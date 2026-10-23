@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
+from types import SimpleNamespace
 
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS.parent))
@@ -140,6 +142,18 @@ class Samples(unittest.TestCase):
         self.assertEqual(J.judge(8, 'u', C.scenario_conditions, scenario, [dict(sample(1), nMoreToday=None)])['verdict'],
                          J.BLOCKED)
 
+    def test_unknown_budget_cannot_be_called_unsaturated(self):
+        for field in ['committedTodaySompi', 'rBudgetSompi']:
+            missing = dict(sample(1))
+            missing[field] = None
+            with self.assertRaises(J.NotObservable):
+                C.observed_conditions([missing])
+        for field, value in [('nMoreToday', False), ('committedTodaySompi', '01'), ('rBudgetSompi', 1.5)]:
+            malformed = dict(sample(1))
+            malformed[field] = value
+            with self.assertRaises(J.Violation):
+                C.observed_conditions([malformed])
+
     def test_collection_floor_needs_an_actual_conviction(self):
         floor = C.collection_floor([sample(1), sample(2, collateral=80, convictions=1)], '10', '25')
         self.assertEqual((floor['collectibleCollateralSompi'], floor['burnedDeltaSompi']), (80, 15))
@@ -166,6 +180,129 @@ class Samples(unittest.TestCase):
         rows[0]['observedWindow'] = 'saturated'
         self.assertEqual(J.judge(8, 'u', C.matrix_covered, rows)['verdict'], J.OBSERVED)
         self.assertEqual(J.judge(8, 'u', C.matrix_covered, rows[1:])['verdict'], J.BLOCKED)
+
+
+DRIVER_SPEC = importlib.util.spec_from_file_location('cost_driver_under_test', TESTS.parent / 'misaka-rfc08-cost-measure.py')
+D = importlib.util.module_from_spec(DRIVER_SPEC)
+DRIVER_SPEC.loader.exec_module(D)
+
+
+def capital_row(daa, sink, committed='5', **node_changes):
+    node = dict(importSessionAvailable=True, importSessionEpoch=7, pruningImportStable=True,
+                importSessionPoint='', importSessionPhase=next(iter(J.STABLE_IMPORT_PHASES)))
+    node.update(node_changes)
+    return dict(dag=dict(virtualDaaScore=daa, sink=sink), node=node,
+                value=dict(capital=dict(sample(daa, committed), shadowAvailable=True)))
+
+
+class CapitalWindow(unittest.TestCase):
+    def test_native_endpoints_and_epoch_must_match_the_fee_window(self):
+        before, after = capital_row(10, 'a'), capital_row(20, 'b')
+        rows = [D.CostRun.capital_sample(before), D.CostRun.capital_sample(after)]
+        result = C.capital_measured(rows, before['dag'], after['dag'])
+        self.assertEqual(result['committedSompiDaa'], 50)
+        self.assertEqual(result['collateralSompiDaa'], 1000)
+        self.assertIn('not measured', result['assumption'])
+        for mutation in [lambda r: r[0].update(sink='other'), lambda r: r[-1].update(virtualDaaScore=21),
+                         lambda r: r[-1].update(importEpoch=8), lambda r: r[0].pop('sampleStatus'),
+                         lambda r: r[0].update(shadowAvailable=False)]:
+            changed = copy.deepcopy(rows)
+            mutation(changed)
+            with self.assertRaises(J.NotObservable):
+                C.capital_measured(changed, before['dag'], after['dag'])
+
+    def test_failed_poll_is_preserved_and_no_later_recovery_erases_the_gap(self):
+        for error in [OSError('socket closed'), RuntimeError('RPC failed'), J.Pending('not ready'),
+                      J.NotObservable('import unavailable'), D.O.ContextMoved('fork moved')]:
+            run = D.CostRun.__new__(D.CostRun)
+            run.samples, run.sample_every, run.last_sample = [], 1, 0
+            run.manifest, run.drill = dict(seats=[dict(bond='producer')]), object()
+            before, after = capital_row(10, 'a'), capital_row(20, 'b')
+            run.samples.append(run.capital_sample(before))
+            with mock.patch.object(D.O, 'bracketed', side_effect=[error, after]), mock.patch.object(D.time, 'monotonic', return_value=100):
+                run.tick()
+                self.assertEqual(len(run.samples), 2)
+                self.assertEqual(run.samples[1]['sampleStatus'], 'unavailable')
+                self.assertNotIn('virtualDaaScore', run.samples[1], 'failure invents no native clock')
+                self.assertEqual(run.samples[1]['error'], str(error))
+                run.last_sample = 0
+                run.tick()
+            self.assertEqual(len(run.samples), 3)
+            self.assertIsNone(C.integrate(run.samples, 'committedTodaySompi'))
+            with self.assertRaises(J.NotObservable):
+                C.capital_measured(run.samples, before['dag'], after['dag'])
+            with self.assertRaises(J.NotObservable):
+                C.observed_conditions(run.samples)
+            with self.assertRaises(J.NotObservable):
+                C.collection_floor(run.samples, 0, 100)
+
+    def test_unstable_import_cannot_supply_a_balance(self):
+        for changes in [dict(pruningImportStable=False), dict(importSessionPoint='active'), dict(importSessionAvailable=False)]:
+            result = D.CostRun.capital_sample(capital_row(10, 'a', **changes))
+            self.assertEqual(result['sampleStatus'], 'unavailable')
+            self.assertNotIn('committedTodaySompi', result)
+
+    def scenario_run(self, failed_after_poll=False):
+        run = D.CostRun.__new__(D.CostRun)
+        before, after = capital_row(10, 'a'), capital_row(20, 'b')
+        for row in [before, after]:
+            row['value'].update(entries=[], vesting=dict(available=True, createdSompi=0, movedSompi=0, burnedSompi=0))
+        run.samples, run.findings = None, []
+
+        def snapshot(label):
+            if label.startswith('before:'):
+                return before
+            self.assertIsNotNone(run.samples, 'sampling stays active through the final snapshot read')
+            if failed_after_poll:
+                run.samples.append(dict(sampleStatus='unavailable', source='node-rpc-unavailable', error='missed final poll'))
+            return after
+        run.snapshot = snapshot
+        run.sample = mock.Mock(side_effect=AssertionError('separate endpoint poll must not run'))
+        run.labels = lambda: {}
+        run.fixtures = lambda *args: None
+        run.require_class = lambda *args: None
+        run.wait = lambda *args, **kwargs: None
+        run.block = lambda *args: None
+        def judge(box, title, fn, *args):
+            item = J.judge(box, title, fn, *args)
+            run.findings.append(item)
+            return item['facts'] if item['verdict'] == J.OBSERVED else None
+        run.judge = judge
+        rpc = SimpleNamespace(close=lambda: None)
+        run.drill = SimpleNamespace(rpc=lambda role: rpc)
+        run.plan = dict(scan={}, decisionInputs=dict(capitalRatePpm=1000000, capitalRatePeriodDaa=1,
+                       retentionCostPerDaaSompi=None, materialWindowDaa=None, budgetWindowDaa=None,
+                       pCollectLowerPpm=None, classCostUpperSompi={}))
+        run.root, run.results, run.evidence = Path('/owned'), [], {}
+        scenario = dict(name='sample-window', sampleIntervalSeconds=5, setupCommands=[], request=None,
+                        classId='c', workCommands=[], convictionCommands=[], observeAfterSeconds=0,
+                        modelSize='small', capState='below-cap', window='unsaturated')
+        with mock.patch.object(D.O, 'accepted_transactions', return_value={}):
+            run.run_scenario(scenario)
+        return run
+
+    def test_scenario_uses_the_snapshot_endpoints_not_two_nearby_polls(self):
+        run = self.scenario_run()
+        result = run.results[0]
+        self.assertEqual([row['virtualDaaScore'] for row in result['samples']], [10, 20])
+        self.assertEqual(result['measured']['capitalCommittedSompiDaa'], 50)
+        self.assertEqual(result['measured']['capitalObservation']['fromSink'], 'a')
+        self.assertEqual(result['measured']['capitalObservation']['toSink'], 'b')
+        self.assertIsNone(run.samples)
+
+
+    def test_final_snapshot_poll_failure_blocks_total_cost_despite_later_recovery(self):
+        run = self.scenario_run(failed_after_poll=True)
+        result = run.results[0]
+        self.assertEqual(result['samples'][1]['sampleStatus'], 'unavailable')
+        self.assertEqual(result['samples'][-1]['sampleStatus'], 'observed')
+        self.assertIsNone(result['measured']['capitalCommittedSompiDaa'])
+        self.assertIsNone(result['measured']['capitalCollateralSompiDaa'])
+        self.assertIsNone(result['measured']['measuredCostSompi'])
+        self.assertEqual(result['derived']['capitalCostSompi'], C.UNKNOWN)
+        self.assertEqual(result['derived']['measuredCostSompi'], C.UNKNOWN)
+        capital = next(row for row in run.findings if 'capital polls' in row['predicate'])
+        self.assertEqual(capital['verdict'], J.BLOCKED)
 
 
 if __name__ == '__main__':

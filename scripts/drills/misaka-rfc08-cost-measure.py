@@ -64,25 +64,35 @@ class CostRun(acceptance.AcceptanceRun):
             return
         try:
             self.sample()
-        except (O.ContextMoved, OSError, RuntimeError, J.Pending):
-            pass  # the next tick retries; a missed sample only widens one integration step
+        except (O.ContextMoved, OSError, RuntimeError, J.Pending, J.NotObservable) as error:
+            # Keep the failed poll: omitting it silently interpolates across an
+            # unobserved interval. No native clock or balance is invented here.
+            self.samples.append(dict(sampleStatus='unavailable', source='node-rpc-unavailable', error=str(error)))
+
+    def capital_value(self, rpc):
+        producer = self.manifest['seats'][0]['bond']
+        shadow = rpc.call('getPalwCapacityShadow', {'steps': [], 'bond': producer, 'adversaryBonds': [],
+                                                  'includeClaims': False, 'limit': 64})
+        bond = next((bond for bond in shadow.get('bonds') or [] if bond.get('bond') == producer), None) or {}
+        return dict(committedTodaySompi=bond.get('committedTodaySompi'), collateralSompi=bond.get('collateralSompi'),
+                    rBudgetSompi=bond.get('rBudgetSompi'), nMoreToday=bond.get('nMoreToday'),
+                    convictions=bond.get('convictions'), convictionsTotal=shadow.get('convictionsTotal'),
+                    shadowAvailable=shadow.get('available'))
+
+    @staticmethod
+    def capital_sample(row):
+        node = row['node']
+        if node.get('importSessionAvailable') is not True or not J.import_is_stable(node):
+            return dict(sampleStatus='unavailable', source='node-rpc-unavailable', error='native import unavailable or incomplete')
+        return dict(row['value']['capital'], sampleStatus='observed', source='node-rpc',
+                    virtualDaaScore=row['dag']['virtualDaaScore'], sink=J.norm(row['dag']['sink']),
+                    importEpoch=node['importSessionEpoch'])
 
     def sample(self):
         self.last_sample = time.monotonic()
-        producer = self.manifest['seats'][0]['bond']
-
-        def body(rpc, dag, node):
-            shadow = rpc.call('getPalwCapacityShadow', {'steps': [], 'bond': producer, 'adversaryBonds': [],
-                                                        'includeClaims': False, 'limit': 64})
-            row = next((bond for bond in shadow.get('bonds') or [] if bond.get('bond') == producer), None)
-            return dict(available=shadow.get('available'), convictionsTotal=shadow.get('convictionsTotal'), bond=row)
-        row = O.bracketed(self.drill, 'JOIN', 'capital-sample', body)
-        bond = row['value']['bond'] or {}
-        self.samples.append(dict(source='node-rpc', virtualDaaScore=row['dag']['virtualDaaScore'], sink=J.norm(row['dag']['sink']),
-                                 committedTodaySompi=bond.get('committedTodaySompi'), collateralSompi=bond.get('collateralSompi'),
-                                 rBudgetSompi=bond.get('rBudgetSompi'), nMoreToday=bond.get('nMoreToday'),
-                                 convictions=bond.get('convictions'), convictionsTotal=row['value']['convictionsTotal'],
-                                 shadowAvailable=row['value']['available']))
+        row = O.bracketed(self.drill, 'JOIN', 'capital-sample',
+                          lambda rpc, dag, node: dict(capital=self.capital_value(rpc)))
+        self.samples.append(self.capital_sample(row))
 
     def snapshot(self, label):
         addresses = sorted(self.labels())
@@ -92,7 +102,7 @@ class CostRun(acceptance.AcceptanceRun):
             vest = rpc.call('getPalwRewardVesting', {'bond': '', 'payoutAddress': '', 'claimId': '', 'limit': 1,
                                                      'after': '', 'execAfter': ''})
             native = vest.get('native') or {}
-            return dict(entries=O.utxo_entries(rpc, addresses, maximum),
+            return dict(entries=O.utxo_entries(rpc, addresses, maximum), capital=self.capital_value(rpc),
                         vesting=dict(available=bool(vest.get('available') and native.get('available')),
                                      createdSompi=native.get('createdSompi'), movedSompi=native.get('movedSompi'),
                                      burnedSompi=native.get('burnedSompi'), outstandingSompi=vest.get('outstandingSompi')))
@@ -111,8 +121,8 @@ class CostRun(acceptance.AcceptanceRun):
     def run_scenario(self, scenario):
         name = scenario['name']
         before = self.snapshot('before:' + name)
-        self.samples, self.sample_every = [], scenario['sampleIntervalSeconds']
-        self.sample()
+        self.samples, self.sample_every = [self.capital_sample(before)], scenario['sampleIntervalSeconds']
+        self.last_sample = time.monotonic()
         try:
             self.fixtures('SETUP_' + name, scenario['setupCommands'])
             self.require_class(scenario['classId'])
@@ -124,10 +134,12 @@ class CostRun(acceptance.AcceptanceRun):
             until = time.monotonic() + scenario['observeAfterSeconds']
             self.wait(lambda: time.monotonic() >= until or None, 'post-scenario observation window',
                       seconds=scenario['observeAfterSeconds'] + 5)
-            self.sample()
+            after = self.snapshot('after:' + name)
+            self.samples.append(self.capital_sample(after))
         finally:
             samples, self.samples = self.samples, None
-        after = self.snapshot('after:' + name)
+        capital_observation = self.judge(8, 'scenario %s: capital polls share fee endpoints and contain no failed observations' % name,
+                                         C.capital_measured, samples, before['dag'], after['dag'])
         rpc = self.drill.rpc('JOIN')
         try:
             window = O.accepted_transactions(rpc, J.norm(before['dag']['sink']), None, self.plan['scan'],
@@ -157,8 +169,9 @@ class CostRun(acceptance.AcceptanceRun):
                         cliFeeSompi=fees('cli-funding'),
                         coinbasePayoutsByAddressLabel=attribution['coinbasePayouts'],
                         vestingDeltaSompi=dict(created=delta('createdSompi'), moved=delta('movedSompi'), burned=delta('burnedSompi')),
-                        capitalCommittedSompiDaa=C.integrate(samples, 'committedTodaySompi'),
-                        capitalCollateralSompiDaa=C.integrate(samples, 'collateralSompi'),
+                        capitalCommittedSompiDaa=None if capital_observation is None else capital_observation['committedSompiDaa'],
+                        capitalCollateralSompiDaa=None if capital_observation is None else capital_observation['collateralSompiDaa'],
+                        capitalObservation=capital_observation,
                         measuredCarrierCostSompi=None if attribution['unresolvedTransactions'] else tracked,
                         unresolvedTransactions=attribution['unresolvedTransactions'])
         inputs = self.plan['decisionInputs']

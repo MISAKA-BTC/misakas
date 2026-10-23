@@ -639,3 +639,49 @@ is not runtime execution of all those tests. The four direct-source census
 controls above are the runtime evidence for this change. The remaining local
 filesystem headroom was about 1.3 GiB after this check; no new full codegen or
 campaign run was attempted on that space.
+
+
+### Cost driver preserves failed capital polls and shares the fee endpoints
+
+A remaining measurement error was in the live cost driver rather than the
+integrator: `tick` swallowed failed capital polls, so the next successful value
+was integrated directly from the last successful value. The earlier control
+for a present row with a missing value did not cover a failed RPC that produced
+no row. Separately, first/last capital polls were taken after/before the fee
+window snapshots, leaving different measurement endpoints.
+
+The driver now records failed polls explicitly, with their error and an
+unavailable status, without inventing a sink, DAA or balance. Recovering later
+does not erase them. Both fee snapshots read the producer capacity shadow
+inside the same native generation bracket as the UTXO/vesting reads and supply
+the capital endpoints. Periodic sampling stays active while waiting for the
+final snapshot. Capital observation requires explicit successful native rows,
+available shadow state, one local import epoch, and exact sink/DAA endpoints
+matching the fee window. A failed poll, unavailable import/shadow, changed epoch
+or mismatched endpoints keeps both capital integrals, capital cost and total
+cost UNKNOWN and records a BLOCKED finding. Missing polls also prevent claiming
+a complete cap/window observation or locating the first conviction floor.
+
+The successful integral is still a sampled estimate: its output names the
+left-Riemann method and the assumption that balances stay constant between
+polls. It does not measure every intermediate transition, actual wall-clock
+capital financing, allocator/disk costs or a retention extension. It provides no
+new decision input, source economics preset or release approval.
+
+Controls exercise the real driver methods with synthetic bracketed rows and
+RPC failures, not live nodes. Six new controls cover: endpoint/fork/import and
+availability refusals; each retriable poll failure followed by recovery;
+unstable native imports; shared snapshot endpoints; and a failed poll while
+waiting for the final snapshot; and missing/malformed budget balances. Missing
+budget balances cannot be labelled unsaturated, and boolean claim counters or
+inexact/noncanonical amounts are refused. The final-snapshot failure case
+preserves the failed row, then
+receives a successful final snapshot, but still reports UNKNOWN capital and
+total cost with a BLOCKED capital finding. The cost module's 16 controls passed
+(`/tmp/misaka-cost-gap-controls-direct.log`). The complete RFC Python suite
+passed all 201 controls (`/tmp/misaka-cost-gap-python-final.log`). The CLI help
+entry point also starts correctly (`/tmp/misaka-cost-gap-help-final.log`). Docs
+checks retain the same 43 baseline issues with none added
+(`/tmp/misaka-cost-gap-docs.log`). Real cost measurement and the full RFC12 campaign remain
+unrun. Working filesystem headroom was approximately 1.3 GiB; no large Rust
+codegen was started for this Python-only change.

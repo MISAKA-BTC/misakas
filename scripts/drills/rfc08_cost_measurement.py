@@ -182,7 +182,8 @@ def attribute(transactions, known, labels):
 
 def integrate(samples, field):
     """Left Riemann sum of a piecewise-constant sampled quantity over DAA: sum(v_i * (daa_{i+1} - daa_i))."""
-    if len(samples) < 2:
+    if len(samples) < 2 or any(sample.get('sampleStatus', 'observed') != 'observed'
+                                or sample.get('shadowAvailable', True) is not True for sample in samples):
         return None
     daas = [J.exact_int(sample['virtualDaaScore'], 'capital sample DAA') for sample in samples]
     if any(right < left for left, right in zip(daas, daas[1:])):
@@ -200,22 +201,52 @@ def integrate(samples, field):
     return total
 
 
+def capital_measured(samples, before, after):
+    """Successful polls bracket the SAME native window as fees; the sum is a sampled estimate."""
+    if not samples or any(sample.get('sampleStatus') != 'observed' or sample.get('source') != 'node-rpc'
+                          or sample.get('shadowAvailable') is not True for sample in samples):
+        raise J.NotObservable('capital polls lack explicit successful native observations; cost stays UNKNOWN')
+    epochs = [J.exact_int(sample.get('importEpoch'), 'capital import epoch') for sample in samples]
+    if len(set(epochs)) != 1:
+        raise J.NotObservable('capital polling crossed a native import generation; cost stays UNKNOWN')
+    committed = integrate(samples, 'committedTodaySompi')
+    collateral = integrate(samples, 'collateralSompi')
+    if committed is None or collateral is None:
+        raise J.NotObservable('capital polling has missing clocks/balances or failed observations; cost stays UNKNOWN')
+    for sample, endpoint in [(samples[0], before), (samples[-1], after)]:
+        endpoint_daa = J.exact_int(endpoint.get('virtualDaaScore'), 'scenario endpoint DAA')
+        if sample.get('virtualDaaScore') != endpoint_daa or not sample.get('sink') \
+                or J.norm(sample['sink']) != J.norm(endpoint['sink']):
+            raise J.NotObservable('capital and fee windows have different native endpoints; cost stays UNKNOWN')
+    return dict(committedSompiDaa=committed, collateralSompiDaa=collateral,
+                fromSink=J.norm(before['sink']), toSink=J.norm(after['sink']),
+                fromDaa=before['virtualDaaScore'], toDaa=after['virtualDaaScore'],
+                method='left-Riemann sum over successful native DAA samples',
+                assumption='sampled balances are held constant until the next poll; intermediate transitions are not measured')
+
+
 def observed_conditions(samples):
-    if not samples:
-        raise J.NotObservable('no capacity-shadow sample of the producer bond was taken')
+    if not samples or any(sample.get('sampleStatus', 'observed') != 'observed'
+                          or sample.get('shadowAvailable', True) is not True for sample in samples):
+        raise J.NotObservable('capacity-shadow observations are missing or unavailable')
     caps = [sample.get('nMoreToday') for sample in samples]
     if any(value is None for value in caps):
         raise J.NotObservable('the capacity shadow serves no per-bond remaining-claim count')
-    saturated = any(sample.get('committedTodaySompi') is not None and sample.get('rBudgetSompi') is not None
-                    and int(sample['committedTodaySompi']) >= int(sample['rBudgetSompi']) for sample in samples)
+    caps = [J.exact_int(value, 'remaining claim count') for value in caps]
+    if any(sample.get(field) is None for sample in samples for field in ('committedTodaySompi', 'rBudgetSompi')):
+        raise J.NotObservable('budget balances are missing; saturation state is UNKNOWN')
+    balances = [[J.decimal(sample[field], field) if isinstance(sample[field], str) else J.exact_int(sample[field], field)
+                 for field in ('committedTodaySompi', 'rBudgetSompi')] for sample in samples]
+    saturated = any(committed >= budget for committed, budget in balances)
     return dict(capState='at-cap' if any(value == 0 for value in caps) else 'below-cap',
                 window='saturated' if saturated else 'unsaturated', source='capacity-shadow (advisory, node-only)')
 
 
 def collection_floor(samples, burned_before, burned_after):
     """The producer bond's collateral at the first sample after its conviction count rose, and the burned delta."""
-    if len(samples) < 2:
-        raise J.NotObservable('too few samples to place a conviction')
+    if len(samples) < 2 or any(sample.get('sampleStatus', 'observed') != 'observed'
+                                or sample.get('shadowAvailable', True) is not True for sample in samples):
+        raise J.NotObservable('missing observations prevent placing the first conviction')
     base = samples[0].get('convictions')
     for sample in samples[1:]:
         if base is not None and sample.get('convictions') is not None and sample['convictions'] > base:
