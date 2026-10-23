@@ -69,6 +69,10 @@ pub(crate) struct World {
 }
 
 pub(crate) fn world(forge_head: u32) -> World {
+    world_with_fault(forge_head, false)
+}
+
+fn world_with_fault(forge_head: u32, conv_window: bool) -> World {
     let artifact = Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8));
     let profile = qwen36_profile_v8(geometry()).expect("graph-v8 projects");
     let backend = Qwen36Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile.clone(), qwen36_held_canonical_v1(160))
@@ -92,7 +96,7 @@ pub(crate) fn world(forge_head: u32) -> World {
         .find(|f| kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(*f, &honest.prompt_token_ids, &committed))
         .expect("the served prompt ids are the job's under one of the two forms");
     let (b, ctx) = (&honest.binding, &honest.binding.job_context);
-    let gdn = kernel_semantics_id_v1(KDESC_Q36_GDN_STEP);
+    let gdn = kernel_semantics_id_v1(if conv_window { KDESC_Q36_SSM_CONV } else { KDESC_Q36_GDN_STEP });
     let node_slot = (0..u32::MAX)
         .take_while(|s| b.shape_profile.resolve_node_slot(*s).is_some())
         .find(|s| b.shape_profile.resolve_node_slot(*s).is_some_and(|(n, l)| l.is_some() && n.kernel_semantics_id == gdn))
@@ -103,7 +107,12 @@ pub(crate) fn world(forge_head: u32) -> World {
         .map(|leaf| (leaf.checkpoint_index, palw_checkpoint_positions_at_v1(&b.shape_profile, ctx, leaf.covered_decode_call)))
         .find(|(_, p)| palw_checkpoint_leaf_carries_recurrence_v1(&b.shape_profile, *p))
         .expect("a recurrence-carrying checkpoint");
-    let demands = gdn_transition_demands_v2(b, node_slot, forge_head, index).expect("units");
+    let demands = if conv_window {
+        gdn_conv_window_demands_v2(b, node_slot, forge_head, index)
+    } else {
+        gdn_transition_demands_v2(b, node_slot, forge_head, index)
+    }
+    .expect("units");
     let PalwHeldMissingV1::StateChunk { chunk: first, .. } = demands[0] else { panic!("state-chunk units") };
     let mut kernels = backend.gdn_recompute_kernels_v2().unwrap();
     let mut state = misaka_palw_base0::fp_recompute::base0_fp_recompute_state_at_covered_v1(
@@ -205,6 +214,13 @@ pub(crate) fn sign(_: &[u8], _: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn run(w: &World, answering: bool) -> (Vec<PalwHeldMissingV1>, PalwGdnHeldNextV1, PalwGdnHeldCaseV1) {
+    run_with_answer_policy(w, |_| answering)
+}
+
+fn run_with_answer_policy(
+    w: &World,
+    mut answer: impl FnMut(Base0GdnCheckpointCourtV2) -> bool,
+) -> (Vec<PalwHeldMissingV1>, PalwGdnHeldNextV1, PalwGdnHeldCaseV1) {
     let claim = claim_of(&w.forged, w);
     let kernels = || w.backend.gdn_recompute_kernels_v2().unwrap();
     let mut case = palw_gdn_held_open_v1(claim.clone(), &w.forged.view(), kernels).unwrap().expect("the forged checkpoint is found");
@@ -231,7 +247,7 @@ fn run(w: &World, answering: bool) -> (Vec<PalwHeldMissingV1>, PalwGdnHeldNextV1
                 .expect("the held DA court admits the demand");
                 demanded.push(unit);
                 chain.push(object);
-                if answering {
+                if answer(case.candidates[case.at]) {
                     chain.push(producer_answer(w, &claim, unit));
                 }
             }
@@ -372,4 +388,87 @@ fn rfc06_held_gdn_filer_tick_a_silent_producer_defaults_and_an_honest_one_is_nev
     let (book, carried) = tick_until_settled(&w, w.honest.clone(), true);
     assert_eq!(book.settled.get(&Hash64::from_u64_word(0xC1A1)), Some(&"honest"));
     assert!(carried.is_empty(), "an honest producer is never demanded");
+}
+
+#[test]
+fn conv_window_only_forgery_is_demanded_and_convicted_by_its_own_terminal() {
+    for head in [0, 1, 3] {
+        let w = world_with_fault(head, true);
+        let (demands, next, case) = run(&w, true);
+        let PalwGdnHeldNextV1::Accuse { object } = next else {
+            panic!("window fault not reached: {next:?}");
+        };
+        let PalwConsensusObjectV2::MemoryRoutingV2 { object } = object else { unreachable!() };
+        let PalwMemoryRoutingObjectV2::Accused { accusation } = *object else { unreachable!() };
+        assert!(accusation.artifact_openings.is_empty(), "the window terminal reads no artifact operands");
+        let claim = kaspa_consensus_core::palw_shard_court_v1::PalwOneMoveClaimV2 {
+            execution_root: accusation.execution_root,
+            class_id: w.shape_profile_id,
+            artifact_root: w.inventory_root,
+        };
+        assert_eq!(
+            kaspa_consensus_core::palw_memory_routing_v2::palw_memory_routing_verdict_v2(
+                &accusation,
+                &claim,
+                PALW_STEP_LEG_MAX_LEAVES,
+                None,
+                0
+            )
+            .unwrap(),
+            kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty
+        );
+        let PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation } = accusation.evidence else {
+            panic!("window terminal expected");
+        };
+        check_gdn_conv_window_refutation_v2(&refutation, accusation.execution_root, w.shape_profile_id, PALW_STEP_LEG_MAX_LEAVES)
+            .expect("the real window terminal convicts producer-authenticated bytes");
+        assert!(case.candidates[..case.at].iter().any(|c| matches!(c, Base0GdnCheckpointCourtV2::Transition { .. })));
+        assert_eq!(
+            case.demands,
+            gdn_conv_window_demands_v2(&w.forged.binding, refutation.conv_slot, refutation.head, w.index).unwrap()
+        );
+        println!("conv-only fault head {head}: {} held units observed before window accusation", demands.len());
+    }
+}
+
+#[test]
+fn silent_conv_window_after_honest_recurrence_answers_uses_the_existing_da_default() {
+    let w = world_with_fault(0, true);
+    let (_, next, case) = run_with_answer_policy(&w, |candidate| matches!(candidate, Base0GdnCheckpointCourtV2::Transition { .. }));
+    assert!(matches!(next, PalwGdnHeldNextV1::DefaultDue { .. }));
+    assert!(matches!(case.candidates[case.at], Base0GdnCheckpointCourtV2::ConvWindow { .. }));
+}
+
+#[test]
+fn a_refused_checkpoint_terminal_is_not_an_honest_candidate() {
+    assert_eq!(terminal_found_fault_v1(Ok(())).unwrap(), true);
+    assert_eq!(terminal_found_fault_v1::<()>(Err(PalwStepRefuteError::NoFaultFound.into())).unwrap(), false);
+    assert!(terminal_found_fault_v1::<()>(Err(PalwStepRefuteError::Unadjudicable.into())).is_err());
+    let quota = kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<u8>("test quota", "refused");
+    assert!(terminal_found_fault_v1::<()>(Err(PalwGdnCourtErrorV2::Resource(quota))).is_err());
+}
+
+#[test]
+fn refused_next_candidate_preserves_the_current_candidate_and_answers_for_retry() {
+    let w = world(1);
+    let mut case = palw_gdn_held_open_v1(claim_of(&w.forged, &w), &w.forged.view(), || w.backend.gdn_recompute_kernels_v2().unwrap())
+        .unwrap()
+        .unwrap();
+    let accuser = PalwGdnHeldAccuserV1 {
+        bond: bond(2), network_domain: Hash64::from_u64_word(0xD0), openings: &w.openings, oracle: &w.oracle, sign: &sign,
+    };
+    assert!(matches!(palw_gdn_held_step_v1(&mut case, &w.forged.view(),
+        || w.backend.gdn_recompute_kernels_v2().unwrap(), &[], 100, 20, &accuser).unwrap(), PalwGdnHeldNextV1::Demand { .. }));
+    let chain: Vec<_> = case.demands.iter().map(|unit| producer_answer(&w, &case.claim, *unit)).collect();
+    note_answers_v1(&mut case, &w.forged.view(), &chain);
+    assert!(case.answers.iter().all(Option::is_some), "retain authenticated answers, not merely empty slots");
+    assert!(case.demanded.is_some());
+    let before = (case.at, case.demands.clone(), case.answers.clone(), case.demanded);
+    let mut unavailable = w.forged.view();
+    unavailable.prompt_token_ids = &[];
+    let mut kernels = || w.backend.gdn_recompute_kernels_v2().unwrap();
+    assert!(load_candidate_v1(&mut case, 1, &unavailable, &mut kernels).is_err());
+    assert_eq!((case.at, case.demands.clone(), case.answers.clone(), case.demanded), before);
+    load_candidate_v1(&mut case, 1, &w.forged.view(), &mut kernels).expect("the restored material can be retried");
+    assert_eq!(case.at, 1);
 }

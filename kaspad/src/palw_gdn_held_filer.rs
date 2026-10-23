@@ -5,14 +5,14 @@
 //! ```text
 //! recompute   the accuser's OWN prefix walk finds the first committed checkpoint that is not the job's state
 //!             (`base0_gdn_first_forged_checkpoint_v2`); none → nothing to file, an honest producer is never demanded
-//! demand      for one recurrence (node slot, head) at a time, the exact `StateChunk` units its transition terminal reads
+//! demand      for one supported checkpoint terminal/head at a time, the exact `StateChunk` units that terminal reads
 //!             (`base0_gdn_forged_checkpoint_demands_v2`), each a signed `DefaultAccusedHeld` — one open at a time
 //! answers     the producer's `MaterialDisclosedV2` / `MaterialDisclosedHeld` on chain, re-checked by the held DA court's own
 //!             hash check (`palw_held_da_check_disclosure_v1`); nothing is taken on the carrier's word
-//! accuse      once every unit is answered: the transition evidence (`base0_gdn_transition_evidence_from_disclosures_v2`), held to
-//!             the court's own terminal (`check_gdn_transition_refutation_v2`) before anything is signed; a candidate whose answered
-//!             bytes are honest moves on to the next (node slot, head); a fault is filed as tag 244 `MemoryRoutingV2::Accused`
-//!             (`GdnTransition`), signed over `palw_memory_routing_session_id_v2`
+//! accuse      once every unit is answered: transition or convolution-window evidence, held to the matching court terminal
+//!             before anything is signed; a candidate whose authenticated answered
+//!             bytes are honest moves on to the next supported terminal/head; a fault is filed as tag 244 `MemoryRoutingV2::Accused`
+//!             (`GdnTransition` or `GdnConvWindow`), signed over `palw_memory_routing_session_id_v2`
 //! silence     an unanswered demand past the disclose window is the held DA court's DA-7 default — the fold's own sweep convicts;
 //!             the filer files nothing more and reports it
 //! ```
@@ -31,13 +31,16 @@ use kaspa_consensus_core::palw_memory_routing_v2::{
 };
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use kaspa_consensus_core::palw_step::kernel_semantics_id_v1;
-use kaspa_consensus_core::palw_step_refute::KDESC_Q36_GDN_STEP;
-use kaspa_consensus_core::palw_step_refute::memory_v2::{check_gdn_transition_refutation_v2, gdn_transition_demands_v2};
+use kaspa_consensus_core::palw_step_refute::memory_v2::{
+    PalwGdnCourtErrorV2, check_gdn_conv_window_refutation_v2, check_gdn_transition_refutation_v2, gdn_conv_window_demands_v2,
+    gdn_transition_demands_v2,
+};
+use kaspa_consensus_core::palw_step_refute::{KDESC_Q36_GDN_STEP, KDESC_Q36_SSM_CONV, PalwStepRefuteError};
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::fp_recompute::Base0FpRecomputeKernelsV1;
 use misaka_palw_base0::gdn_evidence_v2::{
-    Base0GdnCheckpointCourtV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_first_forged_checkpoint_v2, base0_gdn_forged_checkpoint_demands_v2,
-    base0_gdn_transition_evidence_from_disclosures_v2,
+    Base0GdnCheckpointCourtV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_conv_window_evidence_from_disclosures_v2,
+    base0_gdn_first_forged_checkpoint_v2, base0_gdn_forged_checkpoint_demands_v2, base0_gdn_transition_evidence_from_disclosures_v2,
 };
 
 /// The claim the case pursues, as the chain records it.
@@ -57,8 +60,8 @@ pub struct PalwGdnHeldCaseV1 {
     pub claim: PalwGdnHeldClaimV1,
     /// The first forged checkpoint (the accuser's own recompute).
     pub index: u32,
-    /// Every recurrence `(node slot, head)` whose transition reads checkpoint `index`, in canonical order.
-    pub candidates: Vec<(u32, u32)>,
+    /// Recurrence transitions first, then Q36 convolution windows, in slot/head order.
+    pub candidates: Vec<Base0GdnCheckpointCourtV2>,
     /// The candidate under demand.
     pub at: usize,
     /// Its units and the answers found so far.
@@ -79,12 +82,12 @@ pub enum PalwGdnHeldNextV1 {
     Accuse { object: PalwConsensusObjectV2 },
     /// The open demand's window passed unanswered: the held DA court's DA-7 default convicts in the fold's sweep.
     DefaultDue { unit: PalwHeldMissingV1 },
-    /// Every candidate's answered bytes are the honest ones (or none could be built): nothing to file.
+    /// Every candidate's authenticated terminal found no fault: nothing to file.
     Exhausted,
 }
 
-/// Every recurrence node slot of the binding's profile, with each head its transition demands resolve for at `index`.
-fn candidates_v1(binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, index: u32) -> Vec<(u32, u32)> {
+/// Every supported checkpoint terminal and head, with the established recurrence order first.
+fn candidates_v1(binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, index: u32) -> Vec<Base0GdnCheckpointCourtV2> {
     let gdn = kernel_semantics_id_v1(KDESC_Q36_GDN_STEP);
     let profile = &binding.shape_profile;
     let mut out = Vec::new();
@@ -93,7 +96,24 @@ fn candidates_v1(binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV
         if layer.is_some() && node.kernel_semantics_id == gdn {
             let mut head = 0u32;
             while gdn_transition_demands_v2(binding, slot, head, index).is_ok_and(|d| !d.is_empty()) {
-                out.push((slot, head));
+                out.push(Base0GdnCheckpointCourtV2::Transition { node_slot: slot, head });
+                head += 1;
+                if head > 1 << 12 {
+                    break;
+                }
+            }
+        }
+        slot += 1;
+    }
+    // Keep the existing transition order; windows follow it so a conv-only
+    // mismatch is not silently exhausted after all recurrence slices agree.
+    let conv = kernel_semantics_id_v1(KDESC_Q36_SSM_CONV);
+    let mut slot = 0u32;
+    while let Some((node, layer)) = profile.resolve_node_slot(slot) {
+        if layer.is_some() && node.kernel_semantics_id == conv {
+            let mut head = 0u32;
+            while gdn_conv_window_demands_v2(binding, slot, head, index).is_ok_and(|d| !d.is_empty()) {
+                out.push(Base0GdnCheckpointCourtV2::ConvWindow { conv_slot: slot, head });
                 head += 1;
                 if head > 1 << 12 {
                     break;
@@ -117,22 +137,27 @@ pub fn palw_gdn_held_open_v1<K: Base0FpRecomputeKernelsV1>(
     let Some(index) = base0_gdn_first_forged_checkpoint_v2(material, kernels())? else { return Ok(None) };
     let candidates = candidates_v1(material.binding, index);
     if candidates.is_empty() {
-        return Err(format!("checkpoint {index} is forged but no recurrence transition reads it (a convolution-window case)"));
+        return Err(format!("checkpoint {index} is forged but no supported recurrence or convolution terminal reads it"));
     }
     let mut case = PalwGdnHeldCaseV1 { claim, index, candidates, at: 0, demands: Vec::new(), answers: Vec::new(), demanded: None };
-    load_candidate_v1(&mut case, material, &mut kernels)?;
+    load_candidate_v1(&mut case, 0, material, &mut kernels)?;
     Ok(Some(case))
 }
 
 fn load_candidate_v1<K: Base0FpRecomputeKernelsV1>(
     case: &mut PalwGdnHeldCaseV1,
+    at: usize,
     material: &Base0GdnMaterialV2<'_>,
     kernels: &mut impl FnMut() -> K,
 ) -> Result<(), String> {
-    let (node_slot, head) = case.candidates[case.at];
-    case.demands =
-        base0_gdn_forged_checkpoint_demands_v2(material, Base0GdnCheckpointCourtV2::Transition { node_slot, head }, case.index, &mut *kernels)?;
-    case.answers = vec![None; case.demands.len()];
+    let candidate = *case.candidates.get(at).ok_or("GDN candidate outside the case")?;
+    let demands = base0_gdn_forged_checkpoint_demands_v2(material, candidate, case.index, &mut *kernels)?;
+    let answers = vec![None; demands.len()];
+    // Refused construction must not pair the next candidate with the old
+    // candidate's answers on a retry.
+    case.at = at;
+    case.demands = demands;
+    case.answers = answers;
     case.demanded = None;
     Ok(())
 }
@@ -179,6 +204,16 @@ pub struct PalwGdnHeldAccuserV1<'a> {
     pub sign: PalwGdnHeldSignV1<'a>,
 }
 
+/// A refused terminal is not an authenticated honest candidate. The caller
+/// retains the current candidate/answers so it can retry rather than settle it.
+fn terminal_found_fault_v1<T>(verdict: Result<T, PalwGdnCourtErrorV2>) -> Result<bool, String> {
+    match verdict {
+        Ok(_) => Ok(true),
+        Err(PalwGdnCourtErrorV2::Evidence(PalwStepRefuteError::NoFaultFound)) => Ok(false),
+        Err(error) => Err(format!("held GDN terminal refused the candidate: {error}")),
+    }
+}
+
 /// **One step of the case** against the chain's objects at DAA `now` (`disclose_window`: the held DA court's answer window).
 pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
     case: &mut PalwGdnHeldCaseV1,
@@ -221,27 +256,54 @@ pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
             });
         }
         // Every unit of this candidate is answered: the evidence, held to the court's own terminal before it is signed.
-        let (node_slot, head) = case.candidates[case.at];
         let answers: Vec<PalwHeldDisclosureV1> = case.answers.iter().map(|a| a.clone().expect("all answered")).collect();
-        let refutation = base0_gdn_transition_evidence_from_disclosures_v2(
-            material,
-            node_slot,
-            head,
-            case.index,
-            &case.demands,
-            &answers,
-            &mut kernels,
-        );
-        if let Ok(refutation) = refutation
-            && check_gdn_transition_refutation_v2(
-                &refutation,
+        let evidence = match case.candidates[case.at] {
+            Base0GdnCheckpointCourtV2::Transition { node_slot, head } => PalwMemoryRoutingEvidenceV2::GdnTransition {
+                refutation: base0_gdn_transition_evidence_from_disclosures_v2(
+                    material,
+                    node_slot,
+                    head,
+                    case.index,
+                    &case.demands,
+                    &answers,
+                    &mut kernels,
+                )?,
+            },
+            Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } => PalwMemoryRoutingEvidenceV2::GdnConvWindow {
+                refutation: base0_gdn_conv_window_evidence_from_disclosures_v2(
+                    material,
+                    conv_slot,
+                    head,
+                    case.index,
+                    &case.demands,
+                    &answers,
+                )?,
+            },
+        };
+        let verdict = match &evidence {
+            PalwMemoryRoutingEvidenceV2::GdnTransition { refutation } => check_gdn_transition_refutation_v2(
+                refutation,
                 case.claim.execution_root,
                 case.claim.shape_profile_id,
                 accuser.oracle,
                 material.max_leaves,
-            )
-            .is_ok()
-        {
+            ),
+            PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation } => check_gdn_conv_window_refutation_v2(
+                refutation,
+                case.claim.execution_root,
+                case.claim.shape_profile_id,
+                material.max_leaves,
+            ),
+            _ => unreachable!("held GDN candidates use checkpoint terminals"),
+        };
+        if terminal_found_fault_v1(verdict)? {
+            // A window terminal compares authenticated projection rows and
+            // state chunks, so it reads no artifact operands.
+            let artifact_openings = if matches!(&evidence, PalwMemoryRoutingEvidenceV2::GdnConvWindow { .. }) {
+                Vec::new()
+            } else {
+                accuser.openings.to_vec()
+            };
             let mut accusation = PalwMemoryRoutingAccusationV2 {
                 version: PALW_MEMORY_ROUTING_ACCUSATION_VERSION_V2,
                 claim: case.claim.claim,
@@ -249,8 +311,8 @@ pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
                 trace_root: case.claim.trace_root,
                 executor_bond: case.claim.executor,
                 accuser_bond: accuser.bond,
-                evidence: PalwMemoryRoutingEvidenceV2::GdnTransition { refutation },
-                artifact_openings: accuser.openings.to_vec(),
+                evidence,
+                artifact_openings,
                 signature: Vec::new(),
             };
             let session = palw_memory_routing_session_id_v2(accuser.network_domain, &accusation);
@@ -262,12 +324,13 @@ pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
                 },
             });
         }
-        // This candidate's answered bytes are honest (the terminal finds no fault): the next recurrence (node slot, head).
-        case.at += 1;
-        if case.at >= case.candidates.len() {
+        // Only an authenticated NoFaultFound advances. Missing material,
+        // resource refusal or invalid evidence keeps the case available to retry.
+        let next = case.at + 1;
+        if next >= case.candidates.len() {
             return Ok(PalwGdnHeldNextV1::Exhausted);
         }
-        load_candidate_v1(case, material, &mut kernels)?;
+        load_candidate_v1(case, next, material, &mut kernels)?;
     }
 }
 

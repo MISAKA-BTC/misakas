@@ -747,3 +747,67 @@ Documentation validation retained 43 known baseline issues with zero new issues
 (`/tmp/misaka-payout-borrowed-validation-docs.log`). The final runtime rerun
 uses the current production source, including the comparison renderer, and all
 26 controls remain successful. The harness digest manifest matches those files.
+
+
+### Held-GDN filer reaches convolution-window faults
+
+The library already built and judged Q36 convolution-window evidence, but the
+service filer's candidate list contained only recurrence transitions. A held
+checkpoint with honest recurrence slices and a forged conv window therefore
+exhausted its candidates without an accusation. The list now preserves the
+existing transition slot/head order and appends Q36 SsmConv window slots/heads.
+Each candidate uses the existing binding-derived held DA demand units. Once
+answers authenticate, the filer builds the matching transition/window evidence,
+runs that exact terminal, and signs the existing tag-244 accusation only on a
+fault verdict. A conv-window accusation carries no artifact openings: that
+terminal reads authenticated projection rows and state chunks, not operands.
+No wire tag, table, commitment domain, registration path or fence is added.
+
+There was a second refusal bug: failed evidence construction or a refused
+terminal could be skipped as if the candidate were honest. Now only the explicit
+`Evidence(NoFaultFound)` outcome advances. Other evidence/resource refusals stay
+retryable. Loading the next candidate constructs its demands/answer slots before
+changing the current index or answers; a failed load cannot pair a new candidate
+with the old candidate's disclosures. Exhaustion leaves a valid last index.
+
+The production filer module and its real Q36 dev-fixture controls were compiled
+directly with compatible cached core/base0/hash/borsh dependencies. Source and
+argv manifest: `/tmp/misaka-gdn-conv-filer-build.json`; build output:
+`/tmp/misaka-gdn-conv-filer-build.log`. Ten controls exercise the actual module:
+existing recurrence faults/honest cases/service-tick decisions plus four new
+controls for conv-only faults, conv-window silence, refusal classification and
+atomic candidate loading. The conv faults at heads 0, 1 and 3 pass through held
+DA answer authentication, the existing memory/routing verdict function and the
+conv-window terminal; the verdict is ExecutorGuilty with no operand openings.
+The tiny fixture observed 13/14/16 demanded units respectively before accusation,
+including its honest recurrence candidates; these are observations, not policy
+limits. Silence after the recurrence answers produces the existing DefaultDue
+signal at the window candidate. Refused material preserves already authenticated
+answers and the current demand clock; restoring it permits loading the next
+candidate. The Resource error classification control injects the typed refusal;
+it does not measure a physical quota or full-node resource liveness.
+
+The direct-source tests use the established test signing seam and synthetic
+accepted-object lists, not a newly signed live-node campaign. They therefore do
+not establish actual signature/carrier acceptance, chain conviction/settlement,
+restart/reorg/prune behavior or production-scale costs. Candidate/case/evidence
+allocation ownership, full model coverage, solo checkpoint-map GDN registration
+and the remaining RFC06/07/08/12 requirements remain open. In particular the
+larger candidate set is not claimed to fit a measured resource/session budget.
+Public presets and the full-activation pin stay dormant.
+
+`cargo check -p kaspad --lib --features private-integration-config` passed in
+6.18s (`/tmp/misaka-gdn-conv-filer-check.log`), compiling the actual service host
+against the extended case type. Runtime/documentation results are recorded below.
+
+
+The final current-source run passed all ten controls in 12.50s
+(`/tmp/misaka-gdn-conv-filer-current-runtime.log`); source digests in the build
+manifest match the files. Docs checks retain 43 baseline issues and add zero
+(`/tmp/misaka-gdn-conv-filer-docs.log`). One concrete remaining resource path is
+`Qwen36Backend::gdn_inventory_openings_v2`: it currently opens every inventory
+operand before the service creates its oracle, although a recurrence terminal
+reads only its parameter slice and a conv-window terminal reads none. Omitting
+unneeded operands from the final window accusation does not close that earlier
+inventory construction/clone path or its lifetime. It remains in scope along
+with candidate/case ownership and the real campaign.
