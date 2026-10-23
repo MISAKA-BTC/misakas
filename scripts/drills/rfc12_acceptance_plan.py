@@ -524,7 +524,7 @@ def _reconciliation(value):
 
 
 def _coverage(value):
-    # RFC-0006 EXEC origin header coverage (rfc06-exec-origin-coverage-v1.json): written only by custody/kernel-consumer
+    # RFC-0006 EXEC origin header coverage (rfc06-exec-origin-coverage-v2.json): written only by custody/kernel-consumer
     # paid-v4 nodes. The archive role is launched with --archival; the pruned role is the producer, the GC source.
     _keys(value, ('archiveRole', 'maximumWaitSeconds'), 'coverage')
     return dict(archiveRole=_enum(value['archiveRole'], 'coverage.archiveRole', ('provider', 'checker')),

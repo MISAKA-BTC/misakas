@@ -361,7 +361,7 @@ def outbox_records(root, role, kind, files):
     return records
 
 
-COVERAGE_FILE = 'rfc06-exec-origin-coverage-v1.json'
+COVERAGE_FILE = 'rfc06-exec-origin-coverage-v2.json'
 
 
 def coverage_file(root, role, maximum_bytes=16 << 20):
@@ -378,7 +378,7 @@ def coverage_file(root, role, maximum_bytes=16 << 20):
 
 
 def coverage_row(drill, root, role, label):
-    """The coverage file inside the role's own generation bracket; the judgement requires its DAA to match."""
+    """The coverage file inside the role's own generation bracket; the judgement requires its sink, DAA and local import epoch to match."""
     return bracketed(drill, role, label, lambda rpc, dag, node: dict(coverage=coverage_file(root, role)))
 
 

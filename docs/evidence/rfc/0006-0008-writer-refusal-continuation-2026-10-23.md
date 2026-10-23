@@ -534,3 +534,42 @@ Still open: destination coinbase/block-copy ownership and reservations,
 outer live-node capacity/retry acceptance, other payout/court/aux consumers,
 whole-model/physical costs, all reward provenance and the full campaign. No
 activation, consensus bytes, economic policy values or UNKNOWN gate changes.
+
+
+### Historical-header observations bind the native generation
+
+The old private coverage sidecar named only a DAA and ruleset. An observation
+from another sink at the same DAA, or before a local pruning import, could be
+matched to the current RPC read. The writer now publishes the explicitly new
+`rfc06-exec-origin-coverage-v2.json` envelope with `generation` containing sink,
+virtual DAA and local import epoch. It brackets the census and refuses unstable
+or active imports. The consensus census API independently brackets its state
+and header reads with the import epoch, sink and DAA. Failures publish an error
+with no census or generation; no fabricated epoch is used.
+
+The collector accepts only V2 and matches each observation against that role's
+own stable RPC import state, sink and DAA. Different local epochs across the
+archive and pruned nodes are allowed; each must match its own file. Legacy V1,
+missing generation, boolean/inexact counters, changed sink/epoch, active import,
+and contradictory census/error observations cannot become coverage evidence.
+The underlying census counts remain `PalwExecOriginCoverageV1`; this does not
+change historical consensus bytes or give the observation activation authority.
+
+Validation: all 195 RFC Python controls passed (`/tmp/misaka-census-python.log`).
+The production generation-bracket module ran directly through a small rustc
+module harness: two controls passed, covering stable reads, each stamp dimension
+changing, unavailable stamps, active import on the ending read, and census
+failure (`/tmp/misaka-census-bracket-runtime.log`). This is helper execution,
+not a live-node archive/pruned acceptance run. The initial integration check
+found an owned-session API call mismatch; it was corrected to use the existing
+`with_consensus_api_v1` accessor. The final `cargo check -p kaspad --lib --tests --features private-integration-config`
+passed in 20.65s (`/tmp/misaka-census-final-check.log`); this typechecks the
+private worker and tests without executing the full node campaign. The final
+Python rerun also passed all 195 controls (`/tmp/misaka-census-python-final.log`).
+Documentation checks retained the same 43 baseline issues with zero new issues
+(`/tmp/misaka-census-docs.log`).
+
+Still open: historical-header resource reservation ownership, archive coverage
+at real campaign scale, migration approval, other consumer requirements and all
+unrun campaign gates. The activation pin remains unarmed and UNKNOWN remains
+UNKNOWN.

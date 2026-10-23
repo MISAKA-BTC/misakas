@@ -51,6 +51,7 @@ mod paid_claim_observation_v5;
 mod paid_claim_observation_v6;
 pub(crate) mod recovery_ack_carrier_v4;
 mod recovery_observation_v4;
+mod exec_origin_coverage_bracket_v2;
 mod exec_origin_coverage_v1;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
 mod kernel_paid_checker_v4;

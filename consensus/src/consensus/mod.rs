@@ -2356,14 +2356,30 @@ impl ConsensusApi for Consensus {
         &self,
         listed: usize,
     ) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("historical header census import incomplete".into());
+        }
         let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
         let state = self
             .virtual_processor
             .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
             .map_err(|e| format!("historical header census state unavailable: {e:?}"))?;
-        Ok(kaspa_consensus_core::palw_work_slice_v2::palw_exec_origin_coverage_v1(&state, listed.min(4096), |block| {
+        let census = kaspa_consensus_core::palw_work_slice_v2::palw_exec_origin_coverage_v1(&state, listed.min(4096), |block| {
             self.headers_store.get_header(block).ok().and_then(|header| borsh::object_length(&*header).ok()).map(|n| n as u64)
-        }))
+        });
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != generation.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("historical header census point/clock/import changed".into());
+        }
+        Ok(census)
     }
     fn palw_native_recovery_session_quote_v4(
         &self,

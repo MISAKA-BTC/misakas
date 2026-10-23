@@ -379,11 +379,14 @@ class UsefulWorkAndRetirement(unittest.TestCase):
 
 class Coverage(unittest.TestCase):
     def file_row(self, role, daa=100, sink='s', oversized=0, unavailable=0, eligible=3, approval=False):
-        census = dict(cap_bytes=4096, eligible=eligible, within_cap=eligible - oversized, max_bytes_seen=100,
+        census = dict(cap_bytes=4096, eligible=eligible, within_cap=eligible - oversized - unavailable, max_bytes_seen=100,
                       oversized=[], unavailable=[], oversized_total=oversized, unavailable_total=unavailable)
-        envelope = dict(schemaVersion=1, kind=J.COVERAGE_KIND, consensusParamsId='22' * 32, virtualDaaScore=daa,
+        envelope = dict(schemaVersion=2, kind=J.COVERAGE_KIND, consensusParamsId='22' * 32,
+                        generation=dict(sink=sink, virtualDaaScore=daa, importEpoch=7),
                         census=census, error=None, activationApproval=approval)
-        return dict(source='node-rpc', role=role, dag=dict(sink=sink, virtualDaaScore=100), value=dict(coverage=envelope))
+        return dict(source='node-rpc', role=role, dag=dict(sink=sink, virtualDaaScore=100),
+                    node=dict(importSessionAvailable=True, importSessionEpoch=7, pruningImportStable=True,
+                              importSessionPoint='', importSessionPhase=next(iter(J.STABLE_IMPORT_PHASES))), value=dict(coverage=envelope))
 
     def test_archive_covers_and_pruned_is_only_reported(self):
         params = '22' * 32
@@ -397,6 +400,34 @@ class Coverage(unittest.TestCase):
             J.archive_coverage(self.file_row('B', daa=99), self.file_row('A'), params)
         with self.assertRaises(J.Pending):
             J.archive_coverage(self.file_row('B'), self.file_row('A', sink='t'), params)
+
+    def test_same_daa_cannot_reuse_another_sink_or_local_import_epoch(self):
+        for key, value in [('sink', 'other'), ('importEpoch', 8)]:
+            row = self.file_row('B')
+            row['value']['coverage']['generation'][key] = value
+            with self.assertRaises(J.Pending):
+                J.coverage_envelope(row, '22' * 32)
+        row = self.file_row('A')
+        row['node']['importSessionEpoch'] = 9
+        row['value']['coverage']['generation']['importEpoch'] = 9
+        J.archive_coverage(self.file_row('B'), row, '22' * 32)
+
+    def test_legacy_missing_unstable_or_inexact_generation_is_not_evidence(self):
+        mutations = [
+            lambda e, n: e.update(schemaVersion=1, kind='rfc06-private-exec-origin-coverage-v1'),
+            lambda e, n: e.pop('generation'),
+            lambda e, n: e['generation'].update(importEpoch=True),
+            lambda e, n: e['generation'].update(virtualDaaScore=100.0),
+            lambda e, n: n.update(pruningImportStable=False),
+            lambda e, n: n.update(importSessionPoint='active'),
+            lambda e, n: e.update(census=None, error='import changed'),
+            lambda e, n: e.update(error='contradictory'),
+        ]
+        for mutate in mutations:
+            row = self.file_row('B')
+            mutate(row['value']['coverage'], row['node'])
+            with self.assertRaises((J.NotObservable, J.Pending, J.Violation)):
+                J.coverage_envelope(row, '22' * 32)
 
 
 class Aggregation(unittest.TestCase):

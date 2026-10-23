@@ -38,7 +38,7 @@ CHECKBOXES = {
        'before/after the bond-budget cap and with the W_budget window saturated',
     9: 'RFC-0006: EXEC origin header coverage from an archive role and a pruned role at one native generation',
 }
-COVERAGE_KIND = 'rfc06-private-exec-origin-coverage-v1'
+COVERAGE_KIND = 'rfc06-private-exec-origin-coverage-v2'
 
 
 class Violation(Exception):
@@ -770,19 +770,32 @@ def real_income(income):
 # ---- RFC-0006 EXEC origin header coverage (checkbox 9) ------------------------------------------
 
 def coverage_envelope(row, consensus_params_id):
-    """One owned rfc06-exec-origin-coverage-v1.json, read inside a generation bracket of the same role."""
+    """One owned rfc06-exec-origin-coverage-v2.json, read inside a generation bracket of the same role."""
     require_real([row])
     envelope = row['value'].get('coverage')
     if envelope is None:
         raise Pending('%s has not written its coverage observation at this generation' % row['role'])
-    if envelope.get('schemaVersion') != 1 or envelope.get('kind') != COVERAGE_KIND:
+    if type(envelope.get('schemaVersion')) is not int or envelope['schemaVersion'] != 2 or envelope.get('kind') != COVERAGE_KIND:
         raise NotObservable('unknown coverage observation schema')
     if envelope.get('activationApproval') is not False:
         raise Violation('a coverage observation claims activation approval')
     if norm(envelope.get('consensusParamsId')) != norm(consensus_params_id):
         raise Violation('the coverage observation names another consensus ruleset')
-    if envelope.get('virtualDaaScore') != row['dag']['virtualDaaScore']:
-        raise Pending('the coverage file predates this generation (written every 60 s)')
+    if envelope.get('census') is not None:
+        generation = envelope.get('generation')
+        if not isinstance(generation, dict):
+            raise NotObservable('coverage observation omitted its native generation')
+        node = row.get('node') or {}
+        if node.get('importSessionAvailable') is not True or not import_is_stable(node):
+            raise Pending('coverage node import is unavailable or incomplete')
+        daa = exact_int(generation.get('virtualDaaScore'), 'coverage DAA')
+        epoch = exact_int(generation.get('importEpoch'), 'coverage import epoch')
+        own_epoch = exact_int(node.get('importSessionEpoch'), 'node import epoch')
+        if not generation.get('sink') or norm(generation['sink']) != norm(row['dag']['sink']) \
+                or daa != row['dag']['virtualDaaScore'] or epoch != own_epoch:
+            raise Pending('the coverage file predates this native generation (written every 60 s)')
+        if envelope.get('error') is not None:
+            raise NotObservable('coverage observation contains both census and error')
     if envelope.get('census') is None:
         raise NotObservable('%s could not take the census: %s' % (row['role'], envelope.get('error')))
     return envelope['census']
