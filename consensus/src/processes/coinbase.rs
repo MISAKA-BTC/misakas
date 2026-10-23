@@ -14,6 +14,22 @@ use std::convert::TryInto;
 
 use crate::{constants, model::stores::ghostdag::GhostdagData};
 
+/// Render exactly the selected parent's queue prefix consumed by the next
+/// PALW transition. A queued row is already decided; do not derive rewards or
+/// consult current bond keys here. Construction and validation share this path.
+pub fn palw_pending_payout_outputs_v2(state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Vec<TransactionOutput> {
+    state
+        .pending_payouts_iter()
+        .take(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK)
+        .map(|(_, payout)| {
+            TransactionOutput::new(
+                payout.amount,
+                kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
+            )
+        })
+        .collect()
+}
+
 const LENGTH_OF_BLUE_SCORE: usize = size_of::<u64>();
 const LENGTH_OF_SUBSIDY: usize = size_of::<u64>();
 const LENGTH_OF_SCRIPT_PUB_KEY_VERSION: usize = size_of::<u16>();

@@ -4656,16 +4656,7 @@ impl VirtualStateProcessor {
         // more than the coinbase pays would destroy the reward the escrow exists to deliver. The
         // `take` IS the width bound: `PALW_V2_COINBASE_EXTRA_OUTPUTS` is defined from the same
         // constant, so the coinbase's output budget cannot drift from what is rendered here.
-        state
-            .pending_payouts_iter()
-            .take(PALW_V2_MAX_PAYOUTS_PER_BLOCK)
-            .map(|(_, payout)| {
-                TransactionOutput::new(
-                    payout.amount,
-                    kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
-                )
-            })
-            .collect()
+        crate::processes::coinbase::palw_pending_payout_outputs_v2(state)
     }
 
     /// The fold's two answers on a licence object that the V1 and coverage assemblers read

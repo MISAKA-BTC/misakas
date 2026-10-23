@@ -435,3 +435,53 @@ Approximately 2.3 GiB remained afterwards. No old-branch binary was substituted
 for current acceptance. Larger Rust builds await sufficient storage; the K3
 asset/manifest and signed campaign input locations also remain unprovided.
 All full-scope requirements and UNKNOWN gates stay open.
+
+## RFC-0008 queue-to-coinbase rendering and replay
+
+The existing private binary passed 13 provider/material controls (zero failures
+or ignored tests, 0.39s), with canonical TMPDIR as before. They cover frame
+bounds, authority-index reopen/substitution, nested request/response preflight,
+deadline/stream signature binding, exact producer recovery artifacts, V5
+generation/WAL source controls and recovery carrier decoding. Output:
+`/tmp/misaka-rfc08-private-material-runtime-tests.log`. They do not drive actual
+provider replacement acceptance or independent remote hosts.
+
+The processor's existing payout-queue rendering expression was moved without
+changing its order, width, values or scripts into
+`processes::coinbase::palw_pending_payout_outputs_v2`. The construction and
+validation consumers continue to call the processor method, which retains its
+existing queue-lemma assertion and delegates to that renderer.
+
+A separate Cargo integration target, `consensus/tests/coinbase_manager.rs`,
+compiles the actual coinbase manager source and its existing unit controls.
+Its added regression supplies a controlled ten-row queue in reverse insertion
+order, renders the first eight through the actual coinbase manager, applies
+the real PALW fold drain, then renders the remaining two and observes no payout
+after the next drain. It checks every amount/payee and the conserved total.
+Root-checked in-memory carriage restoration and delta apply/revert reproduce
+the same queue and coinbase transaction. The fixture supplies the already-decided
+queue; it does not establish reward earning, funding or selected approval.
+
+To avoid another whole-crate codegen under the storage constraint, runtime
+execution used `rustc --test` on that integration target with compatible
+existing rlibs selected from the worktree build's Cargo dependency fingerprints.
+The actual manager source and new test were compiled afresh. Exact argv,
+dependency paths and source digests are recorded in
+`/tmp/misaka-rfc08-coinbase-manager-build4.json`; build output:
+`/tmp/misaka-rfc08-coinbase-manager-build4.log`. The first wrapper compile exposed
+a private constants re-export and a missing `faster_hex` extern; the target now
+includes the actual constants module and the matching extern was supplied.
+Earlier build logs remain. These dependency identities are compatibility
+inputs, not a source-to-binary attestation or a release approval.
+
+All 11 runtime controls passed (zero failures or ignored tests, 0.08s), output:
+`/tmp/misaka-rfc08-coinbase-queue-final-runtime.log`. The ordinary private node
+library check also passed (6.77s), validating the new renderer call in its real
+consumer: `/tmp/misaka-rfc08-payout-renderer-private-check.log`. The standard
+`cargo check -p kaspa-consensus --test coinbase_manager --features private-integration-config,evm`
+also passed (1m32s); output: `/tmp/misaka-rfc08-coinbase-target-cargo-check.log`.
+
+This verifies queue rendering/drain and PALW state replay, not UTXO rollback,
+whole-block acceptance, full reward-leg provenance/once settlement, material
+restart/reorg/pruned IBD, process crash, allocation/RSS bounds or the 15-gate
+campaign. Those remain open; no dormant fence or UNKNOWN gate changes.
