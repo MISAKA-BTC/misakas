@@ -872,3 +872,79 @@ Documentation checks retained the 43 known baseline issues and added none
 (`/tmp/misaka-gdn-stream-docs.log`). The final runtime source digests match the
 files in the build manifest. Public full activation remains `None`; the model
 tiers, mandatory per-claim approvals and dormant bootstrap guards are unchanged.
+
+
+### GDN opening and oracle allocations keep their typed reservations
+
+The streamed subset now returns `GdnInventoryOpeningsV2`, rather than a bare Vec.
+It exposes borrowed openings and has no Clone, consuming extraction or mutable
+Vec access. A ticket is admitted before stream construction, selector insertion,
+layout-checker name growth, selected-row copies or opening-buffer growth.
+Quotes derive from actual compiler layouts, descriptor counts, actual name and
+operand lengths, and V1's maximum 32 sibling slots. The helper's selected-row,
+name and path copies use fallible allocations. The existing core oracle
+constructor still uses standard Clone/collect after its separate admission;
+this does not make every system allocator failure recoverable. Checked request
+arithmetic rejects unrepresentable sizes before payload allocation.
+The selector is now one borrowed-key BTreeSet, covered by the existing 64-bit
+node envelope under strict native admission. Non-strict legacy use on other
+pointer widths is preserved rather than claiming a pinned BTree bound there.
+
+When the opening Vec grows, the new slot envelope is admitted while the old
+buffer remains live; the old slot reservation is returned only after successful
+growth. The final owner keeps the selected payload and a conservative initial
+stream/checker envelope until drop. It is a typed request bound, not an exact
+heap/RSS measurement. The upstream inventory emitter's plan/read/overlap buffers
+and the borrowed artifact/source are separate, still-open ownership scopes.
+
+`into_oracle_v2` separately reserves the actual independent operand clones the
+core proven-operand constructor makes and authenticates their openings. Its
+`GdnInventoryOracleV2` keeps both the original opening owner and oracle ticket
+through the held filer's use; payload fields drop before their tickets. The
+actual service host and trait now return that composite owner. The step service
+borrows the opening owner through probing. A typed `try_clone_from_v2` adapter
+reserves before making an independent copy of pre-existing openings; it does
+not retroactively cover the source's construction. No wire/ID, model tier,
+claim-approval rule, public fence or economic parameter changes.
+
+Eight isolated-process capacity cases cover zero, one below the stream's
+observed typed request peak, exact peak, one below/exact oracle construction,
+bad root, and one below/exact independent opening copy. The oracle's requested
+bytes include both its cloned operands and wrapper layout. The live result or
+composite oracle prevents a reservation beyond the remaining budget; drop and
+all refusal paths return the complete ticket. The source sizing fixtures are
+created with admission disabled and dropped before arming, or explicitly kept
+as pre-existing source inputs outside the new copy's quota. These test logical
+admission/ownership, not OS quota enforcement or production-model RSS.
+
+A direct-source harness compiles the new helper and actual held filer together,
+re-exporting compatible cached base0 implementation modules as dependencies for
+unchanged artifact execution/court routines. All 16 controls pass: the six helper
+controls (including the eight isolated capacity cases) and ten actual filer
+controls, retaining honest/forged recurrence, conv-window, silence/default,
+refusal/retry and service-tick coverage. The local proxy exists only in the
+harness, not the product. Exact argv/dependency paths/source digests:
+`/tmp/misaka-gdn-owned-filer-build.json`; logs:
+`/tmp/misaka-gdn-owned-filer-current-build.log`,
+`/tmp/misaka-gdn-owned-filer-current-runtime.log` (16 passed, 12.44s).
+
+The actual private service library typecheck also passes:
+`cargo check -p kaspad --lib --features private-integration-config`
+(`/tmp/misaka-gdn-owned-filer-current-check.log`, 5.76s). Initial checks caught a
+stale test field and missing admission-function imports; both were corrected.
+No result from a failed or stale build is used as current runtime evidence.
+
+Still open: copies from these borrowed inputs into accusation objects, the case
+book, outbox/carrier ownership and cached/reorg/restart lifetimes; emitter
+workspace, whole-model resource/time/economic bounds and the live campaign.
+In particular owning the input opening/oracle tickets does not reserve the
+separately cloned artifact openings in a queued accusation. The public activation
+pin and all unapproved source economics remain dormant.
+
+
+The final source rerun passes all 16 controls in 12.42s
+(`/tmp/misaka-gdn-owned-filer-final-build.log`,
+`/tmp/misaka-gdn-owned-filer-final-source-runtime.log`). The manifest digests
+match the current helper/filer/test files. Documentation checks retain 43 known
+baseline issues with zero new issues (`/tmp/misaka-gdn-owned-filer-docs.log`).
+The full campaign and remaining ownership scopes above are not promoted to PASS.

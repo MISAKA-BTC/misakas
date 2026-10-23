@@ -1400,7 +1400,7 @@ impl Qwen36Backend {
     /// The existing court determines which per-head parameter slice it reads.
     pub fn gdn_inventory_openings_v2(
         &self,
-    ) -> Result<(Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_hashes::Hash64), String> {
+    ) -> Result<(crate::GdnInventoryOpeningsV2, kaspa_hashes::Hash64), String> {
         let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered profile".to_string())?;
         crate::gdn_inventory_openings_v2::qwen36_gdn_inventory_openings_streamed_v2(&self.artifact, profile)
     }

@@ -319,8 +319,8 @@ impl PalwGdnHeldHostV1 for Host<'_> {
     fn objects(&self, _: &PalwGdnHeldClaimV1) -> Vec<PalwConsensusObjectV2> {
         self.chain.borrow().clone()
     }
-    fn openings(&self, _: &PalwGdnHeldClaimV1) -> Result<(Vec<PalwArtifactOpeningV1>, PalwProvenOperandsV1), String> {
-        Ok((self.w.openings.clone(), PalwProvenOperandsV1::from_openings_v1(&self.w.openings, self.w.inventory_root).map_err(|e| format!("{e:?}"))?))
+    fn openings(&self, _: &PalwGdnHeldClaimV1) -> Result<GdnInventoryOracleV2, String> {
+        misaka_palw_base0::GdnInventoryOpeningsV2::try_clone_from_v2(&self.w.openings)?.into_oracle_v2(self.w.inventory_root)
     }
     fn disclose_window_daa(&self) -> u64 {
         20

@@ -112,3 +112,5 @@ pub use engine::{Base0Engine, EngineError, KvCache};
 pub use rope::{RopeGenError, RopeTableV1};
 
 mod gdn_inventory_openings_v2;
+
+pub use gdn_inventory_openings_v2::{GdnInventoryOpeningsV2, GdnInventoryOracleV2};

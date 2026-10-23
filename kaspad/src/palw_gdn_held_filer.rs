@@ -37,6 +37,7 @@ use kaspa_consensus_core::palw_step_refute::memory_v2::{
 };
 use kaspa_consensus_core::palw_step_refute::{KDESC_Q36_GDN_STEP, KDESC_Q36_SSM_CONV, PalwStepRefuteError};
 use kaspa_hashes::Hash64;
+use misaka_palw_base0::GdnInventoryOracleV2;
 use misaka_palw_base0::fp_recompute::Base0FpRecomputeKernelsV1;
 use misaka_palw_base0::gdn_evidence_v2::{
     Base0GdnCheckpointCourtV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_conv_window_evidence_from_disclosures_v2,
@@ -347,7 +348,7 @@ pub trait PalwGdnHeldHostV1 {
     /// Every accepted object naming the claim (its demands' answers among them).
     fn objects(&self, claim: &PalwGdnHeldClaimV1) -> Vec<PalwConsensusObjectV2>;
     /// The class inventory's openings and the oracle over them.
-    fn openings(&self, claim: &PalwGdnHeldClaimV1) -> Result<(Vec<PalwArtifactOpeningV1>, PalwProvenOperandsV1), String>;
+    fn openings(&self, claim: &PalwGdnHeldClaimV1) -> Result<GdnInventoryOracleV2, String>;
     /// Complete accepted-history watermark. None holds moves while a page scan is incomplete.
     fn observed_through_daa(&self, now: u64) -> Option<u64> { Some(now) }
     fn disclose_window_daa(&self) -> u64;
@@ -451,9 +452,12 @@ pub fn palw_gdn_held_filer_tick_v1<H: PalwGdnHeldHostV1>(host: &H, book: &mut Pa
             note_answers_v1(case, &view, &objects);
             continue;
         };
-        let Ok((openings, oracle)) = host.openings(&claim) else { continue };
+        let Ok(input) = host.openings(&claim) else { continue };
         let sign = |m: &[u8], c: &[u8]| host.sign(m, c);
-        let accuser = PalwGdnHeldAccuserV1 { bond: host.bond(), network_domain: host.network_domain(), openings: &openings, oracle: &oracle, sign: &sign };
+        let accuser = PalwGdnHeldAccuserV1 {
+            bond: host.bond(), network_domain: host.network_domain(),
+            openings: input.openings(), oracle: input.oracle(), sign: &sign,
+        };
         match palw_gdn_held_step_v1(case, &view, kernels, &objects, observed_daa, host.disclose_window_daa(), &accuser) {
             Ok(PalwGdnHeldNextV1::Demand { object, .. }) => {
                 // A backfilled observation is older than this submission. Its

@@ -54,18 +54,10 @@ impl PalwGdnHeldHostV1 for ServiceGdnHostV1<'_> {
     fn objects(&self, claim: &PalwGdnHeldClaimV1) -> Vec<PalwConsensusObjectV2> {
         self.objects.get(&claim.claim).cloned().unwrap_or_default()
     }
-    fn openings(
-        &self,
-        claim: &PalwGdnHeldClaimV1,
-    ) -> Result<
-        (Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1),
-        String,
-    > {
+    fn openings(&self, claim: &PalwGdnHeldClaimV1) -> Result<misaka_palw_base0::GdnInventoryOracleV2, String> {
         let (q36, _, _) = self.q36(claim)?;
         let (openings, root) = q36.gdn_inventory_openings_v2()?;
-        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, root)
-            .map_err(|e| format!("{e:?}"))?;
-        Ok((openings, oracle))
+        openings.into_oracle_v2(root)
     }
     fn observed_through_daa(&self, _now: u64) -> Option<u64> { self.history_daa }
     fn disclose_window_daa(&self) -> u64 {
