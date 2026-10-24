@@ -18,6 +18,9 @@ pub use execution::PalwNativeRoutingExecutionAuthorityV2;
 #[path = "palw_reader_router_v2/claim_execution.rs"]
 mod claim_execution;
 pub use claim_execution::PalwNativeRoutingClaimAuthorityV2;
+#[path = "palw_reader_router_v2/work_execution.rs"]
+mod work_execution;
+pub use work_execution::{PalwNativeRoutingWorkAuthorityV2, PalwNativeRoutingWorkFaultV2};
 
 pub const PALW_READER_ROUTER_TABLE_V2: u8 = 147;
 pub const PALW_READER_ROUTER_VERSION_V2: u16 = 2;

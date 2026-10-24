@@ -7890,7 +7890,7 @@ impl PalwPanelService {
         current_daa: u64,
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
-    ) -> Result<(Transaction, Hash64, Vec<u8>, kaspa_pq_validator_core::FpAnswerTransactionLeaseV1), String> {
+    ) -> Result<(Transaction, Hash64, Vec<u8>, kaspa_pq_validator_core::FpAnswerTransactionLeaseV1, Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>), String> {
         use kaspa_consensus_core::palw_freeprompt_v3::{
             PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
             fp_claim_id_v3, palw_fp_capture_encode_v1,
@@ -7930,7 +7930,7 @@ impl PalwPanelService {
         } else {
             None
         };
-        let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
+        let mut backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
         // The producer's guard, for the claim this node underwrites here too: no claim of a fused
         // class this build cannot defend at its dissection's turn — past `palw_offence_attribution`, no
         // held class it cannot answer inside the court's turn (ADR-0152 §4-ter N4). **New here on every
@@ -8020,6 +8020,8 @@ impl PalwPanelService {
             Some(PalwDrillFpFaultV1::Backend(fault)) => Some(fault),
             _ => None,
         };
+        let routing_work = crate::palw_native_routing_work_v2::bind_fp_v2(session,backend.as_mut(),&self.consensus_config.params,current_daa,&job)
+            .map_err(|why|format!("native FP routing work deferred before execution: {why}"))?;
         let drill_sparse_seed = self.config.drill_sparse_fault_seed;
         let (_backend, executed) = offload(backend, move |b| {
             let sparse_leaf = match drill_sparse_seed {
@@ -8059,6 +8061,10 @@ impl PalwPanelService {
         })
         .await?;
         let (run, shape, accounting_answer_root) = executed?;
+        if routing_work.as_ref().is_some_and(|owner|!owner.accepts_context_v2(&shape.job_context)) {
+            return Err("executed FP context differs from bound native routing work".into());
+        }
+        crate::palw_native_routing_work_v2::refresh_v2(session,routing_work.as_ref()).map_err(|why|why.to_string())?;
         if let Some(leaf) = drill_fault_leaf {
             warn!(
                 "[{PALW_PANEL}] PALW DRILL: this canonical claim commits a capture corrupted at step leaf {leaf} (execution root {})",
@@ -8262,6 +8268,7 @@ impl PalwPanelService {
         // twice — once at the floor to read the carrier's mass, once at the fee that mass prices —
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
+        crate::palw_native_routing_work_v2::refresh_v2(session,routing_work.as_ref()).map_err(|why|why.to_string())?;
         let build_plain = |fee: u64| {
             if let Some((header, pledge, history, rent)) = &tir_original {
                 // The rent rides on top of relay: consensus burns exactly the declaration from this carrier's fee.
@@ -8331,11 +8338,12 @@ impl PalwPanelService {
         let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&probe.0).compute_mass)
             .max(CANONICAL_CLAIM_FEE_FLOOR_SOMPI);
         drop(probe);
+        crate::palw_native_routing_work_v2::refresh_v2(session,routing_work.as_ref()).map_err(|why|why.to_string())?;
         let (tx, answer_lease) = build(fee)?;
         if let Some(projection) = unpublished_projection.as_mut() {
             projection.keep();
         }
-        Ok((tx, claim_id, material, answer_lease))
+        Ok((tx, claim_id, material, answer_lease, routing_work))
     }
 
     /// Retain this node's own free-prompt material under the claim id, where the resolver serves

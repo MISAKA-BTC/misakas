@@ -411,7 +411,10 @@ impl PalwPanelService {
             {
                 (*canonical_last_daa) = current_daa;
                 match self.build_canonical_claim(&session, network_domain, bond, current_daa, funding_outpoint, &funding_entry).await {
-                    Ok((tx, claim_id, material, _answer_wire_and_signing_lease)) => {
+                    Ok((tx, claim_id, material, _answer_wire_and_signing_lease, routing_work)) => {
+                        if let Err(why)=crate::palw_native_routing_work_v2::refresh_v2(&session,routing_work.as_ref()) {
+                            warn!("[{PALW_PANEL}] canonical native routing publication deferred: {why}");
+                        } else {
                         // The accounting wire/signing reservation follows the actual outer TX through submission.
                         let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
                         let txid = prepared_carrier.id();
@@ -441,6 +444,7 @@ impl PalwPanelService {
                                 funding = None;
                             }
                         }
+                    }
                     }
                     Err(e) => warn!("[{PALW_PANEL}] cannot build a canonical claim: {e}"),
                 }

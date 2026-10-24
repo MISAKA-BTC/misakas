@@ -310,8 +310,8 @@ impl PalwGdnHeldHostV1 for Host<'_> {
     fn accusable_claims(&self) -> Vec<PalwGdnHeldClaimV1> {
         vec![claim_of(&self.material, self.w)]
     }
-    fn material(&self, _: &PalwGdnHeldClaimV1) -> Result<Base0GdnOwnedMaterialV2, String> {
-        Ok(self.material.clone())
+    fn material(&self, _: &PalwGdnHeldClaimV1) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Base0GdnOwnedMaterialV2>, String> {
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&self.material).map_err(|e|e.to_string())
     }
     fn kernels(&self, _: &PalwGdnHeldClaimV1) -> Result<Box<dyn Base0FpRecomputeKernelsV1 + '_>, String> {
         Ok(Box::new(self.w.backend.gdn_recompute_kernels_v2()?))

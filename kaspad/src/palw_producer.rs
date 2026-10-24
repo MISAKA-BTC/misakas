@@ -1525,7 +1525,9 @@ impl PalwProducerService {
         );
         template.block.header.palw_commitment = envelope.encode();
         template.block.header.finalize();
-        let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
+        let block: kaspa_consensus_core::block::Block = template
+            .into_immutable_v3()
+            .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
         let hash = block.hash();
         palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
             .await
@@ -1609,7 +1611,9 @@ impl PalwProducerService {
             );
             template.block.header.palw_commitment = envelope.encode();
             template.block.header.finalize();
-            let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
+            let block: kaspa_consensus_core::block::Block = template
+                .into_immutable_v3()
+                .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
             let hash = block.hash();
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
                 .await
@@ -1859,9 +1863,15 @@ impl PalwProducerService {
         // a capture or the later material-provider journal.
         let mut routing_candidate_v2 = template.block.header.clone();
         routing_candidate_v2.nonce = nonce;
-        let routing_authority_v2 = if self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
+        let routing_active_v2 = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
             f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(routing_candidate_v2.daa_score)
-        }) {
+        });
+        let routing_work_v2 = if let Some((lead,index,retention))=rider.filter(|_|routing_active_v2) {
+            crate::palw_native_routing_work_v2::bind_rider_v2(session,backend.as_mut(),&job,
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond),lead,index,retention)
+                .map_err(|why|format!("native rider routing deferred before execution: {why}"))?
+        } else { None };
+        let routing_authority_v2 = if routing_active_v2 && rider.is_none() {
             session.palw_native_routing_execution_authority_v2(
                 template.selected_parent_hash,
                 &routing_candidate_v2,
@@ -1877,6 +1887,7 @@ impl PalwProducerService {
         // This original owner stays live through signing, retention, submit
         // and announcement, even when custody consumes the backend in a task.
         let require_fresh_routing_v2 = || -> Result<(), String> {
+            crate::palw_native_routing_work_v2::refresh_v2(session,routing_work_v2.as_ref()).map_err(|why|why.to_string())?;
             if let Some(original) = &routing_authority_v2 {
                 let fresh = session
                     .palw_native_routing_execution_authority_v2(
@@ -2068,6 +2079,7 @@ impl PalwProducerService {
         if let Some((lead, index, retention)) = rider {
             attempt.challenge = kaspa_consensus_core::palw_capacity_s567_v1::palw_rider_challenge_v1(&lead, index);
             attempt.trace_retention_daa = retention;
+            require_fresh_routing_v2()?;
             let kp = self.keypair.as_ref().ok_or("no signing key")?;
             let message = attempt_id_v2(&attempt);
             let signature = libcrux_ml_dsa::ml_dsa_87::sign(
@@ -2248,7 +2260,9 @@ impl PalwProducerService {
             template.block.header.nonce = nonce;
             template.block.header.palw_commitment = commitment;
             template.block.header.finalize();
-            let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
+            let block: kaspa_consensus_core::block::Block = template
+                .into_immutable_v3()
+                .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
             let hash = block.hash();
             // **The block first, the announcement after** (ADR-0084 Decision 3). This broadcast
             // used to come before the submit, and on 5f a 748 MB material announced to five peers

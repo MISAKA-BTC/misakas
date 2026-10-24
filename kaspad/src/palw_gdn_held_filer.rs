@@ -342,7 +342,7 @@ pub trait PalwGdnHeldHostV1 {
     /// Held hybrid claims this node's bond may accuse (not its own, not final or voided), with their chain facts.
     fn accusable_claims(&self) -> Vec<PalwGdnHeldClaimV1>;
     /// The accuser's view of the claim's PUBLIC served material (never the producer's heap), or why there is none yet.
-    fn material(&self, claim: &PalwGdnHeldClaimV1) -> Result<Base0GdnOwnedMaterialV2, String>;
+    fn material(&self, claim: &PalwGdnHeldClaimV1) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Base0GdnOwnedMaterialV2>, String>;
     /// Fresh recompute kernels of the claim's class (the node's own resolve door).
     fn kernels(&self, claim: &PalwGdnHeldClaimV1) -> Result<Box<dyn Base0FpRecomputeKernelsV1 + '_>, String>;
     /// Every accepted object naming the claim (its demands' answers among them).

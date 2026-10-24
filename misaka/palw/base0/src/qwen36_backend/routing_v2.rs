@@ -41,7 +41,8 @@ impl Qwen36Backend {
         Ok(self)
     }
     pub(super) fn require_native_routing_job_v2(&self, job: &PalwJobContextV2) -> Result<(), E> {
-        if self.native_routing_execution_v2.as_ref().is_some_and(|authority| authority.job() != job)
+        if self.native_routing_work_v2.as_ref().is_some_and(|authority| !authority.accepts_context_v2(job))
+            || self.native_routing_execution_v2.as_ref().is_some_and(|authority| authority.job() != job)
             || self.native_routing_claim_v2.as_ref().is_some_and(|authority| authority.job() != job)
         {
             return Err(E::Substitution);
@@ -49,7 +50,9 @@ impl Qwen36Backend {
         Ok(())
     }
     pub(super) fn require_native_fp_identity_v2(&self, job: &PalwJobContextV2) -> Result<(), E> {
-        if self.native_routing_execution_v2.is_some() {
+        if self.native_routing_execution_v2.is_some()
+            || self.native_routing_work_v2.as_ref().is_some_and(|owner| owner.fp_job().is_none() || !owner.accepts_context_v2(job))
+        {
             return Err(E::Substitution); // A block attempt owner is never FP authority.
         }
         if let Some(owner) = &self.native_routing_claim_v2 {
@@ -89,6 +92,7 @@ impl Qwen36Backend {
         let profile = self.profile.as_ref().ok_or(E::Incomplete)?;
         if self.resolved_artifact_identity_v2 != Some((row.declaration.class_id, row.declaration.artifact_root))
             || self.native_routing_claim_v2.is_some()
+            || self.native_routing_work_v2.is_some()
             || self.class_profile_id != row.declaration.class_id
             || authority.native_profile() != profile
             || authority.job().shape_profile_id != row.declaration.class_id
@@ -102,6 +106,28 @@ impl Qwen36Backend {
         self.native_routing_execution_v2 = Some(authority);
         Ok(())
     }
+    pub(super) fn bind_native_work_plan_v2(
+        &mut self,
+        authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+    ) -> Result<(), E> {
+        let row = authority.row();
+        let profile = self.profile.as_ref().ok_or(E::Incomplete)?;
+        if self.native_routing_execution_v2.is_some()
+            || self.native_routing_claim_v2.is_some()
+            || self.resolved_artifact_identity_v2 != Some((row.declaration.class_id, row.declaration.artifact_root))
+            || self.class_profile_id != row.declaration.class_id
+            || authority.native_profile() != profile
+            || authority.job().shape_profile_id != row.declaration.class_id
+            || self.native_routing_work_v2.as_ref().is_some_and(|old| !old.same_work_v2(&authority))
+        {
+            return Err(E::Substitution);
+        }
+        let native = self.plan.as_ref().ok_or(E::Incomplete)?.bind_reader_router_v2(profile, &row.declaration, authority.network())?;
+        self.plan = Some(native.plan);
+        self.native_routing_plan_lease_v2 = native.lease;
+        self.native_routing_work_v2 = Some(authority);
+        Ok(())
+    }
     pub(super) fn bind_native_claim_plan_v2(
         &mut self,
         authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>,
@@ -109,6 +135,7 @@ impl Qwen36Backend {
         let row = authority.row();
         let profile = self.profile.as_ref().ok_or(E::Incomplete)?;
         if self.native_routing_execution_v2.is_some()
+            || self.native_routing_work_v2.is_some()
             || self.resolved_artifact_identity_v2 != Some((row.declaration.class_id, row.declaration.artifact_root))
             || self.class_profile_id != row.declaration.class_id
             || authority.native_profile() != profile

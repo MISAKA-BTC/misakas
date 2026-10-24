@@ -12,17 +12,17 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub trait BlockTransactionsStoreReader {
-    fn get(&self, hash: BlockHash) -> Result<Arc<Vec<Transaction>>, StoreError>;
+    fn get(&self, hash: BlockHash) -> Result<kaspa_consensus_core::block::BlockTransactionsV3, StoreError>;
 }
 
 pub trait BlockTransactionsStore: BlockTransactionsStoreReader {
     // This is append only
-    fn insert(&self, hash: BlockHash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, transactions: kaspa_consensus_core::block::BlockTransactionsV3) -> Result<(), StoreError>;
     fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct BlockBody(Arc<Vec<Transaction>>);
+struct BlockBody(kaspa_consensus_core::block::BlockTransactionsV3);
 
 impl MemSizeEstimator for BlockBody {
     fn estimate_mem_bytes(&self) -> usize {
@@ -65,7 +65,7 @@ impl DbBlockTransactionsStore {
         &self,
         batch: &mut WriteBatch,
         hash: BlockHash,
-        transactions: Arc<Vec<Transaction>>,
+        transactions: kaspa_consensus_core::block::BlockTransactionsV3,
     ) -> Result<(), StoreError> {
         if self.access.has(hash)? {
             return Err(StoreError::KeyAlreadyExists(hash.to_string()));
@@ -80,13 +80,13 @@ impl DbBlockTransactionsStore {
 }
 
 impl BlockTransactionsStoreReader for DbBlockTransactionsStore {
-    fn get(&self, hash: BlockHash) -> Result<Arc<Vec<Transaction>>, StoreError> {
+    fn get(&self, hash: BlockHash) -> Result<kaspa_consensus_core::block::BlockTransactionsV3, StoreError> {
         Ok(self.access.read(hash)?.0)
     }
 }
 
 impl BlockTransactionsStore for DbBlockTransactionsStore {
-    fn insert(&self, hash: BlockHash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, transactions: kaspa_consensus_core::block::BlockTransactionsV3) -> Result<(), StoreError> {
         if self.access.has(hash)? {
             return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
@@ -98,3 +98,7 @@ impl BlockTransactionsStore for DbBlockTransactionsStore {
         self.access.delete(DirectDbWriter::new(&self.db), hash)
     }
 }
+
+#[cfg(test)]
+#[path = "block_transactions/retained_body_v3_tests.rs"]
+mod retained_body_v3_tests;

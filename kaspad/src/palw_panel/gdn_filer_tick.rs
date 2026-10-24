@@ -7,12 +7,16 @@ use super::*;
 use crate::palw_gdn_held_filer::{PalwGdnHistoryWalkV1, PalwGdnHeldBookV1, PalwGdnHeldClaimV1, PalwGdnHeldHostV1, palw_gdn_held_filer_tick_v1};
 use crate::palw_panel::court_outbox::CourtOutboxV1;
 use misaka_palw_base0::qwen36_backend::Qwen36Backend;
+use kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1;
+
+#[path = "gdn_filer_capture_owner_v3.rs"]
+mod capture_owner;
 
 /// The queue round of a GDN filer object, below the dissection's rounds and beside step 6's.
 pub(crate) const PALW_GDN_FILER_ROUND_V1: u32 = (1 << 29) | 0x200;
 
 struct ServiceGdnHostV1<'a> {
-    entries: Vec<(PalwGdnHeldClaimV1, Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, Vec<u8>, Vec<u32>)>,
+    entries: Vec<(PalwGdnHeldClaimV1, Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, NativeRetainedV1<Vec<u8>>, NativeRetainedV1<Vec<u32>>)>,
     objects: HashMap<Hash64, Vec<PalwConsensusObjectV2>>,
     history_daa: Option<u64>,
     window: u64,
@@ -34,9 +38,9 @@ impl PalwGdnHeldHostV1 for ServiceGdnHostV1<'_> {
     fn accusable_claims(&self) -> Vec<PalwGdnHeldClaimV1> {
         self.entries.iter().map(|(c, _, _, _)| c.clone()).collect()
     }
-    fn material(&self, claim: &PalwGdnHeldClaimV1) -> Result<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2, String> {
+    fn material(&self, claim: &PalwGdnHeldClaimV1) -> Result<NativeRetainedV1<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2>, String> {
         let (q36, capture, prompt) = self.q36(claim)?;
-        let owned = q36.gdn_accuser_view_v2(capture, Some(prompt))?;
+        let owned = q36.gdn_accuser_view_retained_v3(capture, Some(prompt), claim.execution_root, claim.shape_profile_id).map_err(|e|e.to_string())?;
         if owned.binding.committed_execution_root != claim.execution_root
             || owned.binding.shape_profile.shape_profile_id() != claim.shape_profile_id
         {
@@ -77,8 +81,7 @@ impl PalwGdnHeldHostV1 for ServiceGdnHostV1<'_> {
 // Select by the chain's commitment before taking the first held capture: an unrelated
 // payload in the pool must not starve a later capture of this claim.
 fn capture_names_claim_v1(capture: &[u8], execution_root: Hash64, class_id: Hash64) -> bool {
-    misaka_palw_base0::produce::base0_material_decode_any_v1(capture).is_ok_and(|retained| {
-        let binding = retained.binding();
+    misaka_palw_base0::qwen36_backend::gdn_capture_owner_v3::binding_from_capture_v3(capture).is_ok_and(|binding| {
         binding.committed_execution_root == execution_root && binding.shape_profile.shape_profile_id() == class_id
     })
 }
@@ -146,8 +149,8 @@ pub(super) fn gdn_history_next_page_v1(
 pub(super) struct GdnFilerEntryV1 {
     pub(super) d: kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2,
     pub(super) backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
-    pub(super) capture: Vec<u8>,
-    pub(super) prompt: Vec<u32>,
+    pub(super) capture: NativeRetainedV1<Vec<u8>>,
+    pub(super) prompt: NativeRetainedV1<Vec<u32>>,
 }
 
 impl PalwPanelService {
@@ -187,48 +190,10 @@ impl PalwPanelService {
             if backend.as_any_v1().and_then(|a| a.downcast_ref::<Qwen36Backend>()).is_none() {
                 continue;
             }
-            // Read the prompt from the accepted block, or the hash-bound free-prompt job.
-            // A held capture need not carry prompt IDs; its job_id is not the block anchor.
-            let (capture, prompt) = if d.free_prompt {
-                let form = self.class_prompt_ids_form(d.class_id);
-                let Some((capture, prompt)) = pooled.iter().find_map(|bytes| {
-                    let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes, form)?;
-                    if payload.material.job.class_id != d.class_id || payload.material.job.executor_bond != d.executor_bond.0 {
-                        return None;
-                    }
-                    if !capture_names_claim_v1(&payload.capture, d.execution_root, d.class_id) {
-                        return None;
-                    }
-                    let prompt = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), &payload.material, form)?;
-                    Some((payload.capture, prompt))
-                }) else {
-                    continue;
-                };
-                (capture, prompt)
-            } else {
-                let Some((job, prompt)) = self.attempt_job_for_claim(
-                    session,
-                    backend.as_ref(),
-                    network_domain,
-                    d.accepted_block,
-                    d.class_id,
-                    &d.executor_bond,
-                ) else {
-                    continue;
-                };
-                let prompt: Vec<u32> = prompt.into_iter().map(|id| id as u32).collect();
-                let Some(capture) = pooled
-                    .iter()
-                    .find(|bytes| {
-                        capture_names_claim_v1(bytes, d.execution_root, d.class_id)
-                            && misaka_palw_base0::produce::base0_material_decode_any_v1(bytes)
-                                .is_ok_and(|retained| retained.binding().job_context == job)
-                    })
-                    .cloned()
-                else {
-                    continue;
-                };
-                (capture, prompt)
+            let (capture,prompt)=match self.gdn_capture_for_claim_v3(session,&d,backend.as_ref(),pooled,network_domain) {
+                Ok(Some(material))=>material,
+                Ok(None)=>continue,
+                Err(why)=>{ debug!("[{PALW_PANEL}] claim {}: GDN capture admission withheld: {why}",d.claim_id); continue; }
             };
             entries.push(GdnFilerEntryV1 { d, backend, capture, prompt });
         }
@@ -351,7 +316,7 @@ mod tests {
         outsider.0.index += 1;
         let sign = |_: &[u8], _: &[u8]| None;
         let mut host = ServiceGdnHostV1 {
-            entries: vec![(claim.clone(), Box::new(w.backend), w.capture, prompt.clone())],
+            entries: vec![(claim.clone(), Box::new(w.backend), NativeRetainedV1::retain_existing_v1(w.capture).unwrap(), NativeRetainedV1::try_from_clone_v1(&prompt).unwrap())],
             objects: HashMap::new(),
             history_daa: Some(1),
             window: 8,
@@ -365,7 +330,7 @@ mod tests {
         assert!(palw_gdn_held_filer_tick_v1(&host, &mut honest_book, 1).is_empty());
         assert_eq!(honest_book.settled.get(&claim.claim), Some(&"honest"));
         host.entries[0].0 = forged_claim.clone();
-        host.entries[0].2 = forged_capture;
+        host.entries[0].2 = NativeRetainedV1::retain_existing_v1(forged_capture).unwrap();
         let forged = host.material(&forged_claim).expect("checkpoint mismatch is readable for GDN accusation");
         assert_ne!(forged.binding.checkpoint_merkle_root, owned.binding.checkpoint_merkle_root);
         let mut expected_step_binding = owned.binding.clone();
@@ -407,7 +372,9 @@ mod tests {
         host.entries[0].0 = claim.clone();
         assert!(host.material(&claim).is_err(), "a capture of another execution cannot supply evidence");
         host.entries[0].0.execution_root = forged.binding.committed_execution_root;
-        host.entries[0].3[0] ^= 1;
+        let mut foreign_prompt = prompt.clone();
+        foreign_prompt[0] ^= 1;
+        host.entries[0].3 = NativeRetainedV1::retain_existing_v1(foreign_prompt).unwrap();
         assert!(host.material(&host.entries[0].0).is_err(), "a different prompt cannot supply evidence");
     }
 }

@@ -55,7 +55,7 @@ fn check_accepted_accounting_carriers_v1(
     duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
     accepted: &kaspa_consensus_core::acceptance_data::AcceptanceData,
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
-    mut read_body: impl FnMut(Hash64) -> Result<Arc<Vec<Transaction>>, NativeDecodeErrorV1<&'static str>>,
+    mut read_body: impl FnMut(Hash64) -> Result<kaspa_consensus_core::block::BlockTransactionsV3, NativeDecodeErrorV1<&'static str>>,
 ) -> Result<(), NativeDecodeErrorV1<&'static str>> {
     let fail = NativeDecodeErrorV1::Decode;
     let mut carrier = None;
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(palw_fp_answer_bind_duty_v1(&tx, &duty, &backend).unwrap(), tx.id());
         let accepted = acceptance(std::slice::from_ref(&tx));
         let body = Arc::new(vec![tx]);
-        check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone())).unwrap();
+        check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).unwrap();
     }
     #[test]
     fn accounting_seat_rejects_changed_answer_job_pin_and_wrong_roots() {
@@ -233,15 +233,15 @@ mod tests {
         let body = Arc::new(vec![tx.clone(), duplicate]);
         let accepted = acceptance(&body);
         assert!(matches!(
-            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone())),
+            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())),
             Err(NativeDecodeErrorV1::Decode("ambiguous accounting winning carrier; index unavailable"))
         ));
         let body = Arc::new(vec![tx]);
         let mut accepted = acceptance(&body);
         accepted[0].accepted_transactions[0].transaction_id = h(99);
-        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone())).is_err());
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
         accepted[0].accepted_transactions[0].index_within_block = 8;
-        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone())).is_err());
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
         assert!(
             check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Err(NativeDecodeErrorV1::Decode("missing body")))
                 .is_err()
@@ -254,9 +254,9 @@ mod tests {
         let unrelated = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, wire.to_vec());
         let body = Arc::new(vec![unrelated, tx]);
         let accepted = acceptance(&body);
-        check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone())).unwrap();
+        check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).unwrap();
         let accepted = acceptance(&body[..1]);
-        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone())).is_err());
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
     }
     #[test]
     fn accounting_seat_never_substitutes_legacy_served_answer_material() {
@@ -272,6 +272,6 @@ mod tests {
         let served = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, legacy);
         let body = Arc::new(vec![served]);
         let accepted = acceptance(&body);
-        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone())).is_err());
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
     }
 }

@@ -2674,8 +2674,8 @@ impl crate::palw_gdn_held_filer::PalwGdnHeldHostV1 for GdnNode<'_> {
     fn material(
         &self,
         _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
-    ) -> Result<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2, String> {
-        Ok(self.w.forged.clone())
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2>, String> {
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&self.w.forged).map_err(|e|e.to_string())
     }
     fn kernels(
         &self,

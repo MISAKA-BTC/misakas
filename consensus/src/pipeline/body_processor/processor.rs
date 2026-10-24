@@ -276,7 +276,7 @@ impl BlockBodyProcessor {
         self: &Arc<BlockBodyProcessor>,
         hash: BlockHash,
         parents: &[BlockHash],
-        transactions: Arc<Vec<Transaction>>,
+        transactions: kaspa_consensus_core::block::BlockTransactionsV3,
         evm_payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
     ) {
         let mut batch = WriteBatch::default();
@@ -323,6 +323,6 @@ impl BlockBodyProcessor {
         drop(body_tips_write_guard);
 
         // Write the genesis body
-        self.commit_body(self.genesis.hash, &[], Arc::new(self.genesis.build_genesis_transactions()), &Default::default())
+        self.commit_body(self.genesis.hash, &[], self.genesis.build_genesis_transactions().into(), &Default::default())
     }
 }

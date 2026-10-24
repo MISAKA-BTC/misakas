@@ -831,10 +831,10 @@ impl MiningManager {
             ));
             let miner_data: MinerData = MinerData::new(script_public_key, vec![]);
 
-            let BlockTemplate { block: kaspa_consensus_core::block::MutableBlock { transactions, .. }, calculated_fees, .. } =
-                self.get_block_template(consensus, &miner_data)?;
-
-            let Some(Stats { max, median, min }) = feerate_stats(transactions, calculated_fees) else {
+            // Borrow the admitted render; extracting only the vectors would
+            // drop its coinbase admission before the statistics consumer ends.
+            let template = self.get_block_template(consensus, &miner_data)?;
+            let Some(Stats { max, median, min }) = feerate_stats(&template.block.transactions, &template.calculated_fees) else {
                 return Ok(resp);
             };
 
@@ -1788,7 +1788,7 @@ impl MiningManagerProxy {
         self,
         consensus: &ConsensusProxy,
         block_daa_score: u64,
-        block_transactions: Arc<Vec<Transaction>>,
+        block_transactions: kaspa_consensus_core::block::BlockTransactionsV3,
     ) -> MiningManagerResult<Vec<Arc<Transaction>>> {
         consensus
             .clone()
@@ -1926,7 +1926,7 @@ struct Stats {
 /// Returns an `Option<Stats>` containing the maximum, median, and minimum fee
 /// rates if the input vectors are valid. Returns `None` if the vectors are
 /// empty or if the lengths are inconsistent.
-fn feerate_stats(transactions: Vec<Transaction>, calculated_fees: Vec<u64>) -> Option<Stats> {
+fn feerate_stats(transactions: &[Transaction], calculated_fees: &[u64]) -> Option<Stats> {
     if calculated_fees.is_empty() {
         return None;
     }
@@ -1940,13 +1940,13 @@ fn feerate_stats(transactions: Vec<Transaction>, calculated_fees: Vec<u64>) -> O
     }
     debug_assert!(transactions[0].is_coinbase());
     let mut feerates = calculated_fees
-        .into_iter()
+        .iter()
         .zip(transactions
             .iter()
             // skip coinbase tx
             .skip(1)
             .map(Transaction::mass))
-        .map(|(fee, mass)| fee as f64 / mass as f64)
+        .map(|(fee, mass)| *fee as f64 / mass as f64)
         .collect_vec();
     feerates.sort_unstable_by(f64::total_cmp);
 
@@ -1978,7 +1978,7 @@ mod tests {
     fn feerate_stats_test() {
         let calculated_fees = vec![100u64, 200, 300, 400];
         let txs = transactions(calculated_fees.len() + 1);
-        let Stats { max, median, min } = feerate_stats(txs, calculated_fees).unwrap();
+        let Stats { max, median, min } = feerate_stats(&txs, &calculated_fees).unwrap();
         assert_eq!(max, 200.0);
         assert_eq!(median, 150.0);
         assert_eq!(min, 50.0);
@@ -1988,14 +1988,14 @@ mod tests {
     fn feerate_stats_empty_test() {
         let calculated_fees = vec![];
         let txs = transactions(calculated_fees.len() + 1);
-        assert!(feerate_stats(txs, calculated_fees).is_none());
+        assert!(feerate_stats(&txs, &calculated_fees).is_none());
     }
 
     #[test]
     fn feerate_stats_inconsistent_test() {
         let calculated_fees = vec![100u64, 200, 300, 400];
         let txs = transactions(calculated_fees.len());
-        assert!(feerate_stats(txs, calculated_fees).is_none());
+        assert!(feerate_stats(&txs, &calculated_fees).is_none());
     }
 }
 

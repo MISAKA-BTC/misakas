@@ -51,6 +51,7 @@ pub mod palw_panel;
 /// (node policy).
 pub mod palw_prefill_run;
 pub mod palw_producer;
+mod palw_native_routing_work_v2;
 /// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
 /// (node policy).
 pub mod palw_producer_backpressure;

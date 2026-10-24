@@ -73,6 +73,8 @@ impl std::fmt::Debug for CoinbaseAllocationV2 {
     }
 }
 impl CoinbaseAllocationV2 {
+    pub(crate) fn is_admitted_v3(&self) -> bool { self.lease.is_some() }
+
     pub fn grow_v2(&mut self, requests: u64) -> Result<(), crate::palw_native_resource_v1::NativeCoverageV1> {
         match self.lease.as_mut() {
             Some(lease) => lease.grow_memory_v1(requests),

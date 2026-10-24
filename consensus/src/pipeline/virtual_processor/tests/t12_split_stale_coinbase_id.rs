@@ -121,7 +121,7 @@ async fn replay(submit_as_built: bool) -> Replay {
     let x_as_built = producer_block_from_a_heartbeat_template(&mut producer, &heartbeat, &producer_address);
     let x = x_as_built.hash();
     assert!(!x_as_built.transactions[0].id_is_current(), "the fixture must carry the stale id b6 carried");
-    let x_on_producer = if submit_as_built { x_as_built.clone() } else { x_as_built.clone().with_current_tx_ids().0 };
+    let x_on_producer = if submit_as_built { x_as_built.clone() } else { x_as_built.clone().with_current_tx_ids().unwrap().0 };
     assert_eq!(x_on_producer.hash(), x, "re-deriving the ids never moves the block hash: the merkle root hashes bytes");
     // Valid on EVERY node: nothing in the block's own validation reads its own coinbase's id.
     assert_eq!(insert(&producer, x_on_producer).await, BlockStatus::StatusUTXOValid);

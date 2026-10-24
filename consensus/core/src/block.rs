@@ -9,6 +9,8 @@ use crate::{
 // parent, sink, precomputed-hash test ctor) use `BlockHash` (= `Hash64`).
 use kaspa_utils::mem_size::MemSizeEstimator;
 use std::sync::Arc;
+mod transactions_v3;
+pub use transactions_v3::BlockTransactionsV3;
 
 /// A mutable block structure where header and transactions within can still be mutated.
 #[derive(Debug, Clone)]
@@ -40,7 +42,7 @@ impl MutableBlock {
 #[derive(Debug, Clone)]
 pub struct Block {
     pub header: Arc<Header>,
-    pub transactions: Arc<Vec<Transaction>>,
+    pub transactions: BlockTransactionsV3,
     /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): EVM execution payload,
     /// carried separately from the UTXO `transactions` because EVM txs become
     /// canonical only when their block enters the selected-parent chain. Empty
@@ -52,19 +54,19 @@ pub struct Block {
 
 impl Block {
     pub fn new(header: Header, txs: Vec<Transaction>) -> Self {
-        Self { header: Arc::new(header), transactions: Arc::new(txs), evm_payload: Arc::new(EvmExecutionPayload::default()) }
+        Self { header: Arc::new(header), transactions: txs.into(), evm_payload: Arc::new(EvmExecutionPayload::default()) }
     }
 
-    pub fn from_arcs(header: Arc<Header>, transactions: Arc<Vec<Transaction>>) -> Self {
-        Self { header, transactions, evm_payload: Arc::new(EvmExecutionPayload::default()) }
+    pub fn from_arcs(header: Arc<Header>, transactions: impl Into<BlockTransactionsV3>) -> Self {
+        Self { header, transactions: transactions.into(), evm_payload: Arc::new(EvmExecutionPayload::default()) }
     }
 
     pub fn from_header_arc(header: Arc<Header>) -> Self {
-        Self { header, transactions: Arc::new(Vec::new()), evm_payload: Arc::new(EvmExecutionPayload::default()) }
+        Self { header, transactions: Vec::new().into(), evm_payload: Arc::new(EvmExecutionPayload::default()) }
     }
 
     pub fn from_header(header: Header) -> Self {
-        Self { header: Arc::new(header), transactions: Arc::new(Vec::new()), evm_payload: Arc::new(EvmExecutionPayload::default()) }
+        Self { header: Arc::new(header), transactions: Vec::new().into(), evm_payload: Arc::new(EvmExecutionPayload::default()) }
     }
 
     /// kaspa-pq ADR-0020: attach an EVM execution payload (consuming builder).
@@ -94,11 +96,12 @@ impl Block {
     /// ids, but one built in this process carries whatever its builder left there, and a stale one
     /// makes this node alone compute a different `utxo_commitment` for the first chain block that
     /// merges it. Costs one id hash per transaction and allocates only when something was stale.
-    pub fn with_current_tx_ids(self) -> (Self, usize) {
+    pub fn with_current_tx_ids(self) -> Result<(Self, usize), crate::palw_native_resource_v1::NativeCoverageV1> {
         let stale = self.transactions.iter().filter(|tx| !tx.id_is_current()).count();
         if stale == 0 {
-            return (self, 0);
+            return Ok((self, 0));
         }
+        let allocation = BlockTransactionsV3::prepare_allocation_v3(self.transactions.reserve_coinbase_copy_v3()?)?;
         let transactions = self
             .transactions
             .iter()
@@ -108,7 +111,10 @@ impl Block {
                 tx
             })
             .collect();
-        (Self { header: self.header, transactions: Arc::new(transactions), evm_payload: self.evm_payload }, stale)
+        Ok((
+            Self { header: self.header, transactions: BlockTransactionsV3::from_prepared_v3(transactions, allocation), evm_payload: self.evm_payload },
+            stale,
+        ))
     }
 
     /// WARNING: To be used for test purposes only
@@ -342,6 +348,18 @@ impl BlockTemplate {
             stale_evm_claims: self.stale_evm_claims.clone(),
             dropped_attestation_shards: self.dropped_attestation_shards.clone(),
             coinbase_allocation_v2: allocation,
+        })
+    }
+
+    /// Move the admitted render into its immutable payload owner. Cheap block and
+    /// body-cache clones retain the same ticket until the last payload is dropped.
+    pub fn into_immutable_v3(mut self) -> Result<Block, crate::palw_native_resource_v1::NativeCoverageV1> {
+        let allocation = self.take_coinbase_allocation_v2();
+        let block = self.block;
+        Ok(Block {
+            header: Arc::new(block.header),
+            transactions: BlockTransactionsV3::retained_v3(block.transactions, allocation)?,
+            evm_payload: Arc::new(block.evm_payload),
         })
     }
 

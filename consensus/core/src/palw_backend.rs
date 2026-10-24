@@ -1795,6 +1795,11 @@ pub trait PalwExecutionBackendV1: Send + Sync {
             "backend has no prospective native routed execution plan".into(),
         ))
     }
+    fn bind_native_routing_work_v2(
+        &mut self, _authority: std::sync::Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+    ) -> Result<(), crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        Err(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::Unsupported("backend has no prospective FP/rider native plan".into()))
+    }
     /// Replay of an accepted stamped claim uses its own authority and job,
     /// including free-prompt and rider anchors. It is never block authority.
     fn bind_native_routing_claim_v2(

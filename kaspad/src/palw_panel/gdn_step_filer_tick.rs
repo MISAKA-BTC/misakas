@@ -93,21 +93,24 @@ impl PalwPanelService {
                 continue;
             };
             let Some(q36) = e.backend.as_any_v1().and_then(|a| a.downcast_ref::<Qwen36Backend>()) else { continue };
-            let mut owned = match q36.gdn_accuser_view_v2(&e.capture, Some(e.prompt.as_slice())) {
+            let owned = match q36.gdn_accuser_view_retained_v3(&e.capture, Some(e.prompt.as_slice()), e.d.execution_root, e.d.class_id) {
                 Ok(owned) => owned,
                 Err(why) => {
                     debug!("[{PALW_PANEL}] claim {claim_id}: the GDN step filer has no accuser view yet: {why}");
                     continue;
                 }
             };
+            // Keep the admitted material immutable; only the borrowed court view
+            // uses the fold's current scalar ladder limit.
+            let mut view = owned.view();
             // Round 2 (1): openings are cut, and the verdict judged, at the FOLD's ladder for this class — never a local guess.
-            if owned.max_leaves != class_limits.ladder {
+            if view.max_leaves != class_limits.ladder {
                 info!(
                     "[{PALW_PANEL}] claim {claim_id}: the GDN step filer judges at the fold's class ladder {} (the material's ladder was \
                      {})",
-                    class_limits.ladder, owned.max_leaves
+                    class_limits.ladder, view.max_leaves
                 );
-                owned.max_leaves = class_limits.ladder;
+                view.max_leaves = class_limits.ladder;
             }
             let (openings, _root) = match q36.gdn_inventory_openings_v2() {
                 Ok(o) => o,
@@ -120,7 +123,6 @@ impl PalwPanelService {
                 continue;
             }
             probed += 1;
-            let view = owned.view();
             let notes = palw_gdn_step_probe_case_v1(
                 book,
                 &claim_id,

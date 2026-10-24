@@ -664,13 +664,17 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|verdicts| verdicts.round_blocks.difference(&verdicts.permitted).copied().collect())
             .unwrap_or_default();
-        for (i, (merged_block, txs)) in once((ctx.selected_parent(), selected_parent_transactions))
-            .chain(acceptance_order.iter().copied().map(|b| {
-                let txs = self.block_transactions_store.get(b).unwrap();
-                if unpermitted_rounds.contains(&b) { (b, std::sync::Arc::new(txs[..1].to_vec())) } else { (b, txs) }
-            }))
+        for (i, (merged_block, transactions_owner)) in once((ctx.selected_parent(), selected_parent_transactions))
+            .chain(acceptance_order.iter().copied().map(|b| (b, self.block_transactions_store.get(b).unwrap())))
             .enumerate()
         {
+            // Keep the original admitted body alive. A round without a permit
+            // needs only a borrowed coinbase view, not another owning render.
+            let txs = if i != 0 && unpermitted_rounds.contains(&merged_block) {
+                &transactions_owner[..1]
+            } else {
+                transactions_owner.as_slice()
+            };
             // Create a composed UTXO view from the selected parent UTXO view + the mergeset UTXO diff
             let composed_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
 
@@ -702,7 +706,7 @@ impl VirtualStateProcessor {
                     escrow: escrow_locked.then_some(&ctx.palw_escrow_locks),
                 });
             let (mut validated_transactions, mut inner_multiset) =
-                self.validate_transactions_with_muhash_in_parallel(&txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
+                self.validate_transactions_with_muhash_in_parallel(txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
 
             // A permit grants execution rights, but cannot mint monetary R.
             // Reserve the entire actual collectible native fee before any
@@ -2092,7 +2096,7 @@ impl VirtualStateProcessor {
     /// calculate the muhash in parallel for valid transactions
     pub(crate) fn validate_transactions_with_muhash_in_parallel<'a, V: UtxoView + Sync>(
         &self,
-        txs: &'a Vec<Transaction>,
+        txs: &'a [Transaction],
         utxo_view: &V,
         pov_daa_score: u64,
         flags: TxValidationFlags,

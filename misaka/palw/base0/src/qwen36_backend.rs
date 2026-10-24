@@ -22,6 +22,9 @@
 
 mod held_attention_v1;
 
+#[path = "gdn_capture_owner_v3.rs"]
+pub mod gdn_capture_owner_v3;
+
 use crate::qwen36::{Qwen36ArtifactV1, Qwen36Cache, Qwen36Engine, Qwen36ShapeV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES as LEG_MAX_LEAVES;
@@ -172,6 +175,7 @@ pub struct Qwen36Backend {
     native_routing_execution_v2:
         Option<std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>>,
     native_routing_claim_v2: Option<std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,
+    native_routing_work_v2: Option<std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
     native_routing_plan_lease_v2: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 
@@ -270,6 +274,7 @@ impl Qwen36Backend {
             resolved_artifact_identity_v2: None,
             native_routing_execution_v2: None,
             native_routing_claim_v2: None,
+            native_routing_work_v2: None,
             native_routing_plan_lease_v2: None,
         }
     }
@@ -375,6 +380,7 @@ impl Qwen36Backend {
             resolved_artifact_identity_v2: None,
             native_routing_execution_v2: None,
             native_routing_claim_v2: None,
+            native_routing_work_v2: None,
             native_routing_plan_lease_v2: None,
         }
     }
@@ -424,6 +430,7 @@ impl Qwen36Backend {
             resolved_artifact_identity_v2: None,
             native_routing_execution_v2: None,
             native_routing_claim_v2: None,
+            native_routing_work_v2: None,
             native_routing_plan_lease_v2: None,
         })
     }
@@ -2837,6 +2844,11 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>,
     ) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
         self.bind_native_routing_plan_v2(authority)
+    }
+    fn bind_native_routing_work_v2(
+        &mut self, authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+    ) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        self.bind_native_work_plan_v2(authority)
     }
     fn bind_native_routing_claim_v2(
         &mut self,

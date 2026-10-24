@@ -544,8 +544,18 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>>, String> {
         Err("own native routing execution authority unavailable".into())
     }
+    fn palw_native_routing_fp_work_authority_v2(
+        &self, fp: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, job: &crate::palw_v2::PalwJobContextV2,
+    ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { let _ = (fp,job); Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own prospective FP routing API unavailable")) }
+    fn palw_native_routing_rider_work_authority_v2(
+        &self, job: &crate::palw_v2::PalwJobContextV2, executor: crate::palw_state_v2::PalwBondKeyV2,
+        lead: crate::Hash64, index: u32, retention: u64,
+    ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { let _ = (job,executor,lead,index,retention); Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own prospective rider routing API unavailable")) }
     /// Exact native accepted-claim stamp and whole job, independently of any
     /// provider record. None preserves historical unstamped V1 claims only.
+    fn palw_native_routing_refresh_work_authority_v2(
+        &self, original: &crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
+    ) -> Result<Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>, crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { let _ = original; Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own native routing work refresh unavailable")) }
     fn palw_native_routing_claim_authority_v2(
         &self,
         _claim: crate::Hash64,
@@ -2713,7 +2723,7 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_block_body(&self, hash: BlockHash) -> ConsensusResult<Arc<Vec<Transaction>>> {
+    fn get_block_body(&self, hash: BlockHash) -> ConsensusResult<crate::block::BlockTransactionsV3> {
         unimplemented!()
     }
 

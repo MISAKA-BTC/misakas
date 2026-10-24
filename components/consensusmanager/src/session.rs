@@ -854,6 +854,16 @@ impl ConsensusSessionOwned {
     ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>>, String> {
         self.consensus.palw_native_routing_execution_authority_v2(checkpoint, candidate, job, executor)
     }
+    pub fn palw_native_routing_fp_work_authority_v2(
+        &self, fp: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.consensus.palw_native_routing_fp_work_authority_v2(fp,job) }
+    pub fn palw_native_routing_rider_work_authority_v2(
+        &self, job: &kaspa_consensus_core::palw_v2::PalwJobContextV2, executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        lead: kaspa_consensus_core::Hash64, index: u32, retention: u64,
+    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.consensus.palw_native_routing_rider_work_authority_v2(job,executor,lead,index,retention) }
+    pub fn palw_native_routing_refresh_work_authority_v2(
+        &self, original: &kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
+    ) -> Result<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.consensus.palw_native_routing_refresh_work_authority_v2(original) }
     pub fn palw_native_routing_claim_authority_v2(
         &self,
         claim: Hash64,
@@ -1618,7 +1628,7 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.get_block(hash)).await
     }
 
-    pub async fn async_get_block_body(&self, hash: BlockHash) -> ConsensusResult<Arc<Vec<Transaction>>> {
+    pub async fn async_get_block_body(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::block::BlockTransactionsV3> {
         self.clone().spawn_blocking(move |c| c.get_block_body(hash)).await
     }
 

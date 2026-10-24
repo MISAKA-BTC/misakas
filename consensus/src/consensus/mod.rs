@@ -1451,6 +1451,16 @@ impl ConsensusApi for Consensus {
             executor,
         )
     }
+    fn palw_native_routing_fp_work_authority_v2(
+        &self, fp: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.virtual_processor.palw_native_routing_fp_work_authority_v2_impl(&self.config.params,fp,job) }
+    fn palw_native_routing_rider_work_authority_v2(
+        &self, job: &kaspa_consensus_core::palw_v2::PalwJobContextV2, executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        lead: kaspa_consensus_core::Hash64, index: u32, retention: u64,
+    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.virtual_processor.palw_native_routing_rider_work_authority_v2_impl(&self.config.params,job,executor,lead,index,retention) }
+    fn palw_native_routing_refresh_work_authority_v2(
+        &self, original: &kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
+    ) -> Result<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.virtual_processor.palw_native_routing_refresh_work_authority_v2_impl(&self.config.params,original) }
     fn palw_native_routing_claim_authority_v2(
         &self,
         claim: Hash64,
@@ -4877,11 +4887,10 @@ impl ConsensusApi for Consensus {
             }
 
             let res = transactions
-                .unwrap_or_clone()
-                .into_iter()
+                .iter()
                 .enumerate()
                 .filter(|(index, _tx)| indices.contains(&(*index as TransactionIndexType)))
-                .map(|(_, tx)| tx)
+                .map(|(_, tx)| tx.clone())
                 .collect::<Vec<_>>();
 
             if res.len() != indices.len() {
@@ -4890,11 +4899,11 @@ impl ConsensusApi for Consensus {
                 Ok(res)
             }
         } else {
-            Ok(transactions.unwrap_or_clone())
+            Ok(transactions.as_ref().clone())
         }
     }
 
-    fn get_block_body(&self, hash: BlockHash) -> ConsensusResult<Arc<Vec<Transaction>>> {
+    fn get_block_body(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::block::BlockTransactionsV3> {
         if match self.statuses_store.read().get(hash).optional().unwrap() {
             Some(status) => !status.has_block_body(),
             None => true,

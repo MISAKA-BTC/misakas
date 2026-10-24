@@ -71,7 +71,7 @@ impl TryFrom<RpcBlock> for Block {
     fn try_from(item: RpcBlock) -> RpcResult<Self> {
         Ok(Self {
             header: Arc::new(item.header.try_into()?),
-            transactions: Arc::new(
+            transactions: kaspa_consensus_core::block::BlockTransactionsV3::from(
                 item.transactions
                     .into_iter()
                     .map(kaspa_consensus_core::tx::Transaction::try_from)
@@ -89,7 +89,7 @@ impl TryFrom<RpcRawBlock> for Block {
     fn try_from(item: RpcRawBlock) -> RpcResult<Self> {
         Ok(Self {
             header: Arc::new(item.header.try_into()?),
-            transactions: Arc::new(
+            transactions: kaspa_consensus_core::block::BlockTransactionsV3::from(
                 item.transactions
                     .into_iter()
                     .map(kaspa_consensus_core::tx::Transaction::try_from)
@@ -145,7 +145,7 @@ impl TryFrom<RpcOptionalBlock> for Block {
             header: Arc::new(
                 (item.header.ok_or(RpcError::MissingRpcFieldError("RpcBlock".to_string(), "header".to_string()))?).try_into()?,
             ),
-            transactions: Arc::new(
+            transactions: kaspa_consensus_core::block::BlockTransactionsV3::from(
                 item.transactions
                     .into_iter()
                     .map(kaspa_consensus_core::tx::Transaction::try_from)

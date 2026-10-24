@@ -1834,7 +1834,7 @@ impl FlowContext {
         // stale coinbase id put b6 alone on a different `utxo_commitment` for the chain block that
         // merged its block. The block hash does not change, so what is stored and relayed is the
         // block every peer receives — only with the ids every peer computes for it.
-        let (block, stale_ids) = block.with_current_tx_ids();
+        let (block, stale_ids) = block.with_current_tx_ids().map_err(RuleError::LocalNativeCapacityUnavailable)?;
         if stale_ids > 0 {
             warn!(
                 "Block {} was submitted with {} transaction id(s) that did not match their transactions' bytes (a builder edited a \
