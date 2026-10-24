@@ -23,6 +23,7 @@ mod settlement_once_v1;
 mod settlement_liability_v1;
 // RFC-0007 §4.1 T6: paid-claim traps, the receipt signers' liability and held check fees (dormant; kernel route aux 142).
 mod paid_claim_trap_v1;
+mod paid_claim_reader_v1;
 // RFC08 08-B: native claim fees held from Final to the liability horizon (dormant; kernel route aux 144).
 mod native_liability_hold_v1;
 // G14 lane r5-f02-wire: tag 178 dispatch, the F02 post-Final default / hold / recovery, the per-claim court index, bottom evidence.
