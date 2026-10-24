@@ -487,3 +487,6 @@ fn assert_broken_finals(route: &PalwKernelRouteStateV1, a: &PalwPaidClaimAuthori
         assert!(palw_paid_claim_read_v1(&bad, &base, 0).is_err(), "Final substitution {change}");
     }
 }
+
+#[path = "paid_claim_bootstrap_fail_closed_v6.rs"]
+mod bootstrap_fail_closed_v6;

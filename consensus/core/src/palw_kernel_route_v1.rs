@@ -560,7 +560,7 @@ impl PalwKernelRouteStateV1 {
         let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
             ledger.set_commitment_scope_from_daa_v1(commitment_scope);
             ledger.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(ledger.paid_consumer_projection_mut_v1()).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_checked_v6(ledger.paid_consumer_projection_mut_v1())?;
             Ok(ledger)
         };
         if let Some(cached) = self.ledger_cache.get_reserved_v1().map_err(E::Resource)? {
@@ -836,6 +836,16 @@ fn selected_approval_event_v1(
     receipt: &misaka_palw_kernel::opv::FinalReceiptV1,
     settlement: crate::palw_kernel_settlement_v1::PalwKernelSettlementV1,
 ) -> Result<Option<Vec<u8>>, String> {
+    selected_approval_work_v6(ledger, receipt, settlement)?.map(|work| borsh::to_vec(&work).map_err(|e| e.to_string())).transpose()
+}
+
+/// Same RFC07 event as the encoded compatibility reader, without a second ledger
+/// projection or a serialize/decode round trip in native source consumers.
+pub(crate) fn selected_approval_work_v6(
+    ledger: &KernelLedgerV1,
+    receipt: &misaka_palw_kernel::opv::FinalReceiptV1,
+    settlement: crate::palw_kernel_settlement_v1::PalwKernelSettlementV1,
+) -> Result<Option<misaka_palw_challenge::AttributedWorkV1>, String> {
     use crate::palw_kernel_settlement_v1::PalwKernelSettlementV1 as S;
     use misaka_palw_kernel::mode::VerificationModeV1;
     use misaka_palw_kernel::opv::WorkFinalContextV1;
@@ -876,7 +886,7 @@ fn selected_approval_event_v1(
         event,
         attribution: misaka_palw_challenge::SourceAttributionV1 { producer_id: producer, consumer_id: consumer },
     };
-    borsh::to_vec(&attributed).map(Some).map_err(|e| e.to_string())
+    Ok(Some(attributed))
 }
 
 /// **RFC07 record-only event of a Panel-licensed Final** (ADR-0184 §2): Borsh of `(FinalReceiptV1, settlement label, producer,
@@ -921,8 +931,7 @@ impl PalwKernelRouteStateV1 {
         // does not know the licensing Panel's seed and epoch.
         Ok(match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
             (_, true) => {
-                let approved =
-                    crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(self, &Hash64::from_bytes(receipt.claim));
+                let approved = crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(self, &Hash64::from_bytes(receipt.claim));
                 ("PaidClaimV2", if approved { selected_approval_event_v1(ledger, receipt, settlement)? } else { None })
             }
             (VerificationModeV1::OptimisticPublicVerification, false) => ("OptimisticUnapproved", None),
@@ -1639,7 +1648,7 @@ impl PalwKernelRouteStateV1 {
             // RFC-0006: the reserved ledger is mutated only through its typed methods (no `DerefMut`).
             cached.set_commitment_scope_from_daa_v1(commitment_scope);
             cached.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(cached.paid_consumer_projection_mut_v1()).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_checked_v6(cached.paid_consumer_projection_mut_v1())?;
             return Ok(cached);
         }
         let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(E::Resource)?;

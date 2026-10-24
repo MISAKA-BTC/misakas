@@ -453,10 +453,9 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     }
 
     pub fn paid_claim_approved_final_exists_v2(&self) -> bool {
-        self.aux
-            .range((PAID_CLAIM_FINALS_V2, Vec::new())..(PAID_CLAIM_FINALS_V2 + 1, Vec::new()))
-            .filter_map(|(_, bytes)| borsh::from_slice::<PalwPaidClaimFinalV2>(bytes).ok())
-            .any(|row| row.complete_receipts > 0 && row.completed_rounds > 0)
+        // Conservative compatibility latch only: unknown closes bootstrap, never grants approval.
+        // Native selection propagates the checked error rather than converting it to a boolean.
+        self.paid_claim_approved_final_exists_checked_v6().unwrap_or(true)
     }
 
     /// Whether `claim`'s paid lock was a bootstrap lock (its draw predictable): such a claim's Final may seed the beacon but earns
@@ -988,3 +987,9 @@ fn is_segmented_descriptor_v3(id: &Digest) -> bool {
     *id == misaka_palw_kernel::descriptor::k2_tir_v4_descriptor().digest()
         || *id == misaka_palw_kernel::descriptor::k2_tir_v5_descriptor().digest()
 }
+
+#[path = "palw_paid_claim_bootstrap_read_v6.rs"]
+mod bootstrap_read_v6;
+
+#[cfg(test)]
+pub(crate) use bootstrap_read_v6::with_checker_v6 as with_bootstrap_checker_v6;

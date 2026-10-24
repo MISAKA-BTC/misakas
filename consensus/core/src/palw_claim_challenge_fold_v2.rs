@@ -660,11 +660,14 @@ fn admit_review(
     Ok(())
 }
 fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Digest) -> Result<(), PalwStateV2Error> {
-    let a = authority(b, enrollment)?;
+    let r = b.state.kernel_route.as_ref().ok_or_else(|| refused("paid claim route missing"))?;
+    let native = |why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused);
+    let a = r.paid_claim_enrollment_checked_v6(enrollment).map_err(native)?;
+    let ledger = r.ledger_checked_v1().map_err(native)?;
+    a.validate(&ledger).map_err(refused)?;
     if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
         return Err(refused("staged lock requires a fresh round source"));
     }
-    let r = b.state.kernel_route.as_ref().unwrap();
     if r.aux.contains_key(&(PAID_CLAIM_LOCKS_V2, key(enrollment))) {
         return Err(refused("paid claim lock already consumed"));
     }
@@ -678,11 +681,8 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
     // re-derives the draw from the row. With `bootstrap_seed` `None` a lock needs the locked v5 beacon exactly as before.
     let policy = current_policy(b, ctx.daa_score)?;
     let base_subject = || -> Result<_, PalwStateV2Error> {
-        let base = r
-            .ledger_checked_v1()
-            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
-            .claim_challenge_subject(&a.enrollment.base_claim)
-            .ok_or_else(|| refused("paid lock: base statement missing"))?;
+        let base =
+            ledger.claim_challenge_subject(&a.enrollment.base_claim).ok_or_else(|| refused("paid lock: base statement missing"))?;
         let expected = misaka_palw_kernel::claim_paid_v2::paid_subject_with_checker_snapshot_v2(
             &base,
             &a.class,
@@ -707,39 +707,53 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
         .map_err(refused)?;
         Ok((check, anchor))
     };
-    let seal_seed = match policy.bootstrap_seed {
-        // An unfunded source target (no `Fund`) has no seal-reveal seed: only the bootstrap draw can lock it.
-        Some(_) => match r.paid_beacon_material_v5(&a.context.id()).ok().flatten() {
-            Some((contract, sources, promises)) => misaka_palw_challenge::paid_opt_in::collect_paid_seal_reveal_seed_v6(
+    let material = r.paid_claim_bootstrap_material_checked_v6(&a, &ledger).map_err(native)?;
+    let seal_seed = if policy.bootstrap_seed.is_some() {
+        match &material {
+            Some(material) => misaka_palw_challenge::paid_opt_in::collect_paid_seal_reveal_seed_v6(
                 &a.context,
-                &contract,
-                &sources,
-                &promises,
+                &material.0,
+                &material.1,
+                &material.2,
                 ctx.daa_score,
             )
             .map_err(|e| refused(e.to_string()))?,
             None => None,
-        },
-        None => None,
+        }
+    } else {
+        None
     };
     let (check, anchor) = match (seal_seed, policy.bootstrap_seed) {
         (Some(seed), _) => seeded(seed, misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2())?,
-        (None, Some(seed)) if !r.paid_claim_approved_final_exists_v2() => {
+        (None, Some(seed)) if !r.paid_claim_approved_final_exists_checked_v6().map_err(native)? => {
             seeded(seed, misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2())?
         }
         (None, Some(_)) => return Err(refused("paid lock: the sources sealed after the target have not all revealed")),
         (None, None) => {
-            let check = r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)?;
-            let (contract, sources, promises) = r
-                .paid_beacon_material_v5(&a.context.id())
-                .map_err(refused)?
-                .ok_or_else(|| refused("paid source backing missing"))?;
+            let material = material.as_ref().ok_or_else(|| refused("paid source backing missing"))?;
             let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) =
-                misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, ctx.daa_score)
-                    .map_err(|e| refused(e.to_string()))?
+                misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(
+                    &a.context,
+                    &material.0,
+                    &material.1,
+                    &material.2,
+                    ctx.daa_score,
+                )
+                .map_err(|e| refused(e.to_string()))?
             else {
                 return Err(refused("future paid beacon unavailable"));
             };
+            let base = ledger.claim_challenge_subject(&a.enrollment.base_claim).ok_or_else(|| refused("base statement missing"))?;
+            let check = PaidClaimCheckAuthorityV2::verify(
+                &a.class,
+                &a.enrollment,
+                &base,
+                &a.context,
+                &beacon,
+                ctx.daa_score,
+                paid_checker_snapshot_root_v2(&a.checker_candidates),
+            )
+            .map_err(refused)?;
             (check, beacon.challenge_anchor)
         }
     };
@@ -759,8 +773,7 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
     let (seat_count, seat_quorum) = b.params.kernel_route_seats_and_quorum_v1(ctx.daa_score);
     let mut ranked: Vec<_> = entries.into_values().collect();
     ranked.sort();
-    let seats: Vec<_> =
-        ranked.into_iter().take(seat_count).map(|(_, k)| k).collect();
+    let seats: Vec<_> = ranked.into_iter().take(seat_count).map(|(_, k)| k).collect();
     let quorum = u32::from(seat_quorum);
     if seats.len() < quorum as usize {
         return Err(refused("paid claim lacks distinct eligible checker operators"));
@@ -1300,8 +1313,7 @@ fn round_lock(
     let (seat_count, seat_quorum) = b.params.kernel_route_seats_and_quorum_v1(ctx.daa_score);
     let mut ranked: Vec<_> = operators.into_values().collect();
     ranked.sort();
-    let seats: Vec<_> =
-        ranked.into_iter().take(seat_count).map(|(_, b)| b).collect();
+    let seats: Vec<_> = ranked.into_iter().take(seat_count).map(|(_, b)| b).collect();
     let quorum = u32::from(seat_quorum);
     if seats.len() < quorum as usize {
         return Err(refused("round committee has too few independent native operators"));
