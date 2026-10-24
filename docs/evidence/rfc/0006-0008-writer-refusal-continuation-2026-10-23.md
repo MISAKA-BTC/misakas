@@ -1223,3 +1223,81 @@ Final source private library check also passes in 19.62s
 (`/tmp/misaka-inventory-plan-final-source-private-check.log`), and manifest
 source digests match after that check. Documentation validation retains 43
 baseline issues and zero new issues (`/tmp/misaka-inventory-plan-docs-final.log`).
+
+
+## Cursor integration confirmation and reported public run — 2026-10-24
+
+The user requested merging Cursor's studio/g14 and parallel-lane integration at
+`6a128eb65775c9cf1a26f975b7028c2d4a8b1187` before continuing. At worktree HEAD
+`42b71a83cb7fe502fb1fd9fb499410ef3383534b`, Git confirms that commit is already an
+ancestor, with 49 continuation commits above it. `git fetch origin pre` resolves
+FETCH_HEAD/remote pre to the same specified commit; merging that exact commit
+returns `Already up to date`. No artificial merge commit or duplicate cherry-pick
+is needed. Local pre independently points at `537843abe0ffb6e058b2ca95068192fddac386f9`
+and is not reset or overwritten by this request. The dirty original red-tests
+checkout is preserved; work continues on codex/rfc06-12-continuation.
+
+User-provided operational report (not independently queried in this turn): four
+nodes run that kaspad and follow the public chain, reported DAA 14754 after
+35h13m; activation remains None and is not armed at 16000. P3/P4 pins are included
+in the specified commit. The unarmed rule reportedly accepts through DAA 20001.
+The .113, ibm and 5.104 aliases retain existing data directories; 95.111 reportedly
+finished public sync and accepted ibm's DAA-14754 block with supplied prefix
+`9c3d8c29…`. The old `/root/.t12-20260930` database is reported retained. A prefix
+is not a full block identifier and no missing suffix or host address is inferred.
+The baseline source heartbeat test defaults to DAA 16001 and permits an explicit
+PALW_DRILL_DAA override; this turn does not rerun the 20001 drill or inspect the
+remote nodes. This report does not promote UNKNOWN RFC12 gates or establish
+full-activation/claim acceptance. K3 formal inputs remain uncreated.
+
+## Measurement metadata owner and summary-only sink — 2026-10-24
+
+`qwen36_inventory_measure_v1` now returns `Qwen36InventoryMetadataV1`, an owning
+metadata slice with a retained native ticket. Tensor/layer byte aggregation uses
+checked addition. Slot growth admits old plus new arrays before fallible
+allocation, names reserve before copying, and payload drops before its ticket.
+There is no Clone, mutable slice or Vec extraction path. The existing CLI
+placement consumer borrows the same metadata slice; wire/root/placement semantics
+are unchanged. Cloning from that borrowed slice into another owner remains a
+separate allocation scope.
+
+`qwen36_inventory_summary_v1` now uses a summary-only sink rather than calling
+measure and retaining an unused per-tensor Vec. Both sinks use a wrapper around
+the existing core layout checker/Merkle stream. The wrapper pre-admits its typed
+header, a conservative frontier slot-growth envelope (96 old+new slots with the
+usual factor two), and both checker/comparison names through old/new name
+replacement. It checks row length and leaf count against u32 and total bytes
+against u64 before core push. The summary sink retains no tensor list; shared
+plan/artifact/read-buffer ownership is still separate. Core checker String and
+frontier allocations remain infallible internally after this admission; this is
+not an OS/RSS bound or a complete process-OOM recovery claim. Failing-data
+error Strings remain a diagnostic scope.
+
+Actual inventory Cargo suite: 34 entries pass, 509 filtered, runtime 0.47s after
+11.69s rebuild (`/tmp/misaka-inventory-metadata-final-tests.log`). Source/env/argv,
+lock digest and ancestry: `/tmp/misaka-inventory-metadata-manifest.json`.
+Existing materialized/digest/summary/placement comparisons still pass. Added
+controls compare core and wrapped stream roots around powers of two through
+1025 leaves and exercise counter overflow. Seven isolated cases select the
+actual capacity child: zero, one-below/exact metadata slot growth, name-copy
+refusal, one-below/exact stream name replacement with refusal/retry, and the
+actual measurement operation. Returned metadata keeps its reservation while
+scratch is released; failure and drop return all tickets. The actual operation's
+threshold is found with blockers without rearming, and verified at exact/one
+below with no leaked partial owners. This fixture/layout only: admission peak
+548,440 typed bytes, metadata retained 122,856 bytes for 584 tensors. Inputs and
+the reference fixture inventory are built before arming and are not covered by
+that quota; these numbers are not production-model costs.
+
+Actual private service typecheck passes in 20.42s with the same isolated target,
+debug/incremental settings (`/tmp/misaka-inventory-metadata-private-check.log`).
+Materialized inventory/digest outputs, accusation/case/outbox/carrier copies,
+artifact/cache/diagnostic scopes, whole-model costs and the live campaign remain
+open. Activation stays None; normal bootstrap refusal, claim approvals, frozen
+model tiers and dormant source economics remain unchanged.
+
+The actual metadata placement consumer also typechecks:
+`cargo check -p misaka-palw-sdk --bin palw-class`, 1m23s with the same isolated
+target/env (`/tmp/misaka-inventory-metadata-sdk-check.log`). The manifest source
+digests match after both checks. Documentation checks retain 43 known baseline
+issues with zero new issues (`/tmp/misaka-inventory-metadata-docs-final.log`).

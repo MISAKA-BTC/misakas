@@ -43,12 +43,11 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_artifact::{
-    PalwArtifactInventoryDigestV1, PalwArtifactInventoryStreamV1, PalwArtifactInventorySummaryV1, PalwArtifactInventoryV1,
+    PalwArtifactInventoryDigestV1, PalwArtifactInventoryV1,
     PalwArtifactOperandV1, PalwArtifactRowDigestV1, PalwInventoryError, artifact_leaf_parts_v1,
 };
 use kaspa_consensus_core::palw_base0_ops::ScaleParams;
 use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_tensor_names_v1};
-use kaspa_consensus_core::palw_shard_plan_v1::PalwInventoryRowMetaV1;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -1042,37 +1041,9 @@ pub fn qwen36_inventory_digest_v1(
     PalwArtifactInventoryDigestV1::new(rows).map_err(InventoryBuildError::NotCanonical)
 }
 
-/// **Root, leaf count and bytes, with nothing kept per row** (ADR-0106): the rows arrive in
-/// canonical order, so each is checked, hashed into the Merkle frontier and dropped. Holds one read
-/// block and the frontier's `log₂ n` peaks, whatever the artifact's size.
-pub fn qwen36_inventory_summary_v1(
-    artifact: &crate::qwen36::Qwen36ArtifactV1,
-    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
-) -> Result<PalwArtifactInventorySummaryV1, InventoryBuildError> {
-    Ok(qwen36_inventory_measure_v1(artifact, profile)?.0)
-}
-
-/// **The summary and each tensor's bytes** — what a measurement reads: the placement of an
-/// inventory's bytes (`palw_artifact_bytes_from_inventory_v1`) reads a row's tensor, layer and
-/// length only, so one entry per tensor, its rows summed, places exactly what its rows would.
-/// Per TENSOR, not per row: the hundred-thousand tensors of a 35B mixture, not its fourteen million
-/// leaves.
-pub fn qwen36_inventory_measure_v1(
-    artifact: &crate::qwen36::Qwen36ArtifactV1,
-    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
-) -> Result<(PalwArtifactInventorySummaryV1, Vec<PalwInventoryRowMetaV1>), InventoryBuildError> {
-    let mut stream = PalwArtifactInventoryStreamV1::new();
-    let mut tensors: Vec<PalwInventoryRowMetaV1> = Vec::new();
-    qwen36_visit_inventory_rows_v1(artifact, profile, &mut |name, layer, row_start, bytes| {
-        stream.push(name, layer, row_start, bytes).map_err(InventoryBuildError::NotCanonical)?;
-        match tensors.last_mut() {
-            Some(t) if t.tensor_name == name && t.layer == layer => t.bytes += bytes.len() as u64,
-            _ => tensors.push(PalwInventoryRowMetaV1 { tensor_name: name.to_string(), layer, bytes: bytes.len() as u64 }),
-        }
-        Ok(())
-    })?;
-    Ok((stream.finish().map_err(InventoryBuildError::NotCanonical)?, tensors))
-}
+#[path = "inventory/q36_measure_v1.rs"]
+mod q36_measure_v1;
+pub use q36_measure_v1::{Qwen36InventoryMetadataV1, measure as qwen36_inventory_measure_v1, summary as qwen36_inventory_summary_v1};
 
 /// Where the emitter hands a row: `(tensor, layer, byte offset, bytes)`, the bytes borrowed for the
 /// call only; a sink's refusal stops the pass.
