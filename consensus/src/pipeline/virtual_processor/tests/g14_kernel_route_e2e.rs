@@ -3555,3 +3555,6 @@ mod g14_t_campaign;
 
 // RFC08: signed selected-source fees/refunds through accepted coinbases, restart and reorg.
 mod source_verifier_economics_v2;
+
+// RFC08: signed material generations and exact finalized GC intent binding.
+mod material_gc_v4;

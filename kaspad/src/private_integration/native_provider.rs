@@ -1432,10 +1432,9 @@ impl MonetaryMaterialGcOracleV1 for ConsensusGcOracleV3<'_> {
         release_block: kaspa_consensus_core::BlockHash,
     ) -> Result<bool, String> {
         let session = self.0.consensus().unguarded_session_blocking();
-        if let Some((_, receipt)) = session.palw_material_terminal_receipt_finalized_v2(root, consent)? {
-            return Ok(receipt.tail_block == tail);
-        }
-        session.palw_monetary_material_release_finalized_v1(root, consent, tail, release_block)
+        misaka_palw_remote::monetary_material_gc::native_v4::native_material_release_finalized_v4(
+            &*session, root, consent, tail, release_block,
+        )
     }
 }
 

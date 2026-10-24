@@ -17,6 +17,8 @@
 //! exact witness tuple. The store's own publication is atomic, so a crash leaves either the old snapshot (the marker replays
 //! the same witness-checked deletion) or the new one (the replay finds nothing to delete). The marker is removed only after
 //! the contract is observed gone from the reopened in-memory store; the journal is rewritten the same atomic way.
+pub mod native_v4;
+
 use crate::monetary_material::DurableMonetaryMaterialProviderV1;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_consensus_core::{palw_monetary_material_v1::PalwMonetaryMaterialRowV1, BlockHash, Hash64};
@@ -781,8 +783,10 @@ impl<A: RemoteFinalityAuthorityV1, F: FnMut(BlockHash) -> Result<crate::monetary
             _ => None,
         }))
     }
-    fn release_finalized(&mut self, root: Hash64, consent: Hash64, tail: Hash64, _release: BlockHash) -> Result<bool, String> {
-        Ok(self.terminal_receipt(root, consent)?.is_some_and(|(_, r)| r.tail_block == tail))
+    fn release_finalized(&mut self, root: Hash64, consent: Hash64, tail: Hash64, release: BlockHash) -> Result<bool, String> {
+        Ok(self.terminal_receipt(root, consent)?.is_some_and(|(_, r)| {
+            native_v4::receipt_matches_gc_intent_v4(&r, root, consent, tail, release)
+        }))
     }
 }
 
