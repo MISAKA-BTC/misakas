@@ -98,6 +98,11 @@ impl BoundFpReplayV2 {
     pub(super) fn backend(&self) -> &dyn PalwExecutionBackendV1 {
         self.backend.as_ref()
     }
+    pub(super) fn backend_and_context_mut_v2(
+        &mut self,
+    ) -> (&mut dyn PalwExecutionBackendV1, Option<&PalwJobContextV2>) {
+        (self.backend.as_mut(), self.guard.as_ref().map(|guard| &*guard.job))
+    }
     pub(super) fn backend_mut(&mut self) -> &mut dyn PalwExecutionBackendV1 {
         self.backend.as_mut()
     }

@@ -2759,3 +2759,6 @@ mod resume;
 // Final, and a restart mid-pursuit resumed without a second seal.
 #[path = "palw_service_kernel_e2e.rs"]
 mod kernel;
+
+#[path = "palw_fp_accepted_context_native_tests_v2.rs"]
+mod fp_accepted_context_native;

@@ -118,6 +118,8 @@ mod artifact_inventory;
 mod response_presign;
 #[path = "palw_fp_replay_routing_v2.rs"]
 mod fp_replay_routing;
+#[path = "palw_accepted_fp_job_context_v2.rs"]
+mod accepted_fp_job_context;
 #[path = "palw_flat_source_responder.rs"]
 mod flat_source_responder;
 #[path = "palw_float_source_responder.rs"]
@@ -13931,12 +13933,15 @@ impl PalwPanelService {
                             let shape=backend.capture_shape(&payload.capture)?;
                             let ctx=shape.job_context;
                             (ctx.job_id==*job_id && duty.fp_job_pin_v1().is_some_and(|pin|kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx)==pin)).then_some(ctx)
-                        }).or_else(||backend.fp_job_context_v1(&material.job));
-                        let Some(context)=context else {continue};
+                        });
+                        let context=match context {
+                            Some(context)=>match kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&context) {Ok(context)=>context,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: FP context retention held: {why}",duty.claim_id);continue;}},
+                            None=>match accepted_fp_job_context::accepted_fp_job_context_v2(session,duty,&material.job,backend.as_ref()) {Ok(context)=>context,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: accepted FP context acquisition held: {why}",duty.claim_id);continue;}},
+                        };
                         let bound=match fp_replay_routing::BoundFpReplayV2::bind_with(backend,duty.claim_id,&context,true,|claim,job|session.palw_native_routing_claim_authority_v2(claim,job),context_scratch) {
                             Ok(bound)=>bound,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: FP native routing bind held: {why}",duty.claim_id);continue;}
                         };
-                        (bound,Some(context))
+                        (bound,None)
                     } else {
                         let context=backend.fp_job_context_v1(&material.job);
                         (fp_replay_routing::BoundFpReplayV2::legacy(backend),context)
@@ -13945,16 +13950,16 @@ impl PalwPanelService {
                     // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
                     let backends = self.backends();
                     let (reserved, need) =
-                        match self.reserve_replay_at_widest_run_v1("full-seat", bound.backend_mut(), duty.class_id, duty.claim_id, |b| {
+                        match { let (backend, original_context)=bound.backend_and_context_mut_v2(); self.reserve_replay_at_widest_run_v1("full-seat", backend, duty.class_id, duty.claim_id, |b| {
                             backends.role_memory_need_for_backend_or_chain_v1(
                                 b,
                                 duty.class_id,
                                 duty.artifact_root,
-                                ctx.as_ref(),
+                                original_context.or(ctx.as_ref()),
                                 FULL_SEAT_V1,
                                 |id| self.chain_carriage_v1(session, id),
                             )
-                        }) {
+                        }) } {
                             Ok(taken) => taken,
                             Err(why) => {
                                 crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
