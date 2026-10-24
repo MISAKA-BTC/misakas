@@ -1,5 +1,7 @@
 //! Tiny native TypedKernelV4 ingress/retention mechanism, not K3 or a campaign.
 use super::*;
+#[path = "material_typed_reorg_v4.rs"]
+mod reorg;
 use kaspa_consensus_core::{
     api::ConsensusApi,
     palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4,
@@ -81,6 +83,7 @@ struct ReaderInput {
     nonce: u64,
     current_read: bool,
     replacement: bool,
+    rollback: bool,
 }
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct SignedAdmission {
@@ -130,6 +133,7 @@ fn reader_roundtrip(
     request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
     current_read: bool,
     replacement: bool,
+    rollback: bool,
 ) -> (World, std::sync::Arc<kaspa_database::prelude::DB>) {
     use kaspa_database::prelude::ConnBuilder;
     assert!(kaspa_consensus_core::palw_native_resource_v1::native_declared_logical_limits_v1().is_none());
@@ -142,6 +146,7 @@ fn reader_roundtrip(
         nonce: chain.nonce_for_reopen(),
         current_read,
         replacement,
+        rollback,
     };
     std::fs::write(dir.join("reader-input"), borsh::to_vec(&input).unwrap()).unwrap();
     let db_path = db.path().to_path_buf();
@@ -226,7 +231,7 @@ async fn typed_writer_child() {
     assert!(matches!(request.bundle, PalwProspectiveKernelBundleV4::TypedKernelV4(_)));
     let dir = std::env::temp_dir().join(format!("misaka-native-typed-{}-{root}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    (w, db) = reader_roundtrip(w, db, &dir, request, false, false);
+    (w, db) = reader_roundtrip(w, db, &dir, request, false, false, false);
     let admission: SignedAdmission = borsh::from_slice(&std::fs::read(dir.join("signed-admission")).unwrap()).unwrap();
     assert_eq!(admission.request, request.id());
     let capsule = signed_capsule(&admission.object);
@@ -297,10 +302,10 @@ async fn typed_writer_child() {
         w.net.ledger().claims.contains_key(&root.as_bytes()),
         "actual claim passes active material gate after funded TypedKernelV4 acceptance"
     );
-    (w, db) = reader_roundtrip(w, db, &dir, request, true, false);
+    (w, db) = reader_roundtrip(w, db, &dir, request, true, false, false);
     assert!(w.net.chain.ctx.consensus.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap());
     if std::env::var("MISAKA_TYPED_REPLACEMENT_CHILD_V4").as_deref() == Ok("1") {
-        (w, db) = reader_roundtrip(w, db, &dir, request, false, true);
+        (w, db) = reader_roundtrip(w, db, &dir, request, false, true, false);
         let replacement: SignedReplacement = borsh::from_slice(&std::fs::read(dir.join("signed-replacement")).unwrap()).unwrap();
         assert_eq!(replacement.intent.context_request, request.id());
         assert_eq!(replacement.intent.previous, admission.consent);
@@ -309,7 +314,16 @@ async fn typed_writer_child() {
         assert_eq!(*valid_until_daa, replacement.intent.valid_until_daa);
         assert_eq!(signed_capsule(&replacement.object).bounded_replacement_consent_v4(), Some(replacement.consent));
         assert!(!w.net.chain.ctx.consensus.palw_kernel_material_consent_accepted_v4(root, replacement.consent).unwrap());
-        w.net.send(vec![(0, replacement.object)]).await;
+        let saved = if std::env::var("MISAKA_TYPED_REORG_CHILD_V4").as_deref() == Ok("1") {
+            let fork = w.net.chain.sink();
+            let carrier = w.net.carrier(0, &replacement.object);
+            let bytes = borsh::to_vec(&carrier).unwrap();
+            reorg::send_saved_carrier(&mut w.net, &carrier).await;
+            Some((fork, carrier, bytes))
+        } else {
+            w.net.send(vec![(0, replacement.object)]).await;
+            None
+        };
         let current = w.net.chain.tip_state().1.monetary_material_row_v1(root).expect("actual accepted replacement row");
         assert_eq!(current.sequence, 1);
         assert_eq!(current.consent, replacement.consent);
@@ -326,8 +340,12 @@ async fn typed_writer_child() {
             !w.net.chain.ctx.consensus.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap(),
             "the old consent is historical, not the current monetary generation"
         );
-        (w, db) = reader_roundtrip(w, db, &dir, request, true, true);
+        (w, db) = reader_roundtrip(w, db, &dir, request, true, true, false);
         assert_eq!(w.net.chain.tip_state().1.monetary_material_row_v1(root).unwrap().consent, replacement.consent);
+        if let Some((fork, carrier, bytes)) = saved {
+            (w, db) =
+                reorg::rollback_and_restore(w, db, &dir, request, admission.consent, replacement.consent, fork, carrier, &bytes).await;
+        }
     }
     drop(w);
     drop(db);
@@ -371,28 +389,40 @@ async fn typed_reader_child() {
             .replacement
             .then(|| borsh::from_slice::<SignedReplacement>(&std::fs::read(dir.join("signed-replacement")).unwrap()).unwrap());
         if let Some(replacement) = &replacement {
-            assert!(native.palw_kernel_material_consent_accepted_v4(root, replacement.consent).unwrap());
-            assert!(!native.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap());
+            assert_eq!(native.palw_kernel_material_consent_accepted_v4(root, replacement.consent).unwrap(), !input.rollback);
+            assert_eq!(native.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap(), input.rollback);
         } else {
             assert!(native.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap());
         }
         for card in [2, 3, 4, 5].into_iter().filter(|card| *card < 4 || replacement.is_some()) {
             let file = dir.join(format!("provider-{card}"));
-            let store = Provider::open_with_kernel_contexts_v4(&file, 4 << 20, 16 << 20, |_| None, limits).unwrap();
+            let mut store = Provider::open_with_kernel_contexts_v4(&file, 4 << 20, 16 << 20, |_| None, limits).unwrap();
             let provider = chain.bonds[card];
             let key = TestConsensus::palw_v2_registry_keypair(card as u64);
             let exact_consent = if card < 4 { admission.consent } else { replacement.as_ref().unwrap().consent };
-            store
-                .answer_material_exact_current_v4(
-                    exact_consent,
-                    root,
-                    root,
+            if input.rollback {
+                reorg::rolled_back_provider_read(
+                    &mut store,
+                    native,
+                    &input,
                     provider,
                     key.verification_key.as_ref(),
-                    PalwMonetaryMaterialDemandV1::Kernel { stage: 0, position: 0 },
-                    native,
-                )
-                .unwrap();
+                    exact_consent,
+                    card >= 4,
+                );
+            } else {
+                store
+                    .answer_material_exact_current_v4(
+                        exact_consent,
+                        root,
+                        root,
+                        provider,
+                        key.verification_key.as_ref(),
+                        PalwMonetaryMaterialDemandV1::Kernel { stage: 0, position: 0 },
+                        native,
+                    )
+                    .unwrap();
+            }
         }
     } else {
         let ingress = native.palw_kernel_material_ingress_v4(input.request.intent.checkpoint, &input.request).unwrap();
