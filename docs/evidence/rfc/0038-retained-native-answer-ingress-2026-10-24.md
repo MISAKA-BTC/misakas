@@ -1,0 +1,24 @@
+# RFC-0038 retained native answer ingress — 2026-10-24
+
+The RFC38 transaction accounting envelope now has a checked borrowed decoder. It verifies exact framing, bounded inner schema, answer count arithmetic and EOF before allocating the answer. Plain FP, TFP1, HFP1 and TFO1 retain their existing individual inner ceilings. The old served-material FPA1 codec is a separate schema; its bytes are not an accounting transaction payload.
+
+The production transaction validator receives the accounting fence through its normal services builder. Isolation requires a declared fence, header context requires the accepting height, and the original TFP/HFP/job-version doors continue to apply. No shipped preset changes. The activation validator continues to reject arming.
+
+The actual accepted-transaction extraction path projects only its FP payload view and preserves the outer cached transaction ID and fee lookup. It allocates the answer only after authenticated extraction supplies the exact carrier ID and executed decode count; both are checked before its reservation/copy. The additional transaction-view workspace is reserved from the real transaction input/output/signature/payload fields and remains in the extraction scope. Only a successfully extracted object from that exact carrier may supply its answer. A non-FP object or wrong decode count cannot lend an answer to another object. Each successful object's answer is handed to acceptance rehearsal and then to canonical block extras; refused carriers do not enter the canonical answer collection. Each extras copy reserves its typed answer vectors and BTree memberships before allocation and retains that reservation through the fold call. The dedicated extras guard covers only the answer overlay; it does not claim ownership admission for all other pre-existing extras fields. Duplicate identical answers are idempotent; conflicting answers are a semantic refusal with no overwrite, checked before rehearsal. Local capacity failure propagates as a local native fault rather than a claim verdict.
+
+For FPA1 wrapping TFO1, the funded pairing stores the actual outer transaction, including its FPA bytes, actual inputs, own funding output and final carrier ID. Literal inner equality is checked while native payer signatures and own-output inspection still use that actual transaction. The outer envelope does not authenticate the funding consent, an answer or an output root. Rent reads the same literal inner TFP declaration; the funding output remains an output and cannot become fee credit. Funded admission and material availability keep their existing coordinator requirements and installer restrictions. The separate read-only UTXO funded-candidate diagnostic still classifies raw TFO1 and is not extended to FPA1 here; it supplies no admission/installation authority.
+
+This is node ingress work, not an arming record. RFC38 seat comparison of the *carried transaction answer* with the claim's output root, producer emission, and the complete arming evidence remain outstanding. Existing served-answer seat handling does not establish this new accounting binding. RFC12's 15 real campaign gates remain unexecuted/UNKNOWN; K3 formal inputs, manifest, weights and signed execution inputs remain unavailable. These local regression fixtures do not establish a real campaign result.
+
+Validation on the frozen implementation source:
+
+- `cargo check -p kaspa-consensus --lib`: PASS (9m42s including shared-target waiting; existing warnings remain).
+- Core `palw_fp_answer_accounting_v1`: 9/9 PASS. Includes borrowed framing/truncation/count bounds, old served FPA1 separation, native ticket lifetime and capacity refusal, semantic duplicate conflict refusal, carrier/count correspondence, legacy coverage and dormant arming.
+- Funded-original `accounting_outer_keeps_actual_funding_identity_and_rejects_fee_output_substitution`: 1/1 PASS. Transport/local-fee fixture; synthetic consent is explicitly rejected, not evidence of a real paid execution.
+- Existing `audit_compute_exec_v1`: 6/6 PASS. Pricing/fence regression controls, not campaign evidence.
+- Actual native validator `fp_job_v4_is_admitted_exactly_from_the_decode_rules_fence`: 1/1 PASS (the existing test now also drives FPA accounting through real isolation/header-context doors, including nested/malformed rejection, outer identity preservation and inner job-version fencing).
+- Documentation maintenance: 43 known occurrences, 0 new; `git diff --check`: PASS.
+
+These are 17 local controls (9 core accounting, 1 funded transport/fee, 6 existing fold regressions, 1 real validator test); they do not establish a full campaign gate.
+
+Logs: `/tmp/misaka-rfc38-ingress-check-final-20261024.log`, `/tmp/misaka-rfc38-core-ingress-final-tests-20261024.log`, `/tmp/misaka-rfc38-funded-accounting-test-20261024.log`, `/tmp/misaka-rfc38-answer-fold-regression-20261024.log`, `/tmp/misaka-rfc38-native-doors-final-tests-20261024.log`.

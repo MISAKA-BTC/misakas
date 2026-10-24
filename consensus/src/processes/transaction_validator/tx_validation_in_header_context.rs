@@ -54,48 +54,13 @@ impl TransactionValidator {
         self.check_model_sink_binding_in_context(tx, ctx_daa_score)?;
         self.check_activation_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_improvement_sink_outputs_in_context(tx, ctx_daa_score)?;
-        // Only FP-specific inner doors see the original payload. Lock time,
-        // outputs, transaction identity, fees and mass remain those of the outer TX.
-        let original_inner = if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-            && tx.payload.starts_with(kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAGIC_V1)
-        {
-            if !self.palw_tir_public_conviction_fence.is_some_and(|fence| fence.is_active(ctx_daa_score)) {
-                return Err(TxRuleError::InvalidPalwFpPayload(
-                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
-                ));
-            }
-            let envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
-                .map_err(|_| {
-                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
-                })?;
-            let mut inner = tx.clone();
-            inner.payload = envelope.original_payload;
-            Some(inner)
-        } else if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-            && tx.payload.starts_with(kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
-        {
-            if !self.palw_staged_public_court_fence.is_some_and(|fence| fence.is_active(ctx_daa_score)) {
-                return Err(TxRuleError::InvalidPalwFpPayload(
-                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
-                ));
-            }
-            let envelope =
-                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload).map_err(|_| {
-                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
-                })?;
-            let mut inner = tx.clone();
-            inner.payload = envelope.original_payload;
-            Some(inner)
-        } else {
-            None
-        };
-        let tx = original_inner.as_ref().unwrap_or(tx);
-        self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_gen_claim_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_prefix_state_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_constraint_in_context(tx, ctx_daa_score)?;
+        let payload = self.palw_fp_door_payload_v1(tx, Some(ctx_daa_score))?;
+        self.check_palw_fp_work_leaves_in_context(tx, &payload, ctx_daa_score)?;
+        self.check_palw_fp_job_version_in_context(tx, &payload, ctx_daa_score)?;
+        self.check_palw_fp_evaluation_in_context(tx, &payload, ctx_daa_score)?;
+        self.check_palw_fp_gen_claim_in_context(tx, &payload, ctx_daa_score)?;
+        self.check_palw_fp_prefix_state_in_context(tx, &payload, ctx_daa_score)?;
+        self.check_palw_fp_constraint_in_context(tx, &payload, ctx_daa_score)?;
         self.check_palw_lifecycle_kind_in_context(tx, ctx_daa_score)
     }
 
@@ -126,7 +91,7 @@ impl TransactionValidator {
     /// this makes a build that schedules the fence and one that does not agree on every transaction
     /// below it: the other refuses the claim's bytes at isolation, as undecodable. Inert on every
     /// preset without the fence: returns on its first line.
-    fn check_palw_fp_evaluation_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+    fn check_palw_fp_evaluation_in_context(&self, tx: &Transaction, payload: &[u8], ctx_daa_score: u64) -> TxResult<()> {
         use kaspa_consensus_core::palw_improve_eval_v1::PalwFpEvalHeightRefusalV1;
         let Some(fence) = self.palw_improvement_fence else {
             return Ok(());
@@ -140,7 +105,7 @@ impl TransactionValidator {
         );
         let held_active = self.palw_held_context_fence.is_some_and(|fence| fence.is_active(ctx_daa_score));
         match kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_refusal_at_v1(
-            &tx.payload,
+            payload,
             fence.is_active(ctx_daa_score),
             matches!(decode_rules, kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active),
             held_active,
@@ -158,7 +123,7 @@ impl TransactionValidator {
     /// height; here, at the containing block's DAA, one below the fence — or below the V4 decode rules its job carries — is
     /// refused by name. So a build that schedules the fence and one that does not agree on every transaction below it. Inert
     /// on every preset without the fence: returns on its first line.
-    fn check_palw_fp_prefix_state_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+    fn check_palw_fp_prefix_state_in_context(&self, tx: &Transaction, payload: &[u8], ctx_daa_score: u64) -> TxResult<()> {
         let Some(fence) = self.palw_fp_prefix_state_fence else {
             return Ok(());
         };
@@ -170,7 +135,7 @@ impl TransactionValidator {
             ctx_daa_score,
         );
         match kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_refusal_at_v1(
-            &tx.payload,
+            payload,
             fence.is_active(ctx_daa_score),
             matches!(decode_rules, kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active),
             self.palw_fp_prefix_inherit_fence.is_some_and(|f| f.is_active(ctx_daa_score)),
@@ -184,7 +149,7 @@ impl TransactionValidator {
     /// commitment's stateless rules wherever the ruleset carries `Params::palw_fp_decode_constraint` at all; here, at the
     /// containing block's DAA, one below the fence — or one carrying a second-form constraint below
     /// `Params::palw_fp_constraint_v2` — is refused by name. Inert on every preset without the fence.
-    fn check_palw_fp_constraint_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+    fn check_palw_fp_constraint_in_context(&self, tx: &Transaction, payload: &[u8], ctx_daa_score: u64) -> TxResult<()> {
         let Some(fence) = self.palw_fp_decode_constraint_fence else {
             return Ok(());
         };
@@ -192,7 +157,7 @@ impl TransactionValidator {
             return Ok(());
         }
         match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_refusal_at_v1(
-            &tx.payload,
+            payload,
             fence.is_active(ctx_daa_score),
             self.palw_fp_constraint_v2_fence.is_some_and(|f| f.is_active(ctx_daa_score)),
         ) {
@@ -208,7 +173,7 @@ impl TransactionValidator {
     /// below it: the one refuses the claim here, the other at its isolation door. Inert on every preset
     /// without the fence: isolation refused every version-10 payload already, and this returns on its
     /// first line.
-    fn check_palw_fp_gen_claim_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+    fn check_palw_fp_gen_claim_in_context(&self, tx: &Transaction, payload: &[u8], ctx_daa_score: u64) -> TxResult<()> {
         let Some(fence) = self.palw_fp_job_v5_fence else {
             return Ok(());
         };
@@ -216,13 +181,13 @@ impl TransactionValidator {
             return Ok(());
         }
         if let Some(why) =
-            kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_refusal_at_v1(&tx.payload, fence.is_active(ctx_daa_score))
+            kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_refusal_at_v1(payload, fence.is_active(ctx_daa_score))
         {
             return Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score));
         }
         // The task-head profile: a `Head` job below `palw_task_heads_v1` — bytes the int-12 build refuses at its isolation door.
         let heads_active = self.palw_task_heads_fence.is_some_and(|f| f.is_active(ctx_daa_score));
-        match kaspa_consensus_core::palw_task_heads_v1::palw_fp_head_job_refusal_at_v1(&tx.payload, heads_active) {
+        match kaspa_consensus_core::palw_task_heads_v1::palw_fp_head_job_refusal_at_v1(payload, heads_active) {
             Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score)),
             None => Ok(()),
         }
@@ -235,7 +200,7 @@ impl TransactionValidator {
     /// that does not agree on every transaction below it, and from it only V4 jobs are admitted.
     /// Inert on every preset without the fence: isolation refused every V4 shape already, and
     /// this returns on its first line.
-    fn check_palw_fp_job_version_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+    fn check_palw_fp_job_version_in_context(&self, tx: &Transaction, payload: &[u8], ctx_daa_score: u64) -> TxResult<()> {
         let Some(fence) = self.palw_fp_decode_rules_fence else {
             return Ok(());
         };
@@ -243,7 +208,7 @@ impl TransactionValidator {
             return Ok(());
         }
         let rules = kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::at(Some(fence.daa_score()), ctx_daa_score);
-        match kaspa_consensus_core::palw_fp_objects_v3::palw_fp_job_version_refusal_v1(&tx.payload, rules) {
+        match kaspa_consensus_core::palw_fp_objects_v3::palw_fp_job_version_refusal_v1(payload, rules) {
             Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score)),
             None => Ok(()),
         }
@@ -256,14 +221,14 @@ impl TransactionValidator {
     /// carry it agree on every transaction before the activation, and nothing is committed on the
     /// strength of the permissive answer. Inert on every preset without the regime: isolation's cap
     /// there is the structural one and this returns on its first line.
-    fn check_palw_fp_work_leaves_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+    fn check_palw_fp_work_leaves_in_context(&self, tx: &Transaction, payload: &[u8], ctx_daa_score: u64) -> TxResult<()> {
         let Some(fence) = self.palw_held_context_fence else {
             return Ok(());
         };
         if fence.is_active(ctx_daa_score) || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
             return Ok(());
         }
-        match kaspa_consensus_core::palw_fp_objects_v3::palw_fp_work_leaves_before_the_regime_v1(&tx.payload) {
+        match kaspa_consensus_core::palw_fp_objects_v3::palw_fp_work_leaves_before_the_regime_v1(payload) {
             Some(leaves) => Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(leaves, ctx_daa_score)),
             None => Ok(()),
         }

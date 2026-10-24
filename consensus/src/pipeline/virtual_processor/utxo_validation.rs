@@ -482,16 +482,20 @@ impl VirtualStateProcessor {
             return 0;
         }
         if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            let payload = if tx.payload.starts_with(b"FPA1") && self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(daa)) {
+                let Some(view) = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize) else { return 0; };
+                view.inner
+            } else { &tx.payload };
             // G14 item 1 (RFC-0035 A): a TFO1 carrier burns its literal TFP1's declared rent exactly as that TFP1 carrier would, so
             // the coordinator's native rent check (`prepare_paired_original_v1`) reads a burn that actually happened. Refused or
             // admitted, the rent is destroyed (the TFP1 rule); the funding output is untouched (it is an output, not fee).
-            if kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(tx) {
-                return kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(&tx.payload)
+            if payload.starts_with(b"TFO1") {
+                return kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(payload)
                     .and_then(|envelope| envelope.original_v1())
                     .map(|original| original.declared_rent_sompi)
                     .unwrap_or(0);
             }
-            return kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
+            return kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(payload)
                 .map(|envelope| envelope.declared_rent_sompi).unwrap_or(0);
         }
         if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {

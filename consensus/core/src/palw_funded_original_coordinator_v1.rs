@@ -212,7 +212,18 @@ pub fn palw_funded_original_pairing_v1(tx: &Transaction) -> Result<PalwFundedOri
     if !is_funded_original_carrier_v1(tx) {
         return Err("not a TFO1 carrier".into());
     }
-    let envelope = PalwTirFundedOriginalEnvelopeV1::decode_v1(&tx.payload)?;
+    palw_funded_original_pairing_payload_v1(tx, &tx.payload)
+}
+
+/// RFC38 outer FPA1, with the actual signed transaction retained as the payer carrier.
+/// Only an accepting caller past the accounting fence may use this structural pairing.
+pub fn palw_funded_original_answer_pairing_v1(tx: &Transaction) -> Result<PalwFundedOriginalPairingV1, String> {
+    let view = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
+        .ok_or("invalid FPA1 accounting envelope")?;
+    palw_funded_original_pairing_payload_v1(tx, view.inner)
+}
+fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8]) -> Result<PalwFundedOriginalPairingV1, String> {
+    let envelope = PalwTirFundedOriginalEnvelopeV1::decode_v1(payload)?;
     let original = envelope.original_v1()?;
     let claim = original.original_fp_v1()?.claim_id();
     if claim != envelope.funding.terms.claim || original.pledge.claim != claim {

@@ -121,7 +121,13 @@ impl PalwTirFundedOriginalEnvelopeV1 {
     /// can be misreported as proof of payment. Final txid is obtained here,
     /// outside the signed terms; there is no funding-txid self-reference.
     pub fn inspect_carrier_v1<'a>(&self, tx: &'a Transaction) -> Result<ActualCarrierFundingV1<'a>, String> {
-        if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || tx.payload != self.encode_v1()? {
+        let literal = self.encode_v1()?;
+        let payload = if tx.payload.starts_with(b"FPA1") {
+            crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
+                .ok_or("invalid FPA1 funded carrier")?.inner
+        } else { &tx.payload };
+        // Inspect the actual outer TX: its signed input scope and funding output are never projected.
+        if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || payload != literal {
             return Err("TFO1 is not paired to this literal original carrier".into());
         }
         let t = &self.funding.terms;
@@ -291,6 +297,32 @@ mod tests {
             assert!(bad.encode_v1().is_err());
         }
         assert!(PalwTirFundedOriginalEnvelopeV1::decode_v1(&vec![0; PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1 + 1]).is_err());
+    }
+    #[test]
+    fn accounting_outer_keeps_actual_funding_identity_and_rejects_fee_output_substitution() {
+        let e = envelope();
+        let plain = carrier(&e);
+        let mut outer = plain.clone();
+        outer.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&plain.payload, &[7,8]);
+        outer.finalize();
+        assert_ne!(plain.id(), outer.id());
+        let pairing = crate::palw_funded_original_coordinator_v1::palw_funded_original_answer_pairing_v1(&outer).unwrap();
+        assert_eq!(pairing.carrier(), &outer);
+        assert_eq!(pairing.outpoint(), TransactionOutpoint::new(outer.id(), 1));
+        let populated = PopulatedTransaction::new(&outer, vec![UtxoEntry::new(1011, ScriptPublicKey::default(), 1, false)]);
+        let (_, fee) = e.inspect_populated_carrier_v1(&populated).unwrap();
+        assert_eq!(fee.actual_fee_v1(), 10, "funding remains an output, not a fee");
+        for n in 0..3 {
+            let mut wrong = outer.clone();
+            match n {
+                0 => wrong.outputs[1].value -= 1,
+                1 => wrong.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&outer.payload, &[7,8]),
+                _ => wrong.payload.push(0),
+            }
+            wrong.finalize();
+            assert!(e.inspect_carrier_v1(&wrong).is_err());
+        }
+        assert!(e.funding.verify_signature_v1(&e.payer_pubkey).is_err(), "framing never authenticates synthetic consent or answer/output binding");
     }
     #[test]
     fn actual_own_output_and_once_only_fee_are_bound_to_the_identical_carrier() {

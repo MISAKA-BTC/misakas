@@ -1221,6 +1221,7 @@ pub(super) struct PalwCarriedObjectV1 {
     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     /// Internal only: fee available for rent after mandatory bond burn, or the unpriced sentinel.
     pub(super) carrier_fee: u64,
+    pub(super) fp_answer: Option<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u32>>>,
     /// Original transaction-local companion, never borrowed from another carrier.
     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
     pub(super) tir_public_original: Option<kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
@@ -2663,7 +2664,7 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
-                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals) = self.palw_v2_accepted_objects_and_originals(
+                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers) = self.palw_v2_accepted_objects_and_originals(
                                     state,
                                     state_params,
                                     &point,
@@ -2825,7 +2826,7 @@ impl VirtualStateProcessor {
                                     self.palw_da_court_at(point.daa_score),
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
-                                    &{
+                                    &*fp_answers.attach_v1({
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.tir_public_originals = tir_public_originals;
@@ -2884,7 +2885,7 @@ impl VirtualStateProcessor {
                                         extras.audit_1004_draw_seed_source =
                                             self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
                                         extras
-                                    },
+                                    })?,
                                 ) {
                                     Ok((next, delta, merged_skips)) => {
                                         // A skipped merged work is the block standing while a
@@ -4079,6 +4080,7 @@ impl VirtualStateProcessor {
             .map(|object| PalwCarriedObjectV1 {
                 object,
                 carrier_fee: PALW_RENT_UNPRICED,
+                fp_answer: None,
                 history_pledge: None,
                 tir_public_original: None,
                 funded_original: None,

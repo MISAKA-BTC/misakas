@@ -230,6 +230,7 @@ impl ConsensusServices {
         .with_fp_decode_constraint_fence(params.palw_fp_decode_constraint_fence())
         .with_staged_public_court_fence(params.palw_staged_public_court_v1_fence())
         .with_tir_public_conviction_fence(params.palw_tir_public_conviction_v1_fence())
+        .with_fp_answer_accounting_fence(params.palw_fp_answer_accounting_v1_fence())
         .with_fp_constraint_v2_fence(params.palw_fp_constraint_v2_fence());
 
         let pruning_point_manager = PruningPointManager::new(

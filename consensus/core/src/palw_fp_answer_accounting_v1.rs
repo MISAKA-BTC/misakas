@@ -31,6 +31,9 @@
 //! refuses a licence to a claim whose carried answer does not recompute that root under the claim's context (arming prerequisite —
 //! see [`Params::validate_palw_fp_answer_accounting_v1`]). An answer that lies is therefore a claim that never licenses, so a lie
 //! cannot shrink the coverage a later claim meets, and coverage an attacker plants can only match a sequence it actually computed.
+mod ingress;
+pub use ingress::*;
+
 use crate::Hash64;
 use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
@@ -73,7 +76,7 @@ pub fn palw_fp_answer_covered_positions_v1<'a>(rows: impl IntoIterator<Item = (&
 }
 
 /// **The answer carriage**: `FPA1 ‖ borsh(inner) ‖ borsh(answer)`, where `inner` is the commitment transaction's payload as it
-/// would ride without an answer (a plain FP payload, or a `TFP1` / `HFP1` envelope). A leading magic, as every FP envelope has, so
+/// would ride without an answer (a plain FP payload, or a `TFP1` / `HFP1` / `TFO1` envelope). A leading magic, as every FP envelope has, so
 /// no plain payload (whose first two bytes are its version) and no other envelope is ever read as one.
 pub fn palw_fp_answer_envelope_encode_v1(inner: &[u8], answer: &[u32]) -> Vec<u8> {
     let mut out = PALW_FP_ANSWER_ENVELOPE_MAGIC_V1.to_vec();
@@ -85,18 +88,8 @@ pub fn palw_fp_answer_envelope_encode_v1(inner: &[u8], answer: &[u32]) -> Vec<u8
 /// Decode [`palw_fp_answer_envelope_encode_v1`]'s bytes, strictly: the magic, a bounded inner payload that is not itself an
 /// answer envelope, an answer of at most `max_answer` ids, and nothing after it. `None` for every other payload.
 pub fn palw_fp_answer_envelope_decode_v1(payload: &[u8], max_answer: usize) -> Option<(Vec<u8>, Vec<u32>)> {
-    let mut rest = payload.strip_prefix(&PALW_FP_ANSWER_ENVELOPE_MAGIC_V1[..])?;
-    let inner = crate::palw_public_binding_v1::read_bounded_bytes_v1(&mut rest, crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES)
-        .ok()?;
-    if inner.is_empty() || inner.starts_with(&PALW_FP_ANSWER_ENVELOPE_MAGIC_V1[..]) || rest.len() < 4 {
-        return None;
-    }
-    let count = u32::from_le_bytes(rest[..4].try_into().ok()?) as usize;
-    if count > max_answer || rest.len() != 4 + count * 4 {
-        return None;
-    }
-    let answer = rest[4..].chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-    Some((inner, answer))
+    let view = palw_fp_answer_envelope_view_v1(payload, max_answer)?;
+    Some((view.inner.to_vec(), view.answer_ids_v1().collect()))
 }
 
 impl Params {
@@ -110,9 +103,10 @@ impl Params {
 
     /// **`palw_fp_answer_accounting_v1` is refused when armed** — on a network that is not ConsensusV2, without
     /// `palw_fp_derived_work` and `palw_canonical_work` in force at or below it (the rule re-prices the derived compute), and,
-    /// until its arming record is pinned, at all: the fold rule is built and tested here, but the carriage's node half (the
-    /// processor reading `FPA1` into the transition, the isolation door admitting it), the seat's answer-vs-`output_root` check
-    /// and producer emission are arming prerequisites recorded in ADR-0205 (draft), not built in this lane.
+    /// until its arming record is pinned, at all. The node's bounded accounting-envelope decoder, native doors, transaction-local
+    /// extraction and retained answer handoff to rehearsal/canonical extras are connected. The seat's carried-answer-vs-output-root
+    /// check and producer emission remain arming prerequisites recorded in ADR-0205 (draft); framing or a local replay does not
+    /// replace them.
     pub fn validate_palw_fp_answer_accounting_v1(&self) -> Result<(), PalwModeV2Error> {
         let Some(fence) = self.palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) else { return Ok(()) };
         if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
