@@ -999,3 +999,75 @@ The complete base0 test targets also typecheck via
 (`/tmp/misaka-inventory-reader-tests-check.log`, 1m15s); this does not execute
 those existing tests. Documentation checks retain 43 baseline issues and zero
 new issues (`/tmp/misaka-inventory-reader-docs.log`).
+
+
+## Inventory parameter owners and mapped extent reads — 2026-10-24
+
+User clarification: K3 formal specification/manifest/weights and signed campaign
+inputs are not created. This is missing acceptance input, not permission to
+substitute a toy fixture, Kimi-linear implementation or an invented K3 runtime.
+The complete RFC06/07/08/12 objective remains open.
+
+With the user's cleanup instruction, this continuation removed 938,675,573 bytes
+of reproducible artifacts: nine task-owned temporary test executables and one
+completed incremental session whose query cache contains this exact worktree
+path. The removal manifest is `/tmp/misaka-cleanup-20261024-removed.json`;
+selection evidence is `/tmp/misaka-owned-incremental-cleanup-20261024.json`.
+No source, runtime/campaign logs, build manifests, cached dependency rlibs or
+unrelated incremental sessions were removed. Filesystem availability increased
+from 1.7 GiB to 2.6 GiB at that observation; later builds can consume space.
+
+`InventoryParamRowsV1` now owns the decoded parameter table and its native
+reservation. The envelope uses actual table length, A16QuantParams layout and
+owner header with checked arithmetic, before fallible Vec reservation. Only an
+immutable slice escapes; no Clone or raw Vec extraction can separate data from
+the ticket. Every canonical Q36 plan parameter read and each emitted parameter
+view now uses this owner; widening remains a logical view of the original rows.
+
+For a mapped, budgeted routed expert, the inventory reader follows the same
+source selection as the engine and reads only its immutable parameter extent
+through the file descriptor. It reserves encoded scratch before allocation and
+keeps that ticket through decoded-row construction; scratch drops before the
+returned decoded owner. It does not call the engine's expert-LRU admission and
+does not load the expert's unrelated weights. Other stored parameters borrow
+existing artifact bytes for decoding. Engine execution and public param_rows
+remain unchanged. IO/decode errors retain the existing inventory operand refusal;
+local capacity refusal is Resource. These are logical typed envelopes, not RSS
+measurements or a claim to handle every process OOM.
+
+Fresh direct-source runtime includes current qwen36 production code, inventory
+production code, and both actual new leaf-module test suites. It omits the old
+qwen36/inventory test modules and the two old cfg(test)-only qwen36 fixture
+wrappers; always-compiled real fixture constructors remain included. Only child
+module paths are made absolute. Compatible cached base0/core/hash/Borsh/rayon/
+Blake2 dependencies supply unchanged modules, not current-node acceptance.
+Argv and all included source digests: `/tmp/misaka-inventory-params-build.json`;
+build/runtime logs: `/tmp/misaka-inventory-params-build.log`,
+`/tmp/misaka-inventory-params-runtime.log`.
+
+Six top-level entries pass in 0.14s (two are child entries that return unless
+selected). The quota drivers actually select five read-buffer cases and six
+parameter cases: owned and mapped one-below/exact admission, malformed decode,
+and file read error. They check retained decoded ownership, scratch release
+before return, and full release on failure/drop. All owned/mapped parameter rows
+match the original engine decoder on the real small fixture; mapped misses,
+bytes_read and held expert bytes stay unchanged. Full canonical roots match the
+prechange pins for graph v5/v6/v7/v8 at four read sizes on both owned and mapped
+artifacts (32 comparisons), again without populating the expert LRU.
+
+Still open: plan Vec/Strings/Small rows and temporary derived parameter tables,
+order/distinct-index/sort scratch, overlapping-row merge and downstream owning
+collections; accusation/case/outbox/carrier lifetimes and whole-model cost
+bounds. Artifact loading and engine expert residency have separate ownership
+scopes. These controls are not the real multiprocess/100k/pruned/crash campaign.
+The public activation pin stays None; normal bootstrap refusal, model tiers,
+claim approval rules and dormant source economics remain unchanged.
+
+Product/typecheck results for this change:
+`cargo check -p kaspad --lib --features private-integration-config` passes in
+31.17s (`/tmp/misaka-inventory-params-private-check.log`), and
+`cargo check -p misaka-palw-base0 --tests` passes in 20.38s
+(`/tmp/misaka-inventory-params-final-tests-check.log`). These metadata checks
+include current production wiring and existing test targets but do not execute
+the complete existing test suite. Documentation checks retain 43 baseline
+issues and zero new issues (`/tmp/misaka-inventory-params-docs.log`).

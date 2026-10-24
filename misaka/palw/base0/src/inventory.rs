@@ -1090,7 +1090,7 @@ fn q36_missing(name: &str) -> InventoryBuildError {
 /// as wide as its reader rides verbatim, a singleton answers every lane, and a head-tiled table
 /// repeats its period — the three rules the builder once applied by materializing the table.
 struct Q36ParamViewV1 {
-    rows: Vec<kaspa_consensus_core::palw_base0_a16::A16QuantParams>,
+    rows: crate::qwen36::InventoryParamRowsV1,
     period: usize,
     width: usize,
 }
@@ -1113,7 +1113,7 @@ enum Q36ViewRuleV1 {
 /// The engine's own widening rules, checked: a singleton tiles across the width, a full table rides
 /// verbatim, anything else is a store this class cannot serve per lane.
 fn q36_view(
-    rows: Vec<kaspa_consensus_core::palw_base0_a16::A16QuantParams>,
+    rows: crate::qwen36::InventoryParamRowsV1,
     rule: Q36ViewRuleV1,
     name: &str,
 ) -> Result<Q36ParamViewV1, InventoryBuildError> {
@@ -1293,7 +1293,7 @@ fn qwen36_inventory_plan_v1(
         }
     };
     let param_rows =
-        |name: &str| -> Result<Vec<A16QuantParams>, InventoryBuildError> { artifact.param_rows(name).map_err(|_| missing(name)) };
+        |name: &str| -> Result<crate::qwen36::InventoryParamRowsV1, InventoryBuildError> { artifact.inventory_param_rows_v1(name) };
     let wire = |rows: &[A16QuantParams]| -> Vec<u8> { rows.iter().flat_map(|p| p.to_wire()).collect() };
     // The engine's per-head read (`rows[vh.min(len - 1)]`), one value head at a time.
     let per_head = |rows: &[A16QuantParams], vh: usize| -> A16QuantParams { rows[vh.min(rows.len().saturating_sub(1))] };
@@ -1543,7 +1543,7 @@ fn qwen36_inventory_plan_v1(
             // coordinate: the bytes are the four stores', the coordinate is the class's.
             let stem = name.strip_suffix("linear_gdn.a16").ok_or_else(|| missing(name))?;
             let heads = (profile.gdn_heads as usize).max(1);
-            let stores: Vec<Vec<A16QuantParams>> = ["linear_read.a16", "linear_delta.a16", "linear_write.a16", "linear_out.a16"]
+            let stores: Vec<crate::qwen36::InventoryParamRowsV1> = ["linear_read.a16", "linear_delta.a16", "linear_write.a16", "linear_out.a16"]
                 .iter()
                 .map(|s| param_rows(&sub(&format!("{stem}{s}"), layer)))
                 .collect::<Result<_, _>>()?;

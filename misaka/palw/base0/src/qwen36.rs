@@ -48,6 +48,10 @@ use kaspa_consensus_core::palw_qwen36_ops::{
 use kaspa_hashes::Hash64;
 use std::collections::BTreeMap;
 
+#[path = "qwen36/inventory_params_v1.rs"]
+mod inventory_params_v1;
+pub(crate) use inventory_params_v1::InventoryParamRowsV1;
+
 /// Which arm a layer carries. `config.json` calls these `linear_attention` and `full_attention`
 /// and lists them per layer rather than deriving them from an interval, so this does too: a model
 /// that changes the pattern is a different `layer_types`, not a different code path.

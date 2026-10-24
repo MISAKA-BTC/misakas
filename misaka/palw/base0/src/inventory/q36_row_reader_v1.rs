@@ -100,7 +100,7 @@ impl<'a> Q36RowReaderV1<'a> {
                 // Row `k` is lanes `[k·chunk, (k+1)·chunk)` at byte `k·chunk·17`, the chunking the
                 // arms read; each row's wire bytes are written as it is emitted.
                 let w = kaspa_consensus_core::palw_base0_a16::A16QuantParams::WIRE_BYTES;
-                let view = q36_view(self.artifact.param_rows(stored).map_err(|_| q36_missing(stored))?, *rule, stored)?;
+                let view = q36_view(self.artifact.inventory_param_rows_v1(stored)?, *rule, stored)?;
                 let chunk = (*chunk).max(1);
                 let mut lane = 0usize;
                 while lane < view.width {
@@ -258,6 +258,20 @@ mod tests {
     fn graph_v5_to_v8_keep_the_prechange_inventory_roots_at_every_read_size() {
         use kaspa_consensus_core::palw_artifact::{PalwArtifactInventoryV1, PalwArtifactOperandV1};
         let artifact = crate::qwen36::qwen36_dev_fixture_heads(4, 8, 4, 4, 8, 32);
+        let path = std::env::temp_dir().join(format!("misaka-inventory-roots-{}.palwq36", std::process::id()));
+        let plan: Vec<_> = artifact.tensor_names().into_iter().map(|n| (n.to_string(), artifact.tensor(n).unwrap().len())).collect();
+        let mut writer =
+            crate::qwen36::Qwen36Writer::create(&path, &artifact.shape, &artifact.rope, artifact.params_map(), plan.clone()).unwrap();
+        for (name, _) in &plan {
+            writer.push(name, &artifact.tensor(name).unwrap()).unwrap();
+        }
+        writer.finish().unwrap();
+        let mapped = crate::qwen36::open_artifact_with_residency(
+            &path,
+            crate::qwen36::Qwen36ResidencyPolicyV1::Bytes(artifact.weight_bytes() as u64),
+        )
+        .unwrap();
+        let before = mapped.residency_stats().unwrap();
         let profiles = [
             qwen36_profile_v5(geometry()),
             qwen36_profile_v6(geometry()),
@@ -273,21 +287,34 @@ mod tests {
         ];
         for (index, profile) in profiles.into_iter().enumerate() {
             let profile = profile.unwrap();
-            for block in [1, 7, 17, 4096] {
-                let mut rows = Vec::new();
-                super::super::qwen36_visit_inventory_rows_in_blocks_v1(
-                    &artifact,
-                    &profile,
-                    block,
-                    &mut |name, layer, start, bytes| {
-                        rows.push(PalwArtifactOperandV1 { tensor_name: name.into(), layer, row_start: start, bytes: bytes.to_vec() });
-                        Ok(())
-                    },
-                )
-                .unwrap();
-                let inventory = PalwArtifactInventoryV1::new(rows).unwrap();
-                assert_eq!(inventory.root().to_string(), roots[index], "graph-v{} block {block}", index + 5);
+            for source in [&artifact, &mapped] {
+                for block in [1, 7, 17, 4096] {
+                    let mut rows = Vec::new();
+                    super::super::qwen36_visit_inventory_rows_in_blocks_v1(
+                        source,
+                        &profile,
+                        block,
+                        &mut |name, layer, start, bytes| {
+                            rows.push(PalwArtifactOperandV1 {
+                                tensor_name: name.into(),
+                                layer,
+                                row_start: start,
+                                bytes: bytes.to_vec(),
+                            });
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                    let inventory = PalwArtifactInventoryV1::new(rows).unwrap();
+                    assert_eq!(inventory.root().to_string(), roots[index], "graph-v{} block {block}", index + 5);
+                }
             }
         }
+        let after = mapped.residency_stats().unwrap();
+        assert_eq!(before.misses, after.misses);
+        assert_eq!(before.bytes_read, after.bytes_read);
+        assert_eq!(before.resident_expert_bytes, after.resident_expert_bytes);
+        drop(mapped);
+        std::fs::remove_file(path).unwrap();
     }
 }
