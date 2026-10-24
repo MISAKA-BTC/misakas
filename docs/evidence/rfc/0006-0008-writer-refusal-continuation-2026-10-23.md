@@ -1071,3 +1071,68 @@ Product/typecheck results for this change:
 include current production wiring and existing test targets but do not execute
 the complete existing test suite. Documentation checks retain 43 baseline
 issues and zero new issues (`/tmp/misaka-inventory-params-docs.log`).
+
+
+## Canonical emitter index and overlap workspace — 2026-10-24
+
+`q36_emit_plan_v1` now admits its order and distinct-index arrays before their
+fallible allocations and keeps their owner until emission ends. Distinct indices
+reuse capacity between tensors. Sorting compares `(name, layer, original index)`
+with the in-place unstable sort, preserving the former stable key order without
+its separately allocated heap scratch.
+
+The overlap arm retains one tensor's copied rows under a `MergeRows` owner.
+Its row-slot Vec reserves old plus new capacity through fallible reallocation;
+each copied byte payload reserves separately before allocation. Slots and bytes
+drop before their tickets. The `(offset, encounter sequence)` sort preserves
+first-planned-wins at duplicate offsets without allocating sort scratch; dedup
+drops duplicate payload tickets. Partial allocation/read/sink failures unwind
+the enclosing owners. Input plan storage and sinks that copy emitted bytes
+remain separate ownership scopes, not retroactively covered by these tickets.
+
+The first cached-dependency harness could not build because shared dependency
+rlibs disappeared. An independently running `cargo clean --target-dir target/debug`
+was observed, and the private check also failed when its cfg_if metadata vanished
+during compilation. Neither failed build is used as source verification. The
+continuation switched to the isolated target
+`/tmp/misaka-rfc06-12-build-20261024`, disabled debug info and incremental output,
+and runs the real base0 Cargo test target. The fresh source/env/argv manifest is
+`/tmp/misaka-inventory-workspace-cargo-manifest.json`. This change of verification
+method does not redefine the real-node/15-gate acceptance requirements.
+
+Actual crate test result:
+`CARGO_TARGET_DIR=/tmp/misaka-rfc06-12-build-20261024 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -p misaka-palw-base0 --lib inventory -- --nocapture`
+passes all 27 selected entries (509 other library tests filtered out), runtime
+0.44s after a 3m32s fresh build. Log:
+`/tmp/misaka-inventory-workspace-cargo-tests.log`. This includes the pre-existing
+materializing-builder records, real mapped store cases, floor/graph and court
+coordinate coverage, and GDN stream/opening controls, now compiled directly with
+current dependencies and no production-prefix extraction or cached base0 proxy.
+
+The new controls exercise an out-of-order plan with identical and overlapping
+Small/Zeros plans, name/layer ordering and first-planned winners, plus 1,024 rows
+with 97 duplicate offsets compared against a stable-sort reference. Six new
+isolated capacity cases select the actual child test: one-below/exact index
+ownership, one-below/exact old-plus-new merge slot peak, copied-byte refusal,
+and direct/merged sink refusal cleanup. They check old rows survive failed
+slot growth, duplicate byte tickets release after dedup, resident slots/bytes
+remain held, overflow refuses and all tickets return after drop. Child entry
+functions in the 27 selected entries return without arming unless selected by
+their corresponding parent driver; these are not extra quota executions.
+
+This closes emitter order/distinct and overlap-merge workspace admission, not
+the upstream plan Vec/Strings/Small rows/derived tables, downstream retained
+collections or accusation/case/outbox copies. The envelopes are logical typed
+allocation requests, not measured RSS, production-model costs or OS enforcement.
+Activation remains None; bootstrap rejection, mandatory claim approval and model
+tiers are unchanged. K3 inputs are still uncreated; the full live campaign and
+all four RFCs remain incomplete.
+
+The same isolated target also passes
+`cargo check -p kaspad --lib --features private-integration-config` in 1m51s
+with debug info/incremental disabled
+(`/tmp/misaka-inventory-workspace-isolated-private-check.log`). No shared-cache
+failure is counted as a successful check. The test manifest source digests were
+revalidated after both commands; Cargo.lock digest/results are recorded there.
+Documentation checks retain 43 baseline issues with zero new issues
+(`/tmp/misaka-inventory-workspace-docs.log`).

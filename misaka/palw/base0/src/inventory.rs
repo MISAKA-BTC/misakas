@@ -1220,56 +1220,9 @@ fn qwen36_visit_inventory_rows_in_blocks_v1(
     qwen36_emit_plan_v1(artifact, &plan, block, sink)
 }
 
-/// The plan's rows, in canonical order.
-fn qwen36_emit_plan_v1(
-    artifact: &crate::qwen36::Qwen36ArtifactV1,
-    plan: &[Q36PlannedTensorV1],
-    block: usize,
-    sink: &mut Qwen36RowSinkV1<'_>,
-) -> Result<(), InventoryBuildError> {
-    // A STABLE sort: tensors planned by several slots keep their slot order, which is what the
-    // first-planned-wins merge below reads.
-    let mut order: Vec<usize> = (0..plan.len()).collect();
-    order.sort_by(|&a, &b| (plan[a].name.as_str(), plan[a].layer).cmp(&(plan[b].name.as_str(), plan[b].layer)));
-    let mut rd = Q36RowReaderV1::new(artifact, block)?;
-    let mut i = 0usize;
-    while i < order.len() {
-        let key = (plan[order[i]].name.as_str(), plan[order[i]].layer);
-        let mut j = i + 1;
-        while j < order.len() && (plan[order[j]].name.as_str(), plan[order[j]].layer) == key {
-            j += 1;
-        }
-        // A plan equal to an earlier one of the same tensor yields the same rows, every one of
-        // which the earlier plan wins: it adds nothing. (Both rotations of a full-attention layer
-        // plan its one table and its clamp — the case every hybrid graph has.)
-        let mut distinct: Vec<usize> = Vec::with_capacity(j - i);
-        for &k in &order[i..j] {
-            if !distinct.iter().any(|&d| plan[d].rows == plan[k].rows) {
-                distinct.push(k);
-            }
-        }
-        if let [only] = distinct[..] {
-            rd.stream(&plan[only], sink)?;
-        } else {
-            // One tensor, several different plans: its rows merged by offset, the first-planned
-            // kept — held for this one tensor only. No shipped graph reaches this arm.
-            let mut rows: Vec<(u32, Vec<u8>)> = Vec::new();
-            for &k in &distinct {
-                rd.stream(&plan[k], &mut |_, _, start, bytes| {
-                    rows.push((start, bytes.to_vec()));
-                    Ok(())
-                })?;
-            }
-            rows.sort_by_key(|(start, _)| *start);
-            rows.dedup_by(|later, earlier| later.0 == earlier.0);
-            for (start, bytes) in &rows {
-                sink(key.0, key.1, *start, bytes)?;
-            }
-        }
-        i = j;
-    }
-    Ok(())
-}
+#[path = "inventory/q36_emit_plan_v1.rs"]
+mod q36_emit_plan_v1;
+use q36_emit_plan_v1::emit as qwen36_emit_plan_v1;
 
 /// **The plan: every tensor the inventory holds and how its rows are produced**, walked slot by
 /// slot with every refusal raised in slot order — the builder's checks, in the builder's order,
