@@ -1,0 +1,15 @@
+# RFC-0019 R-8: bind gateway observations to advertised model identity
+
+The drill now requires the requested `/v1/models` entry to uniquely advertise the pinned class and a nonempty runtime manifest hash matching `/health`. Previously `check_gateway_answer` accepted any nonempty model list. A gateway could advertise another class or runtime while the driver still labelled its answer with the pinned class. RFC-0019 §11 R-8 and §12 step 4 require the gateway identity and actual response to be associated with the pinned old/new model.
+
+The actual existing gateway wire is authoritative: `misaka/palw/gateway/src/surface.rs` defines `MODEL_ID = "misaka-palw-fp-v3"` and `models_body` supplies nested `misaka.class_id` and `runtime_manifest_hash`; `main.rs` health supplies the corresponding fields. The driver's stale default `misaka` is replaced by that canonical advertised default. Explicit plan model IDs must be nonempty strings, remain exact with no alias normalization, and must be uniquely advertised. Null, numeric, Boolean, empty/whitespace-only or container IDs are refused even if a malformed model list repeats that value. Identity validation runs before the inference request. Duplicate entries for the same requested ID are refused even if their metadata agrees.
+
+The existing answer-only chat wire does not include `misaka.class_id`, so that response field remains optional. If present, it must still match the pinned class. No new gateway wire is invented. Reports retain the requested model ID, matched runtime identity and nonempty answer observation. These are data-identity checks, not model review, inference correctness, claim authentication or consensus credit.
+
+## Verification
+
+`python3 -m unittest discover -s scripts/drills/tests -p 'test_rfc0019_*.py'` passed **16/16 in 0.030s**. Final log: `/tmp/misaka-rfc19-gateway-model-identity-tests-final-20261025.log`. The preliminary 15-test run remains recorded separately in `/tmp/misaka-rfc19-gateway-model-identity-tests-20261025.log`. `py_compile` and `git diff --check` passed for both changed Python files.
+
+The added controls use the real health/models/answer-only wire shape, including nested model identity and an answer-only chat with no class extension. They verify canonical default dispatch, exact explicitly advertised IDs, refusal of unknown/stale aliases before any inference request, absent/wrong class metadata, absent/empty/conflicting runtime hashes, duplicate/ambiguous requested IDs, and invalid explicit request-ID types even when repeated by malformed advertised metadata. The existing actual R-8 orchestration controls still pass, including old/new pre/post observations, actual DAA phase sampling and per-role registry checks.
+
+These are scripted Python mechanism tests. No real node, model worker or gateway was launched; no annual-upgrade R-8 campaign, K3 result, actual artifact execution or reward/certification approval is claimed. A gateway advertising matching metadata alone cannot prove that computation used the claimed artifact. Actual fixed artifacts, worker execution and native claim/certification evidence remain separate requirements.

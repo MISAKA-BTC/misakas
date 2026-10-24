@@ -68,6 +68,9 @@ from misaka_wrpc_json import WsRpc
 from rfc0018_dag_drill import Blocked, DelayedLink, field, norm
 
 
+# Actual gateway surface::MODEL_ID; explicit plan aliases must be advertised.
+GATEWAY_MODEL_ID = 'misaka-palw-fp-v3'
+
 MODEL_ENTRY_KEYS = ('class_id', 'artifact_root', 'artifact_path', 'tier_permille_before', 'tier_permille_after')
 
 
@@ -156,19 +159,39 @@ def local_llm_spec(plan):
     return spec
 
 
-def check_gateway_answer(class_id, health, models, chat):
-    """R-8 verdict for one gateway reading: the pinned class answers under its own id, non-empty. Returns the answer row."""
+def check_gateway_identity(class_id, health, models, model=GATEWAY_MODEL_ID):
+    """Bind the requested advertised model to the pinned class and this health manifest.
+
+    Identity metadata is not model review, inference correctness or claim authority.
+    """
+    assert isinstance(model, str) and model.strip(), 'requested gateway model must be a nonempty string'
     cid = norm(class_id)
     assert norm(field(health, 'class_id')) == cid, 'gateway /health names class %r, pinned %s' % (field(health, 'class_id'), cid)
-    assert field(models, 'data'), 'gateway /v1/models lists nothing'
+    data = field(models, 'data')
+    assert isinstance(data, list) and data, 'gateway /v1/models lists nothing'
+    advertised = [row for row in data if field(row, 'id') == model]
+    assert len(advertised) == 1, 'requested gateway model %r is not uniquely advertised' % model
+    identity = field(advertised[0], 'misaka', default={})
+    assert norm(field(identity, 'class_id')) == cid, 'advertised gateway model %r names another or unknown class' % model
+    health_manifest = field(health, 'runtime_manifest_hash')
+    model_manifest = field(identity, 'runtime_manifest_hash')
+    assert isinstance(health_manifest, str) and health_manifest.strip(), 'gateway /health has no runtime manifest hash'
+    assert isinstance(model_manifest, str) and model_manifest.strip(), 'advertised gateway model has no runtime manifest hash'
+    assert norm(model_manifest) == norm(health_manifest), 'advertised gateway model and health runtime manifest differ'
+    return cid, norm(health_manifest)
+
+
+def check_gateway_answer(class_id, health, models, chat, model=GATEWAY_MODEL_ID):
+    """R-8 verdict: an identified gateway returns a non-empty answer. No credit authority."""
+    cid, manifest = check_gateway_identity(class_id, health, models, model)
     choices = field(chat, 'choices', default=[]) or []
     text = field(field(choices[0], 'message', default={}) if choices else {}, 'content', default='')
     assert isinstance(text, str) and text.strip(), 'empty answer from class %s' % cid
     misaka = field(chat, 'misaka', default={}) or {}
     answered = norm(field(misaka, 'class_id'))
     assert answered in (None, cid), 'class %s answered as %s (fallback to another id)' % (cid, answered)
-    return {'class_id': cid, 'chars': len(text), 'answer_sha256': hashlib.sha256(text.encode()).hexdigest(),
-            'commitment': field(misaka, 'job_id', 'commitment', 'fp_claim_id'), 'runtime_manifest_hash': field(health, 'runtime_manifest_hash')}
+    return {'class_id': cid, 'model': model, 'chars': len(text), 'answer_sha256': hashlib.sha256(text.encode()).hexdigest(),
+            'commitment': field(misaka, 'job_id', 'commitment', 'fp_claim_id'), 'runtime_manifest_hash': manifest}
 
 
 class Drill:
@@ -538,10 +561,12 @@ class Drill:
         base = gateway['url'].rstrip('/')
         health = self.http(base + '/health')
         models = self.http(base + '/v1/models')
+        model = gateway.get('model', GATEWAY_MODEL_ID)
+        check_gateway_identity(gateway['class_id'], health, models, model)
         chat = self.http(base + '/v1/chat/completions',
-                         {'model': gateway.get('model', 'misaka'), 'max_tokens': max_tokens,
+                         {'model': model, 'max_tokens': max_tokens,
                           'messages': [{'role': 'user', 'content': prompt}]})
-        return check_gateway_answer(gateway['class_id'], health, models, chat)
+        return check_gateway_answer(gateway['class_id'], health, models, chat, model)
 
     def scenario_local_llm(self):
         llm = local_llm_spec(self.plan)
