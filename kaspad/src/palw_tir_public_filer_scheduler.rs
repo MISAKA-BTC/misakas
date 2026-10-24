@@ -16,13 +16,14 @@
 //!   frame's declared conviction rent on top of relay (`palw_lifecycle_carrier_rent_v2`). A lost carrier is re-queued after
 //!   `COURT_MOVE_REPLAN_DAA`, at most [`PALW_TIR_PUBLIC_FILER_SENDS_V1`] times.
 //! - **its restart journal** — every pending finding is persisted (`state_dir/palw-tir-public-filer.v1`, a temporary file renamed
-//!   over the old one; an unreadable journal is set aside, never trusted), so a restart still files inside the door. An entry
+//!   over the old one; stable malformed syntax alone is set aside). Local IO/capacity keeps a loading/write barrier and
+//!   retries from the actual owner/filer tick; reloaded bytes restore opaque evidence, never current authority. An entry
 //!   leaves when the fold shows the conviction (the preflight refuses it as already convicted), when the door closed, when the
 //!   frame left the accepted state, or after its sends.
 //!
-//! **Not covered here (recorded in docs/design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md):** the producers of
-//! findings — an outside owner's acquisition driving (Open → Demand → Collect) and the arithmetic scheduler's localization to a
-//! Ready primitive (`palw_tir_arithmetic_scheduler`) are not yet called from the panel loop.
+//! **Remaining:** full allocation/cost coverage of existing preflight/signing copies and OS/path/IO internals, plus the
+//! funded interaction graph and live campaigns. The outside owner calls this actual queue; a reloaded finding must still pass
+//! current native frame/clock/signing/preflight checks before a carrier is built.
 #![allow(dead_code)] // `queue_finding_v1` is the hook the finding producers call once they are wired; the tick runs every panel tick.
 use crate::palw_panel::court_outbox::CourtOutboxV1;
 
@@ -38,12 +39,17 @@ use std::path::{Path, PathBuf};
 
 const PALW_PANEL: &str = "palw-panel";
 
+#[path = "palw_tir_filer_journal_v2.rs"]
+mod journal;
+use journal::{JournalFaultV2,ReloadPayloadV2};
+
 /// The court queue's lane of a public conviction against an ORIGINAL frame (free: `u32::MAX − 26`; the custodian's lanes are
 /// `− 24` and `− 25`). Keyed by claim with `responder = false`: this node accuses.
 pub(crate) const PALW_TIR_PUBLIC_CONVICTION_ROUND_V1: u32 = u32::MAX - 26;
 /// Sends of one filing before it is given up (each a full conviction rent if it lands; a landed one leaves by the preflight).
 pub(crate) const PALW_TIR_PUBLIC_FILER_SENDS_V1: u8 = 3;
-/// Pending findings held at once (each at most one bounded control, 90,000 B).
+/// Pending findings held at once. A finding may span multiple bounded controls;
+/// its complete staged evidence is retained and journaled under local admission.
 pub(crate) const PALW_TIR_PUBLIC_FILER_PENDING_V1: usize = 16;
 const PALW_TIR_PUBLIC_FILER_MAGIC_V1: &[u8] = b"misaka-node/tir-public-filer/v1\n";
 
@@ -66,6 +72,10 @@ pub(crate) struct PalwTirPublicFilerBookV1 {
     // Nonwire resources for new owned findings. Legacy journal reload does not
     // recreate them or turn disk bytes into current authority.
     owned_filings: Vec<(Hash64, super::tir_public_owner::cone_evidence_owned::ConeEvidenceHoldV2)>,
+    loaded_filings: Vec<(Hash64, std::sync::Arc<ReloadPayloadV2>)>,
+    loading: bool,
+    // Keep the actual read and its completed result across cancellation of a tick.
+    load_task: Option<tokio::task::JoinHandle<Result<Option<journal::JournalDecodedV2>, JournalFaultV2>>>,
     // Remains after clear/removal: Vec retains capacity. Field order ensures
     // both the pending values and sidecar buffer drop before this whole-table ticket.
     owned_membership: Option<(Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_memory_ledger::PalwMemoryReservationV1)>,
@@ -73,71 +83,135 @@ pub(crate) struct PalwTirPublicFilerBookV1 {
 }
 
 impl PalwTirPublicFilerBookV1 {
-    /// The journal in `state_dir`, or an empty one — an unreadable file is set aside (`.unreadable`), never a reason not to start.
+    /// Read under byte/expanded-type admission. Local IO/capacity holds loading;
+    /// only stable malformed syntax is set aside, never an empty-file overwrite.
     pub(crate) fn load(state_dir: &Path) -> Self {
         let path = state_dir.join("palw-tir-public-filer.v1");
-        let mut book = Self { path: Some(path.clone()), ..Self::default() };
-        let Ok(meta) = std::fs::metadata(&path) else { return book };
-        let maximum = (PALW_TIR_PUBLIC_FILER_PENDING_V1 as u64).saturating_mul(
-            kaspa_consensus_core::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1.saturating_add(1024),
-        );
-        if meta.len() > maximum {
-            warn!("[{PALW_PANEL}] the TIR public filer journal {} exceeds its bound; set aside", path.display());
-            let _ = std::fs::rename(&path, path.with_extension("v1.unreadable"));
-            return book;
-        }
-        let Ok(bytes) = std::fs::read(&path) else { return book };
-        let parsed = bytes
-            .strip_prefix(PALW_TIR_PUBLIC_FILER_MAGIC_V1)
-            .and_then(|body| borsh::from_slice::<Vec<PalwTirPublicPendingFilingV1>>(body).ok())
-            .filter(|entries| {
-                entries.len() <= PALW_TIR_PUBLIC_FILER_PENDING_V1 && entries.iter().all(|e| e.evidence.check_staged_v1().is_ok())
-            });
-        match parsed {
-            Some(entries) => {
-                book.filings = entries.into_iter().map(|entry| (entry.claim, entry)).collect();
-                if !book.filings.is_empty() {
-                    info!(
-                        "[{PALW_PANEL}] the TIR public filer resumes {} pending filing(s) from {}",
-                        book.filings.len(),
-                        path.display()
-                    );
-                }
-            }
-            None => {
-                warn!("[{PALW_PANEL}] the TIR public filer journal {} does not decode; set aside", path.display());
-                let _ = std::fs::rename(&path, path.with_extension("v1.unreadable"));
-            }
+        let mut book = Self { path: Some(path.clone()), loading: true, ..Self::default() };
+        if let Err(why) = book.finish_load_v2(journal::load_attempt_v2(&path)) {
+            debug!("[{PALW_PANEL}] TIR journal load remains pending: {why}");
         }
         book
     }
-
-    /// Write the journal if it changed (temporary file, then rename).
-    pub(crate) fn persist(&mut self) {
-        if !self.dirty {
-            return;
-        }
-        let Some(path) = self.path.clone() else {
+    fn finish_load_v2(&mut self, attempt: Result<Option<journal::JournalDecodedV2>, JournalFaultV2>) -> Result<(), JournalFaultV2> {
+        let decoded = attempt?;
+        let Some(decoded) = decoded else {
+            self.loading = false;
             self.dirty = false;
-            return;
+            return Ok(());
         };
-        let mut bytes = PALW_TIR_PUBLIC_FILER_MAGIC_V1.to_vec();
-        let entries: Vec<&PalwTirPublicPendingFilingV1> = self.filings.values().collect();
-        match borsh::to_vec(&entries) {
-            Ok(body) => bytes.extend(body),
-            Err(e) => {
-                warn!("[{PALW_PANEL}] cannot encode the TIR public filer journal: {e}");
-                return;
+        if !self.filings.is_empty() {
+            return Err(JournalFaultV2::Io("pending journal cannot replace live findings".into()));
+        }
+        if decoded.entries.is_empty() {
+            self.loading = false;
+            self.dirty = false;
+            return Ok(());
+        }
+        if cfg!(not(target_pointer_width = "64")) {
+            return Err(JournalFaultV2::Resource("pinned journal BTree profile requires64-bit target".into()));
+        }
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::{btree_node_envelope_bytes_v1, reserve_native_requests_v1},
+            palw_routed_material_v2::PalwMaterialConstructionRequestsV2,
+        };
+        type Slot = (Hash64, std::sync::Arc<ReloadPayloadV2>);
+        let count = decoded.entries.len();
+        let mut q = PalwMaterialConstructionRequestsV2::new();
+        let slots = self
+            .loaded_filings
+            .capacity()
+            .checked_add(count)
+            .ok_or_else(|| JournalFaultV2::Resource("journal slot overflow".into()))?;
+        q.vec_v1::<Slot>(slots as u64).map_err(|e| JournalFaultV2::Resource(e.to_string()))?;
+        q.vec_v1::<(Hash64, super::tir_public_owner::cone_evidence_owned::ConeEvidenceHoldV2)>(self.owned_filings.capacity() as u64)
+            .map_err(|e| JournalFaultV2::Resource(e.to_string()))?;
+        q.vec_v1::<ReloadPayloadV2>(1).map_err(|e| JournalFaultV2::Resource(e.to_string()))?;
+        q.vec_v1::<usize>(3).map_err(|e| JournalFaultV2::Resource(e.to_string()))?;
+        let nodes = count
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(btree_node_envelope_bytes_v1::<Hash64, PalwTirPublicPendingFilingV1>()))
+            .ok_or_else(|| JournalFaultV2::Resource("journal BTree membership overflow".into()))?;
+        q.add_v1(nodes as u64).map_err(|e| JournalFaultV2::Resource(e.to_string()))?;
+        let bytes = q.bytes_v1();
+        let native = reserve_native_requests_v1(bytes).map_err(|e| JournalFaultV2::Resource(e.to_string()))?;
+        let host = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-tir-journal-membership",
+                    class_id: Default::default(),
+                    job: Default::default(),
+                },
+                bytes,
+            )
+            .map_err(|e| JournalFaultV2::Resource(e.to_string()))?;
+        let mut holders = Vec::new();
+        holders.try_reserve_exact(count).map_err(|e| JournalFaultV2::Resource(e.to_string()))?;
+        let (entries, payload) = decoded.into_parts_v2();
+        let payload = std::sync::Arc::new(payload);
+        let mut filings = BTreeMap::new();
+        for entry in entries {
+            holders.push((entry.claim, std::sync::Arc::clone(&payload)));
+            filings.insert(entry.claim, entry);
+        }
+        self.filings = filings;
+        self.loaded_filings = holders;
+        self.owned_membership = Some((native, host));
+        self.loading = false;
+        self.dirty = false;
+        Ok(())
+    }
+    fn start_load_worker_v2(
+        &mut self,
+        loader: impl FnOnce(PathBuf) -> Result<Option<journal::JournalDecodedV2>, JournalFaultV2> + Send + 'static,
+    ) {
+        if self.load_task.is_none() {
+            if let Some(path) = self.path.clone() {
+                self.load_task = Some(tokio::task::spawn_blocking(move || loader(path)));
             }
         }
-        let temporary = path.with_extension("v1.tmp");
-        let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&temporary, &bytes));
-        match written.and_then(|()| std::fs::rename(&temporary, &path)) {
-            Ok(()) => self.dirty = false,
-            Err(e) => warn!(
-                "[{PALW_PANEL}] cannot persist the TIR public filer journal {}: {e} — a restart would lose a filing",
-                path.display()
-            ),
+    }
+    /// The book owns the handle as well as the worker's result. Cancelling a
+    /// tick cannot detach it and start a second read on the next tick.
+    pub(crate) async fn advance_journal_v2(&mut self) -> Result<(), JournalFaultV2> {
+        if self.loading {
+            self.start_load_worker_v2(|path| journal::load_attempt_v2(&path));
+            let Some(task) = self.load_task.as_mut() else {
+                self.loading = false;
+                return Ok(());
+            };
+            let attempt = task.await;
+            // Only a terminal worker is removed; an interrupted await keeps it.
+            self.load_task.take();
+            let attempt = attempt.map_err(|e| JournalFaultV2::Io(format!("journal read worker failed: {e}")))?;
+            self.finish_load_v2(attempt)?;
+        }
+        self.try_persist_v2()
+    }
+    fn try_persist_v2(&mut self) -> Result<(), JournalFaultV2> {
+        if self.loading {
+            return Err(JournalFaultV2::Io("journal loading is pending; writes are held".into()));
+        }
+        if !self.dirty {
+            return Ok(());
+        }
+        let Some(path) = self.path.as_ref() else {
+            self.dirty = false;
+            return Ok(());
+        };
+        let bytes = journal::encode_reserved_v2(&self.filings)?;
+        journal::write_atomic_v2(path, &bytes)?;
+        self.dirty = false;
+        Ok(())
+    }
+    /// Local refusal/IO keeps dirty for the next real owner/filer tick. Never
+    /// overwrite a journal whose initial read has not completed.
+    pub(crate) fn persist(&mut self) {
+        if self.loading {
+            return;
+        }
+        if let Err(why) = self.try_persist_v2() {
+            debug!("[{PALW_PANEL}] TIR journal persist remains pending: {why}");
         }
     }
 
@@ -145,6 +219,7 @@ impl PalwTirPublicFilerBookV1 {
     /// preflight asks it). One finding per claim — a claim is convicted once, so a second finding adds nothing — and at most
     /// [`PALW_TIR_PUBLIC_FILER_PENDING_V1`] at once. Persisted before it returns `true`.
     pub(crate) fn queue_finding_v1(&mut self, claim: Hash64, evidence: PalwTirPublicConvictionEvidenceV1, now_daa: u64) -> bool {
+        if self.loading {return false;}
         if evidence.check_staged_v1().is_err()
             || self.filings.contains_key(&claim)
             || self.filings.len() >= PALW_TIR_PUBLIC_FILER_PENDING_V1
@@ -167,6 +242,7 @@ impl PalwTirPublicFilerBookV1 {
             palw_backend::PalwTirPublicConeFaultV2 as Fault, palw_native_resource_v1::reserve_native_requests_v1,
             palw_routed_material_v2::PalwMaterialConstructionRequestsV2,
         };
+        if self.loading{return Err(Fault::Unavailable("journal loading is pending".into()));}
         if cfg!(not(target_pointer_width = "64")) {
             return Err(Fault::LocalResource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
                 "owned TIR pending membership", "pinned BTree allocation layout only covers 64-bit targets").to_string()));
@@ -185,6 +261,11 @@ impl PalwTirPublicFilerBookV1 {
             .checked_add(self.owned_filings.len() + 1)
             .ok_or_else(|| Fault::LocalResource("TIR finding membership overflow".into()))?;
         q.vec_v1::<Slot>(slots as u64).map_err(|e| Fault::LocalResource(e.to_string()))?;
+        q.vec_v1::<(Hash64,std::sync::Arc<ReloadPayloadV2>)>(self.loaded_filings.capacity() as u64).map_err(|e|Fault::LocalResource(e.to_string()))?;
+        if !self.loaded_filings.is_empty(){
+            q.vec_v1::<ReloadPayloadV2>(1).map_err(|e|Fault::LocalResource(e.to_string()))?;
+            q.vec_v1::<usize>(3).map_err(|e|Fault::LocalResource(e.to_string()))?;
+        }
         // Pinned typed BTree envelope: old table plus at most one full node per
         // new entry, including split/root growth. No codec-byte multiplier.
         let nodes = self
@@ -227,6 +308,7 @@ impl PalwTirPublicFilerBookV1 {
     pub(super) fn drop_v1(&mut self, claim: &Hash64, why: &str) {
         if self.filings.remove(claim).is_some() {
             self.owned_filings.retain(|(key,_)|key!=claim);
+            self.loaded_filings.retain(|(key,_)|key!=claim);
             self.dirty = true;
             debug!("[{PALW_PANEL}] TIR frame {claim}: public filing dropped: {why}");
         }
@@ -256,11 +338,15 @@ impl PalwPanelService {
             if !book.filings.is_empty() {
                 book.filings.clear();
                 book.owned_filings.clear();
+                book.loaded_filings.clear();
                 book.dirty = true;
                 book.persist();
             }
             court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return;
+        }
+        if let Err(why)=book.advance_journal_v2().await {
+            debug!("[{PALW_PANEL}] TIR filer waits for its journal: {why}");return;
         }
         // A queued filing whose finding left the book is stale.
         court_outbox.retain_pending(|(claim, round, responder, _)| !ours(*round, *responder) || book.filings.contains_key(claim));

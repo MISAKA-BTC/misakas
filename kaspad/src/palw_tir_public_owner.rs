@@ -417,6 +417,9 @@ impl PalwPanelService {
             court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return;
         }
+        if let Err(why)=filer.advance_journal_v2().await {
+            debug!("[{PALW_PANEL}] TIR owner waits for its pending-finding journal: {why}");return;
+        }
         let form = self.config.prompt_ids_form;
         // Lane g14-court-capacity-r2: the owner fair start (`palw_court_capacity_v1`), read at the tick's clock below.
         let court_capacity_from = self.consensus_config.params.palw_court_capacity_v1_fence().map(|f| f.activation.daa_score());
