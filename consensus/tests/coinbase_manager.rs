@@ -451,3 +451,66 @@ fn round_comparison_retries_after_native_capacity_refusal() {
     assert!(out.status.success(), "{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
 }
+
+#[test]
+fn coinbase_payload_decode_reservation_matches_inline_and_spilling_scripts() {
+    use kaspa_consensus_core::{coinbase::{CoinbaseData, MinerData}, tx::{ScriptPublicKey, ScriptVec}};
+    let network = &params::MAINNET_PARAMS;
+    let manager = coinbase_manager::CoinbaseManager::new(
+        255, 1000, network.deflationary_phase_daa_score, network.pre_deflationary_phase_base_subsidy,
+        network.target_time_per_block_history(),
+    );
+    for len in [0, 35, 36, 64, 67, 150, 255] {
+        let data = CoinbaseData { blue_score: 12, subsidy: 34,
+            miner_data: MinerData::new(ScriptPublicKey::new(2, ScriptVec::from_slice(&vec![7; len])), &[1, 2][..]) };
+        let payload = manager.serialize_coinbase_payload(&data).unwrap();
+        let _lease = manager.reserve_coinbase_payload_decode_v2(&payload).unwrap();
+        let (decoded, allocated) = allocation_counter::requested(|| manager.deserialize_coinbase_payload(&payload).unwrap());
+        assert_eq!(decoded, data);
+        let bound = if len <= kaspa_consensus_core::tx::SCRIPT_VECTOR_SIZE { 0 } else { len.next_power_of_two() };
+        assert!(allocated <= bound, "script len {len}: actual request {allocated}, admitted bound {bound}");
+        assert_eq!(manager.serialize_coinbase_payload(&decoded).unwrap(), payload);
+    }
+}
+
+#[test]
+fn coinbase_payload_decode_capacity_child() {
+    if std::env::var("MISAKA_COINBASE_DECODE_CAPACITY").ok().as_deref() != Some("1") {
+        return;
+    }
+    use kaspa_consensus_core::{
+        errors::coinbase::CoinbaseError,
+        palw_native_resource_v1::{NativeDecodeErrorV1, NativeSnapshotResourceLimitsV1,
+            arm_native_logical_limits_v1, reserve_native_requests_v1},
+    };
+    let fixture = BorrowedCoinbaseFixture::new(8);
+    let expected = fixture.build();
+    assert!(fixture.miner_script.script().len() > kaspa_consensus_core::tx::SCRIPT_VECTOR_SIZE);
+    let memory = 1 << 20;
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
+    let blocker = reserve_native_requests_v1(memory).unwrap();
+    assert!(matches!(fixture.manager.reserve_coinbase_payload_decode_v2(&expected.payload), Err(NativeDecodeErrorV1::Resource(_))));
+    assert!(matches!(fixture.manager.reserve_coinbase_payload_decode_v2(&[]),
+        Err(NativeDecodeErrorV1::Decode(CoinbaseError::PayloadLenBelowMin(..)))), "malformed input is not capacity refusal");
+    drop(blocker);
+    for mismatch in [false, true] {
+        let mut actual = expected.clone();
+        if mismatch { actual.outputs[0].value += 1; }
+        let lease = fixture.manager.reserve_coinbase_payload_decode_v2(&actual.payload).unwrap();
+        let data = fixture.manager.deserialize_coinbase_payload(&actual.payload).unwrap();
+        assert!(reserve_native_requests_v1(memory).is_err(), "the decoder's input script keeps its reservation through comparison");
+        assert_eq!(fixture.compare_with_miner(&actual, data.miner_data).unwrap().matches, !mismatch);
+        assert!(reserve_native_requests_v1(memory).is_err(), "the caller still retains its lease");
+        drop(lease);
+        assert!(reserve_native_requests_v1(memory).is_ok(), "input reservation releases after comparison");
+    }
+}
+
+#[test]
+fn received_coinbase_payload_retries_after_decode_capacity_refusal() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "coinbase_payload_decode_capacity_child", "--nocapture"])
+        .env("MISAKA_COINBASE_DECODE_CAPACITY", "1").output().unwrap();
+    assert!(out.status.success(), "{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+}

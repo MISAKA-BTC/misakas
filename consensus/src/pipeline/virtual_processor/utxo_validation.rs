@@ -1500,8 +1500,24 @@ impl VirtualStateProcessor {
         // dormant.
         palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
     ) -> BlockProcessResult<()> {
-        // Extract only miner data from the provided coinbase
-        let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
+        // Admission precedes the one input-script copy and lives through the
+        // comparison. Malformed payloads and local capacity keep distinct causes.
+        let _miner_script_lease = self
+            .coinbase_manager
+            .reserve_coinbase_payload_decode_v2(&coinbase.payload)
+            .map_err(|error| match error {
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
+                    crate::errors::RuleError::LocalNativeCapacityUnavailable(why)
+                }
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
+                    crate::errors::RuleError::BadCoinbasePayload(why)
+                }
+            })?;
+        let miner_data = self
+            .coinbase_manager
+            .deserialize_coinbase_payload(&coinbase.payload)
+            .map_err(crate::errors::RuleError::BadCoinbasePayload)?
+            .miner_data;
         let mut validator_output_count = 0usize;
         let validator_reward_outputs = validator_reward_outputs.into_iter().inspect(|_| validator_output_count += 1);
         let comparison = self

@@ -792,6 +792,29 @@ impl CoinbaseManager {
     }
 
     pub fn deserialize_coinbase_payload<'a>(&self, payload: &'a [u8]) -> CoinbaseResult<CoinbaseData<&'a [u8]>> {
+        let (blue_score, subsidy, version, script, extra_data) = self.parse_coinbase_payload_v2(payload)?;
+        let script_public_key = ScriptPublicKey::new(version, ScriptVec::from_slice(script));
+        Ok(CoinbaseData { blue_score, subsidy, miner_data: MinerData { script_public_key, extra_data } })
+    }
+
+    /// Admit the script allocation before decoding a received payload. The real
+    /// validator retains this ticket through the comparison consuming miner data.
+    /// Inline SmallVec scripts need no heap; a spilling script has a conservative
+    /// power-of-two envelope. The wire's u8 script length bounds it to 256 bytes.
+    /// Parsing itself only borrows the authenticated bytes.
+    pub fn reserve_coinbase_payload_decode_v2(
+        &self,
+        payload: &[u8],
+    ) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>, NativeDecodeErrorV1<CoinbaseError>> {
+        let (_, _, _, script, _) = self.parse_coinbase_payload_v2(payload).map_err(NativeDecodeErrorV1::Decode)?;
+        if script.len() <= kaspa_consensus_core::tx::SCRIPT_VECTOR_SIZE {
+            return Ok(None);
+        }
+        let requests = script.len().next_power_of_two() as u64;
+        reserve_native_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)
+    }
+
+    fn parse_coinbase_payload_v2<'a>(&self, payload: &'a [u8]) -> CoinbaseResult<(u64, u64, u16, &'a [u8], &'a [u8])> {
         if payload.len() < MIN_PAYLOAD_LENGTH {
             return Err(CoinbaseError::PayloadLenBelowMin(payload.len(), MIN_PAYLOAD_LENGTH));
         }
@@ -830,11 +853,9 @@ impl CoinbaseManager {
             ));
         }
 
-        let script_public_key =
-            ScriptPublicKey::new(script_pub_key_version, ScriptVec::from_slice(parser.take(script_pub_key_len as usize)));
-        let extra_data = parser.remaining;
+        let (script, extra_data) = parser.remaining.split_at(script_pub_key_len as usize);
 
-        Ok(CoinbaseData { blue_score, subsidy, miner_data: MinerData { script_public_key, extra_data } })
+        Ok((blue_score, subsidy, script_pub_key_version, script, extra_data))
     }
 
     pub fn calc_block_subsidy(&self, daa_score: u64) -> u64 {

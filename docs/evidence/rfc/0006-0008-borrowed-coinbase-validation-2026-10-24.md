@@ -60,3 +60,34 @@ earn or fund rewards, create selected-verifier approval, or accept a native bloc
 All-reward one-time settlement, production material lifecycle campaigns and the
 15-gate acceptance campaign remain incomplete. Activation stays `None`, normal
 selected-source/V6 bootstrap remains refused, and UNKNOWN gates remain UNKNOWN.
+
+## Received-payload input reservation continuation
+
+The earlier comparator measurement prepared its owned miner script before the
+observation. The real validator's `deserialize_coinbase_payload` still allocated
+that input script outside native admission. It now uses the same allocation-free
+borrowed parser for decoding and pre-admission. A script fitting the inline
+SmallVec needs no heap reservation. A spilling script reserves a conservative
+power-of-two envelope, at most 256 bytes because its wire length is a u8, before
+the actual copy. Extra data remains borrowed. The caller retains the ticket until
+the comparison has consumed the miner data. Payload errors are propagated as
+`BadCoinbasePayload`; local quota refusal stays `LocalNativeCapacityUnavailable`.
+
+The final actual coinbase-manager target passed **21/21** controls (0.23 seconds
+runtime), including all earlier reward/queue/comparison controls. New checks
+compare actual decoder allocation requests with the admitted envelope for script
+lengths 0, 35, 36, 64, 67, 150 and 255. An isolated capacity test exhausts the real
+logical budget before admission, checks that malformed bytes remain a decode
+error under the same exhausted budget, releases capacity and retries through
+decode and comparison. Matching and mismatching outputs both release the input
+reservation after the comparison. Log:
+`/tmp/misaka-coinbase-input-admission-tests-final-20261024.log`.
+
+The first build found a borrowed-parser lifetime error, corrected by borrowing
+both script and extra data from the remaining payload slice. A concurrent core
+and consumer API generation mismatch also required a coherent rebuild. Neither
+failed build is counted as successful verification.
+
+This closes the input-script copy in this validator call, not every legacy
+deserializer caller, returned builder/template ownership, stack cost, physical
+RSS or full-model execution cost. The campaign boundaries above still apply.
