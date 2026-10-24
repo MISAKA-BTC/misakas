@@ -107,6 +107,9 @@ pub(super) async fn release_and_collect(
     };
     assert_ne!(pin, receipt.release_block, "snapshot pin is not the saved deletion intent's Release block");
     eprintln!("TYPED_TERMINAL_V4 finalized_pin={pin} release_block={} daa={}", receipt.release_block, w.net.daa());
+    if std::env::var("MISAKA_TYPED_PRUNING_CHILD_V4").as_deref() == Ok("1") {
+        pruning::advance(&mut w, db.path(), dir, root, admission.consent, replacement.consent, phase.tail, phase.release_block).await;
+    }
     phase.finalized = true;
     std::fs::write(dir.join("terminal-input"), borsh::to_vec(&phase).unwrap()).unwrap();
     let state_root = w.net.chain.tip_state().1.state_root();
@@ -210,6 +213,15 @@ pub(super) fn read_and_collect(
     let admission: SignedAdmission = borsh::from_slice(&std::fs::read(dir.join("signed-admission")).unwrap()).unwrap();
     let replacement: SignedReplacement = borsh::from_slice(&std::fs::read(dir.join("signed-replacement")).unwrap()).unwrap();
     let root = input.request.intent.manifest.root;
+    if phase.finalized && std::env::var("MISAKA_TYPED_PRUNING_CHILD_V4").as_deref() == Ok("1") {
+        assert!(
+            matches!(
+                native.get_block(phase.release_block),
+                Err(kaspa_consensus_core::errors::consensus::ConsensusError::BlockNotFound(_))
+            ),
+            "cold reopened native DB must still lack physically pruned Release body"
+        );
+    }
     for card in [2, 3, 4, 5] {
         let consent = if card < 4 { admission.consent } else { replacement.consent };
         let file = dir.join(format!("provider-{card}"));

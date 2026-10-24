@@ -1,5 +1,7 @@
 //! Tiny native TypedKernelV4 ingress/retention mechanism, not K3 or a campaign.
 use super::*;
+#[path = "material_typed_pruning_v4.rs"]
+mod pruning;
 #[path = "material_typed_reorg_v4.rs"]
 mod reorg;
 #[path = "material_typed_terminal_v4.rs"]
@@ -38,7 +40,13 @@ fn config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     assert!(p.validate_palw_material_release_recovery_v2().is_err());
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { unreachable!() };
     let bundle = bundle.clone();
-    (Config::new(p), bundle, premine, floats)
+    let config = Config::new(p);
+    let (config, premine) = if std::env::var("MISAKA_TYPED_PRUNING_CHILD_V4").as_deref() == Ok("1") {
+        pruning::private_funding_config(config, premine)
+    } else {
+        (config, premine)
+    };
+    (config, bundle, premine, floats)
 }
 struct ProducerSigner(Vec<u8>);
 impl kaspa_pq_validator_core::MessageSigner for ProducerSigner {
@@ -189,6 +197,9 @@ async fn typed_writer_child() {
     let (tx, rx) = async_channel::unbounded();
     let mut net = Net::over_cfg(config(), |c| TestConsensus::with_db(db.clone(), c, tx));
     net._keep.push(Box::new(rx));
+    if std::env::var("MISAKA_TYPED_PRUNING_CHILD_V4").as_deref() == Ok("1") {
+        pruning::started(&net, db.path());
+    }
     let mut w = World::on_opv(net).await;
     let job = w.job().await;
     let ledger = w.net.ledger();
