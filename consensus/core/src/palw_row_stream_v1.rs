@@ -34,6 +34,9 @@ use crate::palw_state_v2::{PALW_STATE_V2_DOMAIN_COLLECTION, palw_state_root_of_p
 use std::collections::BTreeSet;
 use std::io::Write;
 
+mod spill_reader;
+pub use spill_reader::{PalwRowSpillEventV1, PalwRowSpillLimitsV1, palw_visit_row_spill_v1};
+
 /// Upper bound on the preimage a peer may send (it is every collection's 64-byte root plus small scalar blocks; the
 /// shipped preimage is a few KiB).
 pub const PALW_ROW_STREAM_MAX_PREIMAGE_BYTES_V1: usize = 1 << 20;
@@ -400,7 +403,9 @@ impl<W> PalwWholeStateVerifiedV1<W> {
     }
 }
 
-/// Read back one spill written by the verifier: `(label, rows)` per collection, in stream order. For the assembly step.
+/// Read back one trusted local spill written by the verifier: `(label, rows)` per collection, in stream order.
+/// This convenience collector retains the whole spill and trusts its length prefixes. For capped staging or
+/// potentially damaged spill files, use [`palw_visit_row_spill_v1`] with explicit local limits instead.
 pub fn palw_read_row_spill_v1(mut r: impl std::io::Read) -> std::io::Result<Vec<(Vec<u8>, Vec<(Vec<u8>, Vec<u8>)>)>> {
     use std::io::{Error, ErrorKind};
     fn u32_of(r: &mut impl std::io::Read) -> std::io::Result<u32> {

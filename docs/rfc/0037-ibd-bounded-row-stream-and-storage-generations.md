@@ -32,6 +32,13 @@ root は「各 collection の 64 byte root を並べた preimage の hash」な�
 
 受信側の検証器は `consensus/core/src/palw_row_stream_v1.rs` に実装済み(wire には未接続)。
 
+2026-10-24 の補助実装として、同 module の `palw_visit_row_spill_v1` はローカル上限
+(`PalwRowSpillLimitsV1`: 総 bytes、collection 数、累積 row 数、label/key/value 長)を確保前に検査し、
+既存 spill を 1 row ごとの borrowed callback で読み戻す。呼出側が保持しなければ reader は全行を累積しない。
+これは framing の検査のみで、callback の途中結果は staging に留め、認証済み stream と既存の全体 import
+ゲートを通過するまで昇格しない。旧全量 reader の置換、全 collection codec、typed state 組立、公開 wire、
+NativeDemand による heap admission への接続は未完である。ローカル容量・allocation 拒否を peer の不正としない。
+
 ### 2.1 何を保証し、何を保証しないか
 
 - 保証: 受け入れた collection は header が commit した state のそれである。偽 row は当該 collection の終わりで検出され、
