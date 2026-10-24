@@ -43,6 +43,14 @@ not live RSS, a full-node cost bound or a whole-model measurement. Local test
 output is `/tmp/misaka-coinbase-stream-controls.log`; the final source rerun also
 passed 18/18 in `/tmp/misaka-coinbase-stream-controls-final.log`.
 
+The real private node and all its test targets also passed `cargo check -p kaspad
+--lib --tests --features private-integration-config` with the dedicated target and
+debug/incremental disabled (7m19s, including the shared-target lock wait). Output is
+`/tmp/misaka-consumer-node-check-final.log`. This checks the production error
+propagation and the concurrent Memory, remote GC and ETH adapter source connections;
+it is type/metadata verification, not native block acceptance. Later paid-claim
+reader and current-material response work is outside that completed source snapshot.
+
 ## Still outside this result
 
 Builder-owned output vectors, scripts, template/block lifetime and their full
