@@ -7,20 +7,27 @@ use kaspa_consensus_core::{
         PALW_KERNEL_MATERIAL_UNIT_BYTES_V4, PALW_KERNEL_PARAMETER_STAGE_V4, PalwKernelParameterOpeningV4, PalwKernelParameterRowV4,
         classify_kernel_parameter_v4, visit_kernel_parameters_v4,
     },
-    palw_material_capacity_v1::{kernel_material_unit_auth_requests_v4, kernel_material_unit_requests_v4},
+    palw_material_capacity_v1::kernel_material_unit_requests_v4,
     palw_native_resource_v1::{
         NativeDemandLeaseV1, NativeRetainedV1, native_kernel_parameter_tensor_requests_v4, preflight_native_value_v1,
-        reserve_native_requests_v1, retain_native_value_decode_v1,
+        reserve_native_requests_v1, retain_native_value_decode_classified_v1,
     },
 };
 use misaka_palw_kernel::{hash::Digest, ledger::KernelLedgerV1};
 use misaka_palw_tir::Tensor;
 
-fn bad(e: impl ToString) -> Refusal {
-    Refusal::new("PROVIDER_READER_V4", e.to_string())
+pub use kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4 as ProviderReaderErrorV4;
+#[path = "provider_reader_v4_errors.rs"]
+mod errors;
+use errors::{capacity, classified_decode, invalid, shape_error, auth_requests, projection_error};
+fn bad(e: impl ToString) -> ProviderReaderErrorV4 {
+    ProviderReaderErrorV4::Unknown(e.to_string())
 }
-fn add(a: u64, b: u64) -> Result<u64, Refusal> {
-    a.checked_add(b).ok_or_else(|| bad("provider reader capacity overflow"))
+fn compatibility(error: ProviderReaderErrorV4) -> Refusal {
+    Refusal::new("PROVIDER_READER_V4", error.to_string())
+}
+fn add(a: u64, b: u64) -> Result<u64, ProviderReaderErrorV4> {
+    a.checked_add(b).ok_or_else(|| capacity("provider reader capacity overflow"))
 }
 
 /// Explicit local resource inputs, independent of unapproved market/security
@@ -33,7 +40,7 @@ pub struct ProviderReaderLimitsV4 {
     pub max_units: u32,
 }
 impl ProviderReaderLimitsV4 {
-    fn validate(&self) -> Result<(), Refusal> {
+    fn validate(&self) -> Result<(), ProviderReaderErrorV4> {
         if self.max_unit_bytes == 0
             || self.max_unit_bytes > PALW_KERNEL_MATERIAL_UNIT_BYTES_V4
             || self.max_total_fetch_bytes == 0
@@ -63,15 +70,15 @@ impl ProviderParameterV4 {
 /// `ledger` must be the caller's authenticated selected-state projection.
 /// Each opening and the final *full* native commitment are checked; accepting
 /// mutually inconsistent row/column trees by checking rows alone is forbidden.
-pub fn fetch_parameter_from_provider_v4(
+pub fn fetch_parameter_from_provider_classified_v4(
     ledger: &KernelLedgerV1,
     claim: &Digest,
     program: u16,
     parameter: u16,
     layer: Option<u16>,
     limits: ProviderReaderLimitsV4,
-    mut fetch: impl FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>,
-) -> Result<ProviderParameterV4, Refusal> {
+    mut fetch: impl FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>,
+) -> Result<ProviderParameterV4, ProviderReaderErrorV4> {
     limits.validate()?;
     let mut offset = 0u64;
     let mut found = None;
@@ -84,87 +91,84 @@ pub fn fetch_parameter_from_provider_v4(
     })
     .map_err(bad)?;
     let (first, spec) = found.ok_or_else(|| bad("parameter is not immutable material of this accepted claim"))?;
-    let units = spec.units().map_err(bad)?;
-    let maximum_unit = spec.maximum_unit_bytes().map_err(bad)?;
+    let units = spec.units().map_err(capacity)?;
+    let maximum_unit = spec.maximum_unit_bytes().map_err(capacity)?;
     if units == 0
         || units > u64::from(limits.max_units)
         || maximum_unit > limits.max_unit_bytes
         || first.checked_add(units).is_none_or(|n| n > u64::from(u32::MAX) + 1)
     {
-        return Err(bad("registered parameter exceeds explicit row/tile acquisition limits"));
+        return Err(capacity("registered parameter exceeds explicit row/tile acquisition limits"));
     }
-    let work = native_kernel_parameter_tensor_requests_v4(&spec).map_err(bad)?;
+    let work = native_kernel_parameter_tensor_requests_v4(&spec).map_err(capacity)?;
     if work > limits.max_workspace_bytes {
-        return Err(bad("full parameter and native commitment workspace exceeds capacity"));
+        return Err(capacity("full parameter and native commitment workspace exceeds capacity"));
     }
     // Reserve the tensor, shape and dual-tree commitment before allocating any
     // destination. Unit decode/auth reservations below live concurrently.
-    let lease = reserve_native_requests_v1(work).map_err(bad)?;
-    let elements = spec.rows.checked_mul(spec.row_len).ok_or_else(|| bad("parameter elements overflow"))?;
+    let lease = reserve_native_requests_v1(work).map_err(capacity)?;
+    let elements = spec.rows.checked_mul(spec.row_len).ok_or_else(|| capacity("parameter elements overflow"))?;
     let mut values = Vec::new();
-    values.try_reserve_exact(usize::try_from(elements).map_err(bad)?).map_err(bad)?;
+    values.try_reserve_exact(usize::try_from(elements).map_err(capacity)?).map_err(capacity)?;
     let mut fetched = 0u64;
     for local in 0..units {
         let ordinal = u32::try_from(add(first, local)?).map_err(bad)?;
-        let bytes = fetch(PALW_KERNEL_PARAMETER_STAGE_V4, ordinal).map_err(bad)?;
+        let bytes = fetch(PALW_KERNEL_PARAMETER_STAGE_V4, ordinal)?;
         fetched = add(fetched, bytes.len() as u64)?;
         if bytes.len() as u64 > limits.max_unit_bytes || fetched > limits.max_total_fetch_bytes {
-            return Err(bad("provider parameter acquisition exceeds byte limits"));
+            return Err(capacity("provider parameter acquisition exceeds byte limits"));
         }
         // Always walk actual lengths before decode, even if native accounting
         // is disabled in a private runtime. A frame cap alone cannot bound Vec.
-        let shape = preflight_native_value_v1::<PalwKernelParameterRowV4>(&bytes[..], bytes.len() as u64).map_err(bad)?;
+        let shape = preflight_native_value_v1::<PalwKernelParameterRowV4>(&bytes[..], bytes.len() as u64).map_err(shape_error)?;
         let codec = kernel_material_unit_requests_v4(PALW_KERNEL_PARAMETER_STAGE_V4, &bytes)
             .map_err(bad)?
             .bytes()
-            .ok_or_else(|| bad("parameter codec coverage overflow"))?;
+            .ok_or_else(|| capacity("parameter codec coverage overflow"))?;
         if add(add(work, bytes.len() as u64)?, add(shape.logical_requests_v1(), codec)?)? > limits.max_workspace_bytes {
-            return Err(bad("parameter codec exceeds concurrent workspace before authentication"));
+            return Err(capacity("parameter codec exceeds concurrent workspace before authentication"));
         }
-        let auth = kernel_material_unit_auth_requests_v4(PALW_KERNEL_PARAMETER_STAGE_V4, &bytes, ledger, claim)
-            .map_err(bad)?
-            .bytes()
-            .ok_or_else(|| bad("parameter authentication coverage overflow"))?;
+        let auth = auth_requests(PALW_KERNEL_PARAMETER_STAGE_V4, &bytes, ledger, claim)?;
         let concurrent = add(add(work, bytes.len() as u64)?, add(shape.logical_requests_v1(), add(codec, auth)?)?)?;
         if concurrent > limits.max_workspace_bytes {
-            return Err(bad("parameter unit decode/auth exceeds concurrent workspace"));
+            return Err(capacity("parameter unit decode/auth exceeds concurrent workspace"));
         }
-        let _auth_lease = reserve_native_requests_v1(add(codec, auth)?).map_err(bad)?;
-        let unit = retain_native_value_decode_v1(&bytes, || borsh::from_slice::<PalwKernelParameterRowV4>(&bytes)).map_err(bad)?;
-        classify_kernel_parameter_v4(ledger, claim, ordinal, &unit).map_err(bad)?;
+        let _auth_lease = reserve_native_requests_v1(add(codec, auth)?).map_err(capacity)?;
+        let unit = retain_native_value_decode_classified_v1(&bytes, || borsh::from_slice::<PalwKernelParameterRowV4>(&bytes)).map_err(classified_decode)?;
+        classify_kernel_parameter_v4(ledger, claim, ordinal, &unit).map_err(invalid)?;
         let part = match &unit.opening {
             PalwKernelParameterOpeningV4::RowV2(o) => &o.values,
             PalwKernelParameterOpeningV4::TileV3(o) => &o.values,
         };
         let tile = local % spec.row_tiles;
         let start = if spec.suite == 3 {
-            tile.checked_mul(misaka_palw_kernel::merkle3::TILE_V3).ok_or_else(|| bad("parameter tile offset overflow"))?
+            tile.checked_mul(misaka_palw_kernel::merkle3::TILE_V3).ok_or_else(|| capacity("parameter tile offset overflow"))?
         } else {
             0
         };
         let expected =
             if spec.suite == 3 { spec.row_len.saturating_sub(start).min(misaka_palw_kernel::merkle3::TILE_V3) } else { spec.row_len };
         if part.len() as u64 != expected || add(values.len() as u64, expected)? > elements {
-            return Err(bad("parameter row/tile cardinality differs"));
+            return Err(invalid("parameter row/tile cardinality differs"));
         }
         values.extend_from_slice(part);
     }
     if values.len() as u64 != elements {
-        return Err(bad("parameter reconstruction is incomplete"));
+        return Err(invalid("parameter reconstruction is incomplete"));
     }
     let mut shape = Vec::new();
-    shape.try_reserve_exact(spec.declaration.shape.len()).map_err(bad)?;
+    shape.try_reserve_exact(spec.declaration.shape.len()).map_err(capacity)?;
     for d in &spec.declaration.shape {
         shape.push(usize::try_from(*d).map_err(bad)?);
     }
     let tensor = Tensor::new(spec.declaration.dtype, shape, values).map_err(bad)?;
     if !full_parameter_matches_v4(&tensor, spec.suite, &spec.commitment)? {
-        return Err(bad("full fetched parameter does not reproduce registered tensor commitment"));
+        return Err(invalid("full fetched parameter does not reproduce registered tensor commitment"));
     }
     Ok(ProviderParameterV4 { tensor, _lease: lease })
 }
 
-fn full_parameter_matches_v4(tensor: &Tensor, suite: u32, want: &Digest) -> Result<bool, Refusal> {
+fn full_parameter_matches_v4(tensor: &Tensor, suite: u32, want: &Digest) -> Result<bool, ProviderReaderErrorV4> {
     let commitment = match suite {
         2 => misaka_palw_kernel::merkle::tensor_commitment_v2(tensor),
         3 => misaka_palw_kernel::merkle3::tensor_commitment_v3(tensor),
@@ -202,7 +206,7 @@ impl ProviderCheckedResultV4 {
         signer: Digest,
         now: u64,
     ) -> Result<misaka_palw_kernel::route::KernelRouteObjectV1, Refusal> {
-        let checked = self.result.complete.as_ref().ok_or_else(|| bad("provider check has no complete selected-seat result"))?;
+        let checked = self.result.complete.as_ref().ok_or_else(|| compatibility(bad("provider check has no complete selected-seat result")))?;
         // The existing authority checks native enrollment/context/seed and
         // assigned signer. Query signatures/local replay cannot bypass it.
         sources.receipt(checked, signer, now)
@@ -217,30 +221,30 @@ struct Reader<'a, F> {
     bytes: Cell<u64>,
     charged: Cell<u64>,
     lease: RefCell<Option<NativeDemandLeaseV1>>,
-    error: RefCell<Option<String>>,
+    error: RefCell<Option<ProviderReaderErrorV4>>,
 }
-impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> Reader<'_, F> {
-    fn charge(&self, n: u64) -> Result<(), Refusal> {
+impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>> Reader<'_, F> {
+    fn charge(&self, n: u64) -> Result<(), ProviderReaderErrorV4> {
         let total = add(self.charged.get(), n)?;
         if total > self.limits.max_workspace_bytes {
-            return Err(bad("cumulative provider checker acquisition exceeds capacity"));
+            return Err(capacity("cumulative provider checker acquisition exceeds capacity"));
         }
         if let Some(lease) = self.lease.borrow_mut().as_mut() {
-            lease.grow_memory_v1(n).map_err(bad)?;
+            lease.grow_memory_v1(n).map_err(capacity)?;
         }
         self.charged.set(total);
         Ok(())
     }
-    fn fetch(&self, stage: u8, ordinal: u32) -> Result<NativeRetainedV1<Vec<u8>>, String> {
-        let next = self.calls.get().checked_add(1).ok_or("provider acquisition count overflow")?;
+    fn fetch(&self, stage: u8, ordinal: u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4> {
+        let next = self.calls.get().checked_add(1).ok_or_else(|| capacity("provider acquisition count overflow"))?;
         if next > self.limits.max_units {
-            return Err("provider acquisition exceeds explicit request count".into());
+            return Err(capacity("provider acquisition exceeds explicit request count"));
         }
         self.calls.set(next);
         let raw = (self.fetch.borrow_mut())(stage, ordinal)?;
-        let bytes = self.bytes.get().checked_add(raw.len() as u64).ok_or("provider acquisition byte overflow")?;
+        let bytes = self.bytes.get().checked_add(raw.len() as u64).ok_or_else(|| capacity("provider acquisition byte overflow"))?;
         if raw.len() as u64 > self.limits.max_unit_bytes || bytes > self.limits.max_total_fetch_bytes {
-            return Err("provider acquisition exceeds explicit byte limits".into());
+            return Err(capacity("provider acquisition exceeds explicit byte limits"));
         }
         self.bytes.set(bytes);
         Ok(raw)
@@ -249,44 +253,41 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> Reader<'_, 
         &self,
         stage: u8,
         ordinal: u32,
-        read: impl FnOnce(&T) -> Result<R, String>,
-    ) -> Result<R, Refusal> {
-        let raw = self.fetch(stage, ordinal).map_err(bad)?;
-        preflight_native_value_v1::<T>(&raw[..], raw.len() as u64).map_err(bad)?;
+        read: impl FnOnce(&T) -> Result<R, ProviderReaderErrorV4>,
+    ) -> Result<R, ProviderReaderErrorV4> {
+        let raw = self.fetch(stage, ordinal)?;
+        preflight_native_value_v1::<T>(&raw[..], raw.len() as u64).map_err(shape_error)?;
         let codec =
-            kernel_material_unit_requests_v4(stage, &raw).map_err(bad)?.bytes().ok_or_else(|| bad("provider codec size overflow"))?;
+            kernel_material_unit_requests_v4(stage, &raw).map_err(bad)?.bytes().ok_or_else(|| capacity("provider codec size overflow"))?;
         // Admit actual codec storage before the auth quote's own decode. Both
         // helpers reserve before allocation; their temporary owner is distinct.
         self.charge(add(raw.len() as u64, codec)?)?;
-        let auth = kernel_material_unit_auth_requests_v4(stage, &raw, self.ledger, &self.claim)
-            .map_err(bad)?
-            .bytes()
-            .ok_or_else(|| bad("provider auth size overflow"))?;
+        let auth = auth_requests(stage, &raw, self.ledger, &self.claim)?;
         self.charge(auth)?;
-        typed_kernel_classify_unit_v4(self.ledger, &self.claim, stage, ordinal, &raw).map_err(bad)?;
-        let value = retain_native_value_decode_v1(&raw, || borsh::from_slice::<T>(&raw)).map_err(bad)?;
-        read(&value).map_err(bad)
+        typed_kernel_classify_unit_v4(self.ledger, &self.claim, stage, ordinal, &raw).map_err(invalid)?;
+        let value = retain_native_value_decode_classified_v1(&raw, || borsh::from_slice::<T>(&raw)).map_err(classified_decode)?;
+        read(&value)
     }
-    fn attempt<T>(&self, call: impl FnOnce() -> Result<T, Refusal>) -> Option<T> {
+    fn attempt<T>(&self, call: impl FnOnce() -> Result<T, ProviderReaderErrorV4>) -> Option<T> {
         if self.error.borrow().is_some() {
             return None;
         }
         match call() {
             Ok(value) => Some(value),
             Err(error) => {
-                *self.error.borrow_mut() = Some(error.to_string());
+                *self.error.borrow_mut() = Some(error);
                 None
             }
         }
     }
 }
-impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> PublicSourceV1 for Reader<'_, F> {
+impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>> PublicSourceV1 for Reader<'_, F> {
     fn node(&self, stage: u8, position: u32, occurrence: u16, node: u16) -> Option<Tensor> {
         self.attempt(|| {
             self.decoded::<PositionResponseV1, _>(stage, position, |r| {
                 match r.values.get(occurrence as usize).and_then(|o| o.get(node as usize)) {
-                    Some(MaterialResponseV1::Whole(w)) => w.decode(),
-                    _ => Err("required provider node is absent/derived/partial".into()),
+                    Some(MaterialResponseV1::Whole(w)) => w.decode().map_err(invalid),
+                    _ => Err(invalid("required provider node is absent/derived/partial")),
                 }
             })
         })
@@ -294,13 +295,13 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> PublicSourc
     fn input(&self, stage: u8, position: u32, index: u16) -> Option<Tensor> {
         self.attempt(|| {
             self.decoded::<PositionResponseV1, _>(stage, position, |r| match r.inputs.get(index as usize) {
-                Some(MaterialResponseV1::Whole(w)) => w.decode(),
-                _ => Err("required provider input is absent/partial".into()),
+                Some(MaterialResponseV1::Whole(w)) => w.decode().map_err(invalid),
+                _ => Err(invalid("required provider input is absent/partial")),
             })
         })
     }
 }
-impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> PublicArtifactV1 for Reader<'_, F> {
+impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>> PublicArtifactV1 for Reader<'_, F> {
     fn param(&self, program: u16, parameter: u16, layer: Option<u16>) -> Option<Tensor> {
         // Mutable memory slots are deliberately absent from immutable provider
         // parameter rows. The typed checker first tries M0 in the artifact and
@@ -320,26 +321,27 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> PublicArtif
         self.attempt(|| {
             // Reserve the destination clone before fetching. The standalone
             // parameter owner separately covers its construction and full roots.
-            let mut work = None;
+            let mut spec_found = None;
             visit_kernel_parameters_v4(self.ledger, &self.claim, |spec| {
                 if (spec.program, spec.parameter, spec.layer) == (program, parameter, layer) {
-                    work = Some(native_kernel_parameter_tensor_requests_v4(&spec).map_err(|e| e.to_string())?);
+                    spec_found = Some(spec);
                 }
                 Ok(())
             })
             .map_err(bad)?;
-            self.charge(work.ok_or_else(|| bad("requested immutable parameter absent"))?)?;
+            let spec = spec_found.ok_or_else(|| bad("requested immutable parameter absent"))?;
+            self.charge(native_kernel_parameter_tensor_requests_v4(&spec).map_err(capacity)?)?;
             let remaining =
-                self.limits.max_workspace_bytes.checked_sub(self.charged.get()).ok_or_else(|| bad("parameter capacity exhausted"))?;
+                self.limits.max_workspace_bytes.checked_sub(self.charged.get()).ok_or_else(|| capacity("parameter capacity exhausted"))?;
             let limits = ProviderReaderLimitsV4 { max_workspace_bytes: remaining, ..self.limits };
-            let value = fetch_parameter_from_provider_v4(self.ledger, &self.claim, program, parameter, layer, limits, |s, p| {
+            let value = fetch_parameter_from_provider_classified_v4(self.ledger, &self.claim, program, parameter, layer, limits, |s, p| {
                 self.fetch(s, p)
             })?;
             Ok(value.tensor().clone())
         })
     }
 }
-impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> misaka_palw_kernel::spec::outsider::SnapshotSourceV1
+impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>> misaka_palw_kernel::spec::outsider::SnapshotSourceV1
     for Reader<'_, F>
 {
     fn item(&self, snapshot: &Digest, id: u64) -> Option<RetrievalItemV1> {
@@ -364,14 +366,14 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> misaka_palw
             self.decoded::<SliceResponseV1, _>(
                 misaka_palw_kernel::spec::SNAPSHOT_STAGE_BASE_V1 + component,
                 u32::try_from(slice).map_err(bad)?,
-                |r| r.items.get(index as usize).cloned().ok_or("provider snapshot slice omitted required item".into()),
+                |r| r.items.get(index as usize).cloned().ok_or_else(|| invalid("provider snapshot slice omitted required item")),
             )
         })
     }
 }
 
-impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> Reader<'_, F> {
-    fn segmented_range(&self, position: u32) -> Result<(u32, u32), Refusal> {
+impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>> Reader<'_, F> {
+    fn segmented_range(&self, position: u32) -> Result<(u32, u32), ProviderReaderErrorV4> {
         let row = self.ledger.claims.get(&self.claim).ok_or_else(|| bad("segmented checker claim absent"))?;
         let misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { evidence, .. } = &row.body else {
             return Err(bad("not a segmented checker claim"));
@@ -390,52 +392,51 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> Reader<'_, 
         }
         Err(bad("segmented native part range absent"))
     }
-    fn segment_path(&self, position: u32) -> Result<(Digest, Vec<Digest>), Refusal> {
+    fn segment_path(&self, position: u32) -> Result<(Digest, Vec<Digest>), ProviderReaderErrorV4> {
         use kaspa_consensus_core::palw_kernel_parameter_material_v4::{
             PALW_KERNEL_SEGMENTED_PART_STAGE_V4, PalwKernelSegmentedPartV4,
         };
         let (first, _) = self.segmented_range(position)?;
         self.decoded::<PalwKernelSegmentedPartV4, _>(PALW_KERNEL_SEGMENTED_PART_STAGE_V4, first, |unit| {
             preflight_native_value_v1::<misaka_palw_kernel::seg_da::SegPartResponseV1>(&unit.bytes[..], unit.bytes.len() as u64)
-                .map_err(|e| e.to_string())?;
-            let part = retain_native_value_decode_v1(&unit.bytes, || {
+                .map_err(shape_error)?;
+            let part = retain_native_value_decode_classified_v1(&unit.bytes, || {
                 borsh::from_slice::<misaka_palw_kernel::seg_da::SegPartResponseV1>(&unit.bytes)
             })
-            .map_err(|e| e.to_string())?;
-            self.charge((part.position_siblings.len() as u64).checked_mul(64).ok_or("segment path size overflow")?)
-                .map_err(|e| e.to_string())?;
+            .map_err(classified_decode)?;
+            self.charge((part.position_siblings.len() as u64).checked_mul(64).ok_or_else(|| capacity("segment path size overflow"))?)?;
             Ok((part.position_root, part.position_siblings.clone()))
         })
     }
     fn assembled(
         &self,
         position: u32,
-    ) -> Result<(misaka_palw_kernel::seg_da::AssembledPositionV1, misaka_palw_kernel::seg_da::HiddenLeavesV1), Refusal> {
+    ) -> Result<(misaka_palw_kernel::seg_da::AssembledPositionV1, misaka_palw_kernel::seg_da::HiddenLeavesV1), ProviderReaderErrorV4> {
         use kaspa_consensus_core::{
             palw_kernel_parameter_material_v4::{PALW_KERNEL_SEGMENTED_PART_STAGE_V4, PalwKernelSegmentedPartV4},
             palw_native_resource_v1::native_kernel_segment_assembly_requests_v4,
         };
         let (first, count) = self.segmented_range(position)?;
         if count == 0 || count > self.limits.max_units {
-            return Err(bad("segmented position exceeds explicit acquisition request limit"));
+            return Err(capacity("segmented position exceeds explicit acquisition request limit"));
         }
         self.charge(
             u64::from(count)
                 .checked_mul(std::mem::size_of::<Vec<u8>>() as u64)
-                .ok_or_else(|| bad("segmented part frames overflow"))?,
+                .ok_or_else(|| capacity("segmented part frames overflow"))?,
         )?;
         let mut parts = Vec::new();
-        parts.try_reserve_exact(count as usize).map_err(bad)?;
+        parts.try_reserve_exact(count as usize).map_err(capacity)?;
         for part in 0..count {
-            let ordinal = first.checked_add(part).ok_or_else(|| bad("segmented part ordinal overflow"))?;
+            let ordinal = first.checked_add(part).ok_or_else(|| capacity("segmented part ordinal overflow"))?;
             // Clone one already authenticated inner frame. The acquisition
             // reservation covers raw/decoded/copied frames while all parts are
             // retained; the assembly quote below covers its own parsed bodies.
             let bytes = self.decoded::<PalwKernelSegmentedPartV4, _>(PALW_KERNEL_SEGMENTED_PART_STAGE_V4, ordinal, |unit| {
                 if unit.position != position || unit.part != part {
-                    return Err("segmented provider part metadata differs".into());
+                    return Err(invalid("segmented provider part metadata differs"));
                 }
-                self.charge(unit.bytes.len() as u64).map_err(|e| e.to_string())?;
+                self.charge(unit.bytes.len() as u64)?;
                 Ok(unit.bytes.clone())
             })?;
             parts.push(bytes);
@@ -445,13 +446,13 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> Reader<'_, 
             return Err(bad("not a segmented checker claim"));
         };
         let class = self.ledger.classes.get(&row.class_binding_id).ok_or_else(|| bad("segmented checker class absent"))?;
-        let requests = native_kernel_segment_assembly_requests_v4(&class.program, position, &parts).map_err(bad)?;
+        let requests = native_kernel_segment_assembly_requests_v4(&class.program, position, &parts).map_err(capacity)?;
         self.charge(requests)?;
         misaka_palw_kernel::seg_da::assemble_position_full_v1(&class.program, segment_roots, evidence.positions, position, &parts)
-            .ok_or_else(|| bad("authenticated segmented parts do not form the native full position"))
+            .ok_or_else(|| invalid("authenticated segmented parts do not form the native full position"))
     }
 }
-impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> misaka_palw_kernel::element::SegMaterialV1 for Reader<'_, F> {
+impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>> misaka_palw_kernel::element::SegMaterialV1 for Reader<'_, F> {
     fn position(&self, position: u32) -> Option<Vec<Vec<Tensor>>> {
         self.attempt(|| self.assembled(position).map(|((values, _, _), _)| values))
     }
@@ -482,26 +483,28 @@ impl VerifiedPaidClaimSourcesV2 {
     /// This ordinary-round entry point rejects V4 until its separately rooted
     /// direct-check audit record is supplied via the V4 entry point. Retrieval
     /// errors are acquisition failures, never arithmetic convictions or Clean.
-    pub fn verify_using_provider_v4(
+    /// Preserve local native capacity and remote acquisition causes through
+    /// every optional checker adapter. Failures cannot produce a complete result.
+    pub fn verify_using_provider_classified_v4(
         &self,
         canonical_opening: &PaidClaimMaterialWireV2,
         limits: ProviderReaderLimitsV4,
-        fetch: impl FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>,
-    ) -> Result<ProviderCheckedResultV4, Refusal> {
+        fetch: impl FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>,
+    ) -> Result<ProviderCheckedResultV4, ProviderReaderErrorV4> {
         limits.validate()?;
         let check = self.check.bind_opening_v3(canonical_opening).map_err(bad)?;
         self.check_provider_v4(canonical_opening, &check, limits, fetch)
     }
-    pub(super) fn check_provider_v4<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>>(
+    fn check_provider_v4<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>>(
         &self,
         canonical_opening: &PaidClaimMaterialWireV2,
         check: &PaidClaimCheckAuthorityV2,
         limits: ProviderReaderLimitsV4,
         fetch: F,
-    ) -> Result<ProviderCheckedResultV4, Refusal> {
+    ) -> Result<ProviderCheckedResultV4, ProviderReaderErrorV4> {
         limits.validate()?;
-        let mut ledger = self.route.ledger().map_err(bad)?;
-        check_provider_material_v4(
+        let mut ledger = self.route.ledger_checked_v1().map_err(projection_error)?;
+        check_provider_material_classified_v4(
             &mut ledger,
             self.authority.enrollment.base_claim,
             self.authority.class.target,
@@ -517,7 +520,7 @@ impl VerifiedPaidClaimSourcesV2 {
 // This is private: supplying a ledger/check here does not install native source
 // authority or make a selected receipt. The public caller derives both above.
 #[allow(clippy::too_many_arguments)]
-fn check_provider_material_v4<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>>(
+fn check_provider_material_classified_v4<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4>>(
     ledger: &mut kaspa_consensus_core::palw_native_resource_v1::ReservedKernelLedgerV1,
     claim: Digest,
     target: PaidClaimTargetV2,
@@ -525,9 +528,9 @@ fn check_provider_material_v4<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u
     check: &PaidClaimCheckAuthorityV2,
     limits: ProviderReaderLimitsV4,
     fetch: F,
-) -> Result<ProviderCheckedResultV4, Refusal> {
+) -> Result<ProviderCheckedResultV4, ProviderReaderErrorV4> {
     limits.validate()?;
-    ledger.try_reserve_kernel_material_v4(&claim).map_err(bad)?;
+    ledger.try_reserve_kernel_material_v4(&claim).map_err(capacity)?;
     let reader = Reader {
         ledger: &*ledger,
         claim,
@@ -536,7 +539,7 @@ fn check_provider_material_v4<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u
         calls: Cell::new(0),
         bytes: Cell::new(0),
         charged: Cell::new(0),
-        lease: RefCell::new(reserve_native_requests_v1(0).map_err(bad)?),
+        lease: RefCell::new(reserve_native_requests_v1(0).map_err(capacity)?),
         error: RefCell::new(None),
     };
     let outsider =
@@ -554,10 +557,42 @@ fn check_provider_material_v4<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u
         PaidClaimTargetV2::Segmented => check.verify_segmented(&outsider, &reader, &canonical_opening.tokens),
     };
     if let Some(error) = reader.error.into_inner() {
-        return Err(bad(error));
+        return Err(error);
     }
     let result = checked.map_err(bad)?;
     Ok(ProviderCheckedResultV4 { result, _acquisition: reader.lease.into_inner() })
+}
+
+/// Compatibility entry point for callers whose transport still returns strings.
+/// Such opaque errors remain Unknown; text is never parsed for fault classification.
+#[allow(clippy::too_many_arguments)]
+pub fn fetch_parameter_from_provider_v4(
+    ledger: &KernelLedgerV1, claim: &Digest, program: u16, parameter: u16, layer: Option<u16>,
+    limits: ProviderReaderLimitsV4,
+    mut fetch: impl FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>,
+) -> Result<ProviderParameterV4, Refusal> {
+    fetch_parameter_from_provider_classified_v4(ledger, claim, program, parameter, layer, limits,
+        |s, p| fetch(s, p).map_err(bad)).map_err(compatibility)
+}
+impl VerifiedPaidClaimSourcesV2 {
+    pub fn verify_using_provider_v4(
+        &self, canonical_opening: &PaidClaimMaterialWireV2, limits: ProviderReaderLimitsV4,
+        mut fetch: impl FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>,
+    ) -> Result<ProviderCheckedResultV4, Refusal> {
+        self.verify_using_provider_classified_v4(canonical_opening, limits,
+            |s, p| fetch(s, p).map_err(bad)).map_err(compatibility)
+    }
+}
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn check_provider_material_v4(
+    ledger: &mut kaspa_consensus_core::palw_native_resource_v1::ReservedKernelLedgerV1,
+    claim: Digest, target: PaidClaimTargetV2, canonical_opening: &PaidClaimMaterialWireV2,
+    check: &PaidClaimCheckAuthorityV2, limits: ProviderReaderLimitsV4,
+    mut fetch: impl FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>,
+) -> Result<ProviderCheckedResultV4, Refusal> {
+    check_provider_material_classified_v4(ledger, claim, target, canonical_opening, check, limits,
+        |s, p| fetch(s, p).map_err(bad)).map_err(compatibility)
 }
 
 #[cfg(test)]

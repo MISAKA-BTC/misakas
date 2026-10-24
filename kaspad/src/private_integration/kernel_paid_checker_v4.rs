@@ -26,7 +26,7 @@ use misaka_palw_sdk::claim_paid_v2::{
     VerifiedPaidClaimSourcesV2, paid_claim_round_sources_from_route_v3, paid_claim_sources_from_route_v2,
     private_bootstrap::ProgramPaidBootstrapWorkV3,
     provider_actions_v4::{objective_action_from_provider_check_v4, sign_provider_objective_action_v4},
-    provider_reader_v4::ProviderReaderLimitsV4,
+    provider_reader_v4::{ProviderReaderLimitsV4, ProviderReaderErrorV4},
 };
 use std::{
     fs::{self, OpenOptions},
@@ -520,21 +520,20 @@ impl PreparedKernelPaidCheckV4 {
                     let query = PalwKernelMaterialUnitQueryV4 {
                         version: 4,
                         root: Hash64::from_bytes(base),
-                        consent: material_consent.ok_or("checker serving provider has no current active generation")?,
+                        consent: material_consent.ok_or_else(|| ProviderReaderErrorV4::Unknown("checker serving provider has no current active generation".into()))?,
                         dependency: Hash64::from_bytes(base),
                         provider: self.provider,
                         stage,
                         position,
                     };
-                    let authority = api.palw_kernel_material_query_authority_v4(&query, self.checker, self.key.public_key())?;
+                    let authority = api.palw_kernel_material_query_authority_v4(&query, self.checker, self.key.public_key()).map_err(ProviderReaderErrorV4::Unknown)?;
                     client
                         .as_ref()
-                        .ok_or("explicit checker query client absent")?
+                        .ok_or_else(|| ProviderReaderErrorV4::Unknown("explicit checker query client absent".into()))?
                         .fetch_kernel_material_unit_classified_v4(&query, &authority)
                         .map_err(|error| {
-                            let message = error.to_string();
-                            *failure.borrow_mut() = Some((query, error));
-                            message
+                            *failure.borrow_mut() = Some(query);
+                            error
                         })
                 };
                 let limits = ProviderReaderLimitsV4 {
@@ -546,7 +545,7 @@ impl PreparedKernelPaidCheckV4 {
                 if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
                     return Err(misaka_palw_kernel::claim_paid_v2::COMPACT_V4_RETIRED_REASON.into());
                 }
-                let checked_result = source.verify_using_provider_v4(&work.material, limits, query);
+                let checked_result = source.verify_using_provider_classified_v4(&work.material, limits, query);
                 let signed = match checked_result {
                     Ok(checked) => {
                         let Some(index) =
@@ -568,12 +567,17 @@ impl PreparedKernelPaidCheckV4 {
                         use kaspa_consensus_core::palw_kernel_material_query_v4::{
                             PalwKernelMaterialFetchErrorV4 as E, monetary_material_challenge_object_v4,
                         };
-                        let Some((unit, cause)) = failure.into_inner() else {
+                        if matches!(error, E::LocalCapacity(_)) {
+                            kaspa_core::debug!("checker local capacity pending; no provider obligation or conviction: {error}");
+                            continue;
+                        }
+                        let Some(unit) = failure.into_inner() else {
                             kaspa_core::debug!(
                                 "checker fresh verification/authority unknown; no new obligation or conviction: {error}"
                             );
                             continue;
                         };
+                        let cause = error;
                         if !matches!(cause, E::Unavailable(_) | E::InvalidMaterial(_)) {
                             kaspa_core::debug!("provider acquisition {cause}; no provider obligation or conviction");
                             continue;

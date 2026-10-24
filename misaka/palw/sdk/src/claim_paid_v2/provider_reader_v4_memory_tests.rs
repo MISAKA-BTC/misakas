@@ -335,7 +335,7 @@ fn only_the_exact_registered_mutable_slot_is_an_optional_artifact_miss() {
         let reader = Reader {
             ledger: &fixture.ledger,
             claim: fixture.claim,
-            fetch: RefCell::new(|_, _| -> Result<NativeRetainedV1<Vec<u8>>, String> {
+            fetch: RefCell::new(|_, _| -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV4> {
                 panic!("optional/excluded parameter must not query provider")
             }),
             limits: MemoryProvider::limits(),
@@ -372,3 +372,6 @@ fn authentic_lie_in_each_memory_step_is_localized_and_convicted_without_complete
         );
     }
 }
+
+#[path = "provider_reader_v4_resource_tests.rs"]
+mod resource_tests;
