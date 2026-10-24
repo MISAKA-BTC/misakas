@@ -25,6 +25,7 @@ import time
 import urllib.request
 from misaka_wrpc_json import WsRpc
 from rfc12_owned_resources import OwnedResourceSampler, ResourceLimitExceeded
+from rfc12_owned_fixture import start_fixture, stop_fixture
 import rfc12_kernel_consumers as kernel_consumers
 import rfc08_native_paid_observation as paid_observations
 
@@ -652,10 +653,10 @@ class MeasuredDrill(Drill):
         # heap with output or hide its failed stderr behind a later exception.
         stdout_path, stderr_path = self.root / (name + '.stdout'), self.root / (name + '.stderr')
         with stdout_path.open('w') as stdout, stderr_path.open('w') as stderr:
-            child = subprocess.Popen(argv, stdout=stdout, stderr=stderr, text=True)
-            self.sampler.register(name, child)
+            child = start_fixture(argv, stdout, stderr)
             self.command_outputs.extend((stdout_path, stderr_path))
             try:
+                self.sampler.register(name, child)
                 while child.poll() is None:
                     if time.monotonic() - began >= allowed:
                         raise Blocked(name + ' exceeded its finite command/workflow deadline')
@@ -667,11 +668,17 @@ class MeasuredDrill(Drill):
                 if child.returncode:
                     raise Blocked('%s exited %s; inspect preserved stderr' % (name, child.returncode))
             finally:
-                if child.poll() is None:
-                    child.kill()
-                    child.wait(timeout=20)
-                self.command_observations.append(dict(label=name, returnCode=child.returncode,
-                    elapsedSeconds=time.monotonic() - began, stdout=str(stdout_path), stderr=str(stderr_path)))
+                cleaned = False
+                try:
+                    stop_fixture(child)
+                    cleaned = True
+                finally:
+                    self.command_observations.append(dict(label=name, returnCode=child.returncode,
+                        elapsedSeconds=time.monotonic() - began, stdout=str(stdout_path), stderr=str(stderr_path),
+                        cleanupScope='owned-posix-process-group', cleanupSucceeded=cleaned))
+        # Descendants could write between the last loop observation and group
+        # shutdown. Include those final bytes before accepting this command.
+        self.check_fixture_output()
         # The fixture hook does not consume command output as a node authority.
         return ''
 
