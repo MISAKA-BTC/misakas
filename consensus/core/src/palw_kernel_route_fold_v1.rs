@@ -981,6 +981,15 @@ fn apply_settlements_to_exec_vesting(
     exec_root: Option<Hash64>,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
+    // Fail closed on paid-target read failures before any earlier settlement
+    // in this batch can write. Genuine absence and a dormant fence are no-ops.
+    if builder.params.paid_claim_trap_active_at(now) {
+        for ordinal in 0..events.len() {
+            if let Some((claim, _, _, _)) = super::palw_settlement_once_fold_v1::kernel_check_fee_at_v1(events, ordinal) {
+                super::palw_paid_claim_trap_fold_v1::check_fee_hold_until_checked_v1(builder, &claim, now)?;
+            }
+        }
+    }
     // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
     // with no spent escrow behind it is never paid (there is no unfunded reward path).
     let mut escrow_debited: std::collections::BTreeMap<Option<misaka_palw_kernel::hash::Digest>, u64> = Default::default();
@@ -1054,7 +1063,7 @@ fn apply_settlements_to_exec_vesting(
             let slot_ordinal = *slot;
             let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot_ordinal);
             *slot = slot.checked_add(1).ok_or(PalwStateV2Error::Overflow("check fee slot ordinal"))?;
-            if let Some(release_after_daa) = super::palw_paid_claim_trap_fold_v1::check_fee_hold_until_v1(builder, &claim, now) {
+            if let Some(release_after_daa) = super::palw_paid_claim_trap_fold_v1::check_fee_hold_until_checked_v1(builder, &claim, now)? {
                 // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): a paid V2 claim's check fee is HELD — the poster's escrow is
                 // debited now, the verifier's `FinalReward` is not paid; the fee is released once, after the claim's trap reveal
                 // window (the verifier's liability horizon), less the forfeiture if the court convicts a claim it signed Clean.

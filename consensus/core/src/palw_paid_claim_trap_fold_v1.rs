@@ -153,14 +153,26 @@ impl PalwChainStateV2 {
         if !params.paid_claim_trap_active_at(daa) {
             return None;
         }
-        self.kernel_route.as_ref()?.paid_claim_authority_for_base_unchecked_v2(&claim.as_bytes()).map(|a| PalwPaidTrapClaimV1::of(&a))
+        self.paid_trap_target_checked_v1(params, claim, daa).ok().flatten()
+    }
+
+    /// Native lookup: malformed present rows and capacity never select mesh
+    /// fallback. The Option-only method above is a historical read wrapper.
+    pub fn paid_trap_target_checked_v1(
+        &self, params: &PalwStateParamsV2, claim: &Hash64, daa: u64,
+    ) -> Result<Option<PalwPaidTrapClaimV1>, PalwStateV2Error> {
+        if !params.paid_claim_trap_active_at(daa) { return Ok(None); }
+        let Some(route) = self.kernel_route.as_ref() else { return Ok(None) };
+        route.paid_claim_authority_for_base_checked_v1(&claim.as_bytes())
+            .map(|a| a.map(|a| PalwPaidTrapClaimV1::of(&a)))
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))
     }
 
     /// **The stateful half of a `TrapRevealed`'s admission, for the acceptance walk and the fold alike**: a paid-claim trap past the
     /// fence ([`Self::paid_trap_revealed_admissible_v1`]), otherwise exactly the mesh's rule (`mesh_trap_revealed_admissible_v2`,
     /// with lane PA's rule where `palw_audit_1004_v1` is in force). The ML-DSA signature stays the walk's.
     pub fn trap_revealed_admissible_v3(&self, params: &PalwStateParamsV2, reveal: &PalwTrapRevealedV1, daa: u64) -> Result<(), String> {
-        match self.paid_trap_target_v1(params, &reveal.claim, daa) {
+        match self.paid_trap_target_checked_v1(params, &reveal.claim, daa).map_err(|why| why.to_string())? {
             Some(paid) => self.paid_trap_revealed_admissible_v1(&paid, reveal, daa).map_err(str::to_string),
             None => self.mesh_trap_revealed_admissible_v2(reveal, daa, params.audit_1004_active_at(daa)).map_err(|e| e.to_string()),
         }
@@ -305,10 +317,22 @@ pub(super) fn on_paid_claim_convictions_v1(
     if !builder.params.paid_claim_trap_active_at(now) {
         return Ok(());
     }
+    // Check every relevant target before the first conviction row/charge can
+    // write. This linear preflight allocates no batch map and rebuilds no ledger.
+    if let Some(route) = builder.state.kernel_route.as_ref() {
+        for event in events {
+            if let misaka_palw_kernel::ledger::LedgerEventV1::Convicted { claim, .. } = event {
+                route.paid_claim_authority_for_base_checked_v1(claim)
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+            }
+        }
+    }
     for event in events {
         let misaka_palw_kernel::ledger::LedgerEventV1::Convicted { claim, accuser, .. } = event else { continue };
         let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
-        let Some(paid) = route.paid_claim_authority_for_base_unchecked_v2(claim).map(|a| PalwPaidTrapClaimV1::of(&a)) else { continue };
+        let Some(paid) = route.paid_claim_authority_for_base_checked_v1(claim)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
+            .map(|a| PalwPaidTrapClaimV1::of(&a)) else { continue };
         let key = palw_paid_trap_conviction_key_v1(claim);
         if route.aux.contains_key(&(PALW_PAID_CLAIM_TRAP_TABLE_V1, key.clone())) {
             continue; // recorded once
@@ -333,8 +357,14 @@ pub(super) fn check_fee_hold_until_v1(builder: &TransitionBuilder<'_>, claim: &[
     if !builder.params.paid_claim_trap_active_at(now) {
         return None;
     }
-    let authority = builder.state.kernel_route.as_ref()?.paid_claim_authority_for_base_unchecked_v2(claim)?;
-    Some(PalwPaidTrapClaimV1::of(&authority).reveal_end())
+    check_fee_hold_until_checked_v1(builder, claim, now).ok().flatten()
+}
+
+pub(super) fn check_fee_hold_until_checked_v1(
+    builder: &TransitionBuilder<'_>, claim: &[u8; 64], now: u64,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    builder.state.paid_trap_target_checked_v1(builder.params, &Hash64::from_bytes(*claim), now)
+        .map(|paid| paid.map(|paid| paid.reveal_end()))
 }
 
 /// **May this slot's fee be held now?** Neither held already nor settled by any consumer (a repeat is refused by a strict arm and
@@ -421,11 +451,12 @@ pub(super) fn release_held_check_fees_v1(builder: &mut TransitionBuilder<'_>, no
         if !kernel.convicted && !matches!(kernel.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. }) {
             continue; // not terminal yet: the fee waits for the verdict
         }
-        let clean = kernel.convicted
-            && route
-                .paid_claim_authority_for_base_unchecked_v2(&row.claim)
+        let clean = if kernel.convicted {
+            route.paid_claim_authority_for_base_checked_v1(&row.claim)
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
                 .map(|a| PalwPaidTrapClaimV1::of(&a))
-                .is_some_and(|paid| !paid.interactive && clean_receipt_signer_v1(route, &paid.enrollment, &row.verifier));
+                .is_some_and(|paid| !paid.interactive && clean_receipt_signer_v1(route, &paid.enrollment, &row.verifier))
+        } else { false };
         due.push((row, clean));
     }
     let commitment_range =

@@ -640,7 +640,7 @@ pub(super) fn apply_trap_revealed_v1(
     }
     // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): past the fence a reveal over a paid V2 base claim is a paid-claim trap,
     // judged and settled by its own rule. Below the fence (and for every other claim) this is `None`: the mesh rule, byte for byte.
-    if let Some(paid) = builder.state.paid_trap_target_v1(builder.params, &reveal.claim, ctx.daa_score) {
+    if let Some(paid) = builder.state.paid_trap_target_checked_v1(builder.params, &reveal.claim, ctx.daa_score)? {
         return super::palw_paid_claim_trap_fold_v1::apply_paid_trap_revealed_v1(builder, ctx, reveal, &paid);
     }
     builder

@@ -993,3 +993,6 @@ mod bootstrap_read_v6;
 
 #[cfg(test)]
 pub(crate) use bootstrap_read_v6::with_checker_v6 as with_bootstrap_checker_v6;
+
+#[path = "palw_paid_claim_base_checked_v1.rs"]
+mod paid_base_checked_v1;
