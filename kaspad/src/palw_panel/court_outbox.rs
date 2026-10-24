@@ -2,7 +2,9 @@
 //! debounce. Historical enqueue-attempt stamps are retained at their existing sites;
 //! neither those stamps nor successful mempool submission are chain acceptance. Native
 //! reads and existing filer/recovery books remain the authority for acceptance.
-use super::{Hash64, PalwConsensusObjectV2, palw_court_queue_edf_v1};
+use super::{Hash64, PalwConsensusObjectV2};
+#[cfg(test)]
+use super::palw_court_queue_edf_v1;
 use std::collections::HashMap;
 use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1};
 #[path = "court_outbox_tickets.rs"]
@@ -11,6 +13,9 @@ use tickets::CourtPayloadTicketsV1;
 #[path = "court_outbox_frames.rs"]
 mod frames;
 use frames::{CourtFrameLeaseV1, CourtRetryBufferV1};
+#[path = "court_outbox_order.rs"]
+mod order;
+use order::CourtOrderPlanV1;
 
 pub(super) type CourtMoveKeyV1 = (Hash64, u32, bool);
 pub(super) type CourtMoveV1 = (Hash64, u32, bool, PalwConsensusObjectV2);
@@ -95,9 +100,23 @@ impl CourtOutboxV1 {
     }
     /// Prepare before draining or doing any funding/submission work. On local
     /// refusal the queue is untouched and the service can retry on a later tick.
-    pub(super) fn try_retry_buffer(&self) -> Result<CourtRetryBufferV1, NativeCoverageV1> {
+    pub(super) fn try_retry_buffer(&mut self) -> Result<CourtRetryBufferV1, NativeCoverageV1> {
+        // The service calls this at the start of a new flush, after any previous
+        // carrier future (and its raw batch) has been dropped. Reclaim canceled
+        // batch tickets before asking for new scratch, avoiding quota deadlock.
+        self.flight_frame = None;
+        self.payload_tickets.finish_flush(&self.pending);
         CourtRetryBufferV1::new(self.pending.len())
     }
+    pub(super) fn try_take_priority(&mut self) -> Result<Vec<CourtMoveV1>, NativeCoverageV1> {
+        let plan = CourtOrderPlanV1::new(&self.pending, &self.due)?;
+        plan.apply(&mut self.pending);
+        self.flight_frame = self.pending_frame.take();
+        self.payload_tickets.start_flush();
+        Ok(std::mem::take(&mut self.pending))
+    }
+    /// Legacy EDF remains only as a fixture/parity reference.
+    #[cfg(test)]
     pub(super) fn take_priority(&mut self) -> Vec<CourtMoveV1> {
         self.flight_frame = self.pending_frame.take();
         self.payload_tickets.start_flush();
@@ -204,6 +223,65 @@ mod tests {
     }
 
     #[test]
+    fn admitted_edf_moves_existing_payload_buffers_without_cloning() {
+        use kaspa_consensus_core::{palw_state_v2::PalwBondKeyV2, tx::{TransactionId, TransactionOutpoint}};
+        let mut pending = Vec::new();
+        let mut pointers = Vec::new();
+        for age in 0..3u8 {
+            let bytes = vec![age; 64];
+            let signature = vec![age; 96];
+            pointers.push((bytes.as_ptr(), signature.as_ptr()));
+            // These opaque payload bytes are only ordering fixtures. They are
+            // not signed native actions or evidence of receipt acceptance.
+            let mut entry = item(u64::from(age) + 1, 0);
+            entry.3 = PalwConsensusObjectV2::KernelRouteV1 {
+                bytes,
+                signer: PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(1), 0)),
+                signature,
+            };
+            pending.push(entry);
+        }
+        let due = [(key(&pending[1]), 10), (key(&pending[2]), 5)].into_iter().collect();
+        let mut owner = CourtOutboxV1::from_parts(pending, due, HashMap::new());
+        let batch = owner.try_take_priority().unwrap();
+        let mut actual = Vec::new();
+        for (_, _, _, object) in batch {
+            let PalwConsensusObjectV2::KernelRouteV1 { bytes, signature, .. } = object else { unreachable!() };
+            let age = bytes[0] as usize;
+            assert_eq!((bytes.as_ptr(), signature.as_ptr()), pointers[age]);
+            actual.push(age);
+        }
+        assert_eq!(actual, vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn admitted_edf_matches_legacy_for_duplicate_and_orphan_deadlines() {
+        for seed in 0..80u64 {
+            let mut pending = Vec::new();
+            let mut due = HashMap::new();
+            let mut state = seed + 1;
+            for age in 0..97u64 {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let mut entry = item((state >> 19) % 11, ((state >> 39) % 7) as u32);
+                entry.2 = state & 1 != 0;
+                // Distinguish equal queue keys so stable order is observable.
+                entry.3 = PalwConsensusObjectV2::ReceiptLicensed { claim: Hash64::from_u64_word(age), receipts: Vec::new() };
+                if state % 3 == 0 {
+                    due.insert(key(&entry), if state % 5 == 0 { u64::MAX } else { state % 13 });
+                }
+                pending.push(entry);
+            }
+            // These due records are not queued: they cannot date an otherwise undated claim.
+            due.insert((Hash64::from_u64_word(3), 999, true), 0);
+            due.insert((Hash64::from_u64_word(99), 0, false), 0);
+            let mut expected = pending.clone();
+            palw_court_queue_edf_v1(&mut expected, &due);
+            let mut owner = CourtOutboxV1::from_parts(pending, due, HashMap::new());
+            assert_eq!(owner.try_take_priority().unwrap(), expected, "EDF parity seed {seed}");
+        }
+    }
+
+    #[test]
     fn payload_ticket_child() {
         if std::env::var("MISAKA_COURT_PAYLOAD_TICKETS").ok().as_deref() != Some("1") {
             return;
@@ -254,9 +332,11 @@ mod tests {
         let blocker = reserve_native_requests_v1(memory).unwrap();
         assert!(owner.try_retry_buffer().is_err());
         assert_eq!(owner.pending().len(), 1, "refusal does not drain the queue");
+        assert!(owner.try_take_priority().is_err());
+        assert_eq!(owner.pending().len(), 1, "EDF refusal does not sort or drain the queue");
         drop(blocker);
         let mut unsent = owner.try_retry_buffer().unwrap();
-        for item in owner.take_priority() {
+        for item in owner.try_take_priority().unwrap() {
             unsent.push(item);
         }
         assert_eq!(unsent.len(), 1);
@@ -268,6 +348,13 @@ mod tests {
         drop(owner.take_priority());
         owner.finish_flush(empty);
         assert!(reserve_native_requests_v1(memory).is_ok(), "zero-capacity retry replaces the empty retained array");
+        owner.try_push_clone(source_key, &source.3).unwrap();
+        drop(owner.try_take_priority().unwrap());
+        assert!(reserve_native_requests_v1(memory).is_err(), "canceled batch has conservative tickets");
+        let empty = owner.try_retry_buffer().unwrap();
+        assert!(reserve_native_requests_v1(memory).is_ok(), "reclaim cancellation before new scratch admission");
+        drop(owner.try_take_priority().unwrap());
+        owner.finish_flush(empty);
         owner.try_push_clone(source_key, &source.3).unwrap();
         owner.retain_pending(|_| false);
         assert!(owner.payload_tickets.is_empty());
@@ -285,7 +372,7 @@ mod tests {
         let mut owner = CourtOutboxV1::default();
         owner.try_push_clone(key(&source), &source.3).unwrap();
         let mut unsent = owner.try_retry_buffer().unwrap();
-        for item in owner.take_priority() {
+        for item in owner.try_take_priority().unwrap() {
             unsent.push(item);
         }
         owner.finish_flush(unsent);

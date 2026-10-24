@@ -2447,14 +2447,16 @@ mod tests {
         assert!(production.contains_code("PalwAttnHeldFilingV1::from_object_v1(object)"), "the sub-roots read off the object");
         let carry = &production[production.find_code("    async fn carry_priority_v1(").expect("the priority lane")..];
         let carry = &carry[..carry.find("\n    }\n").expect("its end")];
-        assert!(carry.contains_code("for (session_id, round, mine_is_responder, object) in court_outbox.take_priority()"));
+        let admitted = carry.find_code("court_outbox.try_take_priority()").expect("admitted EDF before draining");
+        let consume = carry.find_code("for (session_id, round, mine_is_responder, object) in batch").expect("consume admitted batch");
+        assert!(admitted < consume);
         let owner = include_str!("court_outbox.rs");
-        let take = &owner[owner.find_code("fn take_priority(").expect("typed priority operation")..];
+        let take = &owner[owner.find_code("fn try_take_priority(").expect("typed priority operation")..];
         let take = &take[..take.find("\n    }").expect("its end")];
-        assert!(
-            take.find_code("palw_court_queue_edf_v1(&mut self.pending, &self.due);").expect("EDF")
-                < take.find_code("std::mem::take(&mut self.pending)").expect("only then drain")
-        );
+        let reserve = take.find_code("CourtOrderPlanV1::new(&self.pending, &self.due)?;").expect("reserve/build before mutation");
+        let apply = take.find_code("plan.apply(&mut self.pending);").expect("then order");
+        let drain = take.find_code("std::mem::take(&mut self.pending)").expect("only then drain");
+        assert!(reserve < apply && apply < drain);
 
         let module = include_str!("held_court.rs");
         let module = &module[..module.find_code("#[cfg(test)]\nmod tests").expect("this module")];

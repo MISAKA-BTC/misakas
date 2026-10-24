@@ -3941,6 +3941,7 @@ fn verify_receipt_signature_v1(key: &[u8], message: &[u8], signature: &[u8], con
 ///
 /// A new kind of item plugs in by stating its due DAA where it is queued (`court_due.insert`); one
 /// that states none is carried by age, after the dated ones.
+#[cfg(test)]
 pub(crate) fn palw_court_queue_edf_v1(
     queue: &mut [(Hash64, u32, bool, PalwConsensusObjectV2)],
     due: &HashMap<(Hash64, u32, bool), u64>,
@@ -7078,7 +7079,14 @@ impl PalwPanelService {
                 return;
             }
         };
-        for (session_id, round, mine_is_responder, object) in court_outbox.take_priority() {
+        let batch = match court_outbox.try_take_priority() {
+            Ok(batch) => batch,
+            Err(why) => {
+                warn!("[{PALW_PANEL}] court EDF admission refused; queue retained for next tick: {why}");
+                return;
+            }
+        };
+        for (session_id, round, mine_is_responder, object) in batch {
             let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
             // A failed full scan also excludes a higher minimum in this pass. Do not scan the
             // same unavailable heavy budget for every queued proof; cheap moves may still use
