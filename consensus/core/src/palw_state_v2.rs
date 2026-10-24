@@ -19453,6 +19453,8 @@ pub struct PalwFpCommitmentPriceV1 {
 /// fold's own two terms.
 #[derive(Clone, Debug)]
 pub struct PalwFpPriceAnswerV1 {
+    pub chain_point: Hash64,
+    pub answer_accounting_active: bool,
     /// The DAA the job was priced at — the virtual's, which is where a commitment sent now lands.
     pub daa_score: u64,
     /// The fold's price, or its refusal by name.

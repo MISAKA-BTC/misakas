@@ -2497,31 +2497,50 @@ pub struct GetPalwFreePromptPriceRequest {
     pub work_leaves: u64,
     /// `txid_hex:index` of the executor bond, for its room; empty for the price alone.
     pub bond: String,
+    /// V2 explicit accounting quote input: bounded literal FP payload; empty preserves legacy quote.
+    #[serde(default)]
+    pub accounting_payload: Vec<u8>,
+    #[serde(default)]
+    pub answer_token_ids: Vec<u32>,
 }
 
 impl Serializer for GetPalwFreePromptPriceRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.class_id, writer)?;
         store!(Vec<u32>, &self.prompt_token_ids, writer)?;
         store!(u32, &self.prompt_tokens, writer)?;
         store!(u32, &self.decode_tokens_executed, writer)?;
         store!(u64, &self.work_leaves, writer)?;
         store!(String, &self.bond, writer)?;
+        store!(Vec<u8>, &self.accounting_payload, writer)?;
+        store!(Vec<u32>, &self.answer_token_ids, writer)?;
         Ok(())
     }
 }
 
+/// Primitive borsh vectors with their length checked before capacity allocation.
+fn fp_quote_load_bounded_vec_v2<T: borsh::BorshDeserialize, R: std::io::Read>(reader: &mut R, cap: usize) -> std::io::Result<Vec<T>> {
+    let count = load!(u32, reader)? as usize;
+    if count > cap { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "FP quote vector exceeds native bound")); }
+    let mut items = Vec::new();
+    items.try_reserve_exact(count).map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "FP quote vector capacity"))?;
+    for _ in 0..count { items.push(T::deserialize_reader(reader)?); }
+    Ok(items)
+}
+
 impl Deserializer for GetPalwFreePromptPriceRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
+        if version != 1 && version != 2 { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported FP quote version")); }
         let class_id = load!(String, reader)?;
-        let prompt_token_ids = load!(Vec<u32>, reader)?;
+        let prompt_token_ids = fp_quote_load_bounded_vec_v2(reader, 1usize << 21)?;
         let prompt_tokens = load!(u32, reader)?;
         let decode_tokens_executed = load!(u32, reader)?;
         let work_leaves = load!(u64, reader)?;
         let bond = load!(String, reader)?;
-        Ok(Self { class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond })
+        let (accounting_payload, answer_token_ids) = if version == 2 { (fp_quote_load_bounded_vec_v2(reader, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES)?, fp_quote_load_bounded_vec_v2(reader, 1usize << 21)?) } else { (vec![], vec![]) };
+        Ok(Self { class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond, accounting_payload, answer_token_ids })
     }
 }
 
@@ -2546,11 +2565,28 @@ pub struct GetPalwFreePromptPriceResponse {
     /// Decimal `u128`: the bond's room (`ceiling − backed`); empty without a bond, or for one the
     /// chain does not hold.
     pub bond_room_sompi: String,
+    #[serde(default)]
+    pub accounting_quote_version: u16,
+    #[serde(default)]
+    pub accounting_active: bool,
+    #[serde(default)]
+    pub chain_point: String,
+    #[serde(default)]
+    pub network_domain: String,
+    /// Native mass-per-byte, script-byte, sigop and storage parameter, in that order.
+    #[serde(default)]
+    pub mass_per_tx_byte: u64,
+    #[serde(default)]
+    pub mass_per_script_pub_key_byte: u64,
+    #[serde(default)]
+    pub mass_per_sig_op: u64,
+    #[serde(default)]
+    pub storage_mass_parameter: u64,
 }
 
 impl Serializer for GetPalwFreePromptPriceResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.daa_score, writer)?;
         store!(bool, &self.priced, writer)?;
@@ -2560,13 +2596,22 @@ impl Serializer for GetPalwFreePromptPriceResponse {
         store!(u64, &self.pwu, writer)?;
         store!(String, &self.reserved_sompi, writer)?;
         store!(String, &self.bond_room_sompi, writer)?;
+        store!(u16, &self.accounting_quote_version, writer)?;
+        store!(bool, &self.accounting_active, writer)?;
+        store!(String, &self.chain_point, writer)?;
+        store!(String, &self.network_domain, writer)?;
+        store!(u64, &self.mass_per_tx_byte, writer)?;
+        store!(u64, &self.mass_per_script_pub_key_byte, writer)?;
+        store!(u64, &self.mass_per_sig_op, writer)?;
+        store!(u64, &self.storage_mass_parameter, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwFreePromptPriceResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
+        if version != 1 && version != 2 { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported FP quote version")); }
         let available = load!(bool, reader)?;
         let daa_score = load!(u64, reader)?;
         let priced = load!(bool, reader)?;
@@ -2576,7 +2621,11 @@ impl Deserializer for GetPalwFreePromptPriceResponse {
         let pwu = load!(u64, reader)?;
         let reserved_sompi = load!(String, reader)?;
         let bond_room_sompi = load!(String, reader)?;
-        Ok(Self { available, daa_score, priced, refusal, priced_in_compute, quanta, pwu, reserved_sompi, bond_room_sompi })
+        let (accounting_quote_version, accounting_active, chain_point, network_domain, mass_per_tx_byte, mass_per_script_pub_key_byte, mass_per_sig_op, storage_mass_parameter) = if version == 2 {
+            (load!(u16, reader)?, load!(bool, reader)?, load!(String, reader)?, load!(String, reader)?, load!(u64, reader)?, load!(u64, reader)?, load!(u64, reader)?, load!(u64, reader)?)
+        } else { (0, false, String::new(), String::new(), 0, 0, 0, 0) };
+        Ok(Self { available, daa_score, priced, refusal, priced_in_compute, quanta, pwu, reserved_sompi, bond_room_sompi,
+            accounting_quote_version, accounting_active, chain_point, network_domain, mass_per_tx_byte, mass_per_script_pub_key_byte, mass_per_sig_op, storage_mass_parameter })
     }
 }
 
@@ -3869,6 +3918,9 @@ pub struct GetPalwStagedPreclaimQuoteResponse {
     pub quoted: bool,
     pub refusal: String,
     pub snapshot_block: String,
+    /// Native virtual DAA paired with this exact accepted snapshot; absent on legacy responses.
+    #[serde(default)]
+    pub quote_daa: Option<u64>,
     pub resource_plan_id: String,
     pub maximum_records: u64,
     pub maximum_custodians: u64,
@@ -3880,7 +3932,7 @@ pub struct GetPalwStagedPreclaimQuoteResponse {
 
 impl Serializer for GetPalwStagedPreclaimQuoteResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(bool, &self.quoted, writer)?;
         store!(String, &self.refusal, writer)?;
@@ -3890,6 +3942,7 @@ impl Serializer for GetPalwStagedPreclaimQuoteResponse {
         store!(u64, &self.maximum_custodians, writer)?;
         store!(u64, &self.accept_until_daa, writer)?;
         store!(u64, &self.material_span_daa, writer)?;
+        store!(Option<u64>, &self.quote_daa, writer)?;
         Ok(())
     }
 }
@@ -3897,7 +3950,7 @@ impl Serializer for GetPalwStagedPreclaimQuoteResponse {
 impl Deserializer for GetPalwStagedPreclaimQuoteResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if version != 1 {
+        if version != 1 && version != 2 {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown preclaim quote response version"));
         }
         let available = load!(bool, reader)?;
@@ -3909,7 +3962,9 @@ impl Deserializer for GetPalwStagedPreclaimQuoteResponse {
         let maximum_custodians = load!(u64, reader)?;
         let accept_until_daa = load!(u64, reader)?;
         let material_span_daa = load!(u64, reader)?;
+        let quote_daa = if version == 2 { load!(Option<u64>, reader)? } else { None };
         Ok(Self {
+            quote_daa,
             available,
             quoted,
             refusal,

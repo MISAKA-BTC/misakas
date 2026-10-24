@@ -49,13 +49,28 @@ impl PalwChainStateV2 {
         params: &PalwStateParamsV2,
         extras: &PalwTransitionExtrasV1,
     ) -> Result<u64, PalwStateV2Error> {
+        Self::staged_custodian_upper_resolved_v1(registered_tir, now, params,
+            extras.model_registry.as_ref().map(|r| r.globals.seat_count), extras.shard_licensing.is_some())
+    }
+    /// Read-only prospective quote. Native callers resolve these policy facts at `quote_daa`;
+    /// no historical block context or header identity is synthesized for the quote clock.
+    pub fn staged_maximum_custodians_at_quote_v1(
+        &self, class_id: Hash64, quote_daa: u64, params: &PalwStateParamsV2,
+        registry_seats: Option<u16>, shard_licensed: bool,
+    ) -> Result<u64, PalwStateV2Error> {
+        Self::staged_custodian_upper_resolved_v1(self.tir_classes.contains_key(&class_id), quote_daa, params, registry_seats, shard_licensed)
+    }
+    fn staged_custodian_upper_resolved_v1(
+        registered_tir: bool, now: u64, params: &PalwStateParamsV2,
+        registry_seats: Option<u16>, shard_licensed: bool,
+    ) -> Result<u64, PalwStateV2Error> {
         let flat = if params.panel_v3_rule_at(now) {
             u64::from(params.panel_v3().ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?.policy.seat_count)
         } else {
-            u64::from(extras.model_registry.as_ref().map_or(u16::MAX, |r| r.globals.seat_count))
+            u64::from(registry_seats.unwrap_or(u16::MAX))
         };
         let mut maximum = flat;
-        if extras.shard_licensing.is_some() {
+        if shard_licensed {
             maximum = maximum.max(
                 flat.checked_mul(u64::from(crate::palw_shard_licensing_v1::PALW_SHARD_LICENSING_MAX_SHARDS_V1))
                     .ok_or(PalwStateV2Error::Overflow("prospective source shard custodians"))?,

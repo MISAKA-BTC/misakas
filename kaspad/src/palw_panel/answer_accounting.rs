@@ -2,6 +2,22 @@
 use super::*;
 use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1;
 
+pub(super) fn canonical_price_result_v1(
+    result: Result<
+        kaspa_consensus_core::palw_state_v2::PalwFpCommitmentPriceV1,
+        kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
+    >,
+) -> Result<kaspa_consensus_core::palw_state_v2::PalwFpCommitmentPriceV1, String> {
+    use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
+    match result {
+        Ok(price) => Ok(price),
+        Err(why @ (PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_))) => {
+            Err(format!("native canonical price unavailable; claim deferred: {why}"))
+        }
+        Err(why) => Err(format!("the chain would refuse this canonical claim: {why}")),
+    }
+}
+
 impl PalwPanelService {
     /// A read failure/ambiguous winning carrier never becomes approval or an accusation.
     /// The accepted TX body is borrowed through its store Arc, not cloned into a caller-adopted claim DTO.
@@ -94,6 +110,33 @@ mod tests {
         subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
         tx::{ScriptPublicKey, TransactionOutput},
     };
+    #[test]
+    fn accounting_canonical_quote_preserves_success_and_defers_only_native_faults() {
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::NativeCoverageV1,
+            palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
+            palw_state_v2::{PalwFpCommitmentPriceV1, PalwStateV2Error},
+        };
+        for fault in [
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<u8>("quote", "capacity")),
+            PalwStateV2Error::NativeContextUnavailable(PalwSourceBootstrapContextFaultV1::StoreUnreadable),
+        ] {
+            let message = canonical_price_result_v1(Err(fault)).unwrap_err();
+            assert!(message.starts_with("native canonical price unavailable; claim deferred:"));
+            assert!(!message.contains("the chain would refuse"));
+        }
+        assert!(canonical_price_result_v1(Err(PalwStateV2Error::ZeroQuanta)).unwrap_err().starts_with("the chain would refuse"));
+        let price = canonical_price_result_v1(Ok(PalwFpCommitmentPriceV1 {
+            quanta: 2,
+            pwu: 8,
+            reserved: 10,
+            rights_reserved: 3,
+            priced_in_compute: true,
+            derived_work: None,
+        }))
+        .unwrap();
+        assert_eq!((price.quanta, price.pwu, price.reserved, price.rights_reserved), (2, 8, 10, 3));
+    }
     fn h(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)
     }

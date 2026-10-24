@@ -974,6 +974,7 @@ async fn sanity_test() {
                 let rpc_client = client.clone();
                 tst!(op, {
                     let request = GetPalwFreePromptPriceRequest {
+                        accounting_payload: vec![], answer_token_ids: vec![],
                         class_id: "00".repeat(64),
                         prompt_token_ids: vec![1, 2, 3],
                         prompt_tokens: 3,
@@ -984,6 +985,10 @@ async fn sanity_test() {
                     let response = rpc_client.get_palw_free_prompt_price_call(None, request.clone()).await.unwrap();
                     assert!(!response.available, "a chain without ConsensusV2 prices no free-prompt job");
                     assert!(!response.priced);
+                    for (payload, ids) in [(vec![], vec![1]), (vec![0xff], vec![1])] {
+                        let bad = GetPalwFreePromptPriceRequest { accounting_payload: payload, answer_token_ids: ids, ..request.clone() };
+                        assert!(rpc_client.get_palw_free_prompt_price_call(None, bad).await.is_err(), "malformed accounting is refused before native state lookup");
+                    }
                     let malformed = GetPalwFreePromptPriceRequest { class_id: "not-hex".to_string(), ..request };
                     assert!(rpc_client.get_palw_free_prompt_price_call(None, malformed).await.is_err(), "a malformed id is an error");
                 })

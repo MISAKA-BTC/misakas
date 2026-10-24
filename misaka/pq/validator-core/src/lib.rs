@@ -14,7 +14,7 @@
 /// rail's local seed and the signer sidecar's `--print-claim` digest — pass through it.
 pub mod palw_fp_sign_gate;
 mod palw_fp_answer_accounting;
-pub use palw_fp_answer_accounting::{FpAnswerTransactionLeaseV1, wrap_fp_answer_accounting_tx_with_v1};
+pub use palw_fp_answer_accounting::{FpAnswerTransactionLeaseV1, wrap_fp_answer_accounting_tx_with_v1, wrap_fp_answer_accounting_tx_explicit_with_v1};
 
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
@@ -572,20 +572,7 @@ fn build_fp_commitment_tx_with_public_custody_v1(
     if !params.palw_staged_public_court_v1_active_at(current_daa) {
         return Err("original public FP envelope is not active under these chain rules".into());
     }
-    if current_daa >= pledge.accept_until_daa
-        || pledge.claim != fp_claim_id_v3(&commitment)
-        || pledge.producer != kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(commitment.job.executor_bond)
-        || pledge.execution_root != commitment.execution_root
-        || pledge.job_identity != kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&commitment)
-        || signer.public_key() != commitment.job.executor_pubkey.as_slice()
-    {
-        return Err("original public FP pledge changes the exact claim, producer, roots, key or admission clock".into());
-    }
-    pledge.validate_signature_v1(
-        signer.public_key(),
-        kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
-    )?;
-    original_binding.check_wire_v1()?;
+    validate_fp_original_public_identity_v1(signer, current_daa, &commitment, pledge, original_binding)?;
     let prefix_privacy = fp_prefix_privacy_v1(params, current_daa, &commitment)?;
     build_fp_commitment_tx_with_qualified(
         signer,
@@ -600,6 +587,50 @@ fn build_fp_commitment_tx_with_public_custody_v1(
         prefix_privacy,
         Some((pledge, original_binding, delegation)),
     )
+}
+
+fn validate_fp_original_public_identity_v1(
+    signer: &dyn MessageSigner, current_daa: u64, commitment: &PalwFreePromptCommitmentV3,
+    pledge: &kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1,
+    original_binding: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+) -> Result<(), String> {
+    if current_daa >= pledge.accept_until_daa
+        || pledge.claim != fp_claim_id_v3(commitment)
+        || pledge.producer != kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(commitment.job.executor_bond)
+        || pledge.execution_root != commitment.execution_root
+        || pledge.job_identity != kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment)
+        || signer.public_key() != commitment.job.executor_pubkey.as_slice()
+    {
+        return Err("original public FP pledge changes the exact claim, producer, roots, key or admission clock".into());
+    }
+    pledge.validate_signature_v1(
+        signer.public_key(),
+        kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
+    )?;
+    original_binding.check_wire_v1()?;
+    Ok(())
+}
+
+/// External rail's native preclaim quote already resolved the public family. No local Params
+/// are synthesized or armed. Native acceptance remains authoritative; inherited-prefix policy
+/// still needs the separate native Params handshake and is refused by this entry.
+#[allow(clippy::too_many_arguments)]
+pub fn build_fp_commitment_tx_with_quoted_delegated_public_v1(
+    signer: &dyn MessageSigner, current_daa: u64, network_domain: Hash64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    commitment: PalwFreePromptCommitmentV3, prompt_token_ids: Vec<u32>, price: FpCommitmentPriceV1<'_>,
+    pledge: &kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1,
+    original_binding: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    delegation: &kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1,
+    funding_outpoint: TransactionOutpoint, funding: &UtxoEntry, fee: u64,
+) -> Result<Transaction, String> {
+    if commitment.job.is_prefix_state() { return Err("quoted rail lacks native inherited-prefix policy".into()); }
+    if !delegation.covers_v1(current_daa, pledge.material_until_daa) {
+        return Err("custody delegation window does not cover native quote".into());
+    }
+    validate_fp_original_public_identity_v1(signer, current_daa, &commitment, pledge, original_binding)?;
+    build_fp_commitment_tx_with_qualified(signer, network_domain, prompt_ids_form, commitment,
+        prompt_token_ids, price, funding_outpoint, funding, fee, None, Some((pledge, original_binding, Some(delegation))))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3059,7 +3090,27 @@ mod tests {
         let answer = vec![17; commitment.decode_tokens_executed as usize];
         let mut active = params.clone();
         active.palw_fp_answer_accounting_v1 = Some(kaspa_consensus_core::config::params::ForkActivation::new(5000));
-        for inner in [&legacy, &wrapped] {
+        let custodian = ValidatorKey::from_seed([0x91; VALIDATOR_SEED_LEN]);
+        let mut delegation = kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1 {
+            version: 1, producer: pledge.producer,
+            custodian: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(fop(0x91, 0)),
+            valid_from_daa: 1, valid_until_daa: 50_000, producer_signature: vec![], custodian_signature: vec![],
+        };
+        sign_producer_custody_delegation_v1(&key, &mut delegation, false).unwrap();
+        sign_producer_custody_delegation_v1(&custodian, &mut delegation, true).unwrap();
+        delegation.validate_signatures_v1(key.public_key(), custodian.public_key(),
+            |key, message, signature, context| kaspa_txscript::verify_mldsa87_with_context(key,message,signature,context).unwrap_or(false)).unwrap();
+        let quoted = build_fp_commitment_tx_with_quoted_delegated_public_v1(
+            &key, 5000, domain, form, commitment.clone(), ids.clone(), price(), &pledge, &binding,
+            &delegation, fop(9,0), &funding, SF_FEE).unwrap();
+        let delegated = PalwHistoryFpEnvelopeV1::decode_v1(&quoted.payload).unwrap();
+        assert_eq!(delegated.custody_delegation, Some(delegation.clone()));
+        assert!(super::rfc9_sighash_audit::verifies(&quoted,&funding));
+        let mut expired = delegation.clone(); expired.valid_until_daa = pledge.material_until_daa - 1;
+        assert!(build_fp_commitment_tx_with_quoted_delegated_public_v1(
+            &key,5000,domain,form,commitment.clone(),ids.clone(),price(),&pledge,&binding,&expired,
+            fop(9,0),&funding,SF_FEE).is_err());
+        for inner in [&legacy, &wrapped, &quoted] {
             let (before, _lease) = wrap_fp_answer_accounting_tx_with_v1(
                 &key, &active, 4999, inner.clone(), std::slice::from_ref(&funding), &commitment,
                 &context, &answer, Some(commitment.output_root)).unwrap();

@@ -1969,6 +1969,7 @@ mod mockery {
     impl Mock for GetPalwFreePromptPriceRequest {
         fn mock() -> Self {
             GetPalwFreePromptPriceRequest {
+                accounting_payload: vec![], answer_token_ids: vec![],
                 class_id: mock_hex(),
                 prompt_token_ids: vec![151644, 872, 198, 9707],
                 prompt_tokens: mock(),
@@ -1984,6 +1985,7 @@ mod mockery {
     impl Mock for GetPalwFreePromptPriceResponse {
         fn mock() -> Self {
             GetPalwFreePromptPriceResponse {
+                accounting_quote_version: 1, accounting_active: false, chain_point: mock_hex(), network_domain: mock_hex(), mass_per_tx_byte: 1, mass_per_script_pub_key_byte: 2, mass_per_sig_op: 3, storage_mass_parameter: 4,
                 available: mock(),
                 daa_score: mock(),
                 priced: mock(),
@@ -3824,4 +3826,46 @@ mod native_settlement_wire_tests {
         let again: GetPalwSettlementResponse = serde_json::from_value(json).unwrap();
         assert_eq!(again.native_readiness, Some(readiness));
     }
+}
+
+#[cfg(test)]
+mod fp_answer_quote_v2_controls {
+    use crate::{GetPalwFreePromptPriceRequest, GetPalwFreePromptPriceResponse};
+    use workflow_serializer::prelude::*;
+    #[test]
+    fn fp_answer_quote_v2_retains_legacy_wire_and_refuses_unbounded_vectors() {
+        let legacy = (1u16, "class".to_string(), vec![7u32], 1u32, 2u32, 3u64, "bond".to_string());
+        let mut bytes = borsh::to_vec(&legacy).unwrap();
+        let old = <GetPalwFreePromptPriceRequest as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
+        assert!(old.accounting_payload.is_empty()); assert!(old.answer_token_ids.is_empty());
+        let request = GetPalwFreePromptPriceRequest { accounting_payload: vec![1,2], answer_token_ids: vec![3,4], ..old };
+        bytes.clear(); <GetPalwFreePromptPriceRequest as Serializer>::serialize(&request, &mut bytes).unwrap();
+        assert_eq!(&bytes[..2], &2u16.to_le_bytes());
+        let new = <GetPalwFreePromptPriceRequest as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
+        assert_eq!(new.accounting_payload, request.accounting_payload); assert_eq!(new.answer_token_ids, request.answer_token_ids);
+        let mut bad = borsh::to_vec(&legacy).unwrap(); bad[..2].copy_from_slice(&2u16.to_le_bytes());
+        bad.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(<GetPalwFreePromptPriceRequest as Deserializer>::deserialize(&mut &bad[..]).is_err());
+        bytes[..2].copy_from_slice(&99u16.to_le_bytes());
+        assert!(<GetPalwFreePromptPriceRequest as Deserializer>::deserialize(&mut &bytes[..]).is_err());
+        let old_response = borsh::to_vec(&(1u16,false,0u64,false,String::new(),false,0u32,0u64,String::new(),String::new())).unwrap();
+        let response = <GetPalwFreePromptPriceResponse as Deserializer>::deserialize(&mut &old_response[..]).unwrap();
+        assert_eq!(response.accounting_quote_version,0); assert!(!response.accounting_active);
+        bytes.clear(); <GetPalwFreePromptPriceResponse as Serializer>::serialize(&response,&mut bytes).unwrap();
+        assert_eq!(&bytes[..2], &2u16.to_le_bytes());
+    }
+    #[test]
+    fn fp_preclaim_quote_clock_is_explicit_and_legacy_is_not_a_zero_clock() {
+        use crate::GetPalwStagedPreclaimQuoteResponse;
+        let old = borsh::to_vec(&(1u16,true,true,String::new(),"block".to_string(),"plan".to_string(),1u64,2u64,3u64,4u64)).unwrap();
+        let legacy = <GetPalwStagedPreclaimQuoteResponse as Deserializer>::deserialize(&mut &old[..]).unwrap();
+        assert_eq!(legacy.quote_daa,None);
+        let mut bytes=vec![];
+        let current = GetPalwStagedPreclaimQuoteResponse { quote_daa: Some(0), ..legacy };
+        <GetPalwStagedPreclaimQuoteResponse as Serializer>::serialize(&current,&mut bytes).unwrap();
+        assert_eq!(&bytes[..2],&2u16.to_le_bytes());
+        let current = <GetPalwStagedPreclaimQuoteResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
+        assert_eq!(current.quote_daa,Some(0));
+    }
+
 }

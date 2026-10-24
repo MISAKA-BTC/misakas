@@ -687,7 +687,7 @@ impl ConsensusSessionOwned {
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
     ) -> Result<
-        Option<(kaspa_consensus_core::BlockHash, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
+        Option<(kaspa_consensus_core::BlockHash, u64, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
         String,
     > {
         self.consensus.palw_staged_preclaim_quote_v1(original, header)

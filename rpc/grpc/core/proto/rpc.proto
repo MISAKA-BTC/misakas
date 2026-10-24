@@ -2375,6 +2375,8 @@ message GetPalwFreePromptPriceRequestMessage {
   uint32 decodeTokensExecuted = 4;
   uint64 workLeaves = 5;
   string bond = 6;
+  bytes accountingPayload = 7;
+  repeated uint32 answerTokenIds = 8;
 }
 
 message GetPalwFreePromptPriceResponseMessage {
@@ -2387,6 +2389,14 @@ message GetPalwFreePromptPriceResponseMessage {
   uint64 pwu = 7;
   string reservedSompi = 8;
   string bondRoomSompi = 9;
+  uint32 accountingQuoteVersion = 10;
+  bool accountingActive = 11;
+  string chainPoint = 12;
+  string networkDomain = 13;
+  uint64 massPerTxByte = 14;
+  uint64 massPerScriptPubKeyByte = 15;
+  uint64 massPerSigOp = 16;
+  uint64 storageMassParameter = 17;
   RPCError error = 1000;
 }
 
@@ -3568,6 +3578,7 @@ message GetPalwStagedPreclaimQuoteResponseMessage {
   uint64 maximumCustodians = 7;
   uint64 acceptUntilDaa = 8;
   uint64 materialSpanDaa = 9;
+  optional uint64 quoteDaa = 10;
   RPCError error = 1000;
 }
 

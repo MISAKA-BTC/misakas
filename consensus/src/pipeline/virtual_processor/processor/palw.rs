@@ -1293,7 +1293,7 @@ impl VirtualStateProcessor {
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
     ) -> Result<
-        Option<(kaspa_consensus_core::BlockHash, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
+        Option<(kaspa_consensus_core::BlockHash, u64, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
         String,
     > {
         header.check_wire_v1()?;
@@ -1303,34 +1303,48 @@ impl VirtualStateProcessor {
             return Err("staged preclaim quote exceeds the original bounded FP descriptor".into());
         }
         let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
-        let (_, state) = self
+        let (chain_point, state) = self
             .palw_v2_reader_state(params)
             .map_err(|e| e.to_string())?
             .ok_or("PALW V2 authenticated preclaim snapshot unavailable")?;
-        let point = state.last_point().ok_or("preclaim snapshot has no accepted clock")?;
-        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(point.daa_score)) {
+        let accepted_point = state.last_point().ok_or("preclaim snapshot has no accepted clock")?;
+        if accepted_point.block != chain_point { return Err("preclaim accepted snapshot point mismatch; retry".into()); }
+        let virtual_read = self.virtual_stores.read();
+        let native_virtual = virtual_read.state.get().map_err(|e| e.to_string())?;
+        if native_virtual.ghostdag_data.selected_parent != chain_point { return Err("preclaim branch changed; retry".into()); }
+        let quote_daa = native_virtual.daa_score;
+        drop(virtual_read);
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(quote_daa)) {
             return Ok(None);
         }
         if !state.staged_required_families_v1(&original) {
             return Ok(None);
         }
-        let extras = self.palw_transition_extras_for(point);
-        let config = extras.staged_public_court.ok_or("preclaim quote has no native prospective config")?;
-        let maximum_custodians =
-            state.staged_maximum_custodians_v1(original.job.class_id, extras.point().daa_score, params, &extras).map_err(|e| e.to_string())?;
-        let base_ladder =
-            extras.held_context_ladder.or(extras.shard_court_ladder).ok_or("preclaim quote has no native held/shard leaf ladder")?;
+        // Resolve only prospective quote policy. Never pair a historical hash with a fabricated
+        // header DAA or pass a synthetic point to native history/court resolution.
+        let config = kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+        let registry = self.palw_model_registry_fold_at(quote_daa);
+        let maximum_custodians = state.staged_maximum_custodians_at_quote_v1(
+            original.job.class_id, quote_daa, params, registry.as_ref().map(|r| r.globals.seat_count),
+            self.palw_shard_licensing_at(quote_daa) && self.palw_panel_params_v2.is_some(),
+        ).map_err(|why| why.to_string())?;
+        let base_ladder = if self.palw_held_context_at(quote_daa) || self.palw_shard_court_at(quote_daa) {
+            self.palw_court_params_v2.as_ref().map(|court| self.palw_court_step_ladder_at(quote_daa, court))
+        } else { None }.ok_or("preclaim quote has no native held/shard leaf ladder")?;
         let maximum_leaves = state.class_step_ladder_v1(&original.job.class_id, base_ladder);
         let quote = state.staged_preclaim_quote_v1(
             &original,
             &header,
-            point.daa_score,
+            quote_daa,
             maximum_custodians,
             maximum_leaves,
             config,
-            kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedRouteGatesV1::of_extras_v1(&extras),
+            kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedRouteGatesV1 {
+                tir: self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(quote_daa)),
+                float32: self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(quote_daa)),
+            },
         )?;
-        Ok(quote.map(|quote| (point.block, quote)))
+        Ok(quote.map(|quote| (chain_point, quote_daa, quote)))
     }
 
     pub fn palw_staged_flat_source_v1_impl(
@@ -3571,11 +3585,37 @@ impl VirtualStateProcessor {
         work_leaves: u64,
         bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
+        self.palw_fp_commitment_price_inner_v1(class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond, None)
+    }
+
+    pub fn palw_fp_commitment_price_answered_impl(
+        &self, commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        prompt: &[u32], answer: &[u32],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
+        if answer.len() != commitment.decode_tokens_executed as usize { return None; }
+        self.palw_fp_commitment_price_inner_v1(commitment.job.class_id, prompt, commitment.job.prompt_tokens,
+            commitment.decode_tokens_executed, commitment.work_leaves, Some(commitment.job.executor_bond), Some((commitment, answer)))
+    }
+
+    fn palw_fp_commitment_price_inner_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+        prompt_token_ids: &[u32],
+        prompt_tokens: u32,
+        decode_tokens_executed: u32,
+        work_leaves: u64,
+        bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
+        accounting: Option<(&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3, &[u32])>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        // Quote one native branch snapshot. Do not combine its state with a later virtual DAA.
         let virtual_read = self.virtual_stores.read();
-        let daa_score = virtual_read.state.get().ok()?.daa_score;
+        let native_virtual = virtual_read.state.get().ok()?;
+        if native_virtual.ghostdag_data.selected_parent != chain_point { return None; }
+        let daa_score = native_virtual.daa_score;
         drop(virtual_read);
+        let answer_accounting_active = self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(daa_score));
         let inputs = kaspa_consensus_core::palw_state_v2::PalwFpPriceInputsV1 {
             fp_derived_work_daa: self
                 .palw_fp_derived_work
@@ -3590,17 +3630,23 @@ impl VirtualStateProcessor {
             tir_free_prompt_active: self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(daa_score)),
         };
         // The claim id only names a refusal; no claim exists until the rail signs one.
-        let price = kaspa_consensus_core::palw_state_v2::palw_fp_commitment_price_v1(
-            &state,
-            state_params,
-            inputs,
-            &kaspa_hashes::Hash64::default(),
-            &class_id,
-            prompt_token_ids,
-            prompt_tokens,
-            decode_tokens_executed,
-            work_leaves,
-        );
+        let price = if let Some((commitment, answer)) = accounting {
+            kaspa_consensus_core::palw_state_v2::palw_fp_commitment_price_answered_v1(
+                &state, state_params, inputs, &kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment),
+                &class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves,
+                match &commitment.job.tail {
+                    Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Prefix(prefix)) if commitment.job.is_prefix_state() => *prefix,
+                    _ => kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(class_id),
+                }, answer_accounting_active.then_some(answer))
+        } else if answer_accounting_active {
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::FreePromptAnswerNotAccountable {
+                claim: kaspa_hashes::Hash64::default(), carried: None, decoded: decode_tokens_executed,
+            })
+        } else {
+            kaspa_consensus_core::palw_state_v2::palw_fp_commitment_price_v1(
+                &state, state_params, inputs, &kaspa_hashes::Hash64::default(), &class_id,
+                prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves)
+        };
         // **ADR-0152 v3.1 T-2(a) (S-6): the executor's share, which the fold's commitment arm asks
         // before it prices** — so past `palw_rcore_plus` a bond at its share of the class is
         // answered with the fold's own refusal by name, and neither a gateway nor this node's
@@ -3655,7 +3701,7 @@ impl VirtualStateProcessor {
                 self.palw_settled_anchor_depth_at(daa_score),
             )
         });
-        Some(kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1 { daa_score, price, bond_room })
+        Some(kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1 { chain_point, answer_accounting_active, daa_score, price, bond_room })
     }
 
     /// **ADR-0089 Decision 2's window, with the fold's market gate in it** (the 2026-09-23 Position

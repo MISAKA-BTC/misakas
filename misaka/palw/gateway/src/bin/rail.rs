@@ -37,6 +37,9 @@
 //! mode emits exactly that digest so a signer-backed rail can be scripted today without the key
 //! ever reaching this process.
 
+#[path = "rail_answer_accounting/mod.rs"]
+mod rail_answer_accounting;
+
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
@@ -55,7 +58,7 @@ use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{
     FpCommitmentPriceV1, MessageSigner, PALW_TX_FEE_FLOOR_SOMPI, VALIDATOR_SEED_LEN, ValidatorKey, build_fp_commitment_tx_with,
-    build_redemption_bundle_v4_with, estimate_overlay_fee_with,
+    build_redemption_bundle_v4_with, relay_fee_for_compute_mass,
 };
 use kaspa_txscript::script_class::ScriptClass;
 
@@ -623,8 +626,9 @@ fn main() {
     // below it said "earns no quanta" of a chat the chain priced at 17,883 (the 2026-09-20 Studio
     // drill) — so the rail never carried it. The leaves rule stays for the offline path and for a
     // node older than the op, where it is the only rule anyone can apply.
-    let chain_price =
-        rpc_endpoint.as_deref().and_then(|endpoint| chain_fp_price(&rpc_runtime(), endpoint, &commitment, &result.prompt_token_ids));
+    let chain_price = rpc_endpoint.as_deref().map(|endpoint|
+        chain_fp_price(&rpc_runtime(), endpoint, &commitment, &result.prompt_token_ids, &result.output_token_ids)
+            .unwrap_or_else(|why| die(format!("native answer-aware price unavailable; nothing signed: {why}"))));
     let price = match &chain_price {
         Some(answer) if !answer.priced => die(format!("the chain would refuse this commitment: {}", answer.refusal)),
         Some(answer) => FpCommitmentPriceV1::Chain { quanta: answer.quanta, pwu: answer.pwu },
@@ -646,7 +650,7 @@ fn main() {
             read_borsh_hex_v1(path, 2048).unwrap_or_else(|e| die(format!("--public-binding {}: {e}", path.display())));
         let endpoint =
             rpc_endpoint.as_deref().unwrap_or_else(|| die("--public-binding needs --rpc: the pledge is over the node's native quote".into()));
-        let (quote, daa) = chain_preclaim_quote_v1(&rpc_runtime(), endpoint, &commitment, &header)
+        let quote = chain_preclaim_quote_v1(&rpc_runtime(), endpoint, &commitment, &header)
             .unwrap_or_else(|e| die(format!("the node's preclaim quote is unavailable: {e}")));
         if !quote.refusal.is_empty() {
             die(format!("the chain would refuse this original public claim: {}", quote.refusal));
@@ -655,6 +659,9 @@ fn main() {
             // No staged public court here, or the claim requires no family: a plain carrier.
             return None;
         }
+        let native_price = chain_price.as_ref().unwrap_or_else(|| die("public binding requires native price context".into()));
+        rail_answer_accounting::check_preclaim_price_context_v1(&quote, native_price).unwrap_or_else(|why| die(why));
+        let daa = native_price.daa_score;
         let delegation_path = custody_delegation_path.as_ref().unwrap_or_else(|| {
             die("this claim requires a staged public family: an external producer must pass --custody-delegation (a node custodian that answers its DA demands, co-signed)".into())
         });
@@ -689,11 +696,16 @@ fn main() {
             .unwrap_or_else(|e| die(format!("cannot sign the original public custody pledge: {e}")));
         Some((pledge, header, delegation, daa))
     });
-    let build = |fee: u64| {
+    let accounting_context = match chain_price.as_ref().filter(|quote| quote.accounting_active) {
+        Some(_) => Some(public.as_ref().unwrap_or_else(|| die(
+            "native accounting requires this rail's quoted public binding context; plain worker results carry no context".into()
+        )).1.job_context_v1()),
+        None => None,
+    };
+    let build_plain = |fee: u64| {
         if let Some((pledge, header, delegation, daa)) = &public {
-            return kaspa_pq_validator_core::build_fp_commitment_tx_with_delegated_public_v1(
+            return kaspa_pq_validator_core::build_fp_commitment_tx_with_quoted_delegated_public_v1(
                 signer,
-                &DEVNET_PARAMS,
                 *daa,
                 commitment.job.network_domain,
                 prompt_ids_form,
@@ -722,6 +734,16 @@ fn main() {
         )
         .unwrap_or_else(|e| die(format!("cannot build the commitment transaction: {e}")))
     };
+    let build = |fee| {
+        let tx = build_plain(fee);
+        match accounting_context {
+            Some(context) => kaspa_pq_validator_core::wrap_fp_answer_accounting_tx_explicit_with_v1(
+                signer, tx, std::slice::from_ref(&funding_entry), &commitment, context,
+                &result.output_token_ids, Some(result.output_root),
+            ).unwrap_or_else(|why| die(format!("literal accounting carrier refused: {why}"))),
+            None => (tx, kaspa_pq_validator_core::FpAnswerTransactionLeaseV1::default()),
+        }
+    };
     // A commitment's payload carries the job's prompt token ids, so its mass — and with it the
     // node's minimum relay fee (10 sompi per gram of compute mass) — is not a constant: the first
     // live submit (2026-09-04, 8,186-byte payload) was refused as "250000 fees … under the required
@@ -730,15 +752,21 @@ fn main() {
     // build again at that fee unless the operator named one.
     let fee = fee.unwrap_or_else(|| {
         let probe = build(PALW_TX_FEE_FLOOR_SOMPI);
-        let p = &DEVNET_PARAMS;
-        let calc =
-            MassCalculator::new(p.mass_per_tx_byte, p.mass_per_script_pub_key_byte, p.mass_per_sig_op, p.storage_mass_parameter);
-        estimate_overlay_fee_with(signer, &calc, Prefix::Mainnet, probe.payload.len(), false)
+        let calc = match chain_price.as_ref() {
+            Some(quote) => {
+                MassCalculator::new(quote.mass_per_tx_byte, quote.mass_per_script_pub_key_byte, quote.mass_per_sig_op, quote.storage_mass_parameter)
+            }
+            None => {
+                let p = &DEVNET_PARAMS;
+                MassCalculator::new(p.mass_per_tx_byte, p.mass_per_script_pub_key_byte, p.mass_per_sig_op, p.storage_mass_parameter)
+            }
+        };
+        relay_fee_for_compute_mass(calc.calc_non_contextual_masses(&probe.0).compute_mass).max(PALW_TX_FEE_FLOOR_SOMPI)
     });
     if funding_amount <= fee {
         die(format!("--funding-amount {funding_amount} does not cover the fee {fee}"));
     }
-    let tx = build(fee);
+    let (tx, _accounting_wire_and_signing_lease) = build(fee);
 
     let tx_path = PathBuf::from(format!("{}.commitment-tx.borsh", stem.display()));
     let tx_bytes = borsh::to_vec(&tx).unwrap_or_else(|e| die(format!("cannot serialize the transaction: {e}")));
@@ -1604,7 +1632,7 @@ fn chain_preclaim_quote_v1(
     endpoint: &str,
     commitment: &PalwFreePromptCommitmentV3,
     header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
-) -> Result<(kaspa_rpc_core::GetPalwStagedPreclaimQuoteResponse, u64), String> {
+) -> Result<kaspa_rpc_core::GetPalwStagedPreclaimQuoteResponse, String> {
     use kaspa_rpc_core::api::rpc::RpcApi;
     let client = try_rpc_connect(runtime, endpoint)?;
     let request = kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest {
@@ -1612,9 +1640,8 @@ fn chain_preclaim_quote_v1(
         binding_hex: faster_hex::hex_string(&borsh::to_vec(header).map_err(|e| e.to_string())?),
     };
     let quote = runtime.block_on(client.get_palw_staged_preclaim_quote(request)).map_err(|e| e.to_string());
-    let daa = runtime.block_on(client.get_block_dag_info()).map(|info| info.virtual_daa_score).map_err(|e| e.to_string());
     let _ = runtime.block_on(client.disconnect());
-    Ok((quote?, daa?))
+    quote
 }
 
 fn chain_fp_price(
@@ -1622,20 +1649,33 @@ fn chain_fp_price(
     endpoint: &str,
     commitment: &PalwFreePromptCommitmentV3,
     prompt_token_ids: &[u32],
-) -> Option<kaspa_rpc_core::GetPalwFreePromptPriceResponse> {
+    answer_token_ids: &[u32],
+) -> Result<kaspa_rpc_core::GetPalwFreePromptPriceResponse, String> {
     use kaspa_rpc_core::api::rpc::RpcApi;
-    let client = try_rpc_connect(runtime, endpoint).ok()?;
+    let client = try_rpc_connect(runtime, endpoint)?;
     let bond = commitment.job.executor_bond;
+    // Bound the new quote workspace before cloning/serializing the literal input and answer.
+    let _lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(
+        (kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES * 3 + answer_token_ids.len().saturating_mul(4)) as u64
+    ).map_err(|why| format!("native quote capacity: {why:?}"))?;
+    let carried = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&commitment.job, prompt_token_ids);
+    let accounting_payload = borsh::to_vec(&kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
+        version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+        commitment: commitment.clone(), prompt_token_ids: carried.clone(), signature: vec![],
+    }).map_err(|why| why.to_string())?;
     let answer = runtime.block_on(client.get_palw_free_prompt_price(kaspa_rpc_core::GetPalwFreePromptPriceRequest {
+        accounting_payload, answer_token_ids: answer_token_ids.to_vec(),
         class_id: commitment.job.class_id.to_string(),
-        prompt_token_ids: kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&commitment.job, prompt_token_ids),
+        prompt_token_ids: carried,
         prompt_tokens: commitment.job.prompt_tokens,
         decode_tokens_executed: commitment.decode_tokens_executed,
         work_leaves: commitment.work_leaves,
         bond: format!("{}:{}", bond.transaction_id, bond.index),
     }));
     let _ = runtime.block_on(client.disconnect());
-    answer.ok().filter(|a| a.available)
+    let quote = answer.map_err(|why| why.to_string())?;
+    rail_answer_accounting::check_native_quote_v1(&quote, commitment.job.network_domain)?;
+    Ok(quote)
 }
 
 /// **`pwu_per_inference`, recovered from the facts** — through the lane's one inversion
@@ -1911,21 +1951,50 @@ mod watch {
         )
     }
 
-    /// **ADR-0148: the chain's own price for this job**, on a connection opened for the question
-    /// alone — a node older than `GetPalwFreePromptPrice` closes the WebSocket on the unknown op
-    /// rather than answering "method not found", and the watcher's own connection must not be the
-    /// one that pays for asking. `None` when the node does not answer it (or holds no PALW state):
-    /// the caller keeps [`job_exposure`]'s leaves estimate. `Some(Err)` names the fold's refusal.
+    #[derive(Debug)]
+    pub(super) enum ChainPriceFailure {
+        NativeUnavailable(String),
+        Semantic(String),
+    }
+
+    /// Native read/transport/capacity failures retain the job. Only a successful native quote
+    /// which explicitly refuses the claim is a semantic price refusal.
     pub(super) fn chain_job_exposure(
         runtime: &tokio::runtime::Runtime,
         rpc: &str,
         stem: &Path,
         commitment: &PalwFreePromptCommitmentV3,
-    ) -> Option<Result<u128, String>> {
-        let bytes = std::fs::read(PathBuf::from(format!("{}.result.borsh", stem.display()))).ok()?;
-        let result: super::PalwFpWorkerResultV3 = borsh::from_slice(&bytes).ok()?;
-        let answer = super::chain_fp_price(runtime, rpc, commitment, &result.prompt_token_ids)?;
-        Some(if answer.priced { answer.reserved_sompi.parse::<u128>().map_err(|e| e.to_string()) } else { Err(answer.refusal) })
+    ) -> Option<Result<u128, ChainPriceFailure>> {
+        let result = (|| {
+            let bytes = std::fs::read(PathBuf::from(format!("{}.result.borsh", stem.display())))
+                .map_err(|why| ChainPriceFailure::NativeUnavailable(why.to_string()))?;
+            let result: super::PalwFpWorkerResultV3 = borsh::from_slice(&bytes)
+                .map_err(|why| ChainPriceFailure::NativeUnavailable(why.to_string()))?;
+            let answer = super::chain_fp_price(runtime, rpc, commitment, &result.prompt_token_ids, &result.output_token_ids)
+                .map_err(ChainPriceFailure::NativeUnavailable)?;
+            if answer.priced {
+                answer.reserved_sompi.parse::<u128>().map_err(|why| ChainPriceFailure::NativeUnavailable(why.to_string()))
+            } else {
+                Err(ChainPriceFailure::Semantic(answer.refusal))
+            }
+        })();
+        Some(result)
+    }
+
+    /// Actual watch control: transient quote failures never rename the job or spend attempts.
+    fn apply_chain_price_failure_v1(
+        outbox: &Path, job: &Job, state: &mut State, quiet: &mut Quiet, failure: &ChainPriceFailure,
+    ) -> Result<(), String> {
+        match failure {
+            ChainPriceFailure::NativeUnavailable(why) => {
+                quiet.say("price", format!("{}: native price unavailable ({why}); retaining job for retry", job.name));
+                Ok(())
+            }
+            ChainPriceFailure::Semantic(refusal) => {
+                log(format!("{}: the chain would refuse this commitment ({refusal}); not paying to carry it", job.name));
+                give_up(outbox, job, state, "refused-by-price")
+            }
+        }
     }
 
     /// How a failed one-shot run is treated — by what it says about the CLAIM, because a queue
@@ -1944,7 +2013,12 @@ mod watch {
 
     pub(super) fn classify(message: &str) -> Failure {
         let text = message.to_ascii_lowercase();
-        if ["cannot reach", "connection", "timed out", "timeout", "websocket", "cannot read the node"].iter().any(|m| text.contains(m))
+        if ["cannot reach", "connection", "timed out", "timeout", "websocket", "cannot read the node",
+            "native answer-aware price unavailable", "the node's preclaim quote is unavailable",
+            "the chain would refuse this original public claim", "cannot build the original public commitment transaction",
+            "public family and accounting quote snapshot/daa differ", "literal accounting carrier refused",
+            "native accounting requires this rail's quoted public binding context", "public binding requires native price context",
+        ].iter().any(|m| text.contains(m))
         {
             Failure::Transient
         } else if text.contains("anchor") && text.contains("expired") || text.contains("was retired by the gateway") {
@@ -2121,9 +2195,8 @@ mod watch {
         // estimate under-states a wide model's reservation several times over — so the chain's own
         // price for THIS job is asked first, and a commitment it would refuse is not paid to carry.
         let chain_need = chain_job_exposure(runtime, &config.rpc, &job.stem, &commitment);
-        if let Some(Err(refusal)) = &chain_need {
-            log(format!("{}: the chain would refuse this commitment ({refusal}); not paying to carry it", job.name));
-            give_up(&config.outbox, &job, &mut state, "refused-by-price")?;
+        if let Some(Err(failure)) = &chain_need {
+            apply_chain_price_failure_v1(&config.outbox, &job, &mut state, quiet, failure)?;
             return Ok(());
         }
         if let Some(need) = chain_need.and_then(Result::ok).or_else(|| job_exposure(&facts, commitment.work_leaves)) {
@@ -2151,6 +2224,7 @@ mod watch {
             }
         }
         quiet.clear("room");
+        quiet.clear("price");
 
         // 4. Funding.
         let Some((outpoint, amount, source)) = pick_funding(config, runtime, client, key, &info, &state, quiet)? else {
@@ -2418,6 +2492,36 @@ mod watch {
             std::fs::remove_file(traces.join("material.bin")).unwrap();
             assert_eq!(pending_jobs(&outbox, &State::default(), 3)[0].capture, None);
             let _ = std::fs::remove_dir_all(&outbox);
+        }
+
+        #[test]
+        fn rail_watch_native_quote_failure_keeps_files_and_attempts_until_explicit_price_refusal() {
+            let outbox = scratch("native-quote-retain");
+            let stem = outbox.join("fp-job-quote-retain");
+            let summary = PathBuf::from(format!("{}.json",stem.display()));
+            std::fs::write(&summary,b"queued worker evidence").unwrap();
+            let job = Job { stem, name: "fp-job-quote-retain".into(), claim: "claim".into(), commit_by_anchor_daa: None, capture: None };
+            let mut state = State::default(); state.attempts.insert(job.name.clone(),2);
+            save_state(&outbox,&state).unwrap();
+            let mut quiet = Quiet::default();
+            for message in ["native capacity refused", "wrong network", "quote clock changed", "node unavailable"] {
+                apply_chain_price_failure_v1(&outbox,&job,&mut state,&mut quiet,&ChainPriceFailure::NativeUnavailable(message.into())).unwrap();
+                assert_eq!(std::fs::read(&summary).unwrap(),b"queued worker evidence");
+                assert!(state.settled.is_empty()); assert_eq!(state.attempts.get(&job.name),Some(&2));
+                let persisted = load_state(&outbox);
+                assert!(persisted.settled.is_empty()); assert_eq!(persisted.attempts.get(&job.name),Some(&2));
+            }
+            apply_chain_price_failure_v1(&outbox,&job,&mut state,&mut quiet,&ChainPriceFailure::Semantic("ZeroQuanta".into())).unwrap();
+            assert!(!summary.exists());
+            assert_eq!(std::fs::read(PathBuf::from(format!("{}.json.submit-failed",job.stem.display()))).unwrap(),b"queued worker evidence");
+            assert_eq!(load_state(&outbox).settled.get(&job.name).map(String::as_str),Some("refused-by-price"));
+            for text in ["native answer-aware price unavailable: wrong network", "the node's preclaim quote is unavailable: capacity",
+                "public family and accounting quote snapshot/DAA differ; retry before signing", "literal accounting carrier refused: Resource",
+                "the chain would refuse this original public claim: native resource unavailable",
+                "cannot build the original public commitment transaction: quote window changed"] {
+                assert_eq!(classify(text),Failure::Transient,"one-shot quote retries must not spend attempts");
+            }
+            let _ = std::fs::remove_dir_all(outbox);
         }
 
         /// **A job's exposure is the chain's, not the canonical claim's.** testnet-11's A16 class:

@@ -1340,6 +1340,13 @@ impl ConsensusApi for Consensus {
         )
     }
 
+    fn palw_fp_commitment_price_answered_v1(
+        &self, commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        prompt_token_ids: &[u32], answer: &[u32],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
+        self.virtual_processor.palw_fp_commitment_price_answered_impl(commitment, prompt_token_ids, answer)
+    }
+
     fn palw_fp_spendable_v3(
         &self,
         bond: kaspa_consensus_core::tx::TransactionOutpoint,
@@ -4073,7 +4080,7 @@ impl ConsensusApi for Consensus {
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
     ) -> Result<
-        Option<(kaspa_consensus_core::BlockHash, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
+        Option<(kaspa_consensus_core::BlockHash, u64, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
         String,
     > {
         self.virtual_processor.palw_staged_preclaim_quote_v1_impl(original, header)

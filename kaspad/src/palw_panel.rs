@@ -8116,9 +8116,11 @@ impl PalwPanelService {
         };
         let seed = kaspa_pq_validator_core::load_validator_seed(&self.config.key_path)?;
         let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+        let mut public_quote_context = None;
         let public_pledge = if let Some(header) = &original_header {
             match session.palw_staged_preclaim_quote_v1(commitment.clone(), header.clone())? {
-                Some((_snapshot, quote)) => {
+                Some((snapshot, quote_daa, quote)) => {
+                    public_quote_context = Some((snapshot, quote_daa));
                     use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
                     let accept_until_daa = quote.plan.terms.open_until_daa;
                     if accept_until_daa <= current_daa {
@@ -8221,15 +8223,25 @@ impl PalwPanelService {
         // ledger prices compute and the leaves rule no longer says whether the claim earns; below
         // it the function IS the leaves rule. A refusal is the fold's, by name, before any fee.
         let carried = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&job, &ids);
-        let price = match session.palw_fp_commitment_price_v1(
+        let price_answer = if answer_accounting_active {
+            session.with_consensus_api_v1(|c| c.palw_fp_commitment_price_answered_v1(&commitment, &carried, &run.output_token_ids))
+        } else {
+            session.palw_fp_commitment_price_v1(
             class_id,
             carried.clone(),
             job.prompt_tokens,
             commitment.decode_tokens_executed,
             commitment.work_leaves,
             Some(bond),
-        ) {
-            Some(answer) => match answer.price {
+        )
+        };
+        if answer_accounting_active && price_answer.as_ref().is_some_and(|answer| {
+            answer.daa_score != current_daa || public_quote_context.is_some_and(|quoted| quoted != (answer.chain_point, answer.daa_score))
+        }) {
+            return Err("canonical public/answer price snapshot or DAA changed; retry".into());
+        }
+        let price = match price_answer {
+            Some(answer) => match answer_accounting::canonical_price_result_v1(answer.price) {
                 Ok(price) => {
                     // ADR-0152 P6: the room check above priced the claim with the attempt lane's
                     // number; this is the fold's own `FreePromptExposureCeiling` inequality on the
@@ -8238,8 +8250,9 @@ impl PalwPanelService {
                     crate::palw_producer::palw_canonical_claim_bond_room_v1(&price, answer.bond_room, rcore_plus.is_some())?;
                     kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: price.quanta, pwu: price.pwu }
                 }
-                Err(refusal) => return Err(format!("the chain would refuse this canonical claim: {refusal}")),
+                Err(why) => return Err(why),
             },
+            None if answer_accounting_active => return Err("native accounting price unavailable; canonical claim deferred".into()),
             None => kaspa_pq_validator_core::FpCommitmentPriceV1::Leaves {
                 freeprompt: &bundle.freeprompt,
                 class_canonical_leaves: per_inference,

@@ -1109,6 +1109,8 @@ from!(item: &kaspa_rpc_core::GetPalwFreePromptPriceRequest, protowire::GetPalwFr
         decode_tokens_executed: item.decode_tokens_executed,
         work_leaves: item.work_leaves,
         bond: item.bond.clone(),
+        accounting_payload: item.accounting_payload.clone(),
+        answer_token_ids: item.answer_token_ids.clone(),
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwFreePromptPriceResponse>, protowire::GetPalwFreePromptPriceResponseMessage, {
@@ -1122,6 +1124,14 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwFreePromptPriceResponse>, protowir
         pwu: item.pwu,
         reserved_sompi: item.reserved_sompi.clone(),
         bond_room_sompi: item.bond_room_sompi.clone(),
+        accounting_quote_version: item.accounting_quote_version as _,
+        accounting_active: item.accounting_active,
+        chain_point: item.chain_point.clone(),
+        network_domain: item.network_domain.clone(),
+        mass_per_tx_byte: item.mass_per_tx_byte,
+        mass_per_script_pub_key_byte: item.mass_per_script_pub_key_byte,
+        mass_per_sig_op: item.mass_per_sig_op,
+        storage_mass_parameter: item.storage_mass_parameter,
         error: None,
     }
 });
@@ -3648,6 +3658,8 @@ try_from!(item: &protowire::GetPalwFreePromptPriceRequestMessage, kaspa_rpc_core
         decode_tokens_executed: item.decode_tokens_executed,
         work_leaves: item.work_leaves,
         bond: item.bond.clone(),
+        accounting_payload: item.accounting_payload.clone(),
+        answer_token_ids: item.answer_token_ids.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwFreePromptPriceResponseMessage, RpcResult<kaspa_rpc_core::GetPalwFreePromptPriceResponse>, {
@@ -3661,6 +3673,14 @@ try_from!(item: &protowire::GetPalwFreePromptPriceResponseMessage, RpcResult<kas
         pwu: item.pwu,
         reserved_sompi: item.reserved_sompi.clone(),
         bond_room_sompi: item.bond_room_sompi.clone(),
+        accounting_quote_version: item.accounting_quote_version as _,
+        accounting_active: item.accounting_active,
+        chain_point: item.chain_point.clone(),
+        network_domain: item.network_domain.clone(),
+        mass_per_tx_byte: item.mass_per_tx_byte,
+        mass_per_script_pub_key_byte: item.mass_per_script_pub_key_byte,
+        mass_per_sig_op: item.mass_per_sig_op,
+        storage_mass_parameter: item.storage_mass_parameter,
     }
 });
 try_from!(item: &protowire::RpcPalwPanelHoldReason, kaspa_rpc_core::RpcPalwPanelHoldReason, {
@@ -6230,6 +6250,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwStagedPreclaimQuoteResponse>, prot
         quoted: item.quoted,
         refusal: item.refusal.clone(),
         snapshot_block: item.snapshot_block.clone(),
+        quote_daa: item.quote_daa,
         resource_plan_id: item.resource_plan_id.clone(),
         maximum_records: item.maximum_records,
         maximum_custodians: item.maximum_custodians,
@@ -6244,6 +6265,7 @@ try_from!(item: &protowire::GetPalwStagedPreclaimQuoteResponseMessage, RpcResult
         quoted: item.quoted,
         refusal: item.refusal.clone(),
         snapshot_block: item.snapshot_block.clone(),
+        quote_daa: item.quote_daa,
         resource_plan_id: item.resource_plan_id.clone(),
         maximum_records: item.maximum_records,
         maximum_custodians: item.maximum_custodians,

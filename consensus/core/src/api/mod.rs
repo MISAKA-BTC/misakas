@@ -441,6 +441,12 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Native answer-aware producer quote; never enables a local fence.
+    fn palw_fp_commitment_price_answered_v1(
+        &self, _commitment: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        _prompt_token_ids: &[u32], _answer: &[u32],
+    ) -> Option<crate::palw_state_v2::PalwFpPriceAnswerV1> { None }
+
     /// **The certified free-prompt quanta this bond may spend into receipt blocks (FP-R5).**
     ///
     /// Empty on every network that is not `ConsensusV2`, on one with no free-prompt bundle, and
@@ -1853,7 +1859,7 @@ pub trait ConsensusApi: Send + Sync {
         &self,
         _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         _header: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
-    ) -> Result<Option<(crate::BlockHash, crate::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>, String> {
+    ) -> Result<Option<(crate::BlockHash, u64, crate::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>, String> {
         Err("native authenticated staged preclaim quote unavailable".into())
     }
 

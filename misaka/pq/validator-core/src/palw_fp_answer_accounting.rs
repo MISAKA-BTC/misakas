@@ -29,7 +29,7 @@ pub fn wrap_fp_answer_accounting_tx_with_v1(
     signer: &dyn MessageSigner,
     params: &Params,
     daa: u64,
-    mut tx: Transaction,
+    tx: Transaction,
     entries: &[UtxoEntry],
     expected: &PalwFreePromptCommitmentV3,
     context: &PalwJobContextV2,
@@ -39,6 +39,21 @@ pub fn wrap_fp_answer_accounting_tx_with_v1(
     if !params.palw_fp_answer_accounting_v1_fence().is_some_and(|f| f.is_active(daa)) {
         return Ok((tx, FpAnswerTransactionLeaseV1::default()));
     }
+    wrap_fp_answer_accounting_tx_explicit_with_v1(signer, tx, entries, expected, context, ids, root)
+}
+
+/// Explicit carriage only: the caller must obtain its native quote and bind its own executed
+/// context before calling. This function enables no consensus fence and supplies no policy defaults.
+#[allow(clippy::too_many_arguments)]
+pub fn wrap_fp_answer_accounting_tx_explicit_with_v1(
+    signer: &dyn MessageSigner,
+    mut tx: Transaction,
+    entries: &[UtxoEntry],
+    expected: &PalwFreePromptCommitmentV3,
+    context: &PalwJobContextV2,
+    ids: &[u32],
+    root: Option<Hash64>,
+) -> Result<(Transaction, FpAnswerTransactionLeaseV1), Fault> {
     if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT
         || tx.inputs.is_empty()
         || tx.inputs.len() != entries.len()

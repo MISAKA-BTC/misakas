@@ -2593,49 +2593,52 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             let index = index.parse::<u32>().map_err(|_| RpcError::General(format!("bond index '{index}' is not a u32")))?;
             Some(kaspa_consensus_core::tx::TransactionOutpoint { transaction_id, index })
         };
-        let GetPalwFreePromptPriceRequest { prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, .. } = request;
+        if request.accounting_payload.len() > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
+            || request.answer_token_ids.len() > (1usize << 21) {
+            return Err(RpcError::General("accounting quote input exceeds native bounds".into()));
+        }
+        let original = if request.accounting_payload.is_empty() {
+            if !request.answer_token_ids.is_empty() { return Err(RpcError::General("answer without accounting original".into())); }
+            None
+        } else {
+            let original = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_accounting_original_decode_v1(&request.accounting_payload)
+                .map_err(|why| RpcError::General(format!("accounting quote original refused: {why:?}")))?;
+            if original.commitment.job.class_id != class_id || original.prompt_token_ids != request.prompt_token_ids
+                || original.commitment.job.prompt_tokens != request.prompt_tokens
+                || original.commitment.decode_tokens_executed != request.decode_tokens_executed
+                || original.commitment.work_leaves != request.work_leaves
+                || bond != Some(original.commitment.job.executor_bond)
+                || request.answer_token_ids.len() != request.decode_tokens_executed as usize {
+                return Err(RpcError::General("accounting quote differs from literal original".into()));
+            }
+            Some(original)
+        };
+        let GetPalwFreePromptPriceRequest { prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, answer_token_ids, .. } = request;
         let session = self.consensus_manager.consensus().unguarded_session();
-        // RFC-0002 Phase H: an IR class's free-prompt lane opens with the TIR public frame. The price is the fold's own (one
-        // function of the state): below the fence it refuses an IR class by name (no work profile), past it it prices the run from
-        // the admitted program. An IR class's refusal carries the lane's sentence beside the fold's.
         let tir_class = session.clone().spawn_blocking(move |c| c.palw_tir_class_record_v1(class_id)).await.is_some();
-        let answer = session
-            .spawn_blocking(move |c| {
+        let answer = session.spawn_blocking(move |c| {
+            if let Some(original) = original {
+                c.palw_fp_commitment_price_answered_v1(&original.commitment, &prompt_token_ids, &answer_token_ids)
+            } else {
                 c.palw_fp_commitment_price_v1(class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond)
-            })
-            .await;
+            }
+        }).await;
         let Some(answer) = answer else {
             return Ok(GetPalwFreePromptPriceResponse::default());
         };
-        let bond_room_sompi = answer.bond_room.map(|room| room.to_string()).unwrap_or_default();
-        Ok(match answer.price {
-            Ok(price) => GetPalwFreePromptPriceResponse {
-                available: true,
-                daa_score: answer.daa_score,
-                priced: true,
-                refusal: String::new(),
-                priced_in_compute: price.priced_in_compute,
-                quanta: price.quanta,
-                pwu: price.pwu,
-                // The whole reservation the ledger will hold — the weight and, past the audit fence, a
-                // compute-priced claim's receipt rights (#5) — because a gateway checks exactly this
-                // against `bond_room_sompi`.
-                reserved_sompi: price.reserved.saturating_add(price.rights_reserved).to_string(),
-                bond_room_sompi,
-            },
-            Err(refusal) => GetPalwFreePromptPriceResponse {
-                available: true,
-                daa_score: answer.daa_score,
-                priced: false,
-                refusal: if tir_class {
-                    format!("{refusal:?} (class {class_id}: {PALW_TIR_FREE_PROMPT_CLOSED_V1})")
-                } else {
-                    format!("{refusal:?}")
-                },
-                bond_room_sompi,
-                ..Default::default()
-            },
-        })
+        let chain_point = answer.chain_point.to_string();
+        let accounting_active = answer.answer_accounting_active;
+        let mut response = palw_fp_price_rpc_response_v2(answer, tir_class, class_id)?;
+        response.accounting_quote_version = 1;
+        response.accounting_active = accounting_active;
+        response.chain_point = chain_point;
+        let p = &self.config.params;
+        response.network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(p.net.to_string().as_bytes(), Some(p.genesis.hash)).to_string();
+        response.mass_per_tx_byte = p.mass_per_tx_byte;
+        response.mass_per_script_pub_key_byte = p.mass_per_script_pub_key_byte;
+        response.mass_per_sig_op = p.mass_per_sig_op;
+        response.storage_mass_parameter = p.storage_mass_parameter;
+        Ok(response)
     }
 
     async fn get_palw_class_panel_status_call(
@@ -4027,11 +4030,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let session = self.consensus_manager.consensus().unguarded_session();
         let answer = session.spawn_blocking(move |c| c.palw_staged_preclaim_quote_v1(commitment, binding)).await;
         Ok(match answer {
-            Ok(Some((snapshot, quote))) => GetPalwStagedPreclaimQuoteResponse {
+            Ok(Some((snapshot, quote_daa, quote))) => GetPalwStagedPreclaimQuoteResponse {
                 available: true,
                 quoted: true,
                 refusal: String::new(),
                 snapshot_block: snapshot.to_string(),
+                quote_daa: Some(quote_daa),
                 resource_plan_id: quote.resource_plan_id.to_string(),
                 maximum_records: quote.maximum_records,
                 maximum_custodians: quote.maximum_custodians,
@@ -6440,6 +6444,76 @@ fn palw_settlement_read_agrees_v1(
         && before_import.0.utxos_started == after_import.0.utxos_started
         && before_import.0.utxos_imported == after_import.0.utxos_imported
         && native_generation.is_none_or(|generation| generation == before_sink)
+}
+
+/// The actual price response boundary: local capacity/history faults are RPC failures,
+/// never successful semantic `priced=false` responses which a watcher may retire.
+fn palw_fp_price_rpc_response_v2(
+    answer: kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1,
+    tir_class: bool, class_id: kaspa_consensus_core::Hash64,
+) -> RpcResult<GetPalwFreePromptPriceResponse> {
+    let bond_room_sompi = answer.bond_room.map(|room| room.to_string()).unwrap_or_default();
+    Ok(match answer.price {
+            Ok(price) => GetPalwFreePromptPriceResponse {
+                available: true,
+                daa_score: answer.daa_score,
+                priced: true,
+                refusal: String::new(),
+                priced_in_compute: price.priced_in_compute,
+                quanta: price.quanta,
+                pwu: price.pwu,
+                // The whole reservation the ledger will hold — the weight and, past the audit fence, a
+                // compute-priced claim's receipt rights (#5) — because a gateway checks exactly this
+                // against `bond_room_sompi`.
+                reserved_sompi: price.reserved.saturating_add(price.rights_reserved).to_string(),
+                bond_room_sompi,
+                ..Default::default()
+            },
+            Err(refusal @ (kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_)
+                | kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(_))) => {
+                return Err(RpcError::General(format!("native answer-aware price unavailable: {refusal}")));
+            }
+            Err(refusal) => GetPalwFreePromptPriceResponse {
+                available: true,
+                daa_score: answer.daa_score,
+                priced: false,
+                refusal: if tir_class {
+                    format!("{refusal:?} (class {class_id}: {PALW_TIR_FREE_PROMPT_CLOSED_V1})")
+                } else {
+                    format!("{refusal:?}")
+                },
+                bond_room_sompi,
+                ..Default::default()
+            },
+    })
+
+}
+
+#[cfg(test)]
+mod native_fp_quote_price_response_tests {
+    use super::*;
+    use kaspa_consensus_core::{palw_state_v2::{PalwFpPriceAnswerV1, PalwFpCommitmentPriceV1, PalwStateV2Error},
+        palw_native_resource_v1::NativeCoverageV1, palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1};
+    fn answer(price: Result<PalwFpCommitmentPriceV1,PalwStateV2Error>) -> PalwFpPriceAnswerV1 {
+        PalwFpPriceAnswerV1 { chain_point: kaspa_consensus_core::Hash64::from_u64_word(1), daa_score: 7,
+            answer_accounting_active: true, bond_room: Some(101), price }
+    }
+    #[test]
+    fn native_fp_quote_rpc_capacity_and_context_never_become_priced_false() {
+        let class = kaspa_consensus_core::Hash64::from_u64_word(2);
+        for fault in [PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<u8>("quote","capacity unavailable")),
+            PalwStateV2Error::NativeContextUnavailable(PalwSourceBootstrapContextFaultV1::HistoryUnavailable)] {
+            let failure = palw_fp_price_rpc_response_v2(answer(Err(fault)),false,class).unwrap_err();
+            assert!(failure.to_string().contains("native answer-aware price unavailable"));
+        }
+        let semantic = palw_fp_price_rpc_response_v2(answer(Err(PalwStateV2Error::ZeroQuanta)),false,class).unwrap();
+        assert!(semantic.available); assert!(!semantic.priced); assert!(semantic.refusal.contains("ZeroQuanta"));
+        let success = palw_fp_price_rpc_response_v2(answer(Ok(PalwFpCommitmentPriceV1 {
+            quanta: 2, pwu: 8, reserved: 10, rights_reserved: 3, priced_in_compute: true, derived_work: None,
+        })),false,class).unwrap();
+        assert!(success.available && success.priced); assert_eq!(success.quanta,2); assert_eq!(success.pwu,8);
+        assert_eq!(success.reserved_sompi,"13"); assert_eq!(success.bond_room_sompi,"101");
+    }
 }
 
 #[cfg(test)]
