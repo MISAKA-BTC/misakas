@@ -20,7 +20,11 @@
 use super::palw_claim_local_rewards_v1 as rewards;
 use super::*;
 use crate::palw_claim_local_v1::*;
+use crate::palw_native_resource_v1::{NativeRetainedV1, reserve_native_requests_v1};
 use borsh::BorshDeserialize;
+
+#[path = "palw_claim_local_checkpoint_resources_v1.rs"]
+mod resources;
 
 /// The single checkpoint row's key: prefix `'C'`, zero tail (one row per state; the point is inside).
 pub fn palw_claim_local_checkpoint_key_v1() -> [u8; 65] {
@@ -48,10 +52,14 @@ pub(super) fn expected_claim_local_checkpoint_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     point: &PalwBlockContextV2,
-) -> Result<Option<PalwClaimLocalCheckpointV1>, PalwStateV2Error> {
+) -> Result<Option<NativeRetainedV1<PalwClaimLocalCheckpointV1>>, PalwStateV2Error> {
     if !params.claim_local_settlement_active_at(point.daa_score) {
         return Ok(None);
     }
+    // Admit the concrete projection and its construction peak before maps, deep
+    // copies or material encodings allocate. The returned owner keeps the lease.
+    let requests = resources::requests(state).map_err(PalwStateV2Error::NativeResource)?;
+    let lease = reserve_native_requests_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
     let now = point.daa_score;
     // Accepting (chain) block of each retained admission frame, by its point.
     let mut frame_points: BTreeMap<(u64, u64), Hash64> = BTreeMap::new();
@@ -90,7 +98,7 @@ pub(super) fn expected_claim_local_checkpoint_v1(
             manifest.insert(row_id);
             material.insert(row_id, row);
             for (sid, session) in courts.get(id).into_iter().flatten() {
-                let bytes = borsh::to_vec(&(*sid, session.clone())).expect("canonical court row");
+                let bytes = borsh::to_vec(&(sid, session)).expect("canonical court row");
                 let mid = palw_liability_material_id_v1(&bytes);
                 manifest.insert(mid);
                 material.insert(mid, bytes);
@@ -123,7 +131,10 @@ pub(super) fn expected_claim_local_checkpoint_v1(
         );
     }
     let liability_state = if liability.open.is_empty() { Vec::new() } else { borsh::to_vec(&liability).expect("canonical liability") };
-    Ok(Some(PalwClaimLocalCheckpointV1 { point: *point, records, liability_state, material }))
+    Ok(Some(NativeRetainedV1::from_owner_reserved_v1(
+        PalwClaimLocalCheckpointV1 { point: *point, records, liability_state, material },
+        lease,
+    )))
 }
 
 /// The stored checkpoint row, if any (raw; never authority).

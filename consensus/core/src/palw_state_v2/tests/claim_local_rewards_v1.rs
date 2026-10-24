@@ -391,7 +391,10 @@ fn rfc23s2_checkpoint_frontier_passes_unresolved_a_when_independent_b_settles() 
 
 #[test]
 fn rfc23s2_checkpoint_below_the_fence_keeps_the_shared_frontier() {
-    let p = rules().with_claim_local_settlement_from_daa(None);
+    // Stage 1 supplies the resolved-prefix retirement floor. With both stage
+    // fences off, historical F05 lets retirement pass A; stage 2 must preserve
+    // that legacy history rather than retroactively repairing it here.
+    let p = rules().with_unresolved_bound_from_daa(Some(100)).with_claim_local_settlement_from_daa(None);
     let (p, s, [a, b, _c]) = world_with(false, 100, p);
     assert!(checkpoint_bytes(&s).is_none(), "no row below the fence");
     let a_blue = s.claim(&a).unwrap().accepted_blue_score;
@@ -402,7 +405,7 @@ fn rfc23s2_checkpoint_below_the_fence_keeps_the_shared_frontier() {
     }
     let _ = b;
     // The fence armed later than this history: byte-identical to the unarmed rules.
-    let later = rules().with_claim_local_settlement_from_daa(Some(10_000));
+    let later = rules().with_unresolved_bound_from_daa(Some(100)).with_claim_local_settlement_from_daa(Some(10_000));
     let (_, s_late, _) = world_with(false, 100, later.clone());
     assert_eq!(s_late.state_root(), s.state_root(), "a not-yet-reached fence changes nothing");
 }
@@ -449,4 +452,65 @@ fn rfc23s2_checkpoint_pruned_import_reproduces_and_refuses_a_forged_row() {
     let mut missing = s.clone();
     missing.kernel_route.as_mut().unwrap().aux.remove(&key);
     assert!(missing.assert_internal_consistency(&p).is_err());
+}
+
+#[test]
+fn rfc23s2_checkpoint_resource_owner_child() {
+    if std::env::var("MISAKA_CHECKPOINT_RESOURCE_OWNER").ok().as_deref() != Some("1") {
+        return;
+    }
+    use crate::palw_native_resource_v1::{
+        NativeHeapV1, NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
+    };
+    let (p, s, _) = world(false);
+    let point = *s.last_point().unwrap();
+    let canonical = checkpoint_bytes(&s).unwrap();
+    let mut malformed = s.clone();
+    let mut frame_key = vec![0; 65];
+    frame_key[0] = b'F';
+    malformed.kernel_route.as_mut().unwrap().aux.insert((crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1, frame_key), vec![0]);
+    let memory = 32 << 20;
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
+    let blocker = reserve_native_requests_v1(memory).unwrap();
+    let build = || super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&s, &p, &point);
+    assert!(matches!(build(), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(
+        super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&malformed, &p, &point),
+        Err(PalwStateV2Error::NativeResource(_))
+    ), "capacity refusal precedes decoding even a malformed retained frame");
+    drop(blocker);
+    assert!(matches!(
+        super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&malformed, &p, &point),
+        Err(PalwStateV2Error::CarriageInconsistent(_))
+    ), "with capacity available the original malformed-frame error remains distinct");
+    let owner = build().unwrap().unwrap();
+    assert_eq!(borsh::to_vec(&owner).unwrap(), canonical, "owner retains the exact checkpoint encoding");
+    assert!(reserve_native_requests_v1(memory).is_err(), "the returned checkpoint keeps its demand live");
+    let (value, lease) = owner.into_parts_v1();
+    let lease = lease.expect("native logical admission is armed");
+    let heap = value.native_heap_v1("checkpoint result");
+    assert!(lease.memory_v1() >= heap.bytes().unwrap(), "construction quote also bounds the retained result");
+    drop(value);
+    drop(lease);
+    assert!(reserve_native_requests_v1(memory).is_ok(), "dropping the owner returns all demand");
+}
+
+#[test]
+fn rfc23s2_checkpoint_admits_before_build_and_retains_until_drop() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "palw_state_v2::tests::claim_local_rewards_v1::rfc23s2_checkpoint_resource_owner_child",
+            "--nocapture",
+        ])
+        .env("MISAKA_CHECKPOINT_RESOURCE_OWNER", "1")
+        .output()
+        .unwrap();
+    assert!(
+        child.status.success(),
+        "checkpoint capacity child failed: {} {}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr),
+    );
+    assert!(String::from_utf8_lossy(&child.stdout).contains("1 passed"), "the child must actually run its resource test");
 }

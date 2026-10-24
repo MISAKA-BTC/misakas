@@ -190,3 +190,12 @@
 ## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
 
 - service 前提が崩れて default できず責任を保留した claim が、共有 frontier をどこまで止めるかを、終了理由ごとの効果表で明示する([RFC-0026](0026-court-policy-master-contract.md) §4.3、F08)。段階 2 が未有効なら、その独立進行を段階 1 の可用性の説明に借りない。service 障害中も `L_class` 以内という保証は要求しない(本書もネットワーク停止中の前進は保証しない)。期限だけで未解決 claim を Final にしない。
+
+### checkpoint 構築前の予約と返却 owner (2026-10-24、段階2は引き続き未完)
+
+- `palw_claim_local_checkpoint_fold_v1` が実 state を借用して checkpoint を再構築する際、frame point / court / record / material の map、manifest の set、claim・court の独立コピー、配列、Borsh 出力 buffer を構築前に予約する。新しい `palw_claim_local_checkpoint_resources_v1` は実際の件数・型・nested heap を数える。codec 長は byte buffer にだけ使い、Borsh の初期 1,024 byte、geometric growth、および旧新 buffer / Vec が同時に存在する peak を保守的に含める。入力 state 自体は借用境界であり、この予約を入力の過去の構築・常駐に対する承認とはしない。
+- 返却値を `NativeRetainedV1<PalwClaimLocalCheckpointV1>` とし、writer / import 再検査 / status reader が使い終わるまで予約を保持する。court material の符号化は session を借用し、不要な一時 deep clone を除いた。checkpoint の wire は既存形式のままであり、fence 前の即時 `None`、public preset の activation `None`、Gate C の抽選承認は変えない。
+- 回帰は実 fold fixture を使う子 process で、容量枯渇による `NativeResource`、不正 frame の decode より先の拒否、容量回復後の元の `CarriageInconsistent`、再試行後の同一 wire、返却 owner の需要保持、drop 後の需要回収を検査する。これは typed allocation request の検査であり、OS RSS・実モデル費用・全 node campaign の測定ではない。
+- 既存の stage2 fence 前の fixture は、stage1 の retirement floor 修正を arm せずに F05 修正後の挙動を要求していた。stage1 を `Some(100)` として stage2 `None` / `Some(10_000)` の byte 同一性を比べるよう修正する。旧 F05 の挙動は既存 stage1 回帰が明示的に保持・再現する。production の fence 前の規則を変更して合わせる修正は行わない。
+- 全 native input の provenance / material archive、pruning / IBD / restart / reorg 後の外部反証、§6 の同一 artifact による複数 node campaign は引き続き未完・未実測であり、この変更を段階2全体の完了とは扱わない。
+- **最終検証:** `CARGO_TARGET_DIR=/tmp/misaka-rfc06-12-build-20261024 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo --config 'profile.test.package.kaspa-consensus-core.opt-level=0' test -p kaspa-consensus-core --lib palw_row_stream_v1::spill_reader::tests -- --nocapture` で生成した最新 unit binary に対し、`RUST_MIN_STACK=67108864 <binary> rfc23 --test-threads=1 --nocapture` は **56成功・0失敗(1.29秒)**。子 process の実容量検査、修正後の stage2 fence 前 fixture、stage1 の旧 F05 再現を含む。初回の checkpoint 群は11成功・既存 fixture 1失敗であり、上記 prerequisite を直した後の結果だけを最終合格とする。中間の試験用定数 import 漏れによる compile error と、既定 stack での既存大型 fixture の stack overflow は合格件数に含めない。文書検査は既知43・新規0。
