@@ -16,6 +16,7 @@ predicate is a pure function of the rows it is given, so the same evidence file
 can be re-judged offline.
 """
 import json
+from rfc06_exec_origin_coverage import validate_census
 
 OBSERVED, BLOCKED, FAIL, NOT_RUN = 'OBSERVED', 'BLOCKED', 'FAIL', 'NOT_RUN'
 VERDICTS = (OBSERVED, BLOCKED, FAIL, NOT_RUN)
@@ -798,7 +799,10 @@ def coverage_envelope(row, consensus_params_id):
             raise NotObservable('coverage observation contains both census and error')
     if envelope.get('census') is None:
         raise NotObservable('%s could not take the census: %s' % (row['role'], envelope.get('error')))
-    return envelope['census']
+    try:
+        return validate_census(envelope['census'])
+    except ValueError as error:
+        raise NotObservable('unusable native header coverage census: ' + str(error)) from error
 
 
 def coverage_same_generation(archive, pruned):
@@ -816,9 +820,13 @@ def archive_coverage(archive, pruned, consensus_params_id):
     census = coverage_envelope(archive, consensus_params_id)
     pruned_census = coverage_envelope(pruned, consensus_params_id)
     facts = dict(generation=generation, archive=census, prunedReportedNotJudged=pruned_census)
+    if census['cap_bytes'] != pruned_census['cap_bytes']:
+        raise Violation('archive and pruned roles use different original-header carriage caps')
     oversized, unavailable = exact_int(census['oversized_total'], 'oversized_total'), exact_int(census['unavailable_total'], 'unavailable_total')
     if census['eligible'] != pruned_census['eligible']:
         raise Violation('archive and pruned roles count different eligible claims at one generation')
+    if census['eligible'] == 0:
+        raise NotObservable('no eligible legacy original header was exercised at this generation')
     if oversized or unavailable:
         raise NotObservable('archive coverage incomplete: oversized_total=%d unavailable_total=%d oversized=%r unavailable=%r'
                             % (oversized, unavailable, census['oversized'], census['unavailable']))

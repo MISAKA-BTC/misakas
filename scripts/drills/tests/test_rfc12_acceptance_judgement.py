@@ -6,6 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import rfc12_acceptance_judgement as J  # noqa: E402
+from rfc06_exec_origin_coverage import NATIVE_HEADER_CAP_BYTES as HEADER_CAP  # noqa: E402
 
 IDENTITY = dict(genesis='11' * 64, consensusParamsId='22' * 32, retirementActivationDaa=1, retirementPolicyId='33' * 64)
 
@@ -379,8 +380,11 @@ class UsefulWorkAndRetirement(unittest.TestCase):
 
 class Coverage(unittest.TestCase):
     def file_row(self, role, daa=100, sink='s', oversized=0, unavailable=0, eligible=3, approval=False):
-        census = dict(cap_bytes=4096, eligible=eligible, within_cap=eligible - oversized - unavailable, max_bytes_seen=100,
-                      oversized=[], unavailable=[], oversized_total=oversized, unavailable_total=unavailable)
+        census = dict(cap_bytes=HEADER_CAP, eligible=eligible, within_cap=eligible - oversized - unavailable,
+                      max_bytes_seen=HEADER_CAP + 1 if oversized else (100 if eligible > unavailable else 0),
+                      oversized=[[format(i, '0128x'), 'bb' * 64, HEADER_CAP + 1] for i in range(min(oversized, 256))],
+                      unavailable=[[format(i + oversized, '0128x'), 'cc' * 64] for i in range(min(unavailable, 256))],
+                      oversized_total=oversized, unavailable_total=unavailable)
         envelope = dict(schemaVersion=2, kind=J.COVERAGE_KIND, consensusParamsId='22' * 32,
                         generation=dict(sink=sink, virtualDaaScore=daa, importEpoch=7),
                         census=census, error=None, activationApproval=approval)

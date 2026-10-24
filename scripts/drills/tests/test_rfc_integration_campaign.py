@@ -1,5 +1,6 @@
 """Unexecuted source controls: counterexamples do not establish live acceptance."""
 from copy import deepcopy
+import ast
 import hashlib
 from pathlib import Path
 import sys
@@ -45,6 +46,39 @@ def plan_and_drill():
 
 
 class FrozenPlanCounterexamples(unittest.TestCase):
+    def test_actual_local_python_import_closure_is_frozen(self):
+        root = Path(campaign.__file__).parent
+        pinned = set(campaign.SOURCE_LEAVES)
+        missing = set()
+        for name in pinned:
+            tree = ast.parse((root / name).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                    modules = [node.module]
+                else:
+                    continue
+                for module in modules:
+                    local = root / (module.split('.')[0] + '.py')
+                    if local.is_file() and local.name not in pinned:
+                        missing.add(local.name)
+        self.assertFalse(missing, 'actual local campaign imports lack source pins: ' + repr(sorted(missing)))
+
+    def test_owned_fixture_helper_drift_refuses_the_original_content_pin(self):
+        self.assertIn('rfc12_owned_fixture.py', campaign.SOURCE_LEAVES)
+        raw = Path(campaign.__file__).with_name('rfc12_owned_fixture.py').read_bytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = Path(temporary).resolve() / 'rfc12_owned_fixture.py'
+            helper.write_bytes(raw)
+            expected = hashlib.sha256(raw).hexdigest()
+            pin = campaign.FilePin.capture(str(helper), expected)
+            helper.write_bytes(raw + b'\n# drift control\n')
+            with self.assertRaises(campaign.CampaignError):
+                pin.revalidate()
+            with self.assertRaises(campaign.CampaignError):
+                campaign.FilePin.capture(str(helper), expected)
+
     def test_one_candidate_must_be_used_by_all_node_launches(self):
         plan, drill = plan_and_drill()
         campaign.validate_campaign(plan, drill)

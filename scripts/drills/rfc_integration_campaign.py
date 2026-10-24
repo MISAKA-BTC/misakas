@@ -46,7 +46,7 @@ GATES = {
     'rfc12-market': 'market-accounting',
 }
 SOURCE_LEAVES = ('misaka-rfc-integration-campaign.py', 'rfc_integration_campaign.py', 'misaka-rfc12-multiprocess.py',
-    'rfc12_owned_resources.py', 'misaka_wrpc_json.py', 'rfc12_kernel_consumers.py', 'rfc12_native_recovery_observation.py',
+    'rfc12_owned_resources.py', 'rfc12_owned_fixture.py', 'misaka_wrpc_json.py', 'rfc12_kernel_consumers.py', 'rfc12_native_recovery_observation.py',
     'rfc08_native_paid_observation.py', 'rfc08_native_paid_bootstrap_observation.py')
 BUILD_TOOLS = frozenset(('cargo', 'rustc', 'rustup', 'make', 'cmake', 'ninja', 'meson', 'git', 'rebase', 'reset'))
 IDENTIFIER = re.compile(r'[a-z0-9][a-z0-9._-]{0,95}\Z')
