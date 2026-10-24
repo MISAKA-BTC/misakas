@@ -1356,7 +1356,7 @@ impl PalwProducerService {
             last_hold_at = None;
             self.flow_context.update_palw_runtime(|r| r.set_producer("drawing", ""));
             let outcome =
-                self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, None, &mut Vec::new()).await;
+                self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, None, None).await;
             let network_lost = self.network_draw_lost.load(std::sync::atomic::Ordering::Relaxed);
             self.flow_context.update_palw_runtime(|r| {
                 r.draws = draws + u64::from(outcome.is_ok());
@@ -1380,7 +1380,9 @@ impl PalwProducerService {
                         && !self.exiting()
                     {
                         let retention = self.last_lead_retention.load(std::sync::atomic::Ordering::Relaxed);
-                        let mut built = Vec::new();
+                        let mut built = match crate::palw_rider_outbox::RiderBatchV2::new(claim,self.config.riders as usize) {
+                            Ok(batch)=>batch,Err(why)=>{warn!("[{PALW_PRODUCER}] rider batch capacity refused: {why}");continue;}
+                        };
                         for index in 0..self.config.riders {
                             if self.exiting() {
                                 break;
@@ -1398,7 +1400,7 @@ impl PalwProducerService {
                                     miner_data.clone(),
                                     &mut cursor,
                                     Some((claim, index, retention)),
-                                    &mut built,
+                                    Some(&mut built),
                                 )
                                 .await
                             {
@@ -1418,7 +1420,7 @@ impl PalwProducerService {
                         }
                         if !built.is_empty() {
                             info!("[{PALW_PRODUCER}] queues {} rider(s) of lead {claim} (ADR-0164 F-M1, tag 95)", built.len());
-                            crate::palw_rider_outbox::palw_rider_outbox_push_v1(claim, built);
+                            crate::palw_rider_outbox::palw_rider_outbox_push_v2(built);
                         }
                     }
                     // ADR-0122 Decision 8: the work's own line, by the id every later stage of it
@@ -1682,7 +1684,7 @@ impl PalwProducerService {
         // derived anchor, the rider's challenge and its lead's retention; the signed envelope is pushed to `riders_out` and no block is
         // made (`Ok(None)`).
         rider: Option<(Hash64, u32, u64)>,
-        riders_out: &mut Vec<PalwAttemptEnvelopeV2>,
+        mut riders_out: Option<&mut crate::palw_rider_outbox::RiderBatchV2>,
     ) -> Result<Option<(kaspa_consensus_core::BlockHash, Hash64)>, String> {
         let mut template = self
             .mining_manager
@@ -2094,7 +2096,7 @@ impl PalwProducerService {
             let material = self.retain_execution(message, &run.material)?;
             let announced = palw_attempt_announcement_v1(material, None);
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, announced)).await;
-            riders_out.push(PalwAttemptEnvelopeV2 { attempt, signature });
+            riders_out.as_mut().ok_or("rider destination absent")?.push(PalwAttemptEnvelopeV2 { attempt, signature },routing_work_v2.clone(),Some(&job)).map_err(|why|why.to_string())?;
             return Ok(None);
         }
         // A dummy of the right length so the shape gate sees the real wire size at the draw. The

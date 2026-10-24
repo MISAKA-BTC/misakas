@@ -192,9 +192,10 @@ mod routing_execution_context_tests {
         // This is the actual refresh door's decision after its fallible native
         // reachability lookup; an advanced canonical tip is allowed.
         assert!(require_routing_work_refresh_origin_v2(4,4,true).is_ok());
-        assert!(require_routing_work_refresh_origin_v2(4,4,false).is_err());
-        assert!(require_routing_work_refresh_origin_v2(4,5,true).is_err());
-        assert!(require_routing_work_refresh_origin_v2(5,4,true).is_err());
+        use kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 as F;
+        assert!(matches!(require_routing_work_refresh_origin_v2(4,4,false),Err(F::Unavailable(_))));
+        assert!(matches!(require_routing_work_refresh_origin_v2(4,5,true),Err(F::Identity(_))));
+        assert!(matches!(require_routing_work_refresh_origin_v2(5,4,true),Err(F::Identity(_))));
     }
 
     #[test]
@@ -222,8 +223,15 @@ mod routing_execution_context_tests {
 }
 
 fn require_routing_work_refresh_origin_v2(original_epoch:u64,current_epoch:u64,canonical:bool)->Result<(),kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
-    if original_epoch!=current_epoch || !canonical {
-        return Err(kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("routing work pinned checkpoint/import no longer canonical"));
+    if original_epoch!=current_epoch {
+        // A completed import advances the local epoch permanently. This exact
+        // original execution cannot acquire a replacement authority by retry.
+        return Err(kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Identity("routing work import generation changed; reexecute"));
+    }
+    if !canonical {
+        // A branch change may be reversed; do not classify a fallible or
+        // currently noncanonical ancestry as terminal execution misconduct.
+        return Err(kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("routing work pinned checkpoint no longer canonical"));
     }
     Ok(())
 }

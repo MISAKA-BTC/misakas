@@ -6,7 +6,7 @@ use super::{Hash64, PalwConsensusObjectV2};
 #[cfg(test)]
 use super::palw_court_queue_edf_v1;
 use std::collections::HashMap;
-use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1};
+use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1, NativeDemandLeaseV1};
 #[path = "court_outbox_tickets.rs"]
 mod tickets;
 use tickets::CourtPayloadTicketsV1;
@@ -16,6 +16,15 @@ use frames::{CourtFrameLeaseV1, CourtRetryBufferV1};
 #[path = "court_outbox_order.rs"]
 mod order;
 use order::CourtOrderPlanV1;
+#[path = "court_outbox_routing.rs"]
+mod routing;
+use routing::CourtRoutingV2;
+
+/// This invalidates only the local pending execution. It is neither a claim
+/// verdict nor a monetary penalty. Read/import/capacity faults remain retryable.
+pub(super) fn rider_refusal_should_retry_v2(why:&kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2)->bool {
+    !matches!(why,kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Identity(_))
+}
 
 pub(super) type CourtMoveKeyV1 = (Hash64, u32, bool);
 pub(super) type CourtMoveV1 = (Hash64, u32, bool, PalwConsensusObjectV2);
@@ -27,6 +36,8 @@ pub(crate) struct CourtOutboxV1 {
     submitted: HashMap<CourtMoveKeyV1, u64>,
     // Pending payloads drop before the tickets that authorize their storage.
     payload_tickets: CourtPayloadTicketsV1,
+    rider_guards: CourtRoutingV2,
+    rider_due_frame: Option<NativeDemandLeaseV1>,
     pending_frame: Option<CourtFrameLeaseV1>,
     flight_frame: Option<CourtFrameLeaseV1>,
 }
@@ -37,6 +48,36 @@ impl CourtOutboxV1 {
     /// Existing callers decide replacement/duplicate policy; no new dedup rule.
     pub(super) fn push_pending(&mut self, item: CourtMoveV1) {
         self.pending.push(item);
+    }
+    /// Destination admission occurs before detaching the source batch. A refusal
+    /// returns that same box to the in-process outbox without losing its leases.
+    pub(super) fn try_push_rider_batch(&mut self,mut batch:Box<crate::palw_rider_outbox::RiderBatchV2>,daa:u64)->Result<(),Box<crate::palw_rider_outbox::RiderBatchV2>> {
+        let admitted=(||->Result<(),NativeCoverageV1> {
+            let capacity=self.pending.len().checked_add(1).map(|n|n.max(self.pending.capacity()))
+                .ok_or_else(||NativeCoverageV1::overflow::<Self>("rider court pending array"))?;
+            let frame=CourtFrameLeaseV1::reserve(capacity)?;
+            // The due map retains capacity after a batch is sent, so its ticket
+            // belongs to the outbox rather than the shorter-lived batch.
+            let due_frame=crate::palw_rider_outbox::RiderBatchV2::reserve_court_due(self.due.len(),self.due.capacity())?;
+            self.rider_due_frame=due_frame;
+            // Retain admission even if a later allocation fails after the Vec
+            // has grown; its capacity remains owned by this outbox.
+            self.pending_frame=Some(frame);
+            self.pending.try_reserve_exact(1).map_err(|_|NativeCoverageV1::unsupported::<Self>("rider court pending array","local allocation refused"))?;
+            self.due.try_reserve(1).map_err(|_|NativeCoverageV1::unsupported::<Self>("rider court due map","local allocation refused"))?;
+            Ok(())
+        })();
+        if let Err(why)=admitted {kaspa_core::warn!("rider court admission deferred: {why}");return Err(batch);}
+        let lead=batch.lead;
+        let object=batch.take_object();
+        self.rider_guards.insert(batch);
+        self.due.insert((lead,crate::palw_rider_outbox::PALW_RIDER_QUEUE_ROUND_V1,false),daa);
+        self.pending.push((lead,crate::palw_rider_outbox::PALW_RIDER_QUEUE_ROUND_V1,false,object));
+        Ok(())
+    }
+    pub(super) fn refresh_rider(&self,object:&PalwConsensusObjectV2,params:&kaspa_consensus_core::config::params::Params,session:&kaspa_consensusmanager::ConsensusProxy)->Result<(),kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
+        let active=params.palw_memory_routing_court_v2.is_some_and(|f|f!=kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score()));
+        self.rider_guards.refresh(object,active,session)
     }
     /// Copy admission precedes deep Clone. The outbox retains the payload ticket
     /// through its carrier batch and any retry; a refusal leaves the queue unchanged.
@@ -57,6 +98,7 @@ impl CourtOutboxV1 {
     pub(super) fn retain_pending(&mut self, keep: impl FnMut(&CourtMoveV1) -> bool) {
         self.pending.retain(keep);
         self.payload_tickets.prune(&self.pending);
+        self.rider_guards.prune(&self.pending);
     }
     pub(super) fn set_due(&mut self, key: CourtMoveKeyV1, due: u64) -> Option<u64> {
         self.due.insert(key, due)
@@ -106,6 +148,7 @@ impl CourtOutboxV1 {
         // batch tickets before asking for new scratch, avoiding quota deadlock.
         self.flight_frame = None;
         self.payload_tickets.finish_flush(&self.pending);
+        self.rider_guards.finish_flush(&self.pending);
         CourtRetryBufferV1::new(self.pending.len())
     }
     pub(super) fn try_take_priority(&mut self) -> Result<Vec<CourtMoveV1>, NativeCoverageV1> {
@@ -113,6 +156,7 @@ impl CourtOutboxV1 {
         plan.apply(&mut self.pending);
         self.flight_frame = self.pending_frame.take();
         self.payload_tickets.start_flush();
+        self.rider_guards.start_flush();
         Ok(std::mem::take(&mut self.pending))
     }
     /// Legacy EDF remains only as a fixture/parity reference.
@@ -120,6 +164,7 @@ impl CourtOutboxV1 {
     pub(super) fn take_priority(&mut self) -> Vec<CourtMoveV1> {
         self.flight_frame = self.pending_frame.take();
         self.payload_tickets.start_flush();
+        self.rider_guards.start_flush();
         palw_court_queue_edf_v1(&mut self.pending, &self.due);
         std::mem::take(&mut self.pending)
     }
@@ -135,6 +180,7 @@ impl CourtOutboxV1 {
         // The service consumed/dropped the original batch before reaching here.
         self.flight_frame = None;
         self.payload_tickets.finish_flush(&self.pending);
+        self.rider_guards.finish_flush(&self.pending);
         self.due.retain(|key, _| self.pending.iter().any(|(s, r, b, _)| (*s, *r, *b) == *key));
     }
     #[cfg(test)]
@@ -160,11 +206,12 @@ impl CourtOutboxV1 {
         due: HashMap<CourtMoveKeyV1, u64>,
         submitted: HashMap<CourtMoveKeyV1, u64>,
     ) -> Self {
-        Self { pending, due, submitted, payload_tickets: CourtPayloadTicketsV1::default(), pending_frame: None, flight_frame: None }
+        Self { pending, due, submitted, payload_tickets: CourtPayloadTicketsV1::default(), rider_guards: CourtRoutingV2::default(), rider_due_frame:None, pending_frame: None, flight_frame: None }
     }
     #[cfg(test)]
     pub(super) fn into_parts(self) -> (Vec<CourtMoveV1>, HashMap<CourtMoveKeyV1, u64>, HashMap<CourtMoveKeyV1, u64>) {
         assert!(self.payload_tickets.is_empty(), "fixture extraction must not detach payload tickets");
+        assert!(self.rider_guards.is_empty(), "fixture extraction must not detach native rider guards");
         assert!(self.pending_frame.as_ref().is_none_or(|f| !f.is_reserved()) && self.flight_frame.as_ref().is_none_or(|f| !f.is_reserved()), "fixture extraction must not detach frame tickets");
         (self.pending, self.due, self.submitted)
     }
@@ -404,5 +451,138 @@ mod tests {
         assert_eq!(owner.take_priority(), vec![dated.clone(), undated]);
         assert_eq!(owner.due.get(&key(&dated)), Some(&20));
         assert_eq!(owner.due.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod rider_handoff_tests {
+    use super::*;
+    use crate::palw_rider_outbox::{RiderBatchV2,rider_fixture_v2};
+    #[test]
+    fn rider_guard_capacity_lifetime_isolated() {
+        let status=std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("rider_guard_capacity_child").arg("--nocapture")
+            .env("MISAKA_RIDER_GUARD_CAPACITY","1").status().unwrap();
+        assert!(status.success());
+    }
+    #[test]
+    fn rider_guard_capacity_child() {
+        if std::env::var("MISAKA_RIDER_GUARD_CAPACITY").ok().as_deref()!=Some("1") {return;}
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeSnapshotResourceLimitsV1,arm_native_logical_limits_v1,reserve_native_requests_v1};
+        let memory=1<<20;
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 {memory_bytes:memory,database_bytes:0}));
+        let lead=Hash64::from_u64_word(701);
+        let mut batch=RiderBatchV2::new(lead,1).unwrap();batch.push(rider_fixture_v2(lead,0),None,None).unwrap();
+        // Fill exactly the remaining demand budget without assuming fixture sizes.
+        let(mut lo,mut hi)=(0,memory);
+        while lo<hi {let mid=lo+(hi-lo+1)/2;if reserve_native_requests_v1(mid).is_ok(){lo=mid;}else{hi=mid-1;}}
+        let blocker=reserve_native_requests_v1(lo).unwrap();
+        let mut outbox=CourtOutboxV1::default();
+        batch=match outbox.try_push_rider_batch(batch,1) {Err(batch)=>batch,Ok(())=>panic!("capacity must refuse before source detach")};
+        assert!(outbox.pending().is_empty());assert_eq!(batch.len(),1);
+        drop(blocker);
+        assert!(outbox.try_push_rider_batch(batch,1).is_ok());
+        assert!(!outbox.rider_guards.is_empty());
+        assert!(reserve_native_requests_v1(memory).is_err());
+        let mut retry=outbox.try_retry_buffer().unwrap();
+        let flight=outbox.try_take_priority().unwrap();
+        outbox.retain_pending(|_|false);
+        assert!(!outbox.rider_guards.is_empty(),"async flight keeps original owner/ticket");
+        for item in flight {retry.push(item);}
+        outbox.finish_flush(retry);
+        assert_eq!(outbox.pending().len(),1);assert!(!outbox.rider_guards.is_empty(),"refused carrier retains batch owner");
+        let retry=outbox.try_retry_buffer().unwrap();drop(outbox.try_take_priority().unwrap());
+        assert!(!outbox.rider_guards.is_empty(),"cancellation conservatively retains owner");
+        outbox.finish_flush(retry);
+        assert!(outbox.rider_guards.is_empty());
+        assert!(reserve_native_requests_v1(memory).is_err(),"due map capacity remains owned after batch retirement");
+        drop(outbox);
+        assert!(reserve_native_requests_v1(memory).is_ok(),"last payload/guard/map/frame ticket released");
+    }
+}
+
+#[cfg(test)]
+mod rider_native_owner_tests {
+    use super::*;
+    use crate::palw_rider_outbox::{RiderBatchV2,palw_rider_outbox_push_v2,palw_rider_outbox_import_v2};
+    use kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 as Fault;
+    #[test]
+    fn rider_guard_original_native_arc_survives_source_flight_and_retry() {
+        let (original,envelope,job,lead)=crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
+        let weak=std::sync::Arc::downgrade(&original);
+        let mut batch=RiderBatchV2::new(lead,1).unwrap();batch.push(envelope,Some(original),Some(&job)).unwrap();
+        palw_rider_outbox_push_v2(batch);
+        assert!(weak.upgrade().is_some(),"actual original native owner retained in source queue");
+        let mut outbox=CourtOutboxV1::default();
+        palw_rider_outbox_import_v2(|batch|outbox.try_push_rider_batch(batch,11));
+        assert_eq!(outbox.pending().len(),1);
+        let mut calls=0;
+        let mut check=|object:&PalwConsensusObjectV2,outbox:&CourtOutboxV1| {
+            outbox.rider_guards.refresh_with(object,true,|owner| {
+                calls+=1;assert!(std::sync::Arc::ptr_eq(owner,&weak.upgrade().expect("same original owner")));Ok(())
+            },|_,_,_,_,_|panic!("routed original must not become None")).unwrap();
+        };
+        check(&outbox.pending()[0].3,&outbox);
+        let mut retry=outbox.try_retry_buffer().unwrap();let flight=outbox.try_take_priority().unwrap();
+        check(&flight[0].3,&outbox);
+        let refusal=outbox.rider_guards.refresh_with(&flight[0].3,true,|_|Err(Fault::Resource(NativeCoverageV1::unsupported::<u8>("test native refresh","capacity refused"))),|_,_,_,_,_|panic!("no fallback"));
+        assert!(matches!(refusal,Err(Fault::Resource(_))));
+        for item in flight {retry.push(item);}outbox.finish_flush(retry);
+        check(&outbox.pending()[0].3,&outbox);drop(check);assert_eq!(calls,3);
+        let mut changed=outbox.pending()[0].3.clone();let PalwConsensusObjectV2::AttemptRidersV1 {riders,..}=&mut changed else {unreachable!()};
+        riders[0].attempt.output_root=Hash64::from_u64_word(900);
+        assert!(matches!(outbox.rider_guards.refresh_with(&changed,true,|_|panic!("foreign batch must not use original owner"),|_,_,_,_,_|panic!("no fallback")),Err(Fault::Identity(_))));
+        let retry=outbox.try_retry_buffer().unwrap();drop(outbox.try_take_priority().unwrap());
+        assert!(weak.upgrade().is_some(),"original survives canceled carrier future");
+        outbox.finish_flush(retry);assert!(weak.upgrade().is_none(),"owner drops only after final payload retirement");
+    }
+}
+
+#[cfg(test)]
+mod rider_disposition_tests {
+    use super::*;
+    use crate::palw_rider_outbox::RiderBatchV2;
+    use kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 as Fault;
+    #[test]
+    fn rider_guard_native_refusal_retries_resources_but_retires_invalid_execution() {
+        let (original,envelope,job,lead)=crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
+        let weak=std::sync::Arc::downgrade(&original);
+        let mut batch=RiderBatchV2::new(lead,1).unwrap();batch.push(envelope,Some(original),Some(&job)).unwrap();
+        let mut outbox=CourtOutboxV1::default();assert!(outbox.try_push_rider_batch(batch,11).is_ok());
+        let key=(lead,crate::palw_rider_outbox::PALW_RIDER_QUEUE_ROUND_V1,false);
+        for why in [Fault::Resource(NativeCoverageV1::unsupported::<u8>("native refresh","capacity")),Fault::Unavailable("native import/reorg read unavailable")] {
+            let mut retry=outbox.try_retry_buffer().unwrap();
+            for item in outbox.try_take_priority().unwrap() {
+                // The same disposition helper is used at all three actual
+                // pre-funding/pre-sign/pre-submit guard doors.
+                assert!(rider_refusal_should_retry_v2(&why));
+                if rider_refusal_should_retry_v2(&why) {retry.push(item);}
+            }
+            outbox.finish_flush(retry);
+            assert_eq!(outbox.pending().len(),1);assert!(weak.upgrade().is_some());assert!(!outbox.has_submitted(&key));
+        }
+        let retry=outbox.try_retry_buffer().unwrap();
+        for item in outbox.try_take_priority().unwrap() {
+            let why=Fault::Identity("current native rider window expired");
+            assert!(!rider_refusal_should_retry_v2(&why));
+            assert!(weak.upgrade().is_some(),"in-flight original remains alive until the payload drops");drop(item);
+        }
+        outbox.finish_flush(retry);
+        assert!(outbox.pending().is_empty());assert!(weak.upgrade().is_none());assert!(!outbox.has_submitted(&key),"local retirement is never success/approval");
+    }
+    #[test]
+    fn rider_guard_original_none_cannot_invent_routing_owner_or_wait_forever() {
+        let (owner,envelope,job,lead)=crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
+        let mut batch=RiderBatchV2::new(lead,1).unwrap();batch.push(envelope,None,Some(&job)).unwrap();
+        let object=batch.take_object();let mut guards=CourtRoutingV2::default();guards.insert(batch);
+        let mut observed=false;
+        let why=guards.refresh_with(&object,true,|_|panic!("original None cannot become an original Arc"),|retained,executor,l,i,retention| {
+            observed=true;assert_eq!(retained,&job);assert_eq!(executor,owner.executor());assert_eq!((l,i,retention),(lead,0,100));
+            routing::require_original_unrouted_v2(Some(std::sync::Arc::clone(&owner)))
+        }).unwrap_err();
+        assert!(observed);assert!(matches!(why,Fault::Identity(_)));assert!(!rider_refusal_should_retry_v2(&why));
+        let why=CourtRoutingV2::default().refresh_with(&object,true,|_|panic!("no original"),|_,_,_,_,_|panic!("no marker")).unwrap_err();
+        assert!(matches!(why,Fault::Identity(_)));assert!(!rider_refusal_should_retry_v2(&why));
+        assert!(routing::require_original_unrouted_v2(None).is_ok(),"explicit unchanged nonrouted result remains supported");
     }
 }

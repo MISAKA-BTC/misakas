@@ -7088,6 +7088,11 @@ impl PalwPanelService {
             }
         };
         for (session_id, round, mine_is_responder, object) in batch {
+            let rider_batch=crate::palw_rider_outbox::palw_rider_queued_v1(round,mine_is_responder,&object);
+            if let Err(why)=court_outbox.refresh_rider(&object,&self.consensus_config.params,session) {
+                warn!("[{PALW_PANEL}] rider native work withheld before funding: {why}");
+                if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
+            }
             let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
             // A failed full scan also excludes a higher minimum in this pass. Do not scan the
             // same unavailable heavy budget for every queued proof; cheap moves may still use
@@ -7117,9 +7122,18 @@ impl PalwPanelService {
                 unsent.push((session_id, round, mine_is_responder, object));
                 continue;
             };
+            // Funding may await RPC work. Revalidate before the carrier signer.
+            if let Err(why)=court_outbox.refresh_rider(&object,&self.consensus_config.params,session) {
+                warn!("[{PALW_PANEL}] rider native work withheld before carrier signing: {why}");
+                if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
+            }
             match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
                 Ok(prepared_carrier) => {
                     let txid = prepared_carrier.id();
+                    if let Err(why)=court_outbox.refresh_rider(&object,&self.consensus_config.params,session) {
+                        warn!("[{PALW_PANEL}] rider native work withheld before carrier submission: {why}");
+                        if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
+                    }
                     match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
                         Ok(sent_carrier) => {
                             if palw_da_accusation_queued_v1(round, mine_is_responder, &object) {
@@ -7145,10 +7159,14 @@ impl PalwPanelService {
                         Err(e) => {
                             warn!("[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}", object_name(&object));
                             carrier.set_funding(None);
+                            if rider_batch {unsent.push((session_id,round,mine_is_responder,object));}
                         }
                     }
                 }
-                Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}"),
+                Err(e) => {
+                    warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}");
+                    if rider_batch {unsent.push((session_id,round,mine_is_responder,object));}
+                }
             }
         }
         court_outbox.finish_flush(unsent);
@@ -10191,11 +10209,7 @@ impl PalwPanelService {
             .await;
 
             // --- ADR-0164 F-M1: the riders this node's producer built, onto the carrier queue (`palw_rider_outbox`) ---
-            for (lead, object) in crate::palw_rider_outbox::palw_rider_outbox_drain_v1() {
-                let key = (lead, crate::palw_rider_outbox::PALW_RIDER_QUEUE_ROUND_V1, false);
-                court_outbox.set_due(key, current_daa);
-                court_outbox.push_pending((key.0, key.1, key.2, object));
-            }
+            crate::palw_rider_outbox::palw_rider_outbox_import_v2(|batch|court_outbox.try_push_rider_batch(batch,current_daa));
 
             // --- the collector + submitter's half ---
             self.collector_tick_v1(
