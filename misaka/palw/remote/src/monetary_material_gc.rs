@@ -743,12 +743,27 @@ pub struct RemoteProofGcOracleV2<A, F> {
     pub proven_snapshot: F,
 }
 impl<A: RemoteFinalityAuthorityV1, F: FnMut(BlockHash) -> Result<crate::monetary_material_rpc::ProvenMonetarySnapshotV2, String>>
+    RemoteProofGcOracleV2<A, F>
+{
+    fn current_snapshot(&mut self) -> Result<(BlockHash, BlockHash, crate::monetary_material_rpc::ProvenMonetarySnapshotV2), String> {
+        let pin = self.authority.finalized_pin()?;
+        let parent = self.authority.selected_parent(pin)?;
+        let snapshot = (self.proven_snapshot)(pin)?;
+        if snapshot.pinned_block() != pin || snapshot.parent_block() != parent {
+            return Err("monetary snapshot substitutes the native-finalized pin or selected parent".into());
+        }
+        if self.authority.finalized_pin()? != pin || self.authority.selected_parent(pin)? != parent {
+            return Err("native finality changed while reading the monetary snapshot".into());
+        }
+        Ok((pin, parent, snapshot))
+    }
+}
+impl<A: RemoteFinalityAuthorityV1, F: FnMut(BlockHash) -> Result<crate::monetary_material_rpc::ProvenMonetarySnapshotV2, String>>
     MonetaryMaterialGcOracleV1 for RemoteProofGcOracleV2<A, F>
 {
     fn covenant_rows(&mut self) -> Result<(BlockHash, Vec<PalwMonetaryMaterialRowV1>), String> {
-        let pin = self.authority.finalized_pin()?;
-        let parent = self.authority.selected_parent(pin)?;
-        Ok((parent, (self.proven_snapshot)(pin)?.rows().to_vec()))
+        let (_, parent, snapshot) = self.current_snapshot()?;
+        Ok((parent, snapshot.rows().to_vec()))
     }
     fn chain_after(&mut self, low: BlockHash, limit: usize) -> Result<Vec<BlockHash>, String> {
         self.authority.chain_after(low, limit)
@@ -760,8 +775,7 @@ impl<A: RemoteFinalityAuthorityV1, F: FnMut(BlockHash) -> Result<crate::monetary
     ) -> Result<Option<(BlockHash, kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String>
     {
         use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
-        let pin = self.authority.finalized_pin()?;
-        let snapshot = (self.proven_snapshot)(pin)?;
+        let (pin, _, snapshot) = self.current_snapshot()?;
         Ok(snapshot.recoveries().iter().find_map(|row| match row {
             PalwMaterialRecoveryRowV2::Terminal(r) if r.covers(root, stored) => Some((pin, r.clone())),
             _ => None,
@@ -883,6 +897,44 @@ mod tests {
         };
         (store, row, world.l)
     }
+    #[test]
+    fn wrong_pin_aux_proof_retains_real_material_across_gc_and_cold_reopen() {
+        use crate::monetary_material_rpc::provenance_tests::{empty_page, finality, finish};
+        let dir = std::env::temp_dir().join(format!("misaka-gc-pin-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let file = dir.join("store");
+        let (mut store, row, ledger) = typed_store(&file);
+        let bytes = fs::read(&file).unwrap();
+        let current = empty_page(10);
+        let stale = empty_page(11);
+        let mut oracle = RemoteProofGcOracleV2 { authority: finality(&current), proven_snapshot: |_| Ok(finish(&stale)) };
+        let mut janitor = MonetaryMaterialGcJanitorV1::open(&file).unwrap();
+        let report = janitor.tick(&mut store, &mut oracle).unwrap();
+        assert!(report.refused.is_some(), "a valid proof at a different pin is not a current native observation");
+        assert!(report.deleted.is_empty());
+        assert_eq!(store.held_contracts(), vec![(row.consent, row.terms.root)]);
+        assert_eq!(fs::read(&file).unwrap(), bytes);
+        // Simulate a crash after the deletion intent was fsynced but before
+        // publishing a deletion. Reopen must obtain current proof authority.
+        let pending = MonetaryGcCompletedV2 { version: 2,
+            intent: MonetaryGcIntentV1 { version: 1, stored_consent: row.consent, root: row.terms.root,
+                release_consent: row.consent, tail: h(20), release_block: h(501) },
+            native_claims: vec![], };
+        write_atomic(&janitor.intent, &borsh::to_vec(&pending).unwrap()).unwrap();
+        drop(janitor); drop(store);
+        let mut store = DurableMonetaryMaterialProviderV1::open(&file, 1 << 24, 1 << 26, Some(&ledger), |_| None).unwrap();
+        let mut janitor = MonetaryMaterialGcJanitorV1::open(&file).unwrap();
+        let report = janitor.tick(&mut store, &mut oracle).unwrap();
+        assert!(report.refused.is_some());
+        assert!(report.deleted.is_empty());
+        assert_eq!(store.held_contracts(), vec![(row.consent, row.terms.root)]);
+        assert_eq!(fs::read(&file).unwrap(), bytes, "cold replay cannot convert a foreign proof into deletion authority");
+        assert!(janitor.intent.exists(), "unknown authority retains the interrupted intent for later revalidation");
+        assert!(janitor.completed_receipts().next().is_none(), "unknown authority cannot create a cleanup/ACK receipt");
+        drop(janitor); drop(store);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn replacement_observation_requires_its_durable_exact_consent_not_just_sequence() {
         use crate::monetary_material::replacement_generation_observed_v4 as observed;

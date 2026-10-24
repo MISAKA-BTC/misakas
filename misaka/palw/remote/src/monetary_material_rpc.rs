@@ -15,11 +15,18 @@ use kaspa_consensus_core::{
 /// This proof authenticates presence; finality still comes from the configured
 /// native finality authority, never from a server's availability flag.
 pub struct ProvenMonetarySnapshotV2 {
+    pinned: Hash64,
+    parent: Hash64,
     rows: Vec<PalwMonetaryMaterialRowV1>,
     recoveries: Vec<PalwMaterialRecoveryRowV2>,
     checkpoints: Vec<PalwMaterialProviderAckCheckpointV2>,
 }
 impl ProvenMonetarySnapshotV2 {
+    /// The exact header hash against which every proof page was authenticated.
+    pub fn pinned_block(&self) -> Hash64 { self.pinned }
+    /// Parent header used by the proof. A finality consumer must independently
+    /// require that this is its selected parent, not merely another DAG parent.
+    pub fn parent_block(&self) -> Hash64 { self.parent }
     pub fn rows(&self) -> &[PalwMonetaryMaterialRowV1] {
         &self.rows
     }
@@ -33,6 +40,7 @@ impl ProvenMonetarySnapshotV2 {
 
 pub struct MonetaryMaterialProofPagerV1 {
     pinned: Hash64,
+    parent: Hash64,
     aux_root: Hash64,
     state_preimage: Vec<u8>,
     kernel_route_offset: u64,
@@ -122,6 +130,7 @@ impl MonetaryMaterialProofPagerV1 {
         hash.update(&page.total_rows.to_le_bytes());
         Ok(Self {
             pinned,
+            parent,
             aux_root: page.aux_root,
             state_preimage: page.state_preimage.clone(),
             kernel_route_offset: page.kernel_route_offset,
@@ -144,6 +153,7 @@ impl MonetaryMaterialProofPagerV1 {
     }
     pub fn push(&mut self, page: &PalwMonetaryAuxPageV1) -> Result<(), String> {
         if kaspa_consensus_core::hashing::header::hash(&page.header) != self.pinned
+            || kaspa_consensus_core::hashing::header::hash(&page.parent_header) != self.parent
             || page.aux_root != self.aux_root
             || page.state_preimage != self.state_preimage
             || page.kernel_route_offset != self.kernel_route_offset
@@ -312,7 +322,7 @@ impl MonetaryMaterialProofPagerV1 {
                 recoveries.push(row);
             }
         }
-        Ok(ProvenMonetarySnapshotV2 { rows, recoveries, checkpoints })
+        Ok(ProvenMonetarySnapshotV2 { pinned: self.pinned, parent: self.parent, rows, recoveries, checkpoints })
     }
 }
 
@@ -397,3 +407,7 @@ pub async fn fetch_monetary_material_snapshot_v2(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "monetary_material_rpc_provenance_tests.rs"]
+pub(crate) mod provenance_tests;
