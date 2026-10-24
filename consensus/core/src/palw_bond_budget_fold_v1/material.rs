@@ -58,10 +58,58 @@ impl TransitionBuilder<'_> {
         root: Hash64,
         income: Hash64,
     ) -> Result<(), PalwStateV2Error> {
+        self.bind_material_income_checked_v1(now, root, income, false)
+    }
+
+    // Only the issuer consumer can derive this exception, from the actual
+    // allocation row and native claim. Other income on the same BASE root
+    // must still pass the generic enrollment guard above.
+    pub(super) fn bind_issuer_material_income_root_v1(
+        &mut self,
+        now: u64,
+        root: Hash64,
+    ) -> Result<(), PalwStateV2Error> {
         if !self.params.material_income_active_at(now) {
             return Ok(());
         }
-        self.state.require_monetary_material_enrollment_v1(self.params, root, now, None)?;
+        let row = self.state.bond_budget.as_ref().and_then(|book| book.claim_row(&root)).copied()
+            .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("issuer allocation row absent".into()))?;
+        let floor_issuer = self.state.claim(&root).is_some_and(|claim| {
+            claim.bond == row.bond && native_floor_issuer_v1(self.params, Some(claim), row.origin)
+        });
+        self.bind_material_income_checked_v1(now, root, native_income_id_v1(root, &row.bond, 0), floor_issuer)
+    }
+
+    pub(super) fn bind_selected_panel_material_income_root_v1(
+        &mut self,
+        now: u64,
+        root: Hash64,
+        bond: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.material_income_active_at(now) {
+            return Ok(());
+        }
+        let floor_seat = self.state.bond_budget.as_ref().and_then(|book| book.claim_row(&root)).is_some_and(|row| {
+            self.state.claim(&root).is_some_and(|claim| {
+                claim.bond == row.bond && native_floor_issuer_v1(self.params, Some(claim), row.origin)
+            })
+        }) && self.state.panels.get(&root).is_some_and(|panel| panel.seats.iter().any(|seat| seat.bond == bond));
+        self.bind_material_income_checked_v1(now, root, native_income_id_v1(root, &bond, 1), floor_seat)
+    }
+
+    fn bind_material_income_checked_v1(
+        &mut self,
+        now: u64,
+        root: Hash64,
+        income: Hash64,
+        floor_issuer: bool,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.material_income_active_at(now) {
+            return Ok(());
+        }
+        if !floor_issuer {
+            self.state.require_monetary_material_enrollment_v1(self.params, root, now, None)?;
+        }
         self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| budget.bind_material_income_v1(root, income, j))?
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("material root has no monetary engine".into()))?
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))
