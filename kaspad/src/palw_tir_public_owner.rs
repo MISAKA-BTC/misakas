@@ -64,6 +64,10 @@ use kaspa_core::{debug, info};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+#[path = "palw_tir_owner_replay_owned_v2.rs"]
+mod replay_owned;
+use replay_owned::OwnedTirReplayV2;
+
 const PALW_PANEL: &str = "palw-panel";
 
 /// The court queue's lane of an outside owner's moves on one frame (Open, Demand, Collect), keyed by claim (free: `u32::MAX − 28`).
@@ -170,7 +174,7 @@ struct OwnerCaseV1 {
     allocation_id: Hash64,
     source_id: Hash64,
     suspicion: SuspicionV1,
-    own: Arc<dyn PalwTirOwnStepSourceV1>,
+    own: OwnedTirReplayV2,
     prompt: Vec<u32>,
     /// The replay's own decode ids (G-T2: compared with the committed ones to find a selection candidate).
     replay_ids: Vec<u32>,
@@ -189,7 +193,6 @@ struct OwnerCaseV1 {
     // The unsigned signing digest distinguishes a retry from the next accepted-state move.
     last_move: Option<Hash64>,
     done: bool,
-    _replay: crate::palw_memory_ledger::PalwMemoryReservationV1,
 }
 
 /// **The owner book**: the frame page cursor, the live cases and the frames set aside for a while.
@@ -789,8 +792,10 @@ impl PalwPanelService {
                         let cache = self.config.retention_dir.join("tir-public-owner").join(format!("{claim}"));
                         let (header_c, job_c, prompt_c) = (header.clone(), job.clone(), prompt.clone());
                         let own = tokio::task::spawn_blocking(move || {
-                            std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-                            backend.open_tir_own_step_source_v1(&header_c, &job_c, &prompt_c, &cache)
+                            OwnedTirReplayV2::open_reserved(memory, || {
+                                std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+                                backend.open_tir_own_step_source_v1(&header_c, &job_c, &prompt_c, &cache)
+                            })
                         })
                         .await
                         .map_err(|e| format!("TIR owner replay worker failed: {e}"))??;
@@ -827,7 +832,6 @@ impl PalwPanelService {
                                 demands: 0,
                                 last_move: None,
                                 done: false,
-                                _replay: memory,
                             },
                         );
                     }
