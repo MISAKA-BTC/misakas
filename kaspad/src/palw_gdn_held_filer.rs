@@ -203,12 +203,8 @@ pub struct PalwGdnHeldAccuserV1<'a> {
 
 /// A refused terminal is not an authenticated honest candidate. The caller
 /// retains the current candidate/answers so it can retry rather than settle it.
-fn terminal_found_fault_v1<T>(verdict: Result<T, PalwGdnCourtErrorV2>) -> Result<bool, String> {
-    match verdict {
-        Ok(_) => Ok(true),
-        Err(PalwGdnCourtErrorV2::Evidence(PalwStepRefuteError::NoFaultFound)) => Ok(false),
-        Err(error) => Err(format!("held GDN terminal refused the candidate: {error}")),
-    }
+fn terminal_found_fault_v1<T>(verdict: Result<T, PalwGdnCourtErrorV2>) -> Result<bool, PalwGdnHeldErrorV2> {
+    misaka_palw_base0::gdn_evidence_v2::base0_gdn_terminal_fault_v3(verdict).map_err(retained_leg_error_v3)
 }
 
 /// **One step of the case** against the chain's objects at DAA `now` (`disclose_window`: the held DA court's answer window).

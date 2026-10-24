@@ -484,3 +484,6 @@ mod geometry_owner_tests;
 
 #[path = "palw_gdn_held_leaf_leg_tests_v3.rs"]
 mod leaf_leg_tests;
+
+#[path = "palw_gdn_held_court_resource_tests_v3.rs"]
+mod court_resource_tests;
