@@ -49,6 +49,7 @@ pub trait HeaderStore: HeaderStoreReader {
 /// migration). PR-9.5f formally bumps the DB namespace and
 /// rejects old-shape DBs at open time.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 struct Header2 {
     pub hash: BlockHash,
     pub version: u16,
@@ -67,6 +68,7 @@ struct Header2 {
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 struct HeaderWithBlockLevel2 {
     header: Header2,
     block_level: BlockLevel,
@@ -249,3 +251,6 @@ impl HeaderStore for DbHeadersStore {
         Ok(())
     }
 }
+
+#[path = "headers/historical_measure_v2.rs"]
+mod historical_measure_v2;

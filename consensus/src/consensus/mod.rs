@@ -2404,8 +2404,8 @@ impl ConsensusApi for Consensus {
             .virtual_processor
             .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
             .map_err(|e| format!("historical header census state unavailable: {e:?}"))?;
-        let census = kaspa_consensus_core::palw_work_slice_v2::palw_exec_origin_coverage_v1(&state, listed.min(4096), |block| {
-            self.headers_store.get_header(block).ok().and_then(|header| borsh::object_length(&*header).ok()).map(|n| n as u64)
+        let census = kaspa_consensus_core::palw_exec_origin_coverage_v1::palw_exec_origin_coverage_checked_v2(&state, listed.min(4096), |block| {
+            self.headers_store.historical_header_borsh_len_v2(block).optional()
         }).map_err(|e| e.to_string())?;
         let after = self.lkg_virtual_state.load();
         let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;

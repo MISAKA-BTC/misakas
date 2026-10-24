@@ -1,7 +1,7 @@
 //! Read-only historical-header census with owned typed-list capacity.
 use crate::{
     Hash64,
-    palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, reserve_native_requests_v1},
+    palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, reserve_native_requests_v1},
     palw_state_v2::{PalwChainStateV2, PalwClaimSourceV2},
     palw_work_slice_v2::PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1,
 };
@@ -62,36 +62,51 @@ pub fn palw_exec_origin_coverage_v1(
     listed: usize,
     header_bytes: impl FnMut(Hash64) -> Option<u64>,
 ) -> Result<PalwExecOriginCoverageOwnedV1, NativeCoverageV1> {
+    let mut header_bytes = header_bytes;
+    match palw_exec_origin_coverage_checked_v2(state, listed, |block| Ok::<_, std::convert::Infallible>(header_bytes(block))) {
+        Ok(value) => Ok(value),
+        Err(NativeDecodeErrorV1::Resource(error)) => Err(error),
+        Err(NativeDecodeErrorV1::Decode(never)) => match never {},
+    }
+}
+
+/// Fallible historical reader: only Ok(None) contributes to unavailable.
+/// A local capacity, malformed row, or storage failure aborts the observation.
+pub fn palw_exec_origin_coverage_checked_v2<E>(
+    state: &PalwChainStateV2,
+    listed: usize,
+    header_bytes: impl FnMut(Hash64) -> Result<Option<u64>, E>,
+) -> Result<PalwExecOriginCoverageOwnedV1, NativeDecodeErrorV1<E>> {
     let origins = || {
         state.claims_iter().filter_map(|(id, claim)| {
             (matches!(claim.source, PalwClaimSourceV2::Attempt) && state.exec_v2_origin_v1(id).is_none())
                 .then_some((*id, claim.accepted_block))
         })
     };
-    census_from_origins(origins, listed, header_bytes)
+    census_from_origins_checked(origins, listed, header_bytes)
 }
 
-fn census_from_origins<I: Iterator<Item = (Hash64, Hash64)>>(
+fn census_from_origins_checked<E, I: Iterator<Item = (Hash64, Hash64)>>(
     origins: impl Fn() -> I,
     listed: usize,
-    mut header_bytes: impl FnMut(Hash64) -> Option<u64>,
-) -> Result<PalwExecOriginCoverageOwnedV1, NativeCoverageV1> {
+    mut header_bytes: impl FnMut(Hash64) -> Result<Option<u64>, E>,
+) -> Result<PalwExecOriginCoverageOwnedV1, NativeDecodeErrorV1<E>> {
     let capacity = origins().take(listed).count();
-    let request = list_requests(capacity)?;
-    let lease = if request == 0 { None } else { reserve_native_requests_v1(request)? };
+    let request = list_requests(capacity).map_err(NativeDecodeErrorV1::Resource)?;
+    let lease = if request == 0 { None } else { reserve_native_requests_v1(request).map_err(NativeDecodeErrorV1::Resource)? };
     let cap = PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1 as u64;
     let mut census = PalwExecOriginCoverageV1 { cap_bytes: cap, ..Default::default() };
     census
         .oversized
         .try_reserve_exact(capacity)
-        .map_err(|e| NativeCoverageV1::unsupported::<PalwExecOriginCoverageOwnedV1>("historical oversized list", &e.to_string()))?;
+        .map_err(|e| NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<PalwExecOriginCoverageOwnedV1>("historical oversized list", &e.to_string())))?;
     census
         .unavailable
         .try_reserve_exact(capacity)
-        .map_err(|e| NativeCoverageV1::unsupported::<PalwExecOriginCoverageOwnedV1>("historical unavailable list", &e.to_string()))?;
+        .map_err(|e| NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<PalwExecOriginCoverageOwnedV1>("historical unavailable list", &e.to_string())))?;
     for (id, block) in origins() {
         census.eligible += 1;
-        match header_bytes(block) {
+        match header_bytes(block).map_err(NativeDecodeErrorV1::Decode)? {
             Some(bytes) => {
                 census.max_bytes_seen = census.max_bytes_seen.max(bytes);
                 if bytes <= cap {
@@ -115,9 +130,42 @@ fn census_from_origins<I: Iterator<Item = (Hash64, Hash64)>>(
 }
 
 #[cfg(test)]
+fn census_from_origins<I: Iterator<Item = (Hash64, Hash64)>>(
+    origins: impl Fn() -> I,
+    listed: usize,
+    mut header_bytes: impl FnMut(Hash64) -> Option<u64>,
+) -> Result<PalwExecOriginCoverageOwnedV1, NativeCoverageV1> {
+    match census_from_origins_checked(origins, listed, |block| Ok::<_, std::convert::Infallible>(header_bytes(block))) {
+        Ok(value) => Ok(value),
+        Err(NativeDecodeErrorV1::Resource(error)) => Err(error),
+        Err(NativeDecodeErrorV1::Decode(never)) => match never {},
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::palw_native_resource_v1::{NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1};
+
+    #[test]
+    fn historical_read_fault_aborts_instead_of_becoming_unavailable() {
+        #[derive(Debug, PartialEq)]
+        enum Fault { Capacity, Corrupt, Storage }
+        for fault in [Fault::Capacity, Fault::Corrupt, Fault::Storage] {
+            let mut fault = Some(fault);
+            let mut calls = 0;
+            let result = census_from_origins_checked(
+                || (0..3).map(|n| (Hash64::from_u64_word(n), Hash64::from_u64_word(n))),
+                0,
+                |_| {
+                    calls += 1;
+                    if calls == 1 { Ok(None) } else { Err(fault.take().unwrap()) }
+                },
+            );
+            assert!(matches!(result, Err(NativeDecodeErrorV1::Decode(_))));
+            assert_eq!(calls, 2, "stop at the failing read rather than report a partial census");
+        }
+    }
 
     #[test]
     fn empty_native_history_needs_no_reader_or_list_allocation() {
