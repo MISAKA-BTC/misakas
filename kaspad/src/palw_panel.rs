@@ -7071,7 +7071,13 @@ impl PalwPanelService {
         // slots', untouched).
 
         let mut failed_minimum: Option<u64> = None;
-        let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        let mut unsent = match court_outbox.try_retry_buffer() {
+            Ok(buffer) => buffer,
+            Err(why) => {
+                warn!("[{PALW_PANEL}] court retry buffer admission refused; queue retained for next tick: {why}");
+                return;
+            }
+        };
         for (session_id, round, mine_is_responder, object) in court_outbox.take_priority() {
             let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
             // A failed full scan also excludes a higher minimum in this pass. Do not scan the

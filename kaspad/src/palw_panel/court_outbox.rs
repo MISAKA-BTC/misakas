@@ -8,6 +8,9 @@ use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeReta
 #[path = "court_outbox_tickets.rs"]
 mod tickets;
 use tickets::CourtPayloadTicketsV1;
+#[path = "court_outbox_frames.rs"]
+mod frames;
+use frames::{CourtFrameLeaseV1, CourtRetryBufferV1};
 
 pub(super) type CourtMoveKeyV1 = (Hash64, u32, bool);
 pub(super) type CourtMoveV1 = (Hash64, u32, bool, PalwConsensusObjectV2);
@@ -19,6 +22,8 @@ pub(crate) struct CourtOutboxV1 {
     submitted: HashMap<CourtMoveKeyV1, u64>,
     // Pending payloads drop before the tickets that authorize their storage.
     payload_tickets: CourtPayloadTicketsV1,
+    pending_frame: Option<CourtFrameLeaseV1>,
+    flight_frame: Option<CourtFrameLeaseV1>,
 }
 impl CourtOutboxV1 {
     pub(super) fn pending(&self) -> &[CourtMoveV1] {
@@ -32,12 +37,16 @@ impl CourtOutboxV1 {
     /// through its carrier batch and any retry; a refusal leaves the queue unchanged.
     pub(super) fn try_push_clone(&mut self, key: CourtMoveKeyV1, source: &PalwConsensusObjectV2) -> Result<(), NativeCoverageV1> {
         let slot = self.payload_tickets.prepare()?;
+        let capacity = self.pending.len().checked_add(1).map(|n| n.max(self.pending.capacity()))
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("court pending array"))?;
+        let frame = CourtFrameLeaseV1::reserve(capacity)?;
         let copy = NativeRetainedV1::try_from_clone_v1(source)?;
         self.pending.try_reserve_exact(1).map_err(|_| NativeCoverageV1::unsupported::<Self>(
             "court outbox copied payload slot", "queue allocation refused"))?;
         let (object, ticket) = copy.into_parts_v1();
         self.payload_tickets.insert(key, ticket, slot);
         self.pending.push((key.0, key.1, key.2, object));
+        self.pending_frame = Some(frame);
         Ok(())
     }
     pub(super) fn retain_pending(&mut self, keep: impl FnMut(&CourtMoveV1) -> bool) {
@@ -84,17 +93,34 @@ impl CourtOutboxV1 {
     pub(super) fn retain_submitted(&mut self, keep: impl FnMut(&CourtMoveKeyV1, &mut u64) -> bool) {
         self.submitted.retain(keep);
     }
+    /// Prepare before draining or doing any funding/submission work. On local
+    /// refusal the queue is untouched and the service can retry on a later tick.
+    pub(super) fn try_retry_buffer(&self) -> Result<CourtRetryBufferV1, NativeCoverageV1> {
+        CourtRetryBufferV1::new(self.pending.len())
+    }
     pub(super) fn take_priority(&mut self) -> Vec<CourtMoveV1> {
+        self.flight_frame = self.pending_frame.take();
         self.payload_tickets.start_flush();
         palw_court_queue_edf_v1(&mut self.pending, &self.due);
         std::mem::take(&mut self.pending)
     }
     /// Restore exactly the unsent items and prune due dates exactly as the old
     /// carrier loop did. Submission debounce deliberately survives this step.
-    pub(super) fn finish_flush(&mut self, unsent: Vec<CourtMoveV1>) {
+    pub(super) fn finish_flush(&mut self, unsent: CourtRetryBufferV1) {
+        let (items, frame) = unsent.into_parts();
+        self.finish_parts(items, Some(frame));
+    }
+    fn finish_parts(&mut self, unsent: Vec<CourtMoveV1>, frame: Option<CourtFrameLeaseV1>) {
         self.pending = unsent;
+        self.pending_frame = frame;
+        // The service consumed/dropped the original batch before reaching here.
+        self.flight_frame = None;
         self.payload_tickets.finish_flush(&self.pending);
         self.due.retain(|key, _| self.pending.iter().any(|(s, r, b, _)| (*s, *r, *b) == *key));
+    }
+    #[cfg(test)]
+    fn finish_fixture_flush(&mut self, unsent: Vec<CourtMoveV1>) {
+        self.finish_parts(unsent, None);
     }
     /// Test-only adapter for pre-refactor fixtures. Production takes the typed owner.
     #[cfg(test)]
@@ -115,11 +141,12 @@ impl CourtOutboxV1 {
         due: HashMap<CourtMoveKeyV1, u64>,
         submitted: HashMap<CourtMoveKeyV1, u64>,
     ) -> Self {
-        Self { pending, due, submitted, payload_tickets: CourtPayloadTicketsV1::default() }
+        Self { pending, due, submitted, payload_tickets: CourtPayloadTicketsV1::default(), pending_frame: None, flight_frame: None }
     }
     #[cfg(test)]
     pub(super) fn into_parts(self) -> (Vec<CourtMoveV1>, HashMap<CourtMoveKeyV1, u64>, HashMap<CourtMoveKeyV1, u64>) {
         assert!(self.payload_tickets.is_empty(), "fixture extraction must not detach payload tickets");
+        assert!(self.pending_frame.as_ref().is_none_or(|f| !f.is_reserved()) && self.flight_frame.as_ref().is_none_or(|f| !f.is_reserved()), "fixture extraction must not detach frame tickets");
         (self.pending, self.due, self.submitted)
     }
 }
@@ -156,7 +183,7 @@ mod tests {
             owner.mark_submitted(key(&sent), daa);
             old_pending = batch;
             old_due.retain(|k, _| old_pending.iter().any(|item| key(item) == *k));
-            owner.finish_flush(actual);
+            owner.finish_fixture_flush(actual);
             assert_eq!(
                 (owner.pending.clone(), owner.due.clone(), owner.submitted.clone()),
                 (old_pending.clone(), old_due.clone(), old_moved.clone())
@@ -206,11 +233,11 @@ mod tests {
         owner.retain_pending(|_| false);
         assert!(reserve_native_requests_v1(memory).is_err(), "batch still owns copied data");
         drop(batch.pop());
-        owner.finish_flush(batch);
+        owner.finish_fixture_flush(batch);
         assert!(reserve_native_requests_v1(memory).is_err(), "duplicate key still pending");
         let batch = owner.take_priority();
         drop(batch);
-        owner.finish_flush(Vec::new());
+        owner.finish_fixture_flush(Vec::new());
         assert!(owner.payload_tickets.is_empty());
         assert!(reserve_native_requests_v1(memory).is_ok(), "last payload and its tickets released");
         owner.try_push_clone(source_key, &source.3).unwrap();
@@ -218,8 +245,52 @@ mod tests {
         assert!(reserve_native_requests_v1(memory).is_err());
         let next = owner.take_priority();
         assert!(next.is_empty());
-        owner.finish_flush(next);
+        owner.finish_fixture_flush(next);
         assert!(reserve_native_requests_v1(memory).is_ok(), "next flush cleans up canceled batch tickets");
+        // A pre-existing raw queue is an input boundary here. Its new retry
+        // array must be admitted before draining even when no copied payload
+        // tickets exist.
+        owner.push_pending(item(88, 0));
+        let blocker = reserve_native_requests_v1(memory).unwrap();
+        assert!(owner.try_retry_buffer().is_err());
+        assert_eq!(owner.pending().len(), 1, "refusal does not drain the queue");
+        drop(blocker);
+        let mut unsent = owner.try_retry_buffer().unwrap();
+        for item in owner.take_priority() {
+            unsent.push(item);
+        }
+        assert_eq!(unsent.len(), 1);
+        owner.finish_flush(unsent);
+        assert!(reserve_native_requests_v1(memory).is_err());
+        owner.retain_pending(|_| false);
+        assert!(reserve_native_requests_v1(memory).is_err(), "empty Vec still retains allocated capacity");
+        let empty = owner.try_retry_buffer().unwrap();
+        drop(owner.take_priority());
+        owner.finish_flush(empty);
+        assert!(reserve_native_requests_v1(memory).is_ok(), "zero-capacity retry replaces the empty retained array");
+        owner.try_push_clone(source_key, &source.3).unwrap();
+        owner.retain_pending(|_| false);
+        assert!(owner.payload_tickets.is_empty());
+        assert!(reserve_native_requests_v1(memory).is_err(), "strict enqueue frame outlives removed payloads");
+        let empty = owner.try_retry_buffer().unwrap();
+        drop(owner.take_priority());
+        owner.finish_flush(empty);
+        assert!(reserve_native_requests_v1(memory).is_ok());
+    }
+
+    #[test]
+    fn disabled_capacity_fixture_can_extract_unreserved_copies() {
+        // Runs in the ordinary test process with capacity limits disabled.
+        let source = item(7, 2);
+        let mut owner = CourtOutboxV1::default();
+        owner.try_push_clone(key(&source), &source.3).unwrap();
+        let mut unsent = owner.try_retry_buffer().unwrap();
+        for item in owner.take_priority() {
+            unsent.push(item);
+        }
+        owner.finish_flush(unsent);
+        let (pending, _, _) = owner.into_parts();
+        assert_eq!(pending, vec![source]);
     }
 
     #[test]

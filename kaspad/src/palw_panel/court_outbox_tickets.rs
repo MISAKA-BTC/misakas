@@ -29,6 +29,9 @@ impl CourtPayloadTicketsV1 {
         reserve_native_requests_v1(bytes)
     }
     pub(super) fn insert(&mut self, key: CourtMoveKeyV1, payload: Ticket, slot: Ticket) {
+        if payload.is_none() && slot.is_none() {
+            return;
+        }
         self.head = Some(Box::new(Entry { key, _payload: payload, _slot: slot, next: self.head.take() }));
     }
     pub(super) fn start_flush(&mut self) {
