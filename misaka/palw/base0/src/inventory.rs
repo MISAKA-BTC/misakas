@@ -1224,13 +1224,16 @@ fn qwen36_visit_inventory_rows_in_blocks_v1(
 mod q36_emit_plan_v1;
 use q36_emit_plan_v1::emit as qwen36_emit_plan_v1;
 
+#[path = "inventory/q36_plan_storage_v1.rs"]
+mod q36_plan_storage_v1;
+
 /// **The plan: every tensor the inventory holds and how its rows are produced**, walked slot by
 /// slot with every refusal raised in slot order — the builder's checks, in the builder's order,
 /// before any byte is read.
 fn qwen36_inventory_plan_v1(
     artifact: &crate::qwen36::Qwen36ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
-) -> Result<Vec<Q36PlannedTensorV1>, InventoryBuildError> {
+) -> Result<q36_plan_storage_v1::Plan, InventoryBuildError> {
     use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
     use kaspa_consensus_core::palw_qwen36_ops::QWEN36_WEIGHT_GROUP;
     use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
@@ -1239,20 +1242,15 @@ fn qwen36_inventory_plan_v1(
 
     let w = A16QuantParams::WIRE_BYTES;
     let missing = q36_missing;
-    let sub = |name: &str, layer: Option<u16>| -> String {
-        match layer {
-            Some(l) => name.replace("{layer}", &l.to_string()),
-            None => name.to_string(),
-        }
-    };
+    let budget = q36_plan_storage_v1::Budget::new()?;
+    let sub = |name: &str, layer: Option<u16>| budget.sub(name, layer);
     let param_rows =
         |name: &str| -> Result<crate::qwen36::InventoryParamRowsV1, InventoryBuildError> { artifact.inventory_param_rows_v1(name) };
-    let wire = |rows: &[A16QuantParams]| -> Vec<u8> { rows.iter().flat_map(|p| p.to_wire()).collect() };
     // The engine's per-head read (`rows[vh.min(len - 1)]`), one value head at a time.
     let per_head = |rows: &[A16QuantParams], vh: usize| -> A16QuantParams { rows[vh.min(rows.len().saturating_sub(1))] };
     let mut plan: Vec<Q36PlannedTensorV1> = Vec::new();
-    let mut add =
-        |name: &str, layer: Option<u16>, rows: Q36RowsV1| plan.push(Q36PlannedTensorV1 { name: name.to_string(), layer, rows });
+    let mut slots = 0;
+    let mut add = |name: &str, layer: Option<u16>, rows: Q36RowsV1| budget.push(&mut plan, &mut slots, name, layer, rows);
     // A parameter tensor read through a view: checked now, read when its turn comes.
     let params = |stored: String, rule: Q36ViewRuleV1, chunk: usize, what: &str| -> Result<Q36RowsV1, InventoryBuildError> {
         q36_view(param_rows(&stored)?, rule, what)?;
@@ -1261,38 +1259,47 @@ fn qwen36_inventory_plan_v1(
     // One registered triple at offset zero — the sites whose lane counts are the job's, or whose
     // parameter is a single scalar.
     let one_triple = |name: &str, layer: Option<u16>| -> Result<Q36RowsV1, InventoryBuildError> {
-        let store = param_rows(&sub(name, layer))?;
+        let store = param_rows(&sub(name, layer)?)?;
         if store.len() != 1 {
             return Err(missing(&format!("{name}: this site registers exactly one triple")));
         }
-        Ok(Q36RowsV1::Small(vec![(0, wire(&store))]))
+        budget.small(1, w, |_, bytes| {
+            bytes.copy_from_slice(&store[0].to_wire());
+            Ok(0)
+        })
     };
     // A per-expert grouped-projection store: codes, exponents (zeros where the artifact carries
     // none) and per-row triples, chunked at the node's tile restarting at the expert's byte 0.
     let projection =
         |template: &str, store: &str, block_rows: usize, tile: usize| -> Result<[(String, Q36RowsV1); 3], InventoryBuildError> {
-            let len = artifact.tensor_len(store).map_err(|_| missing(store))?;
+            let len = artifact.inventory_tensor_len_v1(store).ok_or_else(|| missing(store))?;
             if block_rows == 0 || !len.is_multiple_of(block_rows) {
                 return Err(missing(&format!("{store}: {len} code bytes over {block_rows} rows")));
             }
             let in_dim = len / block_rows;
             let groups = in_dim.div_ceil(QWEN36_WEIGHT_GROUP);
             let chunk = tile.min(block_rows).max(1);
-            let codes = Q36RowsV1::Stored { store: store.to_string(), total: len, stride: chunk * in_dim.max(1) };
-            let exp_name = format!("{store}.exp");
-            let exps = match artifact.tensor_len(&exp_name) {
-                Ok(n) => {
+            let codes =
+                Q36RowsV1::Stored { store: budget.text(format_args!("{store}"))?.keep(), total: len, stride: chunk * in_dim.max(1) };
+            let exp_name = budget.text(format_args!("{store}.exp"))?;
+            let exps = match artifact.inventory_tensor_len_v1(&exp_name) {
+                Some(n) => {
                     if n != block_rows * groups {
                         return Err(missing(&format!("{exp_name}: {n} exponents over {block_rows}x{groups}")));
                     }
-                    Q36RowsV1::Stored { store: exp_name, total: n, stride: chunk * groups.max(1) }
+                    Q36RowsV1::Stored { store: exp_name.keep(), total: n, stride: chunk * groups.max(1) }
                 }
                 // Absent means every group's exponent is zero — the arithmetic the engine's
                 // exponent-less dispatch performs, committed as the bytes it is.
-                Err(_) => Q36RowsV1::Zeros { total: block_rows * groups, stride: chunk * groups.max(1) },
+                None => Q36RowsV1::Zeros { total: block_rows * groups, stride: chunk * groups.max(1) },
             };
-            let triples = params(format!("{store}.a16"), Q36ViewRuleV1::Lanes { width: block_rows }, chunk, store)?;
-            Ok([(template.to_string(), codes), (format!("{template}.exp"), exps), (format!("{template}.a16"), triples)])
+            let triples =
+                params(budget.text(format_args!("{store}.a16"))?.keep(), Q36ViewRuleV1::Lanes { width: block_rows }, chunk, store)?;
+            Ok([
+                (budget.text(format_args!("{template}"))?.keep(), codes),
+                (budget.text(format_args!("{template}.exp"))?.keep(), exps),
+                (budget.text(format_args!("{template}.a16"))?.keep(), triples),
+            ])
         };
 
     let k_embed = kid(kd::KDESC_A16_EMBED);
@@ -1324,16 +1331,20 @@ fn qwen36_inventory_plan_v1(
     ];
 
     // How many routed experts this layer's artifact stores, by the store's own naming.
-    let expert_count = |layer: u16, suffix: &str| -> usize {
+    let expert_count = |layer: u16, suffix: &str| -> Result<usize, InventoryBuildError> {
         let mut e = 0usize;
-        while e < 65_536 && artifact.tensor_len(&format!("blk.{layer}.ffn_expert.{e}{suffix}")).is_ok() {
+        while e < 65_536
+            && artifact.inventory_tensor_len_v1(&budget.text(format_args!("blk.{layer}.ffn_expert.{e}{suffix}"))?).is_some()
+        {
             e += 1;
         }
-        e
+        Ok(e)
     };
 
     for slot in 0..profile.global_node_count() {
-        let Some((node, layer)) = profile.resolve_node_slot(slot) else { continue };
+        let Some((node, layer)) = profile.resolve_node_slot(slot) else {
+            continue;
+        };
         let name = node.weight_name.as_str();
         let kidv = node.kernel_semantics_id;
         let tile = node.tile_len as usize;
@@ -1349,10 +1360,10 @@ fn qwen36_inventory_plan_v1(
             if width == 0 {
                 return Err(missing(&format!("{name}: a zero-width embedding row")));
             }
-            let store = sub(name, layer);
-            let len = artifact.tensor_len(&store).map_err(|_| missing(name))?;
+            let store = sub(name, layer)?.keep();
+            let len = artifact.inventory_tensor_len_v1(&store).ok_or_else(|| missing(name))?;
             // One row per token id; a trailing partial row is no token's and was never a row.
-            add(name, layer, Q36RowsV1::Stored { store, total: len / width * width, stride: width });
+            add(name, layer, Q36RowsV1::Stored { store, total: len / width * width, stride: width })?;
         } else if kidv == k_grouped || kidv == k_grouped_wide {
             if name.ends_with(".routed") {
                 let (suffix, block_rows) = if name.ends_with(".ffn_down_exps.routed") {
@@ -1364,20 +1375,22 @@ fn qwen36_inventory_plan_v1(
                 };
                 let l = layer.ok_or_else(|| missing(name))?;
                 let prefix = name.rfind("ffn_").map(|i| &name[..i]).ok_or_else(|| missing(name))?;
-                let experts = expert_count(l, suffix);
+                let experts = expert_count(l, suffix)?;
                 if experts == 0 {
                     return Err(missing(&format!("{name}: the artifact stores no routed expert")));
                 }
                 for e in 0..experts {
-                    let template = format!("{prefix}ffn_expert.{e}{suffix}");
-                    for (tensor, rows) in projection(&template, &format!("blk.{l}.ffn_expert.{e}{suffix}"), block_rows, tile)? {
-                        add(&tensor, layer, rows);
+                    let template = budget.text(format_args!("{prefix}ffn_expert.{e}{suffix}"))?;
+                    for (tensor, rows) in
+                        projection(&template, &budget.text(format_args!("blk.{l}.ffn_expert.{e}{suffix}"))?, block_rows, tile)?
+                    {
+                        add(&tensor, layer, rows)?;
                     }
                 }
             } else {
                 let out_dim = fixed.ok_or_else(|| missing(name))?;
-                for (tensor, rows) in projection(name, &sub(name, layer), out_dim, tile)? {
-                    add(&tensor, layer, rows);
+                for (tensor, rows) in projection(name, &sub(name, layer)?, out_dim, tile)? {
+                    add(&tensor, layer, rows)?;
                 }
             }
         } else if kidv == k_req_by_token {
@@ -1388,7 +1401,7 @@ fn qwen36_inventory_plan_v1(
             // longer one is indexed by the token): a calibrated store rides verbatim, a singleton
             // tiles across the vocabulary, and anything else is refused by name.
             let vocab = profile.vocab_size as usize;
-            add(name, layer, params(sub(name, layer), Q36ViewRuleV1::Tokens { vocab }, 1, name)?);
+            add(name, layer, params(sub(name, layer)?.keep(), Q36ViewRuleV1::Tokens { vocab }, 1, name)?)?;
         } else if kidv == k_req {
             match fixed {
                 Some(width) => {
@@ -1408,14 +1421,14 @@ fn qwen36_inventory_plan_v1(
                         }
                         _ => Q36ViewRuleV1::Lanes { width },
                     };
-                    add(name, layer, params(sub(name, layer), rule, tile, name)?);
+                    add(name, layer, params(sub(name, layer)?.keep(), rule, tile, name)?)?;
                 }
                 // The probs: one registered triple, tiled by the kernel at the job's width.
-                None => add(name, layer, one_triple(name, layer)?),
+                None => add(name, layer, one_triple(name, layer)?)?,
             }
         } else if kidv == k_rescale_row {
             let width = fixed.ok_or_else(|| missing(name))?;
-            add(name, layer, params(sub(name, layer), Q36ViewRuleV1::Lanes { width }, tile, name)?);
+            add(name, layer, params(sub(name, layer)?.keep(), Q36ViewRuleV1::Lanes { width }, tile, name)?)?;
         } else if kidv == k_rms_wide {
             // Per value head, ONE triple per row: the arm reads head `vh`'s eps at offset
             // `vh · wire`, one at a time.
@@ -1424,123 +1437,158 @@ fn qwen36_inventory_plan_v1(
             if !width.is_multiple_of(hd) {
                 return Err(missing(&format!("{name}: the wide-norm row is not a whole number of heads")));
             }
-            let store = param_rows(&sub(name, layer))?;
+            let store = param_rows(&sub(name, layer)?)?;
             add(
                 name,
                 layer,
-                Q36RowsV1::Small((0..width / hd).map(|vh| ((vh * w) as u32, per_head(&store, vh).to_wire().to_vec())).collect()),
-            );
+                budget.small(width / hd, w, |vh, bytes| {
+                    bytes.copy_from_slice(&per_head(&store, vh).to_wire());
+                    u32::try_from(vh.checked_mul(w).ok_or_else(q36_plan_storage_v1::overflow)?)
+                        .map_err(|_| q36_plan_storage_v1::overflow().into())
+                })?,
+            )?;
         } else if kidv == k_mul_wide {
             if name.ends_with(".ffn_expert_gated.a16") {
                 let l = layer.ok_or_else(|| missing(name))?;
                 let prefix = name.rfind("ffn_").map(|i| &name[..i]).ok_or_else(|| missing(name))?;
                 let block_rows = profile.ffn_dim as usize;
                 let chunk = tile.min(block_rows).max(1);
-                let experts = expert_count(l, "_gate.weight");
+                let experts = expert_count(l, "_gate.weight")?;
                 for e in 0..experts {
                     for stage in ["_silu.a16", "_gated.a16"] {
-                        let rows =
-                            params(format!("blk.{l}.ffn_expert.{e}{stage}"), Q36ViewRuleV1::Lanes { width: block_rows }, chunk, name)?;
-                        add(&format!("{prefix}ffn_expert.{e}{stage}"), layer, rows);
+                        let rows = params(
+                            budget.text(format_args!("blk.{l}.ffn_expert.{e}{stage}"))?.keep(),
+                            Q36ViewRuleV1::Lanes { width: block_rows },
+                            chunk,
+                            name,
+                        )?;
+                        add(&budget.text(format_args!("{prefix}ffn_expert.{e}{stage}"))?, layer, rows)?;
                     }
                 }
             } else if name.ends_with(".ffn_shared_expert_gated.a16") {
                 let width = fixed.ok_or_else(|| missing(name))?;
                 let stem = name.strip_suffix("ffn_shared_expert_gated.a16").ok_or_else(|| missing(name))?;
                 for stage in ["ffn_shared_expert_silu.a16", "ffn_shared_expert_gated.a16"] {
-                    let template = format!("{stem}{stage}");
-                    let rows = params(sub(&template, layer), Q36ViewRuleV1::Lanes { width }, tile, &template)?;
-                    add(&template, layer, rows);
+                    let template = budget.text(format_args!("{stem}{stage}"))?;
+                    let rows = params(sub(&template, layer)?.keep(), Q36ViewRuleV1::Lanes { width }, tile, &template)?;
+                    add(&template, layer, rows)?;
                 }
             } else if name.ends_with(".ffn_shared_gated.a16") {
-                add(name, layer, one_triple(name, layer)?);
+                add(name, layer, one_triple(name, layer)?)?;
             } else {
                 let width = fixed.ok_or_else(|| missing(name))?;
-                add(name, layer, params(sub(name, layer), Q36ViewRuleV1::Lanes { width }, tile, name)?);
+                add(name, layer, params(sub(name, layer)?.keep(), Q36ViewRuleV1::Lanes { width }, tile, name)?)?;
             }
         } else if kidv == k_gate_apply || kidv == k_scores || kidv == k_values || kidv == k_topk || kidv == k_combine {
-            add(name, layer, one_triple(name, layer)?);
+            add(name, layer, one_triple(name, layer)?)?;
         } else if kidv == k_soft {
             // ONE raw byte — the widening the engine reads through `scalar()`, at the domain the
             // op clamps to.
-            let store = param_rows(&sub(name, layer))?;
+            let store = param_rows(&sub(name, layer)?)?;
             if store.len() != 1 {
                 return Err(missing(&format!("{name}: the softmax widening is one registered scalar")));
             }
-            add(name, layer, Q36RowsV1::Small(vec![(0, vec![store[0].zero.clamp(0, 62) as u8])]));
+            add(
+                name,
+                layer,
+                budget.small(1, 1, |_, bytes| {
+                    bytes[0] = store[0].zero.clamp(0, 62) as u8;
+                    Ok(0)
+                })?,
+            )?;
         } else if kidv == k_fused {
             // **ADR-0082 Decision 1**, the hybrid's half: the same four operands the four nodes it
             // replaces read, derived from the one the node names — the softmax byte normalised the
             // way this family's softmax arm normalises it, and one triple each for the scores, the
             // probabilities and the values.
-            let t = kd::palw_attn_fused_tensors_v1(name).ok_or_else(|| missing(name))?;
-            let store = param_rows(&sub(&t.softmax_up, layer))?;
+            let fused = budget.fused(name)?;
+            let t = fused.as_ref().ok_or_else(|| missing(name))?;
+            let store = param_rows(&sub(&t.softmax_up, layer)?)?;
             if store.len() != 1 {
                 return Err(missing(&format!("{}: the softmax widening is one registered scalar", t.softmax_up)));
             }
-            add(&t.softmax_up, layer, Q36RowsV1::Small(vec![(0, vec![store[0].zero.clamp(0, 62) as u8])]));
+            add(
+                &t.softmax_up,
+                layer,
+                budget.small(1, 1, |_, bytes| {
+                    bytes[0] = store[0].zero.clamp(0, 62) as u8;
+                    Ok(0)
+                })?,
+            )?;
             for triple in [&t.scores, &t.probs, &t.values] {
-                add(triple, layer, one_triple(triple, layer)?);
+                add(triple, layer, one_triple(triple, layer)?)?;
             }
         } else if kidv == k_decay {
             let width = fixed.ok_or_else(|| missing(name))?;
             let stem = name.strip_suffix("linear_decay.a16").ok_or_else(|| missing(name))?;
             for store in ["linear_decay_c.a16", "linear_dt_bias.a16"] {
-                let template = format!("{stem}{store}");
-                let table = param_rows(&sub(&template, layer))?;
-                let effective: Vec<A16QuantParams> = (0..width).map(|vh| per_head(&table, vh)).collect();
-                add(&template, layer, Q36RowsV1::Small(vec![(0, wire(&effective))]));
+                let template = budget.text(format_args!("{stem}{store}"))?;
+                let table = param_rows(&sub(&template, layer)?)?;
+                let bytes = width.checked_mul(w).ok_or_else(q36_plan_storage_v1::overflow)?;
+                add(
+                    &template,
+                    layer,
+                    budget.small(1, bytes, |_, bytes| {
+                        for (vh, chunk) in bytes.chunks_exact_mut(w).enumerate() {
+                            chunk.copy_from_slice(&per_head(&table, vh).to_wire());
+                        }
+                        Ok(0)
+                    })?,
+                )?;
             }
         } else if kidv == k_gdn {
             // `[read, delta, write, out]` per value head, interleaved under the DECLARED
             // coordinate: the bytes are the four stores', the coordinate is the class's.
             let stem = name.strip_suffix("linear_gdn.a16").ok_or_else(|| missing(name))?;
             let heads = (profile.gdn_heads as usize).max(1);
-            let stores: Vec<crate::qwen36::InventoryParamRowsV1> = ["linear_read.a16", "linear_delta.a16", "linear_write.a16", "linear_out.a16"]
-                .iter()
-                .map(|s| param_rows(&sub(&format!("{stem}{s}"), layer)))
-                .collect::<Result<_, _>>()?;
-            let rows = (0..heads)
-                .map(|vh| {
-                    let mut bytes = Vec::with_capacity(4 * w);
-                    for store in &stores {
-                        bytes.extend_from_slice(&per_head(store, vh).to_wire());
-                    }
-                    ((vh * 4 * w) as u32, bytes)
-                })
-                .collect();
-            add(name, layer, Q36RowsV1::Small(rows));
+            let load = |suffix: &str| param_rows(&sub(&budget.text(format_args!("{stem}{suffix}"))?, layer)?);
+            let stores = [load("linear_read.a16")?, load("linear_delta.a16")?, load("linear_write.a16")?, load("linear_out.a16")?];
+            let rows = budget.small(heads, 4 * w, |vh, bytes| {
+                for (store, chunk) in stores.iter().zip(bytes.chunks_exact_mut(w)) {
+                    chunk.copy_from_slice(&per_head(store, vh).to_wire());
+                }
+                u32::try_from(vh.checked_mul(4 * w).ok_or_else(q36_plan_storage_v1::overflow)?)
+                    .map_err(|_| q36_plan_storage_v1::overflow().into())
+            })?;
+            add(name, layer, rows)?;
         } else if kidv == k_conv {
             let width = fixed.ok_or_else(|| missing(name))?;
-            let store = sub(name, layer);
-            let taps = artifact.tensor_len(&store).map_err(|_| missing(name))?;
+            let store = sub(name, layer)?.keep();
+            let taps = artifact.inventory_tensor_len_v1(&store).ok_or_else(|| missing(name))?;
             if taps != 4 * width {
                 return Err(missing(&format!("{name}: {taps} taps over {width} channels")));
             }
-            add(name, layer, Q36RowsV1::Stored { store, total: taps, stride: tile.max(1) * 4 });
+            add(name, layer, Q36RowsV1::Stored { store, total: taps, stride: tile.max(1) * 4 })?;
             let stem = name.strip_suffix(".weight").ok_or_else(|| missing(name))?;
-            let template = format!("{stem}.a16");
-            let rows = params(sub(&template, layer), Q36ViewRuleV1::Lanes { width }, tile, &template)?;
-            add(&template, layer, rows);
+            let template = budget.text(format_args!("{stem}.a16"))?;
+            let rows = params(sub(&template, layer)?.keep(), Q36ViewRuleV1::Lanes { width }, tile, &template)?;
+            add(&template, layer, rows)?;
         } else if kidv == k_rope {
             let pairs = (profile.rope_dims as usize) / 2;
             let table_pairs = artifact.rope.d_head / 2;
             if pairs == 0 || pairs > table_pairs {
                 return Err(missing(&format!("{name}: a {pairs}-pair rotation over a {table_pairs}-pair table")));
             }
-            add(name, layer, Q36RowsV1::Rope { pairs, table_pairs });
+            add(name, layer, Q36RowsV1::Rope { pairs, table_pairs })?;
             // The clamp triple, under the suffix that keeps it from colliding with the table's
             // byte 0 — the store's own row is the node's bare name.
-            let store = param_rows(&sub(name, layer))?;
+            let store = param_rows(&sub(name, layer)?)?;
             if store.len() != 1 {
                 return Err(missing(&format!("{name}: the rotation registers exactly one clamp triple")));
             }
-            add(&format!("{name}.clamp"), layer, Q36RowsV1::Small(vec![(0, wire(&store))]));
+            add(
+                &budget.text(format_args!("{name}.clamp"))?,
+                layer,
+                budget.small(1, w, |_, bytes| {
+                    bytes.copy_from_slice(&store[0].to_wire());
+                    Ok(0)
+                })?,
+            )?;
         } else {
             return Err(missing(&format!("{name}: kernel this inventory does not lay out")));
         }
     }
-    Ok(plan)
+    Ok(q36_plan_storage_v1::Plan::finish(plan, budget))
 }
 
 #[cfg(test)]
@@ -2067,7 +2115,7 @@ pub(crate) mod adr0106_cases {
             let Ok(plan) = crate::inventory::qwen36_inventory_plan_v1(&artifact, &profile) else { continue };
             let mut first: std::collections::BTreeMap<(&str, Option<u16>), &Q36RowsV1> = std::collections::BTreeMap::new();
             let mut twice = Vec::new();
-            for p in &plan {
+            for p in plan.iter() {
                 match first.get(&(p.name.as_str(), p.layer)) {
                     None => {
                         first.insert((p.name.as_str(), p.layer), &p.rows);

@@ -56,6 +56,17 @@ struct WireScratch {
     _ticket: Option<NativeDemandLeaseV1>,
 }
 impl Qwen36ArtifactV1 {
+    /// Borrow metadata without allocating an error String on an expected miss
+    /// (expert scans and absent optional exponent tensors use that outcome).
+    pub(crate) fn inventory_tensor_len_v1(&self, name: &str) -> Option<usize> {
+        match &self.store {
+            Store::Owned(tensors) => tensors.get(name).map(Vec::len),
+            Store::Mapped { map, directory } => {
+                let &(offset, len) = directory.get(name)?;
+                offset.checked_add(len).filter(|&end| end <= map.len()).map(|_| len)
+            }
+        }
+    }
     pub(crate) fn inventory_param_rows_v1(&self, name: &str) -> Result<InventoryParamRowsV1, InventoryBuildError> {
         // Match the engine's source selection. The extent directory is immutable
         // artifact metadata; using it avoids an LRU miss loading unrelated weights.
@@ -114,6 +125,29 @@ mod tests {
         assert_eq!(before.bytes_read, after.bytes_read);
         assert_eq!(before.resident_expert_bytes, after.resident_expert_bytes);
         assert!(matches!(mapped.inventory_param_rows_v1("missing"), Err(InventoryBuildError::Operand(_))));
+        drop(mapped);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn metadata_presence_matches_engine_bounds_on_owned_and_mapped_stores() {
+        let owned = qwen36_dev_fixture_heads(4, 8, 4, 4, 8, 32);
+        let (mut mapped, path) = mapped(&owned, "metadata");
+        for name in owned.tensor_names() {
+            assert_eq!(owned.inventory_tensor_len_v1(name), owned.tensor_len(name).ok());
+            assert_eq!(mapped.inventory_tensor_len_v1(name), mapped.tensor_len(name).ok());
+        }
+        assert_eq!(owned.inventory_tensor_len_v1("absent"), None);
+        assert_eq!(mapped.inventory_tensor_len_v1("absent"), None);
+        let Store::Mapped { directory, .. } = &mut mapped.store else {
+            panic!("mapped fixture");
+        };
+        directory.insert("invalid-overflow".into(), (usize::MAX, 2));
+        directory.insert("invalid-extent".into(), (0, usize::MAX));
+        for name in ["invalid-overflow", "invalid-extent"] {
+            assert_eq!(mapped.inventory_tensor_len_v1(name), None);
+            assert!(mapped.tensor_len(name).is_err());
+        }
         drop(mapped);
         std::fs::remove_file(path).unwrap();
     }

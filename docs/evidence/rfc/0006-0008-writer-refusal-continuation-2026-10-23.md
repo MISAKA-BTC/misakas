@@ -1136,3 +1136,90 @@ failure is counted as a successful check. The test manifest source digests were
 revalidated after both commands; Cargo.lock digest/results are recorded there.
 Documentation checks retain 43 baseline issues with zero new issues
 (`/tmp/misaka-inventory-workspace-docs.log`).
+
+
+## Canonical plan storage owner — 2026-10-24
+
+The Q36 canonical plan now returns an immutable-slice owner containing its
+entries and one native demand budget. Plan slots reserve old plus new capacity
+through fallible reallocation. Planned names, stored names and Small-row vectors/
+byte payloads reserve from checked actual lengths before allocation. The budget
+outlives emission and drops after the plan's payload. It has no Clone, mutable
+slice or raw Vec extraction path. The existing duplicate-plan inspection test
+uses `.iter()` on the owner rather than borrowing a raw Vec; its assertions and
+case set remain unchanged.
+
+Temporary name formatting/substitution uses a scoped loan from that budget:
+rendered UTF-8 length is counted without a heap buffer, then String capacity is
+reserved and allocated fallibly. The `{layer}` expansion matches the former
+String::replace rule, including repeated markers; numeric and expert-scan names
+are temporary loans returned after use. A kept value leaves its reservation in
+the enclosing plan budget. Some projection recipe labels conservatively remain
+charged until plan drop even after the temporary label itself is freed; this is
+an upper envelope for typed requests, not minimal live bytes or physical RSS.
+The canonical fused-attention naming helper is preserved and its four result
+Strings plus temporary suffix are pre-admitted from their typed layout and
+checked input/constant lengths. Its internal String construction is still
+infallible; admission is not a claim to recover from every allocator OOM.
+
+Small-row serializers fill pre-admitted byte slices directly. Decay no longer
+allocates a widened intermediate A16 table before converting it to wire bytes.
+GDN's four decoded table owners use a stack array instead of another heap Vec,
+and serialize read/delta/write/out into the same per-head wire order. Checked
+row-offset conversion refuses overflow rather than truncating. Existing root,
+materializing-builder and court-coordinate tests continue to match unchanged
+records. Diagnostic error Strings and upstream artifact/profile ownership remain
+separate scopes, not covered by the plan data reservation.
+
+Actual Cargo test result: 30 selected inventory entries pass, 509 other library
+tests filtered out; 0.47s runtime after 11.33s rebuild. Command/env/lock and source
+digests: `/tmp/misaka-inventory-plan-manifest.json`; runtime/build log:
+`/tmp/misaka-inventory-plan-final-tests.log`. This is the actual crate, not the
+older production-prefix harness. The prior 27 inventory controls remain and the
+three new entries cover substitution/temporary release, an isolated child entry,
+and a six-case driver. The child entry returns unless explicitly selected.
+
+The six isolated cases cover zero capacity, one below/exact temporary String
+request, one below/exact old-plus-new plan-slot growth peak, and full toy plan
+construction. The last case binary-searches the operation's admission threshold
+using blockers under one checker without rearming; each trial drops all partial
+owners and confirms the full budget is available again. The threshold's exact
+value admits; one byte below refuses as Resource. It checks retained-plan demand
+before drop and after emission has returned its own scratch. For this fixture
+and layout only: admission peak 422,012 typed bytes, retained request 352,474,
+857 emitted rows. These are not production-model bounds or measured RSS/time
+costs. Separate unit controls cover row-fill refusal cleanup and request overflow.
+
+The private service library typecheck passes in 19.59s with the same isolated
+target and debug/incremental settings:
+`cargo check -p kaspad --lib --features private-integration-config`
+(`/tmp/misaka-inventory-plan-private-check.log`). This checks the actual consumer
+connection but is not a full-node or live-campaign run.
+
+Remaining scopes include downstream owning inventory/metadata collections,
+accusation/case/outbox/carrier copies and lifetimes, artifact/engine/cache input
+ownership, diagnostic allocations and whole-model time/resource/economic bounds.
+K3 formal inputs remain uncreated. The 15-gate campaign is not accepted, UNKNOWN
+stays UNKNOWN, activation is None, and the frozen tiers/claim approval/bootstrap
+and dormant economics rules remain unchanged.
+
+Final review additionally removed error-String allocation on *expected* metadata
+misses: `inventory_tensor_len_v1` borrows the directory and returns Option after
+the same owned/mapped range and checked-add validation as the engine API.
+Canonical expert scans and optional exponents use that path. Public engine
+metadata/error behavior is unchanged. A new control compares all real owned/
+mapped entries with the engine and refuses missing, overflowed and out-of-file
+extents. Actual malformed-data diagnostic Strings remain outside this owner.
+
+The final source Cargo rerun passes 31 selected entries, 509 filtered, in 0.46s
+after 11.33s rebuild (`/tmp/misaka-inventory-plan-final-source-tests.log`).
+The original 30-entry result above describes the immediately preceding source;
+it is not substituted for the final result. Final argv/env/source digests and
+results are recorded separately in
+`/tmp/misaka-inventory-plan-final-source-manifest.json`. The toy admission peak,
+retained request and emitted-row count are unchanged.
+
+Final source private library check also passes in 19.62s
+(`/tmp/misaka-inventory-plan-final-source-private-check.log`), and manifest
+source digests match after that check. Documentation validation retains 43
+baseline issues and zero new issues (`/tmp/misaka-inventory-plan-docs-final.log`).
