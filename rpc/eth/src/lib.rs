@@ -1034,12 +1034,20 @@ fn render_head(b: &EthBlock) -> Value {
 // --- eth_getLogs (Increment 6: log index) ---
 
 /// Resolve a `fromBlock`/`toBlock` filter value (tag or hex number) to an
-/// `evm_number`. Absent / `latest` / `pending` / `safe` / `finalized` ⇒ the head.
+/// `evm_number`. Only absent / `latest` / `pending` use the latest head;
+/// certified tags retain the native provider's exact head or unavailability.
 async fn resolve_block_number(provider: &Arc<dyn EthProvider>, v: Option<&Value>) -> EthResult<u64> {
-    match v.and_then(|x| x.as_str()) {
-        None | Some("latest") | Some("pending") | Some("safe") | Some("finalized") => provider.block_number().await,
-        Some("earliest") => Ok(0),
-        Some(hex) => u64_from_hex(hex),
+    match v {
+        None => provider.block_number().await,
+        Some(Value::String(tag)) => match tag.as_str() {
+            "latest" | "pending" => provider.block_number().await,
+            "safe" | "finalized" => provider.block_by_tag(tag).await?
+                .map(|block| block.number)
+                .ok_or_else(|| EthRpcError::server(format!("{tag} EVM head unavailable"))),
+            "earliest" => Ok(0),
+            hex => u64_from_hex(hex),
+        },
+        Some(_) => Err(EthRpcError::invalid_params("block selector must be a tag or hex number string")),
     }
 }
 
@@ -1871,3 +1879,6 @@ mod block_id_tests {
         assert_eq!(exec_block_param(&json!([{"to": "0x00"}, {"blockNumber": "0x2a"}]), 1).unwrap(), BlockId::Number(42));
     }
 }
+
+#[cfg(test)]
+mod certified_range_tests;

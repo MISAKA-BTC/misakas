@@ -1,0 +1,15 @@
+# RFC-0012: certified EVM tags in range consumers
+
+Status: coordinated no-run compilation and adapter dispatcher tests passed. No native EVM campaign result is claimed.
+
+The shared JSON-RPC `resolve_block_number` previously mapped explicit `safe` and `finalized` to `provider.block_number()` (latest). Both `eth_getLogs` range endpoints and `eth_feeHistory`'s newest-block argument used that resolver. Thus a request for a certified prefix could read the unconfirmed latest range even though the actual node provider already had an exact native source.
+
+The existing native provider in `kaspad/src/eth_rpc.rs::block_by_tag` reads `ConsensusApi::get_evm_canonical_heads()`, then uses `safe_head()` / `finalized_head()` to read the executed block. Missing certified heads return absence and native failures propagate. The corrected range resolver now consumes that existing tag API and exact returned block number. Absence is an explicit server-unavailable error, and read failures remain errors; neither becomes latest or zero. The RPC methods cannot call their downstream log/fee consumer after that refusal.
+
+Absent selectors, `latest`, `pending`, `earliest` and numeric hex selectors retain their prior meanings. Explicit non-string selectors now return invalid-params rather than being mistaken for an absent selector and routed to latest. A genuinely returned block number zero remains valid and is distinguished from absence.
+
+## Verification scope
+
+Five actual JSON-RPC dispatcher tests are saved under `rpc/eth/src/certified_range_tests.rs`; package/filter: `kaspa-eth-rpc certified_range_tests`. They use distinct synthetic typed latest/safe/finalized heads and count exact provider/downstream calls. Controls cover both log-range endpoints and fee-history selection; absent/read-fault refusal without latest/zero/downstream fallback; unchanged defaults/pending/earliest/hex behavior; explicit malformed selectors; and a real typed zero-number head. Source diff checking passed. The coordinated no-run build passed in **2m16s**, logged in `/tmp/misaka-rfc12-certified-ranges-rpc-build-20261025.log`. The fixed binary is `/tmp/misaka-rfc12-certified-ranges-rpc-20261025`, SHA-256 `d9c46efa5804175a13650056857b89c4483c4ab41de06cf8fe9b29dbff03c72a`. Its focused tests passed **5/5 in 0.00s**, logged in `/tmp/misaka-rfc12-certified-ranges-focused-tests-20261025.log`. The same binary's entire crate suite passed **27/27 in 0.34s**, logged in `/tmp/misaka-rfc12-certified-ranges-regression-tests-20261025.log`; the five focused tests are included in those 27, not additional cases.
+
+The native provider's source was traced but is not replaced or modified. These new tests exercise the adapter dispatcher against typed synthetic heads, not real native EVM execution, certification, reorg, pruned IBD or Latest/Safe/Finalized campaign acceptance. No canonical head, policy, fence, bridge backing, model input or activation is invented. `historical_signature_replay` in paid observations remains UNKNOWN and untouched.
