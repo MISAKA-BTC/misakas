@@ -106,6 +106,12 @@ impl DurableMonetaryMaterialProviderV1 {
         bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
         context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
     ) -> Result<Hash64, String> {
+        // This fixed request ID comes from native covenant/nonce and identity
+        // replay, not the independently supplied context. Refuse before hashing
+        // the capsule, constructing a candidate, or publishing either file.
+        if material.context_request() != context.request {
+            return Err("replacement publication substitutes own native context request".into());
+        }
         let (e, consent, _) =
             kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&material.proposal)?;
         if !e.offers.iter().any(|p| p.provider == provider)

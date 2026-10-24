@@ -80,10 +80,17 @@ struct ReaderInput {
     simulated_time: u64,
     nonce: u64,
     current_read: bool,
+    replacement: bool,
 }
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct SignedAdmission {
     request: Hash64,
+    consent: Hash64,
+    object: Obj,
+}
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct SignedReplacement {
+    intent: kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
     consent: Hash64,
     object: Obj,
 }
@@ -101,6 +108,17 @@ fn rfc08_typed_provider_exact_publication_native_acceptance_and_cold_restore() {
     assert!(status.success(), "native TypedKernelV4 role fixture failed: {status}");
 }
 
+#[test]
+fn rfc08_typed_replacement_exact_request_native_acceptance_and_historical_cold_read() {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &child_name("typed_writer_child"), "--nocapture", "--test-threads=1"])
+        .env("MISAKA_TYPED_WRITER_CHILD_V4", "1")
+        .env("MISAKA_TYPED_REPLACEMENT_CHILD_V4", "1")
+        .status()
+        .unwrap();
+    assert!(status.success(), "native TypedKernelV4 replacement role fixture failed: {status}");
+}
+
 // The writer deliberately has no native resource limit configured. Configuring
 // global native DB admission on macOS correctly refuses unsupported hard quota.
 // Acquisition-only readers declare local metadata admission in OTHER processes;
@@ -111,6 +129,7 @@ fn reader_roundtrip(
     dir: &std::path::Path,
     request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
     current_read: bool,
+    replacement: bool,
 ) -> (World, std::sync::Arc<kaspa_database::prelude::DB>) {
     use kaspa_database::prelude::ConnBuilder;
     assert!(kaspa_consensus_core::palw_native_resource_v1::native_declared_logical_limits_v1().is_none());
@@ -122,6 +141,7 @@ fn reader_roundtrip(
         simulated_time: chain.ctx.simulated_time,
         nonce: chain.nonce_for_reopen(),
         current_read,
+        replacement,
     };
     std::fs::write(dir.join("reader-input"), borsh::to_vec(&input).unwrap()).unwrap();
     let db_path = db.path().to_path_buf();
@@ -206,7 +226,7 @@ async fn typed_writer_child() {
     assert!(matches!(request.bundle, PalwProspectiveKernelBundleV4::TypedKernelV4(_)));
     let dir = std::env::temp_dir().join(format!("misaka-native-typed-{}-{root}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    (w, db) = reader_roundtrip(w, db, &dir, request, false);
+    (w, db) = reader_roundtrip(w, db, &dir, request, false, false);
     let admission: SignedAdmission = borsh::from_slice(&std::fs::read(dir.join("signed-admission")).unwrap()).unwrap();
     assert_eq!(admission.request, request.id());
     let capsule = signed_capsule(&admission.object);
@@ -277,8 +297,38 @@ async fn typed_writer_child() {
         w.net.ledger().claims.contains_key(&root.as_bytes()),
         "actual claim passes active material gate after funded TypedKernelV4 acceptance"
     );
-    (w, db) = reader_roundtrip(w, db, &dir, request, true);
+    (w, db) = reader_roundtrip(w, db, &dir, request, true, false);
     assert!(w.net.chain.ctx.consensus.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap());
+    if std::env::var("MISAKA_TYPED_REPLACEMENT_CHILD_V4").as_deref() == Ok("1") {
+        (w, db) = reader_roundtrip(w, db, &dir, request, false, true);
+        let replacement: SignedReplacement = borsh::from_slice(&std::fs::read(dir.join("signed-replacement")).unwrap()).unwrap();
+        assert_eq!(replacement.intent.context_request, request.id());
+        assert_eq!(replacement.intent.previous, admission.consent);
+        assert_eq!(replacement.intent.sequence, 1);
+        let Recovery::ReplaceBeforeV4 { valid_until_daa, .. } = signed_capsule(&replacement.object) else { unreachable!() };
+        assert_eq!(*valid_until_daa, replacement.intent.valid_until_daa);
+        assert_eq!(signed_capsule(&replacement.object).bounded_replacement_consent_v4(), Some(replacement.consent));
+        assert!(!w.net.chain.ctx.consensus.palw_kernel_material_consent_accepted_v4(root, replacement.consent).unwrap());
+        w.net.send(vec![(0, replacement.object)]).await;
+        let current = w.net.chain.tip_state().1.monetary_material_row_v1(root).expect("actual accepted replacement row");
+        assert_eq!(current.sequence, 1);
+        assert_eq!(current.consent, replacement.consent);
+        assert!(
+            misaka_palw_remote::monetary_material::replacement_generation_observed_v4(
+                &replacement.intent,
+                Some(replacement.consent),
+                &current,
+            )
+            .unwrap()
+        );
+        assert!(w.net.chain.ctx.consensus.palw_kernel_material_consent_accepted_v4(root, replacement.consent).unwrap());
+        assert!(
+            !w.net.chain.ctx.consensus.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap(),
+            "the old consent is historical, not the current monetary generation"
+        );
+        (w, db) = reader_roundtrip(w, db, &dir, request, true, true);
+        assert_eq!(w.net.chain.tip_state().1.monetary_material_row_v1(root).unwrap().consent, replacement.consent);
+    }
     drop(w);
     drop(db);
     std::fs::remove_dir_all(dir).unwrap();
@@ -312,18 +362,29 @@ async fn typed_reader_child() {
     assert!(!was_accepted);
     arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 4 << 30, database_bytes: 4 << 30 }));
     let limits = PalwKernelMaterialContextLimitsV4 { max_encoded_bytes: 64 << 20, max_heap_bytes: 128 << 20 };
-    if input.current_read {
+    if input.replacement && !input.current_read {
+        prepare_replacement_reader(&chain, &input, &dir, limits);
+    } else if input.current_read {
         let admission: SignedAdmission = borsh::from_slice(&std::fs::read(dir.join("signed-admission")).unwrap()).unwrap();
         assert_eq!(admission.request, input.request.id());
-        assert!(native.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap());
-        for card in [2, 3] {
+        let replacement = input
+            .replacement
+            .then(|| borsh::from_slice::<SignedReplacement>(&std::fs::read(dir.join("signed-replacement")).unwrap()).unwrap());
+        if let Some(replacement) = &replacement {
+            assert!(native.palw_kernel_material_consent_accepted_v4(root, replacement.consent).unwrap());
+            assert!(!native.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap());
+        } else {
+            assert!(native.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap());
+        }
+        for card in [2, 3, 4, 5].into_iter().filter(|card| *card < 4 || replacement.is_some()) {
             let file = dir.join(format!("provider-{card}"));
             let store = Provider::open_with_kernel_contexts_v4(&file, 4 << 20, 16 << 20, |_| None, limits).unwrap();
             let provider = chain.bonds[card];
             let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+            let exact_consent = if card < 4 { admission.consent } else { replacement.as_ref().unwrap().consent };
             store
                 .answer_material_exact_current_v4(
-                    admission.consent,
+                    exact_consent,
                     root,
                     root,
                     provider,
@@ -467,4 +528,97 @@ async fn typed_reader_child() {
     drop(db);
     drop(rx);
     assert_eq!(weak.strong_count(), 0, "reader releases native workers and every DB handle before process exit");
+}
+
+fn prepare_replacement_reader(
+    chain: &T12Chain,
+    input: &ReaderInput,
+    dir: &std::path::Path,
+    limits: PalwKernelMaterialContextLimitsV4,
+) {
+    use kaspa_consensus_core::{
+        palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4,
+        palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    };
+    use misaka_palw_remote::kernel_material_context_v4::KernelMaterialContextArchiveV4;
+    let native: &dyn ConsensusApi = chain.ctx.consensus.as_ref();
+    let initial: SignedAdmission = borsh::from_slice(&std::fs::read(dir.join("signed-admission")).unwrap()).unwrap();
+    assert_eq!(initial.request, input.request.id());
+    let old_file = dir.join("provider-2").with_extension("kernel-context-v4");
+    let archive = KernelMaterialContextArchiveV4::open(&old_file, limits).unwrap();
+    let original = archive.get(initial.consent).unwrap().expect("real persisted initial signed context");
+    assert_eq!(original.context.request, input.request.id());
+    let mut providers = vec![chain.bonds[4], chain.bonds[5]];
+    providers.sort();
+    let intent = PalwKernelMaterialReplacementIntentV4 {
+        version: 4,
+        root: input.request.intent.manifest.root,
+        context_request: original.context.request,
+        previous: initial.consent,
+        sequence: 1,
+        providers,
+        valid_until_daa: native.get_virtual_daa_score().checked_add(30).unwrap(),
+    };
+    let grant = native.palw_kernel_material_replacement_v4(&original.context, &input.request.bundle, &intent).unwrap();
+    assert_eq!(grant.context_request(), original.context.request);
+    let consent = grant.proposal.bounded_replacement_consent_v4().expect("real native bounded replacement grant");
+    let mut stores = Vec::new();
+    for card in [4, 5] {
+        let provider = chain.bonds[card];
+        let file = dir.join(format!("provider-{card}"));
+        let mut store = Provider::open_with_kernel_contexts_v4(&file, 4 << 20, 16 << 20, |_| None, limits).unwrap();
+        if card == 4 {
+            let before = (std::fs::read(&file).ok(), std::fs::read(file.with_extension("kernel-context-v4")).ok());
+            let mut different_request = original.context.clone();
+            different_request.request = Hash64::from_bytes([0xFD; 64]);
+            assert_eq!(different_request.intent.manifest, *grant.manifest(), "negative keeps exactly the same material manifest");
+            assert_eq!(
+                store.prepare_replacement_kernel_v4(provider, &grant, &input.request.bundle, &different_request).unwrap_err(),
+                "replacement publication substitutes own native context request",
+            );
+            assert!(store.held_contracts().is_empty());
+            assert_eq!(
+                before,
+                (std::fs::read(&file).ok(), std::fs::read(file.with_extension("kernel-context-v4")).ok()),
+                "wrong original request refuses before either replacement publication"
+            );
+        }
+        assert_eq!(store.prepare_replacement_kernel_v4(provider, &grant, &input.request.bundle, &original.context).unwrap(), consent);
+        let scope = grant.manifest().scope(intent.root).unwrap();
+        assert!(
+            matches!(
+                native.palw_material_generation_authority_checked_v4(intent.root, consent, provider, scope),
+                Err(PalwMaterialGenerationAuthorityErrorV4::Denied(_))
+            ),
+            "new signed generation has no native authority before acceptance"
+        );
+        let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+        assert!(
+            store
+                .answer_material_exact_current_v4(
+                    consent,
+                    intent.root,
+                    intent.root,
+                    provider,
+                    key.verification_key.as_ref(),
+                    PalwMonetaryMaterialDemandV1::Kernel { stage: 0, position: 0 },
+                    native,
+                )
+                .is_err()
+        );
+        stores.push(store);
+    }
+    // Real publication by BOTH newly liable actors precedes ordinary 241 and
+    // recovery 242 signatures. The native grant's original request is immutable.
+    let object = material_recovery_object_v2(grant.network, (*grant.proposal).clone(), chain.bonds[0], |bond, msg, domain| {
+        let card = chain.bonds.iter().position(|b| b == bond)?;
+        let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+        libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, msg, domain, [0xB9; 32]).ok().map(|s| s.as_ref().to_vec())
+    })
+    .unwrap();
+    assert_eq!(signed_capsule(&object).bounded_replacement_consent_v4(), Some(consent));
+    for store in &mut stores {
+        store.persist_kernel_signatures_v4(&original.context, signed_capsule(&object)).unwrap();
+    }
+    std::fs::write(dir.join("signed-replacement"), borsh::to_vec(&SignedReplacement { intent, consent, object }).unwrap()).unwrap();
 }

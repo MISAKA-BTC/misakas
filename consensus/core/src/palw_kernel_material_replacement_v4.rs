@@ -42,6 +42,7 @@ pub struct PalwKernelMaterialReplacementOwnedV4 {
     pub network: Hash64,
     pub daa_score: u64,
     candidate: ReservedKernelLedgerV1,
+    context_request: Hash64,
     manifest: NativeRetainedV1<PalwMaterialManifestV1>,
     producer_key: NativeRetainedV1<Vec<u8>>,
     provider_keys: [Option<(PalwBondKeyV2, NativeRetainedV1<Vec<u8>>)>; 8],
@@ -49,6 +50,11 @@ pub struct PalwKernelMaterialReplacementOwnedV4 {
 impl PalwKernelMaterialReplacementOwnedV4 {
     pub fn candidate_ledger(&self) -> &misaka_palw_kernel::ledger::KernelLedgerV1 {
         &self.candidate
+    }
+    /// Original request authenticated by this own-native grant. A provider's
+    /// separately supplied restart context must name this exact request.
+    pub fn context_request(&self) -> Hash64 {
+        self.context_request
     }
     pub fn manifest(&self) -> &PalwMaterialManifestV1 {
         &self.manifest
@@ -217,6 +223,7 @@ pub fn kernel_material_replacement_v4(
         network,
         daa_score: now,
         candidate,
+        context_request: context.request,
         manifest: NativeRetainedV1::try_from_clone_v1(&context.intent.manifest).map_err(|e| e.to_string())?,
         producer_key: NativeRetainedV1::try_from_clone_v1(&sponsor.pubkey).map_err(|e| e.to_string())?,
         provider_keys: keys,
