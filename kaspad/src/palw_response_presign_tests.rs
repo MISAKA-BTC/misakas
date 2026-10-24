@@ -210,6 +210,7 @@ fn response_presign_float_constructor_scope_binding_and_exclusive_clock() {
         action: Action::FloatSourceAnswer(answer),
         signature: vec![],
     };
+    queued_source_packet_controls_v1(crate::palw_panel::court_outbox::SourceResponseSnapshotV1::Float(old.clone()), movement.clone());
     let calls = Cell::new(0);
     let sign = || {
         calls.set(calls.get() + 1);
@@ -375,6 +376,7 @@ fn response_presign_tir_public_duty_ordinal_header_seed_actor_and_expiry() {
         action: Action::NativeTirPrefixAnswer(answer),
         signature: vec![],
     };
+    queued_source_packet_controls_v1(crate::palw_panel::court_outbox::SourceResponseSnapshotV1::Tir(old.clone()), movement.clone());
     let calls = Cell::new(0);
     let sign = || {
         calls.set(calls.get() + 1);
@@ -450,4 +452,237 @@ fn response_presign_owned_reader_keeps_exact_host_budget_until_blocking_worker_d
     worker.join().unwrap();
     assert!(dropped.load(Ordering::SeqCst));
     assert_eq!(ledger.reserved_bytes(), 0);
+}
+
+fn copy_source_snapshot_v1(
+    p: &crate::palw_panel::court_outbox::SourceResponseSnapshotV1,
+) -> crate::palw_panel::court_outbox::SourceResponseSnapshotV1 {
+    use crate::palw_panel::court_outbox::SourceResponseSnapshotV1 as S;
+    match p {
+        S::Flat(p) => S::Flat(p.clone()),
+        S::Float(p) => S::Float(p.clone()),
+        S::Tir(p) => S::Tir(p.clone()),
+    }
+}
+fn queued_source_packet_controls_v1(snapshot: crate::palw_panel::court_outbox::SourceResponseSnapshotV1, mut movement: Move) {
+    use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+    use crate::palw_panel::court_outbox::{CourtOutboxV1, SourceResponseFaultV1 as F, SourceResponseSnapshotV1 as S};
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
+    use std::future::Future;
+    movement.signature = vec![7; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
+    let signer = match &movement.action {
+        Action::FlatSourceAnswer(a) => a.answerer,
+        Action::FloatSourceAnswer(a) => a.answerer,
+        Action::NativeTirPrefixAnswer(a) => a.answerer,
+        _ => panic!("source packet"),
+    };
+    let key = (movement.seed_id, 42, true);
+    let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(128), || None);
+    let memory =
+        ledger.reserve(PalwMemoryReservationKeyV1 { role: "queued-source-test", class_id: h(1), job: movement.claim }, 128).unwrap();
+    let object = O::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
+    let mut outbox = CourtOutboxV1::default();
+    outbox.try_push_source_response(key, &object, 110, snapshot, memory, None).unwrap();
+    assert_eq!(ledger.reserved_bytes(), 128);
+    let mut retry = outbox.try_retry_buffer().unwrap();
+    let flight = outbox.try_take_priority().unwrap();
+    let reads = Cell::new(0);
+    let signers = Cell::new(0);
+    let submits = Cell::new(0);
+    // A late read failure at the actual common operation gate must leave the
+    // carrier signer uncalled, and the same exact packet/guard requeued.
+    assert!(matches!(
+        outbox.current_source_then_for_tests(
+            &flight[0].3,
+            |_| {
+                reads.set(reads.get() + 1);
+                Err("native read capacity unavailable".into())
+            },
+            || signers.set(signers.get() + 1)
+        ),
+        Err(F::Retry(_))
+    ));
+    assert_eq!(signers.get(), 0);
+    for item in flight {
+        retry.push(item);
+    }
+    outbox.finish_flush(retry);
+    assert_eq!(ledger.reserved_bytes(), 128);
+    let mut retry = outbox.try_retry_buffer().unwrap();
+    let flight = outbox.try_take_priority().unwrap();
+    outbox
+        .current_source_then_for_tests(&flight[0].3, |p| Ok(Some(copy_source_snapshot_v1(p))), || signers.set(signers.get() + 1))
+        .unwrap();
+    assert!(matches!(
+        outbox.current_source_then_for_tests(
+            &flight[0].3,
+            |_| Err("late native transport refusal".into()),
+            || submits.set(submits.get() + 1)
+        ),
+        Err(F::Retry(_))
+    ));
+    assert_eq!((signers.get(), submits.get()), (1, 0));
+    // Exact packet identity is independent of shared debounce keys. A changed
+    // signed packet cannot borrow this original snapshot or trigger any read.
+    let mut foreign = object.clone();
+    let O::PublicCourtStreamMoveV1 { movement } = &mut foreign else { unreachable!() };
+    movement.signature[0] ^= 1;
+    assert!(matches!(
+        outbox.current_source_then_for_tests(
+            &foreign,
+            |_| panic!("foreign packet must not read under original owner"),
+            || panic!("must not submit")
+        ),
+        Err(F::Stale)
+    ));
+    for variant in [0, 1] {
+        let refusal = outbox.current_source_then_for_tests(
+            &object,
+            |p| {
+                let mut fresh = copy_source_snapshot_v1(p);
+                match &mut fresh {
+                    S::Flat(p) => {
+                        if variant == 0 {
+                            p.now_daa = p.session.response_deadline_v1(&signer).unwrap();
+                        } else {
+                            let mut c = (*p.context).clone();
+                            c.binding.full_logits_trace_root = h(80);
+                            p.context = Box::new(c).into();
+                        }
+                    }
+                    S::Float(p) => {
+                        if variant == 0 {
+                            p.now_daa = p.session.response_deadline_v1(&signer).unwrap();
+                        } else {
+                            let mut c = (*p.context).clone();
+                            c.binding.full_logits_trace_root = h(80);
+                            p.context = Box::new(c).into();
+                        }
+                    }
+                    S::Tir(p) => {
+                        if variant == 0 {
+                            p.now_daa = p.row.respond_until_daa;
+                        } else {
+                            p.header.step_merkle_root = h(80);
+                        }
+                    }
+                }
+                Ok(Some(fresh))
+            },
+            || submits.set(submits.get() + 1),
+        );
+        assert!(matches!(refusal, Err(F::Stale)));
+    }
+    assert_eq!(submits.get(), 0);
+    for item in flight {
+        retry.push(item);
+    }
+    outbox.finish_flush(retry);
+    // Poll and cancel an actual future owning the drained production batch.
+    // The retained exact packet enables one recovery on the next real flush.
+    let mut canceled = Box::pin(async {
+        let _retry = outbox.try_retry_buffer().unwrap();
+        let batch = outbox.try_take_priority().unwrap();
+        std::future::pending::<()>().await;
+        drop(batch);
+    });
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(canceled.as_mut().poll(&mut cx).is_pending());
+    drop(canceled);
+    assert!(outbox.pending().is_empty());
+    assert_eq!(ledger.reserved_bytes(), 128);
+    let recovery = outbox.try_retry_buffer().unwrap();
+    assert_eq!(outbox.pending().len(), 1);
+    drop(recovery);
+    let recovery = outbox.try_retry_buffer().unwrap();
+    assert_eq!(outbox.pending().len(), 1, "next flush does not recover twice");
+    drop(recovery);
+    // A successfully completed packet is marked before any later cancellation;
+    // it must never be resurrected by the next flush.
+    let mut canceled = Box::pin(async {
+        let batch = outbox.try_take_priority().unwrap();
+        outbox
+            .current_source_then_for_tests(&batch[0].3, |p| Ok(Some(copy_source_snapshot_v1(p))), || submits.set(submits.get() + 1))
+            .unwrap();
+        outbox.finish_source_packet(&batch[0].3);
+        std::future::pending::<()>().await;
+        drop(batch);
+    });
+    assert!(canceled.as_mut().poll(&mut cx).is_pending());
+    drop(canceled);
+    let recovery = outbox.try_retry_buffer().unwrap();
+    assert!(outbox.pending().is_empty());
+    assert_eq!(submits.get(), 1);
+    assert_eq!(ledger.reserved_bytes(), 0, "completed packet snapshots release after canceled payload retires");
+    drop(recovery);
+    assert!(outbox.submitted_at(&key).is_none(), "guard disposal does not invent a successful submission stamp");
+}
+#[test]
+fn response_presign_queued_flat_packet_exact_scope_retry_cancel_and_lifetime() {
+    let (old, movement, _) = flat();
+    queued_source_packet_controls_v1(crate::palw_panel::court_outbox::SourceResponseSnapshotV1::Flat(old), movement);
+}
+
+#[test]
+fn response_presign_source_queue_admission_and_canceled_recovery_capacity_are_atomic() {
+    use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+    use crate::palw_panel::court_outbox::{CourtOutboxV1, SourceResponseSnapshotV1 as S};
+    use kaspa_consensus_core::{
+        palw_native_resource_v1::{NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1},
+        palw_state_v2::PalwConsensusObjectV2 as O,
+    };
+    const MODE: &str = "MISAKA_SOURCE_QUEUE_CAPACITY_MODE";
+    let Ok(mode) = std::env::var(MODE) else {
+        let name = format!("{}::response_presign_source_queue_admission_and_canceled_recovery_capacity_are_atomic", module_path!());
+        let name = name.split_once("::").unwrap().1;
+        for mode in ["enqueue", "recover"] {
+            assert!(
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", name, "--nocapture", "--test-threads=1"])
+                    .env(MODE, mode)
+                    .status()
+                    .unwrap()
+                    .success(),
+                "{mode}"
+            );
+        }
+        return;
+    };
+    let (old, mut movement, _) = flat();
+    movement.signature = vec![7; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
+    let key = (movement.seed_id, 42, true);
+    let object = O::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
+    let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(128), || None);
+    let memory =
+        ledger.reserve(PalwMemoryReservationKeyV1 { role: "source-queue-refusal-test", class_id: h(1), job: h(2) }, 128).unwrap();
+    let mut outbox = CourtOutboxV1::default();
+    if mode == "recover" {
+        outbox.try_push_source_response(key, &object, 110, S::Flat(old), memory, None).unwrap();
+        let retry = outbox.try_retry_buffer().unwrap();
+        drop(outbox.try_take_priority().unwrap()); // canceled raw batch
+        drop(retry);
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 }));
+        assert!(outbox.try_retry_buffer().is_err());
+        assert!(outbox.pending().is_empty());
+        assert_eq!(ledger.reserved_bytes(), 128, "whole original packet/duty guard survives failed recovery");
+        assert!(outbox.try_retry_buffer().is_err());
+        assert_eq!(ledger.reserved_bytes(), 128, "repeat refusal never prunes or fabricates authority");
+        drop(outbox);
+        assert_eq!(ledger.reserved_bytes(), 0);
+    } else {
+        // The shared retained clone+due API succeeds normally and must preserve
+        // both existing logical entries on a later typed destination refusal.
+        let mut destination = CourtOutboxV1::default();
+        destination.try_push_clone_with_due(key, &object, 110).unwrap();
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 }));
+        let other = (h(99), 42, true);
+        assert!(destination.try_push_clone_with_due(other, &object, 120).is_err());
+        assert_eq!(destination.pending().len(), 1);
+        assert_eq!(destination.forget_due(&key), Some(110));
+        assert_eq!(destination.forget_due(&other), None);
+        assert!(outbox.try_push_source_response(key, &object, 110, S::Flat(old), memory, None).is_err());
+        assert!(outbox.pending().is_empty());
+        assert_eq!(outbox.forget_due(&key), None);
+        assert_eq!(ledger.reserved_bytes(), 0, "refused destination releases snapshots before their tickets");
+    }
 }

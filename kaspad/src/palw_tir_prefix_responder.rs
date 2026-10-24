@@ -140,7 +140,6 @@ mod tests {
 #[derive(Default)]
 pub(super) struct TirPrefixBookV1 {
     after: Option<(u64, Hash64, PalwBondKeyV2)>,
-    held: HashMap<(Hash64, u32), crate::palw_memory_ledger::PalwMemoryReservationV1>,
 }
 
 impl PalwPanelService {
@@ -206,9 +205,6 @@ impl PalwPanelService {
                 }
             }
         });
-        book.held.retain(|(seed, round), _| {
-            court_outbox.pending().iter().any(|(s, r, responder, _)| (s, r, *responder) == (seed, round, true))
-        });
         for (claim, owner) in keys {
             if slot.only.is_some_and(|only| !only.contains(&claim)) {
                 continue;
@@ -220,7 +216,7 @@ impl PalwPanelService {
             let result = async {
                 let Some(paid) = session.palw_staged_paid_authority_v1((claim, owner))? else { return Ok(()) };
                 let bytes = paid.terms.plan.resident_ram_bytes.checked_mul(2).ok_or("TIR prefix snapshot memory overflow")?;
-                let _snapshot = crate::palw_memory_ledger::host_ledger_v1()
+                let snapshot = crate::palw_memory_ledger::host_ledger_v1()
                     .reserve(
                         crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
                             role: "public-tir-prefix-snapshot",
@@ -324,16 +320,14 @@ impl PalwPanelService {
                 )? else {return Ok(())};
                 movement.signature=signature;
                 movement.check()?;
-                book.held.insert((key.0, key.1), packet_memory);
                 let deadline = row.respond_until_daa;
-                court_outbox.push_pending((
-                    key.0,
-                    key.1,
-                    key.2,
-                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
-                ));
-                court_outbox.set_due(key, deadline.saturating_sub(1));
-                court_outbox.mark_submitted(key, progress.now_daa);
+                let clock=progress.now_daa;
+                let object=PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
+                court_outbox.try_push_source_response(
+                    key,&object,deadline.saturating_sub(1),
+                    super::court_outbox::SourceResponseSnapshotV1::Tir(progress),snapshot,Some(packet_memory),
+                ).map_err(|why|why.to_string())?;
+                court_outbox.mark_submitted(key, clock);
                 Ok::<(), String>(())
             }
             .await;

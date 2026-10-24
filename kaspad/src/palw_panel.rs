@@ -7095,6 +7095,12 @@ impl PalwPanelService {
                 warn!("[{PALW_PANEL}] rider native work withheld before funding: {why}");
                 if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
             }
+            let source_packet=court_outbox::is_source_response_v1(&object);
+            if let Err(why)=court_outbox.current_source_then(&object,session,||()) {
+                warn!("[{PALW_PANEL}] source response withheld before funding: {why}");
+                if matches!(why,court_outbox::SourceResponseFaultV1::Retry(_)) {unsent.push((session_id,round,mine_is_responder,object));}else {court_outbox.finish_source_packet(&object);}
+                continue;
+            }
             let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
             // A failed full scan also excludes a higher minimum in this pass. Do not scan the
             // same unavailable heavy budget for every queued proof; cheap moves may still use
@@ -7129,15 +7135,32 @@ impl PalwPanelService {
                 warn!("[{PALW_PANEL}] rider native work withheld before carrier signing: {why}");
                 if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
             }
-            match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
+            let prepared=match court_outbox.current_source_then(&object,session,||self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa)) {
+                Ok(prepared)=>prepared,
+                Err(why)=>{
+                    warn!("[{PALW_PANEL}] source response withheld before carrier signing: {why}");
+                    if matches!(why,court_outbox::SourceResponseFaultV1::Retry(_)) {unsent.push((session_id,round,mine_is_responder,object));}else {court_outbox.finish_source_packet(&object);}
+                    continue;
+                }
+            };
+            match prepared {
                 Ok(prepared_carrier) => {
                     let txid = prepared_carrier.id();
                     if let Err(why)=court_outbox.refresh_rider(&object,&self.consensus_config.params,session) {
                         warn!("[{PALW_PANEL}] rider native work withheld before carrier submission: {why}");
                         if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
                     }
-                    match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
+                    let submission=match court_outbox.current_source_then(&object,session,||self.submit_prepared_carrier_v1(session,prepared_carrier)) {
+                        Ok(submission)=>submission,
+                        Err(why)=>{
+                            warn!("[{PALW_PANEL}] source response withheld before carrier submission: {why}");
+                            if matches!(why,court_outbox::SourceResponseFaultV1::Retry(_)) {unsent.push((session_id,round,mine_is_responder,object));}else {court_outbox.finish_source_packet(&object);}
+                            continue;
+                        }
+                    };
+                    match submission.await {
                         Ok(sent_carrier) => {
+                            court_outbox.finish_source_packet(&object);
                             if palw_da_accusation_queued_v1(round, mine_is_responder, &object) {
                                 info!("[{PALW_PANEL}] submitted this seat's DefaultAccused of claim {session_id} in tx {txid} (P2-6)");
                             } else if reporter_filer::palw_filer_queued_v1(round, mine_is_responder, &object) {
@@ -7161,13 +7184,13 @@ impl PalwPanelService {
                         Err(e) => {
                             warn!("[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}", object_name(&object));
                             carrier.set_funding(None);
-                            if rider_batch {unsent.push((session_id,round,mine_is_responder,object));}
+                            if rider_batch || source_packet {unsent.push((session_id,round,mine_is_responder,object));}
                         }
                     }
                 }
                 Err(e) => {
                     warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}");
-                    if rider_batch {unsent.push((session_id,round,mine_is_responder,object));}
+                    if rider_batch || source_packet {unsent.push((session_id,round,mine_is_responder,object));}
                 }
             }
         }

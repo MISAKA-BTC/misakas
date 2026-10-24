@@ -19,6 +19,10 @@ use order::CourtOrderPlanV1;
 #[path = "court_outbox_routing.rs"]
 mod routing;
 use routing::CourtRoutingV2;
+#[path = "court_outbox_source_response.rs"]
+mod source_response;
+use source_response::CourtSourceResponsesV1;
+pub(super) use source_response::{SourceResponseSnapshotV1,SourceResponseFaultV1,is_source_response_v1};
 
 /// This invalidates only the local pending execution. It is neither a claim
 /// verdict nor a monetary penalty. Read/import/capacity faults remain retryable.
@@ -37,6 +41,7 @@ pub(crate) struct CourtOutboxV1 {
     // Pending payloads drop before the tickets that authorize their storage.
     payload_tickets: CourtPayloadTicketsV1,
     rider_guards: CourtRoutingV2,
+    source_guards: CourtSourceResponsesV1,
     rider_due_frame: Option<NativeDemandLeaseV1>,
     pending_frame: Option<CourtFrameLeaseV1>,
     flight_frame: Option<CourtFrameLeaseV1>,
@@ -95,10 +100,64 @@ impl CourtOutboxV1 {
         self.pending_frame = Some(frame);
         Ok(())
     }
+    /// Reserve the retained due-map capacity before copying the payload. A
+    /// failed payload admission changes no pending move or logical due entry.
+    pub(super) fn try_push_clone_with_due(&mut self, key: CourtMoveKeyV1, source: &PalwConsensusObjectV2, due: u64) -> Result<(), NativeCoverageV1> {
+        let frame=crate::palw_rider_outbox::RiderBatchV2::reserve_court_due(self.due.len(),self.due.capacity())?;
+        self.rider_due_frame=frame;
+        self.due.try_reserve(1).map_err(|why|NativeCoverageV1::unsupported::<Self>("court due map admission",&why.to_string()))?;
+        self.try_push_clone(key,source)?;
+        self.due.insert(key,due);
+        Ok(())
+    }
+    pub(super) fn try_push_source_response(&mut self,key:CourtMoveKeyV1,source:&PalwConsensusObjectV2,due:u64,snapshot:SourceResponseSnapshotV1,memory:crate::palw_memory_ledger::PalwMemoryReservationV1,packet:Option<crate::palw_memory_ledger::PalwMemoryReservationV1>)->Result<(),NativeCoverageV1> {
+        let guard=CourtSourceResponsesV1::prepare(key,due,snapshot,memory,packet,source)?;
+        self.try_push_clone_with_due(key,source,due)?;
+        self.source_guards.insert(guard);
+        Ok(())
+    }
+    pub(super) fn finish_source_packet(&mut self,object:&PalwConsensusObjectV2) {self.source_guards.finish_packet(object);}
+    /// Recover only still-outstanding exact packets after a canceled carrier
+    /// future. Prepare every copy/ticket before changing logical queue entries.
+    fn recover_source_flight(&mut self)->Result<(),NativeCoverageV1> {
+        let count=self.source_guards.recovery_packets().filter(|(_,o,_)|!self.pending.iter().any(|(_,_,_,p)|p==*o)).count();
+        if count==0 {return Ok(());}
+        type Recovery=(CourtMoveKeyV1,u64,NativeRetainedV1<PalwConsensusObjectV2>,Option<NativeDemandLeaseV1>);
+        let requests=count.checked_mul(std::mem::size_of::<Recovery>()).ok_or_else(||NativeCoverageV1::overflow::<Recovery>("source canceled recovery array"))?;
+        let _workspace=kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(requests as u64)?;
+        let mut recovery=Vec::<Recovery>::new();
+        recovery.try_reserve_exact(count).map_err(|why|NativeCoverageV1::unsupported::<Recovery>("source canceled recovery array",&why.to_string()))?;
+        for (key,object,due) in self.source_guards.recovery_packets().filter(|(_,o,_)|!self.pending.iter().any(|(_,_,_,p)|p==*o)) {
+            let slot=self.payload_tickets.prepare()?;
+            let copy=NativeRetainedV1::try_from_clone_v1(object)?;
+            recovery.push((key,due,copy,slot));
+        }
+        let target=self.pending.len().checked_add(count).ok_or_else(||NativeCoverageV1::overflow::<Self>("source canceled pending array"))?;
+        self.pending_frame=Some(CourtFrameLeaseV1::reserve(target.max(self.pending.capacity()))?);
+        self.pending.try_reserve_exact(count).map_err(|why|NativeCoverageV1::unsupported::<Self>("source canceled pending array",&why.to_string()))?;
+        let due_target=self.due.len().checked_add(count).and_then(|n|n.checked_sub(1)).ok_or_else(||NativeCoverageV1::overflow::<Self>("source canceled due map"))?;
+        self.rider_due_frame=crate::palw_rider_outbox::RiderBatchV2::reserve_court_due(due_target,self.due.capacity())?;
+        self.due.try_reserve(count).map_err(|why|NativeCoverageV1::unsupported::<Self>("source canceled due map",&why.to_string()))?;
+        for (key,due,copy,slot) in recovery {
+            let (object,ticket)=copy.into_parts_v1();
+            self.payload_tickets.insert(key,ticket,slot);
+            self.pending.push((key.0,key.1,key.2,object));
+            self.due.insert(key,due);
+        }
+        Ok(())
+    }
+    pub(super) fn current_source_then<T>(&self,object:&PalwConsensusObjectV2,session:&kaspa_consensusmanager::ConsensusProxy,operation:impl FnOnce()->T)->Result<T,SourceResponseFaultV1> {
+        self.source_guards.current_then(object,session,operation)
+    }
+    #[cfg(test)]
+    pub(super) fn current_source_then_for_tests<T>(&self,object:&PalwConsensusObjectV2,read:impl FnOnce(&SourceResponseSnapshotV1)->Result<Option<SourceResponseSnapshotV1>,String>,operation:impl FnOnce()->T)->Result<T,SourceResponseFaultV1> {
+        self.source_guards.current_then_with(object,read,operation)
+    }
     pub(super) fn retain_pending(&mut self, keep: impl FnMut(&CourtMoveV1) -> bool) {
         self.pending.retain(keep);
         self.payload_tickets.prune(&self.pending);
         self.rider_guards.prune(&self.pending);
+        self.source_guards.prune(&self.pending);
     }
     pub(super) fn set_due(&mut self, key: CourtMoveKeyV1, due: u64) -> Option<u64> {
         self.due.insert(key, due)
@@ -149,6 +208,8 @@ impl CourtOutboxV1 {
         self.flight_frame = None;
         self.payload_tickets.finish_flush(&self.pending);
         self.rider_guards.finish_flush(&self.pending);
+        self.recover_source_flight()?;
+        self.source_guards.finish_flush(&self.pending);
         CourtRetryBufferV1::new(self.pending.len())
     }
     pub(super) fn try_take_priority(&mut self) -> Result<Vec<CourtMoveV1>, NativeCoverageV1> {
@@ -157,6 +218,7 @@ impl CourtOutboxV1 {
         self.flight_frame = self.pending_frame.take();
         self.payload_tickets.start_flush();
         self.rider_guards.start_flush();
+        self.source_guards.start_flush();
         Ok(std::mem::take(&mut self.pending))
     }
     /// Legacy EDF remains only as a fixture/parity reference.
@@ -165,6 +227,7 @@ impl CourtOutboxV1 {
         self.flight_frame = self.pending_frame.take();
         self.payload_tickets.start_flush();
         self.rider_guards.start_flush();
+        self.source_guards.start_flush();
         palw_court_queue_edf_v1(&mut self.pending, &self.due);
         std::mem::take(&mut self.pending)
     }
@@ -181,6 +244,7 @@ impl CourtOutboxV1 {
         self.flight_frame = None;
         self.payload_tickets.finish_flush(&self.pending);
         self.rider_guards.finish_flush(&self.pending);
+        self.source_guards.finish_flush(&self.pending);
         self.due.retain(|key, _| self.pending.iter().any(|(s, r, b, _)| (*s, *r, *b) == *key));
     }
     #[cfg(test)]
@@ -206,12 +270,13 @@ impl CourtOutboxV1 {
         due: HashMap<CourtMoveKeyV1, u64>,
         submitted: HashMap<CourtMoveKeyV1, u64>,
     ) -> Self {
-        Self { pending, due, submitted, payload_tickets: CourtPayloadTicketsV1::default(), rider_guards: CourtRoutingV2::default(), rider_due_frame:None, pending_frame: None, flight_frame: None }
+        Self { pending, due, submitted, payload_tickets: CourtPayloadTicketsV1::default(), rider_guards: CourtRoutingV2::default(), source_guards: CourtSourceResponsesV1::default(), rider_due_frame:None, pending_frame: None, flight_frame: None }
     }
     #[cfg(test)]
     pub(super) fn into_parts(self) -> (Vec<CourtMoveV1>, HashMap<CourtMoveKeyV1, u64>, HashMap<CourtMoveKeyV1, u64>) {
         assert!(self.payload_tickets.is_empty(), "fixture extraction must not detach payload tickets");
         assert!(self.rider_guards.is_empty(), "fixture extraction must not detach native rider guards");
+        assert!(self.source_guards.is_empty(), "fixture extraction must not detach original source response guards");
         assert!(self.pending_frame.as_ref().is_none_or(|f| !f.is_reserved()) && self.flight_frame.as_ref().is_none_or(|f| !f.is_reserved()), "fixture extraction must not detach frame tickets");
         (self.pending, self.due, self.submitted)
     }

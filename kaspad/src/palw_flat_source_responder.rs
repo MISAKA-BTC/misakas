@@ -207,7 +207,7 @@ impl PalwPanelService {
                 };
                 // Keep the admitted snapshot workspace alive through the fresh
                 // own read, signature and queue handoff. No await follows it.
-                let _presign_read=read;
+                let presign_read=read;
                 let Some(signature)=super::response_presign::sign_current_v1(
                     session.palw_staged_flat_source_v1((claim,owner)),
                     |fresh|super::response_presign::flat_current_v1(&expected,fresh,&movement,signer),
@@ -215,13 +215,11 @@ impl PalwPanelService {
                 )? else {return Ok(())};
                 movement.signature=signature;
                 movement.check()?;
-                court_outbox.push_pending((
-                    key.0,
-                    key.1,
-                    key.2,
-                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
-                ));
-                court_outbox.set_due(key, deadline.saturating_sub(1));
+                let object=PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
+                court_outbox.try_push_source_response(
+                    key,&object,deadline.saturating_sub(1),
+                    super::court_outbox::SourceResponseSnapshotV1::Flat(expected),presign_read,None,
+                ).map_err(|why|why.to_string())?;
                 court_outbox.mark_submitted(key, clock);
                 Ok::<(), String>(())
             }
