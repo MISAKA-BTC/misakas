@@ -47,3 +47,9 @@ acceptance. Other capture/transport/publication consumers and physical workspace
 remain scoped separately. Runtime logs and the binding return-type, borrowed-view ladder and
 foreign-prompt fixture compilation corrections are recorded in the scoped
 [production capture record](../../../evidence/rfc/0006-gdn-retained-production-capture-2026-10-25.md).
+
+### 2026-10-25 historical census and pending rider continuation
+
+The actual census now has a fallible read path and a cold current-header size scanner; it does not materialize a header merely to count its Borsh carriage bytes. A reserved legacy conversion remains separate. Only actual key absence contributes to unavailable; local capacity, corrupt rows and storage failure abort the observation. This closes the census's cold header materialization/error-erasure path, with the scoped tests and remaining other historical consumers recorded in [the evidence](../../../evidence/rfc/0006-historical-header-census-measurement-2026-10-25.md).
+
+The prospective rider owner is now handed through the actual producer/outbox/CourtOutbox/carrier path, bound to the full ordered attempt IDs. Capacity/availability preserves pending work, while a typed identity refusal retires only that original pending execution without success or misconduct stamps. This includes local import generation invalidation; a reversible noncanonical ancestry observation remains unavailable. Retained due-map buckets need admission even when their entry count has fallen. [The pending-owner evidence](../../../evidence/rfc/0006-rider-pending-native-owners-2026-10-25.md) separates synthetic native-factory/lifetime controls from live-store branch/expiry and campaign requirements. Original None decisions keep their original job, and cannot acquire an original execution owner after the fact. No serialized owner or restart reconstruction is introduced.
