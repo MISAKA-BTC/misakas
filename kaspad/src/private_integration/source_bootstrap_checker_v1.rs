@@ -25,6 +25,9 @@ use std::{
 
 type Parameters = BTreeMap<(u16, Option<u16>), TensorWireV1>;
 
+#[path = "source_bootstrap_checker_refutation_v1.rs"]
+mod refutation;
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateSourceBootstrapCheckerSpecV1 {
@@ -40,6 +43,9 @@ pub struct PrivateSourceBootstrapCheckerSpecV1 {
     maximum_fee_sompi: u64,
     maximum_input_bytes: u64,
     maximum_workspace_bytes: u64,
+    /// Explicit optional authority for objective FileProof carriers. No
+    /// approval input or default fee authority is reused for prosecution.
+    objective_refutation: Option<refutation::ObjectiveRefutationFeeV1>,
     #[serde(skip)]
     _owner: Option<NativeDemandLeaseV1>,
 }
@@ -71,6 +77,9 @@ impl PrivateSourceBootstrapCheckerSpecV1 {
         let funding = crate::palw_producer::parse_outpoint(&self.funding_outpoint)?;
         if checker.0 == funding || kaspa_consensus_core::config::drill::palw_t12_public_genesis_txid_v1(&funding.transaction_id) {
             return Err("source checker needs a separate private carrier input".into());
+        }
+        if let Some(authority) = &self.objective_refutation {
+            authority.funding(checker, funding)?;
         }
         let paths = (ctx.data_dir.as_os_str().len() as u64)
             .checked_mul(6)
@@ -221,8 +230,12 @@ impl PreparedSourceBootstrapCheckerV1 {
             }
             match misaka_palw_remote::pursuit::kernel_check_program_v1(&ledger, &work.work.claim.as_bytes(), &model, [0; 64]) {
                 Ok(None) => {}
-                Ok(Some(_)) => {
-                    kaspa_core::warn!("source direct replay found a fault; approval withheld");
+                Ok(Some(misaka_palw_remote::pursuit::KernelGoalV1::Prove(proof))) => {
+                    self.drive_objective_refutation(id, &work.work, proof).await?;
+                    continue;
+                }
+                Ok(Some(misaka_palw_remote::pursuit::KernelGoalV1::Demand(_))) => {
+                    kaspa_core::debug!("source direct replay needs public material; approval withheld without accusation");
                     continue;
                 }
                 Err(error) => {
