@@ -309,10 +309,10 @@ impl DurableMonetaryMaterialProviderV1 {
         }
         self.store.provider_answer_action_v1(consent, root, dependency, provider, demand)
     }
-    /// Try every retained candidate generation after the current consent. Each
-    /// fallback needs a positive current native generation/provider/exact-scope
-    /// witness. Kernel data additionally replays its intrinsic context against
-    /// the current signed covenant before any answer leaves this owner.
+    /// Try retained candidates starting with the preferred consent. Every
+    /// candidate needs current native generation/provider/exact-scope authority
+    /// before and after assembly. Kernel data additionally replays its intrinsic
+    /// context against the current signed covenant. Assembly refusal stops the read.
     pub fn answer_material_current_v4(
         &self,
         preferred: Hash64,
@@ -354,15 +354,13 @@ impl DurableMonetaryMaterialProviderV1 {
             palw_attempt_material_v3::verify_ready_signature_v3, palw_kernel_material_context_v4::restore_kernel_material_context_v4,
             palw_material_capacity_v1::PalwMaterialCodecV1,
         };
-        let mut last = String::from("no current eligible retained material generation");
-        for (consent, scope) in self.store.material_generation_scopes_v4(preferred, root, dependency) {
-            if exact && consent != preferred {
-                continue;
-            }
-            let result = (|| {
-                if exact || consent != preferred || self.contexts.is_some() {
-                    native.palw_material_generation_authority_v4(root, consent, provider, scope)?;
-                }
+        self.answer_current_generation_with_v4(
+            preferred,
+            root,
+            dependency,
+            exact,
+            |consent, scope| native.palw_material_generation_authority_v4(root, consent, provider, scope),
+            |consent, scope| {
                 if scope.codec == PalwMaterialCodecV1::NativeHeldCompleteV2 {
                     return Err("V2 routed generation requires its explicit own-authority response API".into());
                 }
@@ -386,14 +384,40 @@ impl DurableMonetaryMaterialProviderV1 {
                     return self.store.provider_answer_action_v1(consent, root, dependency, provider, demand);
                 }
                 self.store.provider_answer_action_v1(consent, root, dependency, provider, demand)
-            })();
-            match result {
-                Ok(answer) => return Ok(answer),
-                Err(reason) => last = reason,
+            },
+        )
+    }
+    // Only a failed initial native authority lookup permits trying another
+    // retained generation. In particular, local allocation / replay / assembly
+    // refusals must not turn into a successful fallback under another consent.
+    fn answer_current_generation_with_v4<T>(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        exact: bool,
+        mut authority: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<(), String>,
+        mut build: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut last = String::from("no current eligible retained material generation");
+        for (consent, scope) in self.store.material_generation_scopes_v4(preferred, root, dependency) {
+            if exact && consent != preferred {
+                continue;
             }
+            if let Err(reason) = authority(consent, scope) {
+                last = reason;
+                continue;
+            }
+            let answer = build(consent, scope)?;
+            // Assembly can outlive the authority read across a reorg. Keep the
+            // returned owner (and its allocation ticket) through this recheck;
+            // a changed generation drops it before any bytes leave this API.
+            authority(consent, scope)?;
+            return Ok(answer);
         }
         Err(last)
     }
+
     pub fn open(
         file: &Path,
         max_contract_bytes: u64,
@@ -835,3 +859,7 @@ fn atomic_routed_file_v2(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "monetary_material_current_tests.rs"]
+mod current_generation_tests;
