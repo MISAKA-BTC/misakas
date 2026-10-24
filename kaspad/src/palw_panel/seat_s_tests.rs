@@ -452,7 +452,15 @@ fn m2_an_output_root_mismatch_is_no_valid() {
     for head in ["    async fn attempt_seat_replay_v1(", "    async fn fp_seat_replay_pass_v1("] {
         assert!(body_of(source, head).contains("duty.output_root"), "{head} compares the claim's output root");
     }
-    assert!(body_of(source, "    async fn fp_seat_replay_pass_v1(").contains("output_root: Some(run.outcome.output_root),"));
+    // The FP pass hands its exact bound backend to the production worker;
+    // the connected helper now projects the run's original output root.
+    assert!(body_of(source, "    async fn fp_seat_replay_pass_v1(").contains("replays.start_fp_routed_v2("));
+    assert!(body_of(source, "    fn start_fp_routed_v2(").contains("bound.execute(&job,&prompt)"));
+    let routed = include_str!("../palw_fp_replay_routing_v2.rs");
+    let execute = body_of(routed, "    pub(super) fn execute(");
+    assert!(execute.contains("self.backend.execute_free_prompt(job, prompt)"));
+    assert!(execute.contains("shape.job_context != *original.job"), "the actual executed context remains bound");
+    assert!(execute.contains("output_root: Some(run.outcome.output_root),"));
 }
 
 /// **M3: a partial seat is priced as the streamed fold it keeps**, not 72 B for every leaf it

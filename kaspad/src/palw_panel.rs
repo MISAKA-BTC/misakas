@@ -116,6 +116,8 @@ mod palw_operator_da;
 mod artifact_inventory;
 #[path = "palw_response_presign_v1.rs"]
 mod response_presign;
+#[path = "palw_fp_replay_routing_v2.rs"]
+mod fp_replay_routing;
 #[path = "palw_flat_source_responder.rs"]
 mod flat_source_responder;
 #[path = "palw_float_source_responder.rs"]
@@ -1178,6 +1180,7 @@ pub(crate) fn palw_seat_s4_refusal_v1(why: String) -> PalwSeatSegmentRefusalV1 {
 #[derive(Clone)]
 enum PalwSeatTaskOutV1 {
     Replay(PalwSeatReplayResultV1),
+    RoutedReplay {result:PalwSeatReplayResultV1,original:Arc<fp_replay_routing::FpReplayRoutingGuardV2>},
     Segment(PalwSeatSegmentResultV1),
 }
 
@@ -1389,7 +1392,7 @@ impl PalwSeatReplaysV1 {
         match self.poll_task(key, now_daa, true).await {
             None => PalwSeatReplayPollV1::Absent,
             Some(None) => PalwSeatReplayPollV1::Running,
-            Some(Some((PalwSeatTaskOutV1::Replay(result), fresh))) => PalwSeatReplayPollV1::Done { result, fresh },
+            Some(Some((PalwSeatTaskOutV1::Replay(result)|PalwSeatTaskOutV1::RoutedReplay {result,..}, fresh))) => PalwSeatReplayPollV1::Done { result, fresh },
             Some(Some((PalwSeatTaskOutV1::Segment(_), fresh))) => {
                 PalwSeatReplayPollV1::Done { result: Err("a segment task under a replay's key".into()), fresh }
             }
@@ -1402,7 +1405,7 @@ impl PalwSeatReplaysV1 {
             None => PalwSeatSegmentPollV1::Absent,
             Some(None) => PalwSeatSegmentPollV1::Running,
             Some(Some((PalwSeatTaskOutV1::Segment(result), fresh))) => PalwSeatSegmentPollV1::Done { result, fresh },
-            Some(Some((PalwSeatTaskOutV1::Replay(_), fresh))) => PalwSeatSegmentPollV1::Done {
+            Some(Some((PalwSeatTaskOutV1::Replay(_)|PalwSeatTaskOutV1::RoutedReplay {..}, fresh))) => PalwSeatSegmentPollV1::Done {
                 result: Err(PalwSeatSegmentRefusalV1::Local("a replay under a segment task's key".into())),
                 fresh,
             },
@@ -1440,7 +1443,7 @@ impl PalwSeatReplaysV1 {
                         PalwSeatTaskOutV1::Segment(Err(PalwSeatSegmentRefusalV1::Local(why)))
                     }
                 });
-                if matches!(result, PalwSeatTaskOutV1::Replay(Ok(_))) {
+                if matches!(result, PalwSeatTaskOutV1::Replay(Ok(_))|PalwSeatTaskOutV1::RoutedReplay {result:Ok(_),..}) {
                     self.timed.insert(run.class, now_daa.saturating_sub(run.started_daa));
                 }
                 self.done.insert(
@@ -1575,6 +1578,27 @@ impl PalwSeatReplaysV1 {
         self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy, overdue: false });
     }
 
+    /// One bound backend and its original native owner move into the worker;
+    /// the same owner returns in its cached output, including detached work.
+    #[allow(clippy::too_many_arguments)]
+    fn start_fp_routed_v2(&mut self,key:PalwSeatReplayKeyV1,class:Hash64,heavy:bool,now_daa:u64,reservation:Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,bound:fp_replay_routing::BoundFpReplayV2,job:kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,prompt:Vec<usize>) {
+        let handle=tokio::task::spawn_blocking(move|| {
+            let _held_for_the_replay=reservation;
+            bound.execute(&job,&prompt)
+        });
+        self.running.insert(key,PalwSeatReplayRunV1 {handle,class,started_daa:now_daa,heavy,overdue:false});
+    }
+    fn refresh_fp_routed_with_v2(&mut self,key:&PalwSeatReplayKeyV1,active:bool,read:impl FnOnce(Hash64,&kaspa_consensus_core::palw_v2::PalwJobContextV2)->Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,String>)->Result<(),fp_replay_routing::FpReplayRoutingFaultV2> {
+        use fp_replay_routing::FpReplayRoutingFaultV2 as Fault;
+        let result=match self.done.get(key).map(|done|&done.result) {
+            Some(PalwSeatTaskOutV1::RoutedReplay {original,..})=>original.current_with(read),
+            _ if active=>Err(Fault::Stale),
+            _=>Ok(()),
+        };
+        if matches!(result,Err(Fault::Stale)) {self.done.remove(key);}
+        result
+    }
+
     /// **Start a whole-job replay that carries its own class** (RFC-0003: a pipeline class's replay) — the
     /// closure holds the held class itself, so no backend object rides with it. In the same slots as
     /// [`Self::start`] (`heavy` for a C7 class), holding `reservation` for its life, timed, detached with its
@@ -1631,7 +1655,7 @@ impl PalwSeatReplaysV1 {
     /// receipt.
     pub(crate) fn retry_refused(&mut self, key: &PalwSeatReplayKeyV1, now_daa: u64, deadline: u64) -> bool {
         let Some(done) = self.done.get(key) else { return false };
-        if !matches!(done.result, PalwSeatTaskOutV1::Replay(Err(_))) || self.retried.contains(key) {
+        if !matches!(done.result, PalwSeatTaskOutV1::Replay(Err(_))|PalwSeatTaskOutV1::RoutedReplay {result:Err(_),..}) || self.retried.contains(key) {
             return false;
         }
         if now_daa.saturating_add(done.finished_daa.saturating_sub(done.started_daa)) > deadline {
@@ -13796,42 +13820,6 @@ impl PalwPanelService {
             // Whether this job's replay can decide the claim: the claim's own, or any while none is.
             let decides = is_own || !holds_own;
             let key = (duty.claim_id, *job_id);
-            let mut routed_backend = None;
-            let mut routing_owner = None;
-            if self
-                .consensus_config
-                .params
-                .palw_memory_routing_court_v2
-                .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(current_daa))
-            {
-                let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { continue };
-                // A captured exact executed count may differ from the decoder
-                // ceiling. Its native job pin authenticates the context before
-                // it may select a plan; a capture never grants authority.
-                let context = jobs[index]
-                    .2
-                    .iter()
-                    .find_map(|bytes| {
-                        let payload = palw_fp_capture_decode_v1(bytes, form)?;
-                        let shape = backend.capture_shape(&payload.capture)?;
-                        let ctx = shape.job_context;
-                        (ctx.job_id == *job_id
-                            && duty.fp_job_pin_v1().is_some_and(|pin| {
-                                kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx) == pin
-                            }))
-                        .then_some(ctx)
-                    })
-                    .or_else(|| backend.fp_job_context_v1(&material.job));
-                let Some(context) = context else { continue };
-                match self.bind_native_routing_replay_v2(session, backend.as_mut(), duty.claim_id, &context) {
-                    Ok(owner) => routing_owner = owner,
-                    Err(why) => {
-                        warn!("[{PALW_PANEL}] claim {}: FP native routing context held: {why}", duty.claim_id);
-                        continue;
-                    }
-                }
-                routed_backend = Some(backend);
-            }
             let mut poll = replays.poll(&key, current_daa).await;
             if decides
                 && let PalwSeatReplayPollV1::Done { result: Err(e), fresh } = &poll
@@ -13848,7 +13836,8 @@ impl PalwPanelService {
             match poll {
                 PalwSeatReplayPollV1::Running => waiting |= decides,
                 PalwSeatReplayPollV1::Done { result: Ok(replayed), fresh } => {
-                    if let Err(why) = self.refresh_native_routing_replay_v2(session, routing_owner.as_ref()) {
+                    let active=self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f|f!=kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score()));
+                    if let Err(why) = replays.refresh_fp_routed_with_v2(&key,active,|claim,job|session.palw_native_routing_claim_authority_v2(claim,job)) {
                         warn!("[{PALW_PANEL}] claim {}: FP replay context changed: {why}", duty.claim_id);
                         continue;
                     }
@@ -13932,12 +13921,31 @@ impl PalwPanelService {
                     let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
                         return (PalwSeatReplayStepV1::NoVerdict, None);
                     };
-                    let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), material, form) else { continue };
-                    let ctx = backend.fp_job_context_v1(&material.job);
+                    let active=self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f|f!=kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score()));
+                    let (mut bound,ctx)=if active {
+                        let context_scratch=match fp_replay_routing::BoundFpReplayV2::context_scratch_v2() {Ok(ticket)=>ticket,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: FP replay context admission held: {why}",duty.claim_id);continue;}};
+                        // Exact-count captures may supply the authenticated job
+                        // spelling, never their own routing authority.
+                        let context=jobs[index].2.iter().find_map(|bytes| {
+                            let payload=palw_fp_capture_decode_v1(bytes,form)?;
+                            let shape=backend.capture_shape(&payload.capture)?;
+                            let ctx=shape.job_context;
+                            (ctx.job_id==*job_id && duty.fp_job_pin_v1().is_some_and(|pin|kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx)==pin)).then_some(ctx)
+                        }).or_else(||backend.fp_job_context_v1(&material.job));
+                        let Some(context)=context else {continue};
+                        let bound=match fp_replay_routing::BoundFpReplayV2::bind_with(backend,duty.claim_id,&context,true,|claim,job|session.palw_native_routing_claim_authority_v2(claim,job),context_scratch) {
+                            Ok(bound)=>bound,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: FP native routing bind held: {why}",duty.claim_id);continue;}
+                        };
+                        (bound,Some(context))
+                    } else {
+                        let context=backend.fp_job_context_v1(&material.job);
+                        (fp_replay_routing::BoundFpReplayV2::legacy(backend),context)
+                    };
+                    let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(bound.backend()), material, form) else { continue };
                     // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
                     let backends = self.backends();
                     let (reserved, need) =
-                        match self.reserve_replay_at_widest_run_v1("full-seat", backend.as_mut(), duty.class_id, duty.claim_id, |b| {
+                        match self.reserve_replay_at_widest_run_v1("full-seat", bound.backend_mut(), duty.class_id, duty.claim_id, |b| {
                             backends.role_memory_need_for_backend_or_chain_v1(
                                 b,
                                 duty.class_id,
@@ -13965,17 +13973,7 @@ impl PalwPanelService {
                     );
                     let job = material.job.clone();
                     let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
-                    replays.start(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), backend, move |b| {
-                        // SEAT-S2: the free-prompt run's own output root — the family's rule over the ids
-                        // this replay generated, under the executed context (the one rule the lane's
-                        // commitment and `fp_committed_output_ids_v1` both use).
-                        b.execute_free_prompt(&job, &prompt).map(|run| kaspa_consensus_core::palw_backend::PalwReplayRootsV1 {
-                            execution_root: run.outcome.execution_root,
-                            trace_root: run.facts.full_logits_trace_root,
-                            work_leaves: Some(run.facts.step_leaf_count),
-                            output_root: Some(run.outcome.output_root),
-                        })
-                    });
+                    replays.start_fp_routed_v2(key,duty.class_id,seat_r_duty.heavy,current_daa,Some(reserved),bound,job,prompt);
                 }
             }
         }
