@@ -13,6 +13,9 @@ use kaspa_consensus_core::{
 use std::convert::TryInto;
 
 use crate::{constants, model::stores::ghostdag::GhostdagData};
+#[path = "coinbase_stream_v2.rs"]
+mod stream;
+use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, reserve_native_requests_v1};
 
 /// Render exactly the selected parent's queue prefix consumed by the next
 /// PALW transition. A queued row is already decided; do not derive rewards or
@@ -378,7 +381,14 @@ impl CoinbaseManager {
         palw_merged_escrow_withheld: &BlockHashMap<u64>,
         palw_round_blocks: &BlockHashSet,
         palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
-    ) -> CoinbaseResult<CoinbaseComparisonV2> {
+    ) -> Result<CoinbaseComparisonV2, NativeDecodeErrorV1<CoinbaseError>> {
+        let classified = stream::CoinbaseMergesetV2::new(ghostdag_data, palw_round_blocks);
+        let requests = classified.round_requests().map_err(NativeDecodeErrorV1::Resource)?;
+        let _round_lease = if requests == 0 {
+            None
+        } else {
+            reserve_native_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?
+        };
         match self.render_coinbase_v2(
             Some(actual),
             _daa_score,
@@ -396,7 +406,7 @@ impl CoinbaseManager {
             palw_merged_escrow_withheld,
             palw_round_blocks,
             palw_receipt_v4_payouts,
-        )? {
+        ).map_err(NativeDecodeErrorV1::Decode)? {
             CoinbaseRenderedV2::Compared(comparison) => Ok(comparison),
             CoinbaseRenderedV2::Built(_) => unreachable!("comparison requested borrowed outputs"),
         }
@@ -433,17 +443,17 @@ impl CoinbaseManager {
             palw_escrow_withheld == 0 || !mergeset_non_daa.contains(&ghostdag_data.selected_parent),
             "a selected parent that escrowed a reward must be inside the DAA window, or its escrow is unfunded"
         );
-        let classified = ghostdag_data.classify_palw_mergeset_v1(|member| palw_round_blocks.contains(&member));
+        let classified = stream::CoinbaseMergesetV2::new(ghostdag_data, palw_round_blocks);
         let mut worker_inclusion_pool = 0u64;
         let mut outputs = match compare {
             Some(actual) => CoinbaseOutputsV2::Compare { actual, count: 0, first_difference: None },
-            None => CoinbaseOutputsV2::Build(Vec::with_capacity(classified.blues().len() + 1)),
+            None => CoinbaseOutputsV2::Build(Vec::with_capacity(classified.blues().count() + 1)),
         };
-        let mut miner_script_output_indices = Vec::with_capacity(2); // red reward + optional inclusion bounty
+        let mut miner_script_output_indices = if compare.is_none() { Vec::with_capacity(2) } else { Vec::new() };
 
         // Add an output for each mergeset blue block (∩ DAA window), paying to the script reported by the block.
         // Note that combinatorically it is nearly impossible for a blue block to be non-DAA
-        for blue in classified.blues().iter().filter(|h| !mergeset_non_daa.contains(h)) {
+        for blue in classified.blues().filter(|h| !mergeset_non_daa.contains(h)) {
             // Not paid, and nothing is redistributed: the share is simply not minted. Placed
             // before the reward lookup so an unentitled blue costs nothing to skip.
             if palw_unentitled_blues.contains(blue) {
@@ -560,7 +570,9 @@ impl CoinbaseManager {
         }
 
         if red_reward > 0 {
-            miner_script_output_indices.push(outputs.len());
+            if compare.is_none() {
+                miner_script_output_indices.push(outputs.len());
+            }
             outputs.push(red_reward, &miner_data.script_public_key);
         }
 
@@ -598,24 +610,29 @@ impl CoinbaseManager {
             )
             .min(worker_inclusion_pool as u128) as u64;
             if bounty > 0 {
-                miner_script_output_indices.push(outputs.len());
+                if compare.is_none() {
+                    miner_script_output_indices.push(outputs.len());
+                }
                 outputs.push(bounty, &miner_data.script_public_key);
             }
         }
 
         // Build the current block's payload. `own_subsidy` is the caller's per-lane answer —
         // see the parameter; `daa_score` still prices every MERGED block's reward above.
-        let payload =
-            self.serialize_coinbase_payload(&CoinbaseData { blue_score: ghostdag_data.blue_score, subsidy: own_subsidy, miner_data })?;
+        let data = CoinbaseData { blue_score: ghostdag_data.blue_score, subsidy: own_subsidy, miner_data };
 
         Ok(match outputs {
             CoinbaseOutputsV2::Build(outputs) => CoinbaseRenderedV2::Built(CoinbaseTransactionTemplate {
-                tx: Transaction::new(constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0, payload),
+                tx: Transaction::new(
+                    constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0,
+                    self.serialize_coinbase_payload(&data)?,
+                ),
                 has_red_reward: red_reward > 0,
                 miner_script_output_indices,
             }),
             CoinbaseOutputsV2::Compare { actual, count, first_difference } => {
-                let payload_matches = actual.payload == payload;
+                let payload_matches = stream::payload_bytes(&data, self.coinbase_payload_script_public_key_max_len)?
+                    .eq(actual.payload.iter().copied());
                 // The same fields hashed by hashing::tx::hash(FULL), including
                 // storage mass. The cached transaction id is deliberately ignored.
                 let metadata_matches = actual.version == constants::TX_VERSION
@@ -693,9 +710,9 @@ impl CoinbaseManager {
         // ADR-0125: round blocks' fees are paid whole to their payouts, so none of them funds the pool.
         palw_round_blocks: &BlockHashSet,
     ) -> u64 {
-        let classified = ghostdag_data.classify_palw_mergeset_v1(|member| palw_round_blocks.contains(&member));
+        let classified = stream::CoinbaseMergesetV2::new(ghostdag_data, palw_round_blocks);
         let mut pool = 0u64;
-        for blue in classified.blues().iter().filter(|h| !mergeset_non_daa.contains(h)) {
+        for blue in classified.blues().filter(|h| !mergeset_non_daa.contains(h)) {
             if palw_unentitled.contains(blue) {
                 continue;
             }
@@ -721,22 +738,7 @@ impl CoinbaseManager {
     }
 
     pub fn serialize_coinbase_payload<T: AsRef<[u8]>>(&self, data: &CoinbaseData<T>) -> CoinbaseResult<Vec<u8>> {
-        let script_pub_key_len = data.miner_data.script_public_key.script().len();
-        if script_pub_key_len > self.coinbase_payload_script_public_key_max_len as usize {
-            return Err(CoinbaseError::PayloadScriptPublicKeyLenAboveMax(
-                script_pub_key_len,
-                self.coinbase_payload_script_public_key_max_len,
-            ));
-        }
-        let payload: Vec<u8> = data.blue_score.to_le_bytes().iter().copied()                    // Blue score                   (u64)
-            .chain(data.subsidy.to_le_bytes().iter().copied())                                  // Subsidy                      (u64)
-            .chain(data.miner_data.script_public_key.version().to_le_bytes().iter().copied())   // Script public key version    (u16)
-            .chain((script_pub_key_len as u8).to_le_bytes().iter().copied())                    // Script public key length     (u8)
-            .chain(data.miner_data.script_public_key.script().iter().copied())                  // Script public key            
-            .chain(data.miner_data.extra_data.as_ref().iter().copied())                         // Extra data
-            .collect();
-
-        Ok(payload)
+        Ok(stream::payload_bytes(data, self.coinbase_payload_script_public_key_max_len)?.collect())
     }
 
     pub fn modify_coinbase_payload<T: AsRef<[u8]>>(&self, mut payload: Vec<u8>, miner_data: &MinerData<T>) -> CoinbaseResult<Vec<u8>> {

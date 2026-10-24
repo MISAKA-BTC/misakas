@@ -1524,7 +1524,14 @@ impl VirtualStateProcessor {
                 palw_round_blocks,
                 palw_receipt_v4_payouts,
             )
-            .unwrap();
+            .map_err(|error| match error {
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
+                    crate::errors::RuleError::LocalNativeCapacityUnavailable(why)
+                }
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
+                    crate::errors::RuleError::BadCoinbasePayload(why)
+                }
+            })?;
         if !comparison.matches {
             // kaspa-pq diagnostic (coinbase mismatch): dump the mismatch SHAPE so the
             // cache-retarget class (equal output count, payload already retargeted, a

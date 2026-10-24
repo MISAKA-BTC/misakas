@@ -261,12 +261,20 @@ impl BorrowedCoinbaseFixture {
             .tx
     }
     fn compare(&self, actual: &kaspa_consensus_core::tx::Transaction) -> coinbase_manager::CoinbaseComparisonV2 {
+        self.compare_with_miner(actual, kaspa_consensus_core::coinbase::MinerData::new(self.miner_script.clone(), &[])).unwrap()
+    }
+    fn compare_with_miner<'a>(
+        &self,
+        actual: &kaspa_consensus_core::tx::Transaction,
+        miner: kaspa_consensus_core::coinbase::MinerData<&'a [u8]>,
+    ) -> Result<coinbase_manager::CoinbaseComparisonV2,
+        kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<kaspa_consensus_core::errors::coinbase::CoinbaseError>> {
         self.manager
             .compare_coinbase_transaction_v2(
                 actual,
                 1,
                 self.own_subsidy,
-                kaspa_consensus_core::coinbase::MinerData::new(self.miner_script.clone(), &[]),
+                miner,
                 &self.ghostdag,
                 &self.rewards,
                 &self.non_daa,
@@ -280,7 +288,6 @@ impl BorrowedCoinbaseFixture {
                 &self.rounds,
                 &self.receipts,
             )
-            .unwrap()
     }
 }
 
@@ -392,11 +399,55 @@ fn borrowed_validation_allocation_requests_do_not_grow_with_the_eight_payout_scr
         let fixture = BorrowedCoinbaseFixture::new(count);
         let expected = fixture.build();
         assert!(fixture.compare(&expected).matches); // warm one-time runtime machinery before observing requests
-        let (comparison, requested) = allocation_counter::requested(|| fixture.compare(&expected));
+        // Input construction is outside the observation: this measures the
+        // actual comparison body, not the caller's owned MinerData clone.
+        let miner = kaspa_consensus_core::coinbase::MinerData::new(fixture.miner_script.clone(), &[][..]);
+        let (comparison, requested) = allocation_counter::requested(|| fixture.compare_with_miner(&expected, miner).unwrap());
         assert!(comparison.matches);
         observations.push(requested);
         println!("borrowed coinbase comparison: payouts={count}, requested_bytes={requested}");
     }
+    assert_eq!(observations, vec![0, 0, 0], "non-round comparison has no temporary heap allocations");
     assert_eq!(observations[0], observations[1]);
     assert_eq!(observations[0], observations[2], "comparison must not allocate owning payout scripts or output rows");
+}
+
+#[test]
+fn coinbase_round_comparison_capacity_child() {
+    if std::env::var("MISAKA_COINBASE_ROUND_CAPACITY").ok().as_deref() != Some("1") {
+        return;
+    }
+    use kaspa_consensus_core::{
+        Hash64, blockhash::BlockHashes, coinbase::{BlockRewardData, MinerData},
+        palw_native_resource_v1::{NativeDecodeErrorV1, NativeSnapshotResourceLimitsV1,
+            arm_native_logical_limits_v1, reserve_native_requests_v1},
+    };
+    let mut fixture = BorrowedCoinbaseFixture::new(8);
+    let round = Hash64::from_u64_word(2);
+    fixture.rounds.insert(round);
+    fixture.ghostdag.mergeset_reds = BlockHashes::new(vec![round]);
+    fixture.rewards.insert(round, BlockRewardData::new(0, 25, 0, fixture.miner_script.clone()));
+    let expected = fixture.build();
+    let miner = MinerData::new(fixture.miner_script.clone(), &[][..]);
+    let memory = 1 << 20;
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
+    let blocker = reserve_native_requests_v1(memory).unwrap();
+    let result = fixture.compare_with_miner(&expected, miner);
+    assert!(matches!(result, Err(NativeDecodeErrorV1::Resource(_))), "local quota is not a bad-coinbase verdict");
+    drop(blocker);
+    assert!(fixture.compare(&expected).matches);
+    assert!(reserve_native_requests_v1(memory).is_ok(), "comparison scratch released on return");
+    let mut bad = expected;
+    bad.outputs[0].value += 1;
+    assert!(!fixture.compare(&bad).matches);
+    assert!(reserve_native_requests_v1(memory).is_ok(), "scratch released on mismatch as well");
+}
+
+#[test]
+fn round_comparison_retries_after_native_capacity_refusal() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "coinbase_round_comparison_capacity_child", "--nocapture"])
+        .env("MISAKA_COINBASE_ROUND_CAPACITY", "1").output().unwrap();
+    assert!(out.status.success(), "{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
 }
