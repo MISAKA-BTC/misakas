@@ -12,6 +12,9 @@ pub mod numerical_inventory_v1;
 #[path = "palw_tir_public_parameter_cover_v1.rs"]
 pub mod parameter_cover_v1;
 
+#[path = "palw_tir_complete_ids_owned_v2.rs"]
+pub(crate) mod complete_ids_owned_v2;
+
 pub const PALW_TIR_PUBLIC_FRONTIER_HASHES_V1: usize = 1024;
 pub const PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1: u32 = 1024;
 pub const PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1: u32 = crate::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1;

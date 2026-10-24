@@ -1322,33 +1322,21 @@ fn conviction_filer_v1(b: &TransitionBuilder<'_>, frame: &Frame, filer: PalwBond
     Ok(())
 }
 
-/// The complete original ID sequence, re-chunked natively into the canonical 1024-ID requests and EOF-authenticated against the
-/// claim's committed logits trace root. Partial sequences authenticate nothing.
+/// Authenticate the complete borrowed ID sequence against this exact original
+/// source/EOF/root. Local construction refusal is not a bad finding.
 fn authenticated_original_ids_v1(
     source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
     rows_root: Hash64,
     ids: &[u32],
-) -> Result<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1, PalwStateV2Error> {
-    use crate::palw_tir_public_source_v1::{
-        PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1, PalwTirPublicResponseV1,
-    };
-    if ids.len() as u64 != u64::from(source.decode_count_v1()) {
-        return Err(refused("TIR public output conviction does not carry the complete original ID sequence"));
-    }
-    let mut assembler = PalwTirPublicIdsAssemblerV1::default();
-    let mut offset = 0usize;
-    for chunk in ids.chunks(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
-        let request = PalwTirPublicRequestV1::Ids { offset: u32::try_from(offset).map_err(|_| refused("TIR ID offset overflow"))? };
-        let response = PalwTirPublicResponseV1::Ids { rows_root, ids: chunk.to_vec() };
-        offset += chunk.len();
-        if let Some(done) = assembler.push_v1(source, &request, &response).map_err(refused)? {
-            if offset != ids.len() {
-                return Err(refused("TIR authenticated IDs reached EOF before the carried sequence ended"));
-            }
-            return Ok(done);
-        }
-    }
-    Err(refused("TIR public output conviction never reached the original authenticated EOF"))
+) -> Result<
+    crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1>,
+    PalwStateV2Error,
+> {
+    use crate::palw_native_resource_v1::NativeDecodeErrorV1;
+    source.retain_complete_ids_classified_v2(rows_root, ids).map_err(|why| match why {
+        NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
+        NativeDecodeErrorV1::Decode(why) => refused(why),
+    })
 }
 
 /// **G14 R4/R6: one public bonded verifier convicts an ORIGINAL frame from authenticated public material alone.**
@@ -2367,6 +2355,70 @@ mod conviction_e2e_tests {
             ),
             Err(PalwStateV2Error::NativeResource(_))
         ));
+    }
+    #[test]
+    fn complete_ids_owned_actual_preflight_reaches_authentication_capacity_and_retries() {
+        const CHILD: &str = "MISAKA_COMPLETE_IDS_PREFLIGHT_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let full = format!("{}::complete_ids_owned_actual_preflight_reaches_authentication_capacity_and_retries", module_path!());
+            assert!(
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", full.split_once("::").unwrap().1, "--nocapture", "--test-threads=1"])
+                    .env(CHILD, "1")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            return;
+        }
+        use crate::palw_native_resource_v1::{
+            NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
+        };
+        use crate::palw_tir_public_source_v1::complete_ids_owned_v2::{observed_v2, reset_observed_v2};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let rows_root =
+            crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+        let lying_fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_lying_output_v1(4, h(0xBAD));
+        let frame = credited_frame(&lying_fx);
+        let (state, params, extras) = world(&lying_fx, &frame);
+        let evidence = Evidence::Output { rows_root, ids: fx.execution.generated.clone() };
+        let initial_root = state.state_root();
+        let claim = frame.plan_v1().original_claim;
+        const LOCAL_BYTES: u64 = 256 << 20;
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: LOCAL_BYTES, database_bytes: 0 }));
+        let run = |available: u64| {
+            let blocker = reserve_native_requests_v1(LOCAL_BYTES - available).unwrap();
+            reset_observed_v2();
+            let result = palw_tir_public_staged_conviction_preflight_v2(
+                &state,
+                &params,
+                &extras,
+                at(&frame, 1).daa_score,
+                outsider(),
+                claim,
+                &evidence,
+            );
+            let observed = observed_v2();
+            drop(blocker);
+            (result, observed)
+        };
+        assert!(run(LOCAL_BYTES).0.is_ok(), "actual tiny finding passes with ample local quota");
+        let (mut low, mut high) = (0, LOCAL_BYTES);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let (_, observed) = run(middle);
+            if observed.1 > 0 { high = middle } else { low = middle + 1 }
+        }
+        assert!(low > 0);
+        let (result, observed) = run(low - 1);
+        assert_eq!(
+            observed,
+            (1, 0),
+            "this refusal must enter complete-ID authentication, not fail the earlier shape/builder admission"
+        );
+        assert!(matches!(result, Err(PalwStateV2Error::NativeResource(_))));
+        assert!(run(LOCAL_BYTES).0.is_ok(), "same actual pending finding succeeds when local headroom returns");
+        assert_eq!(state.state_root(), initial_root, "dry runs and capacity refusal publish no state");
     }
     fn staged_witness_with_service_hold(service_hold: bool) {
         use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part, palw_tir_public_witness_digest_v1};
