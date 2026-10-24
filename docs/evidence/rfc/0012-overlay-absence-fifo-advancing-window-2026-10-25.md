@@ -23,3 +23,5 @@ The same pinned consensus binary supplied all three runtime groups:
 - Quality/epoch `/tmp/misaka-rfc-fifo-native-quality-tests-20261025.log`.
 
 The unchanged-depth native Typed pruning Run 5 was launched from that binary. Its own live artifacts, limits and partial progress are in [the pruning record](0008-typed-native-pruning-2026-10-25.md). Neither the focused cache results nor the debug-build runtime establish a cost campaign or completion of physical pruning/IBD.
+
+The tested FIFO source and regression were committed as `f73f1d549`.
