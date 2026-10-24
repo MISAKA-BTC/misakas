@@ -4,9 +4,9 @@
 //!
 //! ```text
 //! recompute   the accuser's OWN prefix walk finds the first committed checkpoint that is not the job's state
-//!             (`base0_gdn_first_forged_checkpoint_v2`); none → nothing to file, an honest producer is never demanded
+//!             (`base0_gdn_first_forged_checkpoint_retained_v3`); none → nothing to file, an honest producer is never demanded
 //! demand      for one supported checkpoint terminal/head at a time, the exact `StateChunk` units that terminal reads
-//!             (`base0_gdn_forged_checkpoint_demands_v2`), each a signed `DefaultAccusedHeld` — one open at a time
+//!             (`base0_gdn_forged_checkpoint_demands_retained_v3`), each a signed `DefaultAccusedHeld` — one open at a time
 //! answers     the producer's `MaterialDisclosedV2` / `MaterialDisclosedHeld` on chain, re-checked by the held DA court's own
 //!             hash check (`palw_held_da_check_disclosure_v1`); nothing is taken on the carrier's word
 //! accuse      once every unit is answered: transition or convolution-window evidence, held to the matching court terminal
@@ -40,8 +40,8 @@ use kaspa_hashes::Hash64;
 use misaka_palw_base0::GdnInventoryOracleV2;
 use misaka_palw_base0::fp_recompute::Base0FpRecomputeKernelsV1;
 use misaka_palw_base0::gdn_evidence_v2::{
-    Base0GdnCheckpointCourtV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_conv_window_evidence_from_disclosures_v2,
-    base0_gdn_first_forged_checkpoint_v2, base0_gdn_forged_checkpoint_demands_v2, base0_gdn_transition_evidence_from_disclosures_v2,
+    Base0GdnCheckpointCourtV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_conv_window_evidence_from_disclosures_retained_v3,
+    base0_gdn_first_forged_checkpoint_retained_v3, base0_gdn_forged_checkpoint_demands_retained_v3, base0_gdn_transition_evidence_from_disclosures_retained_v3,
 };
 
 #[path = "palw_gdn_held_action_owner_v2.rs"]
@@ -100,6 +100,14 @@ pub enum PalwGdnHeldNextV1 {
     Exhausted,
 }
 
+fn retained_leg_error_v3(error: kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> PalwGdnHeldErrorV2 {
+    use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1;
+    match error {
+        NativeDecodeErrorV1::Resource(why) => PalwGdnHeldErrorV2::Resource(why),
+        NativeDecodeErrorV1::Decode(why) => PalwGdnHeldErrorV2::Operation(why),
+    }
+}
+
 /// **Open a case**, or `None` when the accuser's own recompute finds every committed checkpoint honest.
 pub fn palw_gdn_held_open_retained_v3<K: Base0FpRecomputeKernelsV1>(
     claim: PalwGdnHeldClaimV1,
@@ -109,7 +117,7 @@ pub fn palw_gdn_held_open_retained_v3<K: Base0FpRecomputeKernelsV1>(
     if material.binding.committed_execution_root != claim.execution_root {
         return Err("the material's binding is not the claim's execution".into());
     }
-    let Some(index) = base0_gdn_first_forged_checkpoint_v2(material, kernels())? else { return Ok(None) };
+    let Some(index) = base0_gdn_first_forged_checkpoint_retained_v3(material, kernels()).map_err(retained_leg_error_v3)? else { return Ok(None) };
     let (candidates, candidate_owner) = geometry_owner::candidates(material.binding)?;
     if candidates.is_empty() {
         return Err(format!("checkpoint {index} is forged but no supported recurrence or convolution terminal reads it").into());
@@ -136,7 +144,7 @@ fn load_candidate_v1<K: Base0FpRecomputeKernelsV1>(
     // Covers the pure helper's returned demands, selected-index and layer-list
     // arrays. Earlier Base0 leg/prefix work remains a separate input boundary.
     let admission = geometry_owner::DemandAdmissionV4::prepare(material.binding, candidate)?;
-    let demands = base0_gdn_forged_checkpoint_demands_v2(material, candidate, case.index, &mut *kernels)?;
+    let demands = base0_gdn_forged_checkpoint_demands_retained_v3(material, candidate, case.index, &mut *kernels).map_err(retained_leg_error_v3)?;
     let owner = admission.finish(&demands, demands.capacity())?;
     let (answers, slots) = answer_owner::slots(demands.len())?;
     // Refused construction must not pair the next candidate with the old
@@ -234,7 +242,7 @@ pub fn palw_gdn_held_step_retained_v2<K: Base0FpRecomputeKernelsV1>(
         let answers = answer_owner::complete_batch(&case.answers)?;
         let evidence = match case.candidates[case.at] {
             Base0GdnCheckpointCourtV2::Transition { node_slot, head } => PalwMemoryRoutingEvidenceV2::GdnTransition {
-                refutation: base0_gdn_transition_evidence_from_disclosures_v2(
+                refutation: base0_gdn_transition_evidence_from_disclosures_retained_v3(
                     material,
                     node_slot,
                     head,
@@ -242,17 +250,17 @@ pub fn palw_gdn_held_step_retained_v2<K: Base0FpRecomputeKernelsV1>(
                     &case.demands,
                     &answers,
                     &mut kernels,
-                )?,
+                ).map_err(retained_leg_error_v3)?,
             },
             Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } => PalwMemoryRoutingEvidenceV2::GdnConvWindow {
-                refutation: base0_gdn_conv_window_evidence_from_disclosures_v2(
+                refutation: base0_gdn_conv_window_evidence_from_disclosures_retained_v3(
                     material,
                     conv_slot,
                     head,
                     case.index,
                     &case.demands,
                     &answers,
-                )?,
+                ).map_err(retained_leg_error_v3)?,
             },
         };
         let verdict = match &evidence {

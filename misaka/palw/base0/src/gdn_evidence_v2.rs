@@ -41,6 +41,11 @@ use kaspa_consensus_core::palw_step_refute::memory_v2::{
     gdn_transition_refutation_from_capture_v2, gdn_transition_refutation_with_accused_v2,
 };
 
+#[path = "gdn_leaf_leg_owner_v3.rs"]
+mod leaf_leg_owner;
+pub use leaf_leg_owner::{Base0GdnLeafLegV3, base0_gdn_leaf_leg_retained_v3};
+use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1;
+
 /// **What an accuser holds of one claim's execution.**
 pub struct Base0GdnMaterialV2<'a> {
     /// The claim's binding (its `committed_execution_root` is the claim's).
@@ -260,9 +265,23 @@ pub fn base0_gdn_conv_window_evidence_v2<K: Base0FpRecomputeKernelsV1>(
 /// Cost: one forward per position of the job plus one serialization per checkpoint (on a per-position class, one per position).
 pub fn base0_gdn_first_forged_checkpoint_v2<K: Base0FpRecomputeKernelsV1>(
     material: &Base0GdnMaterialV2<'_>,
-    mut kernels: K,
+    kernels: K,
 ) -> Result<Option<u32>, String> {
     let leg = base0_gdn_leg_v2(material)?;
+    first_forged_with_leg_v3(material, &leg, kernels)
+}
+
+/// Actual PerPosition prefix discovery with the leg owner live through replay.
+pub fn base0_gdn_first_forged_checkpoint_retained_v3<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>, kernels: K,
+) -> Result<Option<u32>, NativeDecodeErrorV1<String>> {
+    let leg = base0_gdn_leaf_leg_retained_v3(material)?;
+    first_forged_with_leg_v3(material, &leg, kernels).map_err(NativeDecodeErrorV1::Decode)
+}
+
+fn first_forged_with_leg_v3<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, mut kernels: K,
+) -> Result<Option<u32>, String> {
     let b = material.binding;
     let (profile, ctx) = (&b.shape_profile, &b.job_context);
     if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
@@ -322,6 +341,21 @@ pub fn base0_gdn_forged_checkpoint_demands_v2<K: Base0FpRecomputeKernelsV1>(
     kernels: impl FnMut() -> K,
 ) -> Result<Vec<PalwHeldMissingV1>, String> {
     let leg = base0_gdn_leg_v2(material)?;
+    forged_demands_with_leg_v3(material, &leg, court, index, kernels)
+}
+
+/// Retained PerPosition counterpart; no other cadence falls back to a raw leg.
+pub fn base0_gdn_forged_checkpoint_demands_retained_v3<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>, court: Base0GdnCheckpointCourtV2, index: u32, kernels: impl FnMut() -> K,
+) -> Result<Vec<PalwHeldMissingV1>, NativeDecodeErrorV1<String>> {
+    let leg = base0_gdn_leaf_leg_retained_v3(material)?;
+    forged_demands_with_leg_v3(material, &leg, court, index, kernels).map_err(NativeDecodeErrorV1::Decode)
+}
+
+fn forged_demands_with_leg_v3<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, court: Base0GdnCheckpointCourtV2,
+    index: u32, kernels: impl FnMut() -> K,
+) -> Result<Vec<PalwHeldMissingV1>, String> {
     confirm_first_forged_v2(material, &leg, index, kernels)?;
     let demands = match court {
         Base0GdnCheckpointCourtV2::Transition { node_slot, head } => {
@@ -363,6 +397,25 @@ pub fn base0_gdn_transition_evidence_from_disclosures_v2<K: Base0FpRecomputeKern
     kernels: impl FnMut() -> K,
 ) -> Result<PalwGdnTransitionRefutationV2, String> {
     let leg = base0_gdn_leg_v2(material)?;
+    transition_disclosures_with_leg_v3(material, &leg, node_slot, head, index, demands, answers, kernels)
+}
+
+/// Retains the admitted leaf leg through transition assembly and predecessor use.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_gdn_transition_evidence_from_disclosures_retained_v3<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>, node_slot: u32, head: u32, index: u32,
+    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1], kernels: impl FnMut() -> K,
+) -> Result<PalwGdnTransitionRefutationV2, NativeDecodeErrorV1<String>> {
+    let leg = base0_gdn_leaf_leg_retained_v3(material)?;
+    transition_disclosures_with_leg_v3(material, &leg, node_slot, head, index, demands, answers, kernels)
+        .map_err(NativeDecodeErrorV1::Decode)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transition_disclosures_with_leg_v3<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, node_slot: u32, head: u32, index: u32,
+    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1], kernels: impl FnMut() -> K,
+) -> Result<PalwGdnTransitionRefutationV2, String> {
     if demands != gdn_transition_demands_v2(material.binding, node_slot, head, index).map_err(|e| e.to_string())?.as_slice() {
         return Err("the answered demands are not the units this transition reads".to_string());
     }
@@ -403,6 +456,22 @@ pub fn base0_gdn_conv_window_evidence_from_disclosures_v2(
     answers: &[PalwHeldDisclosureV1],
 ) -> Result<PalwGdnConvWindowRefutationV2, String> {
     let leg = base0_gdn_leg_v2(material)?;
+    conv_disclosures_with_leg_v3(material, &leg, conv_slot, head, index, demands, answers)
+}
+
+/// Retains the admitted leaf leg through convolution-window evidence assembly.
+pub fn base0_gdn_conv_window_evidence_from_disclosures_retained_v3(
+    material: &Base0GdnMaterialV2<'_>, conv_slot: u32, head: u32, index: u32,
+    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1],
+) -> Result<PalwGdnConvWindowRefutationV2, NativeDecodeErrorV1<String>> {
+    let leg = base0_gdn_leaf_leg_retained_v3(material)?;
+    conv_disclosures_with_leg_v3(material, &leg, conv_slot, head, index, demands, answers).map_err(NativeDecodeErrorV1::Decode)
+}
+
+fn conv_disclosures_with_leg_v3(
+    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, conv_slot: u32, head: u32, index: u32,
+    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1],
+) -> Result<PalwGdnConvWindowRefutationV2, String> {
     if demands != gdn_conv_window_demands_v2(material.binding, conv_slot, head, index).map_err(|e| e.to_string())?.as_slice() {
         return Err("the answered demands are not the units this window reads".to_string());
     }
