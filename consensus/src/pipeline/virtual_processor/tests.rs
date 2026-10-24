@@ -17814,6 +17814,7 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
 
 // Local native capacity is retryable, never a branch preference or invalidity.
 mod rfc12_native_capacity_selection;
+mod rfc12_reserve_read_faults;
 
 mod carrier_bond_rent_conservation;
 

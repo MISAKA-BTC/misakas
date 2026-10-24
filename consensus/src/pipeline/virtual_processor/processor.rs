@@ -7,7 +7,7 @@ use crate::{
         storage::ConsensusStorage,
     },
     constants::BLOCK_VERSION,
-    errors::RuleError,
+    errors::{BlockProcessResult, RuleError},
     model::{
         services::{
             reachability::{MTReachabilityService, ReachabilityService},
@@ -1283,6 +1283,7 @@ mod palw_accept;
 pub(crate) mod palw_h1_guard;
 mod palw_validate;
 mod template;
+mod native_reserve_v1;
 
 impl VirtualStateProcessor {
     #[cfg(test)]
@@ -2547,6 +2548,15 @@ impl VirtualStateProcessor {
 
                     let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header);
 
+                    // Local storage/admission faults do not establish a rule
+                    // violation. Preserve the candidate for a later retry.
+                    let res = match res {
+                        Err(RuleError::LocalNativeCapacityUnavailable(why)) => return Err(why.into()),
+                        Err(RuleError::LocalNativeStateContextUnavailable(why)) => {
+                            return Err(PalwLocalTransitionFaultV1::Context(why));
+                        }
+                        other => other,
+                    };
                     if let Err(rule_error) = res {
                         info!("Block {} is disqualified from virtual chain: {}", current, rule_error);
                         self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
@@ -4610,12 +4620,13 @@ impl VirtualStateProcessor {
         &self,
         selected_parent: BlockHash,
         selected_parent_bond_view: &ActiveBondView,
-    ) -> OverlaySnapshot {
+    ) -> BlockProcessResult<OverlaySnapshot> {
         let Some(dns_params) = self.dns_params.as_ref() else {
-            return OverlaySnapshot::default();
+            return Ok(OverlaySnapshot::default());
         };
 
         let anchor_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
+        let reserve_balance = self.dns_reserve_balance_for_native_v1(selected_parent)?;
 
         // Normalize the (non-canonical) stored `status` to the EFFECTIVE status at the
         // anchor. The raw `status` field diverges across reorg paths — `ActiveBondView::revert`
@@ -4629,12 +4640,11 @@ impl VirtualStateProcessor {
         for b in bonds.iter_mut() {
             b.status = effective_bond_status(b, anchor_daa);
         }
-        let reserve_balance = self.reserve_balance_store.get(selected_parent).unwrap_or(0);
 
         let walk_bound = self.overlay_window_walk_bound(dns_params);
         let window = self.selected_chain_overlay_window(selected_parent, anchor_daa, walk_bound);
 
-        OverlaySnapshot { bonds, reserve_balance, window }
+        Ok(OverlaySnapshot { bonds, reserve_balance, window })
     }
 
     /// ADR-0022: `reward_uniqueness_window + max_reorg_horizon + 2·epoch_length` — the
@@ -7248,13 +7258,13 @@ impl VirtualStateProcessor {
         info!("PALW: captured the V2 state at pruning point {pruning_point} — peers can now sync from it");
     }
 
-    pub fn capture_pruning_point_overlay_snapshot(&self, pruning_point: BlockHash) {
+    pub fn capture_pruning_point_overlay_snapshot(&self, pruning_point: BlockHash) -> BlockProcessResult<()> {
         if self.dns_params.is_none() {
-            return;
+            return Ok(());
         }
         let pp_daa = self.headers_store.get_daa_score(pruning_point).unwrap();
         let view = ActiveBondView::from_records(self.bonds_as_of(pp_daa).into_iter().map(|r| (r.bond_outpoint, r)));
-        let snapshot = self.compute_overlay_snapshot(pruning_point, &view);
+        let snapshot = self.compute_overlay_snapshot(pruning_point, &view)?;
         let mut batch = WriteBatch::default();
         let overlay_commit = self
             .pruning_overlay_snapshot_store
@@ -7263,6 +7273,7 @@ impl VirtualStateProcessor {
             .unwrap();
         self.db.write(batch).unwrap();
         overlay_commit.committed();
+        Ok(())
     }
 
     pub fn are_pruning_points_violating_finality(&self, pp_list: PruningPointsList) -> bool {

@@ -311,7 +311,12 @@ impl PruningProcessor {
             // window reads. Same compute path the virtual processor validates with, so a
             // node serving this snapshot matches a pruned-IBD importer's first post-pruning
             // block `c == v`. No-op when the overlay is dormant.
-            self.virtual_processor.capture_pruning_point_overlay_snapshot(new_pruning_point);
+            if let Err(why) = self.virtual_processor.capture_pruning_point_overlay_snapshot(new_pruning_point) {
+                // Retain all source rows on a local read fault. Never publish a
+                // zero-balance snapshot and then delete the history it needed.
+                warn!("Pruning deferred before overlay capture at {new_pruning_point}: {why}");
+                return;
+            }
             // And the PALW state, for exactly the same reason and with the same ordering
             // constraint: the walk back from the tip reads the delta rows `prune` is about to
             // delete. Without it a running node's tip never equals its pruning point, so it

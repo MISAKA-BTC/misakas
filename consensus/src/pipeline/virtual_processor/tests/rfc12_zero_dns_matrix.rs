@@ -2014,7 +2014,7 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     assert!(rig.api().get_stake_bond(bond_outpoint).is_some(), "the bond is on record");
     let historic_overlay = {
         let vp = rig.vp();
-        vp.compute_overlay_snapshot(overlay_anchor.header.hash, &vp.initial_active_bond_view())
+        vp.compute_overlay_snapshot(overlay_anchor.header.hash, &vp.initial_active_bond_view()).unwrap()
     };
     assert!(historic_overlay.bonds.iter().any(|r| r.bond_outpoint == bond_outpoint), "the historical snapshot retains the bond");
 
@@ -3100,7 +3100,7 @@ async fn rfc12_process_sidecar_crash_worker() {
         let vp = rig.vp();
         // Serve the historical sidecar before changing the importer's context;
         // moving its pruning boundary first would truncate the legacy window walk.
-        let pending_overlay = (kind == "overlay").then(|| vp.compute_overlay_snapshot(point, &vp.initial_active_bond_view()));
+        let pending_overlay = (kind == "overlay").then(|| vp.compute_overlay_snapshot(point, &vp.initial_active_bond_view()).unwrap());
         let pending_carriage = (kind == "palw").then(|| {
             vp.capture_pruning_point_palw_state(point);
             vp.pruning_point_palw_state(point).expect("the node serves its root-verified historical carriage")

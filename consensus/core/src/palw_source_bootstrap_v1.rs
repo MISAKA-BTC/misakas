@@ -61,7 +61,7 @@ impl std::fmt::Display for PalwSourceBootstrapContextFaultV1 {
             Self::Capacity(e) => write!(f, "{e}"),
             Self::CapacityUnavailable => f.write_str("own bootstrap snapshot capacity is unavailable"),
             Self::HistoryUnavailable => f.write_str("own bootstrap selected-chain history is unavailable"),
-            Self::StoreUnreadable => f.write_str("own bootstrap native store/context is unreadable"),
+            Self::StoreUnreadable => f.write_str("own native store/context is unreadable"),
         }
     }
 }

@@ -771,7 +771,7 @@ impl VirtualStateProcessor {
         // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
         if let Some(dns_params) = self.dns_params.as_ref() {
-            let parent_balance = self.reserve_balance_store.get(virtual_state.ghostdag_data.selected_parent).unwrap_or(0);
+            let parent_balance = self.dns_reserve_balance_for_native_v1(virtual_state.ghostdag_data.selected_parent)?;
             let (drip_outputs, _) = self.reserve_drip_outputs(
                 dns_params,
                 virtual_state.daa_score,
@@ -947,7 +947,7 @@ impl VirtualStateProcessor {
         // `with_overlay_commitment` re-finalizes over the full preimage.
         let header = if self.dns_params.is_some() {
             let overlay_root =
-                self.compute_overlay_snapshot(virtual_state.ghostdag_data.selected_parent, &template_bond_view).commitment_root();
+                self.compute_overlay_snapshot(virtual_state.ghostdag_data.selected_parent, &template_bond_view)?.commitment_root();
             header.with_overlay_commitment(overlay_root)
         } else {
             header

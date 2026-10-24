@@ -1199,7 +1199,7 @@ impl VirtualStateProcessor {
         // the pruning point and this same check on the first post-pruning block verifies
         // them against its header. Gated on the overlay being active (`dns_params`).
         if self.dns_params.is_some() {
-            let snap = self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view);
+            let snap = self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view)?;
             let expected_overlay = snap.commitment_root();
             if expected_overlay != header.overlay_commitment_root {
                 // Per-component digests (ADR-0022 divergence triage): the root alone only says
@@ -1406,7 +1406,7 @@ impl VirtualStateProcessor {
         // construction (template) and validation paths agree byte-for-byte). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
         if let Some(dns_params) = self.dns_params.as_ref() {
-            let parent_balance = self.reserve_balance_store.get(ctx.selected_parent()).unwrap_or(0);
+            let parent_balance = self.dns_reserve_balance_for_native_v1(ctx.selected_parent())?;
             let (drip_outputs, drip_total) = self.reserve_drip_outputs(
                 dns_params,
                 header.daa_score,
