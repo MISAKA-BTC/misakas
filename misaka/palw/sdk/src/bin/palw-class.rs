@@ -35,6 +35,7 @@ USAGE:
     palw-class kernel-preflight <program.tir> --positions N [--height DAA] [--json]
     palw-class kernel-params <artifact.palwtir> --tensor-workspace-mib N --payload-limit-mib N --out <params.borsh> [--encoder] [--json]
     palw-class panel-lifetime-v2 authorize|sign|inspect ... (palw-class panel-lifetime-v2 --help)
+    palw-class router-binding-v2 sign ... (palw-class router-binding-v2 --help)
     palw-class claim-v2 class|job|commit|fund|lock|verify|sign|inspect|final ... (palw-class claim-v2 --help)
     palw-class flat-v6 post|seal|reveal|expire ... (palw-class flat-v6 --help for offline protected candidate preparation)
     palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> [--model-id <model-id>] <artifact-path>
@@ -339,6 +340,9 @@ fn run(args: &[String]) -> Result<(), String> {
     let command = if args.is_empty() { String::new() } else { args.remove(0) };
     if command == "panel-lifetime-v2" {
         return misaka_palw_sdk::panel_lifetime_v2::cli::run(&args);
+    }
+    if command == "router-binding-v2" {
+        return misaka_palw_sdk::router_binding_v2::cli::run(&args);
     }
     if command == "claim-v2" {
         return misaka_palw_sdk::claim_paid_v2::cli::run(&args);

@@ -662,3 +662,6 @@ pub mod state_carriage_rpc;
 #[cfg(test)]
 #[path = "../../kernel/tests/common/mod.rs"]
 mod provider_reader_fixture;
+
+/// RFC-0006 offline immutable per-reader router declarations (tag 244).
+pub mod router_binding_v2;
