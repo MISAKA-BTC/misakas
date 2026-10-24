@@ -114,6 +114,8 @@ mod palw_operator_da;
 
 #[path = "palw_artifact_inventory.rs"]
 mod artifact_inventory;
+#[path = "palw_response_presign_v1.rs"]
+mod response_presign;
 #[path = "palw_flat_source_responder.rs"]
 mod flat_source_responder;
 #[path = "palw_float_source_responder.rs"]

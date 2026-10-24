@@ -17,8 +17,7 @@ const ROUND: u32 = u32::MAX - 22;
 struct ReaderV1 {
     claim: Hash64,
     owner: PalwBondKeyV2,
-    reader: Arc<std::sync::Mutex<Box<dyn PalwFloatPublicSourceReaderV1>>>,
-    _memory: crate::palw_memory_ledger::PalwMemoryReservationV1,
+    reader: Arc<super::response_presign::OwnedSourceReaderV1<dyn PalwFloatPublicSourceReaderV1>>,
 }
 #[derive(Default)]
 pub(super) struct FloatSourceBookV1 {
@@ -144,12 +143,12 @@ impl PalwPanelService {
                             8 << 20,
                         )
                         .map_err(|e| e.to_string())?;
-                    let reader: Box<dyn PalwFloatPublicSourceReaderV1> = if sidecar.is_file() {
+                    let (reader,memory): (Box<dyn PalwFloatPublicSourceReaderV1>,_) = if sidecar.is_file() {
                         tokio::task::spawn_blocking(move || {
                             let source =
                                 Arc::new(misaka_palw_base0::flat_public_source::Base0OriginalCaptureFileV1::open_v1(&sidecar)?);
                             kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatPublicSidecarReaderV1::open_v1(source)
-                                .map(|reader| Box::new(reader) as Box<dyn PalwFloatPublicSourceReaderV1>)
+                                .map(|reader| (Box::new(reader) as Box<dyn PalwFloatPublicSourceReaderV1>,memory))
                         })
                         .await
                         .map_err(|e| format!("Float32 sidecar reader failed: {e}"))??
@@ -166,10 +165,10 @@ impl PalwPanelService {
                                 let Ok(source) = Base0OriginalCaptureFileV1::open_v1(&path) else { continue };
                                 let Ok(source) = Base0OriginalCaptureRangeV1::fp_capture_v1(Arc::new(source), &job) else { continue };
                                 if let Ok(reader) = backend.open_float_public_source_v1(Arc::new(source), &binding) {
-                                    return Ok(reader);
+                                    return Ok((reader,memory));
                                 }
                             }
-                            Err::<Box<dyn PalwFloatPublicSourceReaderV1>, String>(
+                            Err::<(Box<dyn PalwFloatPublicSourceReaderV1>,crate::palw_memory_ledger::PalwMemoryReservationV1), String>(
                                 "Float32 source has no original public sidecar or retaining backend".into(),
                             )
                         })
@@ -177,20 +176,24 @@ impl PalwPanelService {
                         .map_err(|e| format!("Float32 reader factory failed: {e}"))??
                     };
                     book.readers
-                        .insert(id, ReaderV1 { claim, owner, reader: Arc::new(std::sync::Mutex::new(reader)), _memory: memory });
+                        .insert(id, ReaderV1 { claim, owner, reader: super::response_presign::OwnedSourceReaderV1::new(reader,memory).map_err(|why|why.to_string())? });
                 }
                 let slot = book.readers.get(&id).ok_or("Float32 source reader disappeared")?;
                 if (slot.claim, slot.owner) != (claim, owner) {
                     return Err("Float32 reader substitutes literal native source".into());
                 }
                 let reader = slot.reader.clone();
+                // Shared native contexts clone only their Arc; retain the whole
+                // original identity for the last read after the blocking poll.
+                let expected=progress.clone();
                 let clock = progress.now_daa;
                 let deadline = source.response_deadline_v1(&signer).ok_or("Float32 source has no response deadline")?;
                 let bundle_id = source.bundle_id;
-                let answer = tokio::task::spawn_blocking(move || {
-                    let _read = read;
-                    let mut reader = reader.lock().map_err(|_| "Float32 reader lock poisoned")?;
-                    crate::palw_flat_public_source::float_answer_v1(&progress.session, signer, clock, reader.as_mut())
+                let (answer,read) = tokio::task::spawn_blocking(move || {
+                    let read=read;
+                    let mut reader = reader.reader.lock().map_err(|_| "Float32 reader lock poisoned")?;
+                    let answer=crate::palw_flat_public_source::float_answer_v1(&progress.session, signer, clock, reader.as_mut())?;
+                    Ok::<_,String>((answer,read))
                 })
                 .await
                 .map_err(|e| format!("Float32 source poll failed: {e}"))??;
@@ -205,9 +208,15 @@ impl PalwPanelService {
                     action: PalwConstraintStreamActionV1::FloatSourceAnswer(answer),
                     signature: Vec::new(),
                 };
-                movement.signature = self
-                    .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
-                    .ok_or("Float32 custodian signing key unavailable")?;
+                // Keep the admitted snapshot workspace alive through the fresh
+                // own read, signature and queue handoff. No await follows it.
+                let _presign_read=read;
+                let Some(signature)=super::response_presign::sign_current_v1(
+                    session.palw_staged_float_source_v1((claim,owner)),
+                    |fresh|super::response_presign::float_current_v1(&expected,fresh,&movement,signer),
+                    ||self.sign(&movement.signing_message(),PALW_CONSTRAINT_STREAM_CONTEXT_V1),
+                )? else {return Ok(())};
+                movement.signature=signature;
                 movement.check()?;
                 court_outbox.push_pending((
                     key.0,

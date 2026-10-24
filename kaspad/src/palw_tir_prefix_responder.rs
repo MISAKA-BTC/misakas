@@ -315,9 +315,14 @@ impl PalwPanelService {
                     action: PalwConstraintStreamActionV1::NativeTirPrefixAnswer(answer),
                     signature: Vec::new(),
                 };
-                movement.signature = self
-                    .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
-                    .ok_or("TIR prefix custodian signing key unavailable")?;
+                // Last native read after disclosure, immediately before signing.
+                // Existing snapshot/packet reservations remain live here.
+                let Some(signature)=super::response_presign::sign_current_v1(
+                    session.palw_staged_tir_prefix_v1((claim,owner)),
+                    |fresh|super::response_presign::tir_current_v1(&progress,fresh,&movement,signer),
+                    ||self.sign(&movement.signing_message(),PALW_CONSTRAINT_STREAM_CONTEXT_V1),
+                )? else {return Ok(())};
+                movement.signature=signature;
                 movement.check()?;
                 book.held.insert((key.0, key.1), packet_memory);
                 let deadline = row.respond_until_daa;
