@@ -268,7 +268,7 @@ fn validate_saved_object(
     provider: PalwBondKeyV2,
     material_consent: Option<Hash64>,
     valid_until: Option<u64>,
-) -> Result<(), String> {
+) -> Result<(), outbox::CheckerOutboxErrorV4> {
     if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
         let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
             root,
@@ -303,15 +303,7 @@ fn validate_saved_object(
                 | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { .. },
         } => {
             let receipt = receipt_from_saved(object, actor)?;
-            if receipt.enrollment != enrollment
-                || receipt.round != round
-                || receipt.assignment != source.lock().assignment
-                || receipt.source_context != source.lock().context
-                || receipt.sample_seed != source.lock().seed
-                || receipt.signer != bond
-            {
-                return Err("checker receipt WAL belongs to another source/assignment; retained without rebinding".into());
-            }
+            saved_receipt_binding::validate(&receipt, enrollment, round, bond, source.lock())?;
         }
         KernelRouteObjectV1::FileProof { accuser, claim, .. } if *accuser == bond && *claim == base => {}
         KernelRouteObjectV1::FileDemand { demander, claim, stage, .. } if *demander == bond && *claim == base && *stage < 254 => {}
@@ -693,17 +685,6 @@ impl PreparedKernelPaidCheckV4 {
                 object = Some(signed);
             }
             let signed = object.as_ref().ok_or("checker receipt WAL absent")?;
-            validate_saved_object(
-                signed,
-                self.checker,
-                base,
-                enrollment,
-                self.spec.round,
-                &source,
-                self.provider,
-                material_consent,
-                self.spec.challenge_valid_until_daa,
-            )?;
             let signature_ok = match &**signed {
                 PalwConsensusObjectV2::KernelRouteV1 { bytes, signature, .. } => {
                     let message =
@@ -736,6 +717,27 @@ impl PreparedKernelPaidCheckV4 {
             };
             if !signature_ok {
                 return Err("checker WAL signature differs from configured native key/purpose".into());
+            }
+            match validate_saved_object(
+                signed,
+                self.checker,
+                base,
+                enrollment,
+                self.spec.round,
+                &source,
+                self.provider,
+                material_consent,
+                self.spec.challenge_valid_until_daa,
+            ) {
+                Ok(()) => {}
+                Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                    // A changed assignment is not WAL corruption or permission
+                    // to rewrite it. Keep polling so a rollback restoring the
+                    // original binding can relay the same signed transaction.
+                    kaspa_core::debug!("checker receipt source changed; exact WAL retained: {error}");
+                    continue;
+                }
+                Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
             }
             if !matches!(api.palw_object_rehearsal_v1(signed), Some(PalwObjectRehearsalV1::Accepted)) {
                 continue;
@@ -857,6 +859,7 @@ impl PreparedKernelPaidCheckV4 {
 
 mod challenge_history;
 mod outbox;
+mod saved_receipt_binding;
 
 #[cfg(test)]
 mod tests;
