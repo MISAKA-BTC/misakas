@@ -2421,8 +2421,12 @@ impl VirtualStateProcessor {
         if let Some(verdict) = self.palw_exec_origin_rehearsal_v1_on(state, state_params, point, object) {
             return verdict;
         }
-        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
-            return PalwObjectRehearsalV1::NotAccepted(why);
+        match self.palw_v2_validate_objects_classified_v1(state, state_params, point, std::slice::from_ref(object)) {
+            Ok(()) => {}
+            Err(super::palw_validate::PalwObjectAdmissionFaultV1::Resource(why)) => {
+                return PalwObjectRehearsalV1::Refused(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why));
+            }
+            Err(super::palw_validate::PalwObjectAdmissionFaultV1::Semantic(why)) => return PalwObjectRehearsalV1::NotAccepted(why),
         }
         match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
             state,

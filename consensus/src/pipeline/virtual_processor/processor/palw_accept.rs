@@ -381,6 +381,21 @@ impl VirtualStateProcessor {
         self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block, None).0
     }
 
+    /// Exercise the production fallible acceptance boundary without the legacy
+    /// test wrapper's unwrap. Local faults must not become an empty acceptance.
+    #[cfg(test)]
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_accept_classified_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Result<usize, PalwLocalTransitionFaultV1> {
+        self.palw_v2_accepted_objects_and_refunds_inner(
+            state, params, point, Self::unpriced_for_tests(objects), point.block, None, &[], &[],
+        ).map(|(objects, ..)| objects.len())
+    }
+
     /// The same filter, with the state it folded to — ADR-0064's half. The bootstrap lookup reads
     /// bonds out of THIS, so a test that only saw the accepted objects could not tell the fixed
     /// behaviour ("the registry the transition will have") from the one it replaced ("the first
@@ -1861,7 +1876,7 @@ impl VirtualStateProcessor {
                 }
                 _ => {}
             }
-            match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
+            match self.palw_v2_validate_objects_classified_v1(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
                     // **AC-SLOT below the fence: the slot is charged on the acceptance check** (the
                     // pre-audit behavior). Past the fence it is charged only after the move applies.
@@ -2026,7 +2041,8 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
-                Err(why) => {
+                Err(super::palw_validate::PalwObjectAdmissionFaultV1::Resource(why)) => return Err(why.into()),
+                Err(super::palw_validate::PalwObjectAdmissionFaultV1::Semantic(why)) => {
                     // Review of #12: a charged registration the gate refused bars its registrant
                     // from another slot in this block (see the charging site).
                     if let Some(registrant) = bought_registration {

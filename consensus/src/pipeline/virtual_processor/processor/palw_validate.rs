@@ -13,7 +13,45 @@ mod kernel_material;
 mod improvement;
 mod structural;
 
+/// Admission data faults and local native capacity have different dispositions.
+/// String-only compatibility callers must not drive checked trap accepted state.
+#[derive(Debug)]
+pub(in crate::pipeline::virtual_processor) enum PalwObjectAdmissionFaultV1 {
+    Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+    Semantic(String),
+}
+impl From<String> for PalwObjectAdmissionFaultV1 {
+    fn from(why: String) -> Self { Self::Semantic(why) }
+}
+impl std::fmt::Display for PalwObjectAdmissionFaultV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { Self::Resource(why) => write!(f, "{why}"), Self::Semantic(why) => write!(f, "{why}") }
+    }
+}
+
 impl VirtualStateProcessor {
+    /// Accepted-state consumers use this entry point. Trap reveals do exactly
+    /// one checked paid lookup; capacity never falls through a String validator.
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_validate_objects_classified_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+    ) -> Result<(), PalwObjectAdmissionFaultV1> {
+        for object in objects {
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TrapRevealedV1 { reveal } = object {
+                if self.palw_panel_params_v2.is_none() {
+                    return Err(PalwObjectAdmissionFaultV1::Semantic("PALW objects on a network with no V2 bundle".into()));
+                }
+                self.palw_validate_trap_reveal_classified_v1(state, state_params, point, reveal)?;
+            } else {
+                self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object))?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn palw_v2_validate_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

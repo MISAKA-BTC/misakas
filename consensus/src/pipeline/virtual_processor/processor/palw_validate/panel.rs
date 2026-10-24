@@ -3,6 +3,39 @@
 use super::*;
 
 impl VirtualStateProcessor {
+    pub(super) fn palw_validate_trap_reveal_classified_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        reveal: &kaspa_consensus_core::palw_mesh_v1::PalwTrapRevealedV1,
+    ) -> Result<(), PalwObjectAdmissionFaultV1> {
+        use kaspa_consensus_core::{palw_mesh_v1 as mesh, palw_state_v2::PalwStateV2Error};
+        if !params.audit_mesh_active_at(point.daa_score) {
+            return Err(mesh::PalwMeshErrorV1::Dormant("palw_audit_mesh_v1").to_string().into());
+        }
+        mesh::palw_trap_revealed_shape_v1(reveal).map_err(|why| why.to_string())?;
+        let paid = state.paid_trap_target_checked_v1(params, &reveal.claim, point.daa_score).map_err(|why| {
+            match why {
+                PalwStateV2Error::NativeResource(why) => PalwObjectAdmissionFaultV1::Resource(why),
+                other => PalwObjectAdmissionFaultV1::Semantic(other.to_string()),
+            }
+        })?;
+        match paid {
+            Some(paid) => state.paid_trap_revealed_admissible_v1(&paid, reveal, point.daa_score).map_err(str::to_string)?,
+            None => state.mesh_trap_revealed_admissible_v2(reveal, point.daa_score, params.audit_1004_active_at(point.daa_score))
+                .map_err(|why| why.to_string())?,
+        }
+        mesh::palw_trap_revealed_verify_v1(
+            state,
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.network_id_bytes.as_slice(), Some(self.genesis.hash),
+            ),
+            reveal, Self::verify_mldsa87_with_context_bool,
+        ).map_err(|why| why.to_string())?;
+        Ok(())
+    }
+
     pub(super) fn palw_validate_panel_object_v1(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -68,21 +101,8 @@ impl VirtualStateProcessor {
                 // commitment about its own audited claim, inside the reveal window — or, past the dormant `palw_paid_claim_trap_v1`,
                 // a paid V2 base claim's trap: RFC-0007 §4.1 T6), then the setter's signature.
                 Obj::TrapRevealedV1 { reveal } => {
-                    if !state_params.audit_mesh_active_at(point.daa_score) {
-                        return Err(kaspa_consensus_core::palw_mesh_v1::PalwMeshErrorV1::Dormant("palw_audit_mesh_v1").to_string());
-                    }
-                    kaspa_consensus_core::palw_mesh_v1::palw_trap_revealed_shape_v1(reveal).map_err(|e| e.to_string())?;
-                    state.trap_revealed_admissible_v3(state_params, reveal, point.daa_score)?;
-                    kaspa_consensus_core::palw_mesh_v1::palw_trap_revealed_verify_v1(
-                        state,
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
-                            self.network_id_bytes.as_slice(),
-                            Some(self.genesis.hash),
-                        ),
-                        reveal,
-                        Self::verify_mldsa87_with_context_bool,
-                    )
-                    .map_err(|e| e.to_string())?;
+                    self.palw_validate_trap_reveal_classified_v1(state, state_params, point, reveal)
+                        .map_err(|why| why.to_string())?;
                 }
                 // **RFC-0010: a certified Panel epoch output** (tag 120): the fence, and the proof's bound (the lifecycle shape check
                 // already holds it). Whether it verifies against THIS branch is the fold's, which drops one that does not and lets the
