@@ -23,6 +23,11 @@
 //! identity and membership only, and nothing here is validator approval or consensus credit.
 use super::capture::{gdn_chunk_witness_v2, gdn_input_rows_from_capture_v2, gdn_recurrence_section_v2, gdn_selected_delta_chunks_v2};
 use super::*;
+#[path = "conv_request_owner_v3.rs"]
+mod conv_request_owner;
+pub use conv_request_owner::{PalwGdnConvAdmissionV3, PalwGdnConvOwnerV3, PalwGdnConvRefutationRequestsV3, PalwGdnConvRequiredRowV3,
+    gdn_conv_refutation_requests_v3, visit_gdn_conv_required_rows_v3};
+
 
 /// The evidence version of both checkpoint terminals.
 pub const PALW_GDN_CHECKPOINT_EVIDENCE_VERSION_V2: u16 = 2;
@@ -543,26 +548,13 @@ pub fn gdn_conv_window_required_v2(
     head: u32,
     checkpoint_index: u32,
 ) -> Result<Vec<Vec<(u64, PalwStepCoordinateV1)>>, PalwGdnCourtErrorV2> {
-    let profile = &binding.shape_profile;
-    let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
-    let (_, sources) = conv_sources_v2(profile, conv_slot, &geometry)?;
-    let (_, to_first) = checkpoint_site_v2(binding, checkpoint_index)?;
-    let from = to_first.saturating_sub(geometry.conv_kernel);
     let mut out = Vec::new();
-    for absolute in from..to_first {
-        for (which, (slot, tile, _)) in sources.iter().enumerate() {
-            let (lo, hi) = conv_range_v2(&geometry, head, which);
-            let coord0 = coordinate_at_v2(binding, absolute, *slot, 0);
-            let mut row = Vec::new();
-            for t in (lo / tile) as u32..=((hi - 1) / tile) as u32 {
-                let coord = PalwStepCoordinateV1 { tile_index: t, ..coord0 };
-                let index =
-                    canonical_step_leaf_index(profile, &binding.job_context, &coord).ok_or(PalwStepRefuteError::Unadjudicable)?;
-                row.push((index, coord));
-            }
-            out.push(row);
-        }
-    }
+    visit_gdn_conv_required_rows_v3(binding, conv_slot, head, checkpoint_index, |source| {
+        let mut row = Vec::new();
+        source.visit_tiles_v3(|index, coordinate| { row.push((index, coordinate)); Ok(()) })?;
+        out.push(row);
+        Ok(())
+    })?;
     Ok(out)
 }
 

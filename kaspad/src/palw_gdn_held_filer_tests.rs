@@ -490,3 +490,6 @@ mod court_resource_tests;
 
 #[path = "palw_gdn_held_witness_owner_tests_v4.rs"]
 mod witness_owner_tests;
+
+#[path = "palw_gdn_held_conv_owner_tests_v3.rs"]
+mod conv_owner_tests;

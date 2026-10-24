@@ -165,10 +165,31 @@ fn actual_transition_and_conv_builders_keep_witness_ticket_through_native_court_
             .unwrap()
             .map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation }),
         };
-        assert_eq!(free(ceiling), ceiling - bytes, "real builder retains only the named witness-copy request after leg retirement");
+        let extra = if let Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } = case.candidates[case.at] {
+            let leg = misaka_palw_base0::gdn_evidence_v2::base0_gdn_leg_v2(&w.forged.view()).unwrap();
+            let capture = kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnCaptureV2 {
+                binding: &w.forged.binding,
+                step_leaf_hashes: &w.forged.tiles.leaves,
+                checkpoint_leaf_hashes: &leg.leaf_hashes,
+                max_leaves: w.forged.max_leaves,
+            };
+            kaspa_consensus_core::palw_step_refute::memory_v2::gdn_conv_refutation_requests_v3(
+                &capture,
+                conv_slot,
+                head,
+                case.index,
+                |at, _| w.forged.tiles.tiles.iter().find(|(i, _)| *i == at).map(|(_, leaf)| leaf),
+            )
+            .unwrap()
+            .persistent_bytes
+        } else {
+            0
+        };
+        let input_bytes = bytes + extra;
+        assert_eq!(free(ceiling), ceiling - input_bytes, "real builder retains exactly its named input roles after leg retirement");
         let signs = std::cell::Cell::new(0);
         let signer = |m: &[u8], c: &[u8]| {
-            assert!(free(ceiling) < ceiling - bytes, "output preadmission and witness guard overlap at the actual signer");
+            assert!(free(ceiling) < ceiling - input_bytes, "output preadmission and witness guard overlap at the actual signer");
             signs.set(signs.get() + 1);
             sign(m, c)
         };
@@ -181,7 +202,7 @@ fn actual_transition_and_conv_builders_keep_witness_ticket_through_native_court_
         };
         let object = built
             .try_handoff_v4(|evidence| {
-                assert_eq!(free(ceiling), ceiling - bytes);
+                assert_eq!(free(ceiling), ceiling - input_bytes);
                 let verdict = match &evidence {
                     PalwMemoryRoutingEvidenceV2::GdnTransition { refutation } => check_gdn_transition_refutation_v2(
                         refutation,
@@ -199,7 +220,7 @@ fn actual_transition_and_conv_builders_keep_witness_ticket_through_native_court_
                     _ => unreachable!(),
                 };
                 assert!(terminal_found_fault_v1(verdict)?);
-                assert_eq!(free(ceiling), ceiling - bytes, "court scratch retires, input guard remains");
+                assert_eq!(free(ceiling), ceiling - input_bytes, "court scratch retires, input guard remains");
                 super::super::action_owner::accusation(&case.claim, evidence, &accuser)
             })
             .unwrap();

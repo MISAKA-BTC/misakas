@@ -1089,6 +1089,10 @@ pub fn kv_aux_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV
 // `the_closed_form_is_the_loop_on_every_shipped_profile` asserts the whole `Result`, error payload
 // included, against the real loop for every shipped profile at every `n_ctx` in `2..=512`.
 
+#[path = "palw_step_rank_requests_v3.rs"]
+mod rank_requests_v3;
+pub use rank_requests_v3::PalwCanonicalStepRankV3;
+
 /// One kv-scaled node, collapsed to the three numbers its leaf count depends on. `weight` is the
 /// multiplicity of the table it came from: 1 for pre/post, `G` for gdn, `A` for attn.
 #[derive(Clone, Copy, Debug)]
@@ -1185,44 +1189,8 @@ fn kv_scaled_prefix_sum_v1(multiplier: u128, tile_len: u128, k_max: u128) -> u12
 /// Builds [`PalwLeafShapeV1`]. `visits` counts node-table entries touched — the quantity the old
 /// loop paid `n_ctx` times over.
 fn palw_leaf_shape_v1(profile: &PalwShapeProfileV3, visits: &mut u64) -> PalwLeafShapeV1 {
-    let attn_layers = attention_layer_count_v1(profile);
-    let gdn_layers = (profile.layer_count as u128).saturating_sub(attn_layers);
     let mut shape = PalwLeafShapeV1::default();
-    for (table, weight, is_logits) in [
-        (&profile.pre_nodes, 1u128, false),
-        (&profile.gdn_nodes, gdn_layers, false),
-        (&profile.attn_nodes, attn_layers, false),
-        (&profile.post_nodes, 1u128, true),
-    ] {
-        for node in table {
-            *visits += 1;
-            let tile = node.tile_len as u128;
-            match node.out_len {
-                PalwStepOutLenV1::Fixed { elements } => {
-                    let c = weight.saturating_mul(tiles_u128(elements as u128, tile));
-                    if is_logits {
-                        shape.logits_const = shape.logits_const.saturating_add(c);
-                    } else {
-                        shape.body_const = shape.body_const.saturating_add(c);
-                    }
-                }
-                PalwStepOutLenV1::KvScaled { multiplier } => {
-                    // A zero multiplicity is a table no layer selects, and a zero tile width tiles
-                    // nothing — both contribute 0 at every position, so both drop out here rather
-                    // than being carried as a term that is always zero.
-                    if weight == 0 || tile == 0 {
-                        continue;
-                    }
-                    let term = PalwKvTermV1 { multiplier: multiplier as u128, tile_len: tile, weight };
-                    if is_logits {
-                        shape.logits_kv.push(term);
-                    } else {
-                        shape.body_kv.push(term);
-                    }
-                }
-            }
-        }
-    }
+    rank_requests_v3::fill_leaf_shape_v3(&mut shape, profile, visits);
     shape
 }
 
@@ -1960,75 +1928,9 @@ pub fn canonical_step_leaf_index(
 
 /// [`canonical_step_leaf_index`] with the node-visit counter its cost test reads.
 pub(crate) fn canonical_step_leaf_index_counted_v1(
-    profile: &PalwShapeProfileV3,
-    context: &PalwJobContextV2,
-    coord: &PalwStepCoordinateV1,
-    visits: &mut u64,
+    profile: &PalwShapeProfileV3, context: &PalwJobContextV2, coord: &PalwStepCoordinateV1, visits: &mut u64,
 ) -> Option<u64> {
-    let prefill = context.declared_prefill_tokens as u64;
-    let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
-    let call = coord.call_index as u64;
-    if call > decode_calls {
-        return None;
-    }
-    let positions = if call == 0 { prefill } else { 1 };
-    if (coord.position as u64) >= positions {
-        return None;
-    }
-    let s = if call == 0 { coord.position as u64 + 1 } else { prefill + call };
-    let with_logits = if call == 0 { coord.position as u64 + 1 == prefill } else { true };
-    let slot_count = profile.global_node_count();
-    if coord.node_slot >= slot_count {
-        return None;
-    }
-    let post_first = slot_count - profile.post_nodes.len() as u32;
-    let is_post = coord.node_slot >= post_first;
-    if is_post && !with_logits {
-        return None; // post nodes do not exist at non-logit positions
-    }
-    let shape = palw_leaf_shape_v1(profile, visits);
-    let mut index = palw_job_running_total_v1(&shape, u128::from(s - 1), u128::from(prefill), visits);
-    // Slots before this one within the position.
-    let pre = profile.pre_nodes.len() as u64;
-    let slot = u64::from(coord.node_slot);
-    let node = if slot < pre {
-        for n in &profile.pre_nodes[..slot as usize] {
-            *visits += 1;
-            index = index.saturating_add(palw_node_tiles_at_v1(n, s));
-        }
-        &profile.pre_nodes[slot as usize]
-    } else {
-        for n in &profile.pre_nodes {
-            *visits += 1;
-            index = index.saturating_add(palw_node_tiles_at_v1(n, s));
-        }
-        let layers = PalwLayerMultiplicityV1::at(profile, s, visits);
-        let layer_slots = layers.slots_before(layers.layers);
-        let within_layers = slot - pre;
-        if within_layers < layer_slots {
-            let l = layers.layer_holding(u128::from(within_layers), |m, c| u128::from(m.slots_before(c)));
-            index = index.saturating_add(layers.leaves_before(l));
-            let at = (within_layers - layers.slots_before(l)) as usize;
-            let table = profile.layer_table(u16::try_from(l).ok()?);
-            for n in table.get(..at)? {
-                *visits += 1;
-                index = index.saturating_add(palw_node_tiles_at_v1(n, s));
-            }
-            table.get(at)?
-        } else {
-            index = index.saturating_add(layers.leaves_before(layers.layers));
-            let at = (within_layers - layer_slots) as usize;
-            for n in profile.post_nodes.get(..at)? {
-                *visits += 1;
-                index = index.saturating_add(palw_node_tiles_at_v1(n, s));
-            }
-            profile.post_nodes.get(at)?
-        }
-    };
-    if u128::from(coord.tile_index) >= palw_node_tiles_at_v1(node, s) {
-        return None;
-    }
-    u64::try_from(index.saturating_add(u128::from(coord.tile_index))).ok().filter(|v| *v < u64::MAX)
+    rank_requests_v3::canonical_rank_with_shape_v3(profile, context, coord, visits, None)
 }
 
 /// **The walk the closed forms replaced, retained as their reference** — [`canonical_step_coordinates`]
@@ -3839,4 +3741,6 @@ mod tests {
         assert_eq!(step_leaf_count_capped_v1(&p512, &ctx, PALW_STEP_MAX_LEAVES), Ok(4_074_040));
         assert_eq!(PALW_STEP_MAX_LEAVES, 4_194_304);
     }
+    include!("palw_step_rank_requests_tests_v3.rs");
+
 }

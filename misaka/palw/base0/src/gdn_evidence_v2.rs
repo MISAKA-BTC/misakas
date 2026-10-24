@@ -516,11 +516,24 @@ pub fn base0_gdn_conv_window_evidence_from_disclosures_retained_v4(
     demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1],
 ) -> Result<Base0GdnWitnessBuiltV4<PalwGdnConvWindowRefutationV2>, NativeDecodeErrorV1<String>> {
     let leg = base0_gdn_leaf_leg_retained_v3(material)?;
+    // An independently admitted native rank cache serves this same immutable
+    // material's clone source. The request visitor admits its own rank cache.
+    let rank = kaspa_consensus_core::palw_step::PalwCanonicalStepRankV3::new_v3(&material.binding.shape_profile, &material.binding.job_context)
+        .map_err(NativeDecodeErrorV1::Resource)?;
     if demands != gdn_conv_window_demands_v2(material.binding, conv_slot, head, index).map_err(base0_gdn_court_error_v3)?.as_slice() {
         return Err(NativeDecodeErrorV1::Decode("the answered demands are not the units this window reads".into()));
     }
-    base0_gdn_checkpoint_witness_retained_v4(demands, answers)?.try_build_v4(|accused|
-        conv_disclosures_with_accused_v4(material, &leg, conv_slot, head, index, accused))
+    let capture = capture_v2(material, &leg);
+    let request = kaspa_consensus_core::palw_step_refute::memory_v2::gdn_conv_refutation_requests_v3(&capture, conv_slot, head, index, |at, _coordinate|
+        material.tiles.tiles.iter().find(|(i, _)| *i == at).map(|(_, leaf)| leaf))
+        .map_err(base0_gdn_court_error_v3)?;
+    let admission = request.reserve_v3().map_err(base0_gdn_court_error_v3)?;
+    let tile = |coordinate: PalwStepCoordinateV1| rank.index_v3(&coordinate)
+        .and_then(|at| material.tiles.tiles.iter().find(|(i, _)| *i == at).map(|(_, leaf)| leaf.clone()));
+    let built = base0_gdn_checkpoint_witness_retained_v4(demands, answers)?.try_build_v4(|accused|
+        gdn_conv_window_refutation_with_accused_v2(&capture, conv_slot, head, index, accused, &tile).map_err(base0_gdn_court_error_v3))?;
+    admission.validate_v3(&built).map_err(base0_gdn_court_error_v3)?;
+    Ok(built.with_conv_owner_v5(admission.into_owner_v3()))
 }
 
 fn conv_disclosures_with_accused_v4(

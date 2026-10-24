@@ -53,31 +53,29 @@ fn actual_transition_and_conv_court_capacity_is_typed_retry_without_case_advance
         let blocker = reserve_native_requests_v1(ceiling - (1 << 20)).unwrap();
         let batch = super::super::answer_owner::complete_batch(&case.answers).unwrap();
         let evidence = match case.candidates[case.at] {
-            Base0GdnCheckpointCourtV2::Transition { node_slot, head } => PalwMemoryRoutingEvidenceV2::GdnTransition {
-                refutation: base0_gdn_transition_evidence_from_disclosures_retained_v3(
-                    &w.forged.view(),
-                    node_slot,
-                    head,
-                    case.index,
-                    &case.demands,
-                    &batch,
-                    || w.backend.gdn_recompute_kernels_v2().unwrap(),
-                )
-                .expect("the exact upstream transition construction fits this budget"),
-            },
-            Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } => PalwMemoryRoutingEvidenceV2::GdnConvWindow {
-                refutation: base0_gdn_conv_window_evidence_from_disclosures_retained_v3(
-                    &w.forged.view(),
-                    conv_slot,
-                    head,
-                    case.index,
-                    &case.demands,
-                    &batch,
-                )
-                .expect("the exact upstream conv construction fits this budget"),
-            },
+            Base0GdnCheckpointCourtV2::Transition { node_slot, head } => base0_gdn_transition_evidence_from_disclosures_retained_v4(
+                &w.forged.view(),
+                node_slot,
+                head,
+                case.index,
+                &case.demands,
+                &batch,
+                || w.backend.gdn_recompute_kernels_v2().unwrap(),
+            )
+            .expect("the exact upstream transition construction fits this budget")
+            .map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnTransition { refutation }),
+            Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } => base0_gdn_conv_window_evidence_from_disclosures_retained_v4(
+                &w.forged.view(),
+                conv_slot,
+                head,
+                case.index,
+                &case.demands,
+                &batch,
+            )
+            .expect("the exact upstream conv construction fits this budget")
+            .map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation }),
         };
-        let verdict = match &evidence {
+        let verdict = match &*evidence {
             PalwMemoryRoutingEvidenceV2::GdnTransition { refutation } => check_gdn_transition_refutation_v2(
                 refutation,
                 case.claim.execution_root,
