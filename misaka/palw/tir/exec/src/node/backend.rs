@@ -1998,53 +1998,29 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
         copy_budget_bytes: u64,
     ) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicConeProbeV1, String> {
-        let (registered, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&self.class, &self.artifact_root)
-            .map_err(|e| e.to_string())?;
-        let binding =
-            header.resolve_registered_layout_v1(&registered, &self.class.layout, header.committed_execution_root, self.ladder)?;
-        if rules.max_step_leaf_count != self.ladder
-            || rules.prompt_form != self.prompt_ids_form
-            || leaf_index >= binding.step_leaf_count
-        {
-            return Err("public TIR builder changes native class ladder, prompt form or original leaf".into());
-        }
-        let mut compact = binding.clone();
-        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut compact);
-        let mut inputs = super::cell::TirRunInputsV1::default();
-        for run in runs {
-            if run.binding != compact
-                || run.range.leaf_hashes.is_empty()
-                || run.range.leaf_hashes.len() > kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1 as usize
-            {
-                return Err("public TIR operand range changes original header/layout or bounded unit".into());
-            }
-            inputs.add_run(
-                binding.step_leaf_count,
-                &binding.step_merkle_root,
-                &run.range,
-                &run.preimages,
-                &binding.job_context,
-                &self.class_id,
-                self.ladder,
-            )?;
-        }
-        let trace = match trace {
-            Some(pin) => TirTraceV1::Summary { rows_root: pin.rows_root, generated: &pin.generated_token_ids, pins: &[] },
-            None => TirTraceV1::Absent,
-        };
-        let runner = self.checked_runner()?;
-        let store = TirEvidenceV1::public_runs_v1(
-            &runner,
-            &binding,
-            prompt_token_ids,
-            trace,
-            &inputs,
-            self.artifact.as_ref(),
-            self.prompt_ids_form,
-            self.ladder,
-        )?;
-        let store = store.with_carried_copy_limits_v1(copy_budget_bytes, copy_budget_bytes);
-        Ok(store.probe_cone_v1(leaf_index, rules, limits))
+        self.with_public_cone_store_v2(header, prompt_token_ids, trace, runs, leaf_index, rules, limits, copy_budget_bytes, |store| {
+            store.probe_cone_v1(leaf_index, rules, limits)
+        })
+    }
+
+    fn probe_tir_public_cone_owned_v2(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prompt_token_ids: &[u32],
+        trace: Option<&PalwTiledDecodeTokensV1>,
+        runs: &[kaspa_consensus_core::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        leaf_index: u64,
+        rules: &PalwTirCourtRulesV1,
+        limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        copy_budget_bytes: u64,
+    ) -> Result<
+        kaspa_consensus_core::palw_backend::PalwTirPublicConeProbeOwnedV2,
+        kaspa_consensus_core::palw_backend::PalwTirPublicConeFaultV2,
+    > {
+        self.with_public_cone_store_v2(header, prompt_token_ids, trace, runs, leaf_index, rules, limits, copy_budget_bytes, |store| {
+            store.probe_cone_owned_v2(leaf_index, rules, limits)
+        })
+        .map_err(kaspa_consensus_core::palw_backend::PalwTirPublicConeFaultV2::Unavailable)?
     }
 
     /// G14: step leaf `leaf_index` of a TIR claim — its canonical lanes and its capped opening against the header's step root,
@@ -2098,5 +2074,68 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
             })
         })?;
         Ok(kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&self.class_id, prefix_tokens, &digest))
+    }
+}
+
+impl TirBackendV1 {
+    fn with_public_cone_store_v2<R>(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prompt_token_ids: &[u32],
+        trace: Option<&PalwTiledDecodeTokensV1>,
+        runs: &[kaspa_consensus_core::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        leaf_index: u64,
+        rules: &PalwTirCourtRulesV1,
+        limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        copy_budget_bytes: u64,
+        probe: impl FnOnce(&TirEvidenceV1<'_>) -> R,
+    ) -> Result<R, String> {
+        let (registered, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&self.class, &self.artifact_root)
+            .map_err(|e| e.to_string())?;
+        let binding =
+            header.resolve_registered_layout_v1(&registered, &self.class.layout, header.committed_execution_root, self.ladder)?;
+        if rules.max_step_leaf_count != self.ladder
+            || rules.prompt_form != self.prompt_ids_form
+            || leaf_index >= binding.step_leaf_count
+        {
+            return Err("public TIR builder changes native class ladder, prompt form or original leaf".into());
+        }
+        let mut compact = binding.clone();
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut compact);
+        let mut inputs = super::cell::TirRunInputsV1::default();
+        for run in runs {
+            if run.binding != compact
+                || run.range.leaf_hashes.is_empty()
+                || run.range.leaf_hashes.len() > kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1 as usize
+            {
+                return Err("public TIR operand range changes original header/layout or bounded unit".into());
+            }
+            inputs.add_run(
+                binding.step_leaf_count,
+                &binding.step_merkle_root,
+                &run.range,
+                &run.preimages,
+                &binding.job_context,
+                &self.class_id,
+                self.ladder,
+            )?;
+        }
+        let trace = match trace {
+            Some(pin) => TirTraceV1::Summary { rows_root: pin.rows_root, generated: &pin.generated_token_ids, pins: &[] },
+            None => TirTraceV1::Absent,
+        };
+        let runner = self.checked_runner()?;
+        let store = TirEvidenceV1::public_runs_v1(
+            &runner,
+            &binding,
+            prompt_token_ids,
+            trace,
+            &inputs,
+            self.artifact.as_ref(),
+            self.prompt_ids_form,
+            self.ladder,
+        )?;
+        let store = store.with_carried_copy_limits_v1(copy_budget_bytes, copy_budget_bytes);
+        Ok(probe(&store))
     }
 }

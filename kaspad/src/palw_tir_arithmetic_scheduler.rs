@@ -16,7 +16,7 @@ use kaspa_consensus_core::{
 use std::sync::Arc;
 
 use kaspa_consensus_core::{
-    palw_backend::{PalwExecutionBackendV1, PalwTirPublicConeNeedV1, PalwTirPublicConeProbeV1},
+    palw_backend::{PalwExecutionBackendV1, PalwTirPublicConeNeedV1, PalwTirPublicConeProbeOwnedV2},
     palw_court_v2::PalwCourtVerdictProofV2,
     palw_tir_court_v1::{PalwTirBuilderMeterV1, PalwTirBuilderWorkLimitsV1, PalwTirCourtRulesV1, PalwTirStepRunDisclosureV1},
     palw_tir_public_source_v1::{
@@ -155,6 +155,8 @@ pub(super) struct PreparedConeV1 {
     pub meter: PalwTirBuilderMeterV1,
     // The actual proof remains accounted after the blocking wave returns.
     pub _reservation: crate::palw_memory_ledger::PalwMemoryReservationV1,
+    _native: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    _host: Vec<Box<dyn Send+Sync>>,
 }
 
 pub(super) enum ConeContinuationV1 {
@@ -446,7 +448,7 @@ pub(super) fn continue_cone_v1(
     // Charge the FULL allocated probe work/copy budget even on Need, Refused or
     // Err. Re-evaluating the already-read prefix never resets total paid work.
     budget.charge_probe_v1(limits, copy_budget_bytes)?;
-    match backend.probe_tir_public_cone_v1(
+    match backend.probe_tir_public_cone_owned_v2(
         source.header_v1(),
         prompt,
         trace.as_ref(),
@@ -455,10 +457,11 @@ pub(super) fn continue_cone_v1(
         rules,
         limits,
         copy_budget_bytes,
-    )? {
-        PalwTirPublicConeProbeV1::Need(need) => lower_cone_need_v1(budget, source, &intervals, need),
-        PalwTirPublicConeProbeV1::Refused { reason } => Ok(ConeContinuationV1::Refused { reason }),
-        PalwTirPublicConeProbeV1::Ready { proof, meter } => {
+    ).map_err(|why|why.to_string())? {
+        PalwTirPublicConeProbeOwnedV2::Need(need) => lower_cone_need_v1(budget, source, &intervals, need),
+        PalwTirPublicConeProbeOwnedV2::Refused { reason } => Ok(ConeContinuationV1::Refused { reason }),
+        PalwTirPublicConeProbeOwnedV2::Ready(ready) => {
+            let (proof,native,host,meter)=ready.into_parts_v2();
             if meter.work.elements > limits.evaluation.max_elements
                 || meter.work.terms > limits.evaluation.max_terms
                 || meter.target_requests > limits.max_target_requests
@@ -466,7 +469,7 @@ pub(super) fn continue_cone_v1(
             {
                 return Ok(ConeContinuationV1::Refused { reason: "TIR cone builder exceeded this wave's allocation".into() });
             }
-            Ok(ConeContinuationV1::Ready(PreparedConeV1 { proof, meter, _reservation: reservation }))
+            Ok(ConeContinuationV1::Ready(PreparedConeV1 { proof, meter, _reservation: reservation, _native:native, _host:host }))
         }
     }
 }

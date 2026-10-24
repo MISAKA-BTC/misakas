@@ -463,6 +463,28 @@ impl<'a> PalwCourtEvidenceOpsV1<'a> {
     ) -> Result<PalwTirPublicConeProbeV1, String> {
         self.backend.probe_tir_public_cone_v1(_header, _prompt_token_ids, _trace, _runs, _leaf_index, _rules, _limits, _copy_budget_bytes)
     }
+    pub fn probe_tir_public_cone_owned_v2(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prompt_token_ids: &[u32],
+        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        _leaf_index: u64,
+        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+        _limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        _copy_budget_bytes: u64,
+    ) -> Result<PalwTirPublicConeProbeOwnedV2, PalwTirPublicConeFaultV2> {
+        self.backend.probe_tir_public_cone_owned_v2(
+            _header,
+            _prompt_token_ids,
+            _trace,
+            _runs,
+            _leaf_index,
+            _rules,
+            _limits,
+            _copy_budget_bytes,
+        )
+    }
     pub fn build_tir_public_cone_bounded_v1(
         &self,
         header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,

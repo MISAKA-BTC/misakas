@@ -680,7 +680,56 @@ mod tests {
     }
 
     #[test]
+    fn public_sparse_owned_probe_preserves_local_capacity_and_transfers_host_guards() {
+        const CHILD:&str="MISAKA_TIR_OWNED_CONE_RESOURCE_CHILD";
+        if std::env::var(CHILD).as_deref()!=Ok("1") {
+            let full=format!("{}::public_sparse_owned_probe_preserves_local_capacity_and_transfers_host_guards",module_path!());
+            let name=full.split_once("::").unwrap().1;
+            assert!(std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact",name,"--nocapture","--test-threads=1"]).env(CHILD,"1").status().unwrap().success());return;
+        }
+        public_sparse_originals_reach_native_cone_kernel_and_missing_never_acquits();
+    }
+
+    #[test]
+    fn public_sparse_owned_probe_retains_and_releases_native_logical_quota() {
+        const CHILD:&str="MISAKA_TIR_OWNED_CONE_LOGICAL_CHILD";
+        if std::env::var(CHILD).as_deref()!=Ok("1") {
+            let full=format!("{}::public_sparse_owned_probe_retains_and_releases_native_logical_quota",module_path!());
+            let name=full.split_once("::").unwrap().1;
+            assert!(std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact",name,"--nocapture","--test-threads=1"]).env(CHILD,"1").status().unwrap().success());return;
+        }
+        public_sparse_originals_reach_native_cone_kernel_and_missing_never_acquits();
+    }
+    // Test-only generous logical ceiling for this tiny kernel fixture. This is
+    // neither a shipping policy nor an all-model/physical allocation bound.
+    const OWNED_CONE_TEST_LOGICAL_BYTES:u64=256<<20;
+    fn owned_cone_logical_headroom_v2()->u64 {
+        let (mut lo,mut hi)=(0,OWNED_CONE_TEST_LOGICAL_BYTES);
+        while lo<hi {
+            let middle=lo+(hi-lo+1)/2;
+            match kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(middle) {
+                Ok(ticket)=>{assert!(ticket.is_some());drop(ticket);lo=middle;}
+                Err(_)=>hi=middle-1,
+            }
+        }
+        lo
+    }
+
+    #[test]
     fn public_sparse_originals_reach_native_cone_kernel_and_missing_never_acquits() {
+        use std::sync::atomic::{AtomicBool,AtomicU64,Ordering};
+        struct TrackedCopy {bytes:u64,held:std::sync::Arc<AtomicU64>}
+        impl Drop for TrackedCopy {fn drop(&mut self){self.held.fetch_sub(self.bytes,Ordering::SeqCst);}}
+        let logical_control=std::env::var("MISAKA_TIR_OWNED_CONE_LOGICAL_CHILD").as_deref()==Ok("1");
+        let owned_control=if logical_control || std::env::var("MISAKA_TIR_OWNED_CONE_RESOURCE_CHILD").as_deref()==Ok("1") {
+            let refusal=std::sync::Arc::new(AtomicBool::new(false));let held=std::sync::Arc::new(AtomicU64::new(0));
+            let (r,h)=(refusal.clone(),held.clone());
+            assert!(super::super::memory::set_tir_memory_reserver_v1(std::sync::Arc::new(move |role,_,_,bytes| {
+                let bytes=if role=="tir-carried-copies" {if r.load(Ordering::SeqCst){return Err("deliberate host quota refusal".into());}bytes}else{0};
+                h.fetch_add(bytes,Ordering::SeqCst);Ok(Box::new(TrackedCopy{bytes,held:h.clone()}))
+            })));
+            Some((refusal,held))
+        }else{None};
         use super::super::{artifact::TirArtifactV1, backend::TirBackendV1};
         use kaspa_consensus_core::{
             palw_backend::{PalwExecutionBackendV1, PalwTirPublicConeNeedV1, PalwTirPublicConeProbeV1},
@@ -705,7 +754,10 @@ mod tests {
             &path,
             &program,
             borsh::to_vec(&layout).unwrap(),
-            [2; 64],
+            // Attempt contexts use the native J5 yardstick's zero tokenizer
+            // identity. Register that exact identity in this fixture container,
+            // rather than synthesizing a contradictory nonzero header/class pair.
+            [0; 64],
             name.clone(),
             &mut tensor,
         )
@@ -732,6 +784,11 @@ mod tests {
             };
             let capture = super::super::backend::TirCaptureV1::decode(&produced.material).unwrap();
             let header = PalwPublicTirBindingHeaderV1::of_binding_v1(&capture.binding);
+            let (registered, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&class, &root).unwrap();
+            assert_eq!(registered.tokenizer_id, header.job_context.tokenizer_id, "native class and J5 context tokenizer agree");
+            assert_eq!(registered.facts.class_id, header.job_context.shape_profile_id);
+            assert_eq!(registered.facts.max_context, class.layout.max_context);
+            assert!(header.step_leaf_count <= rules.max_step_leaf_count);
             // A folded ORIGINAL contains only public prompt/trace/IDs. The
             // responder reconstructs once across position polls and serves raw
             // bytes only after all original roots match. A false fold refuses.
@@ -803,6 +860,35 @@ mod tests {
                     panic!("fixture did not publish original run")
                 };
                 public_runs.push(*run);
+            }
+            if let Some((refusal,held))=&owned_control {
+                use kaspa_consensus_core::palw_backend::{PalwTirPublicConeProbeOwnedV2 as Owned,PalwTirPublicConeFaultV2 as Fault};
+                let before=held.load(Ordering::SeqCst);
+                if logical_control && !kaspa_consensus_core::palw_native_resource_v1::native_logical_admission_enabled_v1() {
+                    kaspa_consensus_core::palw_native_resource_v1::arm_native_logical_limits_v1(Some(
+                        kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:OWNED_CONE_TEST_LOGICAL_BYTES,database_bytes:0}));
+                }
+                let native_before=logical_control.then(owned_cone_logical_headroom_v2);
+                let Owned::Ready(ready)=backend.probe_tir_public_cone_owned_v2(&header,&prompt_ids,Some(&trace),&public_runs,3,&rules,limits,copies).unwrap() else {panic!("complete original must reach actual native cone builder");};
+                assert!(held.load(Ordering::SeqCst)>before,"Ready owns actual host guards after evidence-store drop");
+                if let Some(native_before)=native_before {
+                    use kaspa_consensus_core::palw_native_resource_v1::{NativeHeapV1,NativeRetainedV1};
+                    let exact=ready.proof_v2().native_heap_v1("actual TIR owned proof test").bytes().expect("real proof heap visitor must support its typed fields")
+                        +(std::mem::size_of::<NativeRetainedV1<PalwCourtVerdictProofV2>>()+std::mem::size_of::<[usize;3]>()) as u64;
+                    assert!(exact>0);
+                    assert_eq!(native_before-owned_cone_logical_headroom_v2(),exact,"actual retained proof holds its native typed quota after store drop");
+                }
+                let PalwCourtVerdictProofV2::TirCone{refutation}=ready.proof_v2() else{panic!("native cone")};
+                assert_eq!(check_tir_cone_refutation_v1(refutation,&rules).is_ok(),fault);
+                drop(ready);assert_eq!(held.load(Ordering::SeqCst),before);
+                if let Some(native_before)=native_before {assert_eq!(owned_cone_logical_headroom_v2(),native_before,"dropping the real proof returns its actual native quota");}
+                refusal.store(true,Ordering::SeqCst);
+                assert!(matches!(backend.probe_tir_public_cone_owned_v2(&header,&prompt_ids,Some(&trace),&public_runs,3,&rules,limits,copies),Err(Fault::LocalResource(_))));
+                // Explicit old-API compatibility: its historical collapsed refusal remains.
+                assert!(matches!(backend.probe_tir_public_cone_v1(&header,&prompt_ids,Some(&trace),&public_runs,3,&rules,limits,copies).unwrap(),PalwTirPublicConeProbeV1::Refused{..}));
+                refusal.store(false,Ordering::SeqCst);
+                assert!(matches!(backend.probe_tir_public_cone_owned_v2(&header,&prompt_ids,Some(&trace),&public_runs,3,&rules,limits,0).unwrap(),Owned::Refused{..}),"configured copy cap is not host quota");
+                assert_eq!(held.load(Ordering::SeqCst),before);
             }
             // The actual verifier receives only public authenticated originals and
             // its registered artifact; it has no producer capture or private state.

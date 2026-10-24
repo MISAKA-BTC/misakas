@@ -13,7 +13,14 @@ use super::memory::{TirMemoryLeaseV1, TirMemoryReserverV1, memory_reserver_v1, r
 pub(crate) const DEFAULT_COPY_LIMIT_V1: u64 = 1 << 30;
 const GROWTH_V1: u64 = 1 << 20;
 
+#[derive(Debug)]
+pub(crate) enum TirCopyRefusalV2 {
+    ConfiguredLimit,
+    LocalResource(String),
+}
+
 pub(crate) struct TirCarriedCopiesV1 {
+    refusal: RefCell<Option<TirCopyRefusalV2>>,
     per_move_limit: u64,
     lifetime_limit: u64,
     move_bytes: Cell<u64>,
@@ -27,6 +34,7 @@ pub(crate) struct TirCarriedCopiesV1 {
 impl TirCarriedCopiesV1 {
     pub(crate) fn new() -> Self {
         Self {
+            refusal: RefCell::new(None),
             per_move_limit: DEFAULT_COPY_LIMIT_V1,
             lifetime_limit: DEFAULT_COPY_LIMIT_V1,
             move_bytes: Cell::new(0),
@@ -38,6 +46,7 @@ impl TirCarriedCopiesV1 {
     }
     pub(crate) fn reset_move(&self) {
         self.move_bytes.set(0);
+        self.refusal.borrow_mut().take();
         // Issued owned objects may still exist: never drop guards or reset lifetime usage.
     }
     pub(crate) fn set_limits(&mut self, per_move: u64, lifetime: u64) {
@@ -54,20 +63,49 @@ impl TirCarriedCopiesV1 {
         self.reserved_bytes.get()
     }
 
+    fn refuse_v2(&self, refusal: TirCopyRefusalV2) {
+        let mut current = self.refusal.borrow_mut();
+        // A later missing operand/cap may not erase an observed local failure.
+        if !matches!(*current, Some(TirCopyRefusalV2::LocalResource(_))) {
+            *current = Some(refusal);
+        }
+    }
+    pub(crate) fn take_refusal_v2(&self) -> Option<TirCopyRefusalV2> {
+        self.refusal.borrow_mut().take()
+    }
+    pub(crate) fn take_leases_v2(&self) -> Vec<TirMemoryLeaseV1> {
+        self.reserved_bytes.set(0);
+        std::mem::take(&mut *self.leases.borrow_mut())
+    }
     pub(crate) fn admit(&self, class: Hash64, ctx: &PalwJobContextV2, need: u64) -> Option<()> {
-        let next_move = self.move_bytes.get().checked_add(need)?;
-        let next_lifetime = self.lifetime_bytes.get().checked_add(need)?;
+        let Some((next_move, next_lifetime)) =
+            self.move_bytes.get().checked_add(need).zip(self.lifetime_bytes.get().checked_add(need))
+        else {
+            self.refuse_v2(TirCopyRefusalV2::ConfiguredLimit);
+            return None;
+        };
         if next_move > self.per_move_limit || next_lifetime > self.lifetime_limit {
+            self.refuse_v2(TirCopyRefusalV2::ConfiguredLimit);
             return None;
         }
         if next_lifetime > self.reserved_bytes.get() {
-            // At most 1024 normal growth guards over a store's entire life. A tighter
-            // tool limit permits a final partial chunk, so exact-limit probes stay exact.
-            let rounded = next_lifetime.checked_add(GROWTH_V1 - 1)? / GROWTH_V1 * GROWTH_V1;
+            let Some(rounded) = next_lifetime.checked_add(GROWTH_V1 - 1).and_then(|n| (n / GROWTH_V1).checked_mul(GROWTH_V1)) else {
+                self.refuse_v2(TirCopyRefusalV2::ConfiguredLimit);
+                return None;
+            };
             let new_reserved = rounded.min(self.lifetime_limit);
             let growth = new_reserved.checked_sub(self.reserved_bytes.get())?;
-            self.leases.borrow_mut().try_reserve(1).ok()?;
-            let lease = reserve_v1(&self.reserver, "tir-carried-copies", class, ctx, growth).ok()?;
+            if let Err(why) = self.leases.borrow_mut().try_reserve(1) {
+                self.refuse_v2(TirCopyRefusalV2::LocalResource(why.to_string()));
+                return None;
+            }
+            let lease = match reserve_v1(&self.reserver, "tir-carried-copies", class, ctx, growth) {
+                Ok(lease) => lease,
+                Err(why) => {
+                    self.refuse_v2(TirCopyRefusalV2::LocalResource(why));
+                    return None;
+                }
+            };
             if let Some(lease) = lease {
                 self.leases.borrow_mut().push(lease);
             }
@@ -77,18 +115,21 @@ impl TirCarriedCopiesV1 {
         self.lifetime_bytes.set(next_lifetime);
         Some(())
     }
-
     pub(crate) fn scratch(&self, class: Hash64, ctx: &PalwJobContextV2, need: u64) -> Option<Option<TirMemoryLeaseV1>> {
-        // Scratch is transient, not a retained-copy lifetime debit. It still
-        // obeys the caller's explicit allocation; caller holds both allocations
-        // when retained copies and this temporary lease coexist.
         if need > self.per_move_limit || need > self.lifetime_limit {
+            self.refuse_v2(TirCopyRefusalV2::ConfiguredLimit);
             return None;
         }
         if need == 0 {
             return Some(None);
         }
-        reserve_v1(&self.reserver, "tir-param-scratch", class, ctx, need).ok()
+        match reserve_v1(&self.reserver, "tir-param-scratch", class, ctx, need) {
+            Ok(lease) => Some(lease),
+            Err(why) => {
+                self.refuse_v2(TirCopyRefusalV2::LocalResource(why));
+                None
+            }
+        }
     }
 }
 

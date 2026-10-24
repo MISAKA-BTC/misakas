@@ -966,6 +966,24 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family has no public sparse TIR dependency probe".into())
     }
 
+    /// Classified, nonwire probe. Legacy-only adapters explicitly defer here;
+    /// they must implement ownership and source-level resource classification.
+    fn probe_tir_public_cone_owned_v2(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prompt_token_ids: &[u32],
+        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        _leaf_index: u64,
+        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+        _limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        _copy_budget_bytes: u64,
+    ) -> Result<PalwTirPublicConeProbeOwnedV2, PalwTirPublicConeFaultV2> {
+        Err(PalwTirPublicConeFaultV2::Unavailable(
+            "this family has no classified owned TIR cone probe; legacy bare probe is not promoted".into(),
+        ))
+    }
+
     fn build_tir_public_cone_bounded_v1(
         &self,
         header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
@@ -2354,3 +2372,7 @@ mod operation_view_tests {
         assert_eq!(backend.calls.load(Ordering::SeqCst), 0, "an absent capability does not start a substitute execution");
     }
 }
+
+#[path = "palw_backend/cone_owned_v2.rs"]
+mod cone_owned_v2;
+pub use cone_owned_v2::{PalwTirPublicConeFaultV2, PalwTirPublicConeProbeOwnedV2, PalwTirPublicConeReadyV2};

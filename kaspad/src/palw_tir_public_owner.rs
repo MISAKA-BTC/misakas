@@ -46,7 +46,7 @@ use super::tir_public_filer::palw_tir_public_arithmetic_evidence_v1;
 use super::tir_public_filer_scheduler::PalwTirPublicFilerBookV1;
 use kaspa_consensus_core::{
     Hash64,
-    palw_backend::{PalwExecutionBackendV1, PalwTirOwnStepSourceV1, PalwTirPublicConeNeedV1, PalwTirPublicConeProbeV1},
+    palw_backend::{PalwExecutionBackendV1, PalwTirOwnStepSourceV1, PalwTirPublicConeNeedV1},
     palw_court_v2::PalwCourtVerdictProofV2,
     palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwConsensusObjectV2},
     palw_tir_public_carriage_v1::{
@@ -67,6 +67,9 @@ use std::sync::Arc;
 #[path = "palw_tir_owner_replay_owned_v2.rs"]
 mod replay_owned;
 use replay_owned::OwnedTirReplayV2;
+#[path = "palw_tir_cone_evidence_owned_v2.rs"]
+pub(super) mod cone_evidence_owned;
+use kaspa_consensus_core::palw_backend::{PalwTirPublicConeProbeOwnedV2, PalwTirPublicConeReadyV2, PalwTirPublicConeFaultV2};
 
 const PALW_PANEL: &str = "palw-panel";
 
@@ -212,7 +215,7 @@ fn owner_retry_waits_v1(last: Option<Hash64>, next: Hash64, moved_at: Option<u64
 enum ConeOutcomeV1 {
     Acquire(PalwTirPublicRequestV1),
     AwaitIds,
-    Ready(Box<PalwCourtVerdictProofV2>),
+    Ready(PalwTirPublicConeReadyV2),
     Refused(String),
 }
 
@@ -230,7 +233,7 @@ fn owner_cone_probe_v1(
     backend: &dyn PalwExecutionBackendV1,
     rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     leaf: u64,
-) -> Result<ConeOutcomeV1, String> {
+) -> Result<ConeOutcomeV1, PalwTirPublicConeFaultV2> {
     let header = source.header_v1();
     let mut compact =
         header.resolve_registered_layout_v1(registered, layout, header.committed_execution_root, rules.max_step_leaf_count)?;
@@ -302,7 +305,7 @@ fn owner_cone_probe_v1(
         max_source_reads: PALW_TIR_PUBLIC_OWNER_SOURCE_READS_V1,
     };
     Ok(
-        match backend.probe_tir_public_cone_v1(
+        match backend.probe_tir_public_cone_owned_v2(
             header,
             prompt,
             trace.as_ref(),
@@ -312,9 +315,9 @@ fn owner_cone_probe_v1(
             limits,
             PALW_TIR_PUBLIC_OWNER_COPY_BYTES_V1,
         )? {
-            PalwTirPublicConeProbeV1::Ready { proof, .. } => ConeOutcomeV1::Ready(Box::new(proof)),
-            PalwTirPublicConeProbeV1::Refused { reason } => ConeOutcomeV1::Refused(reason),
-            PalwTirPublicConeProbeV1::Need(need) => {
+            PalwTirPublicConeProbeOwnedV2::Ready(ready) => ConeOutcomeV1::Ready(ready),
+            PalwTirPublicConeProbeOwnedV2::Refused { reason } => ConeOutcomeV1::Refused(reason),
+            PalwTirPublicConeProbeOwnedV2::Need(need) => {
                 let (first, count) = match need {
                     PalwTirPublicConeNeedV1::StepPreimage { index } | PalwTirPublicConeNeedV1::StepOpening { index } => (index, 1),
                     PalwTirPublicConeNeedV1::StepRange { first, count } => (first, count),
@@ -366,6 +369,33 @@ enum OwnerStepV1 {
         claim: Hash64,
         evidence: Box<PalwTirPublicConvictionEvidenceV1>,
     },
+}
+
+fn apply_owner_cone_result_v2(
+    case: &mut OwnerCaseV1,
+    filer: &mut PalwTirPublicFilerBookV1,
+    claim: Hash64,
+    now: u64,
+    outcome: Result<ConeOutcomeV1, PalwTirPublicConeFaultV2>,
+) -> Result<(), PalwTirPublicConeFaultV2> {
+    // Resource/read faults exit before any terminal disposition; keep the
+    // original independently executed source and current acquisition for retry.
+    match outcome? {
+        ConeOutcomeV1::Acquire(request) => case.cone_want = Some(request),
+        ConeOutcomeV1::AwaitIds => case.cone_needs_ids = true,
+        ConeOutcomeV1::Ready(proof) => {
+            let evidence = cone_evidence_owned::OwnedConeEvidenceV2::from_ready_v2(proof)?;
+            if filer.try_queue_owned_finding_v2(claim, evidence, now)? {
+                info!("[{PALW_PANEL}] TIR frame {claim}: retained arithmetic finding handed to public filer");
+            }
+            case.done = true;
+        }
+        ConeOutcomeV1::Refused(reason) => {
+            info!("[{PALW_PANEL}] TIR frame {claim}: configured/semantic cone construction refused: {reason}");
+            case.done = true;
+        }
+    }
+    Ok(())
 }
 
 impl PalwPanelService {
@@ -879,23 +909,9 @@ impl PalwPanelService {
                             owner_cone_probe_v1(&source, &registered, &layout, &units, ids.as_ref(), &prompt, backend.as_ref(), &rules, leaf)
                         })
                         .await
-                        .map_err(|e| format!("TIR owner cone worker failed: {e}"))??;
+                        .map_err(|e| format!("TIR owner cone worker failed: {e}"))?;
                         let Some(case) = book.cases.get_mut(&claim) else { return Ok(()) };
-                        match outcome {
-                            ConeOutcomeV1::Acquire(request) => case.cone_want = Some(request),
-                            ConeOutcomeV1::AwaitIds => case.cone_needs_ids = true,
-                            ConeOutcomeV1::Ready(proof) => {
-                                let evidence = palw_tir_public_arithmetic_evidence_v1(*proof)?;
-                                if filer.queue_finding_v1(claim, evidence, now) {
-                                    info!("[{PALW_PANEL}] TIR frame {claim}: arithmetic finding at leaf {leaf} handed to the public filer");
-                                }
-                                case.done = true;
-                            }
-                            ConeOutcomeV1::Refused(reason) => {
-                                info!("[{PALW_PANEL}] TIR frame {claim}: cone construction refused at leaf {leaf}: {reason}");
-                                case.done = true;
-                            }
-                        }
+                        apply_owner_cone_result_v2(case, filer, claim, now, outcome).map_err(|e|e.to_string())?;
                     }
                     OwnerStepV1::Finding { claim, evidence } => {
                         if filer.queue_finding_v1(claim, *evidence, now) {
@@ -1113,3 +1129,7 @@ mod tests {
         assert_eq!(owner_suspicion_v1(&committed, h(30), &j, 8, &replay(14, 13, 30, vec![1])), Some(SuspicionV1::Output));
     }
 }
+
+#[cfg(test)]
+#[path="palw_tir_cone_owned_consumer_tests_v2.rs"]
+mod cone_owned_consumer_tests;

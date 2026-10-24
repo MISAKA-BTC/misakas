@@ -63,6 +63,12 @@ pub(crate) struct PalwTirPublicPendingFilingV1 {
 pub(crate) struct PalwTirPublicFilerBookV1 {
     path: Option<PathBuf>,
     filings: BTreeMap<Hash64, PalwTirPublicPendingFilingV1>,
+    // Nonwire resources for new owned findings. Legacy journal reload does not
+    // recreate them or turn disk bytes into current authority.
+    owned_filings: Vec<(Hash64, super::tir_public_owner::cone_evidence_owned::ConeEvidenceHoldV2)>,
+    // Remains after clear/removal: Vec retains capacity. Field order ensures
+    // both the pending values and sidecar buffer drop before this whole-table ticket.
+    owned_membership: Option<(Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_memory_ledger::PalwMemoryReservationV1)>,
     dirty: bool,
 }
 
@@ -151,8 +157,76 @@ impl PalwTirPublicFilerBookV1 {
         true
     }
 
-    fn drop_v1(&mut self, claim: &Hash64, why: &str) {
+    pub(crate) fn try_queue_owned_finding_v2(
+        &mut self,
+        claim: Hash64,
+        evidence: super::tir_public_owner::cone_evidence_owned::OwnedConeEvidenceV2,
+        now_daa: u64,
+    ) -> Result<bool, kaspa_consensus_core::palw_backend::PalwTirPublicConeFaultV2> {
+        use kaspa_consensus_core::{
+            palw_backend::PalwTirPublicConeFaultV2 as Fault, palw_native_resource_v1::reserve_native_requests_v1,
+            palw_routed_material_v2::PalwMaterialConstructionRequestsV2,
+        };
+        if cfg!(not(target_pointer_width = "64")) {
+            return Err(Fault::LocalResource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                "owned TIR pending membership", "pinned BTree allocation layout only covers 64-bit targets").to_string()));
+        }
+        if self.filings.contains_key(&claim) {
+            return Ok(false);
+        }
+        if self.filings.len() >= PALW_TIR_PUBLIC_FILER_PENDING_V1 {
+            return Err(Fault::LocalResource("local pending TIR finding queue is full".into()));
+        }
+        type Slot = (Hash64, super::tir_public_owner::cone_evidence_owned::ConeEvidenceHoldV2);
+        let mut q = PalwMaterialConstructionRequestsV2::new();
+        let slots = self
+            .owned_filings
+            .capacity()
+            .checked_add(self.owned_filings.len() + 1)
+            .ok_or_else(|| Fault::LocalResource("TIR finding membership overflow".into()))?;
+        q.vec_v1::<Slot>(slots as u64).map_err(|e| Fault::LocalResource(e.to_string()))?;
+        // Pinned typed BTree envelope: old table plus at most one full node per
+        // new entry, including split/root growth. No codec-byte multiplier.
+        let nodes = self
+            .filings
+            .len()
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| Fault::LocalResource("TIR pending tree overflow".into()))?;
+        let tree = nodes
+            .checked_mul(kaspa_consensus_core::palw_native_resource_v1::btree_node_envelope_bytes_v1::<
+                Hash64,
+                PalwTirPublicPendingFilingV1,
+            >())
+            .ok_or_else(|| Fault::LocalResource("TIR pending node bytes overflow".into()))?;
+        q.add_v1(tree as u64).map_err(|e| Fault::LocalResource(e.to_string()))?;
+        let bytes = q.bytes_v1();
+        let native = reserve_native_requests_v1(bytes).map_err(|e| Fault::LocalResource(e.to_string()))?;
+        let host = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-tir-owned-finding",
+                    class_id: Hash64::default(),
+                    job: claim,
+                },
+                bytes,
+            )
+            .map_err(|e| Fault::LocalResource(e.to_string()))?;
+        self.owned_filings.try_reserve_exact(1).map_err(|e| Fault::LocalResource(e.to_string()))?;
+        let (evidence, hold) = evidence.into_parts_v2();
+        self.filings.insert(claim, PalwTirPublicPendingFilingV1 { claim, evidence, found_daa: now_daa, sends: 0, staged_offset: 0 });
+        self.owned_filings.push((claim, hold));
+        // The new full-table lease already covers old/new allocations. Replace
+        // the previous ticket only after all infallible insertions complete.
+        self.owned_membership=Some((native,host));
+        self.dirty = true;
+        self.persist();
+        Ok(true)
+    }
+
+    pub(super) fn drop_v1(&mut self, claim: &Hash64, why: &str) {
         if self.filings.remove(claim).is_some() {
+            self.owned_filings.retain(|(key,_)|key!=claim);
             self.dirty = true;
             debug!("[{PALW_PANEL}] TIR frame {claim}: public filing dropped: {why}");
         }
@@ -181,6 +255,7 @@ impl PalwPanelService {
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_none() {
             if !book.filings.is_empty() {
                 book.filings.clear();
+                book.owned_filings.clear();
                 book.dirty = true;
                 book.persist();
             }

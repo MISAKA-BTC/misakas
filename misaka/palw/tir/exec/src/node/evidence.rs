@@ -743,6 +743,35 @@ impl<'a> TirEvidenceV1<'a> {
         }
     }
 
+    /// Preserve actual allocator refusal and transfer the store's host guards
+    /// before it drops. Configured caps remain ordinary construction refusals.
+    pub fn probe_cone_owned_v2(
+        &self,
+        leaf: u64,
+        rules: &PalwTirCourtRulesV1,
+        limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+    ) -> Result<
+        kaspa_consensus_core::palw_backend::PalwTirPublicConeProbeOwnedV2,
+        kaspa_consensus_core::palw_backend::PalwTirPublicConeFaultV2,
+    > {
+        use kaspa_consensus_core::palw_backend::{
+            PalwTirPublicConeFaultV2 as Fault, PalwTirPublicConeProbeOwnedV2 as Owned, PalwTirPublicConeProbeV1 as Legacy,
+            PalwTirPublicConeReadyV2,
+        };
+        let result = self.probe_cone_v1(leaf, rules, limits);
+        if let Some(super::copies::TirCopyRefusalV2::LocalResource(why)) = self.copies.take_refusal_v2() {
+            return Err(Fault::LocalResource(why));
+        }
+        Ok(match result {
+            Legacy::Need(need) => Owned::Need(need),
+            Legacy::Refused { reason } => Owned::Refused { reason },
+            Legacy::Ready { proof, meter } => Owned::Ready(
+                PalwTirPublicConeReadyV2::from_reserved_v2(proof, self.copies.take_leases_v2(), meter)
+                    .map_err(|why| Fault::LocalResource(why.to_string()))?,
+            ),
+        })
+    }
+
     /// **The logits-consistency accusation over logits step leaf `leaf`**: the step tile and the
     /// same row's lanes in the committed trace, in the class's scheme.
     pub fn logits_consistency(&self, leaf: u64) -> Result<PalwTirLogitsConsistencyV1, String> {
