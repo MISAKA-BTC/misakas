@@ -2935,6 +2935,8 @@ pub struct Params {
     pub palw_class_registration_origin_v1: Option<ForkActivation>,
     /// Claim-level selected approval for the first useful-work source. No preset activates it.
     pub palw_selected_source_bootstrap_v1: Option<crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1>,
+    /// Private, explicit prepaid verifier duties; normal activation remains refused.
+    pub palw_source_verifier_economics_v2: Option<crate::palw_source_verifier_economics_v2::PalwSourceVerifierEconomicsFenceV2>,
     /// Separate paid draw lineage for native approved bootstrap sources. All shipped presets leave it dormant.
     pub palw_paid_bootstrap_source_v6: Option<crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapSourceFenceV6>,
 
@@ -6234,6 +6236,7 @@ impl Params {
             palw_memory_routing_court_v2: self.palw_memory_routing_court_v2,
             palw_class_registration_origin_v1: self.palw_class_registration_origin_v1,
             palw_selected_source_bootstrap_v1: self.palw_selected_source_bootstrap_v1,
+            palw_source_verifier_economics_v2: self.palw_source_verifier_economics_v2,
             palw_paid_bootstrap_source_v6: self.palw_paid_bootstrap_source_v6,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
@@ -7411,6 +7414,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_memory_routing_court_v2: None,
     palw_class_registration_origin_v1: None,
     palw_selected_source_bootstrap_v1: None,
+    palw_source_verifier_economics_v2: None,
     palw_paid_bootstrap_source_v6: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
@@ -7783,6 +7787,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_memory_routing_court_v2: None,
     palw_class_registration_origin_v1: None,
     palw_selected_source_bootstrap_v1: None,
+    palw_source_verifier_economics_v2: None,
     palw_paid_bootstrap_source_v6: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
@@ -8137,6 +8142,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_memory_routing_court_v2: None,
     palw_class_registration_origin_v1: None,
     palw_selected_source_bootstrap_v1: None,
+    palw_source_verifier_economics_v2: None,
     palw_paid_bootstrap_source_v6: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
@@ -13694,6 +13700,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_memory_routing_court_v2: None,
     palw_class_registration_origin_v1: None,
     palw_selected_source_bootstrap_v1: None,
+    palw_source_verifier_economics_v2: None,
     palw_paid_bootstrap_source_v6: None,
     palw_shard_licensing: None,
     palw_token_lift: None,

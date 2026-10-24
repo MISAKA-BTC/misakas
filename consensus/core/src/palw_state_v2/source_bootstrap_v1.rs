@@ -20,10 +20,11 @@ fn decode_error<E: std::fmt::Display>(e: NativeDecodeErrorV1<E>) -> PalwStateV2E
         NativeDecodeErrorV1::Decode(e) => refuse(e.to_string()),
     }
 }
-fn raw<'a>(state: &'a PalwChainStateV2, k: &[u8]) -> Option<&'a [u8]> {
-    state.kernel_route()?.aux.iter().find_map(|((t, key), bytes)| {
-        (*t == PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1 && key.as_slice() == k).then_some(bytes.as_slice())
-    })
+fn raw<'a>(state:&'a PalwChainStateV2,k:&[u8])->Result<Option<&'a[u8]>,PalwStateV2Error>{
+    let Some(route)=state.kernel_route() else{return Ok(None)};
+    let _key=crate::palw_native_resource_v1::reserve_native_requests_v1(k.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+    let mut owned=Vec::new();owned.try_reserve_exact(k.len()).map_err(|why|PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<u8>>("source fixed key",&why.to_string())))?;owned.extend_from_slice(k);
+    Ok(route.aux.get(&(PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1,owned)).map(Vec::as_slice))
 }
 fn key(prefix: u8, id: Hash64) -> [u8; 65] {
     let mut k = [0; 65];
@@ -35,7 +36,7 @@ fn read<T: crate::palw_native_resource_v1::NativeWireScanV1 + BorshDeserialize>(
     state: &PalwChainStateV2,
     k: &[u8],
 ) -> Result<Option<NativeRetainedV1<T>>, PalwStateV2Error> {
-    raw(state, k).map(|b| retain_native_value_decode_classified_v1(b, || borsh::from_slice(b)).map_err(decode_error)).transpose()
+    raw(state, k)?.map(|b| retain_native_value_decode_classified_v1(b, || borsh::from_slice(b)).map_err(decode_error)).transpose()
 }
 
 impl PalwChainStateV2 {
@@ -70,6 +71,7 @@ impl PalwChainStateV2 {
         validate_cohort(&epoch)?;
         let row = self.source_bootstrap_work_v1(id)?.ok_or_else(|| refuse("bootstrap checker work absent"))?;
         validate_work(&epoch, &row)?;
+        if let Some(route)=self.kernel_route(){crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route,&epoch,&row).map_err(decode_error)?;}
         if row.work.id() != id {
             return Err(refuse("bootstrap checker work key differs from statement"));
         }
@@ -122,6 +124,7 @@ impl PalwChainStateV2 {
         let Some(row) = self.source_bootstrap_work_v1(id)? else { return Ok(None) };
         validate_cohort(&epoch)?;
         validate_work(&epoch, &row)?;
+        if let Some(route)=self.kernel_route(){crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route,&epoch,&row).map_err(decode_error)?;}
         let Some((final_position, settlement_position)) = row.settlement else { return Ok(None) };
         let Some((anchor, _)) = epoch.context.anchor else { return Ok(None) };
         Ok(Some(misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1 {
@@ -197,12 +200,13 @@ impl PalwChainStateV2 {
             if k[0] == 1 {
                 let row = self.source_bootstrap_work_v1(id)?.ok_or_else(|| refuse("bootstrap work vanished"))?;
                 validate_work(e, &row)?;
-                if row.work.id() != id || raw(self, &key(2, row.work.canonical_work)) != Some(id.as_byte_slice()) {
+                crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route,e,&row).map_err(decode_error)?;
+                if row.work.id() != id || raw(self, &key(2, row.work.canonical_work))? != Some(id.as_byte_slice()) {
                     return Err(refuse("bootstrap work identity/canonical-work index mismatch"));
                 }
                 works = works.checked_add(1).ok_or(PalwStateV2Error::Overflow("bootstrap work count"))?;
             } else if k[0] == 2 {
-                let b = raw(self, k).ok_or_else(|| refuse("bootstrap canonical index vanished"))?;
+                let b = raw(self, k)?.ok_or_else(|| refuse("bootstrap canonical index vanished"))?;
                 if b.len() != 64 {
                     return Err(refuse("bootstrap canonical-work index size"));
                 }
@@ -348,7 +352,7 @@ impl TransitionBuilder<'_> {
             PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<T>("bootstrap row encoding", "allocator refusal"))
         })?;
         borsh::to_writer(&mut bytes, row).map_err(|_| refuse("bootstrap row encoding"))?;
-        let absent = raw(&self.state, k).is_none();
+        let absent = raw(&self.state, k)?.is_none();
         let k = (PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1, k.to_vec());
         let bytes = Some(bytes);
         self.reserve_map_journal_v1(&k, &bytes, absent, "bootstrap native journal")?;
@@ -398,7 +402,7 @@ pub(super) fn prepare(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContex
             return Err(refuse("bootstrap epoch cannot replace its frozen roster/anchor"));
         }
         if old.context.anchor == own.anchor {
-            return Ok(());
+            return super::palw_source_verifier_economics_fold_v2::prepare(builder,ctx);
         }
     }
     use crate::palw_native_resource_v1::NativeHeapV1;
@@ -439,7 +443,8 @@ pub(super) fn prepare(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContex
         draw_refused,
         source_works: previous.as_ref().map(|r| r.source_works).unwrap_or(0),
     };
-    builder.source_bootstrap_write_v1(&[0], &row)
+    builder.source_bootstrap_write_v1(&[0], &row)?;
+    super::palw_source_verifier_economics_fold_v2::prepare(builder,ctx)
 }
 
 pub(super) fn apply(
@@ -482,7 +487,7 @@ pub(super) fn apply(
                 }
                 return Err(refuse("bootstrap work identity collision"));
             }
-            if raw(&builder.state, &key(2, work.canonical_work)).is_some() {
+            if raw(&builder.state, &key(2, work.canonical_work))?.is_some() {
                 return Err(refuse("bootstrap canonical work was already consumed; rewrapping cannot add a source"));
             }
             if epoch.source_works >= p.selection.maximum_source_works {
@@ -490,6 +495,7 @@ pub(super) fn apply(
             }
             let row = PalwSourceBootstrapWorkRowV1 { work, approvals: Vec::new(), settlement: None };
             validate_work(&epoch, &row)?;
+        if let Some(route)=builder.state.kernel_route(){crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route,&epoch,&row).map_err(decode_error)?;}
             builder.source_bootstrap_write_v1(&key(1, id), &row)?;
             builder.source_bootstrap_write_v1(&key(2, work.canonical_work), &id)?;
             use crate::palw_native_resource_v1::NativeHeapV1;
@@ -506,7 +512,11 @@ pub(super) fn apply(
             next.source_works = next.source_works.checked_add(1).ok_or(PalwStateV2Error::Overflow("bootstrap source works"))?;
             builder.source_bootstrap_write_v1(&[0], &next)?;
         }
-        PalwSourceBootstrapActionV1::Approve { work, slot, statement, signed_daa } => {
+        PalwSourceBootstrapActionV1::FundVerifierEconomicsV2 { terms } => {
+            return super::palw_source_verifier_economics_fold_v2::fund(builder,ctx,actor,&epoch,&terms);
+        }
+        PalwSourceBootstrapActionV1::Approve { work, slot, statement, signed_daa }
+        | PalwSourceBootstrapActionV1::ApproveWithLiabilityV2 { work, slot, statement, signed_daa, .. } => {
             let row =
                 builder.state.source_bootstrap_work_v1(work)?.ok_or_else(|| refuse("bootstrap approval names no native work"))?;
             if row.settlement.is_some() {
@@ -526,6 +536,11 @@ pub(super) fn apply(
             }
             if row.approvals.iter().any(|a| a.slot == slot) {
                 return Err(refuse("bootstrap approval slot already consumed"));
+            }
+            if let PalwSourceBootstrapActionV1::ApproveWithLiabilityV2 { funding_id, .. } = action {
+                super::palw_source_verifier_economics_fold_v2::approve(builder,ctx,actor,&epoch,&row,*funding_id)?;
+            } else {
+                super::palw_source_verifier_economics_fold_v2::legacy_approval_allowed(builder,ctx,&epoch)?;
             }
             use crate::palw_native_resource_v1::NativeHeapV1;
             let heap =
@@ -627,7 +642,7 @@ pub(super) fn settle(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContext
         validate_work(&epoch, &next)?;
         builder.source_bootstrap_write_v1(&key(1, id), &next)?;
     }
-    Ok(())
+    super::palw_source_verifier_economics_fold_v2::sweep(builder,ctx)
 }
 
 fn derive_native_work(
@@ -738,6 +753,7 @@ pub(crate) fn current_paid_source_event_v6(
         bytes, || borsh::from_slice(bytes),
     ).map_err(decode_error)?;
     validate_work(epoch, &row)?;
+    crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route, epoch, &row).map_err(decode_error)?;
     if row.work.id() != id { return Err(refuse("V6 bootstrap source key differs from its own statement")); }
     let Some((final_position, settlement_position)) = row.settlement else { return Ok(None) };
     let Some(source) = ledger.claims.get(&row.work.claim.as_bytes()) else { return Ok(None) };

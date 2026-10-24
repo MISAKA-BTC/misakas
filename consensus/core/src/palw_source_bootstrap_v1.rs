@@ -395,6 +395,8 @@ pub struct PalwSourceBootstrapWorkRowV1 {
 pub enum PalwSourceBootstrapActionV1 {
     Open { policy: Hash64, epoch: u64, claim: Hash64 },
     Approve { work: Hash64, slot: u16, statement: Hash64, signed_daa: u64 },
+    FundVerifierEconomicsV2 { terms: crate::palw_source_verifier_economics_v2::PalwSourceVerifierFeeTermsV2 },
+    ApproveWithLiabilityV2 { work: Hash64, slot: u16, statement: Hash64, signed_daa: u64, funding_id: Hash64 },
 }
 
 pub fn palw_source_bootstrap_message_v1(network: Hash64, actor: PalwBondKeyV2, action: &PalwSourceBootstrapActionV1) -> Hash64 {

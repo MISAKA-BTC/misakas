@@ -485,6 +485,9 @@ impl Params {
         if self.palw_selected_source_bootstrap_v1.is_some_and(|f| f.at == ForkActivation::never()) {
             self.palw_selected_source_bootstrap_v1 = None;
         }
+        if self.palw_source_verifier_economics_v2.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_source_verifier_economics_v2 = None;
+        }
         if self.palw_paid_bootstrap_source_v6.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_paid_bootstrap_source_v6 = None;
         }
@@ -1173,6 +1176,7 @@ impl Params {
             palw_memory_routing_court_v2,
             palw_class_registration_origin_v1,
             palw_selected_source_bootstrap_v1,
+            palw_source_verifier_economics_v2,
             palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
@@ -1518,6 +1522,7 @@ impl Params {
             ("palw_memory_routing_court_v2", *palw_memory_routing_court_v2),
             ("palw_class_registration_origin_v1", *palw_class_registration_origin_v1),
             ("palw_selected_source_bootstrap_v1", palw_selected_source_bootstrap_v1.map(|f| f.at)),
+            ("palw_source_verifier_economics_v2", palw_source_verifier_economics_v2.map(|f| f.activation)),
             ("palw_paid_bootstrap_source_v6", palw_paid_bootstrap_source_v6.map(|f| f.activation)),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
@@ -1822,6 +1827,11 @@ impl Params {
         if let Some(fence) = self.palw_selected_source_bootstrap_v1 {
             h.write(b"palw_selected_source_bootstrap_v1");
             h.write(fence.at.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_byte_slice());
+        }
+        if let Some(fence) = self.palw_source_verifier_economics_v2 {
+            h.write(b"palw_source_verifier_economics_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.id().as_byte_slice());
         }
         if let Some(fence) = self.palw_paid_bootstrap_source_v6 {
@@ -2937,6 +2947,7 @@ impl Params {
             palw_memory_routing_court_v2,
             palw_class_registration_origin_v1,
             palw_selected_source_bootstrap_v1,
+            palw_source_verifier_economics_v2,
             palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
@@ -3761,6 +3772,9 @@ impl Params {
         if let Some(fence) = palw_selected_source_bootstrap_v1.as_mut() {
             fork(&mut fence.at, visit);
         }
+        if let Some(fence) = palw_source_verifier_economics_v2.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         if let Some(fence) = palw_paid_bootstrap_source_v6.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -4511,6 +4525,7 @@ impl Params {
             palw_memory_routing_court_v2,
             palw_class_registration_origin_v1,
             palw_selected_source_bootstrap_v1,
+            palw_source_verifier_economics_v2,
             palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
@@ -5405,6 +5420,11 @@ impl Params {
         if let Some(fence) = palw_selected_source_bootstrap_v1 {
             h.write(b"palw_selected_source_bootstrap_v1");
             h.write(fence.at.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_byte_slice());
+        }
+        if let Some(fence) = palw_source_verifier_economics_v2 {
+            h.write(b"palw_source_verifier_economics_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.id().as_byte_slice());
         }
         if let Some(fence) = palw_paid_bootstrap_source_v6 {

@@ -253,16 +253,34 @@ impl PreparedSourceBootstrapCheckerV1 {
             {
                 continue;
             }
+            // Economics is a distinct explicit namespace. Never downgrade a
+            // missing/failed funded read into an old approval under that epoch.
+            let economics = latest.state.source_verifier_economics_epoch_v2().map_err(|e| e.to_string())?;
+            let funding_id = if economics.is_some() {
+                let Some(funding) = latest.state.source_verifier_funding_v2(id).map_err(|e| e.to_string())? else { continue };
+                Some(funding.terms.id())
+            } else {
+                None
+            };
             if signed.is_none() {
                 if object_path.exists() {
                     let (raw, _raw) = read_bounded(&object_path, self.spec.maximum_input_bytes)?;
                     signed = Some(retain_native_value_decode_v1(&raw, || borsh::from_slice(&raw)).map_err(|e| e.to_string())?);
                 } else {
-                    let action = PalwSourceBootstrapActionV1::Approve {
-                        work: id,
-                        slot: self.spec.slot,
-                        statement: work.work.id(),
-                        signed_daa: latest.virtual_daa,
+                    let action = match funding_id {
+                        Some(funding_id) => PalwSourceBootstrapActionV1::ApproveWithLiabilityV2 {
+                            work: id,
+                            slot: self.spec.slot,
+                            statement: work.work.id(),
+                            signed_daa: latest.virtual_daa,
+                            funding_id,
+                        },
+                        None => PalwSourceBootstrapActionV1::Approve {
+                            work: id,
+                            slot: self.spec.slot,
+                            statement: work.work.id(),
+                            signed_daa: latest.virtual_daa,
+                        },
                     };
                     let message = palw_source_bootstrap_message_v1(epoch.context.policy.network, self.checker, &action);
                     let _signature = reserve_native_requests_v1(
@@ -286,15 +304,27 @@ impl PreparedSourceBootstrapCheckerV1 {
             let PalwConsensusObjectV2::SourceBootstrapV1 { actor, action, signature } = &**object else {
                 return Err("source WAL family differs".into());
             };
-            let PalwSourceBootstrapActionV1::Approve { work: saved, slot, statement, signed_daa } = action else {
-                return Err("source WAL action differs".into());
+            let (saved, slot, statement, signed_daa, saved_funding_id) = match (action, funding_id) {
+                (PalwSourceBootstrapActionV1::Approve { work, slot, statement, signed_daa }, None) => {
+                    (work, slot, statement, signed_daa, None)
+                }
+                (
+                    PalwSourceBootstrapActionV1::ApproveWithLiabilityV2 {
+                        work,
+                        slot,
+                        statement,
+                        signed_daa,
+                        funding_id: saved_funding,
+                    },
+                    Some(_),
+                ) => (work, slot, statement, signed_daa, Some(*saved_funding)),
+                _ => return Err("source WAL action/funding namespace differs".into()),
             };
             if *actor != self.checker
                 || *saved != id
                 || *slot != self.spec.slot
                 || *statement != work.work.id()
                 || *signed_daa < work.work.accepted_daa
-                || *signed_daa > latest.virtual_daa
                 || *signed_daa > work.work.deadline_daa
                 || !kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3(
                     self.key.public_key(),
@@ -304,6 +334,12 @@ impl PreparedSourceBootstrapCheckerV1 {
                 )
             {
                 return Err("source exact approval WAL identity/signature differs".into());
+            }
+            // A coherent alternate branch may have another valid sponsor's
+            // funding or an earlier DAA. Keep the immutable WAL and wait for
+            // its original native context; never re-sign it for the new view.
+            if saved_funding_id != funding_id || *signed_daa > latest.virtual_daa {
+                continue;
             }
             if !matches!(api.palw_object_rehearsal_v1(object), Some(PalwObjectRehearsalV1::Accepted)) {
                 continue;

@@ -22,13 +22,13 @@ use kaspad_lib::{
         prepare_private_integration_probe, private_complete_check_params_v1, private_g14_drill_params_v1,
         private_late_retirement_params_v1, private_native_settlement_params_v1, private_paid_claim_params_v3,
         private_paid_claim_params_v4, private_probe_manifest, private_source_bootstrap_paid_params_with_consumer_v6,
-        private_source_bootstrap_params_v1,
+        private_source_bootstrap_params_v1, private_source_verifier_economics_params_v2,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 const USAGE: &str = "misaka-rfc12-private-node (requires --features private-integration-config)
 --private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4|g14-v1|source-v1|source-paid-v1 --private-probe-salt=HEX --testnet --netsuffix=12
-source-v1/source-paid-v1 require --private-probe-source-policy=ABSOLUTE_BORSH (explicit nonzero activation and full policy;
+Optional --private-probe-source-verifier-economics-policy=ABSOLUTE_BORSH supplies explicit dormant\nprivate prepayment/liability terms; it supplies no acceptance or policy approval.\nsource-v1/source-paid-v1 require --private-probe-source-policy=ABSOLUTE_BORSH (explicit nonzero activation and full policy;
   no values are selected or approved) and optionally --private-probe-source-check=ABSOLUTE_JSON
   (one actual drawn slot, registered model material, independent carrier key/input and finite resource/fee caps).
   --private-probe-source-open=ABSOLUTE_JSON opens one actual native claim with its real producer key;
@@ -146,6 +146,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-kernel-paid-material-generation-v7"
                         | "--private-probe-kernel-material-replacement"
                         | "--private-probe-source-policy"
+                        | "--private-probe-source-verifier-economics-policy"
                         | "--private-probe-paid-bootstrap-source-policy"
                         | "--private-probe-source-check"
                         | "--private-probe-source-open"
@@ -228,6 +229,10 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let source_policy = flags.values.remove("--private-probe-source-policy");
     if source_profile != source_policy.is_some() {
         return Err("source-v1/source-paid-v1 require their explicit policy file and other profiles cannot use it".into());
+    }
+    let source_economics_policy = flags.values.remove("--private-probe-source-verifier-economics-policy");
+    if source_economics_policy.is_some() && !source_profile {
+        return Err("source verifier economics requires an explicit private source profile".into());
     }
     let paid_bootstrap_source_policy = flags.values.remove("--private-probe-paid-bootstrap-source-policy");
     if paid_bootstrap_source_policy.is_some() && profile != "source-paid-v1" {
@@ -425,6 +430,10 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         }
         "g14-v1" => private_g14_drill_params_v1(&salt, g14_at.expect("height checked"), g14_set, panel_seats.unwrap_or(3))?,
         _ => return Err("unallocated private profile".into()),
+    };
+    let params = match source_economics_policy {
+        Some(path) => private_source_verifier_economics_params_v2(params, &salt, Path::new(&path))?,
+        None => params,
     };
     // RFC-0012 §4.4: only the retirement height moves; the DAA-1 profile is unchanged when the option is absent.
     let params = match retirement_daa {

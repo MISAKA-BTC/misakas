@@ -254,6 +254,8 @@ mod palw_econ_contracts_fold_v1;
 // N3 (round 3): BootstrapExact source rounds (inner 73, aux 130), past `palw_beacon_bootstrap_v1`.
 #[path = "palw_beacon_bootstrap_fold_v1.rs"]
 mod palw_beacon_bootstrap_fold_v1;
+#[path = "palw_source_verifier_economics_fold_v2.rs"]
+mod palw_source_verifier_economics_fold_v2;
 #[path = "palw_state_v2/source_bootstrap_v1.rs"]
 mod source_bootstrap_v1;
 // RFC-0017: model eligibility (inner 74/75, aux 131) and its claim-gate / probation / Final hooks, past `palw_model_eligibility_v1`.
@@ -1988,6 +1990,8 @@ pub struct PalwStateParamsV2 {
     /// Some-only policy is committed by Params; skip preserves historical ruleset bytes.
     #[borsh(skip)]
     pub(crate) selected_source_bootstrap_v1: Option<(u64, crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1)>,
+    #[borsh(skip)]
+    pub(crate) selected_source_economics_v2: Option<(u64, crate::palw_source_verifier_economics_v2::PalwSourceVerifierEconomicsPolicyV2)>,
     /// Some-only Params identity carries this separately versioned lineage contract.
     #[borsh(skip)]
     pub(crate) paid_bootstrap_source_v6:
@@ -10640,8 +10644,8 @@ pub fn palw_reporter_filing_read_v1(
 pub struct PalwChainStateV2 {
     // ---- primary data: everything the root commits to ----
     bonds: BTreeMap<PalwBondKeyV2, PalwBondStateV2>,
-    /// Maintained accumulator of Decision 6's `reserved_exposure(bond)`. Derivable from `claims`;
-    /// kept so admission's ceiling check is O(log n), and cross-checked by
+    /// Maintained accumulator of Decision 6's `reserved_exposure(bond)`, including native claim,
+    /// court/execution and explicit private source-checker duties. Admission reads it in O(log n), cross-checked by
     /// [`Self::assert_internal_consistency`]. An entry exists iff its value is non-zero.
     reserved_exposure: BTreeMap<PalwBondKeyV2, u128>,
     classes: BTreeMap<Hash64, PalwClassStateV2>,

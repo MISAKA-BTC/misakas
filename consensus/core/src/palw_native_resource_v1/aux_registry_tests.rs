@@ -473,3 +473,149 @@ fn native_liability_hold_rows_have_their_own_exact_aux_codec() {
     let mut empty = NativeWireReaderV1::new(&[][..], 0);
     assert!(super::wire_kernel_aux::scan_native_aux_row_v1(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, &[0x01; 65], &mut empty).is_err());
 }
+
+/// Aux146 has its own exact families; aux139 router bytes are never reused.
+#[test]
+fn source_verifier_economics_aux146_has_exact_versioned_families() {
+    use crate::palw_source_verifier_economics_v2::*;
+    use crate::{
+        Hash64,
+        palw_state_v2::PalwBondKeyV2,
+        tx::{TransactionId, TransactionOutpoint},
+    };
+    let h = Hash64::from_u64_word(1);
+    let actor = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(2), 3));
+    let policy = PalwSourceVerifierEconomicsPolicyV2 {
+        version: 2,
+        network: h,
+        bootstrap_policy: h,
+        exposure_per_work_sompi: 1,
+        minimum_fee_per_checker_sompi: 1,
+        maximum_funded_works: 1,
+        maximum_liabilities: 1,
+    };
+    let terms = PalwSourceVerifierFeeTermsV2 { version: 2, policy: h, work: h, sponsor: actor, fee_per_checker_sompi: 1 };
+    let epoch = PalwSourceVerifierEconomicsEpochV2 {
+        version: 2,
+        activation: 1,
+        policy,
+        epoch: h,
+        until_daa: 8,
+        funded_works: 0,
+        liabilities: 0,
+    };
+    let funding = PalwSourceVerifierFundingV2 {
+        version: 2,
+        terms,
+        epoch: h,
+        funded_daa: 1,
+        until_daa: 8,
+        distinct_payees: 1,
+        prepaid: 1,
+        held: 1,
+        queued: 0,
+        refunded: 0,
+        forfeited: 0,
+        closed: false,
+        refund_queue: None,
+        refund_queued_block: None,
+        refund_acknowledged_block: None,
+        refund_acknowledged_daa: None,
+    };
+    let duty = PalwSourceVerifierLiabilityV2 {
+        version: 2,
+        policy: h,
+        work: h,
+        claim: h,
+        actor,
+        funding: h,
+        exposure: 1,
+        fee: 1,
+        accepted_daa: 1,
+        until_daa: 8,
+        status: PalwSourceVerifierDutyStatusV2::Active,
+        entitlement: PalwSourceVerifierEntitlementV2::Held,
+    };
+    let hold = PalwSourceVerifierBondHoldV2 { version: 2, actor, policy: h, until_daa: 8, reserved: 1 };
+    let court = PalwSourceVerifierCourtOutcomeV2 {
+        version: 2,
+        policy: h,
+        work: h,
+        claim: h,
+        actor,
+        block: h,
+        daa: 2,
+        accuser: h,
+        exposure: 1,
+        collected: 1,
+    };
+    let reference = PalwSourceVerifierDutyRefV2 { actor, work: h };
+    let queued = PalwSourceVerifierQueueV2 {
+        version: 2,
+        work: h,
+        actor,
+        funding: h,
+        duty: Some(h),
+        queue: h,
+        payload: h,
+        amount: 1,
+        queued_block: h,
+        queued_daa: 9,
+    };
+    let rows = [
+        (0, 1, borsh::to_vec(&epoch).unwrap()),
+        (1, 65, borsh::to_vec(&funding).unwrap()),
+        (2, 133, borsh::to_vec(&duty).unwrap()),
+        (3, 69, borsh::to_vec(&hold).unwrap()),
+        (4, 65, borsh::to_vec(&court).unwrap()),
+        (5, 73, borsh::to_vec(&1u8).unwrap()),
+        (6, 133, borsh::to_vec(&h).unwrap()),
+        (7, 129, borsh::to_vec(&reference).unwrap()),
+        (8, 129, borsh::to_vec(&queued).unwrap()),
+    ];
+    for (prefix, length, bytes) in rows {
+        let mut key = vec![0; length];
+        key[0] = prefix;
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        super::wire_kernel_aux::scan_native_aux_row_v1(146, &key, &mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0);
+        for bad_key in [&key[..key.len() - 1], &[255][..]] {
+            let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+            assert!(super::wire_kernel_aux::scan_native_aux_row_v1(146, bad_key, &mut reader).is_err());
+        }
+        let truncated = &bytes[..bytes.len() - 1];
+        let mut reader = NativeWireReaderV1::new(truncated, truncated.len() as u64);
+        assert!(super::wire_kernel_aux::scan_native_aux_row_v1(146, &key, &mut reader).is_err());
+    }
+}
+
+#[test]
+fn source_bootstrap_economics_appends_actions_without_reusing_old_tags() {
+    use crate::{
+        Hash64,
+        palw_source_bootstrap_v1::PalwSourceBootstrapActionV1 as A,
+        palw_source_verifier_economics_v2::PalwSourceVerifierFeeTermsV2,
+        palw_state_v2::PalwBondKeyV2,
+        tx::{TransactionId, TransactionOutpoint},
+    };
+    let h = Hash64::from_u64_word(1);
+    let terms = PalwSourceVerifierFeeTermsV2 {
+        version: 2,
+        policy: h,
+        work: h,
+        sponsor: PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(2), 3)),
+        fee_per_checker_sompi: 1,
+    };
+    let cases = [
+        A::Open { policy: h, epoch: 1, claim: h },
+        A::Approve { work: h, slot: 0, statement: h, signed_daa: 2 },
+        A::FundVerifierEconomicsV2 { terms },
+        A::ApproveWithLiabilityV2 { work: h, slot: 0, statement: h, signed_daa: 2, funding_id: terms.id() },
+    ];
+    for (tag, action) in cases.iter().enumerate() {
+        let bytes = borsh::to_vec(action).unwrap();
+        assert_eq!(bytes[0], tag as u8);
+        preflight_native_value_v1::<A>(bytes.as_slice(), bytes.len() as u64).unwrap();
+        assert_eq!(borsh::from_slice::<A>(&bytes).unwrap(), *action);
+    }
+}

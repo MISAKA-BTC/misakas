@@ -45,6 +45,33 @@ pub fn private_source_bootstrap_paid_params_with_consumer_v6(
     Ok(params)
 }
 
+/// Optional private economics input. Every term is explicit; this entry does
+/// not authorize normal activation or select security/economic policy values.
+pub fn private_source_verifier_economics_params_v2(
+    mut params: Params,
+    salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
+    policy_file: &Path,
+) -> Result<Params, String> {
+    use kaspa_consensus_core::palw_source_verifier_economics_v2::{
+        PalwSourceVerifierEconomicsFenceV2, PalwSourceVerifierEconomicsPolicyV2,
+    };
+    let (raw, _owner) = kernel_paid_producer_v4::read_bounded(policy_file, 4096)?;
+    let (activation, policy): (u64, PalwSourceVerifierEconomicsPolicyV2) = borsh::from_slice(&raw).map_err(|e| e.to_string())?;
+    params.palw_source_verifier_economics_v2 =
+        Some(PalwSourceVerifierEconomicsFenceV2 { activation: ForkActivation::new(activation), policy });
+    params.sync_palw_source_verifier_economics_v2();
+    validate_private_source_bootstrap_relations_v1(&params, salt)?;
+    Ok(params)
+}
+
+/// The retired compact-computation fence must stay absent. The private paid
+/// base is PAV3 plus release recovery, as enforced by its exact fingerprint.
+pub(super) fn has_private_paid_v4_scope_v1(params: &Params) -> bool {
+    params.palw_claim_compact_v4.is_none()
+        && params.palw_claim_challenge_v2.is_some_and(|f| f.activation.is_active(0))
+        && params.palw_material_release_recovery_v2.as_ref().is_some_and(|f| f.activation.is_active(0))
+}
+
 fn attach_policy(
     mut params: Params,
     salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
@@ -81,6 +108,8 @@ pub(super) fn validate_private_source_bootstrap_relations_v1(
     let mut stripped = params.clone();
     stripped.palw_selected_source_bootstrap_v1 = None;
     stripped.sync_palw_selected_source_bootstrap_v1();
+    stripped.palw_source_verifier_economics_v2 = None;
+    stripped.sync_palw_source_verifier_economics_v2();
     stripped.palw_paid_bootstrap_source_v6 = None;
     stripped.sync_palw_paid_bootstrap_source_v6();
     if stripped.consensus_params_id() != baseline.consensus_params_id() {
@@ -101,13 +130,27 @@ pub(super) fn validate_private_source_bootstrap_relations_v1(
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         return Err("private source needs its own native ConsensusV2 state".into());
     };
+    if let Some(economics) = params.palw_source_verifier_economics_v2 {
+        economics.policy.validate()?;
+        if economics.activation == ForkActivation::never()
+            || economics.activation.daa_score() == 0
+            || economics.activation.daa_score() > fence.policy.freeze_cutoff_daa
+            || economics.policy.bootstrap_policy != fence.policy.id()
+            || economics.policy.network != network
+            || economics.policy.maximum_funded_works > fence.policy.selection.maximum_source_works
+            || !bundle.state.selected_source_economics_v2_mirror_matches(economics.activation.daa_score(), &economics.policy)
+        {
+            return Err("private source economics changes its explicit source/network/schedule/native mirror contract".into());
+        }
+    } else {
+        params.validate_palw_source_verifier_economics_v2().map_err(|e| e.to_string())?;
+    }
     if let Some(consumer) = params.palw_paid_bootstrap_source_v6 {
         consumer.policy.validate()?;
         // Both source and consumer policies normalize out of the scheduled
         // base identity. Genesis activation would introduce a hash cycle via
         // bootstrap_policy -> source.policy.ruleset -> complete Params.
-        if params.palw_claim_compact_v4.is_none()
-            || params.palw_material_release_recovery_v2.is_none()
+        if !has_private_paid_v4_scope_v1(params)
             || consumer.activation == ForkActivation::never()
             || consumer.activation.daa_score() == 0
             || consumer.activation.daa_score() >= fence.policy.ends_at_daa
@@ -128,3 +171,7 @@ pub(super) fn validate_private_source_bootstrap_relations_v1(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "source_bootstrap_factory_tests_v1.rs"]
+mod tests;

@@ -2126,6 +2126,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // (A settlement the real bonds cannot honour fails the object — the walk's rehearsal drops it with its builder, so no half-applied
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true, ctx.daa_score)?;
+    super::palw_source_verifier_economics_fold_v2::court_events(builder,ctx,&events)?;
     builder.close_terminal_kernel_budgets_v1(&ledger)?;
     persist_budget(builder, ctx, &ledger)?;
     // Only the exact signed candidate used the temporary scope. Persisting this root in
@@ -2398,6 +2399,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         }
     }
     apply_settlements(builder, &events, false, ctx.daa_score)?;
+    super::palw_source_verifier_economics_fold_v2::court_events(builder,ctx,&events)?;
     builder.close_terminal_kernel_budgets_v1(&ledger)?;
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
     let stale: Vec<misaka_palw_kernel::hash::Digest> = builder

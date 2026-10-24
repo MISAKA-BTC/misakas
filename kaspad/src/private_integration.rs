@@ -65,6 +65,7 @@ pub use source_bootstrap_producer_v1::PrivateSourceBootstrapProducerSpecV1;
 mod source_bootstrap_factory_v1;
 pub use source_bootstrap_factory_v1::{
     private_source_bootstrap_paid_params_v1, private_source_bootstrap_paid_params_with_consumer_v6, private_source_bootstrap_params_v1,
+    private_source_verifier_economics_params_v2,
 };
 mod paid_material_generation_export_v5;
 pub use paid_material_generation_export_v5::PrivatePaidMaterialGenerationExportSpecV5;
@@ -404,6 +405,14 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             "activationDaa": fence.at.daa_score(), "policyId": fence.policy.id().to_string(),
             "versionedConsumerLineage": "UNAVAILABLE", "releaseApproval": false,
             "securitySoundnessMeasured": false,
+        });
+    }
+    if let Some(fence) = config.params.palw_source_verifier_economics_v2 {
+        manifest["sourceVerifierEconomicsPrivatePolicyV2"] = serde_json::json!({
+            "activationDaa": fence.activation.daa_score(), "policyId": fence.policy.id().to_string(),
+            "bootstrapPolicyId": fence.policy.bootstrap_policy.to_string(), "auxTable": 146,
+            "releaseApproval": false, "securitySoundnessMeasured": false,
+            "nativeCampaignAcceptance": "UNKNOWN",
         });
     }
     if let Some(fence) = config.params.palw_paid_bootstrap_source_v6 {
@@ -982,7 +991,7 @@ pub fn create_private_integration_core_with_campaign_workers_v1(
     if source_profile {
         let salt = config.palw_drill_genesis_salt.as_ref().ok_or("source/paid profile salted identity absent")?;
         source_bootstrap_factory_v1::validate_private_source_bootstrap_relations_v1(&config.params, salt)?;
-        if config.params.palw_claim_compact_v4.is_none() || config.params.palw_material_release_recovery_v2.is_none() {
+        if !source_bootstrap_factory_v1::has_private_paid_v4_scope_v1(&config.params) {
             return Err("combined source campaign constructor requires the exact paid-v4 base".into());
         }
     } else {

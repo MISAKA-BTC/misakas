@@ -14,6 +14,9 @@ pub(super) fn prepare_block_objects_v1(
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None)?;
     }
+    // Dedicated checker fee/refund ACK reads only this exact consumed prefix;
+    // principal refunds do not depend on an R engine being active.
+    palw_source_verifier_economics_fold_v2::acknowledge_consumed_prefix(builder,ctx)?;
     // 1c′. ADR-0089 Decision 6: the settlement list the parent decided was carried and settled
     //      by THIS block's EVM step; it leaves the state here, before this block's own is written.
     for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {

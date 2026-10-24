@@ -30,9 +30,16 @@ native_struct!(crate::palw_reader_router_v2::PalwReaderRouterRowV2; declaration,
 native_struct!(crate::palw_routed_material_v2::PalwMaterialAuthorityRecordV2; version, network, claim, execution_root, class_id, artifact_root, accepted_daa, ladder, form, routing);
 native_struct!(crate::palw_routed_material_v2::PalwHeldMaterialBundleV2; version, claim, authority, binding, units);
 native_struct!(crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2; version, claim, provider, target, refutation, receipt, signature);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierEconomicsEpochV2; version, activation, policy, epoch, until_daa, funded_works, liabilities);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierFundingV2; version, terms, epoch, funded_daa, until_daa, distinct_payees, prepaid, held, queued, refunded, forfeited, closed, refund_queue, refund_queued_block, refund_acknowledged_block, refund_acknowledged_daa);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierLiabilityV2; version, policy, work, claim, actor, funding, exposure, fee, accepted_daa, until_daa, status, entitlement);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierBondHoldV2; version, actor, policy, until_daa, reserved);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierCourtOutcomeV2; version, policy, work, claim, actor, block, daa, accuser, exposure, collected);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierDutyRefV2; actor, work);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierQueueV2; version, work, actor, funding, duty, queue, payload, amount, queued_block, queued_daa);
 native_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapEpochRowV1; context, cohort, draw_refused, source_works);
 native_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkRowV1; work, approvals, settlement);
-native_enum!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapActionV1; Open { policy, epoch, claim }, Approve { work, slot, statement, signed_daa });
+native_enum!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapActionV1; Open { policy, epoch, claim }, Approve { work, slot, statement, signed_daa }, FundVerifierEconomicsV2 { terms }, ApproveWithLiabilityV2 { work, slot, statement, signed_daa, funding_id });
 native_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapOwnContextV1; policy, frozen_block, frozen_state_root, frozen_block_daa, population, population_refused, anchor);
 native_struct!(misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1; version, network, bootstrap_epoch, bootstrap_policy, frozen_population, frozen_block, anchor, anchor_position, source_profile, checker_scope, claim, canonical_work, statement, material_scope, execution_commitment, approval_root, producer, consumer, accepted_position, final_position, settlement_position, approved_slots, required_slots);
 native_struct!(misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6; version, network, bootstrap_policy, required_sources, maximum_events, anchor_delay, window, settlement_depth, maximum_consumers, source_liability_slack);
@@ -265,6 +272,10 @@ native_enum!(crate::palw_held_da_v1::PalwHeldMissingV1; PromptIdsTile { tile }, 
 native_enum!(crate::palw_routed_material_v2::PalwHeldMaterialUnitV2; Legacy(f0), Routed(f0));
 native_enum!(crate::palw_routed_material_v2::PalwRoutedMaterialTargetV2; DaHeld, DaKernelWitness, Monetary { root, consent });
 native_struct!(crate::palw_routed_material_v2::PalwRoutedMaterialReceiptV2; stream, sequence, previous, challenge_deadline_daa);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierEconomicsPolicyV2; version, network, bootstrap_policy, exposure_per_work_sompi, minimum_fee_per_checker_sompi, maximum_funded_works, maximum_liabilities);
+native_struct!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierFeeTermsV2; version, policy, work, sponsor, fee_per_checker_sompi);
+native_enum!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierDutyStatusV2; Active, Released { block, daa }, Convicted { block, daa, collected });
+native_enum!(crate::palw_source_verifier_economics_v2::PalwSourceVerifierEntitlementV2; Held, Forfeited { block }, Queued { block, queue }, QueueAcknowledged { queued_block, queue, acknowledged_block, acknowledged_daa, amount });
 native_struct!(misaka_palw_challenge::bootstrap_epoch_v1::BootstrapSeatV1; candidate_index, bond, locked_weight);
 native_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkV1; epoch, policy, claim, producer, consumer, canonical_work, source_profile, checker_scope, class_binding, execution_commitment, material_scope, accepted_daa, deadline_daa);
 native_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapApprovalRowV1; slot, signer, signed_daa, accepted_daa);

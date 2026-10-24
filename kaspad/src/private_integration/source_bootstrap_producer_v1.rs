@@ -34,6 +34,8 @@ pub struct PrivateSourceBootstrapProducerSpecV1 {
     maximum_input_bytes: u64,
     /// Optional first plain OPV work; no paid class/job/source dependency.
     production: Option<PlainSourceProgramSpecV1>,
+    /// Explicit prepaid verifier terms and a separate fee carrier input.
+    verifier_funding: Option<SourceVerifierFundingSpecV2>,
     #[serde(skip)]
     _owner: Option<NativeDemandLeaseV1>,
 }
@@ -50,6 +52,13 @@ struct PlainSourceProgramSpecV1 {
     maximum_seal_fee_sompi: u64,
     maximum_claim_fee_sompi: u64,
     maximum_workspace_bytes: u64,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceVerifierFundingSpecV2 {
+    fee_per_checker_sompi: u64,
+    carrier_funding_outpoint: String,
+    maximum_carrier_fee_sompi: u64,
 }
 type Parameters = BTreeMap<(u16, Option<u16>), misaka_palw_kernel::public::TensorWireV1>;
 impl PrivateSourceBootstrapProducerSpecV1 {
@@ -104,6 +113,25 @@ impl PrivateSourceBootstrapProducerSpecV1 {
                 if point == actor.0 || kaspa_consensus_core::config::drill::palw_t12_public_genesis_txid_v1(&point.transaction_id) {
                     return Err("plain source work funding must be separate private carrier inputs".into());
                 }
+            }
+        }
+        if self.verifier_funding.is_some() != ctx.config.params.palw_source_verifier_economics_v2.is_some() {
+            return Err("source producer economics needs explicit fee terms exactly when its private policy is supplied".into());
+        }
+        if let Some(spec) = &self.verifier_funding {
+            let point = crate::palw_producer::parse_outpoint(&spec.carrier_funding_outpoint)?;
+            if point == funding
+                || point == actor.0
+                || kaspa_consensus_core::config::drill::palw_t12_public_genesis_txid_v1(&point.transaction_id)
+                || spec.fee_per_checker_sompi == 0
+                || spec.maximum_carrier_fee_sompi == 0
+                || self.production.as_ref().is_some_and(|p| {
+                    [&p.seal_funding_outpoint, &p.claim_funding_outpoint]
+                        .into_iter()
+                        .any(|raw| crate::palw_producer::parse_outpoint(raw).ok() == Some(point))
+                })
+            {
+                return Err("source verifier funding needs explicit fees and a separate private carrier input".into());
             }
         }
         let amount = (ctx.data_dir.as_os_str().len() as u64)
@@ -177,8 +205,7 @@ impl PreparedSourceBootstrapProducerV1 {
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
-        let object_path = self.outbox.join("open.borsh");
-        let tx_path = self.outbox.join("carrier.borsh");
+        let mut active_action = None;
         let mut object: Option<NativeRetainedV1<PalwConsensusObjectV2>> = None;
         let mut transaction: Option<Transaction> = None;
         let mut tx_owner = None;
@@ -222,13 +249,64 @@ impl PreparedSourceBootstrapProducerV1 {
             {
                 return Err("source opening does not belong to the own registered producer/key".into());
             }
-            if let Some(accepted) = state.source_bootstrap_work_v1(work.id()).map_err(|e| e.to_string())? {
+            let accepted = state.source_bootstrap_work_v1(work.id()).map_err(|e| e.to_string())?;
+            let (action, carrier_funding, maximum_fee, object_name, carrier_name) = if let Some(accepted) = accepted {
                 if accepted.work != work {
                     return Err("native source opening statement substituted".into());
                 }
-                continue;
+                let Some(spec) = &self.spec.verifier_funding else { continue };
+                let Some(economics) = state.source_verifier_economics_epoch_v2().map_err(|e| e.to_string())? else { continue };
+                let terms = kaspa_consensus_core::palw_source_verifier_economics_v2::PalwSourceVerifierFeeTermsV2 {
+                    version: 2,
+                    policy: economics.policy.id(),
+                    work: work.id(),
+                    sponsor: self.actor,
+                    fee_per_checker_sompi: spec.fee_per_checker_sompi,
+                };
+                if let Some(funding) = state.source_verifier_funding_v2(work.id()).map_err(|e| e.to_string())? {
+                    if funding.terms != terms {
+                        // Another valid branch may carry another sponsor or terms.
+                        // Retain our immutable funding WAL and wait for its view.
+                        continue;
+                    }
+                    continue;
+                }
+                (
+                    PalwSourceBootstrapActionV1::FundVerifierEconomicsV2 { terms },
+                    crate::palw_producer::parse_outpoint(&spec.carrier_funding_outpoint)?,
+                    spec.maximum_carrier_fee_sompi,
+                    "verifier-fund.borsh",
+                    "verifier-fund-carrier.borsh",
+                )
+            } else {
+                (
+                    PalwSourceBootstrapActionV1::Open { policy: policy.id(), epoch: policy.epoch, claim },
+                    self.funding,
+                    self.spec.maximum_fee_sompi,
+                    "open.borsh",
+                    "carrier.borsh",
+                )
+            };
+            let suffix = object_name.len().max(carrier_name.len()).checked_add(1).ok_or("source phase suffix overflow")?;
+            let path_capacity = self.outbox.as_os_str().len().checked_add(suffix).ok_or("source phase path capacity overflow")?;
+            let path_bytes = (path_capacity as u64).checked_mul(2).ok_or("source phase paths overflow")?;
+            let _paths = reserve_native_requests_v1(path_bytes).map_err(|e| e.to_string())?;
+            // Exact reservations avoid join's intermediate clone/growth buffers.
+            // Both filenames and their separator fit the actual longest suffix.
+            let mut object_path = PathBuf::new();
+            object_path.try_reserve_exact(path_capacity).map_err(|e| e.to_string())?;
+            object_path.push(&self.outbox);
+            object_path.push(object_name);
+            let mut tx_path = PathBuf::new();
+            tx_path.try_reserve_exact(path_capacity).map_err(|e| e.to_string())?;
+            tx_path.push(&self.outbox);
+            tx_path.push(carrier_name);
+            if active_action != Some(action) {
+                object = None;
+                transaction = None;
+                tx_owner = None;
+                active_action = Some(action);
             }
-            let action = PalwSourceBootstrapActionV1::Open { policy: policy.id(), epoch: policy.epoch, claim };
             if object.is_none() {
                 if object_path.exists() {
                     let (raw, _raw) = read_bounded(&object_path, self.spec.maximum_input_bytes)?;
@@ -279,16 +357,16 @@ impl PreparedSourceBootstrapProducerV1 {
                     transaction = Some(tx);
                     tx_owner = owner;
                 } else {
-                    let Some(entry) = api.get_virtual_utxo_entry(self.funding) else { continue };
+                    let Some(entry) = api.get_virtual_utxo_entry(carrier_funding) else { continue };
                     let daa = observation.virtual_daa;
                     let minimum =
                         crate::palw_panel::palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.config.params, signed, daa);
                     if entry.script_public_key != script
                         || entry.amount < minimum
-                        || api.palw_bond_payout_payload_v2(PalwBondKeyV2(self.funding)).is_some()
-                        || self.flow.mining_manager().outpoint_is_spent_in_mempool(&self.funding)
+                        || api.palw_bond_payout_payload_v2(PalwBondKeyV2(carrier_funding)).is_some()
+                        || self.flow.mining_manager().outpoint_is_spent_in_mempool(&carrier_funding)
                         || !crate::palw_panel::palw_fee_funding_usable_v1(
-                            &self.funding,
+                            &carrier_funding,
                             &entry,
                             daa,
                             self.config.params.coinbase_spend_maturity(),
@@ -307,7 +385,7 @@ impl PreparedSourceBootstrapProducerV1 {
                         &self.config,
                         &self.payer,
                         signed,
-                        self.funding,
+                        carrier_funding,
                         &entry,
                         &[],
                         None,
@@ -318,7 +396,7 @@ impl PreparedSourceBootstrapProducerV1 {
                         .iter()
                         .try_fold(0u64, |n, output| n.checked_add(output.value))
                         .and_then(|n| entry.amount.checked_sub(n));
-                    if fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi) {
+                    if fee.is_none_or(|fee| fee > maximum_fee) {
                         return Err("source opening carrier exceeds fee authority".into());
                     }
                     publish_borsh(&tx_path, &tx, self.spec.maximum_input_bytes)?;
@@ -327,22 +405,22 @@ impl PreparedSourceBootstrapProducerV1 {
                 }
             }
             let tx = transaction.as_ref().ok_or("source opening carrier absent")?;
-            if tx.inputs.len() != 1 || tx.inputs[0].previous_outpoint != self.funding {
+            if tx.inputs.len() != 1 || tx.inputs[0].previous_outpoint != carrier_funding {
                 return Err("source opening input substituted".into());
             }
-            let Some(entry) = api.get_virtual_utxo_entry(self.funding) else { continue };
+            let Some(entry) = api.get_virtual_utxo_entry(carrier_funding) else { continue };
             let fee =
                 tx.outputs.iter().try_fold(0u64, |n, output| n.checked_add(output.value)).and_then(|n| entry.amount.checked_sub(n));
             if entry.script_public_key != script
                 || tx.outputs.len() != 1
                 || tx.outputs[0].script_public_key != script
-                || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi)
+                || fee.is_none_or(|fee| fee > maximum_fee)
             {
                 return Err("source opening WAL payer/change/fee differs".into());
             }
-            if api.palw_bond_payout_payload_v2(PalwBondKeyV2(self.funding)).is_some()
+            if api.palw_bond_payout_payload_v2(PalwBondKeyV2(carrier_funding)).is_some()
                 || !crate::palw_panel::palw_fee_funding_usable_v1(
-                    &self.funding,
+                    &carrier_funding,
                     &entry,
                     observation.virtual_daa,
                     self.config.params.coinbase_spend_maturity(),

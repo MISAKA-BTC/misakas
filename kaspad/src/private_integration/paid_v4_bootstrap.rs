@@ -53,8 +53,7 @@ pub fn export_private_source_paid_bootstrap_v1(config: &Config, output: &Path) -
     let salt = config.palw_drill_genesis_salt.as_ref().ok_or("source-paid bootstrap salted identity absent")?;
     if config.private_population.is_some()
         || config.params.skip_proof_of_work
-        || config.params.palw_claim_compact_v4.is_none()
-        || config.params.palw_material_release_recovery_v2.is_none()
+        || !super::source_bootstrap_factory_v1::has_private_paid_v4_scope_v1(&config.params)
     {
         return Err("source-paid bootstrap requires its exact real-PoW paid-v4 base and explicit source policy".into());
     }

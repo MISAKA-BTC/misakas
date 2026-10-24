@@ -3413,6 +3413,7 @@ impl PalwChainStateV2 {
         // N3 (round 3): aux 130 rounds only past their fence; every stored judgement re-derived.
         self.assert_beacon_bootstrap_consistency_v1(params)?;
         self.assert_source_bootstrap_consistency_v1(params)?;
+        self.assert_source_verifier_economics_consistency_v2(params)?;
         self.assert_panel_source_fee_consistency_v2()?;
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
@@ -3789,6 +3790,9 @@ impl PalwChainStateV2 {
         // `move_commitment`) while this re-derivation opens one for every live claim. Below the fence
         // every attempt commits `reserved > 0`, the two never differ by a zero row, and the comparison
         // is the exact one it always was.
+        // The same primary exposure ledger also holds the explicit private source duties.
+        // Keep the aggregate-map reservation alive through the comparison below.
+        let _source_exposure_workspace = self.add_source_verifier_exposures_v2(&mut exposure)?;
         let exposure_matches = if params.capacity_weight_cap_from_daa().is_some() {
             let nonzero = |ledger: &BTreeMap<PalwBondKeyV2, u128>| -> BTreeMap<PalwBondKeyV2, u128> {
                 ledger.iter().filter(|(_, held)| **held != 0).map(|(bond, held)| (*bond, *held)).collect()
@@ -3798,7 +3802,7 @@ impl PalwChainStateV2 {
             exposure == self.reserved_exposure
         };
         if !exposure_matches {
-            return Err(PalwStateV2Error::CarriageInconsistent("reserved_exposure differs from the claims it summarizes".into()));
+            return Err(PalwStateV2Error::CarriageInconsistent("reserved_exposure differs from the native duties it summarizes".into()));
         }
         // **ADR-0056 Decision 3, the same property for the registry's own ledger.** Two
         // accumulators, each derivable from the collection it summarizes and each checked against
