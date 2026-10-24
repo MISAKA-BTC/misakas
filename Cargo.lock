@@ -3800,6 +3800,7 @@ dependencies = [
  "kaspa-muhash",
  "kaspa-notify",
  "kaspa-pow",
+ "kaspa-pq-validator-core",
  "kaspa-rpc-core",
  "kaspa-txscript",
  "kaspa-txscript-errors",

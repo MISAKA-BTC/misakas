@@ -66,6 +66,8 @@ misaka-palw-base0.workspace = true
 misaka-palw-kernel.workspace = true
 
 [dev-dependencies]
+# Typed provider handoff fixture signs with the actual native registry key.
+kaspa-pq-validator-core.workspace = true
 criterion.workspace = true
 serde_json.workspace = true
 flate2.workspace = true

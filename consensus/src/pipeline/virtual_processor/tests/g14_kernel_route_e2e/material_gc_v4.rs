@@ -27,7 +27,7 @@ use misaka_palw_remote::{
 
 const MATERIAL_FROM: u64 = 30;
 
-fn config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+pub(super) fn config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (c, bundle, premine, floats) = kernel_config_opv(opv_admitted());
     let mut p = c.params.clone();
     p.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);

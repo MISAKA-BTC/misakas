@@ -3558,3 +3558,4 @@ mod source_verifier_economics_v2;
 
 // RFC08: signed material generations and exact finalized GC intent binding.
 mod material_gc_v4;
+mod material_typed_ingress_v4;

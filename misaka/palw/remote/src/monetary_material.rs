@@ -64,8 +64,30 @@ impl DurableMonetaryMaterialProviderV1 {
         {
             return Err("kernel material/enrollment native authority differs".into());
         }
+        // These are independently supplied borrowed inputs. Publishing the
+        // material under one consent and the restart context under another
+        // leaves a successfully prepared provider unable to restore its bytes.
+        // Match the unsigned financial identity; provider signatures may be
+        // added only after publication and are authenticated by native ingress.
+        let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll {
+            monetary, ..
+        } = capsule else {
+            return Err("prospective publication requires its initial funded enrollment capsule".into());
+        };
+        if context.request != material.request_id()
+            || context.intent.manifest != *material.manifest()
+            || monetary.terms != enrollment.terms
+            || monetary.offers.len() != enrollment.offers.len()
+            || monetary.offers.iter().zip(&enrollment.offers).any(|(a, b)| {
+                (a.provider, a.collateral_sompi, a.prepaid_fee_sompi)
+                    != (b.provider, b.collateral_sompi, b.prepaid_fee_sompi)
+            })
+        {
+            return Err("prospective publication substitutes native request/context/financial consent".into());
+        }
+        let consent = enrollment.id();
         let candidate = self.store.provider_admit_prospective_kernel_v4(
-            enrollment.id(),
+            consent,
             material,
             bundle,
             enrollment.terms.max_material_bytes,
@@ -73,7 +95,7 @@ impl DurableMonetaryMaterialProviderV1 {
         )?;
         self.contexts.as_mut().ok_or("kernel ingress has no explicitly configured metadata capacities")?.insert(context, capsule)?;
         self.publish(candidate)?;
-        Ok(enrollment.id())
+        Ok(consent)
     }
     /// New native quote authenticates the original work and accepted obligation;
     /// newly signed replacement still cannot answer before native acceptance.
