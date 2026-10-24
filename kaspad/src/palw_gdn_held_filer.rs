@@ -42,6 +42,7 @@ use misaka_palw_base0::fp_recompute::Base0FpRecomputeKernelsV1;
 use misaka_palw_base0::gdn_evidence_v2::{
     Base0GdnCheckpointCourtV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_conv_window_evidence_from_disclosures_retained_v3,
     base0_gdn_first_forged_checkpoint_retained_v3, base0_gdn_forged_checkpoint_demands_retained_v3, base0_gdn_transition_evidence_from_disclosures_retained_v3,
+    base0_gdn_conv_window_evidence_from_disclosures_retained_v4, base0_gdn_transition_evidence_from_disclosures_retained_v4,
 };
 
 #[path = "palw_gdn_held_action_owner_v2.rs"]
@@ -237,46 +238,35 @@ pub fn palw_gdn_held_step_retained_v2<K: Base0FpRecomputeKernelsV1>(
         // Every unit of this candidate is answered: the evidence, held to the court's own terminal before it is signed.
         let answers = answer_owner::complete_batch(&case.answers)?;
         let evidence = match case.candidates[case.at] {
-            Base0GdnCheckpointCourtV2::Transition { node_slot, head } => PalwMemoryRoutingEvidenceV2::GdnTransition {
-                refutation: base0_gdn_transition_evidence_from_disclosures_retained_v3(
-                    material,
-                    node_slot,
-                    head,
-                    case.index,
-                    &case.demands,
-                    &answers,
-                    &mut kernels,
-                ).map_err(retained_leg_error_v3)?,
-            },
-            Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } => PalwMemoryRoutingEvidenceV2::GdnConvWindow {
-                refutation: base0_gdn_conv_window_evidence_from_disclosures_retained_v3(
-                    material,
-                    conv_slot,
-                    head,
-                    case.index,
-                    &case.demands,
-                    &answers,
-                ).map_err(retained_leg_error_v3)?,
-            },
+            Base0GdnCheckpointCourtV2::Transition { node_slot, head } =>
+                base0_gdn_transition_evidence_from_disclosures_retained_v4(
+                    material, node_slot, head, case.index, &case.demands, &answers, &mut kernels,
+                ).map_err(retained_leg_error_v3)?.map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnTransition { refutation }),
+            Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } =>
+                base0_gdn_conv_window_evidence_from_disclosures_retained_v4(
+                    material, conv_slot, head, case.index, &case.demands, &answers,
+                ).map_err(retained_leg_error_v3)?.map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation }),
         };
-        let verdict = match &evidence {
-            PalwMemoryRoutingEvidenceV2::GdnTransition { refutation } => check_gdn_transition_refutation_v2(
-                refutation,
-                case.claim.execution_root,
-                case.claim.shape_profile_id,
-                accuser.oracle,
-                material.max_leaves,
-            ),
-            PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation } => check_gdn_conv_window_refutation_v2(
-                refutation,
-                case.claim.execution_root,
-                case.claim.shape_profile_id,
-                material.max_leaves,
-            ),
-            _ => unreachable!("held GDN candidates use checkpoint terminals"),
-        };
-        if terminal_found_fault_v1(verdict)? {
-            let object = action_owner::accusation(&case.claim, evidence, accuser)?;
+        // The accused-witness input guard spans both the actual native court
+        // and signed-output preadmission. The output's independent ticket is
+        // acquired before the callback returns and this input guard retires.
+        let object = evidence.try_handoff_v4(|evidence| {
+            let verdict = match &evidence {
+                PalwMemoryRoutingEvidenceV2::GdnTransition { refutation } => check_gdn_transition_refutation_v2(
+                    refutation, case.claim.execution_root, case.claim.shape_profile_id, accuser.oracle, material.max_leaves,
+                ),
+                PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation } => check_gdn_conv_window_refutation_v2(
+                    refutation, case.claim.execution_root, case.claim.shape_profile_id, material.max_leaves,
+                ),
+                _ => unreachable!("held GDN candidates use checkpoint terminals"),
+            };
+            if terminal_found_fault_v1(verdict)? {
+                action_owner::accusation(&case.claim, evidence, accuser).map(Some)
+            } else {
+                Ok(None)
+            }
+        })?;
+        if let Some(object) = object {
             return Ok(PalwGdnHeldNextRetainedV2::Accuse { object });
         }
         // Only an authenticated NoFaultFound advances. Missing material,
