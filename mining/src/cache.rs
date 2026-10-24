@@ -23,14 +23,17 @@ impl Inner {
         Self { last_update_time: 0, block_template: None, cache_lifetime }
     }
 
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.block_template = None;
     }
 
-    pub(crate) fn get_immutable_cached_template(&self) -> Option<Arc<BlockTemplate>> {
+    pub(crate) fn get_immutable_cached_template(&mut self) -> Option<Arc<BlockTemplate>> {
         let now = unix_now();
         // We verify that `now > last update` in order to avoid theoretic clock change bugs
-        if now > self.last_update_time + self.cache_lifetime || now < self.last_update_time {
+        if now.checked_sub(self.last_update_time).is_none_or(|elapsed| elapsed > self.cache_lifetime) {
+            // An unusable cache entry must release its retained reservation
+            // before the replacement template asks for capacity.
+            self.clear();
             None
         } else {
             self.block_template.clone()
@@ -72,5 +75,74 @@ impl BlockTemplateCache {
             guard.clear();
         }
         guard
+    }
+}
+
+#[cfg(test)]
+mod owner_lifetime_tests {
+    use super::*;
+    use kaspa_consensus_core::{
+        block::MutableBlock,
+        coinbase::MinerData,
+        config::params::MAINNET_PARAMS,
+        tx::{ScriptPublicKey, scriptvec},
+    };
+
+    // Only Arc ownership is under test; this is not a coinbase acceptance or
+    // quota fixture. The retained allocation owner lives inside BlockTemplate.
+    fn template() -> BlockTemplate {
+        BlockTemplate::new(
+            MutableBlock::new((&MAINNET_PARAMS.genesis).into(), vec![]),
+            MinerData::new(ScriptPublicKey::new(0, scriptvec![0x51]), vec![]),
+            false,
+            vec![],
+            0,
+            0,
+            MAINNET_PARAMS.genesis.hash,
+            vec![],
+            vec![],
+            vec![],
+        )
+    }
+
+    fn invalidate_clock(cache: &mut Inner, rollback: bool) {
+        // No sleeps or wall-clock boundary race: epoch zero has expired, and
+        // u64::MAX is strictly after every practical unix millisecond clock.
+        cache.cache_lifetime = 0;
+        cache.last_update_time = if rollback { u64::MAX } else { 0 };
+    }
+
+    #[test]
+    fn expiry_and_clock_rollback_release_the_final_cached_owner() {
+        for rollback in [false, true] {
+            let mut cache = Inner::new(None);
+            let external = cache.set_immutable_cached_template(template());
+            let weak = Arc::downgrade(&external);
+            assert_eq!(weak.strong_count(), 2);
+            drop(external);
+            assert_eq!(weak.strong_count(), 1, "only the cache should still own the template");
+            invalidate_clock(&mut cache, rollback);
+            assert!(cache.get_immutable_cached_template().is_none());
+            assert!(cache.block_template.is_none());
+            assert!(weak.upgrade().is_none(), "an unusable cache must drop its final template/allocation owner");
+        }
+    }
+
+    #[test]
+    fn invalidating_cache_preserves_an_external_template_owner_until_drop() {
+        for rollback in [false, true] {
+            let mut cache = Inner::new(None);
+            let external = cache.set_immutable_cached_template(template());
+            let weak = Arc::downgrade(&external);
+            invalidate_clock(&mut cache, rollback);
+            assert!(cache.get_immutable_cached_template().is_none());
+            assert!(cache.block_template.is_none());
+            assert_eq!(weak.strong_count(), 1, "an external consumer retains its own lifetime");
+            let retained = weak.upgrade().expect("cache invalidation cannot destroy an external owner's template");
+            assert!(Arc::ptr_eq(&retained, &external));
+            drop(retained);
+            drop(external);
+            assert!(weak.upgrade().is_none());
+        }
     }
 }

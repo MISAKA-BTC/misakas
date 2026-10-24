@@ -15,6 +15,9 @@ use std::convert::TryInto;
 use crate::{constants, model::stores::ghostdag::GhostdagData};
 #[path = "coinbase_stream_v2.rs"]
 mod stream;
+#[cfg(test)]
+#[path = "coinbase_build_resource_v2.rs"]
+mod build_resource_tests;
 use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, reserve_native_requests_v1};
 
 /// Render exactly the selected parent's queue prefix consumed by the next
@@ -89,19 +92,38 @@ pub struct CoinbaseComparisonV2 {
 }
 
 enum CoinbaseOutputsV2<'a> {
-    Build(Vec<TransactionOutput>),
+    Build { outputs: Vec<TransactionOutput>, allocation: CoinbaseAllocationV2 },
     Compare { actual: &'a Transaction, count: usize, first_difference: Option<(usize, bool, bool, u64, u64)> },
 }
 impl CoinbaseOutputsV2<'_> {
     fn len(&self) -> usize {
         match self {
-            Self::Build(outputs) => outputs.len(),
+            Self::Build { outputs, .. } => outputs.len(),
             Self::Compare { count, .. } => *count,
         }
     }
-    fn push(&mut self, value: u64, script: &ScriptPublicKey) {
+    fn push(&mut self, value: u64, script: &ScriptPublicKey) -> CoinbaseResult<()> {
         match self {
-            Self::Build(outputs) => outputs.push(TransactionOutput::new(value, script.clone())),
+            Self::Build { outputs, allocation } => {
+                let requests = (std::mem::size_of::<TransactionOutput>() as u64)
+                    .checked_mul(4)
+                    .and_then(|n| n.checked_add((script.script().len() as u64).checked_mul(2)?))
+                    .ok_or_else(|| {
+                        CoinbaseError::LocalNativeCapacityUnavailable(
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>("coinbase output copy"),
+                        )
+                    })?;
+                allocation.grow_v2(requests).map_err(CoinbaseError::LocalNativeCapacityUnavailable)?;
+                outputs.try_reserve(1).map_err(|why| {
+                    CoinbaseError::LocalNativeCapacityUnavailable(
+                        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                            "coinbase output allocation",
+                            &why.to_string(),
+                        ),
+                    )
+                })?;
+                outputs.push(TransactionOutput::new(value, script.clone()));
+            }
             Self::Compare { actual, count, first_difference } => {
                 if let Some(output) = actual.outputs.get(*count) {
                     let same_value = output.value == value;
@@ -113,6 +135,7 @@ impl CoinbaseOutputsV2<'_> {
                 *count += 1;
             }
         }
+        Ok(())
     }
 }
 enum CoinbaseRenderedV2 {
@@ -406,7 +429,10 @@ impl CoinbaseManager {
             palw_merged_escrow_withheld,
             palw_round_blocks,
             palw_receipt_v4_payouts,
-        ).map_err(NativeDecodeErrorV1::Decode)? {
+        ).map_err(|why| match why {
+            CoinbaseError::LocalNativeCapacityUnavailable(why) => NativeDecodeErrorV1::Resource(why),
+            why => NativeDecodeErrorV1::Decode(why),
+        })? {
             CoinbaseRenderedV2::Compared(comparison) => Ok(comparison),
             CoinbaseRenderedV2::Built(_) => unreachable!("comparison requested borrowed outputs"),
         }
@@ -447,7 +473,15 @@ impl CoinbaseManager {
         let mut worker_inclusion_pool = 0u64;
         let mut outputs = match compare {
             Some(actual) => CoinbaseOutputsV2::Compare { actual, count: 0, first_difference: None },
-            None => CoinbaseOutputsV2::Build(Vec::with_capacity(classified.blues().count() + 1)),
+            None => {
+                let mut allocation = CoinbaseAllocationV2::default();
+                let payload_requests = MIN_PAYLOAD_LENGTH.checked_add(miner_data.script_public_key.script().len())
+                    .and_then(|n| n.checked_add(miner_data.extra_data.as_ref().len()))
+                    .and_then(|n| n.checked_add(std::mem::size_of::<CoinbaseTransactionTemplate>() + 2 * std::mem::size_of::<usize>()))
+                    .ok_or_else(|| CoinbaseError::LocalNativeCapacityUnavailable(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<CoinbaseTransactionTemplate>("coinbase payload allocation")))?;
+                allocation.grow_v2(payload_requests as u64).map_err(CoinbaseError::LocalNativeCapacityUnavailable)?;
+                CoinbaseOutputsV2::Build { outputs: Vec::new(), allocation }
+            },
         };
         let mut miner_script_output_indices = if compare.is_none() { Vec::with_capacity(2) } else { Vec::new() };
 
@@ -495,12 +529,16 @@ impl CoinbaseManager {
                 // map below the fence → paid in full (ADR-0058 Decision 5), byte-identical.
                 value.saturating_sub(palw_merged_escrow_withheld.get(blue).copied().unwrap_or(0))
             };
-            Self::push_worker_output(&mut outputs, value, reward_data, carve, palw_receipt_v4_payouts.get(blue));
+            Self::push_worker_output(&mut outputs, value, reward_data, carve, palw_receipt_v4_payouts.get(blue))?;
         }
 
         // Collect all rewards from mergeset reds ∩ DAA window and create a
         // single output rewarding all to the current block (the "merging" block)
         let mut red_reward = 0u64;
+        let _build_round_lease = if compare.is_none() {
+            reserve_native_requests_v1(classified.round_requests().map_err(CoinbaseError::LocalNativeCapacityUnavailable)?)
+                .map_err(CoinbaseError::LocalNativeCapacityUnavailable)?
+        } else { None };
         let mut round_payees: Vec<(&ScriptPublicKey, u64)> = Vec::new();
 
         for round in classified.rounds() {
@@ -551,7 +589,7 @@ impl CoinbaseManager {
                 // The carve is `worker_carve(subsidy) ≤ worker_base_sompi ≤ value`, so this never
                 // underflows into fees; if it consumes the whole worker share the output is dropped.
                 let value = value.saturating_sub(palw_merged_escrow_withheld.get(red).copied().unwrap_or(0));
-                Self::push_worker_output(&mut outputs, value, reward_data, carve, palw_receipt_v4_payouts.get(red));
+                Self::push_worker_output(&mut outputs, value, reward_data, carve, palw_receipt_v4_payouts.get(red))?;
                 continue;
             }
             // §F carve: accumulate the Worker share EXCLUDING the §D inclusion sub-pool; else full.
@@ -573,12 +611,12 @@ impl CoinbaseManager {
             if compare.is_none() {
                 miner_script_output_indices.push(outputs.len());
             }
-            outputs.push(red_reward, &miner_data.script_public_key);
+            outputs.push(red_reward, &miner_data.script_public_key)?;
         }
 
         // ADR-0125: the round lane's payouts, after the red lump.
         for (script, value) in round_payees {
-            outputs.push(value, script);
+            outputs.push(value, script)?;
         }
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): append the
@@ -589,7 +627,7 @@ impl CoinbaseManager {
         // bootstrap-period supply reduction (no minting without recipients). Once
         // validators bond, this carries their participation payouts.
         for output in validator_reward_outputs {
-            outputs.push(output.value, &output.script_public_key);
+            outputs.push(output.value, &output.script_public_key)?;
         }
 
         // kaspa-pq Phase 13 (ADR-0018 §D base inclusion bounty): pay THIS block's miner
@@ -613,7 +651,7 @@ impl CoinbaseManager {
                 if compare.is_none() {
                     miner_script_output_indices.push(outputs.len());
                 }
-                outputs.push(bounty, &miner_data.script_public_key);
+                outputs.push(bounty, &miner_data.script_public_key)?;
             }
         }
 
@@ -622,7 +660,8 @@ impl CoinbaseManager {
         let data = CoinbaseData { blue_score: ghostdag_data.blue_score, subsidy: own_subsidy, miner_data };
 
         Ok(match outputs {
-            CoinbaseOutputsV2::Build(outputs) => CoinbaseRenderedV2::Built(CoinbaseTransactionTemplate {
+            CoinbaseOutputsV2::Build { outputs, allocation } => CoinbaseRenderedV2::Built(CoinbaseTransactionTemplate {
+                allocation_v2: allocation,
                 tx: Transaction::new(
                     constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0,
                     self.serialize_coinbase_payload(&data)?,
@@ -661,12 +700,12 @@ impl CoinbaseManager {
         reward_data: &BlockRewardData,
         carve: Option<&FeeSplitParams>,
         v4: Option<&kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
-    ) {
+    ) -> CoinbaseResult<()> {
         let Some(v4) = v4 else {
             if value > 0 {
-                outputs.push(value, &reward_data.script_public_key);
+                outputs.push(value, &reward_data.script_public_key)?;
             }
-            return;
+            return Ok(());
         };
         // The subsidy-derived worker share of this block, by the same arithmetic the value above used; never more than `value`.
         let subsidy_part = match carve {
@@ -676,12 +715,13 @@ impl CoinbaseManager {
         .min(value);
         let (miner_leg, _builder_fee) = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_split_v1(subsidy_part, v4.fee_bps);
         if miner_leg > 0 {
-            outputs.push(miner_leg, &v4.miner_script);
+            outputs.push(miner_leg, &v4.miner_script)?;
         }
         let builder_output = value - miner_leg;
         if builder_output > 0 {
-            outputs.push(builder_output, &reward_data.script_public_key);
+            outputs.push(builder_output, &reward_data.script_public_key)?;
         }
+        Ok(())
     }
 
     /// kaspa-pq Phase 13 (ADR-0018 §F/§E): the validator-side pool funded by this
@@ -738,7 +778,15 @@ impl CoinbaseManager {
     }
 
     pub fn serialize_coinbase_payload<T: AsRef<[u8]>>(&self, data: &CoinbaseData<T>) -> CoinbaseResult<Vec<u8>> {
-        Ok(stream::payload_bytes(data, self.coinbase_payload_script_public_key_max_len)?.collect())
+        let bytes = stream::payload_bytes(data, self.coinbase_payload_script_public_key_max_len)?;
+        let length = MIN_PAYLOAD_LENGTH.checked_add(data.miner_data.script_public_key.script().len())
+            .and_then(|n| n.checked_add(data.miner_data.extra_data.as_ref().len()))
+            .ok_or_else(|| CoinbaseError::LocalNativeCapacityUnavailable(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Vec<u8>>("coinbase payload")))?;
+        let mut payload = Vec::new();
+        payload.try_reserve_exact(length).map_err(|why| CoinbaseError::LocalNativeCapacityUnavailable(
+            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Vec<u8>>("coinbase payload", &why.to_string())))?;
+        payload.extend(bytes);
+        Ok(payload)
     }
 
     pub fn modify_coinbase_payload<T: AsRef<[u8]>>(&self, mut payload: Vec<u8>, miner_data: &MinerData<T>) -> CoinbaseResult<Vec<u8>> {

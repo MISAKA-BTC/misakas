@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum CoinbaseError {
+    #[error("local coinbase capacity unavailable: {0}")]
+    LocalNativeCapacityUnavailable(crate::palw_native_resource_v1::NativeCoverageV1),
     #[error("coinbase payload length is {0} while the minimum allowed length is {1}")]
     PayloadLenBelowMin(usize, usize),
 

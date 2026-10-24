@@ -240,7 +240,7 @@ pub struct AttestationTemplateDrop {
 }
 
 /// A block template for miners.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BlockTemplate {
     pub block: MutableBlock,
     pub miner_data: MinerData,
@@ -265,6 +265,7 @@ pub struct BlockTemplate {
     /// shard stays in the mempool and is re-selected into every subsequent template forever.
     /// Empty on non-overlay nets / below the activation gate.
     pub dropped_attestation_shards: Vec<AttestationTemplateDrop>,
+    coinbase_allocation_v2: crate::coinbase::CoinbaseAllocationV2,
 }
 
 impl BlockTemplate {
@@ -291,7 +292,93 @@ impl BlockTemplate {
             calculated_fees,
             stale_evm_claims,
             dropped_attestation_shards,
+            coinbase_allocation_v2: Default::default(),
         }
+    }
+
+    pub fn with_coinbase_allocation_v2(mut self, allocation: crate::coinbase::CoinbaseAllocationV2) -> Self {
+        self.coinbase_allocation_v2 = allocation;
+        self
+    }
+
+    /// Admit the coinbase and miner-data copy before cloning a cached template.
+    /// Other block transactions, header and EVM data are outside this ticket.
+    pub fn try_clone_v2(&self) -> Result<Self, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::NativeCoverageV1;
+        let mut allocation = crate::coinbase::CoinbaseAllocationV2::default();
+        let tx = self
+            .block
+            .transactions
+            .first()
+            .ok_or_else(|| NativeCoverageV1::unsupported::<Self>("coinbase template copy", "missing coinbase"))?;
+        if !tx.inputs.is_empty() {
+            return Err(NativeCoverageV1::unsupported::<Self>("coinbase template copy", "coinbase has inputs"));
+        }
+        let mut bytes = std::mem::size_of::<Self>() as u64;
+        let mut add = |n: usize| -> Result<(), NativeCoverageV1> {
+            bytes = bytes.checked_add(n as u64).ok_or_else(|| NativeCoverageV1::overflow::<Self>("coinbase template copy"))?;
+            Ok(())
+        };
+        add(tx.payload.len())?;
+        for output in &tx.outputs {
+            add(std::mem::size_of::<crate::tx::TransactionOutput>())?;
+            add(output.script_public_key.script().len())?;
+        }
+        for _ in &self.coinbase_miner_script_output_indices {
+            add(std::mem::size_of::<usize>())?;
+        }
+        add(self.miner_data.script_public_key.script().len())?;
+        add(self.miner_data.extra_data.len())?;
+        allocation.grow_v2(bytes)?;
+        Ok(Self {
+            block: self.block.clone(),
+            miner_data: self.miner_data.clone(),
+            coinbase_has_red_reward: self.coinbase_has_red_reward,
+            coinbase_miner_script_output_indices: self.coinbase_miner_script_output_indices.clone(),
+            selected_parent_timestamp: self.selected_parent_timestamp,
+            selected_parent_daa_score: self.selected_parent_daa_score,
+            selected_parent_hash: self.selected_parent_hash,
+            calculated_fees: self.calculated_fees.clone(),
+            stale_evm_claims: self.stale_evm_claims.clone(),
+            dropped_attestation_shards: self.dropped_attestation_shards.clone(),
+            coinbase_allocation_v2: allocation,
+        })
+    }
+
+    pub fn take_coinbase_allocation_v2(&mut self) -> crate::coinbase::CoinbaseAllocationV2 {
+        std::mem::take(&mut self.coinbase_allocation_v2)
+    }
+
+    /// Reserve simultaneous old/new payloads and replacement miner scripts.
+    pub fn reserve_coinbase_change_v2(&mut self, miner: &MinerData) -> Result<(), crate::palw_native_resource_v1::NativeCoverageV1> {
+        let requests = self.coinbase_change_requests_v2(miner)?;
+        self.coinbase_allocation_v2.grow_v2(requests)
+    }
+
+    pub fn reserve_current_coinbase_change_v2(&mut self) -> Result<(), crate::palw_native_resource_v1::NativeCoverageV1> {
+        let requests = self.coinbase_change_requests_v2(&self.miner_data)?;
+        self.coinbase_allocation_v2.grow_v2(requests)
+    }
+
+    fn coinbase_change_requests_v2(&self, miner: &MinerData) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::NativeCoverageV1;
+        let tx = self
+            .block
+            .transactions
+            .first()
+            .ok_or_else(|| NativeCoverageV1::unsupported::<Self>("coinbase miner change", "missing coinbase"))?;
+        // The payload format's u8 script length also covers a round's new payee.
+        let script = miner.script_public_key.script().len().max(u8::MAX as usize);
+        let requests = self
+            .coinbase_miner_script_output_indices
+            .len()
+            .checked_add(3)
+            .and_then(|n| script.checked_mul(n))
+            .and_then(|n| n.checked_add(miner.extra_data.len().checked_mul(2)?))
+            .and_then(|n| n.checked_add(tx.payload.len().checked_mul(3)?))
+            .and_then(|n| n.checked_add(2 * (19 + crate::palw_exec_v2_anchor::PALW_EXEC_V2_ANCHOR_MAX_TRAILER_BYTES)))
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("coinbase miner change"))?;
+        Ok(requests as u64)
     }
 
     pub fn to_virtual_state_approx_id(&self) -> VirtualStateApproxId {

@@ -764,6 +764,7 @@ impl VirtualStateProcessor {
         }
         let header_pruning_point = self.pruning_point_manager.expected_header_pruning_point(ghostdag.to_compact()).pruning_point;
         let parents_by_level = self.parents_manager.calc_block_parents(pruning_point, &parents);
+        template.reserve_current_coinbase_change_v2().map_err(RuleError::LocalNativeCapacityUnavailable)?;
         let miner_data = MinerData::new(payout, template.miner_data.extra_data.clone());
         let payload = self
             .coinbase_manager
@@ -772,7 +773,11 @@ impl VirtualStateProcessor {
                 subsidy: 0,
                 miner_data: miner_data.clone(),
             })
-            .map_err(RuleError::BadCoinbasePayload)?;
+            .map_err(|why| match why {
+                kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => RuleError::LocalNativeCapacityUnavailable(why),
+                why => RuleError::BadCoinbasePayload(why),
+            })?;
+        let allocation = template.take_coinbase_allocation_v2();
         let mut transactions = std::mem::take(&mut template.block.transactions);
         let mut coinbase = transactions.remove(0);
         coinbase.outputs.clear();
@@ -822,6 +827,6 @@ impl VirtualStateProcessor {
             calculated_fees,
             Vec::new(),
             Vec::new(),
-        ))
+        ).with_coinbase_allocation_v2(allocation))
     }
 }

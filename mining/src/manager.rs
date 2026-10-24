@@ -515,13 +515,16 @@ impl MiningManager {
         let bypass_cache_for_attestation =
             latest_ready_epoch.is_some() && self.config.attestation_policy.enabled && self.mempool.read().attestation_tx_count() > 0;
         let mut cache_lock = self.block_template_cache.lock(virtual_state_approx_id);
-        let immutable_template = if bypass_cache_for_attestation { None } else { cache_lock.get_immutable_cached_template() };
+        let immutable_template = if bypass_cache_for_attestation {
+            cache_lock.clear();
+            None
+        } else { cache_lock.get_immutable_cached_template() };
 
         // We first try and use a cached template if not expired
         if let Some(immutable_template) = immutable_template {
             drop(cache_lock);
             if immutable_template.miner_data == *miner_data {
-                return Ok(immutable_template.as_ref().clone());
+                return Ok(immutable_template.try_clone_v2().map_err(BuilderError::from)?);
             }
             // Miner data is new -- make the minimum changes required
             // Note the call returns a modified clone of the cached block template
@@ -633,7 +636,7 @@ impl MiningManager {
                             );
                         }
                     }
-                    return Ok(block_template.as_ref().clone());
+                    return Ok(block_template.try_clone_v2().map_err(BuilderError::from)?);
                 }
                 Err(BuilderError::ConsensusError(BlockRuleError::TemplateBuildFailedAfterAttestationDrops(source, dropped))) => {
                     self.reconcile_attestation_template_drops(&dropped, latest_ready_epoch);

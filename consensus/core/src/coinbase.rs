@@ -56,4 +56,30 @@ pub struct CoinbaseTransactionTemplate {
     /// Currently this includes the aggregate red reward and the worker-inclusion
     /// bounty; validator/reserve outputs can be interleaved between them.
     pub miner_script_output_indices: Vec<usize>,
+    /// Reservation for the owning coinbase render. Transfer with the transaction
+    /// into the block template; borrowing the queue did not admit this copy.
+    pub allocation_v2: CoinbaseAllocationV2,
+}
+
+/// Typed coinbase allocation requests, not whole-block or physical RSS coverage.
+/// Deliberately not Clone: a deep copy must obtain its own reservation first.
+#[derive(Default)]
+pub struct CoinbaseAllocationV2 {
+    lease: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+impl std::fmt::Debug for CoinbaseAllocationV2 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CoinbaseAllocationV2").field("admitted", &self.lease.is_some()).finish()
+    }
+}
+impl CoinbaseAllocationV2 {
+    pub fn grow_v2(&mut self, requests: u64) -> Result<(), crate::palw_native_resource_v1::NativeCoverageV1> {
+        match self.lease.as_mut() {
+            Some(lease) => lease.grow_memory_v1(requests),
+            None => {
+                self.lease = crate::palw_native_resource_v1::reserve_native_requests_v1(requests)?;
+                Ok(())
+            }
+        }
+    }
 }

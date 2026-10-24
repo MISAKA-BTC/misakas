@@ -119,7 +119,8 @@ impl BlockTemplateBuilder {
         new_miner_data: &MinerData,
         block_template_to_modify: &BlockTemplate,
     ) -> BuilderResult<BlockTemplate> {
-        let mut block_template = block_template_to_modify.clone();
+        let mut block_template = block_template_to_modify.try_clone_v2()?;
+        block_template.reserve_coinbase_change_v2(new_miner_data)?;
 
         // The first transaction is always the coinbase transaction
         let coinbase_tx = &mut block_template.block.transactions[COINBASE_TRANSACTION_INDEX];

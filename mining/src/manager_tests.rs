@@ -1969,8 +1969,8 @@ mod tests {
         }
 
         // Compare hashes
-        let expected_block = expected_template.clone().block.to_immutable();
-        let modified_block = modified_template.clone().block.to_immutable();
+        let expected_block = expected_template.try_clone_v2().unwrap().block.to_immutable();
+        let modified_block = modified_template.try_clone_v2().unwrap().block.to_immutable();
         assert_ne!(
             expected_template.block.header.hash, modified_template.block.header.hash,
             "built and modified block templates should have different hashes"
@@ -1988,7 +1988,7 @@ mod tests {
         }
 
         // Compare hashes
-        let modified_block = modified_template_2.clone().block.to_immutable();
+        let modified_block = modified_template_2.try_clone_v2().unwrap().block.to_immutable();
         assert_eq!(
             expected_template.block.header.hash, modified_template_2.block.header.hash,
             "built and modified block templates should have same hashes"

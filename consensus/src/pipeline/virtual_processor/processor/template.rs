@@ -269,6 +269,7 @@ impl VirtualStateProcessor {
         // re-serialisation below keeps it, or the beat would commit a UTXO state for blocks it does not name. Read only past the fence:
         // below it (and where it is not armed) the miner data is exactly the template's, a trailer in a miner's tag being its bytes.
         let exec_v2 = self.palw_exec_v2_active_at(template.block.header.daa_score);
+        template.reserve_current_coinbase_change_v2().map_err(RuleError::LocalNativeCapacityUnavailable)?;
         let coinbase = &mut template.block.transactions[0];
         let miner_data = match kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(&coinbase.payload)
             .ok()
@@ -282,7 +283,10 @@ impl VirtualStateProcessor {
         };
         let zeroed = kaspa_consensus_core::coinbase::CoinbaseData { blue_score, subsidy: 0, miner_data };
         coinbase.payload =
-            self.coinbase_manager.serialize_coinbase_payload(&zeroed).expect("a payload the manager just built reserializes");
+            self.coinbase_manager.serialize_coinbase_payload(&zeroed).map_err(|why| match why {
+                kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => RuleError::LocalNativeCapacityUnavailable(why),
+                why => RuleError::BadCoinbasePayload(why),
+            })?;
         coinbase.finalize();
         template.block.header.hash_merkle_root = calc_hash_merkle_root(template.block.transactions.iter());
         template.block.header.finalize();
@@ -868,7 +872,10 @@ impl VirtualStateProcessor {
                 // RFC-0009: the merged V4 receipt blocks' split payouts.
                 &palw_receipt_v4_payouts,
             )
-            .unwrap();
+            .map_err(|why| match why {
+                kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => RuleError::LocalNativeCapacityUnavailable(why),
+                why => RuleError::BadCoinbasePayload(why),
+            })?;
         // **The coinbase is fixed HERE, before `evm_template_fields` commits the lane** (phase2-plan
         // §5.4, F6): the lane never reads the block's own coinbase, so the vesting mints and seat
         // pay it renders need no re-commit — and a later edit of these outputs must re-derive the
@@ -978,6 +985,6 @@ impl VirtualStateProcessor {
             calculated_fees,
             stale_evm_claims,
             dropped_attestation_shards,
-        ))
+        ).with_coinbase_allocation_v2(coinbase.allocation_v2))
     }
 }
