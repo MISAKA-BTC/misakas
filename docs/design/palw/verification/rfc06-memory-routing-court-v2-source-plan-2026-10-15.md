@@ -32,3 +32,18 @@ The additive native `GdnStepAccusedV2` carrier uses tag 243, version 2 and a new
 7. Prepare source controls for changed/foreign checkpoint roots, wrong index/cadence/layer/head, truncated/duplicated chunks, cross-head alias disagreement, wrong selected router, multiple independent routers, Kimi expert universe, honest long-versus-anchored replay parity and flags-off historical bytes. Run them only in the consolidated validation phase.
 
 All evidence above authenticates data identity, membership and the selected reader binding. It is not a cryptographic proof that model computation is correct. The local verdict comes from deterministic recomputation over authenticated inputs. Consensus credit still requires randomly selected validator approval under an explicit honest-fraction premise; optimistic Final and matching local replay do not replace it. No prohibited computation-proof mechanism is adopted or left as a future remedy. Resource/fee calibration, complete native writer closure, authenticated original-identity migration and 100k/pruned-P2P acceptance remain separate open requirements.
+
+## Production continuation — 2026-10-25
+
+The autonomous step and held-GDN service callers now use a retained actual-capture decoder and
+folded DenseTiles replay admission before their existing evidence/court/signing paths. The shared
+pool selector retains its decoded/copy ownership and accepted-job binding. This narrows the
+capture ownership gap above; it does not complete all recurrence/router/physical-cost coverage.
+The actual base0 capture integration target passed 3/3 on 2026-10-25, including isolated
+zero-quota and returned-owner lifetime controls. The fresh node binary also passed the changed
+ServiceGdnHost control (1/1), held-court controls (2/2) and held-tick controls (2/2). These are
+small fixture mechanism checks, not a multi-process production campaign or all-model cost
+acceptance. Other capture/transport/publication consumers and physical workspace coverage
+remain scoped separately. Runtime logs and the binding return-type, borrowed-view ladder and
+foreign-prompt fixture compilation corrections are recorded in the scoped
+[production capture record](../../../evidence/rfc/0006-gdn-retained-production-capture-2026-10-25.md).
