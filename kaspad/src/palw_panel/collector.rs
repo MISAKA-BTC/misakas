@@ -411,7 +411,8 @@ impl PalwPanelService {
             {
                 (*canonical_last_daa) = current_daa;
                 match self.build_canonical_claim(&session, network_domain, bond, current_daa, funding_outpoint, &funding_entry).await {
-                    Ok((tx, claim_id, material)) => {
+                    Ok((tx, claim_id, material, _answer_wire_and_signing_lease)) => {
+                        // The accounting wire/signing reservation follows the actual outer TX through submission.
                         let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
                         let txid = prepared_carrier.id();
                         match self.submit_prepared_direct_v1(&session, prepared_carrier).await {

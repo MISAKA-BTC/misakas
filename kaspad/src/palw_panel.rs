@@ -77,6 +77,7 @@ pub(crate) mod source_support;
 mod retirement;
 mod collector;
 mod seat_progress;
+mod answer_accounting;
 mod court_progress;
 mod tick_inputs;
 mod registration;
@@ -7889,7 +7890,7 @@ impl PalwPanelService {
         current_daa: u64,
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
-    ) -> Result<(Transaction, Hash64, Vec<u8>), String> {
+    ) -> Result<(Transaction, Hash64, Vec<u8>, kaspa_pq_validator_core::FpAnswerTransactionLeaseV1), String> {
         use kaspa_consensus_core::palw_freeprompt_v3::{
             PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
             fp_claim_id_v3, palw_fp_capture_encode_v1,
@@ -7902,6 +7903,7 @@ impl PalwPanelService {
         // (2026-09-02): every canonical claim on the new class was refused with "transaction has
         // 250000 fees which is under the required amount of 262870", and the lane never opened.
         const CANONICAL_CLAIM_FEE_FLOOR_SOMPI: u64 = 250_000;
+        let answer_accounting_active = self.consensus_config.params.palw_fp_answer_accounting_v1_fence().is_some_and(|f| f.is_active(current_daa));
 
         let class_id = self.canonical_class_id_v1(session)?;
         let facts = session.palw_producer_facts_v2(class_id, Some(bond)).ok_or("no producer facts for the canonical class")?;
@@ -8052,10 +8054,11 @@ impl PalwPanelService {
             };
             let shape =
                 b.capture_shape(&run.outcome.material).ok_or_else(|| "the capture has no shape this family can read".to_string())?;
-            Ok::<_, String>((run, shape))
+            let answer_root = if answer_accounting_active { b.output_root_for_context_v1(&shape.job_context, &run.output_token_ids) } else { None };
+            Ok::<_, String>((run, shape, answer_root))
         })
         .await?;
-        let (run, shape) = executed?;
+        let (run, shape, accounting_answer_root) = executed?;
         if let Some(leaf) = drill_fault_leaf {
             warn!(
                 "[{PALW_PANEL}] PALW DRILL: this canonical claim commits a capture corrupted at step leaf {leaf} (execution root {})",
@@ -8246,7 +8249,7 @@ impl PalwPanelService {
         // twice — once at the floor to read the carrier's mass, once at the fee that mass prices —
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
-        let build = |fee: u64| {
+        let build_plain = |fee: u64| {
             if let Some((header, pledge, history, rent)) = &tir_original {
                 // The rent rides on top of relay: consensus burns exactly the declaration from this carrier's fee.
                 return kaspa_pq_validator_core::build_fp_commitment_tx_with_tir_public_original_v1(
@@ -8297,6 +8300,13 @@ impl PalwPanelService {
                 fee,
             )
         };
+        let build = |fee| {
+            let tx = build_plain(fee)?;
+            kaspa_pq_validator_core::wrap_fp_answer_accounting_tx_with_v1(
+                &key, &self.consensus_config.params, current_daa, tx, std::slice::from_ref(funding),
+                &commitment, &shape.job_context, &run.output_token_ids, accounting_answer_root,
+            ).map_err(|e| e.to_string())
+        };
         let probe = build(CANONICAL_CLAIM_FEE_FLOOR_SOMPI)?;
         let params = &self.consensus_config.params;
         let mass_calculator = MassCalculator::new(
@@ -8305,13 +8315,14 @@ impl PalwPanelService {
             params.mass_per_sig_op,
             params.storage_mass_parameter,
         );
-        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&probe).compute_mass)
+        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&probe.0).compute_mass)
             .max(CANONICAL_CLAIM_FEE_FLOOR_SOMPI);
-        let tx = build(fee)?;
+        drop(probe);
+        let (tx, answer_lease) = build(fee)?;
         if let Some(projection) = unpublished_projection.as_mut() {
             projection.keep();
         }
-        Ok((tx, claim_id, material))
+        Ok((tx, claim_id, material, answer_lease))
     }
 
     /// Retain this node's own free-prompt material under the claim id, where the resolver serves

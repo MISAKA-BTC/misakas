@@ -87,6 +87,22 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
     assert_eq!(state.state_root(),root);
     assert!(state.claim(&fp.claim_id()).is_none());
     assert_eq!(validated.calculated_fee,value-envelope.funding.terms.funding_amount_sompi);
+    // Read-only outer accounting carrier: actual funding signatures authenticate FPA1 bytes,
+    // while the inner payer consent still authenticates its own unchanged TFO1 terms.
+    let answer = vec![0; fp.commitment.decode_tokens_executed as usize];
+    let wire = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_retain_encode_v1(&tx.payload, &answer).unwrap();
+    let accounting_tx = make(wire.to_vec());
+    assert_ne!(accounting_tx.id(), tx.id());
+    let accounting_validated = vp.validate_transaction_in_utxo_context(&accounting_tx,&view,now,full,None).unwrap();
+    let court = vp.palw_court_params_at(now).and_then(Result::ok);
+    let native = court.as_ref().map(|c|(c,vp.palw_court_step_ladder_at(now,c)));
+    let accounting_diagnostic = kaspa_consensus_core::palw_state_v2::palw_funded_original_answer_candidate_v1(
+        &state,vp.palw_network_domain_v2(),now,&accounting_validated,vp.palw_state_params_v2.as_ref(),native);
+    assert!(matches!(&accounting_diagnostic,PalwFundedOriginalCandidateV1::Missing(s) if s.starts_with("native source checked;")),"{accounting_diagnostic:?}");
+    assert_eq!(accounting_validated.calculated_fee,validated.calculated_fee);
+    assert_eq!(accounting_tx.outputs,tx.outputs);
+    assert_eq!(state.state_root(),root);
+    assert!(state.claim(&fp.claim_id()).is_none());
     // Full native inputs and payer consent stay valid. Corrupt ONLY the
     // producer's separate source pledge signature, keeping its signed scope,
     // original FP commitment, funding profile IDs/output/amount unchanged.

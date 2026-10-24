@@ -13,6 +13,8 @@
 /// only place a `PalwFpCommitmentV3` claim id is allowed to come from. Both signing forms — the
 /// rail's local seed and the signer sidecar's `--print-claim` digest — pass through it.
 pub mod palw_fp_sign_gate;
+mod palw_fp_answer_accounting;
+pub use palw_fp_answer_accounting::{FpAnswerTransactionLeaseV1, wrap_fp_answer_accounting_tx_with_v1};
 
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
@@ -3032,10 +3034,59 @@ mod tests {
         )
         .unwrap();
         let envelope = PalwHistoryFpEnvelopeV1::decode_v1(&wrapped.payload).unwrap();
-        assert_eq!(envelope.original_payload, legacy.payload);
+        // These are independently signed builds: hedged ML-DSA signatures need not be equal.
+        // Compare their exact claim/prompt semantics and verify each original signature instead.
+        let legacy_original: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&legacy.payload).unwrap();
+        let history_original = envelope.original_fp_v1().unwrap();
+        for original in [&legacy_original, &history_original] {
+            assert_eq!(original.version, PALW_FP_V3_VERSION);
+            assert_eq!(original.commitment, commitment);
+            assert_eq!(original.prompt_token_ids, ids);
+            assert!(key.verify_with_context(
+                fp_claim_id_v3(&commitment).as_byte_slice(), &original.signature, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT));
+        }
+        assert!(super::rfc9_sighash_audit::verifies(&legacy, &funding));
+        assert!(super::rfc9_sighash_audit::verifies(&wrapped, &funding));
         assert_eq!(envelope.original_fp_v1().unwrap().claim_id(), fp_claim_id_v3(&commitment));
         assert_eq!(wrapped.outputs, legacy.outputs);
         assert_ne!(wrapped.inputs[0].signature_script, legacy.inputs[0].signature_script);
+        // Actual accounting producer: preserve literal inner consent/history bytes and funding
+        // outputs, but authenticate the larger outer TX under its own funding sighash.
+        let PalwPublicExecutionBindingHeaderV1::Legacy(header) = &binding else { unreachable!() };
+        let mut context = header.job_context.clone();
+        context.job_id = kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&commitment.job);
+        context.execution_seed = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_execution_seed_v3(&commitment.job);
+        let answer = vec![17; commitment.decode_tokens_executed as usize];
+        let mut active = params.clone();
+        active.palw_fp_answer_accounting_v1 = Some(kaspa_consensus_core::config::params::ForkActivation::new(5000));
+        for inner in [&legacy, &wrapped] {
+            let (before, _lease) = wrap_fp_answer_accounting_tx_with_v1(
+                &key, &active, 4999, inner.clone(), std::slice::from_ref(&funding), &commitment,
+                &context, &answer, Some(commitment.output_root)).unwrap();
+            assert_eq!(before.payload, inner.payload);
+            assert_eq!(before.inputs[0].signature_script, inner.inputs[0].signature_script);
+            let (outer, _lease) = wrap_fp_answer_accounting_tx_with_v1(
+                &key, &active, 5000, inner.clone(), std::slice::from_ref(&funding), &commitment,
+                &context, &answer, Some(commitment.output_root)).unwrap();
+            assert_eq!(outer.outputs, inner.outputs);
+            assert_eq!(outer.inputs[0].previous_outpoint, inner.inputs[0].previous_outpoint);
+            assert_ne!(outer.id(), inner.id());
+            assert!(super::rfc9_sighash_audit::verifies(&outer, &funding), "actual outer funding signature verifies");
+            let view = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&outer.payload, answer.len()).unwrap();
+            assert_eq!(view.inner, inner.payload);
+            assert!(view.answer_ids_v1().eq(answer.iter().copied()));
+            let mut forged = outer.clone();
+            forged.payload = inner.payload.clone();
+            forged.finalize();
+            assert!(!super::rfc9_sighash_audit::verifies(&forged, &funding), "outer signature cannot authorize the old inner TX");
+            assert!(wrap_fp_answer_accounting_tx_with_v1(
+                &key, &active, 5000, inner.clone(), std::slice::from_ref(&funding), &commitment,
+                &context, &answer, None).is_err());
+            assert!(wrap_fp_answer_accounting_tx_with_v1(
+                &key, &active, 5000, outer, std::slice::from_ref(&funding), &commitment,
+                &context, &answer, Some(commitment.output_root)).is_err());
+        }
+
         let mut wrong = pledge.clone();
         wrong.claim = Hash64::from_u64_word(99);
         assert!(
@@ -4302,7 +4353,7 @@ mod rfc9_sighash_audit {
         calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &Mldsa87SigHashReusedValuesUnsync::new())
     }
 
-    fn verifies(tx: &Transaction, entry: &UtxoEntry) -> bool {
+    pub(super) fn verifies(tx: &Transaction, entry: &UtxoEntry) -> bool {
         let (sig_ht, pubkey) = pushes(&tx.inputs[0].signature_script);
         let (sig, hash_type) = sig_ht.split_at(sig_ht.len() - 1);
         assert_eq!(hash_type, &[SIG_HASH_ALL.to_u8()]);

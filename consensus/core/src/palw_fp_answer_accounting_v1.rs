@@ -31,6 +31,8 @@
 //! refuses a licence to a claim whose carried answer does not recompute that root under the claim's context (arming prerequisite —
 //! see [`Params::validate_palw_fp_answer_accounting_v1`]). An answer that lies is therefore a claim that never licenses, so a lie
 //! cannot shrink the coverage a later claim meets, and coverage an attacker plants can only match a sequence it actually computed.
+mod binding;
+pub use binding::*;
 mod ingress;
 pub use ingress::*;
 

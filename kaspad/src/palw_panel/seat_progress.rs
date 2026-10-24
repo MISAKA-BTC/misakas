@@ -1693,6 +1693,22 @@ impl PalwPanelService {
                 None
             };
             let Some(verdict) = verdict else { continue };
+            // RFC38: every approving form, including Sampled and the vertex path, checks the actual accepted transaction.
+            // A legacy served answer/replay is not a substitute for this carriage binding.
+            if matches!(verdict, PalwReceiptVerdictV2::Valid | PalwReceiptVerdictV2::Sampled) {
+                if let Err(why) = self.fp_accounting_answer_for_seat_v1(&session, duty) {
+                    match why {
+                        kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
+                            crate::palw_backends::note_throttled_v1("panel-accounting-capacity", || format!("[{PALW_PANEL}] claim {} accounting check deferred by local capacity: {why}", duty.claim_id));
+                        }
+                        kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
+                            crate::palw_backends::note_throttled_v1("panel-accounting-unbound", || format!("[{PALW_PANEL}] claim {} accounting answer unbound ({why}); no approving receipt/vertex filed", duty.claim_id));
+                        }
+                    }
+                    continue;
+                }
+            }
+
             // **SEAT-R, enforced where the receipt is signed**: past the fence a `Valid` that no
             // off-loop replay licensed files nothing, whatever arm produced it — the source pin
             // (`seat_r_tests`) and the `debug_assert!`s name the arms; this holds in a release build.

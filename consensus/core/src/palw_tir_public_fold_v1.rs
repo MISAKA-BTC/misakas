@@ -39,10 +39,44 @@ pub fn palw_funded_original_candidate_v1(
     native_params: Option<&PalwStateParamsV2>,
     native_court: Option<(&crate::palw_mode_v2::PalwCourtParamsV2,u64)>,
 ) -> PalwFundedOriginalCandidateV1 {
+    palw_funded_original_candidate_inner_v1(state, network, daa, validated, native_params, native_court, false)
+}
+
+/// Read-only FPA1/TFO1 candidate inspection. The native caller resolves the accounting fence before calling;
+/// this entry adds neither installation authority nor an admitted variant.
+pub fn palw_funded_original_answer_candidate_v1(
+    state: &PalwChainStateV2,
+    network: Hash64,
+    daa: u64,
+    validated: &crate::tx::ValidatedTransaction<'_>,
+    native_params: Option<&PalwStateParamsV2>,
+    native_court: Option<(&crate::palw_mode_v2::PalwCourtParamsV2,u64)>,
+) -> PalwFundedOriginalCandidateV1 {
+    palw_funded_original_candidate_inner_v1(state, network, daa, validated, native_params, native_court, true)
+}
+
+fn palw_funded_original_candidate_inner_v1(
+    state: &PalwChainStateV2,
+    network: Hash64,
+    daa: u64,
+    validated: &crate::tx::ValidatedTransaction<'_>,
+    native_params: Option<&PalwStateParamsV2>,
+    native_court: Option<(&crate::palw_mode_v2::PalwCourtParamsV2,u64)>,
+    accounting: bool,
+) -> PalwFundedOriginalCandidateV1 {
     use PalwFundedOriginalCandidateV1::{Invalid, Missing};
     use crate::palw_tir_funded_original_envelope_v1::{is_funded_original_carrier_v1, PalwTirFundedOriginalEnvelopeV1};
     let tx = validated.tx;
-    if !is_funded_original_carrier_v1(tx) || !tx.id_is_current() {
+    let payload = if accounting {
+        let Some(view) = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize) else {
+            return Invalid("accounting carrier framing");
+        };
+        if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !view.inner.starts_with(b"TFO1") {
+            return Invalid("accounting carrier does not contain TFO1");
+        }
+        view.inner
+    } else { &tx.payload };
+    if (!accounting && !is_funded_original_carrier_v1(tx)) || !tx.id_is_current() {
         return Invalid("carrier framing or stale actual transaction id");
     }
     if tx.inputs.len() != validated.entries.len() {
@@ -61,7 +95,7 @@ pub fn palw_funded_original_candidate_v1(
     if input.checked_sub(output) != Some(validated.calculated_fee) {
         return Invalid("actual input/output fee differs from native validation");
     }
-    let Ok(envelope) = PalwTirFundedOriginalEnvelopeV1::decode_v1(&tx.payload) else {
+    let Ok(envelope) = PalwTirFundedOriginalEnvelopeV1::decode_v1(payload) else {
         return Invalid("funded original bounded codec");
     };
     let terms = &envelope.funding.terms;

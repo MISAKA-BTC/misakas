@@ -566,7 +566,11 @@ impl VirtualStateProcessor {
         // the carrier's signed profile IDs or a caller graph/count declaration.
         let court = self.palw_court_params_at(accepting_daa).and_then(Result::ok);
         let native = court.as_ref().map(|c|(c,self.palw_court_step_ladder_at(accepting_daa,c)));
-        kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1(
+        let accounting = validated.tx.payload.starts_with(b"FPA1")
+            && self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(accepting_daa));
+        let inspect = if accounting { kaspa_consensus_core::palw_state_v2::palw_funded_original_answer_candidate_v1 }
+            else { kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1 };
+        inspect(
             state, self.palw_network_domain_v2(), accepting_daa, validated,
             self.palw_state_params_v2.as_ref(), native,
         )
@@ -804,7 +808,11 @@ impl VirtualStateProcessor {
                     }
                 }
                 if let Some((state, accepting_daa)) = candidate_state {
-                    if kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(validated_tx.tx) {
+                    let accounting_funded = self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(accepting_daa))
+                        && validated_tx.tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+                        && kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&validated_tx.tx.payload, u32::MAX as usize)
+                            .is_some_and(|v| v.inner.starts_with(b"TFO1"));
+                    if accounting_funded || kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(validated_tx.tx) {
                         let diagnostic = self.palw_funded_original_candidate_from_native_v1(state, accepting_daa, validated_tx);
                         // Full / selected-parent cached checks are not relabelled
                         // as each other. Both leave the funded installer CLOSED.
