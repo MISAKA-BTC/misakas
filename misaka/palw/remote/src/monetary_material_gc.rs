@@ -532,14 +532,14 @@ impl MonetaryMaterialGcJanitorV1 {
                 Ok(None)
             };
             match recovery {
-                Ok(Some((pin, receipt))) if receipt.covers(root, consent) => {
+                Ok(Some((_pin, receipt))) if receipt.covers(root, consent) => {
                     let intent = MonetaryGcIntentV1 {
                         version: 1,
                         stored_consent: consent,
                         root,
                         release_consent: consent,
                         tail: receipt.tail_block,
-                        release_block: pin,
+                        release_block: receipt.release_block,
                     };
                     let claims =
                         store.held_native_authorities().get(&consent).map(|s| s.iter().copied().collect()).unwrap_or_default();

@@ -2,6 +2,8 @@
 use super::*;
 #[path = "material_typed_reorg_v4.rs"]
 mod reorg;
+#[path = "material_typed_terminal_v4.rs"]
+mod terminal;
 use kaspa_consensus_core::{
     api::ConsensusApi,
     palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4,
@@ -347,6 +349,9 @@ async fn typed_writer_child() {
                 reorg::rollback_and_restore(w, db, &dir, request, admission.consent, replacement.consent, fork, carrier, &bytes).await;
         }
     }
+    if std::env::var("MISAKA_TYPED_TERMINAL_CHILD_V4").as_deref() == Ok("1") {
+        (w, db) = terminal::release_and_collect(w, db, &dir, request).await;
+    }
     drop(w);
     drop(db);
     std::fs::remove_dir_all(dir).unwrap();
@@ -380,7 +385,9 @@ async fn typed_reader_child() {
     assert!(!was_accepted);
     arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 4 << 30, database_bytes: 4 << 30 }));
     let limits = PalwKernelMaterialContextLimitsV4 { max_encoded_bytes: 64 << 20, max_heap_bytes: 128 << 20 };
-    if input.replacement && !input.current_read {
+    if dir.join("terminal-input").exists() {
+        terminal::read_and_collect(native, &input, &dir, limits);
+    } else if input.replacement && !input.current_read {
         prepare_replacement_reader(&chain, &input, &dir, limits);
     } else if input.current_read {
         let admission: SignedAdmission = borsh::from_slice(&std::fs::read(dir.join("signed-admission")).unwrap()).unwrap();
