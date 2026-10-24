@@ -302,6 +302,21 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> PublicSourc
 }
 impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> PublicArtifactV1 for Reader<'_, F> {
     fn param(&self, program: u16, parameter: u16, layer: Option<u16>) -> Option<Tensor> {
+        // Mutable memory slots are deliberately absent from immutable provider
+        // parameter rows. The typed checker first tries M0 in the artifact and
+        // then falls back to its authenticated entry-state unit. That optional
+        // miss must not poison a successful fallback with a sticky read error.
+        if program == 0
+            && self.ledger.claims.get(&self.claim).is_some_and(|row| {
+                matches!(&row.body, misaka_palw_kernel::ledger::ClaimBodyV1::Spec(_))
+                    && self.ledger.typed.classes.get(&row.class_binding_id).is_some_and(|class| {
+                        matches!(&class.kind, misaka_palw_kernel::spec::SpecClassKindV1::Memory { root, .. }
+                            if root.slots.iter().any(|slot| slot.param == (parameter, layer)))
+                    })
+            })
+        {
+            return None;
+        }
         self.attempt(|| {
             // Reserve the destination clone before fetching. The standalone
             // parameter owner separately covers its construction and full roots.
@@ -486,39 +501,63 @@ impl VerifiedPaidClaimSourcesV2 {
     ) -> Result<ProviderCheckedResultV4, Refusal> {
         limits.validate()?;
         let mut ledger = self.route.ledger().map_err(bad)?;
-        let claim = self.authority.enrollment.base_claim;
-        ledger.try_reserve_kernel_material_v4(&claim).map_err(bad)?;
-        let reader = Reader {
-            ledger: &ledger,
-            claim,
-            fetch: RefCell::new(fetch),
+        check_provider_material_v4(
+            &mut ledger,
+            self.authority.enrollment.base_claim,
+            self.authority.class.target,
+            canonical_opening,
+            check,
             limits,
-            calls: Cell::new(0),
-            bytes: Cell::new(0),
-            charged: Cell::new(0),
-            lease: RefCell::new(reserve_native_requests_v1(0).map_err(bad)?),
-            error: RefCell::new(None),
-        };
-        let outsider =
-            misaka_palw_kernel::ledger::OutsiderV1 { ledger: &ledger, claim, material: &reader, artifact: &reader, salt: [0; 64] };
-        let checked = match self.authority.class.target {
-            PaidClaimTargetV2::Program | PaidClaimTargetV2::Pipeline => check.verify_program_or_pipeline(&outsider),
-            PaidClaimTargetV2::TypedSpec => check.verify_typed(&misaka_palw_kernel::spec::outsider::SpecOutsiderV1 {
-                ledger: &ledger,
-                claim,
-                material: &reader,
-                artifact: &reader,
-                snapshots: &reader,
-                salt: [0; 64],
-            }),
-            PaidClaimTargetV2::Segmented => check.verify_segmented(&outsider, &reader, &canonical_opening.tokens),
-        };
-        if let Some(error) = reader.error.into_inner() {
-            return Err(bad(error));
-        }
-        let result = checked.map_err(bad)?;
-        Ok(ProviderCheckedResultV4 { result, _acquisition: reader.lease.into_inner() })
+            fetch,
+        )
     }
+}
+
+// Shared by the authenticated source caller and focused adapter regressions.
+// This is private: supplying a ledger/check here does not install native source
+// authority or make a selected receipt. The public caller derives both above.
+#[allow(clippy::too_many_arguments)]
+fn check_provider_material_v4<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>>(
+    ledger: &mut kaspa_consensus_core::palw_native_resource_v1::ReservedKernelLedgerV1,
+    claim: Digest,
+    target: PaidClaimTargetV2,
+    canonical_opening: &PaidClaimMaterialWireV2,
+    check: &PaidClaimCheckAuthorityV2,
+    limits: ProviderReaderLimitsV4,
+    fetch: F,
+) -> Result<ProviderCheckedResultV4, Refusal> {
+    limits.validate()?;
+    ledger.try_reserve_kernel_material_v4(&claim).map_err(bad)?;
+    let reader = Reader {
+        ledger: &*ledger,
+        claim,
+        fetch: RefCell::new(fetch),
+        limits,
+        calls: Cell::new(0),
+        bytes: Cell::new(0),
+        charged: Cell::new(0),
+        lease: RefCell::new(reserve_native_requests_v1(0).map_err(bad)?),
+        error: RefCell::new(None),
+    };
+    let outsider =
+        misaka_palw_kernel::ledger::OutsiderV1 { ledger: &*ledger, claim, material: &reader, artifact: &reader, salt: [0; 64] };
+    let checked = match target {
+        PaidClaimTargetV2::Program | PaidClaimTargetV2::Pipeline => check.verify_program_or_pipeline(&outsider),
+        PaidClaimTargetV2::TypedSpec => check.verify_typed(&misaka_palw_kernel::spec::outsider::SpecOutsiderV1 {
+            ledger: &*ledger,
+            claim,
+            material: &reader,
+            artifact: &reader,
+            snapshots: &reader,
+            salt: [0; 64],
+        }),
+        PaidClaimTargetV2::Segmented => check.verify_segmented(&outsider, &reader, &canonical_opening.tokens),
+    };
+    if let Some(error) = reader.error.into_inner() {
+        return Err(bad(error));
+    }
+    let result = checked.map_err(bad)?;
+    Ok(ProviderCheckedResultV4 { result, _acquisition: reader.lease.into_inner() })
 }
 
 #[cfg(test)]
@@ -586,22 +625,28 @@ mod tests {
             assert_eq!(actual.tensor().shape, expected.shape);
             assert_eq!(actual.tensor().to_le_bytes(), expected.to_le_bytes());
             assert_eq!(calls, units);
-            assert!(fetch_parameter_from_provider_v4(&world.l, &claim, program, parameter, layer, limits, |_, _| Err(
-                "provider unavailable".into()
-            ))
-            .is_err());
-            assert!(fetch_parameter_from_provider_v4(&world.l, &claim, program, parameter, layer, limits, |s, p| fetch(s, p, true))
-                .is_err());
-            assert!(fetch_parameter_from_provider_v4(
-                &world.l,
-                &claim,
-                program,
-                parameter,
-                layer,
-                ProviderReaderLimitsV4 { max_workspace_bytes: 1, ..limits },
-                |_, _| panic!("insufficient workspace must refuse before fetching")
-            )
-            .is_err());
+            assert!(
+                fetch_parameter_from_provider_v4(&world.l, &claim, program, parameter, layer, limits, |_, _| Err(
+                    "provider unavailable".into()
+                ))
+                .is_err()
+            );
+            assert!(
+                fetch_parameter_from_provider_v4(&world.l, &claim, program, parameter, layer, limits, |s, p| fetch(s, p, true))
+                    .is_err()
+            );
+            assert!(
+                fetch_parameter_from_provider_v4(
+                    &world.l,
+                    &claim,
+                    program,
+                    parameter,
+                    layer,
+                    ProviderReaderLimitsV4 { max_workspace_bytes: 1, ..limits },
+                    |_, _| panic!("insufficient workspace must refuse before fetching")
+                )
+                .is_err()
+            );
         }
     }
 
@@ -631,3 +676,7 @@ mod tests {
         assert!(full_parameter_matches_v4(&original, 99, &v2).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "provider_reader_v4_memory_tests.rs"]
+mod memory_tests;
