@@ -493,3 +493,6 @@ mod witness_owner_tests;
 
 #[path = "palw_gdn_held_conv_owner_tests_v3.rs"]
 mod conv_owner_tests;
+
+#[path = "palw_gdn_held_borrowed_demand_tests_v3.rs"]
+mod borrowed_demand_tests;

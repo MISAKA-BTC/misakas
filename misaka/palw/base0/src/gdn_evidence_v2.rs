@@ -520,9 +520,8 @@ pub fn base0_gdn_conv_window_evidence_from_disclosures_retained_v4(
     // material's clone source. The request visitor admits its own rank cache.
     let rank = kaspa_consensus_core::palw_step::PalwCanonicalStepRankV3::new_v3(&material.binding.shape_profile, &material.binding.job_context)
         .map_err(NativeDecodeErrorV1::Resource)?;
-    if demands != gdn_conv_window_demands_v2(material.binding, conv_slot, head, index).map_err(base0_gdn_court_error_v3)?.as_slice() {
-        return Err(NativeDecodeErrorV1::Decode("the answered demands are not the units this window reads".into()));
-    }
+    kaspa_consensus_core::palw_step_refute::memory_v2::gdn_check_conv_demands_borrowed_v3(
+        material.binding, conv_slot, head, index, demands).map_err(base0_gdn_court_error_v3)?;
     let capture = capture_v2(material, &leg);
     let request = kaspa_consensus_core::palw_step_refute::memory_v2::gdn_conv_refutation_requests_v3(&capture, conv_slot, head, index, |at, _coordinate|
         material.tiles.tiles.iter().find(|(i, _)| *i == at).map(|(_, leaf)| leaf))

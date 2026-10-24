@@ -25,6 +25,10 @@ use super::capture::{gdn_chunk_witness_v2, gdn_input_rows_from_capture_v2, gdn_r
 use super::*;
 #[path = "conv_request_owner_v3.rs"]
 mod conv_request_owner;
+#[path = "conv_demand_borrow_v3.rs"]
+mod conv_demand_borrow;
+pub use conv_demand_borrow::gdn_check_conv_demands_borrowed_v3;
+
 pub use conv_request_owner::{PalwGdnConvAdmissionV3, PalwGdnConvOwnerV3, PalwGdnConvRefutationRequestsV3, PalwGdnConvRequiredRowV3,
     gdn_conv_refutation_requests_v3, visit_gdn_conv_required_rows_v3};
 
@@ -754,16 +758,7 @@ fn conv_window_chunks_v2(
     head: u32,
     positions: u32,
 ) -> Result<Vec<u32>, PalwGdnCourtErrorV2> {
-    let profile = &binding.shape_profile;
-    let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
-    let (layer, _) = conv_sources_v2(profile, conv_slot, &geometry)?;
-    let (offset, _, _) = gdn_recurrence_section_v2(profile, positions)?;
-    let mut out = Vec::new();
-    for block in 0..geometry.conv_kernel.div_ceil(geometry.conv_rows_per_chunk) {
-        let local = geometry.conv_chunk_index(layer, head, block).ok_or(PalwStepRefuteError::Unadjudicable)?;
-        out.push(offset.checked_add(local).and_then(|i| u32::try_from(i).ok()).ok_or(PalwStepRefuteError::Unadjudicable)?);
-    }
-    Ok(out)
+    conv_demand_borrow::collect_conv_chunks_v3(binding, conv_slot, head, positions)
 }
 
 /// **Assemble a convolution-window accusation from captured material.**

@@ -21,6 +21,7 @@ pub use transition::{
     PALW_GDN_CHECKPOINT_EVIDENCE_VERSION_V2, PALW_GDN_CONV_WINDOW_EVIDENCE_KIND_V2, PALW_GDN_TRANSITION_EVIDENCE_KIND_V2,
     PalwGdnCheckpointVerdictV2, PalwGdnConvWindowRefutationV2, PalwGdnMismatchV2, PalwGdnTransitionRefutationV2,
     check_gdn_conv_window_refutation_v2, check_gdn_transition_refutation_v2, gdn_checkpoint_witness_from_disclosures_v2,
+    gdn_check_conv_demands_borrowed_v3,
     PalwGdnConvAdmissionV3, PalwGdnConvOwnerV3, PalwGdnConvRefutationRequestsV3, PalwGdnConvRequiredRowV3,
     gdn_conv_refutation_requests_v3, visit_gdn_conv_required_rows_v3,
     gdn_conv_window_demands_v2, gdn_conv_window_refutation_from_capture_v2, gdn_conv_window_refutation_with_accused_v2,

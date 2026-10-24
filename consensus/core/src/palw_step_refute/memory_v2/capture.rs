@@ -7,6 +7,11 @@
 //! different set would be refused by the checker, which re-derives the same values. The output authenticates data membership only;
 //! the verdict is the deterministic replay over it, and nothing here confers validator approval or consensus credit.
 use super::*;
+#[path = "recurrence_layout_owner_v3.rs"]
+mod recurrence_layout_owner;
+pub(crate) use recurrence_layout_owner::gdn_recurrence_section_retained_v3;
+use recurrence_layout_owner::{RecurrenceKindV3, recurrence_kind_v3};
+
 
 /// **Where a class's checkpoint at `positions` keeps its recurrence half, and how many chunks the whole checkpoint has** —
 /// `(offset of the first recurrence chunk, total chunk count, held layout if the map is held)`. The one spelling the assembler and
@@ -17,7 +22,8 @@ pub(crate) fn gdn_recurrence_section_v2(
     positions: u32,
 ) -> Result<(u64, u64, Option<maps::PalwStateLayoutV4>), PalwGdnCourtErrorV2> {
     let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
-    if maps::palw_profile_is_held_v4(profile) {
+    let kind = recurrence_kind_v3(profile);
+    if kind == RecurrenceKindV3::Held {
         let layout =
             maps::palw_state_layout_v4(profile, positions).map_err(|_| evidence("held checkpoint has no recurrence layout"))?;
         if layout.gdn_layers.is_empty() {
@@ -27,7 +33,7 @@ pub(crate) fn gdn_recurrence_section_v2(
         let count = layout.chunk_count();
         return Ok((offset, count, Some(layout)));
     }
-    if profile.state_chunk_map_id == maps::hybrid_state_chunk_map_id_v3() {
+    if kind == RecurrenceKindV3::Hybrid {
         let layout = maps::hybrid_state_geometry_for_covered_v1(profile, positions)
             .map_err(|_| evidence("hybrid checkpoint has no recurrence layout"))?;
         if layout.gdn_layers.is_empty() {
@@ -35,7 +41,9 @@ pub(crate) fn gdn_recurrence_section_v2(
         }
         return Ok((layout.attn.chunk_count(), layout.chunk_count(), None));
     }
-    if let Some(attention) = maps::hybrid_composed_attention_chunks_v2(profile, positions) {
+    if kind == RecurrenceKindV3::Composed {
+        let attention = maps::hybrid_composed_attention_chunks_v2(profile, positions)
+            .ok_or_else(|| evidence("composed checkpoint's attention half is not derivable"))?;
         // RFC-0006 consumer v2's NEW composed maps: the integer-kv v2 attention half, then the recurrence enumeration, one flat
         // tree. Historical hybrid v1/v2 ids never reach here (they carry no recurrence in their roots).
         let attention = attention.map_err(|_| evidence("composed checkpoint's attention half is not derivable"))?;
