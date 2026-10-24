@@ -431,6 +431,9 @@ impl NativeCarrierQueueV4 {
         if tx.payload.get(..2) != Some(version.as_slice()) || tx.payload.get(2..) != Some(row.object.as_slice()) {
             return Err("submitted carrier substitutes queued signed object".into());
         }
+        if let Some(saved) = &row.submitted_transaction {
+            return crate::material_recovery_ack_v2::verify_saved_carrier_v4(tx, saved);
+        }
         let len = borsh::object_length(tx).map_err(|e| e.to_string())? as u64;
         let existing = row.native_heap_v1("native carrier submission").bytes().ok_or("native carrier row shape unsupported")?;
         let _copy = reserve_native_requests_v1(
@@ -504,6 +507,51 @@ mod tests {
         let row = queue.get(&id).unwrap();
         assert_eq!(row.purpose, second);
         assert_eq!(&*row.object_owned().unwrap(), &release(h(1), h(5)));
+        drop(queue);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn submitted_carrier_is_immutable_across_reopen_and_explicit_release_reorg() {
+        // Real WAL/atomic file publication; the empty signature is a storage
+        // fixture, not evidence of native funding, finality or release authority.
+        let dir = dir();
+        let file = dir.join("queue");
+        let mut queue = NativeCarrierQueueV4::open(&file).unwrap();
+        let purpose = NativeCarrierPurposeV4::Release { root: h(1), consent: h(2), tail: h(4) };
+        let id = purpose.id();
+        let first = release(h(1), h(4));
+        queue.insert(id, purpose, &first).unwrap();
+        let carrier = |object: &PalwConsensusObjectV2, funding| Transaction::new(
+            0,
+            vec![kaspa_consensus_core::tx::TransactionInput::new(
+                TransactionOutpoint::new(h(funding), 0), vec![1], 0, 1,
+            )],
+            vec![], 0, kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE, 0,
+            borsh::to_vec(&(kaspa_consensus_core::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2, object)).unwrap(),
+        );
+        let tx = carrier(&first, 20);
+        queue.record_submitted(id, &tx).unwrap();
+        let snapshot = fs::read(&file).unwrap();
+        queue.record_submitted(id, &tx).unwrap();
+        assert!(queue.record_submitted(id, &carrier(&first, 21)).is_err(), "same object cannot overwrite funded bytes");
+        assert_eq!(fs::read(&file).unwrap(), snapshot);
+        drop(queue);
+        let mut queue = NativeCarrierQueueV4::open(&file).unwrap();
+        queue.record_submitted(id, &tx).unwrap();
+        assert!(queue.record_submitted(id, &carrier(&first, 21)).is_err());
+        assert_eq!(queue.get(&id).unwrap().submitted_transaction.as_ref().unwrap(), &borsh::to_vec(&tx).unwrap());
+        // The existing explicit release-only replacement changes the signed
+        // proposal after a reorg. It remains the sole reset route for this slot.
+        let second = release(h(1), h(5));
+        queue.replace_release_proposal(id,
+            NativeCarrierPurposeV4::Release { root: h(1), consent: h(2), tail: h(5) }, &second).unwrap();
+        assert!(queue.get(&id).unwrap().submitted_transaction.is_none());
+        let next_tx = carrier(&second, 22);
+        queue.record_submitted(id, &next_tx).unwrap();
+        assert!(queue.record_submitted(id, &tx).is_err(), "old tail cannot return through the retry API");
+        drop(queue);
+        let queue = NativeCarrierQueueV4::open(&file).unwrap();
+        assert_eq!(queue.get(&id).unwrap().submitted_transaction.as_ref().unwrap(), &borsh::to_vec(&next_tx).unwrap());
         drop(queue);
         fs::remove_dir_all(dir).unwrap();
     }
