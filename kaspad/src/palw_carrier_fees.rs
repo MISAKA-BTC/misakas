@@ -3,7 +3,7 @@ use super::*;
 
 /// Match acceptance and coinbase rent at the carrier's current virtual DAA. Unsupported lifecycle
 /// kinds and inactive rent fences add nothing; this never arms a consensus rule.
-pub(super) fn palw_lifecycle_carrier_rent_v2(
+pub(crate) fn palw_lifecycle_carrier_rent_v2(
     params: &kaspa_consensus_core::config::params::Params,
     object: &PalwConsensusObjectV2,
     daa: u64,

@@ -11,6 +11,9 @@ use kaspa_consensus_core::{
 };
 use std::{collections::HashSet, path::Path, sync::Arc, time::Duration};
 
+#[path = "recovery_ack_carrier_authority_v4.rs"]
+mod authority;
+
 /// A durable, already signed additional object. The provider service owns
 /// purpose-specific acceptance/finality checks and outbox publication.
 pub(crate) struct AdditionalNativeCarrierV4 {
@@ -162,6 +165,12 @@ impl PrivateRecoveryAckFeeSpecV4 {
                         };
                         let session = manager.consensus().unguarded_session();
                         let object = job.object();
+                        if !matches!(session.palw_object_rehearsal_v1(object),
+                            Some(kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)) {
+                            // A pending WAL is not native authority. Refusal, including
+                            // local NativeResource, keeps the same signed obligation.
+                            continue;
+                        }
                         // Keep the constructor/decoder ticket through relay admission.
                         // Pool ownership and its own capacity are a separate boundary.
                         let (transaction, _transaction_lease) = if let Some(submitted) = job.submitted() {
@@ -253,6 +262,20 @@ impl PrivateRecoveryAckFeeSpecV4 {
                             .has_transaction(transaction.id(), kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly)
                             .await
                         {
+                            continue;
+                        }
+                        if transaction.inputs.first().is_some_and(|input|
+                            flow.mining_manager().outpoint_is_spent_in_mempool(&input.previous_outpoint)) {
+                            continue;
+                        }
+                        // Validate after the async pool lookup, including cold
+                        // carriers. An already-pooled identical transaction simply
+                        // waits above; no stale native/funding authority crosses
+                        // the await into this final pre-relay check.
+                        if let Err(error) = session.with_consensus_api_v1(|api| authority::verify_current(
+                            api, &config.params, &transaction, object, &script, self.maximum_fee_sompi,
+                        )) {
+                            kaspa_core::warn!("private recovery carrier waits for current authority: {error}");
                             continue;
                         }
                         match tokio::time::timeout(
