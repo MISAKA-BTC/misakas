@@ -149,11 +149,15 @@ pub fn sign_provider_objective_action_v4(
     action: &ProviderObjectiveActionV4,
 ) -> Result<NativeRetainedV1<PalwConsensusObjectV2>, Refusal> {
     let actor = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
+    // Preserve the receipt namespace chosen from the authenticated sources,
+    // including an existing private V6 binding. Signing cannot install that
+    // binding or replace native assignment/source/activation validation.
     match &action.object {
         KernelRouteObjectV1::PaidClaimV2 {
             object:
                 misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2::Receipt { receipt }
-                | misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2::RoundReceipt { receipt },
+                | misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2::RoundReceipt { receipt }
+                | misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { receipt },
         } if receipt.signer == actor => {}
         KernelRouteObjectV1::FileProof { accuser, .. } if *accuser == actor => {}
         KernelRouteObjectV1::FileDemand { demander, .. } if *demander == actor => {}
@@ -227,3 +231,7 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "provider_actions_v4_signing_tests.rs"]
+mod signing_tests;
