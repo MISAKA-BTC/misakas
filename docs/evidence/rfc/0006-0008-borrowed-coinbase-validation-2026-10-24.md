@@ -40,7 +40,8 @@ A thread-local allocation-request counter observes zero bytes during comparisons
 with zero, one and eight payout scripts and no rounds. Inputs are prepared before
 the measurement. This is an allocation-request control of this comparator; it is
 not live RSS, a full-node cost bound or a whole-model measurement. Local test
-output is `/tmp/misaka-coinbase-stream-controls.log`.
+output is `/tmp/misaka-coinbase-stream-controls.log`; the final source rerun also
+passed 18/18 in `/tmp/misaka-coinbase-stream-controls-final.log`.
 
 ## Still outside this result
 
