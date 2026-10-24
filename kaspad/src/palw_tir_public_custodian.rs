@@ -63,6 +63,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[path = "palw_tir_custodian_owned_v2.rs"]
+mod owned_storage;
+use owned_storage::CustodianOwnedV2;
+
 const PALW_PANEL: &str = "palw-panel";
 
 /// The court queue's lane of a preparer's `WorkDebit` on a frame (free: `u32::MAX − 24`; the TIR prefix responder is `− 23`).
@@ -112,8 +116,8 @@ struct JournalV2 {
 /// One frame this node is preparing (process memory; see the module's restart note).
 struct CaseV1 {
     work: PalwTirPublicWorkBookV1,
-    reader: Option<Box<dyn PalwTirPublicCaptureReaderV1>>,
-    writer: Option<Box<dyn PalwTirPublicPreparedWriterV1>>,
+    reader: Option<CustodianOwnedV2<Box<dyn PalwTirPublicCaptureReaderV1>>>,
+    writer: Option<CustodianOwnedV2<Box<dyn PalwTirPublicPreparedWriterV1>>>,
     warm: bool,
     /// The quote whose debit is queued or in flight, and the permit once that debit is accepted.
     quote: Option<PalwTirPublicCaptureSliceV1>,
@@ -122,8 +126,6 @@ struct CaseV1 {
     /// publication); `None` until the pass's debit is accepted.
     ledger: Option<OperationalLedgerV1>,
     failed: bool,
-    _capture: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
-    _publish: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
 }
 
 /// **The custodian book**: the live preparations (memory) and the sealed-descriptor journal (disk).
@@ -442,8 +444,6 @@ impl PalwPanelService {
                                     permit: None,
                                     ledger: None,
                                     failed: false,
-                                    _capture: None,
-                                    _publish: None,
                                 },
                             );
                         }
@@ -624,28 +624,22 @@ impl PalwPanelService {
                         };
                         let paths = self.fp_retained_payload_paths(&key.0);
                         let cache = self.config.retention_dir.join("tir-public-prepared");
-                        let (reader, need) = tokio::task::spawn_blocking(move || {
+                        let reader = tokio::task::spawn_blocking(move || {
                             let source = retained_original_v1(&paths, &job)?;
                             let need = backend.tir_public_capture_need_v1(&header, source.len_v1())?;
-                            std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-                            let reader = backend.open_tir_public_capture_v1(&header, source, &cache)?;
-                            Ok::<_, String>((reader, need))
+                            CustodianOwnedV2::try_build(
+                                &crate::palw_memory_ledger::host_ledger_v1(),
+                                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                                    role: "public-tir-custodian-capture", class_id: class, job: key.0,
+                                }, need.resident_ram_bytes, || {
+                                    std::fs::create_dir_all(&cache).map_err(|e|e.to_string())?;
+                                    backend.open_tir_public_capture_v1(&header, source, &cache)
+                                })
                         })
                         .await
                         .map_err(|e| format!("TIR custodian reader worker failed: {e}"))??;
-                        let memory = crate::palw_memory_ledger::host_ledger_v1()
-                            .reserve(
-                                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
-                                    role: "public-tir-custodian-capture",
-                                    class_id: class,
-                                    job: key.0,
-                                },
-                                need.resident_ram_bytes,
-                            )
-                            .map_err(|e| e.to_string())?;
                         if let Some(case) = book.cases.get_mut(&key) {
                             case.reader = Some(reader);
-                            case._capture = Some(memory);
                         }
                     }
                     StepV1::Begin { key, material_until_daa, now } => {
@@ -664,8 +658,7 @@ impl PalwPanelService {
                             .map_err(|e| e.to_string())?;
                         let directory = self.config.retention_dir.join("tir-public-prepared");
                         let writer = reader.begin_prepared_v1(&directory, material_until_daa, now)?;
-                        case.writer = Some(writer);
-                        case._publish = Some(memory);
+                        case.writer = Some(CustodianOwnedV2::with_reservation(writer,memory));
                     }
                     StepV1::Debit { key, action, original_accepted_daa, source_id, due: due_daa } => {
                         let queue = (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true);
@@ -724,8 +717,8 @@ impl PalwPanelService {
                             let borrowed = BorrowedPreparationSnapshotV1::from_native_v1(&snapshot);
                             let result = run_pass_slices_v1(
                                 &mut warm,
-                                reader.as_deref_mut(),
-                                writer.as_deref_mut(),
+                                reader.as_mut().map(|owned|owned.value.as_mut()),
+                                writer.as_mut().map(|owned|owned.value.as_mut()),
                                 PALW_TIR_PUBLIC_SLICES_PER_STEP_V1,
                                 &mut ledger,
                                 |ledger, reader, quote| prepare_claim_capture_slice_v1(&borrowed, reader, quote, ledger),
@@ -886,6 +879,7 @@ impl PalwPanelService {
             .map_err(|e| e.to_string())?;
         let until = entry.material_until_daa;
         let reopened = tokio::task::spawn_blocking(move || {
+            let _memory=_memory;
             backend
                 .reopen_tir_prepared_capture_v1(&header, &descriptor, &directory, until, now)
                 .map(|reader| reader.prepared_descriptor_v1() == Some(&descriptor))
@@ -939,12 +933,11 @@ struct ResponseCaseV1 {
     turn: u64,
     request: PalwTirPublicRequestV1,
     respond_until_daa: u64,
-    body: Option<Vec<u8>>,
+    body: Option<CustodianOwnedV2<Vec<u8>>>,
     failed: bool,
     /// G-T5: the ordinal of the last move queued for this demand (Begin 0, a Part at offset `o` is `1 + o`, Finish `u64::MAX`).
     /// A NEXT move (the accepted slot advanced) is queued at once; only a re-send of the same move waits `COURT_MOVE_REPLAN_DAA`.
     last_move: Option<u64>,
-    _memory: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
 }
 
 /// G-T5: the ordinal of an answer move (see `ResponseCaseV1::last_move`).
@@ -1080,7 +1073,6 @@ impl PalwPanelService {
                                 body: None,
                                 failed: false,
                                 last_move: None,
-                                _memory: None,
                             },
                         );
                     }
@@ -1179,6 +1171,12 @@ impl PalwPanelService {
                         let Some(case) = book.responses.get(&demand) else { return Ok(()) };
                         let request = case.request;
                         let ram = kaspa_consensus_core::palw_tir_public_owned_v1::request_body_bound_v1(&source, request)?.1;
+                        let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
+                            Arc::from(self.resolve_backend(session, descriptor.class_id, descriptor.artifact_root)?);
+                        let header = source.header_v1().clone();
+                        let reopen = backend.tir_prepared_capture_need_v1(&header, descriptor.retained_bytes)?.reopen_ram_bytes;
+                        // The response material quote does not own the reopened reader.
+                        let ram=ram.checked_add(reopen).ok_or("TIR responder reopen + body RAM overflow")?;
                         let memory = crate::palw_memory_ledger::host_ledger_v1()
                             .reserve(
                                 crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
@@ -1189,17 +1187,16 @@ impl PalwPanelService {
                                 ram,
                             )
                             .map_err(|e| e.to_string())?;
-                        let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
-                            Arc::from(self.resolve_backend(session, descriptor.class_id, descriptor.artifact_root)?);
-                        let header = source.header_v1().clone();
                         let directory = self.config.retention_dir.join("tir-public-prepared");
                         let body = tokio::task::spawn_blocking(move || {
+                            let memory=memory;
                             let mut reader =
                                 backend.reopen_tir_prepared_capture_v1(&header, &descriptor, &directory, material_until_daa, now)?;
                             if reader.prepared_descriptor_v1() != Some(&descriptor) {
                                 return Err("the reopened capture is not the exact Ready descriptor".into());
                             }
                             response_body_v1(reader.as_mut(), &source, request)
+                                .map(|body|CustodianOwnedV2::with_reservation(body,memory))
                         })
                         .await
                         .map_err(|e| format!("TIR responder body worker failed: {e}"))?;
@@ -1207,7 +1204,6 @@ impl PalwPanelService {
                         match body {
                             Ok(body) => {
                                 case.body = Some(body);
-                                case._memory = Some(memory);
                             }
                             Err(why) => {
                                 case.failed = true;
