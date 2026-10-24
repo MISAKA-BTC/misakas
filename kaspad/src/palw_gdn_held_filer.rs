@@ -44,6 +44,10 @@ use misaka_palw_base0::gdn_evidence_v2::{
     base0_gdn_first_forged_checkpoint_v2, base0_gdn_forged_checkpoint_demands_v2, base0_gdn_transition_evidence_from_disclosures_v2,
 };
 
+#[path = "palw_gdn_held_action_owner_v2.rs"]
+mod action_owner;
+pub use action_owner::{PalwGdnHeldErrorV2, PalwGdnHeldNextRetainedV2};
+
 /// The claim the case pursues, as the chain records it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwGdnHeldClaimV1 {
@@ -216,7 +220,7 @@ fn terminal_found_fault_v1<T>(verdict: Result<T, PalwGdnCourtErrorV2>) -> Result
 }
 
 /// **One step of the case** against the chain's objects at DAA `now` (`disclose_window`: the held DA court's answer window).
-pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
+pub fn palw_gdn_held_step_retained_v2<K: Base0FpRecomputeKernelsV1>(
     case: &mut PalwGdnHeldCaseV1,
     material: &Base0GdnMaterialV2<'_>,
     mut kernels: impl FnMut() -> K,
@@ -224,7 +228,7 @@ pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
     now: u64,
     disclose_window: u64,
     accuser: &PalwGdnHeldAccuserV1<'_>,
-) -> Result<PalwGdnHeldNextV1, String> {
+) -> Result<PalwGdnHeldNextRetainedV2, PalwGdnHeldErrorV2> {
     if accuser.bond == case.claim.executor {
         return Err("the producer never accuses its own claim".into());
     }
@@ -233,26 +237,12 @@ pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
         if let Some(i) = case.answers.iter().position(Option::is_none) {
             return Ok(match case.demanded {
                 Some((open, at)) if open == i && now > at.saturating_add(disclose_window) => {
-                    PalwGdnHeldNextV1::DefaultDue { unit: case.demands[i] }
+                    PalwGdnHeldNextRetainedV2::DefaultDue { unit: case.demands[i] }
                 }
-                Some((open, _)) if open == i => PalwGdnHeldNextV1::Wait,
+                Some((open, _)) if open == i => PalwGdnHeldNextRetainedV2::Wait,
                 _ => {
-                    let mut demand = PalwHeldAccusationV1 {
-                        version: PALW_HELD_DA_VERSION_V1,
-                        claim: case.claim.claim,
-                        missing: case.demands[i],
-                        accuser: accuser.bond,
-                        binding: material.binding.clone(),
-                        signature: Vec::new(),
-                    };
-                    let message = palw_held_da_accusation_message_v1(accuser.network_domain.as_byte_slice(), &demand);
-                    demand.signature = (accuser.sign)(message.as_byte_slice(), PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT)
-                        .ok_or("no signing key for a held demand")?;
-                    case.demanded = Some((i, now));
-                    PalwGdnHeldNextV1::Demand {
-                        unit: case.demands[i],
-                        object: PalwConsensusObjectV2::DefaultAccusedHeld { accusation: Box::new(demand) },
-                    }
+                    let object = action_owner::demand(&case.claim, material, case.demands[i], accuser)?;
+                    PalwGdnHeldNextRetainedV2::Demand { index: i, unit: case.demands[i], object }
                 }
             });
         }
@@ -298,44 +288,39 @@ pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
             _ => unreachable!("held GDN candidates use checkpoint terminals"),
         };
         if terminal_found_fault_v1(verdict)? {
-            // A window terminal compares authenticated projection rows and
-            // state chunks, so it reads no artifact operands.
-            let artifact_openings = if matches!(&evidence, PalwMemoryRoutingEvidenceV2::GdnConvWindow { .. }) {
-                Vec::new()
-            } else {
-                accuser.openings.to_vec()
-            };
-            let mut accusation = PalwMemoryRoutingAccusationV2 {
-                version: PALW_MEMORY_ROUTING_ACCUSATION_VERSION_V2,
-                claim: case.claim.claim,
-                execution_root: case.claim.execution_root,
-                trace_root: case.claim.trace_root,
-                executor_bond: case.claim.executor,
-                accuser_bond: accuser.bond,
-                evidence,
-                artifact_openings,
-                signature: Vec::new(),
-            };
-            let session = palw_memory_routing_session_id_v2(accuser.network_domain, &accusation);
-            accusation.signature = (accuser.sign)(session.as_byte_slice(), PALW_MEMORY_ROUTING_MLDSA87_CONTEXT_V2)
-                .ok_or("no signing key for a GDN accusation")?;
-            return Ok(PalwGdnHeldNextV1::Accuse {
-                object: PalwConsensusObjectV2::MemoryRoutingV2 {
-                    object: Box::new(PalwMemoryRoutingObjectV2::Accused { accusation }),
-                },
-            });
+            let object = action_owner::accusation(&case.claim, evidence, accuser)?;
+            return Ok(PalwGdnHeldNextRetainedV2::Accuse { object });
         }
         // Only an authenticated NoFaultFound advances. Missing material,
         // resource refusal or invalid evidence keeps the case available to retry.
         let next = case.at + 1;
         if next >= case.candidates.len() {
-            return Ok(PalwGdnHeldNextV1::Exhausted);
+            return Ok(PalwGdnHeldNextRetainedV2::Exhausted);
         }
         load_candidate_v1(case, next, material, &mut kernels)?;
     }
 }
 
 // ---- the node's side: one book of cases, one tick -----------------------------------------------------------------------------
+
+/// Legacy raw-object interface. Production uses the retained step and atomic
+/// handoff below; callers extracting raw objects own their destination boundary.
+pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
+    case: &mut PalwGdnHeldCaseV1, material: &Base0GdnMaterialV2<'_>, kernels: impl FnMut() -> K,
+    objects: &[PalwConsensusObjectV2], now: u64, disclose_window: u64, accuser: &PalwGdnHeldAccuserV1<'_>,
+) -> Result<PalwGdnHeldNextV1, String> {
+    use PalwGdnHeldNextRetainedV2 as N;
+    Ok(match palw_gdn_held_step_retained_v2(case, material, kernels, objects, now, disclose_window, accuser).map_err(|e| e.to_string())? {
+        N::Demand { index, unit, object } => {
+            case.demanded = Some((index, now));
+            PalwGdnHeldNextV1::Demand { unit, object: object.into_parts_v1().0 }
+        },
+        N::Accuse { object } => PalwGdnHeldNextV1::Accuse { object: object.into_parts_v1().0 },
+        N::Wait => PalwGdnHeldNextV1::Wait,
+        N::DefaultDue { unit } => PalwGdnHeldNextV1::DefaultDue { unit },
+        N::Exhausted => PalwGdnHeldNextV1::Exhausted,
+    })
+}
 
 /// **What the filer needs of the node** — a seam over the service, so the tick runs against a fixture in the tests.
 pub trait PalwGdnHeldHostV1 {
@@ -404,8 +389,11 @@ impl Base0FpRecomputeKernelsV1 for PalwGdnBoxedKernelsV1<'_> {
 
 /// **One tick**: open a case for every accusable claim not yet seen (the accuser's own recompute decides), step every open case,
 /// and return the objects to carry. A claim whose recompute finds every checkpoint honest is settled `honest` and never demanded.
-pub fn palw_gdn_held_filer_tick_v1<H: PalwGdnHeldHostV1>(host: &H, book: &mut PalwGdnHeldBookV1, now: u64) -> Vec<PalwGdnHeldOutV1> {
-    let mut out = Vec::new();
+pub fn palw_gdn_held_filer_emit_v2<H: PalwGdnHeldHostV1>(
+    host: &H, book: &mut PalwGdnHeldBookV1, now: u64,
+    mut emit: impl FnMut(Hash64, &kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwConsensusObjectV2>)
+        -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>,
+) {
     let claims = host.accusable_claims();
     let live: std::collections::BTreeSet<Hash64> = claims.iter().map(|c| c.claim).collect();
     if let Some(history) = &book.history {
@@ -458,26 +446,36 @@ pub fn palw_gdn_held_filer_tick_v1<H: PalwGdnHeldHostV1>(host: &H, book: &mut Pa
             bond: host.bond(), network_domain: host.network_domain(),
             openings: input.openings(), oracle: input.oracle(), sign: &sign,
         };
-        match palw_gdn_held_step_v1(case, &view, kernels, &objects, observed_daa, host.disclose_window_daa(), &accuser) {
-            Ok(PalwGdnHeldNextV1::Demand { object, .. }) => {
+        match palw_gdn_held_step_retained_v2(case, &view, kernels, &objects, observed_daa, host.disclose_window_daa(), &accuser) {
+            Ok(PalwGdnHeldNextRetainedV2::Demand { index, object, .. }) => {
+                if emit(claim.claim, &object).is_err() { continue; }
                 // A backfilled observation is older than this submission. Its
                 // clock must not shorten a newly queued demand's answer window.
-                if let Some((unit, _)) = case.demanded { case.demanded = Some((unit, now.max(observed_daa))); }
-                out.push((claim.claim, object));
+                case.demanded = Some((index, now.max(observed_daa)));
             }
-            Ok(PalwGdnHeldNextV1::Accuse { object }) => {
-                out.push((claim.claim, object));
+            Ok(PalwGdnHeldNextRetainedV2::Accuse { object }) => {
+                if emit(claim.claim, &object).is_err() { continue; }
                 book.settled.insert(claim.claim, "accused");
             }
-            Ok(PalwGdnHeldNextV1::DefaultDue { .. }) => {
+            Ok(PalwGdnHeldNextRetainedV2::DefaultDue { .. }) => {
                 book.settled.insert(claim.claim, "defaulted");
             }
-            Ok(PalwGdnHeldNextV1::Exhausted) => {
+            Ok(PalwGdnHeldNextRetainedV2::Exhausted) => {
                 book.settled.insert(claim.claim, "exhausted");
             }
-            Ok(PalwGdnHeldNextV1::Wait) | Err(_) => {}
+            Ok(PalwGdnHeldNextRetainedV2::Wait) | Err(_) => {}
         }
     }
+}
+
+/// Compatibility raw collection for historical fixtures. The actual service
+/// retains action ownership and supplies a fallible destination admission.
+pub fn palw_gdn_held_filer_tick_v1<H: PalwGdnHeldHostV1>(host: &H, book: &mut PalwGdnHeldBookV1, now: u64) -> Vec<PalwGdnHeldOutV1> {
+    let mut out = Vec::new();
+    palw_gdn_held_filer_emit_v2(host, book, now, |claim, object| {
+        out.push((claim, (**object).clone()));
+        Ok(())
+    });
     out
 }
 

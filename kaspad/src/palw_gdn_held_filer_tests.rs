@@ -472,3 +472,6 @@ fn refused_next_candidate_preserves_the_current_candidate_and_answers_for_retry(
     load_candidate_v1(&mut case, 1, &w.forged.view(), &mut kernels).expect("the restored material can be retried");
     assert_eq!(case.at, 1);
 }
+
+#[path = "palw_gdn_held_action_owner_tests_v2.rs"]
+mod action_owner_tests;

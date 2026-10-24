@@ -289,13 +289,22 @@ impl PalwPanelService {
             domain: network_domain,
             sign: &sign,
         };
-        for (i, (claim, object)) in palw_gdn_held_filer_tick_v1(&host, book, current_daa).into_iter().enumerate() {
-            let round = PALW_GDN_FILER_ROUND_V1 + i as u32;
-            info!("[{PALW_PANEL}] claim {claim}: the held-GDN filer queues {} (RFC-0006 06-A)", object_name(&object));
-            court_outbox.push_pending((claim, round, false, object));
-            court_outbox.set_due((claim, round, false), current_daa);
-        }
+        gdn_emit_into_outbox_v2(&host, book, current_daa, court_outbox);
     }
+}
+
+fn gdn_emit_into_outbox_v2<H: PalwGdnHeldHostV1>(host: &H, book: &mut PalwGdnHeldBookV1, current_daa: u64, court_outbox: &mut CourtOutboxV1) {
+        let mut queued = 0u32;
+        crate::palw_gdn_held_filer::palw_gdn_held_filer_emit_v2(host, book, current_daa, |claim, object| {
+            let round = PALW_GDN_FILER_ROUND_V1.checked_add(queued).ok_or_else(||
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<CourtOutboxV1>("held GDN outbox round"))?;
+            let next = queued.checked_add(1).ok_or_else(||
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<CourtOutboxV1>("held GDN outbox count"))?;
+            court_outbox.try_push_clone_with_due((claim, round, false), object, current_daa)?;
+            queued = next;
+            info!("[{PALW_PANEL}] claim {claim}: the held-GDN filer queues {} (RFC-0006 06-A)", object_name(object));
+            Ok(())
+        });
 }
 
 #[cfg(test)]
@@ -377,4 +386,27 @@ mod tests {
         host.entries[0].3 = NativeRetainedV1::retain_existing_v1(foreign_prompt).unwrap();
         assert!(host.material(&host.entries[0].0).is_err(), "a different prompt cannot supply evidence");
     }
+
+    #[test]
+    fn retained_service_gdn_demand_uses_atomic_outbox_handoff_before_advancing_book() {
+        let w = crate::palw_gdn_held_filer::tests::world(0);
+        let claim = crate::palw_gdn_held_filer::tests::claim_of(&w.forged, &w);
+        let prompt = w.forged.prompt_token_ids.clone();
+        let mut outsider = claim.executor; outsider.0.index += 1;
+        let sign = |_: &[u8], _: &[u8]| Some(vec![1]);
+        let host = ServiceGdnHostV1 {
+            entries: vec![(claim.clone(), Box::new(w.backend), NativeRetainedV1::retain_existing_v1(w.forged_capture).unwrap(), NativeRetainedV1::retain_existing_v1(prompt).unwrap())],
+            objects: HashMap::new(), history_daa: Some(1), window: 8, bond: outsider,
+            domain: Hash64::from_u64_word(0), sign: &sign,
+        };
+        let mut book = PalwGdnHeldBookV1::default();
+        let mut outbox = CourtOutboxV1::default();
+        gdn_emit_into_outbox_v2(&host, &mut book, 100, &mut outbox);
+        assert_eq!(outbox.pending().len(), 1);
+        assert!(matches!(&outbox.pending()[0].3, PalwConsensusObjectV2::DefaultAccusedHeld { .. }));
+        assert_eq!(book.cases[&claim.claim].demanded.unwrap().1, 100);
+        assert!(!book.settled.contains_key(&claim.claim));
+        assert_eq!(outbox.forget_due(&(claim.claim, PALW_GDN_FILER_ROUND_V1, false)), Some(100));
+    }
+
 }
