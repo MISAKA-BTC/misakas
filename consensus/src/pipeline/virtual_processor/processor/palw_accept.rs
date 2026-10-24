@@ -682,6 +682,9 @@ impl VirtualStateProcessor {
         // The old path's synthetic chain point; unused past the fence.
         let mut rehearsal = *point;
         let mut fee_extras = self.palw_transition_extras_for(point).into_legacy_extras();
+        // Resolve against the accepted parent before pre-object preparation or
+        // synthetic rehearsals move the state. Rehearsals retain this same context.
+        self.palw_attach_source_bootstrap_context_v1(state, point, &mut fee_extras);
         fee_extras.round_fee_incomes = round_fee_incomes.to_vec();
         // G14 lane escrow-rfc08 round 2: the rehearsal's pre-object base settles the same qualified escrow spends the final fold
         // settles (`prepare_block_objects_v1`), so the coordinator reads the same funded-escrow rows in both.
@@ -2309,7 +2312,7 @@ impl VirtualStateProcessor {
             // Lane r6-p2-shared (RFC-0024 A, T15): the fence's DAA, so the fold keys the position terminal on the CLAIM's
             // `accepted_daa` (an older claim keeps the whole-tile close).
             tir_bounded_door_from_daa: self.palw_tir_bounded_door_v1.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()).map(|f| f.daa_score()),
-            // Filled only by for_objects after resolving this state's actual
+            // Filled by the source-only attachment helper against the actual
             // selected parent. A point hash can be a proposed template block.
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
@@ -2483,26 +2486,7 @@ impl VirtualStateProcessor {
         let mut extras = self.palw_transition_extras_for(point).into_legacy_extras();
         extras.model_court_window_active = self.palw_model_court_window_active_at(point.daa_score);
         extras.class_court_windows = self.palw_class_court_windows_for_objects(objects, point.daa_score);
-        if let Some(fence) = self
-            .palw_selected_source_bootstrap_v1
-            .as_ref()
-            .filter(|f| f.at != kaspa_consensus_core::config::params::ForkActivation::never() && f.at.is_active(point.daa_score))
-        {
-            use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault;
-            let result = match state.last_point() {
-                Some(parent) => self.palw_source_bootstrap_own_context_v1(state, parent.block, point.daa_score, &fence.policy),
-                None if point.daa_score <= fence.policy.freeze_cutoff_daa => Ok(None),
-                None => Err(Fault::HistoryUnavailable),
-            };
-            match result {
-                Ok(Some(context)) => match context.into_shared_source_bootstrap_v1() {
-                    Ok(owned) => extras.selected_source_bootstrap_v1 = Some(owned),
-                    Err(coverage) => extras.selected_source_bootstrap_fault_v1 = Some(Fault::Capacity(coverage)),
-                },
-                Ok(None) => {}
-                Err(fault) => extras.selected_source_bootstrap_fault_v1 = Some(fault),
-            }
-        }
+        self.palw_attach_source_bootstrap_context_v1(state, point, &mut extras);
         PalwResolvedBlockInputsV1::at(point, extras)
     }
 

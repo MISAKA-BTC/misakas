@@ -56,6 +56,37 @@ struct Boundary {
 }
 
 impl VirtualStateProcessor {
+    /// Attach only the source epoch observation. Ordinary fee/pre-object inputs
+    /// retain their existing model and class court semantics; object consumers
+    /// can add those fields separately. Resolve before mutating the parent state.
+    pub(in crate::pipeline::virtual_processor) fn palw_attach_source_bootstrap_context_v1(
+        &self,
+        state: &PalwChainStateV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        extras: &mut kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) {
+        if let Some(fence) = self
+            .palw_selected_source_bootstrap_v1
+            .as_ref()
+            .filter(|f| f.at != kaspa_consensus_core::config::params::ForkActivation::never() && f.at.is_active(point.daa_score))
+        {
+            use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault;
+            let result = match state.last_point() {
+                Some(parent) => self.palw_source_bootstrap_own_context_v1(state, parent.block, point.daa_score, &fence.policy),
+                None if point.daa_score <= fence.policy.freeze_cutoff_daa => Ok(None),
+                None => Err(Fault::HistoryUnavailable),
+            };
+            match result {
+                Ok(Some(context)) => match context.into_shared_source_bootstrap_v1() {
+                    Ok(owned) => extras.selected_source_bootstrap_v1 = Some(owned),
+                    Err(coverage) => extras.selected_source_bootstrap_fault_v1 = Some(Fault::Capacity(coverage)),
+                },
+                Ok(None) => {}
+                Err(fault) => extras.selected_source_bootstrap_fault_v1 = Some(fault),
+            }
+        }
+    }
+
     fn source_bootstrap_boundary_v1(
         &self,
         parent: BlockHash,

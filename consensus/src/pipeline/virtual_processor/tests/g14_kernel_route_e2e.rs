@@ -3552,3 +3552,6 @@ mod rfc23_stage1_node;
 // compile their bodies only with `--features g14-t-campaign-merged`: `g14_t_campaign/mod.rs`.
 #[path = "g14_t_campaign/mod.rs"]
 mod g14_t_campaign;
+
+// RFC08: signed selected-source fees/refunds through accepted coinbases, restart and reorg.
+mod source_verifier_economics_v2;
