@@ -118,8 +118,10 @@ impl<K: Clone + Eq + Hash> OverlayAbsentCache<K> {
         let result = read();
         if let Err(StoreError::KeyNotFound(db_key)) = &result {
             if entries.rows.len() == self.limit {
-                // Bounded constant-time eviction; no unbounded recency queue.
-                entries.rows.swap_remove_index(0);
+                // Bounded FIFO metadata movement, without another key queue.
+                // swap_remove would move the newest key into slot zero and
+                // repeatedly evict it while stale middle entries never leave.
+                entries.rows.shift_remove_index(0);
             }
             entries.rows.insert(key, db_key.clone());
         }
@@ -410,3 +412,7 @@ mod tests {
         assert_eq!(cache.read(1, || Ok(value.load(Ordering::SeqCst))).unwrap(), 99);
     }
 }
+
+#[cfg(test)]
+#[path = "overlay_absent_cache/advancing_window_tests.rs"]
+mod advancing_window_tests;

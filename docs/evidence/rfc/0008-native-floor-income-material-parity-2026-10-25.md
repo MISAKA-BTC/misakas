@@ -2,7 +2,7 @@
 
 ## Result and boundary
 
-The focused core tests passed **5/5 in 0.04s**, and the existing state budget-fold regression group passed **30/30 in 0.38s** using the same pinned core binary. The core build completed in **2m55s**. These are private mechanics and existing fold regressions. The subsequent pinned native Typed pruning Run 4 reached actual native Final at DAA 1520, with safe frontier blue score 2758 beyond Release blue score 734; its physical-pruning loop remains live/PENDING. Exact runtime/source records are in [the pruning evidence](0008-typed-native-pruning-2026-10-25.md). Physical pruning and pruned IBD are not yet established.
+The focused core tests passed **5/5 in 0.04s**, and the existing state budget-fold regression group passed **30/30 in 0.38s** using the same pinned core binary. The core build completed in **2m55s**. These are private mechanics and existing fold regressions. The subsequent pinned native Typed pruning Run 4 reached actual native Final at DAA 1520, with safe frontier blue score 2758 beyond Release blue score 734; that run was later intentionally interrupted by the controller after Run 5 startup, without a physical-prune result. Run 5 remains live/PENDING. Exact runtime/source records are in [the pruning evidence](0008-typed-native-pruning-2026-10-25.md). Physical pruning and pruned IBD are not yet established.
 
 - Focused log: `/tmp/misaka-rfc-native-floor-material-budget-tests-20261025.log`.
 - Existing fold regression log: `/tmp/misaka-rfc-native-floor-budget-fold-regression-20261025.log`.
