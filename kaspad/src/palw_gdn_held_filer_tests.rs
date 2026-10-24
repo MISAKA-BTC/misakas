@@ -478,3 +478,6 @@ mod action_owner_tests;
 
 #[path = "palw_gdn_held_answer_owner_tests_v3.rs"]
 mod answer_owner_tests;
+
+#[path = "palw_gdn_held_geometry_owner_tests_v4.rs"]
+mod geometry_owner_tests;

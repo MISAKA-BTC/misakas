@@ -49,6 +49,8 @@ mod action_owner;
 pub use action_owner::{PalwGdnHeldErrorV2, PalwGdnHeldNextRetainedV2};
 #[path = "palw_gdn_held_answer_owner_v3.rs"]
 mod answer_owner;
+#[path = "palw_gdn_held_geometry_owner_v4.rs"]
+mod geometry_owner;
 use kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1;
 
 /// The claim the case pursues, as the chain records it.
@@ -70,10 +72,12 @@ pub struct PalwGdnHeldCaseV1 {
     pub index: u32,
     /// Recurrence transitions first, then Q36 convolution windows, in slot/head order.
     pub candidates: Vec<Base0GdnCheckpointCourtV2>,
+    candidate_owner: geometry_owner::GeometryOwnerV4,
     /// The candidate under demand.
     pub at: usize,
     /// Its units and the answers found so far.
     pub demands: Vec<PalwHeldMissingV1>,
+    demand_owner: Option<geometry_owner::GeometryOwnerV4>,
     pub answers: Vec<Option<NativeRetainedV1<PalwHeldDisclosureV1>>>,
     // Values drop before the reservation for their persistent Option slots.
     answer_slots: Option<answer_owner::AnswerSlotsV3>,
@@ -96,45 +100,6 @@ pub enum PalwGdnHeldNextV1 {
     Exhausted,
 }
 
-/// Every supported checkpoint terminal and head, with the established recurrence order first.
-fn candidates_v1(binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, index: u32) -> Vec<Base0GdnCheckpointCourtV2> {
-    let gdn = kernel_semantics_id_v1(KDESC_Q36_GDN_STEP);
-    let profile = &binding.shape_profile;
-    let mut out = Vec::new();
-    let mut slot = 0u32;
-    while let Some((node, layer)) = profile.resolve_node_slot(slot) {
-        if layer.is_some() && node.kernel_semantics_id == gdn {
-            let mut head = 0u32;
-            while gdn_transition_demands_v2(binding, slot, head, index).is_ok_and(|d| !d.is_empty()) {
-                out.push(Base0GdnCheckpointCourtV2::Transition { node_slot: slot, head });
-                head += 1;
-                if head > 1 << 12 {
-                    break;
-                }
-            }
-        }
-        slot += 1;
-    }
-    // Keep the existing transition order; windows follow it so a conv-only
-    // mismatch is not silently exhausted after all recurrence slices agree.
-    let conv = kernel_semantics_id_v1(KDESC_Q36_SSM_CONV);
-    let mut slot = 0u32;
-    while let Some((node, layer)) = profile.resolve_node_slot(slot) {
-        if layer.is_some() && node.kernel_semantics_id == conv {
-            let mut head = 0u32;
-            while gdn_conv_window_demands_v2(binding, slot, head, index).is_ok_and(|d| !d.is_empty()) {
-                out.push(Base0GdnCheckpointCourtV2::ConvWindow { conv_slot: slot, head });
-                head += 1;
-                if head > 1 << 12 {
-                    break;
-                }
-            }
-        }
-        slot += 1;
-    }
-    out
-}
-
 /// **Open a case**, or `None` when the accuser's own recompute finds every committed checkpoint honest.
 pub fn palw_gdn_held_open_retained_v3<K: Base0FpRecomputeKernelsV1>(
     claim: PalwGdnHeldClaimV1,
@@ -145,11 +110,11 @@ pub fn palw_gdn_held_open_retained_v3<K: Base0FpRecomputeKernelsV1>(
         return Err("the material's binding is not the claim's execution".into());
     }
     let Some(index) = base0_gdn_first_forged_checkpoint_v2(material, kernels())? else { return Ok(None) };
-    let candidates = candidates_v1(material.binding, index);
+    let (candidates, candidate_owner) = geometry_owner::candidates(material.binding)?;
     if candidates.is_empty() {
         return Err(format!("checkpoint {index} is forged but no supported recurrence or convolution terminal reads it").into());
     }
-    let mut case = PalwGdnHeldCaseV1 { claim, index, candidates, at: 0, demands: Vec::new(), answers: Vec::new(), answer_slots: None, demanded: None };
+    let mut case = PalwGdnHeldCaseV1 { claim, index, candidates, candidate_owner, at: 0, demands: Vec::new(), demand_owner: None, answers: Vec::new(), answer_slots: None, demanded: None };
     load_candidate_v1(&mut case, 0, material, &mut kernels)?;
     Ok(Some(case))
 }
@@ -168,12 +133,17 @@ fn load_candidate_v1<K: Base0FpRecomputeKernelsV1>(
     kernels: &mut impl FnMut() -> K,
 ) -> Result<(), PalwGdnHeldErrorV2> {
     let candidate = *case.candidates.get(at).ok_or("GDN candidate outside the case")?;
+    // Covers the pure helper's returned demands, selected-index and layer-list
+    // arrays. Earlier Base0 leg/prefix work remains a separate input boundary.
+    let admission = geometry_owner::DemandAdmissionV4::prepare(material.binding, candidate)?;
     let demands = base0_gdn_forged_checkpoint_demands_v2(material, candidate, case.index, &mut *kernels)?;
+    let owner = admission.finish(&demands, demands.capacity())?;
     let (answers, slots) = answer_owner::slots(demands.len())?;
     // Refused construction must not pair the next candidate with the old
     // candidate's answers on a retry.
     case.at = at;
     case.demands = demands;
+    case.demand_owner = Some(owner);
     case.answers = answers;
     case.answer_slots = Some(slots);
     case.demanded = None;
