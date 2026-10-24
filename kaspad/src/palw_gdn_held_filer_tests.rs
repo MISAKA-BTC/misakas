@@ -460,18 +460,21 @@ fn refused_next_candidate_preserves_the_current_candidate_and_answers_for_retry(
     assert!(matches!(palw_gdn_held_step_v1(&mut case, &w.forged.view(),
         || w.backend.gdn_recompute_kernels_v2().unwrap(), &[], 100, 20, &accuser).unwrap(), PalwGdnHeldNextV1::Demand { .. }));
     let chain: Vec<_> = case.demands.iter().map(|unit| producer_answer(&w, &case.claim, *unit)).collect();
-    note_answers_v1(&mut case, &w.forged.view(), &chain);
+    note_answers_v1(&mut case, &w.forged.view(), &chain).unwrap();
     assert!(case.answers.iter().all(Option::is_some), "retain authenticated answers, not merely empty slots");
     assert!(case.demanded.is_some());
-    let before = (case.at, case.demands.clone(), case.answers.clone(), case.demanded);
+    let before = (case.at, case.demands.clone(), borsh::to_vec(&case.answers).unwrap(), case.demanded);
     let mut unavailable = w.forged.view();
     unavailable.prompt_token_ids = &[];
     let mut kernels = || w.backend.gdn_recompute_kernels_v2().unwrap();
     assert!(load_candidate_v1(&mut case, 1, &unavailable, &mut kernels).is_err());
-    assert_eq!((case.at, case.demands.clone(), case.answers.clone(), case.demanded), before);
+    assert_eq!((case.at, case.demands.clone(), borsh::to_vec(&case.answers).unwrap(), case.demanded), before);
     load_candidate_v1(&mut case, 1, &w.forged.view(), &mut kernels).expect("the restored material can be retried");
     assert_eq!(case.at, 1);
 }
 
 #[path = "palw_gdn_held_action_owner_tests_v2.rs"]
 mod action_owner_tests;
+
+#[path = "palw_gdn_held_answer_owner_tests_v3.rs"]
+mod answer_owner_tests;
