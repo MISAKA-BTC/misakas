@@ -359,7 +359,7 @@ impl DurableMonetaryMaterialProviderV1 {
             root,
             dependency,
             exact,
-            |consent, scope| native.palw_material_generation_authority_v4(root, consent, provider, scope),
+            |consent, scope| native.palw_material_generation_authority_checked_v4(root, consent, provider, scope),
             |consent, scope| {
                 if scope.codec == PalwMaterialCodecV1::NativeHeldCompleteV2 {
                     return Err("V2 routed generation requires its explicit own-authority response API".into());
@@ -387,7 +387,7 @@ impl DurableMonetaryMaterialProviderV1 {
             },
         )
     }
-    // Only a failed initial native authority lookup permits trying another
+    // Only a denied initial native authority lookup permits trying another
     // retained generation. In particular, local allocation / replay / assembly
     // refusals must not turn into a successful fallback under another consent.
     fn answer_current_generation_with_v4<T>(
@@ -396,7 +396,10 @@ impl DurableMonetaryMaterialProviderV1 {
         root: Hash64,
         dependency: Hash64,
         exact: bool,
-        mut authority: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<(), String>,
+        mut authority: impl FnMut(
+            Hash64,
+            &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
+        ) -> Result<(), kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4>,
         mut build: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<T, String>,
     ) -> Result<T, String> {
         let mut last = String::from("no current eligible retained material generation");
@@ -405,14 +408,19 @@ impl DurableMonetaryMaterialProviderV1 {
                 continue;
             }
             if let Err(reason) = authority(consent, scope) {
-                last = reason;
-                continue;
+                match reason {
+                    kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4::Denied(reason) => {
+                        last = reason;
+                        continue;
+                    }
+                    reason => return Err(reason.to_string()),
+                }
             }
             let answer = build(consent, scope)?;
             // Assembly can outlive the authority read across a reorg. Keep the
             // returned owner (and its allocation ticket) through this recheck;
             // a changed generation drops it before any bytes leave this API.
-            authority(consent, scope)?;
+            authority(consent, scope).map_err(|why| why.to_string())?;
             return Ok(answer);
         }
         Err(last)

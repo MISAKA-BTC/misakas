@@ -2,19 +2,22 @@
 //! provider store. Native authority outcomes are injected; these are storage / gate
 //! regressions, not an actual native reorg or provider-host acceptance campaign.
 use super::*;
+use kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4 as AuthorityError;
 use kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1;
 use std::cell::Cell;
 
 fn h(n: u64) -> Hash64 {
     Hash64::from_u64_word(n)
 }
+static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 struct FixtureDir(PathBuf);
 impl FixtureDir {
     fn new() -> Self {
         Self(std::env::temp_dir().join(format!(
-            "misaka-current-provider-{}-{}",
+            "misaka-current-provider-{}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         )))
     }
     fn file(&self) -> PathBuf {
@@ -94,7 +97,7 @@ fn preferred_current_generation_cannot_answer_without_current_authority() {
         false,
         |_, _| {
             calls.set(calls.get() + 1);
-            Err("no current accepted generation".into())
+            Err(AuthorityError::Denied("no current accepted generation".into()))
         },
         |_, _| -> Result<(), String> { panic!("absent current authority must precede response assembly") },
     );
@@ -111,7 +114,7 @@ fn fallback_requires_its_own_authority_and_exact_read_keeps_its_consent() {
     let authority = |consent, _: &_| {
         calls.set(calls.get() + 1);
         if consent == preferred {
-            Err("preferred no longer current".into())
+            Err(AuthorityError::Denied("preferred no longer current".into()))
         } else {
             assert_eq!(consent, fallback);
             Ok(())
@@ -131,7 +134,7 @@ fn fallback_requires_its_own_authority_and_exact_read_keeps_its_consent() {
         true,
         |consent, _| {
             assert_eq!(consent, preferred);
-            Err("exact consent unavailable".into())
+            Err(AuthorityError::Denied("exact consent unavailable".into()))
         },
         |_, _| -> Result<(), String> { panic!("exact read must not use another consent") },
     );
@@ -175,7 +178,7 @@ fn current_generation_capacity_and_reorg_release_actual_answer_owner() {
             if calls.get() == 1 {
                 Ok(())
             } else {
-                Err("generation changed during response assembly".into())
+                Err(AuthorityError::Unavailable("generation changed during response assembly".into()))
             }
         },
         |consent, _| {
@@ -204,4 +207,34 @@ fn current_generation_capacity_and_reorg_release_actual_answer_owner() {
     assert_eq!(calls.get(), 1, "assembly capacity refusal must not become successful consent fallback");
     drop(occupied);
     drop(reserve_native_requests_v1(LIMIT).unwrap());
+}
+
+#[test]
+fn initial_native_capacity_and_unavailable_are_not_generation_denials() {
+    use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+    let dir = FixtureDir::new();
+    let (store, preferred, _, root, _) = typed_store(&dir.file());
+    let refusals = [
+        AuthorityError::Resource(NativeCoverageV1::unsupported::<u64>("authority test", "local reservation refused")),
+        AuthorityError::CapacityUnavailable,
+        AuthorityError::Unavailable("current state unreadable".into()),
+    ];
+    for refusal in refusals {
+        let calls = Cell::new(0);
+        let expected = refusal.to_string();
+        let result = store.answer_current_generation_with_v4(
+            preferred,
+            root,
+            root,
+            false,
+            |consent, _| {
+                calls.set(calls.get() + 1);
+                assert_eq!(consent, preferred, "context/capacity failure must not try another consent");
+                Err(refusal.clone())
+            },
+            |_, _| -> Result<(), String> { panic!("no native authority; no response assembly") },
+        );
+        assert_eq!(result.unwrap_err(), expected);
+        assert_eq!(calls.get(), 1);
+    }
 }

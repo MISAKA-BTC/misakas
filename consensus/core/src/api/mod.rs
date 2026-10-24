@@ -721,12 +721,25 @@ pub trait ConsensusApi: Send + Sync {
     }
     fn palw_material_generation_authority_v4(
         &self,
+        root: Hash64,
+        consent: Hash64,
+        provider: crate::palw_state_v2::PalwBondKeyV2,
+        scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
+    ) -> Result<(), String> {
+        self.palw_material_generation_authority_checked_v4(root, consent, provider, scope).map_err(|why| why.to_string())
+    }
+    /// Typed current authority. The default cannot classify a legacy String override
+    /// and therefore refuses as unavailable instead of guessing from its text.
+    fn palw_material_generation_authority_checked_v4(
+        &self,
         _root: Hash64,
         _consent: Hash64,
         _provider: crate::palw_state_v2::PalwBondKeyV2,
         _scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
-    ) -> Result<(), String> {
-        Err("current native material generation authority unavailable".into())
+    ) -> Result<(), crate::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4> {
+        Err(crate::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4::Unavailable(
+            "current native material generation authority unavailable".into(),
+        ))
     }
     fn palw_kernel_material_replacement_v4(
         &self,

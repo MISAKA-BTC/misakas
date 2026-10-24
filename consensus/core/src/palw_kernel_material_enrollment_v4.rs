@@ -320,6 +320,36 @@ pub fn require_kernel_context_current_v4(
     Ok(())
 }
 
+/// A candidate denial may select another retained consent. Local capacity or
+/// missing / unreadable native context cannot authorize that fallback.
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum PalwMaterialGenerationAuthorityErrorV4 {
+    #[error("{0}")]
+    Resource(crate::palw_native_resource_v1::NativeCoverageV1),
+    /// The candidate-state reader preserves the capacity classification, but
+    /// does not expose its underlying quota detail. Do not invent a byte bound.
+    #[error("material generation native capacity unavailable")]
+    CapacityUnavailable,
+    #[error("{0}")]
+    Denied(String),
+    #[error("{0}")]
+    Unavailable(String),
+}
+
+fn decode_generation_row_v4<T: crate::palw_native_resource_v1::NativeWireScanV1 + borsh::BorshDeserialize>(
+    raw: &[u8],
+) -> Result<NativeRetainedV1<T>, PalwMaterialGenerationAuthorityErrorV4> {
+    use crate::palw_native_resource_v1::{preflight_native_value_v1, retain_native_value_decode_classified_v1, NativeDecodeErrorV1};
+    use PalwMaterialGenerationAuthorityErrorV4 as E;
+    // Malformed wire shape is unavailable state, even when a logical resource
+    // limit is also active. Run this before the reserving classified decoder.
+    preflight_native_value_v1::<T>(raw, raw.len() as u64).map_err(|why| E::Unavailable(why.to_string()))?;
+    retain_native_value_decode_classified_v1(raw, || borsh::from_slice::<T>(raw)).map_err(|why| match why {
+        NativeDecodeErrorV1::Resource(why) => E::Resource(why),
+        NativeDecodeErrorV1::Decode(why) => E::Unavailable(why.to_string()),
+    })
+}
+
 pub fn require_material_generation_current_v4(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -329,41 +359,76 @@ pub fn require_material_generation_current_v4(
     provider: crate::palw_state_v2::PalwBondKeyV2,
     scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
 ) -> Result<(), String> {
+    require_material_generation_current_checked_v4(state, params, now, root, consent, provider, scope).map_err(|why| why.to_string())
+}
+
+pub fn require_material_generation_current_checked_v4(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now: u64,
+    root: Hash64,
+    consent: Hash64,
+    provider: crate::palw_state_v2::PalwBondKeyV2,
+    scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
+) -> Result<(), PalwMaterialGenerationAuthorityErrorV4> {
     use crate::{
-        palw_material_release_recovery_v2::{PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, PalwMaterialRecoveryRowV2},
-        palw_monetary_material_v1::{PALW_MONETARY_MATERIAL_TABLE_V1, PalwMonetaryMaterialRowV1},
-        palw_native_resource_v1::{preflight_native_value_v1, retain_native_value_decode_v1},
+        palw_material_release_recovery_v2::{PalwMaterialRecoveryRowV2, PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2},
+        palw_monetary_material_v1::{PalwMonetaryMaterialRowV1, PALW_MONETARY_MATERIAL_TABLE_V1},
     };
+    use PalwMaterialGenerationAuthorityErrorV4 as E;
     if params.material_release_recovery_at_v2(now).is_none() {
-        return Err("generation fallback requires explicit recovery enrollment".into());
+        return Err(E::Unavailable("generation fallback requires explicit recovery enrollment".into()));
     }
-    let route = state.kernel_route().ok_or("generation native route absent")?;
+    let route = state.kernel_route().ok_or_else(|| E::Unavailable("generation native route absent".into()))?;
     let encoded = |table| {
         route
             .aux
             .iter()
             .find(|((t, k), _)| *t == table && k.as_slice() == root.as_byte_slice())
             .map(|(_, b)| b.as_slice())
-            .ok_or("current material generation absent")
+            .ok_or_else(|| E::Denied("current material generation absent".into()))
     };
     let raw = encoded(PALW_MONETARY_MATERIAL_TABLE_V1)?;
-    preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
-    let monetary =
-        retain_native_value_decode_v1(raw, || borsh::from_slice::<PalwMonetaryMaterialRowV1>(raw)).map_err(|e| e.to_string())?;
+    let monetary = decode_generation_row_v4::<PalwMonetaryMaterialRowV1>(raw)?;
     let manifest = monetary.terms.material_manifest.as_ref().or_else(|| monetary.native_binding.as_ref().map(|b| &b.manifest));
     if monetary.terms.root != root
         || !monetary.providers.iter().any(|p| p.provider == provider && !p.charged)
         || manifest.and_then(|m| m.scope(scope.claim)) != Some(scope)
     {
-        return Err("retained material differs from current native exact provider/scope".into());
+        return Err(E::Denied("retained material differs from current native exact provider/scope".into()));
     }
     let raw = encoded(PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2)?;
-    preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
-    let recovery =
-        retain_native_value_decode_v1(raw, || borsh::from_slice::<PalwMaterialRecoveryRowV2>(raw)).map_err(|e| e.to_string())?;
-    let PalwMaterialRecoveryRowV2::Active(contract) = &*recovery else { return Err("terminal generation cannot answer".into()) };
+    let recovery = decode_generation_row_v4::<PalwMaterialRecoveryRowV2>(raw)?;
+    let PalwMaterialRecoveryRowV2::Active(contract) = &*recovery else {
+        return Err(E::Denied("terminal generation cannot answer".into()));
+    };
     if !contract.generations.iter().any(|g| g.consent == consent && g.providers.contains(&provider)) {
-        return Err("retained provider generation is not currently enrolled".into());
+        return Err(E::Denied("retained provider generation is not currently enrolled".into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod generation_authority_tests {
+    use super::*;
+    #[test]
+    fn classified_generation_row_capacity_is_not_denial_or_malformed_state() {
+        const CHILD: &str = "MISAKA_GENERATION_AUTHORITY_RESOURCE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "palw_kernel_material_enrollment_v4::generation_authority_tests::classified_generation_row_capacity_is_not_denial_or_malformed_state", "--nocapture"])
+                .env(CHILD, "1").status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        use crate::palw_native_resource_v1::{arm_native_logical_limits_v1, NativeSnapshotResourceLimitsV1};
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 }));
+        // Exercise the exact generic row decoder used by the checked authority.
+        // A tiny scalar isolates its reservation / codec classification boundary.
+        assert!(matches!(
+            decode_generation_row_v4::<u64>(&7u64.to_le_bytes()),
+            Err(PalwMaterialGenerationAuthorityErrorV4::Resource(_))
+        ));
+        assert!(matches!(decode_generation_row_v4::<u64>(&[0; 7]), Err(PalwMaterialGenerationAuthorityErrorV4::Unavailable(_))));
+    }
 }

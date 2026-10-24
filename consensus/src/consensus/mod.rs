@@ -2182,23 +2182,44 @@ impl ConsensusApi for Consensus {
         provider: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         scope: &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
     ) -> Result<(), String> {
+        self.palw_material_generation_authority_checked_v4(root, consent, provider, scope).map_err(|why| why.to_string())
+    }
+    fn palw_material_generation_authority_checked_v4(
+        &self,
+        root: kaspa_hashes::Hash64,
+        consent: kaspa_hashes::Hash64,
+        provider: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        scope: &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
+    ) -> Result<(), kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4> {
+        use crate::pipeline::virtual_processor::PalwWeighFaultV2;
+        use kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4 as E;
+        use kaspa_consensus_core::palw_state_v2::PalwStateV2Error as S;
+        let state_fault = |why: S| match why {
+            S::NativeResource(why) => E::Resource(why),
+            S::NativeContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::Capacity(why)) => E::Resource(why),
+            S::NativeContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable) => E::CapacityUnavailable,
+            why => E::Unavailable(why.to_string()),
+        };
         let before = self.lkg_virtual_state.load();
         let now = self.get_virtual_daa_score();
-        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|why| E::Unavailable(why.to_string()))?;
         if !stable || generation.active.is_some() {
-            return Err("material generation import incomplete".into());
+            return Err(E::Unavailable("material generation import incomplete".into()));
         }
         let state = self
             .virtual_processor
             .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
-            .map_err(|e| format!("material generation native state unavailable: {e:?}"))?;
+            .map_err(|why| match why {
+                PalwWeighFaultV2::NativeCapacityUnavailable => E::CapacityUnavailable,
+                why => E::Unavailable(format!("material generation native state unavailable: {why:?}")),
+            })?;
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
         else {
-            return Err("material generation needs ConsensusV2".into());
+            return Err(E::Unavailable("material generation needs ConsensusV2".into()));
         };
-        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
-        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
-        kaspa_consensus_core::palw_kernel_material_enrollment_v4::require_material_generation_current_v4(
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(state_fault)?;
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(state_fault)?;
+        kaspa_consensus_core::palw_kernel_material_enrollment_v4::require_material_generation_current_checked_v4(
             &state,
             &bundle.state,
             now,
@@ -2208,14 +2229,14 @@ impl ConsensusApi for Consensus {
             scope,
         )?;
         let after = self.lkg_virtual_state.load();
-        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|why| E::Unavailable(why.to_string()))?;
         if !stable
             || end.active.is_some()
             || end.epoch != generation.epoch
             || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
             || now != self.get_virtual_daa_score()
         {
-            return Err("material generation native point/import changed".into());
+            return Err(E::Unavailable("material generation native point/import changed".into()));
         }
         Ok(())
     }
