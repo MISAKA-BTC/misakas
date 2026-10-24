@@ -43,6 +43,11 @@ use kaspa_hashes::Hash64;
 use misaka_palw_base0::fp_recompute::Base0FpRecomputeKernelsV1;
 use misaka_palw_base0::gdn_evidence_v2::{Base0GdnEvidenceV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_step_evidence_v2};
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+#[path = "palw_gdn_step_object_owner.rs"]
+mod object_owner;
+pub use object_owner::PalwGdnStepObjectV1;
 
 /// Step tiles re-executed per claim per tick (each is one prefix walk of the accuser's own kernels).
 pub const PALW_GDN_STEP_PROBES_PER_TICK_V1: usize = 2;
@@ -160,10 +165,11 @@ pub fn palw_gdn_step_object_v1(
     openings: &[PalwArtifactOpeningV1],
     limits: PalwGdnCourtLimitsV2,
     sign: &dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>>,
-) -> Result<PalwConsensusObjectV2, String> {
+) -> Result<Arc<PalwGdnStepObjectV1>, String> {
     if accuser == claim.executor {
         return Err("the producer never accuses its own claim".into());
     }
+    let ticket = PalwGdnStepObjectV1::reserve(&refutation, openings).map_err(|e| e.to_string())?;
     let mut accusation = palw_gdn_step_accusation_v1(claim, accuser, leaf, refutation, openings);
     let actual = PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root: claim.artifact_root };
     // The fold's order (`objects.rs`, `GdnStepAccusedV2`): shape at the claim's ladder, then the close ceiling, then the verdict.
@@ -177,9 +183,16 @@ pub fn palw_gdn_step_object_v1(
     let session = palw_gdn_court_session_id_v2(network_domain, &accusation);
     accusation.signature =
         sign(session.as_byte_slice(), PALW_GDN_COURT_MLDSA87_CONTEXT_V2).ok_or("no signing key for a GDN step accusation")?;
+    // The production signer returns the fixed ML-DSA-87 signature. Reject a
+    // callback that violates that trusted bound; this postcondition does not
+    // retroactively authorize an oversized callback allocation.
+    if accusation.signature.len() > kaspa_txscript::MLDSA87_SIG_LEN {
+        return Err("GDN signer exceeded the ML-DSA-87 construction bound".into());
+    }
     // Measured on the SIGNED object — exactly what the fold measures.
     palw_gdn_step_fits_close_v1(&accusation, limits.max_close_bytes).map_err(|e| e.to_string())?;
-    Ok(PalwConsensusObjectV2::GdnStepAccusedV2 { accusation: Box::new(accusation) })
+    let object = PalwConsensusObjectV2::GdnStepAccusedV2 { accusation: Box::new(accusation) };
+    Ok(Arc::new(PalwGdnStepObjectV1::finish(object, ticket)))
 }
 
 /// Why an accusation does not fit the court's close ceiling.
@@ -371,7 +384,7 @@ pub enum PalwGdnStepStageV1 {
     /// Probing served tiles from `cursor`.
     Probing { cursor: usize },
     /// A signed accusation, waiting for (or riding) the carrier.
-    Filed { object: Box<PalwConsensusObjectV2>, leaf: u64, sent: PalwGdnStepSentV1 },
+    Filed { object: Arc<PalwGdnStepObjectV1>, leaf: u64, sent: PalwGdnStepSentV1 },
 }
 
 #[derive(Clone, Debug)]
@@ -517,7 +530,7 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
                 match palw_gdn_step_object_v1(&claim, accuser, network_domain, leaf, *refutation, openings, limits, sign) {
                     Ok(object) => {
                         let case = book.cases.get_mut(claim_id).expect("held above");
-                        case.stage = PalwGdnStepStageV1::Filed { object: Box::new(object), leaf, sent: PalwGdnStepSentV1::default() };
+                        case.stage = PalwGdnStepStageV1::Filed { object, leaf, sent: PalwGdnStepSentV1::default() };
                         notes.push(format!("leaf {leaf}: the step does not recompute — GdnStepAccusedV2 built and signed"));
                     }
                     Err(why) => {
@@ -884,9 +897,20 @@ mod tests {
         let claim = dev_claim(&w);
         let mut book = PalwGdnStepBookV1::default();
         book.open(claim.clone(), 1);
+        // Construct fixture inputs before enabling the quota: this test measures
+        // the signed-object owner's boundary, not earlier material construction.
+        let (leaf, refutation) = material.tiles.tiles.iter().find_map(|(leaf, _)| {
+            let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(
+                &material.binding.shape_profile, &material.binding.job_context, *leaf)?;
+            match base0_gdn_step_evidence_v2(&material, coord, || w.backend.gdn_recompute_kernels_v2().unwrap()).ok()? {
+                Base0GdnEvidenceV2::Step(r) => Some((*leaf, r)),
+                _ => None,
+            }
+        }).expect("a real recurrence step");
         let memory = 16 << 20;
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
         let blocker = reserve_native_requests_v1(memory).unwrap();
+        assert!(PalwGdnStepObjectV1::reserve(&refutation, &w.openings).is_err());
         let sign = |_: &[u8], _: &[u8]| -> Option<Vec<u8>> {
             panic!("an honest step is never signed");
         };
@@ -910,6 +934,19 @@ mod tests {
         assert!(matches!(book.cases[&claim.claim].stage, PalwGdnStepStageV1::Probing { cursor: 0 }));
         drop(blocker);
         assert!(reserve_native_requests_v1(memory).is_ok(), "failed probes leak no court reservations");
+        let ticket = PalwGdnStepObjectV1::reserve(&refutation, &w.openings).unwrap();
+        let accusation = palw_gdn_step_accusation_v1(&claim, bond(2), leaf, *refutation, &w.openings);
+        let owner = Arc::new(PalwGdnStepObjectV1::finish(
+            PalwConsensusObjectV2::GdnStepAccusedV2 { accusation: Box::new(accusation) }, ticket));
+        let shared = Arc::clone(&owner);
+        assert!(Arc::ptr_eq(&owner, &shared));
+        drop(owner);
+        assert!(reserve_native_requests_v1(memory).is_err(), "shared case retains its object ticket");
+        let copied = shared.try_clone_v1().unwrap();
+        drop(shared);
+        assert!(reserve_native_requests_v1(memory).is_err(), "independent copy retains its own ticket");
+        drop(copied);
+        assert!(reserve_native_requests_v1(memory).is_ok(), "object copies release all tickets");
         for _ in 0..=material.tiles.tiles.len() {
             palw_gdn_step_probe_case_v1(
                 &mut book,

@@ -160,7 +160,7 @@ impl PalwPanelService {
         for (claim_id, view, candidate) in views {
             // Copy what this claim's decisions need out of the book; no borrow of it is held below.
             let Some((object, leaf, mut sent)) = book.cases.get(&claim_id).and_then(|case| match &case.stage {
-                PalwGdnStepStageV1::Filed { object, leaf, sent } => Some(((**object).clone(), *leaf, *sent)),
+                PalwGdnStepStageV1::Filed { object, leaf, sent } => Some((std::sync::Arc::clone(object), *leaf, *sent)),
                 PalwGdnStepStageV1::Probing { .. } => None,
             }) else {
                 continue;
@@ -254,9 +254,13 @@ impl PalwPanelService {
                              now {current_daa}; G14 ③)",
                             view.phase, view.deadline_daa
                         );
-                        court_outbox.push_pending((claim_id, PALW_GDN_STEP_ROUND_V1, false, object.clone()));
-                        court_outbox.set_due(accuse_key, current_daa);
-                        sent.accusation = Some((current_daa, 1));
+                        match court_outbox.try_push_clone(accuse_key, &object) {
+                            Ok(()) => {
+                                court_outbox.set_due(accuse_key, current_daa);
+                                sent.accusation = Some((current_daa, 1));
+                            }
+                            Err(why) => warn!("[{PALW_PANEL}] claim {claim_id}: GDN accusation admission refused; retained for retry: {why}"),
+                        }
                     }
                     PalwGdnStepWindowV1::Closed(why) => {
                         warn!("[{PALW_PANEL}] claim {claim_id}: GDN step filer does NOT file — {why}");
@@ -289,11 +293,15 @@ impl PalwPanelService {
                                 "[{PALW_PANEL}] claim {claim_id}: GDN step filer's accusation has no verdict on the selected chain (reorg \
                                  or lost carrier) — re-submitting"
                             );
-                            court_outbox.forget_submitted(&accuse_key);
-                            court_outbox.push_pending((claim_id, PALW_GDN_STEP_ROUND_V1, false, object.clone()));
-                            court_outbox.set_due(accuse_key, current_daa);
-                            let n = sent.accusation.map_or(0, |(_, n)| n);
-                            sent.accusation = Some((current_daa, n.saturating_add(1)));
+                            match court_outbox.try_push_clone(accuse_key, &object) {
+                                Ok(()) => {
+                                    court_outbox.forget_submitted(&accuse_key);
+                                    court_outbox.set_due(accuse_key, current_daa);
+                                    let n = sent.accusation.map_or(0, |(_, n)| n);
+                                    sent.accusation = Some((current_daa, n.saturating_add(1)));
+                                }
+                                Err(why) => warn!("[{PALW_PANEL}] claim {claim_id}: GDN resend admission refused; retained for retry: {why}"),
+                            }
                         }
                         PalwGdnStepResendV1::GiveUp(why) => {
                             warn!("[{PALW_PANEL}] claim {claim_id}: GDN step filer gives up — {why}");
