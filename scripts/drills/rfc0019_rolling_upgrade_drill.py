@@ -560,20 +560,54 @@ class Drill:
                 self.logs[role] = open(folder / 'gateway.log', 'w')
                 self.processes[role] = subprocess.Popen(self.argv(g['argv']), stdout=self.logs[role], stderr=subprocess.STDOUT)
         roles = self.scenario_rolling()
-        node_roles = roles
+
+        def phase_daa(phase):
+            observed = {role: self.daa(role) for role in roles}
+            assert observed and all(daa < self.switch if phase == 'before' else daa >= self.switch
+                                    for daa in observed.values()), \
+                'gateway %s observation is outside the actual switch phase: %r (H=%d)' % (phase, observed, self.switch)
+            return observed
+
+        phase_daa('before')
+        registries_before = {r: self.registry_reading(r)[0] for r in roles}
+        phase_daa('before')
+        assert len({json.dumps(v, sort_keys=True) for v in registries_before.values()}) == 1, \
+            'nodes read different registries below the switch'
         prompt, max_tokens = llm['prompt'], int(llm.get('max_tokens', 32))
-        before = [self.wait(lambda g=g: self.ask_gateway(g, prompt, max_tokens), 'gateway %s before the switch' % g['class_id'])
-                  for g in llm['gateways'] if norm(g['class_id']) in old_ids]
-        self.advance(node_roles, self.switch + self.margin)
-        pairs, _, _ = self.registry_reading(node_roles[0])
-        after = []
-        for g in llm['gateways']:
-            row = self.wait(lambda g=g: self.ask_gateway(g, prompt, max_tokens), 'gateway %s after the switch' % g['class_id'])
+
+        def answers(phase):
+            rows = []
+            for g in llm['gateways']:
+                daa_before = phase_daa(phase)
+                row = self.wait(lambda g=g: self.ask_gateway(g, prompt, max_tokens),
+                                'gateway %s %s the switch' % (g['class_id'], phase))
+                assert row and row['class_id'] == norm(g['class_id']), \
+                    'gateway did not return its pinned id %s %s the switch' % (g['class_id'], phase)
+                row = dict(row, node_daa_before=daa_before, node_daa_after=phase_daa(phase))
+                rows.append(row)
+            assert {r['class_id'] for r in rows} == served, 'not every served id answered %s the switch' % phase
+            return rows
+
+        # A new registered class is already usable at its fixed lower tier before
+        # the annual switch. Its pre-H inference cannot be substituted by post-H success.
+        before = answers('before')
+        self.advance(roles, self.switch + self.margin)
+        phase_daa('after')
+        registries_after = {r: self.registry_reading(r) for r in roles}
+        phase_daa('after')
+        assert len({json.dumps(v, sort_keys=True) for v in registries_after.values()}) == 1, \
+            'upgraded nodes read different registries: %r' % registries_after
+        for role, (pairs, edition, root) in registries_after.items():
+            check_model_add(registries_before[role], pairs, spec, edition)
+            if spec.get('catalog_root_after'):
+                assert root == norm(spec['catalog_root_after']), 'the catalog root in force is not the pinned one'
+        after = answers('after')
+        pairs = next(iter(registries_after.values()))[0]
+        for row in after:
             assert row['class_id'] in pairs, 'gateway class %s is not registered after the switch' % row['class_id']
-            after.append(row)
-        answered = {r['class_id'] for r in after}
-        assert old_ids & served <= answered and new_ids & served <= answered, 'not every served id answered after the switch'
-        self.report['local-llm'] = {'before': before, 'after': after, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest()}
+        self.report['local-llm'] = {'before': before, 'after': after,
+                                   'registries_before': registries_before, 'registries_after': registries_after,
+                                   'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest()}
 
 
 SCENARIOS = ['rolling', 'switch', 'stale', 'boundary', 'restart', 'liveness', 'model-add', 'local-llm']
