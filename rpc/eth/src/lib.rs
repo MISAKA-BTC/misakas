@@ -35,6 +35,8 @@ pub mod codes {
 /// §9: the RFC 6455 WebSocket transport (`eth_subscribe`). A `serve_conn` that
 /// sees an `Upgrade: websocket` request hands the socket to [`ws::serve_ws`].
 mod ws;
+#[cfg(test)]
+mod full_block_tests;
 
 /// An error surfaced through the JSON-RPC `error` member.
 #[derive(Debug, Clone)]
@@ -911,15 +913,25 @@ async fn resolve_block(provider: &Arc<dyn EthProvider>, id: BlockId) -> EthResul
 
 /// Fetch full tx objects for a block iff `full` (the `fullTransactionObjects`
 /// boolean param), else `None` so [`render_block`] emits hashes (audit H-04).
+/// Missing bodies or a lookup at another block/position fail the complete request;
+/// a successful full block never silently omits or re-contextualizes a transaction.
 async fn full_txs_for(provider: &Arc<dyn EthProvider>, b: &EthBlock, full: bool) -> EthResult<Option<Vec<EthTx>>> {
     if !full {
         return Ok(None);
     }
     let mut out = Vec::with_capacity(b.tx_hashes.len());
-    for h in &b.tx_hashes {
-        if let Some(tx) = provider.transaction_by_hash(*h).await? {
-            out.push(tx);
+    for (index, h) in b.tx_hashes.iter().enumerate() {
+        let tx = provider.transaction_by_hash(*h).await?.ok_or_else(|| {
+            EthRpcError::server("full transaction data for the requested block is unavailable; retry or request hashes")
+        })?;
+        if tx.hash != *h {
+            return Err(EthRpcError::server("full transaction lookup returned another transaction identity"));
         }
+        let index = u32::try_from(index).map_err(|_| EthRpcError::server("full block transaction index exceeds native width"))?;
+        if tx.block_hash != Some(b.hash) || tx.block_number != Some(b.number) || tx.tx_index != Some(index) {
+            return Err(EthRpcError::server("full transaction block context changed or is unavailable"));
+        }
+        out.push(tx);
     }
     Ok(Some(out))
 }

@@ -832,10 +832,37 @@ class AcceptanceRun:
         def read(role):
             url = self.drill.plan['nodes'][role]['eth']
             return O.bracketed(self.drill, role, label, lambda rpc, dag, node: O.evm_value(url, accounts, timeout))
-        rows = self.parallel(roles, read)
-        if len({row['value']['ethLatestHash'] for row in rows}) != 1:
+        rows = self.same_sink(self.parallel(roles, read), label)
+        if len({row['dag']['virtualDaaScore'] for row in rows}) != 1:
+            raise J.Pending('%s: native DAA differs across balance reads' % label)
+        if len({(row['value']['ethLatestHash'], row['value']['ethLatestNumber']) for row in rows}) != 1:
             raise J.Pending('%s: ETH latest differs across processes' % label)
+        if len({tuple(sorted(row['value']['balances'].items())) for row in rows}) != 1:
+            raise J.Violation('%s: processes at one ETH block disagree on account balances' % label)
         return rows
+
+    def evm_reconciliation(self, roles, label, account, first, parent_hash, deadline):
+        """Balance and gas interval at one own JOIN native generation and one frozen ETH endpoint."""
+        rows = self.evm_set(roles, label, [account])
+        reference = next((row for row in rows if row['role'] == 'JOIN'), None)
+        if reference is None:
+            raise J.NotObservable('EVM reconciliation requires its own JOIN balance observation')
+        def remaining():
+            left = min(self.remaining(), deadline - time.monotonic())
+            if left <= 0:
+                raise WaitTimeout('the predeclared EVM reconciliation phase deadline expired')
+            return left
+        def body(rpc, dag, node):
+            if O.context(dag, node) != O.context(reference['dag'], reference['node']):
+                raise O.ContextMoved('gas scan is not at the JOIN balance generation')
+            spends = O.evm_spends(self.drill.plan['nodes']['JOIN']['eth'], account, first,
+                reference['value']['ethLatestNumber'], min(self.bounds['probeTimeoutSeconds'], remaining()),
+                self.plan['scan']['maximumScannedEvmBlocks'], parent_hash=parent_hash,
+                last_hash=reference['value']['ethLatestHash'], remaining=remaining)
+            return dict(spends=spends, ethLatestHash=reference['value']['ethLatestHash'],
+                ethLatestNumber=reference['value']['ethLatestNumber'])
+        fees = O.bracketed(self.drill, 'JOIN', label + '-gas', body)
+        return rows, fees
 
     @staticmethod
     def credit_rows(rows, account):
@@ -856,7 +883,8 @@ class AcceptanceRun:
         before = self.wait(lambda: self.evm_set(self.live(PRIMARY), 'bridge-before', accounts), 'EVM balances before deposit')
         self.rows.extend(before)
         self.bridge.update(beforeWei={account: before[0]['value']['balances'][account] for account in accounts},
-                           beforeEthNumber=before[0]['value']['ethLatestNumber'])
+                           beforeEthNumber=before[0]['value']['ethLatestNumber'],
+                           beforeEthHash=before[0]['value']['ethLatestHash'])
         self.bridge['destinationsBefore'] = {}
         for name, address in (('withdrawal', bridge['withdrawal']['destinationAddress']),
                               ('refund', bridge['refund']['destinationAddress'])):
@@ -945,12 +973,14 @@ class AcceptanceRun:
 
         def positions(label):
             def read(role):
-                def body(rpc, dag, node):
-                    answer = rpc.call('getPalwModelPositions', {'holder': market['holderId']})
-                    units = sum(row['units'] for row in answer.get('positions') or [] if J.norm(row.get('lineId')) == market['lineId'])
-                    return dict(tipHash=answer.get('tipHash'), units=units)
-                return O.bracketed(self.drill, role, label, body)
-            return self.parallel(roles, read)
+                return O.bracketed(self.drill, role, label,
+                    lambda rpc, dag, node: O.model_position_value(rpc, dag, market['holderId'], market['lineId']))
+            rows = self.same_sink(self.parallel(roles, read), label)
+            if len({row['value']['tipDaa'] for row in rows}) != 1:
+                raise J.Pending('%s: model position DAA differs across processes' % label)
+            if len({row['value']['units'] for row in rows}) != 1:
+                raise J.Violation('processes at one native tip disagree on the market position baseline or fill')
+            return rows
         before = self.wait(lambda: positions('market-before'), 'positions before the market step')
         self.rows.extend(before)
         units = before[0]['value']['units']
@@ -1121,12 +1151,13 @@ class AcceptanceRun:
             point_rows = self.wait(withdrawal_points, 'the synthetic withdrawal outpoint materializes')
             self.rows.extend(point_rows)
             self.bridge['effectPoints'].update(point_rows[0]['value']['pointStates'])
-            evm = self.wait(lambda: self.evm_set(self.live(PRIMARY), 'withdrawal-evm', [bridge['evmAddress']]),
-                            'EVM balance after the withdrawal')
+            reconciliation_deadline = min(self.deadline, time.monotonic() + self.bounds['phaseTimeoutSeconds'])
+            evm, gas_row = self.wait(lambda: self.evm_reconciliation(self.live(PRIMARY), 'withdrawal-evm',
+                bridge['evmAddress'], self.bridge['beforeEthNumber'] + 1, self.bridge['beforeEthHash'], reconciliation_deadline),
+                'EVM balance and frozen gas history after the withdrawal')
             self.rows.extend(evm)
-            url = drill.plan['nodes']['JOIN']['eth']
-            spends = O.evm_spends(url, bridge['evmAddress'], self.bridge['beforeEthNumber'] + 1, evm[0]['value']['ethLatestNumber'],
-                                  self.bounds['probeTimeoutSeconds'], self.plan['scan']['maximumScannedEvmBlocks'])
+            self.rows.append(gas_row)
+            spends = gas_row['value']['spends']
             gas = sum(spend['gasWei'] for spend in spends)
             self.bridge.update(evmSpends=spends, gasWei=gas)
             if gas > int(withdrawal['maximumGasWei']):

@@ -220,39 +220,157 @@ def amounts_of(entries):
             for entry in entries}
 
 
+def _eth_quantity(value, name, bits):
+    if not isinstance(value, str) or re.fullmatch('0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)', value) is None:
+        raise NotObservable(name + ' is not a canonical ETH quantity')
+    number = int(value, 16)
+    if number >= 2**bits:
+        raise NotObservable(name + ' exceeds its native unsigned width')
+    return number
+
+
+def _eth_head_stamp(block):
+    if not isinstance(block, dict) or not isinstance(block.get('hash'), str) \
+            or re.fullmatch('0x[0-9a-fA-F]{64}', block['hash']) is None:
+        raise NotObservable('ETH latest omitted its actual 32-byte block hash')
+    return norm(block['hash']), _eth_quantity(block.get('number'), 'ETH latest number', 64)
+
+
 def evm_value(eth_url, accounts, timeout):
     latest = eth_result(eth_url, 'eth_getBlockByNumber', ['latest', False], timeout)
     if latest is None:
         raise Pending('no executed ETH latest block yet')
-    number = latest['number']
+    stamp = _eth_head_stamp(latest)
+    block_hash = latest['hash']
+    # The adapter already implements EIP-1898. Numeric selectors can resolve to
+    # another block during a same-height reorg, mixing balances under this hash.
+    selector = dict(blockHash=block_hash, requireCanonical=True)
     balances = {}
     for account in accounts:
-        balance = eth_result(eth_url, 'eth_getBalance', [account, number], timeout)
-        balances[account] = int(balance, 16)
-    return dict(ethLatestHash=norm(latest['hash']), ethLatestNumber=int(number, 16), balances=balances)
+        balance = eth_result(eth_url, 'eth_getBalance', [account, selector], timeout)
+        balances[account] = _eth_quantity(balance, 'ETH account balance', 256)
+    after = eth_result(eth_url, 'eth_getBlockByNumber', ['latest', False], timeout)
+    if after is None or _eth_head_stamp(after) != stamp:
+        raise ContextMoved('ETH latest moved while reading hash-pinned account balances')
+    return dict(ethLatestHash=stamp[0], ethLatestNumber=stamp[1], balances=balances)
 
 
-def evm_spends(eth_url, sender, first, last, timeout, bound):
-    """Gas and value of every executed EVM transaction from `sender` in [first, last], from blocks and receipts."""
-    if last < first:
+def model_position_value(rpc, dag, holder, line):
+    """Read one position from the actual native API, refusing a stale cached tip or malformed zero fallback."""
+    answer = rpc.call('getPalwModelPositions', {'holder': holder})
+    if not isinstance(answer, dict) or norm(answer.get('holder')) != norm(holder):
+        raise NotObservable('model position response does not name the requested holder')
+    tip, daa = answer.get('tipHash'), answer.get('tipDaa')
+    if not isinstance(tip, str) or not tip or type(daa) is not int or not 0 <= daa < 2**64:
+        raise NotObservable('model positions omitted an exact native tip')
+    if norm(tip) != norm(dag['sink']) or daa != dag['virtualDaaScore']:
+        raise Pending('model position snapshot is not at the bracketed native tip')
+    positions = answer.get('positions')
+    if not isinstance(positions, list):
+        raise NotObservable('model position rows unavailable; cannot infer zero units')
+    units, seen = 0, set()
+    for position in positions:
+        if not isinstance(position, dict):
+            raise NotObservable('malformed native model position row')
+        identity, amount = norm(position.get('lineId')), position.get('units')
+        if not isinstance(identity, str) or re.fullmatch('[0-9a-f]{128}', identity) is None \
+                or type(amount) is not int or not 0 <= amount < 2**64:
+            raise NotObservable('model position identity or units are not native values')
+        if identity in seen:
+            raise NotObservable('model position response repeats a line')
+        seen.add(identity)
+        if identity == norm(line):
+            units = amount
+    return dict(tipHash=norm(tip), tipDaa=daa, units=units)
+
+
+def evm_spends(eth_url, sender, first, last, timeout, bound, *, parent_hash, last_hash, remaining=None):
+    """Fees for one hash-linked interval after the before-balance block through the after-balance block.
+
+    Blocks come from immutable hash selectors. Numeric endpoint checks only establish
+    current canonical membership, never select transaction/receipt data by height.
+    The caller brackets this scan with the same native generation as its balance.
+    """
+    if type(first) is not int or type(last) is not int or not 1 <= first < 2**64 or not 0 <= last < 2**64 \
+            or type(bound) is not int or bound <= 0:
+        raise NotObservable('invalid finite EVM reconciliation interval')
+    if last < first - 1 or last - first + 1 > bound:
+        raise NotObservable('the EVM block scan exceeds or contradicts its predeclared bound')
+    def expected_hash(value):
+        value = norm(value)
+        if not isinstance(value, str) or re.fullmatch('[0-9a-f]{64}', value) is None:
+            raise NotObservable('EVM reconciliation endpoint is not an actual 32-byte hash')
+        return value
+    parent_hash, last_hash = expected_hash(parent_hash), expected_hash(last_hash)
+    def read(method, params):
+        allowed = min(timeout, remaining()) if remaining is not None else timeout
+        if allowed <= 0:
+            raise NotObservable('EVM reconciliation read budget expired')
+        value = eth_result(eth_url, method, params, allowed)
+        if remaining is not None:
+            remaining()
+        return value
+    def canonical_endpoint():
+        block = read('eth_getBlockByNumber', [hex(last), False])
+        if block is None or _eth_head_stamp(block) != (last_hash, last):
+            raise ContextMoved('the frozen EVM reconciliation endpoint left the canonical chain')
+    canonical_endpoint()
+    if last == first - 1:
+        if last_hash != parent_hash:
+            raise ContextMoved('an empty EVM interval changed its before-balance hash')
         return []
-    if last - first + 1 > bound:
-        raise NotObservable('the EVM block scan exceeds its predeclared bound')
-    spends = []
-    for number in range(first, last + 1):
-        block = eth_result(eth_url, 'eth_getBlockByNumber', [hex(number), True], timeout)
+    target, blocks_seen, transactions_seen, groups = last_hash, set(), set(), []
+    for number in range(last, first - 1, -1):
+        if target in blocks_seen:
+            raise NotObservable('EVM reconciliation contains a cyclic block path')
+        blocks_seen.add(target)
+        block = read('eth_getBlockByHash', ['0x' + target, True])
         if block is None:
-            raise Pending('ETH block %d is not executed yet' % number)
-        for tx in block.get('transactions') or []:
-            if norm(tx.get('from')) != norm(sender):
+            raise Pending('frozen EVM block data is unavailable')
+        if _eth_head_stamp(block) != (target, number):
+            raise NotObservable('EVM hash walk returned another block or skipped a block number')
+        parent = block.get('parentHash')
+        if not isinstance(parent, str) or re.fullmatch('0x[0-9a-fA-F]{64}', parent) is None:
+            raise NotObservable('EVM block omitted its actual parent hash')
+        transactions = block.get('transactions')
+        if not isinstance(transactions, list):
+            raise NotObservable('full EVM transaction bodies are unavailable')
+        spends = []
+        for index, tx in enumerate(transactions):
+            if remaining is not None:
+                remaining()
+            if not isinstance(tx, dict) or not isinstance(tx.get('hash'), str) \
+                    or re.fullmatch('0x[0-9a-fA-F]{64}', tx['hash']) is None \
+                    or not isinstance(tx.get('from'), str) or re.fullmatch('0x[0-9a-fA-F]{40}', tx['from']) is None:
+                raise NotObservable('full EVM transaction identity is unavailable')
+            txid = norm(tx['hash'])
+            if txid in transactions_seen:
+                raise NotObservable('EVM reconciliation repeats a transaction')
+            transactions_seen.add(txid)
+            if norm(tx['from']) != norm(sender):
                 continue
-            receipt = eth_result(eth_url, 'eth_getTransactionReceipt', [tx['hash']], timeout)
+            receipt = read('eth_getTransactionReceipt', [tx['hash']])
             if receipt is None:
-                raise Pending('receipt of %s not served yet' % tx['hash'])
-            spends.append(dict(hash=norm(tx['hash']), block=number, valueWei=int(tx['value'], 16),
-                               gasWei=int(receipt['gasUsed'], 16) * int(receipt['effectiveGasPrice'], 16),
-                               status=receipt.get('status')))
-    return spends
+                raise Pending('receipt of %s is unavailable' % tx['hash'])
+            if not isinstance(receipt, dict):
+                raise NotObservable('EVM receipt body is malformed')
+            if norm(receipt.get('transactionHash')) != txid or norm(receipt.get('blockHash')) != target \
+                    or _eth_quantity(receipt.get('blockNumber'), 'receipt block number', 64) != number \
+                    or _eth_quantity(receipt.get('transactionIndex'), 'receipt transaction index', 64) != index:
+                raise ContextMoved('EVM receipt is not for the frozen block/transaction position')
+            status = _eth_quantity(receipt.get('status'), 'receipt status', 8)
+            if status not in (0, 1):
+                raise NotObservable('EVM receipt status is neither success nor failure')
+            spends.append(dict(hash=txid, block=number, blockHash=target,
+                valueWei=_eth_quantity(tx.get('value'), 'EVM transaction value', 256),
+                gasWei=_eth_quantity(receipt.get('gasUsed'), 'receipt gas used', 64) *
+                    _eth_quantity(receipt.get('effectiveGasPrice'), 'receipt gas price', 256), status=receipt['status']))
+        groups.append(spends)
+        target = norm(parent)
+    if target != parent_hash:
+        raise ContextMoved('EVM fee history does not descend from the before-balance block')
+    canonical_endpoint()
+    return [spend for group in reversed(groups) for spend in group]
 
 
 class AnchorReorged(NotObservable):
