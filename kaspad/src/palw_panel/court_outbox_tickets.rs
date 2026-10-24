@@ -32,7 +32,9 @@ impl CourtPayloadTicketsV1 {
         self.head = Some(Box::new(Entry { key, _payload: payload, _slot: slot, next: self.head.take() }));
     }
     pub(super) fn start_flush(&mut self) {
-        assert!(!self.in_flight, "court outbox batch already in flight");
+        // A canceled carrier future may have dropped its raw batch without
+        // finishing. Keep those tickets conservatively until the next flush;
+        // cancellation must not make the following tick panic.
         self.in_flight = true;
     }
     pub(super) fn finish_flush(&mut self, pending: &[CourtMoveV1]) {

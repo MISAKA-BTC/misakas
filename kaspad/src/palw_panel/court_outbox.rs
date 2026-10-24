@@ -213,6 +213,13 @@ mod tests {
         owner.finish_flush(Vec::new());
         assert!(owner.payload_tickets.is_empty());
         assert!(reserve_native_requests_v1(memory).is_ok(), "last payload and its tickets released");
+        owner.try_push_clone(source_key, &source.3).unwrap();
+        drop(owner.take_priority()); // Carrier future canceled before finish_flush.
+        assert!(reserve_native_requests_v1(memory).is_err());
+        let next = owner.take_priority();
+        assert!(next.is_empty());
+        owner.finish_flush(next);
+        assert!(reserve_native_requests_v1(memory).is_ok(), "next flush cleans up canceled batch tickets");
     }
 
     #[test]
