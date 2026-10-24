@@ -218,7 +218,7 @@ mod palw_court_shared_material_intake_fold_v1;
 mod palw_tir_public_fold_v1;
 pub use palw_tir_public_fold_v1::{
     PalwFundedOriginalCandidateV1, palw_funded_original_candidate_v1, palw_funded_original_answer_candidate_v1,
-    PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1, palw_tir_public_conviction_preflight_v1, palw_tir_public_original_quote_v1,
+    PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1, palw_tir_public_conviction_preflight_v1, palw_tir_public_staged_conviction_preflight_v2, palw_tir_public_original_quote_v1,
     palw_tir_public_preclaim_quote_v1,
 };
 #[path = "palw_terminal_carriage_fold_v1.rs"]

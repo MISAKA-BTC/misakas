@@ -110,6 +110,55 @@ impl CourtOutboxV1 {
         self.due.insert(key,due);
         Ok(())
     }
+    /// Filer payload copies also retain host demand when native quotas are off.
+    /// Both quota families precede Clone; no queue/due publication on refusal.
+    pub(super) fn try_push_filer_clone_with_due_v2(
+        &mut self,
+        key: CourtMoveKeyV1,
+        source: &PalwConsensusObjectV2,
+        due: u64,
+    ) -> Result<(), NativeCoverageV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1;
+        let payload = source.native_heap_v1("TIR filer court payload");
+        let bytes = payload
+            .bytes()
+            .ok_or(payload)?
+            .checked_add(CourtPayloadTicketsV1::host_slot_bytes()?)
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("TIR filer host payload"))?;
+        let host = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-tir-filer-court-payload",
+                    class_id: Default::default(),
+                    job: key.0,
+                },
+                bytes,
+            )
+            .map_err(|_| NativeCoverageV1::unsupported::<Self>("TIR filer court payload", "host ledger admission refused"))?;
+        let slot = self.payload_tickets.prepare()?;
+        let frame = crate::palw_rider_outbox::RiderBatchV2::reserve_court_due(self.due.len(), self.due.capacity())?;
+        let capacity = self
+            .pending
+            .len()
+            .checked_add(1)
+            .map(|n| n.max(self.pending.capacity()))
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("TIR filer court frame"))?;
+        let pending = CourtFrameLeaseV1::reserve(capacity)?;
+        let copy = NativeRetainedV1::try_from_clone_v1(source)?;
+        // Actual capacity may grow even if a later allocation refuses; keep
+        // the complete metadata tickets before making those allocation calls.
+        self.pending_frame = Some(pending);
+        self.rider_due_frame = frame;
+        self.pending
+            .try_reserve_exact(1)
+            .map_err(|_| NativeCoverageV1::unsupported::<Self>("TIR filer court frame", "allocation refused"))?;
+        self.due.try_reserve(1).map_err(|_| NativeCoverageV1::unsupported::<Self>("TIR filer court due", "allocation refused"))?;
+        let (object, ticket) = copy.into_parts_v1();
+        self.payload_tickets.insert_with_host(key, ticket, slot, Some(host));
+        self.pending.push((key.0, key.1, key.2, object));
+        self.due.insert(key, due);
+        Ok(())
+    }
     pub(super) fn try_push_source_response(&mut self,key:CourtMoveKeyV1,source:&PalwConsensusObjectV2,due:u64,snapshot:SourceResponseSnapshotV1,memory:crate::palw_memory_ledger::PalwMemoryReservationV1,packet:Option<crate::palw_memory_ledger::PalwMemoryReservationV1>)->Result<(),NativeCoverageV1> {
         let guard=CourtSourceResponsesV1::prepare(key,due,snapshot,memory,packet,source)?;
         self.try_push_clone_with_due(key,source,due)?;

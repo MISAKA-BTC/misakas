@@ -7,6 +7,32 @@ mod source_bootstrap_v1;
 #[path = "routed_material_v2.rs"]
 mod routed_material_v2;
 
+// Capacity/context failures are retry, never a semantic conviction refusal.
+fn tir_conviction_preflight_outcome_v2(
+    result: Result<(), kaspa_consensus_core::palw_state_v2::PalwStateV2Error>,
+) -> Result<Option<Result<(), String>>, String> {
+    use kaspa_consensus_core::palw_state_v2::PalwStateV2Error as E;
+    match result {
+        Err(why @ (E::NativeResource(_) | E::NativeContextUnavailable(_))) => Err(why.to_string()),
+        other => Ok(Some(other.map_err(|why| why.to_string()))),
+    }
+}
+
+#[cfg(test)]
+mod tir_preflight_fault_tests_v2 {
+    use super::tir_conviction_preflight_outcome_v2;
+    use kaspa_consensus_core::{palw_native_resource_v1::NativeCoverageV1,palw_state_v2::PalwStateV2Error as E,palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C};
+    #[test]
+    fn staged_conviction_preflight_native_faults_retry_semantic_refusal_does_not() {
+        assert!(tir_conviction_preflight_outcome_v2(Err(E::NativeResource(NativeCoverageV1::overflow::<u8>("test preflight")))).is_err());
+        for fault in [C::HistoryUnavailable,C::StoreUnreadable,C::CapacityUnavailable] {
+            assert!(tir_conviction_preflight_outcome_v2(Err(E::NativeContextUnavailable(fault))).is_err());
+        }
+        assert!(matches!(tir_conviction_preflight_outcome_v2(Err(E::MissingClaim(Default::default()))),Ok(Some(Err(_)))));
+        assert!(matches!(tir_conviction_preflight_outcome_v2(Ok(())),Ok(Some(Ok(())))));
+    }
+}
+
 impl VirtualStateProcessor {
     /// **The 2026-09-23 Position route matrix, P-B3, at the mempool and at the template: the fold's
     /// market gate on a carrier before it relays and before it is mined.**
@@ -1480,11 +1506,30 @@ impl VirtualStateProcessor {
             return Ok(None);
         }
         let extras = self.palw_transition_extras_for(point);
-        Ok(Some(
+        tir_conviction_preflight_outcome_v2(
             kaspa_consensus_core::palw_state_v2::palw_tir_public_conviction_preflight_v1(
                 &state, params, &extras, next, filer, claim, &evidence,
-            )
-            .map_err(|e| e.to_string()),
+            ),
+        )
+    }
+
+    pub fn palw_tir_public_staged_conviction_preflight_v2_impl(
+        &self,
+        filer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        claim: kaspa_consensus_core::Hash64,
+        evidence: &kaspa_consensus_core::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+    ) -> Result<Option<Result<(), String>>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let point = state.last_point().ok_or("TIR staged preflight snapshot has no accepted clock")?;
+        let next = point.daa_score.saturating_add(1);
+        if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(next)) {
+            return Ok(None);
+        }
+        let extras = self.palw_transition_extras_for(point);
+        tir_conviction_preflight_outcome_v2(kaspa_consensus_core::palw_state_v2::palw_tir_public_staged_conviction_preflight_v2(
+            &state, params, &extras, next, filer, claim, evidence,
         ))
     }
 

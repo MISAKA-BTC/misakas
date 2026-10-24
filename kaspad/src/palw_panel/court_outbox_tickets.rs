@@ -10,6 +10,7 @@ struct Entry {
     key: CourtMoveKeyV1,
     _payload: Ticket,
     _slot: Ticket,
+    _host: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
     next: Option<Box<Entry>>,
 }
 #[derive(Default)]
@@ -28,11 +29,26 @@ impl CourtPayloadTicketsV1 {
             .ok_or_else(|| NativeCoverageV1::overflow::<Entry>(component))?;
         reserve_native_requests_v1(bytes)
     }
+    pub(super) fn host_slot_bytes() -> Result<u64, NativeCoverageV1> {
+        size_of::<Entry>()
+            .checked_mul(2)
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or_else(|| NativeCoverageV1::overflow::<Entry>("court host payload ticket"))
+    }
     pub(super) fn insert(&mut self, key: CourtMoveKeyV1, payload: Ticket, slot: Ticket) {
-        if payload.is_none() && slot.is_none() {
+        self.insert_with_host(key, payload, slot, None);
+    }
+    pub(super) fn insert_with_host(
+        &mut self,
+        key: CourtMoveKeyV1,
+        payload: Ticket,
+        slot: Ticket,
+        host: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+    ) {
+        if payload.is_none() && slot.is_none() && host.is_none() {
             return;
         }
-        self.head = Some(Box::new(Entry { key, _payload: payload, _slot: slot, next: self.head.take() }));
+        self.head = Some(Box::new(Entry { key, _payload: payload, _slot: slot, _host: host, next: self.head.take() }));
     }
     pub(super) fn start_flush(&mut self) {
         // A canceled carrier future may have dropped its raw batch without

@@ -549,6 +549,35 @@ pub fn palw_tir_public_conviction_preflight_v1(
     apply_conviction_v1(&mut builder, &ctx, &frame, filer, evidence)
 }
 
+/// Explicit local dry run of a COMPLETE staged witness. Ordinary control shape
+/// and decoder bounds remain unchanged. The same accepted frame and adjudicator
+/// used by the last witness part decide the outcome; no journal authority exists.
+pub fn palw_tir_public_staged_conviction_preflight_v2(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    next_daa: u64,
+    filer: PalwBondKeyV2,
+    claim: Hash64,
+    evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_resource_v1::{NativeHeapV1, reserve_native_requests_v1};
+    let scratch = evidence.native_heap_v1("staged TIR preflight shape copy");
+    let bytes = scratch.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(scratch))?;
+    let _shape = reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?;
+    evidence.check_staged_v1().map_err(refused)?;
+    let frame = palw_tir_public_claim_v1(base, claim).ok_or_else(|| refused("TIR staged preflight: no ORIGINAL frame"))?;
+    frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
+    let length = borsh::object_length(evidence).map_err(|_| refused("TIR staged preflight evidence length overflow"))?;
+    if length as u64 > frame.plan_v1().terminal.maximum_witness_bytes {
+        return Err(refused("TIR staged preflight exceeds the ORIGINAL frame's prepaid witness ceiling"));
+    }
+    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    rules(&builder)?;
+    let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: next_daa, blue_score: 0, subsidy: 0 };
+    apply_conviction_v1(&mut builder, &ctx, frame, filer, evidence)
+}
+
 /// All inputs are transaction-local original material or resolved native state.
 /// The ordinary FP signature/price/admission path must also accept that SAME
 /// original object. No row is written by this preparation step.
@@ -2263,6 +2292,81 @@ mod conviction_e2e_tests {
     #[test]
     fn rooted_service_hold_does_not_block_streamed_fraud_conviction() {
         staged_witness_with_service_hold(true);
+    }
+    #[test]
+    fn staged_conviction_preflight_uses_actual_terminal_adjudicator_and_keeps_ordinary_bound() {
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let rows_root =
+            crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+        let lying_fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_lying_output_v1(4, h(0xBAD));
+        let frame = credited_frame(&lying_fx);
+        let (state, params, extras) = world(&lying_fx, &frame);
+        let evidence = Evidence::Output { rows_root, ids: fx.execution.generated.clone() };
+        let next = at(&frame, 1).daa_score;
+        let claim = frame.plan_v1().original_claim;
+        // Same authentic tiny output finding as the complete-last-part test.
+        palw_tir_public_conviction_preflight_v1(&state, &params, &extras, next, outsider(), claim, &evidence).unwrap();
+        palw_tir_public_staged_conviction_preflight_v2(&state, &params, &extras, next, outsider(), claim, &evidence).unwrap();
+        let large = Evidence::Output {
+            rows_root,
+            ids: vec![3; crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONVICTION_MAX_IDS_V1 + 1],
+        };
+        assert!(large.check_v1().is_err());
+        large.check_staged_v1().unwrap();
+        let old = palw_tir_public_conviction_preflight_v1(&state, &params, &extras, next, outsider(), claim, &large)
+            .unwrap_err()
+            .to_string();
+        let staged = palw_tir_public_staged_conviction_preflight_v2(&state, &params, &extras, next, outsider(), claim, &large)
+            .unwrap_err()
+            .to_string();
+        assert_ne!(old, staged, "staged dry run reaches accepted ceiling/authentication, not the ordinary single-control ID cap");
+        assert!(
+            palw_tir_public_staged_conviction_preflight_v2(
+                &state,
+                &params,
+                &extras,
+                frame.plan_v1().terms.collect_until_daa,
+                outsider(),
+                claim,
+                &evidence
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn staged_conviction_preflight_actual_shape_capacity_is_retryable() {
+        const CHILD: &str = "MISAKA_STAGED_PREFLIGHT_QUOTA_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let full = format!("{}::staged_conviction_preflight_actual_shape_capacity_is_retryable", module_path!());
+            assert!(
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", full.split_once("::").unwrap().1, "--nocapture", "--test-threads=1"])
+                    .env(CHILD, "1")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            return;
+        }
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = credited_frame(&fx);
+        let (state, params, extras) = world(&fx, &frame);
+        let evidence = Evidence::Output { rows_root: h(1), ids: vec![3; 2] };
+        crate::palw_native_resource_v1::arm_native_logical_limits_v1(Some(
+            crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 },
+        ));
+        assert!(matches!(
+            palw_tir_public_staged_conviction_preflight_v2(
+                &state,
+                &params,
+                &extras,
+                at(&frame, 1).daa_score,
+                outsider(),
+                frame.plan_v1().original_claim,
+                &evidence
+            ),
+            Err(PalwStateV2Error::NativeResource(_))
+        ));
     }
     fn staged_witness_with_service_hold(service_hold: bool) {
         use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part, palw_tir_public_witness_digest_v1};

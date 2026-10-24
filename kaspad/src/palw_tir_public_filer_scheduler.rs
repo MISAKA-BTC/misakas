@@ -43,6 +43,10 @@ const PALW_PANEL: &str = "palw-panel";
 mod journal;
 use journal::{JournalFaultV2,ReloadPayloadV2};
 
+#[path = "palw_tir_filer_preparation_v2.rs"]
+mod preparation;
+use preparation::{FilerClaimListV2,PreparedFilingV2,FilerPreparationFaultV2};
+
 /// The court queue's lane of a public conviction against an ORIGINAL frame (free: `u32::MAX − 26`; the custodian's lanes are
 /// `− 24` and `− 25`). Keyed by claim with `responder = false`: this node accuses.
 pub(crate) const PALW_TIR_PUBLIC_CONVICTION_ROUND_V1: u32 = u32::MAX - 26;
@@ -305,6 +309,24 @@ impl PalwTirPublicFilerBookV1 {
         Ok(true)
     }
 
+    fn enqueue_filing_v2(
+        &mut self,
+        claim: Hash64,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        current_daa: u64,
+        due: u64,
+        outbox: &mut CourtOutboxV1,
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        let key = (claim, PALW_TIR_PUBLIC_CONVICTION_ROUND_V1, false);
+        outbox.try_push_filer_clone_with_due_v2(key, object, due)?;
+        outbox.mark_submitted(key, current_daa);
+        if let Some(entry) = self.filings.get_mut(&claim) {
+            entry.sends = entry.sends.saturating_add(1);
+            self.dirty = true;
+        }
+        Ok(())
+    }
+
     pub(super) fn drop_v1(&mut self, claim: &Hash64, why: &str) {
         if self.filings.remove(claim).is_some() {
             self.owned_filings.retain(|(key,_)|key!=claim);
@@ -345,13 +367,20 @@ impl PalwPanelService {
             court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return;
         }
-        if let Err(why)=book.advance_journal_v2().await {
-            debug!("[{PALW_PANEL}] TIR filer waits for its journal: {why}");return;
+        if let Err(why) = book.advance_journal_v2().await {
+            debug!("[{PALW_PANEL}] TIR filer waits for its journal: {why}");
+            return;
         }
         // A queued filing whose finding left the book is stale.
         court_outbox.retain_pending(|(claim, round, responder, _)| !ours(*round, *responder) || book.filings.contains_key(claim));
-        let claims: Vec<Hash64> = book.filings.keys().copied().collect();
-        for claim in claims {
+        let claims = match FilerClaimListV2::new(book.filings.keys()) {
+            Ok(claims) => claims,
+            Err(why) => {
+                debug!("[{PALW_PANEL}] TIR filer claim workspace unavailable: {why:?}");
+                return;
+            }
+        };
+        for &claim in &claims.claims {
             let key = (claim, PALW_TIR_PUBLIC_CONVICTION_ROUND_V1, false);
             if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
                 || court_outbox.submitted_at(&key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
@@ -380,12 +409,27 @@ impl PalwPanelService {
                 }
                 continue;
             }
-            let Some(entry) = book.filings.get(&claim).cloned() else { continue };
-            match session.palw_tir_public_conviction_preflight_v1(filer, claim, entry.evidence.clone()) {
+            let Some(entry) = book.filings.get(&claim) else { continue };
+            let staged_offset = entry.staged_offset;
+            let prepared = match PreparedFilingV2::new(&entry.evidence, &view, filer, network_domain) {
+                Ok(prepared) => prepared,
+                Err(FilerPreparationFaultV2::Resource(why)) => {
+                    debug!("[{PALW_PANEL}] TIR frame {claim}: preparation deferred: {why}");
+                    continue;
+                }
+                Err(FilerPreparationFaultV2::Semantic(why)) => {
+                    book.drop_v1(&claim, &why);
+                    continue;
+                }
+            };
+            let preflight = if prepared.staged {
+                session.palw_tir_public_staged_conviction_preflight_v2(filer, claim, &prepared.evidence)
+            } else {
+                session.palw_tir_public_conviction_preflight_v1(filer, claim, prepared.evidence.clone())
+            };
+            match preflight {
                 Ok(Some(Ok(()))) => {}
                 Ok(Some(Err(why))) => {
-                    // Already convicted (by this node's earlier send or anyone's), a holding primitive, or a refusal the accepted
-                    // state already shows: filing would only burn the rent.
                     book.drop_v1(&claim, &why);
                     continue;
                 }
@@ -395,20 +439,8 @@ impl PalwPanelService {
                     continue;
                 }
             }
-            // G14 R7: an evidence whose encoding does not fit one control rides in 16 KiB parts (split carriage, never truncated);
-            // the fold adjudicates when the last part lands. The next part starts where the fold's row says it stopped.
-            let encoded = match borsh::to_vec(&entry.evidence) {
-                Ok(encoded) => encoded,
-                Err(why) => {
-                    book.drop_v1(&claim, &why.to_string());
-                    continue;
-                }
-            };
-            // Staged too: an Output past the single-control ID preflight, however few bytes it is.
-            let staged = entry.evidence.check_v1().is_err()
-                || encoded.len() as u64 + 4096
-                    > kaspa_consensus_core::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1;
-            let built = if staged {
+            let encoded = &prepared.encoded;
+            let built = if prepared.staged {
                 let digest = kaspa_consensus_core::palw_tir_public_carriage_v1::palw_tir_public_witness_digest_v1(&encoded);
                 let mut accepted: Option<(u64, Hash64)> = None;
                 let mut read = |state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| -> Result<(), String> {
@@ -430,7 +462,7 @@ impl PalwPanelService {
                         continue;
                     }
                 };
-                if offset != entry.staged_offset
+                if offset != staged_offset
                     && let Some(e) = book.filings.get_mut(&claim)
                 {
                     e.staged_offset = offset;
@@ -453,7 +485,7 @@ impl PalwPanelService {
                     &view,
                     filer,
                     current_daa,
-                    entry.evidence,
+                    prepared.evidence.clone(),
                 )
             };
             let object = match built {
@@ -468,12 +500,11 @@ impl PalwPanelService {
                 book.drop_v1(&claim, "sent its bounded number of times");
                 continue;
             }
-            court_outbox.push_pending((key.0, key.1, key.2, object));
-            court_outbox.set_due(key, view.collect_until_daa.saturating_sub(1));
-            court_outbox.mark_submitted(key, current_daa);
-            if let Some(entry) = book.filings.get_mut(&claim) {
-                entry.sends = entry.sends.saturating_add(1);
-                book.dirty = true;
+            if let Err(why) =
+                book.enqueue_filing_v2(claim, &object, current_daa, view.collect_until_daa.saturating_sub(1), court_outbox)
+            {
+                debug!("[{PALW_PANEL}] TIR frame {claim}: destination admission deferred: {why}");
+                continue;
             }
             info!("[{PALW_PANEL}] TIR frame {claim}: public conviction queued (door closes at DAA {})", view.collect_until_daa);
         }
@@ -519,3 +550,7 @@ mod tests {
         assert!(dir.path().join("palw-tir-public-filer.v1.unreadable").exists());
     }
 }
+
+#[cfg(test)]
+#[path = "palw_tir_filer_preparation_tests_v2.rs"]
+mod preparation_tests;
