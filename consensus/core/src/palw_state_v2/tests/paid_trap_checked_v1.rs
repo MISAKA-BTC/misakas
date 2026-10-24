@@ -187,3 +187,145 @@ fn native_capacity_refuses_paid_trap_reads_without_mutation_or_dormant_lookup() 
     ));
     assert_eq!(b.state.state_root(), root);
 }
+
+// Actual sweep mechanics over the full native paid-authority fixture. The
+// terminal and held/receipt rows are explicit local-state fixture setup, not an
+// accepted court campaign or a new public arming configuration.
+fn sweep_fixture() -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2) {
+    use crate::palw_paid_claim_trap_v1::*;
+    let (mut state, p, extras, a) = setup();
+    let route = state.kernel_route.as_mut().unwrap();
+    let base = a.enrollment.base_claim;
+    let mut kernel = route.kernel_claim_row_v1(&Hash64::from_bytes(base)).unwrap();
+    kernel.convicted = true;
+    kernel.life.state = misaka_palw_kernel::lifecycle::ClaimStateV1::Convicted { daa: 9 };
+    route.rows.insert((misaka_palw_kernel::rows::TABLE_CLAIMS_V1, base.to_vec()), borsh::to_vec(&kernel).unwrap());
+    for (slot, candidate) in a.checker_candidates.iter().take(2).enumerate() {
+        // The original fixture shares a payout payload; separate these local
+        // test recipients so a forfeited fee cannot hide in another's total.
+        state.bonds.get_mut(&candidate.bond).unwrap().payout_payload = h64(900 + slot as u64);
+        let verifier = palw_kernel_bond_id_v1(&candidate.bond);
+        let receipt = PaidClaimReceiptV2 {
+            version: 2,
+            enrollment: a.enrollment.id(),
+            verification_class: a.class.id(),
+            assignment: [0; 64],
+            source_context: a.context.id(),
+            sample_seed: [0; 64],
+            evidence_root: [0; 64],
+            transcript_root: [0; 64],
+            signer: verifier,
+            signed_daa: 8,
+            complete: slot == 0,
+            round: 0,
+            message_root: [0; 64],
+        };
+        let receipt_id = object_id(b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2", &(receipt.enrollment, verifier));
+        route.aux.insert((PAID_CLAIM_RECEIPTS_V2, receipt_id.to_vec()), borsh::to_vec(&receipt).unwrap());
+        let held = PalwHeldCheckFeeRowV1 {
+            version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+            claim: base,
+            verifier,
+            slot: slot as u64,
+            poster: a.enrollment.producer,
+            fee: 1_000,
+            release_after_daa: 10,
+        };
+        route.aux.insert(
+            (PALW_PAID_CLAIM_TRAP_TABLE_V1, palw_paid_trap_held_fee_key_v1(&base, &verifier, slot as u64)),
+            borsh::to_vec(&held).unwrap(),
+        );
+    }
+    (state, armed(p), extras, a)
+}
+
+#[test]
+fn actual_held_fee_sweep_uses_full_paid_authority_and_forfeits_clean_fee_once() {
+    use crate::palw_paid_claim_trap_v1::*;
+    let (state, p, extras, a) = sweep_fixture();
+    let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+    crate::palw_state_v2::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(&mut b, 11).unwrap();
+    let (_, kept) = palw_paid_trap_forfeit_v1(1_000);
+    for (slot, candidate) in a.checker_candidates.iter().take(2).enumerate() {
+        let verifier = palw_kernel_bond_id_v1(&candidate.bond);
+        let key = (PALW_PAID_CLAIM_TRAP_TABLE_V1, palw_paid_trap_held_fee_key_v1(&a.enrollment.base_claim, &verifier, slot as u64));
+        assert!(!b.state.kernel_route.as_ref().unwrap().aux.contains_key(&key));
+        let payload = b.state.bonds[&candidate.bond].payout_payload;
+        let amount = b.state.pending_payouts.get(&palw_kernel_payout_key_v1(&payload)).map_or(0, |r| r.amount);
+        assert_eq!(amount, if slot == 0 { kept } else { 1_000 }, "actual sweep derives Clean status rather than a test boolean");
+    }
+    let after = b.state.state_root();
+    crate::palw_state_v2::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(&mut b, 12).unwrap();
+    assert_eq!(b.state.state_root(), after, "the repeated actual sweep releases nothing twice");
+}
+
+#[test]
+fn actual_held_fee_sweep_missing_base_or_later_corruption_keeps_all_rows_and_payouts() {
+    use crate::palw_paid_claim_trap_v1::*;
+    for later_corruption in [false, true] {
+        let (mut state, p, extras, a) = sweep_fixture();
+        let route = state.kernel_route.as_mut().unwrap();
+        if later_corruption {
+            // The first paid claim is valid and due. A later damaged due row
+            // must still be discovered before the first payout/deletion.
+            let other = [0xff; 64];
+            assert!(a.enrollment.base_claim < other, "the corrupt due key must sort after the valid claim");
+            let kernel = route.rows[&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, a.enrollment.base_claim.to_vec())].clone();
+            route.rows.insert((misaka_palw_kernel::rows::TABLE_CLAIMS_V1, other.to_vec()), kernel);
+            route
+                .aux
+                .insert((PAID_CLAIM_ENROLLMENTS_V2, paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, &other)), vec![0xff]);
+            let verifier = palw_kernel_bond_id_v1(&a.checker_candidates[0].bond);
+            let held = PalwHeldCheckFeeRowV1 {
+                version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+                claim: other,
+                verifier,
+                slot: 0,
+                poster: a.enrollment.producer,
+                fee: 1_000,
+                release_after_daa: 10,
+            };
+            route.aux.insert(
+                (PALW_PAID_CLAIM_TRAP_TABLE_V1, palw_paid_trap_held_fee_key_v1(&other, &verifier, 0)),
+                borsh::to_vec(&held).unwrap(),
+            );
+        } else {
+            route.aux.remove(&(
+                PAID_CLAIM_ENROLLMENTS_V2,
+                paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, &a.enrollment.base_claim),
+            ));
+        }
+        let root = state.state_root();
+        let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+        assert!(crate::palw_state_v2::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(&mut b, 11).is_err());
+        assert_eq!(b.state.state_root(), root, "no held row, payout or settlement is changed before all due reads succeed");
+    }
+}
+
+#[test]
+fn actual_held_fee_sweep_quota_refusal_retains_due_fees_without_false_payout() {
+    const CHILD: &str = "MISAKA_PAID_TRAP_SWEEP_QUOTA_CHILD";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let name = format!("{}::actual_held_fee_sweep_quota_refusal_retains_due_fees_without_false_payout", module_path!());
+        let name = name.split_once("::").unwrap().1;
+        assert!(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .status()
+                .unwrap()
+                .success()
+        );
+        return;
+    }
+    let (state, p, extras, _) = sweep_fixture();
+    let root = state.state_root();
+    let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+    use crate::palw_native_resource_v1::{NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1};
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 }));
+    assert!(matches!(
+        crate::palw_state_v2::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(&mut b, 11),
+        Err(PalwStateV2Error::NativeResource(_))
+    ));
+    assert_eq!(b.state.state_root(), root);
+}

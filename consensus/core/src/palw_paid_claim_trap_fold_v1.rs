@@ -452,10 +452,13 @@ pub(super) fn release_held_check_fees_v1(builder: &mut TransitionBuilder<'_>, no
             continue; // not terminal yet: the fee waits for the verdict
         }
         let clean = if kernel.convicted {
-            route.paid_claim_authority_for_base_checked_v1(&row.claim)
+            // A persisted held fee is already a paid obligation. Missing
+            // authority here is corruption, never an ordinary unpaid claim.
+            let authority = route.paid_claim_authority_for_base_checked_v1(&row.claim)
                 .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
-                .map(|a| PalwPaidTrapClaimV1::of(&a))
-                .is_some_and(|paid| !paid.interactive && clean_receipt_signer_v1(route, &paid.enrollment, &row.verifier))
+                .ok_or_else(|| refused("held paid check fee has no base enrollment authority"))?;
+            let paid = PalwPaidTrapClaimV1::of(&authority);
+            !paid.interactive && clean_receipt_signer_v1(route, &paid.enrollment, &row.verifier)
         } else { false };
         due.push((row, clean));
     }
