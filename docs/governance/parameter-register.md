@@ -75,7 +75,7 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 ## 2026-10-22 P3・P4 の値の pin（fence は未武装）
 
 - 承認: **ユーザー委任 2026-10-22**（値の決定と、目安で pin してよいこと）。機械可読の行は [parameters.json](parameters.json)。導出・監査・再計算: [pin-2026-10-22.md](../evidence/palw/studio-values-2026-10-22/pin-2026-10-22.md)。
-- この節は台帳への pin である。`PALW_T12_FULL_ACTIVATION_DAA` は `None` のまま。arming record の一覧も空のまま。理由は [fence-readiness-2026-10-22.md](../evidence/palw/studio-values-2026-10-22/fence-readiness-2026-10-22.md)。
+- この節は台帳への pin である。2026-10-24、ユーザー指示で `PALW_T12_FULL_ACTIVATION_DAA` は DAA 15,100。arming record の一覧は空のまま（ダイジェストは作らない）。公開 testnet-12 のその高さだけ `validate_palw_v2` が受理する。
 - 出荷 preset はこれらの値を読まない。コード上の置き場は `consensus/core/src/palw_values_p4_v1.rs` と、P3 が既存定数へ入れた値である。
 
 ### 決定値（再計算で一致。武装は別）

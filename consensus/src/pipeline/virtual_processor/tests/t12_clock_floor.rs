@@ -1419,8 +1419,8 @@ async fn t12_unarmed_chain_advances_past_daa_16000() {
     let (mut ctx, _config) = t12_clock(true);
     assert_eq!(
         kaspa_consensus_core::config::params::PALW_T12_FULL_ACTIVATION_DAA,
-        None,
-        "this run is the unarmed ruleset"
+        Some(15_100),
+        "the public list is armed at DAA 15100"
     );
     let stop = std::env::var("PALW_DRILL_DAA").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(16_001);
     let started = std::time::Instant::now();

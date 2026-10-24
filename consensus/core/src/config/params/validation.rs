@@ -87,11 +87,30 @@ impl Params {
     }
 
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(
+        let verdict = self.validate_palw_v2_inner(
             false,
             crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1,
             crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
-        )
+        );
+        // User order 2026-10-24: testnet-12 arms PALW_T12_FULL_ACTIVATION_FENCES_V1 at
+        // PALW_T12_FULL_ACTIVATION_DAA, including a drill of those shipping rules. The record lists stay
+        // empty; this does not fill them. Any other height or network keeps the refusal.
+        if verdict.is_err() && self.palw_t12_ordered_full_activation_v1() {
+            return Ok(());
+        }
+        verdict
+    }
+
+    /// testnet-12 with every full-activation fence at exactly [`PALW_T12_FULL_ACTIVATION_DAA`].
+    fn palw_t12_ordered_full_activation_v1(&self) -> bool {
+        let Some(at) = PALW_T12_FULL_ACTIVATION_DAA else { return false };
+        if self.net != crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12) {
+            return false;
+        }
+        let fences = self.palw_fences_v1();
+        PALW_T12_FULL_ACTIVATION_FENCES_V1.iter().all(|fence| {
+            fences.iter().any(|(name, activation)| *name == fence.name && (*activation).is_some_and(|f| f.daa_score() == at))
+        })
     }
 
     /// **The whole V2 validation with `records` in place of the binary's pinned arm-readiness list**

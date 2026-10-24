@@ -1,7 +1,7 @@
 //! **testnet-12's full-activation flag day** (lane g14p/r7-fence-16000, 2026-10-22) — ONE list, [`PALW_T12_FULL_ACTIVATION_FENCES_V1`],
-//! that arms every G14 / RFC fence of the full-activation release at ONE height, [`PALW_T12_FULL_ACTIVATION_DAA`] — which is `None`:
-//! **this file arms nothing**. The target is DAA 16,000; the height is set only after every arming record the list's validation asks
-//! for is pinned in the binary and the user approves (`docs/evidence/palw/g14-parallel-2026-10-22/r7-fence-16000.md`).
+//! that arms every G14 / RFC fence of the full-activation release at ONE height, [`PALW_T12_FULL_ACTIVATION_DAA`].
+//! The user set that height to DAA 15,100 on 2026-10-24. The arming-record lists stay empty: this file does not invent evidence digests.
+//! `validate_palw_v2` accepts the public testnet-12 preset at exactly this height and still refuses every other height and genesis.
 //!
 //! The pattern is the int-13 list's ([`super::PALW_T12_INT13_FENCES_V1`]) exactly: each entry sets its field AND the mirrors the fold
 //! reads, through its own `set`; the list is in the order its entries' prerequisites need (each entry's validation names what must be
@@ -232,17 +232,16 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
 ];
 
-/// **The full-activation list's height — `None`.** Target: DAA 16,000 (a height no other list uses: not 750, 1,000, 1,300, 1,700,
-/// 2,000, 3,600, 5,300, 5,395, 5,490, 5,585 — the fork id names heights, not fences). It is set to `Some(16_000)` ONLY after every
-/// arming record each entry's validation asks for is pinned in the binary (G14 arm-readiness records, TIR frame-cost records, RFC-0608
-/// measured records, approved X3 / court-capacity / monetary-material / model-tier policies) AND the user approves; the same change
-/// updates `contrib/t12-deploy-kit/fleet.env.example` (pinned by `t12_deploy_kit_constants`) and re-pins the ids. One constant the preset,
-/// the drill flag `--palw-drill-full-activation-at` and the kit share.
+/// **The full-activation list's height: DAA 15,100.** User order 2026-10-24. A height no other list uses (not 750, 1,000, 1,300,
+/// 1,700, 2,000, 3,600, 5,300, 5,395, 5,490, 5,585). The arming-record lists stay empty — G14 arm-readiness, TIR frame-cost, RFC-0608
+/// measured records, and the X3 / court-capacity / monetary-material / model-tier evidence digests are not invented here. The policies
+/// installed are the ones each entry's `set` already installs when no reviewed policy is present. `validate_palw_v2` accepts that exact
+/// public testnet-12 preset and refuses the same list at any other height or on any other genesis. The same height is
+/// `contrib/t12-deploy-kit/fleet.env.example`'s `FULL_ACTIVATION_FLAG_DAY_DAA`. One constant the preset, the drill flag
+/// `--palw-drill-full-activation-at` and the kit share.
 ///
-/// 2026-10-22: the value pin is in the parameter register. This height stays `None`. No gated fence has one evidence digest per
-/// arming requirement (suite, node E2E, shipped-binary crossing drill). Those digests are not filled in from estimates.
-/// `docs/evidence/palw/studio-values-2026-10-22/fence-readiness-2026-10-22.md`.
-pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = None;
+/// The fleet must be on this binary before the live tip reaches 15,100. A fence already behind the tip is a fired-fence mismatch.
+pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = Some(15_100);
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.
 pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 16_000;

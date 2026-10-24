@@ -1,5 +1,5 @@
-//! **testnet-12's full-activation list** (lane g14p/r7-fence-16000, 2026-10-22): `PALW_T12_FULL_ACTIVATION_FENCES_V1` at
-//! `PALW_T12_FULL_ACTIVATION_DAA` — `None`, target 16,000.
+//! **testnet-12's full-activation list** (lane g14p/r7-fence-16000): `PALW_T12_FULL_ACTIVATION_FENCES_V1` at
+//! `PALW_T12_FULL_ACTIVATION_DAA` — DAA 15,100 (user order 2026-10-24). Target 16,000 stays unused.
 //!
 //! * **dormant** — with the height `None` every shipped id is the int-12 release's, byte for byte (the int-13 twin, extended);
 //! * **ordered** — every "needs X at or below it" of validation names an EARLIER entry (or a rule outside the list, named below);
@@ -153,20 +153,25 @@ fn the_list_is_the_int13_list_then_the_g14_fences_in_prerequisite_order() {
 }
 
 #[test]
-fn with_the_height_none_every_shipped_id_is_the_int12_release() {
-    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, None, "nothing armed until the records are pinned and the user approves");
+fn the_user_ordered_height_arms_every_list_fence_and_keeps_the_int12_identity() {
+    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_100), "user order 2026-10-24");
     assert_eq!(PALW_T12_INT13_DAA, None);
     let shipped = palw_t12_shipped_params();
     for name in LIST {
-        assert_eq!(fence_at(&shipped, name), None, "{name} is dormant on the shipped ruleset");
+        assert_eq!(fence_at(&shipped, name), Some(15_100), "{name} is armed on the shipped ruleset");
     }
-    assert_eq!(ids(&shipped), int12_ids(), "the shipped ruleset is int-12's, byte for byte");
-    assert_eq!(ids(&palw_t12_release_v7_params()), int12_ids(), "the v7 baseline too");
-    assert_eq!(ids(&palw_t12_release_v6_params()), int12_ids(), "and v6");
-    // Dormant twice is dormant: the reverse-order clear of an already-dormant list moves nothing.
+    shipped.validate_palw_v2().expect("the public preset at DAA 15100 validates");
+    let (params, identity, schedule) = ids(&shipped);
+    let (old_params, old_identity, old_schedule) = int12_ids();
+    assert_ne!(params, old_params, "the params id moves");
+    assert_eq!(identity, old_identity, "a future fence leaves the identity");
+    assert_ne!(schedule, old_schedule, "the schedule names 15100");
+    assert!(shipped.fence_schedule_v1().contains(&15_100));
+    assert_eq!(ids(&palw_t12_release_v7_params()), int12_ids(), "clearing the list is the int-12 release");
+    assert_eq!(ids(&palw_t12_release_v6_params()), int12_ids(), "v6 clears it too");
     let mut again = shipped.clone();
     palw_t12_arm_full_activation_at_v1(&mut again, None);
-    assert_eq!(ids(&again), ids(&shipped));
+    assert_eq!(ids(&again), int12_ids());
 }
 
 #[test]
@@ -191,7 +196,7 @@ fn sixteen_thousand_is_used_by_no_other_list_or_schedule() {
 
 #[test]
 fn armed_at_a_test_height_it_moves_the_params_and_schedule_ids_only_and_comes_back_byte_for_byte() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v7_params();
     let mut armed = shipped.clone();
     palw_t12_arm_full_activation_at_v1(&mut armed, Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
     for name in LIST {
@@ -245,7 +250,7 @@ fn drill_with_the_earlier_flag_days_low() -> Params {
 fn the_drill_flag_refuses_untouched_until_the_records_exist() {
     let before = drill_with_the_earlier_flag_days_low();
     for name in LIST {
-        assert_eq!(fence_at(&before, name), None, "{name}: dormant on the drill ruleset before the flag");
+        assert_eq!(fence_at(&before, name), Some(15_100), "{name}: the shipping height on the drill ruleset");
     }
     let mut p = before.clone();
     match palw_drill_full_activation_at_v1(&mut p, 60) {

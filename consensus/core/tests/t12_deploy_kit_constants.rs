@@ -218,11 +218,12 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     assert_eq!(kit, core, "{FLEET}: INT13_FLAG_DAY_DAA is the preset's (empty = no int-13 flag day)");
     assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
     let p = Params::from(t12());
+    let expected = PALW_T12_FULL_ACTIVATION_DAA.or(PALW_T12_INT13_DAA);
     for fence in PALW_T12_INT13_FENCES_V1 {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
         assert_eq!(
-            armed, PALW_T12_INT13_DAA,
-            "{}: the preset arms every fence of the list at the kit's height (none: dormant)",
+            armed, expected,
+            "{}: the int-13 entries ride the full-activation height when that height is set",
             fence.name
         );
     }
@@ -230,14 +231,13 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     assert!(!schedule.contains(&9_000), "the cancelled 9,000 is not on the public schedule: {schedule:?}");
     assert_eq!(
         schedule.last().copied(),
-        PALW_T12_INT11_RHO1000_DAA,
-        "the schedule ends at the int-11 flag day's last height: {schedule:?}"
+        PALW_T12_FULL_ACTIVATION_DAA.or(PALW_T12_INT11_RHO1000_DAA),
+        "the schedule ends at the full-activation height when it is set: {schedule:?}"
     );
 }
 
-/// **The kit's copy of the full-activation list's height is the core's** (lane g14p/r7-fence-16000): `None` today — target 16,000, set
-/// only after every arming record is pinned and the user approves — so the kit's copy is EMPTY, the preset arms no G14-only entry of the
-/// list, and 16,000 is on no schedule. When the height is set, both move together and this reads it again.
+/// **The kit's copy of the full-activation list's height is the core's** (user order 2026-10-24: DAA 15,100).
+/// 16,000 stays off the schedule. When the height changes, both move together and this reads it again.
 #[test]
 fn the_kit_names_the_full_activation_height_the_preset_arms() {
     const FLEET: &str = "contrib/t12-deploy-kit/fleet.env.example";
@@ -245,7 +245,7 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
     let kit = shell_value(FLEET, &fleet, "FULL_ACTIVATION_FLAG_DAY_DAA");
     let core = PALW_T12_FULL_ACTIVATION_DAA.map(|at| at.to_string()).unwrap_or_default();
     assert_eq!(kit, core, "{FLEET}: FULL_ACTIVATION_FLAG_DAY_DAA is the preset's (empty = no full-activation flag day)");
-    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, None, "nothing armed until the records are pinned and the user approves");
+    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_100), "user order 2026-10-24");
     let p = Params::from(t12());
     for fence in PALW_T12_FULL_ACTIVATION_FENCES_V1 {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());

@@ -10964,6 +10964,7 @@ pub fn palw_t12_shipped_params() -> Params {
 /// against the build it replaces.
 pub fn palw_t12_launch_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_full_activation_at_v1(&mut params, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
@@ -11978,6 +11979,7 @@ pub fn palw_t12_arm_int13_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
 /// list moved it" twin).
 pub fn palw_t12_release_v6_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_full_activation_at_v1(&mut params, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     params
 }
@@ -11987,6 +11989,7 @@ pub fn palw_t12_release_v6_params() -> Params {
 /// baseline the int-11 flag day is judged against (the fork-id comparison, the "only this list moved it" twin).
 pub fn palw_t12_release_v5_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_full_activation_at_v1(&mut params, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     params
@@ -11999,6 +12002,7 @@ pub fn palw_t12_release_v5_params() -> Params {
 /// twin).
 pub fn palw_t12_release_v4_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_full_activation_at_v1(&mut params, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
@@ -12018,6 +12022,7 @@ pub fn palw_t12_release_v4_params() -> Params {
 /// baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_full_activation_at_v1(&mut params, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
@@ -12037,6 +12042,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_full_activation_at_v1(&mut params, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
@@ -12058,6 +12064,7 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_full_activation_at_v1(&mut params, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
@@ -12133,9 +12140,9 @@ fn palw_t12_params_with_registry_v1(
     // **The int-13 flag day** (the coordinator's brief of 2026-10-08): `PALW_T12_INT13_FENCES_V1` — the code-change-only fences, tier 1 — at
     // `PALW_T12_INT13_DAA`, after the int-11 flag day whose `palw_gen_v1` the range twin needs below it; dormant while the height is `None`.
     palw_t12_arm_int13_flag_day_v1(&mut params);
-    // **The full-activation flag day** (lane g14p/r7-fence-16000, 2026-10-22): `PALW_T12_FULL_ACTIVATION_FENCES_V1` — the int-13 list's
-    // entries plus every G14 / RFC fence of the full-activation release — at `PALW_T12_FULL_ACTIVATION_DAA` (target 16,000), after the
-    // int-13 flag day; dormant while the height is `None` (it is: no arming record is pinned and the user has not approved).
+    // **The full-activation flag day** (lane g14p/r7-fence-16000): `PALW_T12_FULL_ACTIVATION_FENCES_V1` — the int-13 list's
+    // entries plus every G14 / RFC fence of the full-activation release — at `PALW_T12_FULL_ACTIVATION_DAA` (user order 2026-10-24:
+    // DAA 15,100), after the int-13 flag day.
     full_activation_v1::palw_t12_arm_full_activation_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
