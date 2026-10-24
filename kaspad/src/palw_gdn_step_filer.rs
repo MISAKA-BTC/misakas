@@ -33,8 +33,8 @@
 //! from public material and reads every filing's fate back from the chain.
 use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
 use kaspa_consensus_core::palw_gdn_court_v2::{
-    PALW_GDN_COURT_MLDSA87_CONTEXT_V2, PALW_GDN_COURT_VERSION_V2, PalwGdnCourtAccusationV2, PalwGdnCourtLimitsV2,
-    palw_gdn_court_session_id_v2, palw_gdn_court_verdict_v2,
+    PALW_GDN_COURT_MLDSA87_CONTEXT_V2, PALW_GDN_COURT_VERSION_V2, PalwGdnCourtAccusationV2, PalwGdnCourtLimitsV2, PalwGdnCourtViewV2,
+    palw_gdn_court_session_id_v2, palw_gdn_court_verdict_v2, palw_gdn_court_verdict_view_v2,
 };
 use kaspa_consensus_core::palw_shard_court_v1::{PalwOneMoveClaimV2, PalwShardCourtVerdictV1};
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwClaimPhaseV2, PalwConsensusObjectV2, PalwVoidReasonV2};
@@ -450,7 +450,15 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
         return notes;
     }
     let (profile, ctx) = (&material.binding.shape_profile, &material.binding.job_context);
-    let actual = PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root: claim.artifact_root };
+    let actual =
+        PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root: claim.artifact_root };
+    let gdn_programs = [
+        kaspa_consensus_core::palw_step_refute::KDESC_GDN_CORE_NEON,
+        kaspa_consensus_core::palw_step_refute::KDESC_GDN_CORE_AVX2,
+        kaspa_consensus_core::palw_step_refute::KDESC_Q36_GDN_STEP,
+    ]
+    .map(kaspa_consensus_core::palw_step::kernel_semantics_id_v1);
+    let mut retry_window = false;
     for leaf in &window {
         // A served tile outside the chain's class ladder can never reach the
         // court. Reject it before allocating/recomputing an evidence body.
@@ -461,15 +469,29 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
         let Some(coord) = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, *leaf) else {
             continue;
         };
+        let Some((node, _)) = profile.resolve_node_slot(coord.node_slot) else { continue };
+        // Match the court's accepted recurrence programs. Other served tiles
+        // are outside this filer; a failed applicable probe is not honesty.
+        if !gdn_programs.contains(&node.kernel_semantics_id) {
+            continue;
+        }
         let built = base0_gdn_step_evidence_v2(material, coord, &mut kernels).map(PalwGdnStepBuiltV1::from);
         let probe = palw_gdn_step_classify_v1(*leaf, built, |refutation| {
-            let trial = palw_gdn_step_accusation_v1(&claim, accuser, *leaf, (**refutation).clone(), openings);
+            let trial = PalwGdnCourtViewV2 {
+                version: PALW_GDN_COURT_VERSION_V2,
+                execution_root: claim.execution_root,
+                executor_bond: claim.executor,
+                accuser_bond: accuser,
+                leaf_index: *leaf,
+                refutation: refutation.as_ref(),
+                artifact_openings: openings,
+            };
             // The fold's ladder (`class_step_ladder_v1` over the network's court ladder), never the material's own `max_leaves`:
             // a class whose recorded ladder differs is judged here exactly as the fold judges it.
             if let Err(e) = trial.validate_shape(limits.ladder) {
                 return Err(format!("shape at the fold's ladder {}: {e}", limits.ladder));
             }
-            match palw_gdn_court_verdict_v2(&trial, &actual, limits.ladder) {
+            match palw_gdn_court_verdict_view_v2(trial, &actual, limits.ladder) {
                 Ok(PalwShardCourtVerdictV1::ExecutorGuilty) => Ok(true),
                 Ok(PalwShardCourtVerdictV1::FalseAccusation) => Ok(false),
                 Ok(other) => Err(format!("{other:?}")),
@@ -478,11 +500,16 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
         });
         match probe {
             PalwGdnStepProbeV1::Honest => {}
-            PalwGdnStepProbeV1::Unbuildable(why) => notes.push(format!("leaf {leaf}: no step evidence ({why})")),
+            PalwGdnStepProbeV1::Unbuildable(why) => {
+                retry_window = true;
+                notes.push(format!("leaf {leaf}: no step evidence ({why}); retaining window for retry"));
+            }
             PalwGdnStepProbeV1::ForgedCheckpoint { index } => {
                 book.settle(
                     claim_id,
-                    format!("leaf {leaf} stands on forged checkpoint {index}: the held-GDN filer's case (tag 244), not a step accusation"),
+                    format!(
+                        "leaf {leaf} stands on forged checkpoint {index}: the held-GDN filer's case (tag 244), not a step accusation"
+                    ),
                 );
                 return notes;
             }
@@ -490,19 +517,18 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
                 match palw_gdn_step_object_v1(&claim, accuser, network_domain, leaf, *refutation, openings, limits, sign) {
                     Ok(object) => {
                         let case = book.cases.get_mut(claim_id).expect("held above");
-                        case.stage =
-                            PalwGdnStepStageV1::Filed { object: Box::new(object), leaf, sent: PalwGdnStepSentV1::default() };
+                        case.stage = PalwGdnStepStageV1::Filed { object: Box::new(object), leaf, sent: PalwGdnStepSentV1::default() };
                         notes.push(format!("leaf {leaf}: the step does not recompute — GdnStepAccusedV2 built and signed"));
                     }
                     Err(why) => {
-                        book.settle(claim_id, format!("leaf {leaf}: mismatch found but not fileable: {why}"));
+                        notes.push(format!("leaf {leaf}: mismatch found but not fileable: {why}; retaining window for retry"));
                     }
                 }
                 return notes;
             }
         }
     }
-    if let Some(case) = book.cases.get_mut(claim_id) {
+    if !retry_window && let Some(case) = book.cases.get_mut(claim_id) {
         case.stage = PalwGdnStepStageV1::Probing { cursor: cursor + window.len() };
     }
     notes
@@ -790,5 +816,128 @@ mod tests {
         let err = palw_gdn_step_fits_close_v1(&accusation, bytes - 1).expect_err("one byte over");
         assert_eq!(err, PalwGdnStepOversizeV1::TooLarge { bytes, ceiling: bytes - 1, openings: w.openings.len() });
         assert!(err.to_string().contains(&format!("{bytes} bytes")), "{err}");
+    }
+    #[test]
+    fn borrowed_probe_matches_wire_court_on_real_step_and_bad_membership() {
+        let w = crate::palw_gdn_held_filer::tests::world(0);
+        let material = w.honest.view();
+        let claim = dev_claim(&w);
+        let (leaf, refutation) = material
+            .tiles
+            .tiles
+            .iter()
+            .find_map(|(leaf, _)| {
+                let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(
+                    &material.binding.shape_profile,
+                    &material.binding.job_context,
+                    *leaf,
+                )?;
+                match base0_gdn_step_evidence_v2(&material, coord, || w.backend.gdn_recompute_kernels_v2().unwrap()).ok()? {
+                    Base0GdnEvidenceV2::Step(r) => Some((*leaf, r)),
+                    _ => None,
+                }
+            })
+            .expect("a real recurrence step");
+        let actual =
+            PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root: claim.artifact_root };
+        let view = PalwGdnCourtViewV2 {
+            version: PALW_GDN_COURT_VERSION_V2,
+            execution_root: claim.execution_root,
+            executor_bond: claim.executor,
+            accuser_bond: bond(2),
+            leaf_index: leaf,
+            refutation: &refutation,
+            artifact_openings: &w.openings,
+        };
+        assert!(std::ptr::eq(view.refutation, refutation.as_ref()));
+        assert_eq!(view.artifact_openings.as_ptr(), w.openings.as_ptr());
+        let borrowed = palw_gdn_court_verdict_view_v2(view, &actual, material.max_leaves).unwrap();
+        assert_eq!(borrowed, PalwShardCourtVerdictV1::FalseAccusation);
+        let wire = palw_gdn_step_accusation_v1(&claim, bond(2), leaf, *refutation, &w.openings);
+        assert_eq!(palw_gdn_court_verdict_v2(&wire, &actual, material.max_leaves).unwrap(), borrowed);
+        let mut bad = wire;
+        assert!(!bad.artifact_openings.is_empty());
+        bad.artifact_openings[0].operand.bytes[0] ^= 1;
+        let owned = palw_gdn_court_verdict_v2(&bad, &actual, material.max_leaves).unwrap_err();
+        let borrowed = palw_gdn_court_verdict_view_v2(bad.as_view_v2(), &actual, material.max_leaves).unwrap_err();
+        for error in [owned, borrowed] {
+            assert!(matches!(
+                error,
+                kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnCourtErrorV2::Evidence(
+                    kaspa_consensus_core::palw_step_refute::PalwStepRefuteError::InputSetNotCanonical(
+                        "GDN artifact operands do not belong to the registered class artifact"
+                    )
+                )
+            ));
+        }
+    }
+    #[test]
+    fn resource_retry_child() {
+        if std::env::var("MISAKA_GDN_PROBE_RESOURCE_RETRY").ok().as_deref() != Some("1") {
+            return;
+        }
+        use kaspa_consensus_core::palw_native_resource_v1::{
+            NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
+        };
+        let w = crate::palw_gdn_held_filer::tests::world(0);
+        let material = w.honest.view();
+        let claim = dev_claim(&w);
+        let mut book = PalwGdnStepBookV1::default();
+        book.open(claim.clone(), 1);
+        let memory = 16 << 20;
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
+        let blocker = reserve_native_requests_v1(memory).unwrap();
+        let sign = |_: &[u8], _: &[u8]| -> Option<Vec<u8>> {
+            panic!("an honest step is never signed");
+        };
+        let limits = PalwGdnCourtLimitsV2 { ladder: material.max_leaves, max_close_bytes: 64 << 20 };
+        let budget = material.tiles.tiles.len();
+        let notes = palw_gdn_step_probe_case_v1(
+            &mut book,
+            &claim.claim,
+            &material,
+            || w.backend.gdn_recompute_kernels_v2().unwrap(),
+            bond(2),
+            Hash64::default(),
+            &w.openings,
+            limits,
+            &sign,
+            budget,
+        );
+        assert!(!notes.is_empty());
+        assert!(notes.iter().any(|n| n.contains("retaining window for retry")), "{notes:?}");
+        assert!(!book.settled.contains_key(&claim.claim));
+        assert!(matches!(book.cases[&claim.claim].stage, PalwGdnStepStageV1::Probing { cursor: 0 }));
+        drop(blocker);
+        assert!(reserve_native_requests_v1(memory).is_ok(), "failed probes leak no court reservations");
+        for _ in 0..=material.tiles.tiles.len() {
+            palw_gdn_step_probe_case_v1(
+                &mut book,
+                &claim.claim,
+                &material,
+                || w.backend.gdn_recompute_kernels_v2().unwrap(),
+                bond(2),
+                Hash64::default(),
+                &w.openings,
+                limits,
+                &sign,
+                PALW_GDN_STEP_PROBES_PER_TICK_V1,
+            );
+            if book.settled.contains_key(&claim.claim) {
+                break;
+            }
+        }
+        assert!(book.settled.get(&claim.claim).is_some_and(|why| why.starts_with("honest")), "{:#?}", book.settled);
+        assert!(reserve_native_requests_v1(memory).is_ok());
+    }
+    #[test]
+    fn temporary_resource_refusal_retries_without_certifying_honesty() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "palw_gdn_step_filer::tests::resource_retry_child", "--nocapture"])
+            .env("MISAKA_GDN_PROBE_RESOURCE_RETRY", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
     }
 }

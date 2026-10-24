@@ -2689,14 +2689,8 @@ impl crate::palw_gdn_held_filer::PalwGdnHeldHostV1 for GdnNode<'_> {
     fn openings(
         &self,
         _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
-    ) -> Result<
-        (Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1),
-        String,
-    > {
-        let oracle =
-            kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&self.w.openings, self.w.inventory_root)
-                .map_err(|e| format!("{e:?}"))?;
-        Ok((self.w.openings.clone(), oracle))
+    ) -> Result<misaka_palw_base0::GdnInventoryOracleV2, String> {
+        misaka_palw_base0::GdnInventoryOpeningsV2::try_clone_from_v2(&self.w.openings)?.into_oracle_v2(self.w.inventory_root)
     }
     fn disclose_window_daa(&self) -> u64 {
         self.window

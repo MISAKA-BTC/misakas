@@ -1301,3 +1301,83 @@ The actual metadata placement consumer also typechecks:
 target/env (`/tmp/misaka-inventory-metadata-sdk-check.log`). The manifest source
 digests match after both checks. Documentation checks retain 43 known baseline
 issues with zero new issues (`/tmp/misaka-inventory-metadata-docs-final.log`).
+
+
+## Borrowed GDN court probes and refusal retry — 2026-10-24
+
+The step filer's pre-signing local probe no longer builds an owned trial
+accusation by cloning its complete refutation and opening set. A non-wire
+`PalwGdnCourtViewV2` borrows those payloads and carries only the fixed framing
+fields read by the court. `PalwGdnCourtAccusationV2::as_view_v2` delegates wire
+shape validation to the same view walk; both verdict entry points delegate to
+the same existing terminal. The authenticated oracle's own operand clone still
+has its prior typed pre-admission and scoped reservation. No wire struct, tag,
+session/signature message, terminal rule or claim approval requirement changes.
+The view is not a signature carrier or consensus credit authentication.
+
+Review also found that a failed applicable step probe could advance the cursor
+and eventually settle the local case as "honest" without having evaluated it.
+The filer now skips explicitly non-recurrence catalog entries (the court accepts
+GDN NEON/AVX2 cores and Q36 GDN step), and keeps a window's cursor when an
+applicable evidence build/court verdict refuses. Successful honest windows still
+advance. A detected mismatch whose signed object cannot be built is reported
+and kept for retry rather than permanently settled. Refusal is never converted
+to a mismatch or selected-validator approval. This changes the local filer book,
+not the native claim phase/finality or reward settlement rules. A permanently
+unbuildable applicable tile can keep that bounded case pending; complete
+material/provider support and whole-node cost bounds remain separate work.
+
+Final core Cargo suite: 5 selected tests pass, 5088 filtered, runtime 0.02s after
+1m40s build (`/tmp/misaka-gdn-borrowed-court-final-core-tests.log`). To keep the
+monolithic core test codegen practical, that command explicitly overrides only
+`profile.test.package.kaspa-consensus-core.opt-level=0`; debug/incremental remain
+disabled. These are shape/identity/encoding controls, not production timing
+measurements. The initial three-test run did not include the two added controls
+and is not used as the final-source result; test compile errors were fixed
+before this five-test run. New controls assert pointer identity to original
+refutation/openings, framing refusal order and actual-claim execution refusal.
+Existing carrier tags, dormant network fences and session-binding checks pass.
+
+The actual base0 GDN Cargo tests pass 7 entries, 536 filtered, runtime 23.16s
+(`/tmp/misaka-gdn-borrowed-court-base0-tests.log`), including one-lane Q36 GDN
+faults on either side of the key-head boundary. These use the repository's
+normal package optimization settings. The normal base0 library is built through
+Cargo, and its emitted artifact JSON supplies matching core/hash/base0/Borsh
+rlibs (`/tmp/misaka-gdn-borrowed-court-artifacts.jsonl`). The subsequent core
+source edits are cfg(test)-only; its production view/verdict prefix is unchanged.
+
+Fresh direct-source held/step filer runtime passes 21 entries in 59.47s
+(`/tmp/misaka-gdn-borrowed-filers-build.log`,
+`/tmp/misaka-gdn-borrowed-filers-runtime.log`). It compiles the actual held filer
+and its tests, and the actual complete step production module with all but one
+unchanged cross-filer handoff test. The omitted test requires the separate full
+false-Valid/reporter/panel service graph; it is not replaced with a mock or counted
+as passing. Existing honest/forged checkpoint, conv-only fault, DA silence,
+reservation/reorg/window/close-ceiling controls run. A new real step control
+compares wire and borrowed verdicts and rejects bad artifact membership. The
+isolated resource child fills the entire logical budget, checks applicable
+probes leave cursor zero and the case unsettled, releases the blocker, then
+retries until the same honest producer is evaluated and settled. The child
+entry returns without arming unless selected by its driver. Source/production
+prefix digests, exact rustc argv, Cargo artifacts, optimization/env settings and
+results: `/tmp/misaka-gdn-borrowed-filers-manifest.json`.
+
+Remaining allocation scopes: actual signed-accusation opening copies, produced
+refutation ownership, served/window/notes scratch, held case candidates/answers,
+book/outbox/carrier copies and their restart/reorg lifetimes. Removing a local
+trial clone does not reserve the separately retained accusation. Whole-model
+costs and the live campaign remain incomplete; K3 inputs remain uncreated.
+Activation remains None; bootstrap restrictions, model tiers, mandatory claim
+approvals and dormant source economics are unchanged.
+
+The expanded actual service/test-target typecheck first caught one stale E2E
+GdnNode host seam from the earlier opening-owner change. It now uses the actual
+`try_clone_from_v2(...).into_oracle_v2(...)` owner rather than returning an
+unreserved Vec/oracle tuple. The assertions/scenarios are unchanged. After that
+repair, `cargo check -p kaspad --lib --tests --features private-integration-config`
+passes in 17.11s (`/tmp/misaka-gdn-borrowed-filers-final-private-tests-check.log`).
+This includes typechecking the full test graph, not executing the omitted
+false-Valid handoff or the full E2E graph. Source and rlib digests are recorded
+in the manifest; source digests match after checks. Documentation validation
+retains 43 baseline issues and zero new issues
+(`/tmp/misaka-gdn-borrowed-filers-docs-final.log`).

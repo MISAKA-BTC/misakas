@@ -40,10 +40,19 @@ pub struct PalwGdnCourtAccusationV2 {
     pub signature: Vec<u8>,
 }
 
-impl PalwGdnCourtAccusationV2 {
-    /// Only framing/identity checks; no arithmetic or reserved workspace is
-    /// consumed by the String-only outer admission walk. The typed fold always
-    /// runs the full terminal and preserves local resource refusal separately.
+/// Borrowed framing/evidence for local court probes. It is not a wire object,
+/// signature carrier, or selected-verifier approval.
+#[derive(Clone, Copy)]
+pub struct PalwGdnCourtViewV2<'a> {
+    pub version: u16,
+    pub execution_root: Hash64,
+    pub executor_bond: PalwBondKeyV2,
+    pub accuser_bond: PalwBondKeyV2,
+    pub leaf_index: u64,
+    pub refutation: &'a PalwGdnStepRefutationV2,
+    pub artifact_openings: &'a [PalwArtifactOpeningV1],
+}
+impl PalwGdnCourtViewV2<'_> {
     pub fn validate_shape(&self, ladder: u64) -> Result<(), &'static str> {
         if self.version != PALW_GDN_COURT_VERSION_V2 || self.refutation.version != 2 {
             return Err("unsupported GDN court/evidence version");
@@ -58,6 +67,23 @@ impl PalwGdnCourtAccusationV2 {
             return Err("GDN accusation binding names another execution");
         }
         Ok(())
+    }
+}
+impl PalwGdnCourtAccusationV2 {
+    pub fn as_view_v2(&self) -> PalwGdnCourtViewV2<'_> {
+        PalwGdnCourtViewV2 {
+            version: self.version,
+            execution_root: self.execution_root,
+            executor_bond: self.executor_bond,
+            accuser_bond: self.accuser_bond,
+            leaf_index: self.leaf_index,
+            refutation: &self.refutation,
+            artifact_openings: &self.artifact_openings,
+        }
+    }
+    /// The wire carrier and borrowed local probe share exactly one framing walk.
+    pub fn validate_shape(&self, ladder: u64) -> Result<(), &'static str> {
+        self.as_view_v2().validate_shape(ladder)
     }
     /// Count the complete accusation, including identity and signature framing,
     /// against the existing close ceiling. No temporary canonical Vec needed.
@@ -93,6 +119,16 @@ pub fn palw_gdn_court_verdict_v2(
     claim: &PalwOneMoveClaimV2,
     ladder: u64,
 ) -> Result<PalwShardCourtVerdictV1, PalwGdnCourtErrorV2> {
+    palw_gdn_court_verdict_view_v2(accusation.as_view_v2(), claim, ladder)
+}
+
+/// Same terminal as the wire entry point, borrowing existing evidence/openings.
+/// The authenticated oracle still reserves its own cloned operand ownership.
+pub fn palw_gdn_court_verdict_view_v2(
+    accusation: PalwGdnCourtViewV2<'_>,
+    claim: &PalwOneMoveClaimV2,
+    ladder: u64,
+) -> Result<PalwShardCourtVerdictV1, PalwGdnCourtErrorV2> {
     let refused = |message| PalwGdnCourtErrorV2::Evidence(PalwStepRefuteError::InputSetNotCanonical(message));
     accusation.validate_shape(ladder).map_err(refused)?;
     if accusation.execution_root != claim.execution_root {
@@ -102,14 +138,14 @@ pub fn palw_gdn_court_verdict_v2(
     // actual typed ownership before cloning; membership hashing is streaming.
     let mut q = TirNativeRequestsV1::new();
     q.exact_v1::<PalwArtifactOperandV1>(accusation.artifact_openings.len() as u64)?;
-    for opening in &accusation.artifact_openings {
+    for opening in accusation.artifact_openings {
         let heap = opening.operand.native_heap_v1("GDN court authenticated artifact operand clone");
         q.add_v1(heap.bytes().ok_or(heap)?)?;
     }
     let _operands = reserve_native_requests_v1(q.bytes_v1())?;
-    let proven = PalwProvenOperandsV1::from_openings_v1(&accusation.artifact_openings, claim.artifact_root)
+    let proven = PalwProvenOperandsV1::from_openings_v1(accusation.artifact_openings, claim.artifact_root)
         .map_err(|_| refused("GDN artifact operands do not belong to the registered class artifact"))?;
-    match check_gdn_step_refutation_v2(&accusation.refutation, claim.execution_root, claim.class_id, &proven, ladder) {
+    match check_gdn_step_refutation_v2(accusation.refutation, claim.execution_root, claim.class_id, &proven, ladder) {
         Ok(_) => Ok(PalwShardCourtVerdictV1::ExecutorGuilty),
         Err(PalwGdnCourtErrorV2::Evidence(PalwStepRefuteError::NoFaultFound)) => Ok(PalwShardCourtVerdictV1::FalseAccusation),
         Err(other) => Err(other),
@@ -242,5 +278,49 @@ mod tests {
         let mut changed = a.clone();
         std::mem::swap(&mut changed.executor_bond, &mut changed.accuser_bond);
         assert_ne!(digest, palw_gdn_court_session_id_v2(network, &changed));
+    }
+    #[test]
+    fn borrowed_view_reuses_evidence_and_preserves_shape_refusal_order() {
+        let a = accusation();
+        let view = a.as_view_v2();
+        assert!(std::ptr::eq(view.refutation, &a.refutation));
+        assert_eq!(view.artifact_openings.as_ptr(), a.artifact_openings.as_ptr());
+        assert_eq!(view.validate_shape(u64::MAX), Ok(()));
+        let mut changed = a.clone();
+        changed.version = 0;
+        assert_eq!(changed.validate_shape(0), Err("unsupported GDN court/evidence version"));
+        changed = a.clone();
+        changed.refutation.version = 0;
+        assert_eq!(changed.validate_shape(0), Err("unsupported GDN court/evidence version"));
+        assert_eq!(a.validate_shape(a.leaf_index), Err("GDN accusation leaf does not match its opening/ladder"));
+        changed = a.clone();
+        changed.leaf_index = changed.leaf_index.saturating_add(1);
+        assert_eq!(changed.validate_shape(u64::MAX), Err("GDN accusation leaf does not match its opening/ladder"));
+        changed = a.clone();
+        changed.accuser_bond = changed.executor_bond;
+        assert_eq!(changed.validate_shape(u64::MAX), Err("GDN accusation accuser is its executor"));
+        changed = a.clone();
+        changed.execution_root = Hash64::from_u64_word(999);
+        assert_eq!(changed.validate_shape(u64::MAX), Err("GDN accusation binding names another execution"));
+    }
+
+    #[test]
+    fn wire_and_borrowed_entry_points_preserve_actual_claim_refusal() {
+        let a = accusation();
+        let claim = PalwOneMoveClaimV2 {
+            execution_root: Hash64::from_u64_word(999),
+            class_id: Hash64::default(),
+            artifact_root: Hash64::default(),
+        };
+        let owned = palw_gdn_court_verdict_v2(&a, &claim, u64::MAX).unwrap_err();
+        let borrowed = palw_gdn_court_verdict_view_v2(a.as_view_v2(), &claim, u64::MAX).unwrap_err();
+        for error in [owned, borrowed] {
+            assert!(matches!(
+                error,
+                PalwGdnCourtErrorV2::Evidence(PalwStepRefuteError::InputSetNotCanonical(
+                    "GDN accusation is not the actual native claim's execution"
+                ))
+            ));
+        }
     }
 }
