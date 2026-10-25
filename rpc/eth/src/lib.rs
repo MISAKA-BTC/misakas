@@ -406,6 +406,17 @@ pub trait EthProvider: Send + Sync + 'static {
     /// inner vec = wildcard). The caller bounds the block range.
     async fn get_logs(&self, from: u64, to: u64, addresses: Vec<[u8; 20]>, topics: Vec<Vec<[u8; 32]>>) -> EthResult<Vec<EthLogEntry>>;
 
+    /// EIP-234 exact immutable block logs, including a retained side branch.
+    /// None means unknown. Never substitute a number-range query.
+    async fn get_logs_by_block_hash(
+        &self,
+        _hash: [u8; 32],
+        _addresses: Vec<[u8; 20]>,
+        _topics: Vec<Vec<[u8; 32]>>,
+    ) -> EthResult<Option<Vec<EthLogEntry>>> {
+        Err(EthRpcError::server("exact block-hash logs unavailable"))
+    }
+
     /// `eth_feeHistory`: base fees + gas-used ratios over the last `block_count`
     /// blocks ending at `newest` (used by EIP-1559 tooling — Foundry/ethers/MetaMask).
     async fn fee_history(&self, block_count: u64, newest: u64, reward_percentiles: Vec<f64>) -> EthResult<EthFeeHistory>;
@@ -1104,15 +1115,21 @@ async fn eth_get_logs(provider: &Arc<dyn EthProvider>, params: &Value) -> EthRes
         .ok_or_else(|| EthRpcError::invalid_params("eth_getLogs expects a filter object"))?;
     let addresses = parse_address_list(f.get("address"))?;
     let topics = parse_topic_filter(f.get("topics"))?;
-    let (from, to) = if let Some(bh) = f.get("blockHash").and_then(|v| v.as_str()) {
-        let h = parse_hash32_param(&json!([bh]), 0)?;
-        let blk = provider.block_by_hash(h).await?.ok_or_else(|| EthRpcError::invalid_params("unknown blockHash"))?;
-        (blk.number, blk.number)
-    } else {
-        let from = resolve_block_number(provider, f.get("fromBlock")).await?;
-        let to = resolve_block_number(provider, f.get("toBlock")).await?;
-        (from, to)
-    };
+    if let Some(hash) = f.get("blockHash") {
+        if f.contains_key("fromBlock") || f.contains_key("toBlock") {
+            return Err(EthRpcError::invalid_params("blockHash is mutually exclusive with fromBlock/toBlock"));
+        }
+        let hash = hash.as_str().ok_or_else(|| EthRpcError::invalid_params("blockHash must be a 32-byte hash string"))?;
+        let hash = parse_hash32_param(&json!([hash]), 0)?;
+        let logs = provider.get_logs_by_block_hash(hash, addresses, topics).await?
+            .ok_or_else(|| EthRpcError::server("Block not found."))?;
+        if logs.iter().any(|log| log.block_hash != hash) {
+            return Err(EthRpcError::server("exact block-hash logs returned a different block"));
+        }
+        return Ok(Value::Array(logs.iter().map(|log| render_log(log, false)).collect()));
+    }
+    let from = resolve_block_number(provider, f.get("fromBlock")).await?;
+    let to = resolve_block_number(provider, f.get("toBlock")).await?;
     // DoS bound: cap the scanned range (matches the node-side per-result cap).
     const MAX_RANGE: u64 = 10_000;
     if to >= from && to - from >= MAX_RANGE {
@@ -1122,7 +1139,8 @@ async fn eth_get_logs(provider: &Arc<dyn EthProvider>, params: &Value) -> EthRes
     Ok(Value::Array(logs.iter().map(|l| render_log(l, false)).collect()))
 }
 
-/// Render one log object. `removed` is `false` for `eth_getLogs` (canonical) and
+/// Render one log object. `removed` is `false` for `eth_getLogs` (including an
+/// explicit retained-fork hash query) and
 /// per-event for the §9 `eth_subscribe("logs")` stream (true for detached logs).
 fn render_log(e: &EthLogEntry, removed: bool) -> Value {
     let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
@@ -1882,3 +1900,6 @@ mod block_id_tests {
 
 #[cfg(test)]
 mod certified_range_tests;
+
+#[cfg(test)]
+mod exact_hash_logs_tests;

@@ -1,0 +1,32 @@
+# RFC-0012 accepted market replay context
+
+Status: coordinated build and dedicated runtime PASS; see final verification below.
+
+## Actual missing consumer and execution contract
+
+Accepted replay used the unchanged executor for its prefix, but supplied a default market input; its target inspector registered no market handlers. The production virtual processor instead supplies the selected parent's PALW state, the accepting child's DAA-resolved fences/gate, and exactly the settlements scheduled by the parent's fold. A post-accepting simulation view has the wrong chain DAA and may include different rows. A fresh target handler also loses the prefix's committed per-account/total action counters. Empty-account execution cannot represent the recorded market receipt.
+
+The new native API `palw_evm_replay_market_owned_v2(accepting)` resolves the actual accepting header and Ghostdag selected parent under the reader-first pruning session. It obtains the existing exact retained post-parent state, verifies its point against the parent header, projects the existing market gate using the accepting DAA, and separately admits/copies the parent's settlement vector in its canonical map order. Its view and settlement owners survive the returned non-wire context. The API returns None off ConsensusV2 or before the EVM market fence; active history/store/resource/import failures are explicit. The import epoch/stability is checked again after projection; no current-tip fallback exists. This is a local read capability, not portable admission, settlement certification, or a computation proof.
+
+The session API and actual accepted-replay RPC obtain this context after the checked receipt/body/EVM-parent reads. The continuation rejects accepting/parent/DAA identity mismatch before interpretation and retains the whole context throughout synchronous replay. These reads are not claimed to create a new atomic multi-store settlement snapshot.
+
+## Same executor and handler ownership
+
+The legacy `execute_block_evm` entry retains its original raw setup. A replay-only retained entry invokes the same executor body with a retained handler instead of cloning the view into an unowned raw Arc. It rejects simultaneous raw/retained inputs. Expected settlements and all other execution inputs remain the original executor inputs. The prefix's actual committed market actions seed the target handler's existing counter reset method before the target transaction runs with the inspector. The target then undergoes the existing status/gas/log reconciliation against its recorded receipt. The old trace API delegates with no market context and retains its previous inert contract.
+
+Existing typed view inventory now supports explicit retention of already-existing compatibility views through exhaustive native field visitors, including actual Vec capacities, nested roots/names/proposals/evaluations, maps and refused-class sets. It does not preadmit earlier raw-view construction. The real native API uses the existing state-to-owned-view constructor, not this compatibility path. Settlement copy admission follows actual Copy row count/type and keeps value-before-ticket drop order. Retained handler setup accounting is the existing reviewed implementation. Whole trace allocations, state-cache materialization, candidate/body clones and complete model cost remain separate boundaries.
+
+## Prepared controls — not yet run
+
+- Core `replay_market_`: two parents. Actual settlement map order versus the raw accessor, Q-1 refusal/Q success and returned-output lifetime; existing-view inventory includes nonempty nested capacities. The quota child belongs to its parent. Earlier raw/source fixture construction occurs before quota arming and is not claimed covered by the output copy ticket.
+- Consensus `replay_market_native_`: three parents. Actual pipeline-accepted BASE adjacent blocks with distinct DAA prove parent view versus post-accepting view and exact child fences; projection-triggered real import epoch change refuses the returned owners; active real capacity refusal versus dormant zero state work. No market trade rows or model maturity facts are planted in this chain fixture.
+- Node `replay_market_rpc_`: two parents at the actual production continuation. Typed faults and accepting/parent/DAA mismatch invoke no trace; exact Arc owner and true inactive None are preserved. These are API controls, not accepted-chain evidence.
+- EVM `accepted_market_replay_`: four parents. Real signed calls execute against the existing hypothetical market-window fixture through the unchanged raw executor. Retained accepted replay reconciles the recorded second writer receipt with and without an actual executed system settlement op. A block of seventeen signed same-account moves records sixteen queued actions and the seventeenth's real revert; replay must retain the prefix counter to reproduce that receipt. Wrong parent/DAA refuses; real retained handler quota refusal is retried after release. The quota child is inclusive. The earlier fixture window and expected settlement table are explicit EVM inputs, not claimed native fold/admission outcomes. No approved claim, K3 work or native39 settlement mapping is supplied by them.
+
+All eleven prepared parent controls remain PENDING until the parent-coordinated build and exact runtime filters complete. Existing executor/trace/simulator/native view controls will be run as related regression scope. No runtime acceptance follows from static parsing alone.
+
+Public activation remains None; ordinary selected-source/V6 paid bootstrap remains refused. This work changes local RPC replay only, preserves existing historical gate compatibility, and introduces no model-level review or tier change. Bridge acceptance, actual mature market fill, all-model costs, 100k/multi-process/OS-crash campaigns, historical signatures, K3 inputs and all fifteen real campaign gates remain outside these local controls.
+
+## Final coordinated verification
+
+Replay eleven dedicated parents, existing executor28/trace14/sim1/candidate3 and native-view controls PASS. Six-package retry1 no-run PASS in 186.13 seconds with 40 identities matched. Initial missing test import failure is preserved. Earlier PENDING statements describe the preparation checkpoint and are superseded by this terminal result. [Pinned executables, exact counts, logs and scope](0006-0012-source-cone-replay-logs-verification-2026-10-25.md). No campaign status is promoted.

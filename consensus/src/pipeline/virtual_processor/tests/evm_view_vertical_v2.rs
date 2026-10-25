@@ -140,3 +140,6 @@ async fn historical_market_native_api_active_resource_and_dormant_zero_state_wor
     assert!(matches!(active.consensus.palw_evm_view_at_owned_v2(target), Err(NativeEvmViewFaultV2::Resource(_))));
     assert!(dormant.consensus.palw_evm_view_at_owned_v2(dormant_target).unwrap().is_none());
 }
+
+#[path = "evm_replay_market_vertical_v2.rs"]
+mod replay_market_v2;

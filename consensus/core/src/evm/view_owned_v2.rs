@@ -1,9 +1,22 @@
 //! Local historical EVM read failures; none of these authenticate computation.
 use crate::palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1};
 use std::sync::Arc;
+#[path = "view_native_heap_v2.rs"]
+mod native_heap;
 
 pub type NativeEvmViewOwnedV2 = Arc<NativeRetainedV1<super::model_market::PalwEvmViewV1>>;
 pub type NativeEvmViewAtV2 = (NativeEvmViewOwnedV2, super::model_market::PalwEvmMarketFencesV1);
+/// Non-wire replay inputs: post-parent rows interpreted at the accepting block's
+/// fences, with the exact settlements the parent's fold scheduled for its child.
+#[derive(Debug)]
+pub struct NativeEvmReplayMarketV2 {
+    pub accepting: crate::Hash64,
+    pub selected_parent: crate::Hash64,
+    pub accepting_daa: u64,
+    pub view: NativeEvmViewOwnedV2,
+    pub fences: super::model_market::PalwEvmMarketFencesV1,
+    pub settlements: NativeRetainedV1<Vec<super::model_market::PalwEvmSettlementV1>>,
+}
 #[derive(Debug, thiserror::Error)]
 pub enum NativeEvmViewFaultV2 {
     #[error("historical EVM local capacity: {0}")]

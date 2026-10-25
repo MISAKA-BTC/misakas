@@ -213,6 +213,32 @@ pub fn trace_accepted_tx(
     capture_struct_logs: bool,
     limits: TraceLimits,
 ) -> Result<TracedTx, TraceError> {
+    trace_accepted_tx_with_market_owned_v2(parent_snapshot, parent_header, body, receipt_index, expected_receipt,
+        gas_pool_v2_activation_daa_score, f002_withdraw_cap_activation_daa_score, bridge_ledger_activation_daa_score,
+        f003_mldsa_verify_activation_daa_score, capture_struct_logs, limits, None)
+}
+
+/// Same replay engine with exact native post-parent market rows and child fences.
+#[allow(clippy::too_many_arguments)]
+pub fn trace_accepted_tx_with_market_owned_v2(
+    parent_snapshot: &EvmStateSnapshot,
+    parent_header: Option<&EvmExecutionHeader>,
+    body: &EvmTraceReplayBodyV1,
+    receipt_index: u32,
+    expected_receipt: &EvmReceipt,
+    gas_pool_v2_activation_daa_score: u64,
+    f002_withdraw_cap_activation_daa_score: u64,
+    bridge_ledger_activation_daa_score: u64,
+    f003_mldsa_verify_activation_daa_score: u64,
+    capture_struct_logs: bool,
+    limits: TraceLimits,
+    market_context: Option<&kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>,
+) -> Result<TracedTx, TraceError> {
+    if let Some(context) = market_context {
+        if context.selected_parent != body.selected_parent || context.accepting_daa != body.env.daa_score || !context.fences.evm_active {
+            return Err(TraceError::Internal("replay market context does not match selected parent/accepting DAA".into()));
+        }
+    }
     let target_idx = candidate_index_for_receipt(body, receipt_index).ok_or(TraceError::TargetNotAccepted)?;
 
     // Reconstruct the executor inputs from the replay body. `transactions` is
@@ -233,7 +259,11 @@ pub fn trace_accepted_tx(
     //    prefix txs, with all their tip-reroute / F002-burn accounting).
     let prefix = &all_candidates[..target_idx];
     let input_prefix = EvmBlockInput {
-        market: Default::default(),
+        market: match market_context {
+            Some(context) => crate::EvmMarketInput { palw_view: None, fences: context.fences,
+                expected_settlements: &context.settlements, chain_id: context.view.chain_id },
+            None => Default::default(),
+        },
         parent: parent_header,
         header_timestamp_ms: body.env.header_timestamp_ms,
         selected_parent_hash,
@@ -255,7 +285,10 @@ pub fn trace_accepted_tx(
         // the block ran under is its committed header's `gas_limit`, and a prefix never exceeds it.
     };
     let seed = seed_cachedb(parent_snapshot).map_err(TraceError::Exec)?;
-    let (prefix_result, mut pre_state) = execute_block_evm(seed, &input_prefix).map_err(TraceError::Exec)?;
+    let (prefix_result, mut pre_state) = match market_context {
+        Some(context) => crate::executor::execute_block_evm_with_retained_market_v2(seed, &input_prefix, context.view.clone()),
+        None => execute_block_evm(seed, &input_prefix),
+    }.map_err(TraceError::Exec)?;
 
     // Defense-in-depth (fail closed): the re-derived prefix MUST reproduce the
     // recorded per-candidate outcomes exactly. If it does not — a wrong activation
@@ -285,6 +318,18 @@ pub fn trace_accepted_tx(
         to_revm_address(&body.env.coinbase),
     );
 
+    // Replay the target with the committed prefix's action counters. Starting a
+    // fresh handler at zero would change the next action's sequence/per-account cap.
+    let market = match market_context {
+        Some(context) => {
+            let handler = crate::model_market::MarketHandlers::new_retained_v2(context.view.clone(), context.fences, context.view.chain_id)
+                .map_err(|e| TraceError::Exec(EvmExecError::NativeResource(e)))?;
+            handler.set_committed(&prefix_result.market_actions);
+            Some(handler)
+        }
+        None => None,
+    };
+
     // 3. Decode the target tx and run it once with the call-frame inspector.
     let txenv = decode_tx_to_env(&body.txs[target_idx].raw).map_err(|e| TraceError::Exec(EvmExecError::TxDecode(e)))?;
     let target_gas_limit = txenv.gas_limit;
@@ -308,7 +353,7 @@ pub fn trace_accepted_tx(
             // Same precompile seam as the executor + the eth_call simulator (parity),
             // composed with the inspector handler (inspector_handle_register does not
             // override handlers — observation only).
-            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, None)))
+            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, market.clone())))
             .append_handler_register(inspector_handle_register)
             .build();
         evm.context.evm.env.tx = txenv;

@@ -654,6 +654,16 @@ impl EthProvider for NodeEthProvider {
         Ok(entries.into_iter().map(to_eth_log_entry).collect())
     }
 
+    async fn get_logs_by_block_hash(
+        &self,
+        hash: [u8; 32],
+        addresses: Vec<[u8; 20]>,
+        topics: Vec<Vec<[u8; 32]>>,
+    ) -> EthResult<Option<Vec<EthLogEntry>>> {
+        let session = self.consensus_manager.consensus().session().await;
+        session.spawn_blocking(move |c| exact_hash_logs_v2(c, hash, addresses, topics)).await
+    }
+
     async fn fee_history(&self, block_count: u64, newest: u64, reward_percentiles: Vec<f64>) -> EthResult<EthFeeHistory> {
         let session = self.consensus_manager.consensus().session().await;
         let np = reward_percentiles.len();
@@ -760,7 +770,7 @@ impl NodeEthProvider {
                     // with (gas-pool v1/v2, withdraw-cap, bridge ledger, F003) — read from the
                     // network Params, not assumed inert (testnet runs a finite gas-pool-v2 fence).
                     let (gas_pool_v2, f002_withdraw_cap, bridge_ledger, f003_mldsa_verify) = c.evm_activation_fences();
-                    let traced = kaspa_evm::trace::trace_accepted_tx(
+                    let traced = with_replay_market_owned_v2(c, accepting, &body, |market| kaspa_evm::trace::trace_accepted_tx_with_market_owned_v2(
                         &parent_snapshot,
                         parent_header.as_ref(),
                         &body,
@@ -772,8 +782,9 @@ impl NodeEthProvider {
                         f003_mldsa_verify,
                         capture_struct_logs,
                         kaspa_evm::trace::TraceLimits::default(),
+                        market,
                     )
-                    .map_err(|e| EthRpcError::server(format!("{e}")))?;
+                    .map_err(|e| EthRpcError::server(format!("{e}"))))?;
                     let originating = kaspa_evm::trace::candidate_index_for_receipt(&body, view.receipt_index)
                         .map(|i| body.txs[i].originating_payload_block);
                     Ok((traced, accepting, originating))
@@ -899,11 +910,56 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
     }
 }
 
+fn with_replay_market_owned_v2<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    accepting: kaspa_consensus_core::BlockHash,
+    body: &kaspa_consensus_core::evm::EvmTraceReplayBodyV1,
+    visit: impl FnOnce(Option<&kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>) -> EthResult<T>,
+) -> EthResult<T> {
+    let context = c.palw_evm_replay_market_owned_v2(accepting)
+        .map_err(|e| EthRpcError::server(format!("historical replay market unavailable: {e}")))?;
+    if let Some(context) = &context {
+        if context.accepting != accepting || context.selected_parent != body.selected_parent || context.accepting_daa != body.env.daa_score {
+            return Err(EthRpcError::server("historical replay market identity differs from accepted replay body"));
+        }
+    }
+    visit(context.as_ref())
+}
+
 fn transaction_read_v2<T>(
     label: &str,
     result: kaspa_consensus_core::errors::consensus::ConsensusResult<T>,
 ) -> EthResult<T> {
     result.map_err(|e| EthRpcError::server(format!("{label}: {e}")))
+}
+
+#[cfg(test)]
+#[path = "eth_rpc_replay_market_tests_v2.rs"]
+mod replay_market_tests_v2;
+
+/// Exact immutable hash query; unlike the number range it may name a retained
+/// side branch. Filter in place and keep the existing 10,000-result limit.
+fn exact_hash_logs_v2(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    hash: [u8; 32],
+    addresses: Vec<[u8; 20]>,
+    topics: Vec<Vec<[u8; 32]>>,
+) -> EthResult<Option<Vec<EthLogEntry>>> {
+    let Some(mut logs) = transaction_read_v2("exact block-hash logs", c.get_evm_block_logs_by_rpc_hash(EvmH256::from_bytes(hash)))?
+    else { return Ok(None) };
+    if logs.iter().any(|log| log.block_l1_hash.as_bytes()[..32] != hash[..]) {
+        return Err(EthRpcError::server("exact block-hash reader returned a different block"));
+    }
+    logs.retain(|log| {
+        (addresses.is_empty() || addresses.contains(&log.address.as_bytes()))
+            && topics.iter().enumerate().all(|(index, allowed)| {
+                allowed.is_empty() || log.topics.get(index).is_some_and(|topic| allowed.contains(&topic.as_bytes()))
+            })
+    });
+    if logs.len() > 10_000 {
+        return Err(EthRpcError::server("eth_getLogs: query matched more than 10000 logs; narrow the filters"));
+    }
+    Ok(Some(logs.into_iter().map(to_eth_log_entry).collect()))
 }
 
 fn with_candidate_authority_v2<T>(
@@ -1306,3 +1362,7 @@ mod receipt_fault_tests;
 #[cfg(test)]
 #[path = "eth_rpc_transaction_authority_tests.rs"]
 mod transaction_authority_tests;
+
+#[cfg(test)]
+#[path = "eth_rpc_exact_hash_logs_tests.rs"]
+mod exact_hash_logs_tests;

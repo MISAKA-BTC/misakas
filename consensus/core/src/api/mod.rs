@@ -929,6 +929,15 @@ pub trait ConsensusApi: Send + Sync {
         Err(crate::evm::view_owned_v2::NativeEvmViewFaultV2::Unavailable("exact post-target reader not implemented"))
     }
 
+    /// Exact selected-parent market inputs at this accepting block's fence DAA.
+    /// A post-accepting simulation view is not an execution replay prestate.
+    fn palw_evm_replay_market_owned_v2(
+        &self,
+        _accepting: BlockHash,
+    ) -> Result<Option<crate::evm::view_owned_v2::NativeEvmReplayMarketV2>, crate::evm::view_owned_v2::NativeEvmViewFaultV2> {
+        Err(crate::evm::view_owned_v2::NativeEvmViewFaultV2::Unavailable("exact replay market reader not implemented"))
+    }
+
     /// ADR-0088 Decision 12: the proposals attached to a line, keyed by proposal id. `None` when
     /// the line does not exist.
     fn palw_model_proposals_v1(
@@ -2926,6 +2935,15 @@ pub trait ConsensusApi: Send + Sync {
     /// points to). Empty for a non-EVM / unknown block.
     fn get_evm_block_logs(&self, _l1_hash: BlockHash) -> ConsensusResult<Vec<crate::evm::EvmLogEntry>> {
         Ok(Vec::new())
+    }
+
+    /// Exact immutable logs for an RPC block hash, including a retained side
+    /// branch. None means unknown; no canonical-number substitution is allowed.
+    fn get_evm_block_logs_by_rpc_hash(
+        &self,
+        _rpc_hash: kaspa_hashes::EvmH256,
+    ) -> ConsensusResult<Option<Vec<crate::evm::EvmLogEntry>>> {
+        Err(crate::errors::consensus::ConsensusError::General("exact RPC-hash EVM logs unavailable"))
     }
 
     /// kaspa-pq EVM Lane v0.4 (§16, audit R-2): the raw EIP-2718 bytes of an EVM

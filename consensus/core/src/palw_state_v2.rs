@@ -11335,6 +11335,7 @@ pub struct PalwChainStateV2 {
 
 mod chain_state;
 mod evm_view_owned_v2;
+mod evm_replay_settlements_owned_v2;
 pub use evm_view_owned_v2::{NativeEvmMarketGateInputsV2, NativeEvmViewQuoteV2};
 #[path = "palw_court_end_archive_fold_v1.rs"]
 mod palw_court_end_archive_fold_v1;

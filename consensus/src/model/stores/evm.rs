@@ -768,6 +768,16 @@ impl DbEvmLogIndexStore {
         }
     }
 
+    /// Checked query reader: genuine absent floor permits a canonical scan;
+    /// malformed/unreadable completeness metadata cannot certify an empty index.
+    pub fn try_indexed_floor(&self) -> Result<Option<u64>, StoreError> {
+        match self.floor.read(EvmH256::from_bytes([0u8; 32])) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Lower the floor to `n` if the index now covers a lower block (set-once for
     /// forward processing; a backfill lowers it). Idempotent. NOTE: the floor store
     /// uses `CachePolicy::Empty`, so this guard's `indexed_floor()` reads only
@@ -807,6 +817,20 @@ impl DbEvmLogIndexStore {
     /// never written by us — are skipped.
     pub fn bucket_locs(&self, kind: LogPostingKind, selector: &[u8]) -> impl Iterator<Item = LogPostingLoc> + '_ {
         self.access.bucket_iterator(log_posting_bucket(kind, selector)).filter_map(|r| r.ok().and_then(|m| decode_log_posting_loc(&m)))
+    }
+
+    /// The actual query consumer must not silently drop unreadable members.
+    /// Keep the historical iterator above for its existing compatibility callers.
+    pub fn try_bucket_locs(
+        &self,
+        kind: LogPostingKind,
+        selector: &[u8],
+    ) -> impl Iterator<Item = Result<LogPostingLoc, StoreError>> + '_ {
+        self.access.bucket_iterator(log_posting_bucket(kind, selector)).map(|member| {
+            let member = member?;
+            decode_log_posting_loc(&member)
+                .ok_or_else(|| StoreError::DataInconsistency("malformed EVM log posting member".into()))
+        })
     }
 }
 

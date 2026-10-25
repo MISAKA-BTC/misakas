@@ -224,8 +224,29 @@ fn bridge_ledger_opening(
 /// state (for persistence / the next block). The parent state is consumed as the
 /// mutable working set.
 pub fn execute_block_evm(
+    state_db: CacheDB<EmptyDB>,
+    input: &EvmBlockInput,
+) -> Result<(EvmExecutionResult, CacheDB<EmptyDB>), EvmExecError> {
+    execute_block_evm_inner_v2(state_db, input, None)
+}
+
+/// Replay-only retained market input; consensus keeps the original entry point.
+/// The same executor interprets the prefix with the exact owned parent view.
+pub fn execute_block_evm_with_retained_market_v2(
+    state_db: CacheDB<EmptyDB>,
+    input: &EvmBlockInput,
+    view: kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewOwnedV2,
+) -> Result<(EvmExecutionResult, CacheDB<EmptyDB>), EvmExecError> {
+    if input.market.palw_view.is_some() {
+        return Err(EvmExecError::InvariantViolation("both legacy and retained replay market views supplied".into()));
+    }
+    execute_block_evm_inner_v2(state_db, input, Some(view))
+}
+
+fn execute_block_evm_inner_v2(
     mut state_db: CacheDB<EmptyDB>,
     input: &EvmBlockInput,
+    retained_view: Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewOwnedV2>,
 ) -> Result<(EvmExecutionResult, CacheDB<EmptyDB>), EvmExecError> {
     let parent_state_root = input.parent.map(|p| p.state_root).unwrap_or(EVM_GENESIS_STATE_ROOT);
     let coinbase = to_revm_address(&input.payload.evm_coinbase);
@@ -430,12 +451,15 @@ pub fn execute_block_evm(
     }
     // ADR-0089 Decisions 2 and 5: the window and the hand, bound to this block's view, registered
     // only when the fence says so and a view was given.
-    let market: Option<MarketHandlers> = input
+    let market: Option<MarketHandlers> = if input.market.fences.evm_active && retained_view.is_some() {
+        Some(MarketHandlers::new_retained_v2(retained_view.expect("checked retained view"), input.market.fences, input.market.chain_id)
+            .map_err(EvmExecError::NativeResource)?)
+    } else { input
         .market
         .palw_view
         .clone()
         .filter(|_| input.market.fences.evm_active)
-        .map(|view| MarketHandlers::new(view, input.market.fences, input.market.chain_id));
+        .map(|view| MarketHandlers::new(view, input.market.fences, input.market.chain_id)) };
     let market_for_seam = market.clone();
     let mut market_actions: Vec<PalwEvmMarketActionV1> = Vec::new();
     let mut burn_this_block: u128 = 0;
@@ -2310,4 +2334,6 @@ mod tests {
         let err = execute_block_evm(funded_seed(from, 0), &input).err().unwrap();
         assert!(matches!(err, EvmExecError::MarketSettlementMismatch(_)), "{err:?}");
     }
+    include!("accepted_market_replay_tests_v2.rs");
+
 }

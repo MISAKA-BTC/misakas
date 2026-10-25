@@ -6,6 +6,7 @@ pub mod storage;
 pub mod test_consensus;
 
 mod palw_material_hold;
+mod evm_replay_market_owned_v2;
 #[cfg(test)]
 mod evm_view_projection_hook_v2;
 mod utxo_set_override;
@@ -2827,6 +2828,13 @@ impl ConsensusApi for Consensus {
         Ok(Some((view, fences)))
     }
 
+    fn palw_evm_replay_market_owned_v2(
+        &self,
+        accepting: BlockHash,
+    ) -> Result<Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>, kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2> {
+        self.read_evm_replay_market_owned_v2(accepting)
+    }
+
     fn palw_model_lines_v1(&self, class_id: kaspa_hashes::Hash64) -> Option<Vec<kaspa_consensus_core::api::PalwModelLineRowReadV1>> {
         let state = self.palw_state_v2_tip()?;
         state.class(&class_id)?;
@@ -5306,12 +5314,13 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_block_logs(&self, l1_hash: BlockHash) -> ConsensusResult<Vec<kaspa_consensus_core::evm::EvmLogEntry>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM immutable logs read: {e}"));
         // Read by L1 hash from the IMMUTABLE header + receipts stores (never the
         // reorg-mutable number map): the §9 logs reorg pump emits detached blocks,
         // which are no longer canonical but whose receipts are still stored. No
         // canonical filter here — the pump tags removed=true/false itself.
-        let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { return Ok(Vec::new()) };
-        let receipts = self.storage.evm_receipts_store.get(l1_hash).optional().unwrap().unwrap_or_default();
+        let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().map_err(unavailable)? else { return Ok(Vec::new()) };
+        let receipts = self.storage.evm_receipts_store.get(l1_hash).optional().map_err(unavailable)?.unwrap_or_default();
         let mut out = Vec::new();
         let mut log_index: u32 = 0;
         for (rcpt_idx, receipt) in receipts.receipts.iter().enumerate() {
@@ -5331,6 +5340,24 @@ impl ConsensusApi for Consensus {
             }
         }
         Ok(out)
+    }
+
+    fn get_evm_block_logs_by_rpc_hash(
+        &self,
+        rpc_hash: kaspa_hashes::EvmH256,
+    ) -> ConsensusResult<Option<Vec<kaspa_consensus_core::evm::EvmLogEntry>>> {
+        use crate::model::stores::evm::{EvmBlockHashMapStoreReader, EvmHeaderStoreReader};
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM hash logs read: {e}"));
+        let Some(block) = self.storage.evm_block_hash_map_store.get(rpc_hash).map_err(unavailable)? else { return Ok(None) };
+        if block.as_bytes()[..32] != rpc_hash.as_bytes()[..] {
+            return Err(ConsensusError::GeneralOwned("EVM RPC hash index names a different block hash".into()));
+        }
+        if self.storage.evm_header_store.get(block).optional().map_err(unavailable)?.is_none() {
+            return Ok(None);
+        }
+        // Exact immutable identity, intentionally not the reorg-mutable number
+        // index or canonical-only range reader. EIP-234 includes retained forks.
+        self.get_evm_block_logs(block).map(Some)
     }
 
     fn get_evm_raw_tx(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<Vec<u8>>> {
@@ -5375,6 +5402,12 @@ impl ConsensusApi for Consensus {
         topics: Vec<Vec<kaspa_hashes::EvmH256>>,
     ) -> ConsensusResult<Vec<kaspa_consensus_core::evm::EvmLogEntry>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmNumberStoreReader, EvmReceiptsStoreReader};
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM range logs read: {e}"));
+        let canonical = |block| match self.is_chain_block(block) {
+            Ok(value) => Ok(value),
+            Err(ConsensusError::HeaderNotFound(_)) => Ok(false),
+            Err(error) => Err(error),
+        };
         // DoS bound: cap the result set (the crate caps the block range upstream).
         // Exceeding the cap is an ERROR, not a silent truncation (audit H-05): a
         // truncated array indistinguishable from a complete one makes indexers
@@ -5403,7 +5436,10 @@ impl ConsensusApi for Consensus {
         // the address posting index instead of scanning every block. The floor gate
         // prevents silently missing logs from blocks indexed before the writer was
         // deployed (a backfill lowers the floor — design §14).
-        if !addresses.is_empty() && self.storage.evm_log_index_store.indexed_floor().is_some_and(|f| from_number >= f) {
+        let indexed_floor = if addresses.is_empty() { None } else {
+            self.storage.evm_log_index_store.try_indexed_floor().map_err(unavailable)?
+        };
+        if indexed_floor.is_some_and(|f| from_number >= f) {
             let mut out: Vec<kaspa_consensus_core::evm::EvmLogEntry> = Vec::new();
             let mut seen: std::collections::HashSet<[u8; 20]> = std::collections::HashSet::new();
             for addr in addresses.iter().copied() {
@@ -5412,26 +5448,30 @@ impl ConsensusApi for Consensus {
                 }
                 // Collect this address's in-range postings (ascending block order),
                 // then resolve each (the iterator borrows the store).
-                let locs: Vec<_> = self
-                    .storage
-                    .evm_log_index_store
-                    .bucket_locs(kaspa_consensus_core::evm::LogPostingKind::Address, &addr.as_bytes())
-                    .skip_while(|loc| loc.evm_number < from_number)
-                    .take_while(|loc| loc.evm_number <= to_number)
-                    .collect();
+                let mut locs = Vec::new();
+                for loc in self.storage.evm_log_index_store
+                    .try_bucket_locs(kaspa_consensus_core::evm::LogPostingKind::Address, &addr.as_bytes()) {
+                    let loc = loc.map_err(unavailable)?;
+                    if loc.evm_number < from_number { continue; }
+                    if loc.evm_number > to_number { break; }
+                    locs.push(loc);
+                }
                 for loc in locs {
                     // Canonical-resolve the posting (drop side-branch entries) — the
                     // same backstop get_evm_block_by_number uses.
-                    if !self.is_chain_block(loc.l1_hash).unwrap_or(false) {
+                    if !canonical(loc.l1_hash)? {
                         continue;
                     }
-                    let Some(header) = self.storage.evm_header_store.get(loc.l1_hash).optional().unwrap() else { continue };
+                    let Some(header) = self.storage.evm_header_store.get(loc.l1_hash).optional().map_err(unavailable)? else { continue };
                     if header.evm_number != loc.evm_number {
                         continue;
                     }
-                    let receipts = self.storage.evm_receipts_store.get(loc.l1_hash).optional().unwrap().unwrap_or_default();
+                    let receipts = self.storage.evm_receipts_store.get(loc.l1_hash).optional().map_err(unavailable)?.unwrap_or_default();
                     let Some(receipt) = receipts.receipts.get(loc.tx_index as usize) else { continue };
                     let Some(log) = receipt.logs.get(loc.in_receipt_log_index as usize) else { continue };
+                    if log.address != addr {
+                        continue;
+                    }
                     if !topic_match(&log.topics) {
                         continue;
                     }
@@ -5462,16 +5502,16 @@ impl ConsensusApi for Consensus {
 
         let mut out = Vec::new();
         for n in from_number..=to_number {
-            let Some(l1_hash) = self.storage.evm_number_store.get(n).unwrap() else { continue };
+            let Some(l1_hash) = self.storage.evm_number_store.get(n).map_err(unavailable)? else { continue };
             // Reorg-validate the (upsert) number index before trusting the row.
-            if !self.is_chain_block(l1_hash).unwrap_or(false) {
+            if !canonical(l1_hash)? {
                 continue;
             }
-            let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { continue };
+            let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().map_err(unavailable)? else { continue };
             if header.evm_number != n {
                 continue;
             }
-            let receipts = self.storage.evm_receipts_store.get(l1_hash).optional().unwrap().unwrap_or_default();
+            let receipts = self.storage.evm_receipts_store.get(l1_hash).optional().map_err(unavailable)?.unwrap_or_default();
             let mut log_index: u32 = 0;
             for (rcpt_idx, receipt) in receipts.receipts.iter().enumerate() {
                 let tx_hash = receipts.tx_hashes.get(rcpt_idx).cloned().unwrap_or_default();
@@ -5882,3 +5922,6 @@ mod evm_receipt_fault_tests;
 
 #[cfg(test)]
 mod evm_transaction_fault_tests;
+
+#[cfg(test)]
+mod evm_logs_fault_tests;

@@ -1232,6 +1232,13 @@ impl ConsensusSessionOwned {
         self.consensus.palw_evm_view_at_owned_v2(target)
     }
 
+    pub fn palw_evm_replay_market_owned_v2(
+        &self,
+        accepting: kaspa_consensus_core::BlockHash,
+    ) -> Result<Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>, kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2> {
+        self.consensus.palw_evm_replay_market_owned_v2(accepting)
+    }
+
     pub fn palw_model_lines_v1(
         &self,
         class_id: kaspa_consensus_core::Hash64,
