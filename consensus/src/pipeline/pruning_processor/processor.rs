@@ -1,5 +1,8 @@
 //! TODO: module comment about locking safety and consistency of various pruning stores
 
+#[path = "prune_row_locks.rs"]
+mod prune_row_locks;
+
 use crate::{
     consensus::{
         services::{ConsensusServices, DbParentsManager, DbPruningPointManager},
@@ -660,11 +663,17 @@ impl PruningProcessor {
 
             if !keep_blocks.contains(&current) {
                 let mut batch = WriteBatch::default();
-                let mut relations_write = self.relations_store.write();
-                let mut reachability_relations_write = self.reachability_relations_store.write();
+                // Match virtual's PALW -> statuses order, retaining the header
+                // processor's relations -> reachability-relations -> statuses order.
+                // All four guards remain held through the same durable row batch.
+                let prune_row_locks::RowGuards {
+                    palw: mut palw_write,
+                    relations: mut relations_write,
+                    reachability_relations: mut reachability_relations_write,
+                    statuses: mut statuses_write,
+                } = prune_row_locks::lock_rows(&self.storage);
                 let mut staging_reachability_relations = StagingRelationsStore::new(&mut reachability_relations_write);
                 let mut staging_reachability = StagingReachabilityStore::new(reachability_read);
-                let mut statuses_write = self.statuses_store.write();
 
                 // Prune data related to block bodies and UTXO state
                 self.utxo_multisets_store.delete_batch(&mut batch, current).unwrap();
@@ -699,11 +708,11 @@ impl PruningProcessor {
                 //
                 // A no-op (delete-of-absent) on every network without a V2 bundle, which is every
                 // shipped preset.
-                self.palw_state_v2_store.write().delete_delta_batch(&mut batch, current).unwrap();
+                palw_write.delete_delta_batch(&mut batch, current).unwrap();
                 // Paid public prefix material outlives a body's pruning while its original
                 // horizon is live. Only this irreversible point can advance archive GC.
                 let archive_pruning_daa = self.headers_store.get_daa_score(new_pruning_point).unwrap();
-                self.palw_state_v2_store.read().gc_prefix_history_batch_v1(&mut batch, archive_pruning_daa, 64).unwrap();
+                palw_write.gc_prefix_history_batch_v1(&mut batch, archive_pruning_daa, 64).unwrap();
                 // kaspa-pq ADR-0020 (EVM lane): prune this pruned block's per-block
                 // EVM data (audit H-01 — without this the EVM stores grew O(state ×
                 // blocks) and were never reclaimed). All keyed by the L1 block hash;
@@ -817,6 +826,7 @@ impl PruningProcessor {
                 drop(statuses_write);
                 drop(reachability_relations_write);
                 drop(relations_write);
+                drop(palw_write);
 
                 reachability_read = self.reachability_store.upgradable_read();
             }
