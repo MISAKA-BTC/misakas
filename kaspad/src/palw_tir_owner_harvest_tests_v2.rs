@@ -4,13 +4,13 @@ use super::super::{PalwTirPublicRequestV1, PalwTirPublicResponseV1, PalwTirPubli
 use super::*;
 use kaspa_consensus_core::{
     palw_tir_class_v1::*,
-    palw_tir_public_source_v1::PalwTirPublicIdsAssemblerV1,
+    palw_tir_public_state_v1::PalwTirPublicFinishedOwnedV2,
     palw_tir_step_v1::{PalwTirStepBindingV1, PalwTirStepSpaceV1, palw_tir_execution_root_v1},
 };
 fn h(n: u64) -> Hash64 {
     Hash64::from_u64_word(n)
 }
-fn material() -> (PalwTirPublicFinishedV1, PalwTirPublicFinishedV1) {
+pub(crate) fn material() -> (PalwTirPublicFinishedOwnedV2, PalwTirPublicFinishedOwnedV2) {
     use misaka_palw_tir::{
         builder::ProgramBuilder,
         program::{HISTORY_BOUND_V1_SMALL, Ref},
@@ -110,26 +110,21 @@ fn material() -> (PalwTirPublicFinishedV1, PalwTirPublicFinishedV1) {
         PalwTirPublicSourceV1::new_v1(&record, &class.layout, &header, binding.committed_execution_root, trace, maximum).unwrap();
     let (frontier, siblings) = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_node_parts_v1(&hashes, 1, 0).unwrap();
     let unit = source
-        .authenticate_v1(
+        .authenticate_response_owned_v2(
             &PalwTirPublicRequestV1::StepNode { level: 1, index: 0 },
             &PalwTirPublicResponseV1::StepNode { frontier, siblings },
             None,
         )
         .unwrap();
-    let ids = PalwTirPublicIdsAssemblerV1::default()
-        .push_v1(&source, &PalwTirPublicRequestV1::Ids { offset: 0 }, &PalwTirPublicResponseV1::Ids { rows_root, ids })
-        .unwrap()
-        .unwrap();
-    (PalwTirPublicFinishedV1::Unit(unit), PalwTirPublicFinishedV1::Ids(ids))
+    let body = kaspa_consensus_core::palw_tir_public_owned_v1::palw_tir_public_ids_body_v1(&source, rows_root, &ids).unwrap();
+    let ids = source.decode_complete_ids_body_native_v2(&body).unwrap();
+    (PalwTirPublicFinishedOwnedV2::Unit(unit), PalwTirPublicFinishedOwnedV2::Ids(ids))
 }
 #[test]
 fn tir_owner_harvest_publishes_units_ids_once_and_deduplicates_requests() {
     let (mut case, _host) = cone_owned_consumer_tests::case();
     let (unit, ids) = material();
-    let unit_again = match &unit {
-        PalwTirPublicFinishedV1::Unit(unit) => PalwTirPublicFinishedV1::Unit(unit.clone()),
-        _ => unreachable!(),
-    };
+    let (unit_again, _) = material();
     assert!(harvest_accepted_v2(&mut case, h(1), || Ok(Some(unit))).unwrap());
     assert_eq!(case.units.len(), 1);
     assert!(case.ids.is_none());
@@ -163,7 +158,7 @@ fn tir_owner_harvest_failed_read_stays_retryable_until_publication() {
     let (_, ids) = material();
     let id = h(9);
     assert!(!harvest_accepted_v2(&mut case, id, || Ok(None)).unwrap());
-    assert!(harvest_accepted_v2(&mut case, id, || Err("semantic material refusal".into())).is_err());
+    assert!(harvest_accepted_v2(&mut case, id, || Err(Fault::Decode("semantic material refusal".into()))).is_err());
     assert!(case.harvested.is_empty() && case.units.is_empty() && case.ids.is_none() && !case.done);
     const LIMIT: u64 = 1 << 20;
     arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: LIMIT, database_bytes: 0 }));
@@ -171,7 +166,7 @@ fn tir_owner_harvest_failed_read_stays_retryable_until_publication() {
     let mut reads = 0;
     let fault = harvest_accepted_v2(&mut case, id, || {
         reads += 1;
-        let _read = reserve_native_requests_v1(1).map_err(|e| format!("{e:?}"))?;
+        let _read = reserve_native_requests_v1(1).map_err(Fault::Resource)?;
         Ok(None)
     });
     assert!(fault.is_err());
@@ -181,7 +176,7 @@ fn tir_owner_harvest_failed_read_stays_retryable_until_publication() {
     assert!(
         harvest_accepted_v2(&mut case, id, || {
             reads += 1;
-            let _read = reserve_native_requests_v1(1).map_err(|e| format!("{e:?}"))?;
+            let _read = reserve_native_requests_v1(1).map_err(Fault::Resource)?;
             Ok(Some(ids))
         })
         .unwrap()
@@ -192,5 +187,6 @@ fn tir_owner_harvest_failed_read_stays_retryable_until_publication() {
     assert!(case.units.is_empty() && !case.done);
     assert_eq!(case.harvested.len(), 1);
     assert_eq!(case.demands, 0);
+    drop(case);
     assert!(reserve_native_requests_v1(LIMIT).is_ok());
 }

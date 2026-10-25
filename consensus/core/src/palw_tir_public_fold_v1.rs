@@ -1812,6 +1812,7 @@ mod tests {
 #[cfg(test)]
 mod conviction_e2e_tests {
     include!("palw_tir_continuation_source_owned_tests_v2.rs");
+    include!("palw_tir_finished_material_owned_tests_v2.rs");
     include!("palw_tir_native_header_identity_tests_v2.rs");
     include!("palw_tir_allocation_source_owned_tests_v2.rs");
     include!("palw_tir_preparation_sources_owned_tests_v2.rs");

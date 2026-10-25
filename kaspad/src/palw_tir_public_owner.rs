@@ -10,7 +10,7 @@
 //! 1. **Open** an owner acquisition on the frame (its own rent and deposit, never the producer's pool; K_owner bounds owners).
 //! 2. **Acquire and localize** — one `Demand` at a time against the frame's literal custodians; each answer is read back only
 //!    from the ACCEPTED rooted chunks and re-authenticated against the original roots
-//!    (`palw_tir_public_finished_material_v1`). A step-root disagreement descends the committed step tree with authenticated
+//!    (`PalwTirPublicMaterialContextV2::finished_material_owned_v2`). A step-root disagreement descends the committed step tree with authenticated
 //!    `StepNode` frontiers against the replay (`next_public_from_source_v1`) to one leaf, then probes the public sparse cone
 //!    builder, demanding exactly the step ranges it names, until it returns a built primitive. An output-root disagreement (or a
 //!    stop-rule question) demands the complete original IDs to their outer EOF.
@@ -54,7 +54,7 @@ use kaspa_consensus_core::{
         PalwTirPublicConvictionEvidenceV1,
     },
     palw_tir_public_claim_v1::palw_tir_public_claim_v1,
-    palw_tir_public_owned_v1::{PalwTirPublicFinishedV1, PalwTirPublicOwnedActionV1},
+    palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1,
     palw_tir_public_source_v1::{
         PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1, PalwTirPublicAuthenticatedIdsV1, PalwTirPublicAuthenticatedUnitV1, PalwTirPublicRequestV1,
         PalwTirPublicResponseV1, PalwTirPublicSourceV1,
@@ -68,6 +68,10 @@ use std::sync::Arc;
 mod replay_owned;
 #[path = "palw_tir_owner_harvest_v2.rs"]
 mod harvest;
+#[path = "palw_tir_material_share_owned_v2.rs"]
+mod material_share;
+use material_share::SharedMaterialV2;
+use kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1;
 #[path="palw_tir_source_worker_owned_v2.rs"]
 pub(super) mod source_owned;
 use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, NativeRetainedV1};
@@ -190,9 +194,10 @@ struct OwnerCaseV1 {
     steps_differ: bool,
     /// `(reserved_daa, acquisition allocation)` of this node's acquisition row, once its Open is accepted.
     acquisition: Option<(u64, Hash64)>,
-    units: Vec<Arc<PalwTirPublicAuthenticatedUnitV1>>,
-    ids: Option<PalwTirPublicAuthenticatedIdsV1>,
+    units: Vec<Arc<SharedMaterialV2<PalwTirPublicAuthenticatedUnitV1>>>,
+    ids: Option<Arc<SharedMaterialV2<PalwTirPublicAuthenticatedIdsV1>>>,
     harvested: BTreeSet<Hash64>,
+    _harvest_membership: Option<NativeDemandLeaseV1>,
     leaf: Option<u64>,
     /// The next unit the cone builder asked for (set by the last probe), or a need for the IDs.
     cone_want: Option<PalwTirPublicRequestV1>,
@@ -232,7 +237,7 @@ fn owner_cone_probe_v1(
     source: &PalwTirPublicSourceV1,
     registered: &kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
     layout: &kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1,
-    units: &[Arc<PalwTirPublicAuthenticatedUnitV1>],
+    units: &[Arc<SharedMaterialV2<PalwTirPublicAuthenticatedUnitV1>>],
     ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
     prompt: &[u32],
     backend: &dyn PalwExecutionBackendV1,
@@ -556,23 +561,29 @@ impl PalwPanelService {
                         ended.push(*claim);
                         continue;
                     };
-                    let Some(source)=source_owned::defer_source_read_v2(&mut source_refusal,
-                        kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_source_for_row_owned_v2(state,row,maximum_leaves)) else {
-                        return Ok(());
+                    let context = match kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_material_context_v2(
+                        state,
+                        row.key_v1()?,
+                        maximum_leaves,
+                    ) {
+                        Ok(context) => context,
+                        Err(why) => {
+                            source_refusal = Some(why);
+                            return Ok(());
+                        }
                     };
+                    let source = &*context;
                     // 2. Harvest every accepted answer of the current turn, re-read from the rooted chunks and re-authenticated.
                     let active = row.owned.active_v1();
                     if let Some(p) = active {
                         for slot in p.slots.values() {
                             let Some(reference) = slot.finished.as_ref() else { continue };
                             let id = reference.hash_v1()?;
-                            harvest::harvest_accepted_v2(case, id, || {
-                                kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_finished_material_v1(
-                                    state,
-                                    reference,
-                                    maximum_leaves,
-                                )
-                            })?;
+                            if let Err(why) = harvest::harvest_accepted_v2(case, id, || context.finished_material_owned_v2(reference))
+                            {
+                                source_refusal = Some(why);
+                                return Ok(());
+                            }
                         }
                     }
                     // 3. A finding from the harvested material, or the next unit this case wants.
@@ -682,7 +693,7 @@ impl PalwPanelService {
                                 .ok_or("TIR owner: class layout is gone")?;
                                 steps.push(OwnerStepV1::Cone {
                                     claim: *claim,
-                                    source,
+                                    source: context.into_source(),
                                     registered: Box::new(registered.clone()),
                                     layout: Box::new(layout.clone()),
                                     leaf,
@@ -694,7 +705,7 @@ impl PalwPanelService {
                                 match super::tir_arithmetic_scheduler::next_public_from_source_v1(
                                     &source,
                                     case.own.as_ref(),
-                                    |request| units.iter().find(|u| u.request_v1() == request).cloned(),
+                                    |request| units.iter().find(|u| u.request_v1() == request).map(|unit| &***unit),
                                 )? {
                                     super::tir_arithmetic_scheduler::PublicArithmeticStepV1::Acquire(request) => Some(request),
                                     super::tir_arithmetic_scheduler::PublicArithmeticStepV1::Leaf { index } => {
@@ -864,6 +875,7 @@ impl PalwPanelService {
                                 units: Vec::new(),
                                 ids: None,
                                 harvested: BTreeSet::new(),
+                                _harvest_membership: None,
                                 leaf: None,
                                 cone_want: None,
                                 cone_needs_ids: false,
@@ -904,8 +916,7 @@ impl PalwPanelService {
                         let class = registered.facts.class_id;
                         let backend: Arc<dyn PalwExecutionBackendV1> =
                             Arc::from(self.resolve_backend(session, class, source.header_v1().artifact_root)?);
-                        let units = case.units.clone();
-                        let ids = case.ids.clone();
+                        let material = material_share::MaterialWorkerInputsV2::from_case(case).map_err(|why|why.to_string())?;
                         let prompt = case.prompt.clone();
                         let court = self.config.court;
                         let rules = kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1 {
@@ -914,7 +925,10 @@ impl PalwPanelService {
                             limits: kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&court),
                         };
                         let outcome = source_owned::run_owned_source_v2(source, move |source| {
-                            owner_cone_probe_v1(source, &registered, &layout, &units, ids.as_ref(), &prompt, backend.as_ref(), &rules, leaf)
+                            // Force whole-value capture: its pointer Vec ticket
+                            // must enter the worker together with these fields.
+                            let material = material;
+                            owner_cone_probe_v1(source, &registered, &layout, &material.units, material.ids.as_ref().map(|ids| &***ids), &prompt, backend.as_ref(), &rules, leaf)
                         })
                         .await
                         .map_err(|e| format!("TIR owner cone worker failed: {e}"))?;

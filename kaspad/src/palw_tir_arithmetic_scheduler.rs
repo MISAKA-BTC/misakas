@@ -508,10 +508,10 @@ fn public_step_v1(step: ArithmeticStepV1) -> Result<PublicArithmeticStepV1, Stri
 /// Prospective paid-source entry. Authentication markers are produced only by
 /// the original native source; an unsigned packet or an old DA answered bit is
 /// not a frontier. This returns a request, never a legacy DA accusation object.
-pub(super) fn next_public_from_source_v1(
+pub(super) fn next_public_from_source_v1<'a>(
     source: &PalwTirPublicSourceV1,
     own: &dyn PalwTirOwnStepSourceV1,
-    mut unit: impl FnMut(PalwTirPublicRequestV1) -> Option<Arc<PalwTirPublicAuthenticatedUnitV1>>,
+    mut unit: impl FnMut(PalwTirPublicRequestV1) -> Option<&'a PalwTirPublicAuthenticatedUnitV1>,
 ) -> Result<PublicArithmeticStepV1, String> {
     let original = source.header_v1();
     let info = own.info_v1();
@@ -523,7 +523,7 @@ pub(super) fn next_public_from_source_v1(
     {
         return Err("independent TIR source is not the original registered job's rooted replay".into());
     }
-    public_step_v1(next_tree_v1(
+    public_step_v1(next_tree_inner_v2(
         source.leaf_count_v1(),
         original.step_merkle_root,
         info.header.step_leaf_count,
@@ -535,7 +535,7 @@ pub(super) fn next_public_from_source_v1(
                 return Err("TIR arithmetic frontier marker belongs to another source or request".into());
             }
             match unit.response_v1() {
-                PalwTirPublicResponseV1::StepNode { frontier, .. } => Ok(Some(frontier.clone())),
+                PalwTirPublicResponseV1::StepNode { frontier, .. } => Ok(Some(frontier.as_slice())),
                 _ => Err("TIR arithmetic frontier marker has another response kind".into()),
             }
         },
@@ -567,8 +567,18 @@ fn next_tree_v1(
     count: u64,
     original_step_root: Hash64,
     own_count: u64,
+    own_node: impl FnMut(u8, u64) -> Result<Hash64, String>,
+    authenticated_frontier: impl FnMut(u8, u64) -> Result<Option<Vec<Hash64>>, String>,
+) -> Result<ArithmeticStepV1, String> {
+    next_tree_inner_v2(count, original_step_root, own_count, own_node, authenticated_frontier)
+}
+
+fn next_tree_inner_v2<F: AsRef<[Hash64]>>(
+    count: u64,
+    original_step_root: Hash64,
+    own_count: u64,
     mut own_node: impl FnMut(u8, u64) -> Result<Hash64, String>,
-    mut authenticated_frontier: impl FnMut(u8, u64) -> Result<Option<Vec<Hash64>>, String>,
+    mut authenticated_frontier: impl FnMut(u8, u64) -> Result<Option<F>, String>,
 ) -> Result<ArithmeticStepV1, String> {
     if count == 0 || own_count != count {
         return Err("independent TIR execution has another step geometry; an identity proof is required".into());
@@ -584,7 +594,7 @@ fn next_tree_v1(
         let Some(frontier) = authenticated_frontier(level, index)? else {
             return Ok(ArithmeticStepV1::Need(PalwDaUnitV1::TirStepNode { level, index }));
         };
-        let Some((below, child)) = first_difference_v1(count, level, index, &frontier, &mut own_node)? else {
+        let Some((below, child)) = first_difference_v1(count, level, index, frontier.as_ref(), &mut own_node)? else {
             return Err("authenticated divergent TIR node has no independently divergent child".into());
         };
         if below >= level {

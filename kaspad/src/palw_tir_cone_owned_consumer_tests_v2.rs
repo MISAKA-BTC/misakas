@@ -57,6 +57,7 @@ pub(super) fn case() -> (OwnerCaseV1, Arc<PalwMemoryLedgerV1>) {
             units: vec![],
             ids: None,
             harvested: Default::default(),
+            _harvest_membership: None,
             leaf: Some(3),
             cone_want: None,
             cone_needs_ids: false,
