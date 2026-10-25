@@ -21964,9 +21964,16 @@ fn attach_riders_v1(
                 budget_block_units: rider_block_units,
             },
         )
-        .map_err(|refused| PalwStateV2Error::CapacityRiders(format!("rider {index}: {refused}")))?;
+        .map_err(|refused| rider_attempt_refusal_v2(index, refused))?;
     }
     Ok(())
+}
+
+fn rider_attempt_refusal_v2(index: u32, refused: PalwStateV2Error) -> PalwStateV2Error {
+    match refused {
+        local @ (PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_)) => local,
+        semantic => PalwStateV2Error::CapacityRiders(format!("rider {index}: {semantic}")),
+    }
 }
 
 fn apply_attempt(
@@ -22034,20 +22041,12 @@ fn apply_attempt(
     builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt)?;
     // **Lane g14-court-capacity-r2 (`palw_court_capacity_v1`, dormant): bounded admission of court-demanding claims** — a
     // fused-attention V2 Attempt is taken only while its hard-deadline bucket has room on the reserve slots. `Ok` below the fence.
-    palw_court_capacity_fold_v1::check_court_claim_admission_v1(
-        &builder.state,
-        builder.params,
+    builder.check_attempt_court_admission_native_v2(
         &attempt.class_id,
         ctx.daa_score,
         attempt.trace_retention_daa,
         builder.extras.model_registry.as_ref().map_or(0, |fold| fold.span_daa),
     )?;
-    // **rfcgap-c (RFC-0014 2026-10-19 E, RFC-0026 §3.2 / F03; ADR-0192 advance reservation): the paid ingress's claim admission** —
-    // past `palw_court_outsider_lane_v1` with an adopted ingress schedule, a new claim is taken only while fewer than
-    // `R = ⌊cap / 2⌋` claims are in flight, so every admitted claim holds its own outside-side court reservation. Before
-    // `apply_attempt`'s first write; the refusal is `CourtClaimAdmissionFull` (skipped, like the bucket above). `Ok` while the
-    // schedule is typed-missing (every shipped build) or below the fence.
-    palw_court_capacity_fold_v1::palw_court_ingress_claim_admits_v1(&builder.state, builder.params, &attempt.class_id, ctx.daa_score)?;
     // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for this executor** — one function, the
     // same every other door asks; before the reservation is taken, so a class no panel can be drawn for voids nothing.
     // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): over the seats that hold the root the attempt names**, and that root's own
@@ -22081,6 +22080,9 @@ fn apply_attempt(
     // (`palw_claim_attempts_v1`), so the three cannot disagree.
     let attempts =
         if builder.extras.audit_2026_09_23_active { crate::palw_pwu::palw_claim_attempts_v1(attempt.pwu, canonical_draw) } else { 1 };
+    // The admission phase mutably owns reservation metadata. Reborrow the
+    // unchanged class afterwards rather than cloning its dynamic fields.
+    let class = builder.state.classes.get(&attempt.class_id).ok_or(PalwStateV2Error::MissingClass(attempt.class_id))?;
     let reserved = (palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .and_then(|sompi| sompi.checked_mul(attempts as u128))

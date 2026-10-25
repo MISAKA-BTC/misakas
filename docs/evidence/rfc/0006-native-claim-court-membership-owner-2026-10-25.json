@@ -1,0 +1,261 @@
+{
+  "scope": "RFC06 mutable native claim/funded court-membership construction ownership and rider typed local failure; not all RFC06 acceptance",
+  "build": {
+    "head": "bca931f72bcc38b5e52d320cd79aa99a7de8784b",
+    "files": [
+      {
+        "path": "Cargo.lock",
+        "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+      },
+      {
+        "path": "Cargo.toml",
+        "sha256": "288fab6f6c4aff360a22f53e4f75bae60027a49afa1ef74326cc43d56de566c9"
+      },
+      {
+        "path": "components/consensusmanager/Cargo.toml",
+        "sha256": "a93633ac943f962bb17b35afc6b8d16bfd855b151ee3ca5f49663d69ce0f23ac"
+      },
+      {
+        "path": "components/consensusmanager/src/session.rs",
+        "sha256": "c0d76e3785f2fedf714d6015fbcaeb52d8d100c0b6698b2c60fb9af0d3b6ed51"
+      },
+      {
+        "path": "consensus/Cargo.toml",
+        "sha256": "623586e150fed14d9df4c55465be33374427a1730d4f763c4289316bc34b9c83"
+      },
+      {
+        "path": "consensus/core/Cargo.toml",
+        "sha256": "ba7e84c40620b97d32e323613fcf22623df3a1f80b60ef89cbcac4c622968e80"
+      },
+      {
+        "path": "consensus/core/src/config/params/full_activation_v1.rs",
+        "sha256": "982293432351e14d12b5b749c36d3e45152eb9558bb66d34968902de100e431f"
+      },
+      {
+        "path": "consensus/core/src/palw_claim_court_admission_workspace_v2.rs",
+        "sha256": "1f14cce27a38b5ec46a2b05999405c978a581838f763d7ce356ad686211053e4"
+      },
+      {
+        "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+        "sha256": "cb0a7d501861b41b2fe439f4fab54d93d348119f1368636006d09e0d6867df4f"
+      },
+      {
+        "path": "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs",
+        "sha256": "034aa596c89722b1da3d818e4bb4632efcd81ba4a05a1df9f74b38f0686a7ed6"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2.rs",
+        "sha256": "bdd9edb2b511c15e3f6b8a00420604b180d12fe9698c11eb8519fd3a490a9d45"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests.rs",
+        "sha256": "d45d4512b90b3cb07064447ad8f8c3f421ab88ec9dc7407d5e568760c9549c23"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests/claim_court_admission_workspace_v2.rs",
+        "sha256": "9dc1161371bb073cbf0030e163fd17135ca5c47f5babaa469b4c9a854a807cc8"
+      },
+      {
+        "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/material_typed_ingress_v4.rs",
+        "sha256": "03196734701bfb248a92b72ad8bcc913ba54539fcde18ba3959c4100f12b9256"
+      },
+      {
+        "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs",
+        "sha256": "6afed5c86f7db9926a8ceec3919a7326dd8600ee39ea93e82a112cb7183a4134"
+      },
+      {
+        "path": "consensus/tests/fixtures/signed_provider_config_v4.rs",
+        "sha256": "2c5c2e6d8551732afcc807cd8b962047d8031819ae123b6c0953f182468cbce7"
+      },
+      {
+        "path": "kaspad/Cargo.toml",
+        "sha256": "e7a9c98ef2c74e09be69ac66bf1cbf20f3bc7d644281dba5cad8071438c5a78f"
+      },
+      {
+        "path": "kaspad/src/private_integration/kernel_paid_checker_v4.rs",
+        "sha256": "caf03e207dd5468e1dded8c4f1c52fc8c543a64039cfd6b9cb59ba9af27c493a"
+      },
+      {
+        "path": "kaspad/src/private_integration/kernel_paid_checker_v4/signed_socket_native.rs",
+        "sha256": "d5872e8b3ec852997fa92249128d5bdff596afe8078339e689e7aae5649467d3"
+      },
+      {
+        "path": "misaka/evm/core/Cargo.toml",
+        "sha256": "44bd39f36d62f54c0b8e3b60f54bd0412d7e8023b8b803ca93aa89717ac49db2"
+      },
+      {
+        "path": "misaka/palw/remote/Cargo.toml",
+        "sha256": "cc386ed1719a7bbe67012b452440b3c55242f63a222fe3f7180ded3321442da1"
+      },
+      {
+        "path": "misaka/palw/sdk/Cargo.toml",
+        "sha256": "5db4c9200ef3695cd613e48ddd05e6660f55cdc19e7ffd1d1d876cab23d3ea45"
+      },
+      {
+        "path": "rpc/eth/Cargo.toml",
+        "sha256": "c98fb8bedd276e0d58312ccc7358ac6a63087bf57efdc8cad1953d3f98900daa"
+      }
+    ],
+    "build_result": "PASS",
+    "scope": "native funded claim admission membership and real checker/provider process Challenge fixture; no campaign promotion",
+    "exit_code": 0,
+    "wall_seconds": 173.12,
+    "identity_matches": true
+  },
+  "executable_pins": {
+    "kaspa_consensus": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry4-20261025",
+      "sha256": "0db425d2945297f607cc94b1a8af2bd96261700bc71c2ae2604ba50d5df154f6"
+    },
+    "kaspa_consensus_core": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry4-20261025",
+      "sha256": "f6ef7a107f7d6b456efccf8ce348c43e6090253899b49544ad505605bcbadc64"
+    },
+    "kaspa_eth_rpc": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_eth_rpc-retry4-20261025",
+      "sha256": "1aca96e6452bb29c1d3306586e2d334c233430c2be5183523ca018831e1cba4e"
+    },
+    "kaspa_evm": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_evm-retry4-20261025",
+      "sha256": "1dd31f0e62ba539079fc432f1462bbfa89ddc5c0a3be347e3a021c31fec02f02"
+    },
+    "kaspad_lib": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry4-20261025",
+      "sha256": "78425c1c69d2d48c921a63eb8a74a2878ff91e648c0edc2fbd7d0c1210af72cd"
+    },
+    "misaka_palw_sdk": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-misaka_palw_sdk-retry4-20261025",
+      "sha256": "c56264b84771f10a3edb86e828e597ffa87b0f86c23ebd80ca71073dce5a7448"
+    }
+  },
+  "new_controls": {
+    "command": [
+      "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry4-20261025",
+      "palw_state_v2::tests::claim_court_admission_workspace_v2",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "pins": {
+      "kaspa_consensus": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry4-20261025",
+        "sha256": "0db425d2945297f607cc94b1a8af2bd96261700bc71c2ae2604ba50d5df154f6"
+      },
+      "kaspa_consensus_core": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry4-20261025",
+        "sha256": "f6ef7a107f7d6b456efccf8ce348c43e6090253899b49544ad505605bcbadc64"
+      },
+      "kaspa_eth_rpc": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_eth_rpc-retry4-20261025",
+        "sha256": "1aca96e6452bb29c1d3306586e2d334c233430c2be5183523ca018831e1cba4e"
+      },
+      "kaspa_evm": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_evm-retry4-20261025",
+        "sha256": "1dd31f0e62ba539079fc432f1462bbfa89ddc5c0a3be347e3a021c31fec02f02"
+      },
+      "kaspad_lib": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry4-20261025",
+        "sha256": "78425c1c69d2d48c921a63eb8a74a2878ff91e648c0edc2fbd7d0c1210af72cd"
+      },
+      "misaka_palw_sdk": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-misaka_palw_sdk-retry4-20261025",
+        "sha256": "c56264b84771f10a3edb86e828e597ffa87b0f86c23ebd80ca71073dce5a7448"
+      }
+    },
+    "exit_code": 0,
+    "timeout": false,
+    "wall_seconds": 2.81,
+    "log": "/tmp/misaka-rfc-claim-provider-native-core-runtime-retry4-20261025.log",
+    "summary": [
+      "ok",
+      "3",
+      "0",
+      "0",
+      "0.06"
+    ],
+    "scope_pass": true
+  },
+  "related_controls": {
+    "binary": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry4-20261025",
+      "sha256": "f6ef7a107f7d6b456efccf8ce348c43e6090253899b49544ad505605bcbadc64"
+    },
+    "groups": [
+      {
+        "filter": "palw_state_v2::tests::court_admission_workspace_v2",
+        "exit": 0,
+        "seconds": 5.78,
+        "log": "/tmp/misaka-rfc-claim-court-related-retry4-20261025-0.log",
+        "summary": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5213 filtered out; finished in 2.92s"
+        ]
+      },
+      {
+        "filter": "palw_state_v2::tests::court_capacity_workspace_v2",
+        "exit": 0,
+        "seconds": 0.16,
+        "log": "/tmp/misaka-rfc-claim-court-related-retry4-20261025-1.log",
+        "summary": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5213 filtered out; finished in 0.04s"
+        ]
+      },
+      {
+        "filter": "palw_state_v2::tests::legacy_court_ingress_workspace_v2",
+        "exit": 0,
+        "seconds": 0.14,
+        "log": "/tmp/misaka-rfc-claim-court-related-retry4-20261025-2.log",
+        "summary": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5213 filtered out; finished in 0.11s"
+        ]
+      },
+      {
+        "filter": "palw_state_v2::tests::court_deadline_workspace_v2",
+        "exit": 0,
+        "seconds": 0.14,
+        "log": "/tmp/misaka-rfc-claim-court-related-retry4-20261025-3.log",
+        "summary": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5214 filtered out; finished in 0.09s"
+        ]
+      },
+      {
+        "filter": "palw_state_v2::funded_escrow::tests",
+        "exit": 0,
+        "seconds": 0.38,
+        "log": "/tmp/misaka-rfc-claim-court-related-retry4-20261025-4.log",
+        "summary": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 5210 filtered out; finished in 0.32s"
+        ]
+      },
+      {
+        "filter": "palw_court_paid_ingress_v1::tests",
+        "exit": 0,
+        "seconds": 0.02,
+        "log": "/tmp/misaka-rfc-claim-court-related-retry4-20261025-5.log",
+        "summary": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5214 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "filter": "palw_funded_original_admission_v1::tests",
+        "exit": 0,
+        "seconds": 0.02,
+        "log": "/tmp/misaka-rfc-claim-court-related-retry4-20261025-6.log",
+        "summary": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5214 filtered out; finished in 0.01s"
+        ]
+      }
+    ]
+  },
+  "distinct_core_passes": 24,
+  "failed": 0,
+  "ignored": 0,
+  "logs": {
+    "misaka-rfc-claim-provider-native-core-runtime-retry4-20261025.log": "\nrunning 3 tests\ntest palw_state_v2::tests::claim_court_admission_workspace_v2::claim_court_actual_rider_preserves_typed_local_failure_after_prior_writes ... ok\ntest palw_state_v2::tests::claim_court_admission_workspace_v2::claim_court_count_matches_collector_duplicates_exclusion_deadline_and_dormancy ... ok\ntest palw_state_v2::tests::claim_court_admission_workspace_v2::claim_court_membership_real_attempt_and_funded_phase_refuse_before_write_and_retry ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5213 filtered out; finished in 0.06s\n\n",
+    "misaka-rfc-claim-court-related-retry4-20261025-0.log": "\nrunning 3 tests\ntest palw_state_v2::tests::court_admission_workspace_v2::court_admission_opened_row_handoff_is_admitted_before_clone_and_dormant_is_free ... ok\ntest palw_state_v2::tests::court_admission_workspace_v2::court_admission_workspace_preserves_active_flags_off_queue_fee_and_delta_bytes ... ok\ntest palw_state_v2::tests::court_admission_workspace_v2::court_admission_workspace_refuses_before_queue_or_ingress_fee_and_retries ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5213 filtered out; finished in 2.92s\n\n",
+    "misaka-rfc-claim-court-related-retry4-20261025-1.log": "\nrunning 3 tests\ntest palw_state_v2::tests::court_capacity_workspace_v2::court_capacity_sweep_actual_pool_priority_and_flags_off_journal_replay_match ... ok\ntest palw_state_v2::tests::court_capacity_workspace_v2::court_capacity_sweep_dormant_fence_has_no_new_allocation_or_payment ... ok\ntest palw_state_v2::tests::court_capacity_workspace_v2::court_capacity_sweep_workspace_refuses_before_occupancy_payment_and_retries_ticket_grant ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5213 filtered out; finished in 0.04s\n\n",
+    "misaka-rfc-claim-court-related-retry4-20261025-2.log": "\nrunning 3 tests\ntest palw_state_v2::tests::legacy_court_ingress_workspace_v2::legacy_court_ingress_borrowed_side_matches_old_membership_and_zero_quota_dormant_direct_cap_rules ... ok\ntest palw_state_v2::tests::legacy_court_ingress_workspace_v2::legacy_court_ingress_workspace_preserves_flags_off_fee_bytes_root_and_delta_replay ... ok\ntest palw_state_v2::tests::legacy_court_ingress_workspace_v2::legacy_court_ingress_workspace_refuses_before_fee_or_journal_and_retries_paid_and_unpaid ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5213 filtered out; finished in 0.11s\n\n",
+    "misaka-rfc-claim-court-related-retry4-20261025-3.log": "\nrunning 2 tests\ntest palw_state_v2::tests::court_deadline_workspace_v2::actual_court_timeout_capacity_refuses_before_copies_or_verdict_and_retry_keeps_original_outcome ... ok\ntest palw_state_v2::tests::court_deadline_workspace_v2::actual_court_timeout_flags_off_parity_and_not_due_boundary_preserve_state_and_journal ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5214 filtered out; finished in 0.09s\n\n",
+    "misaka-rfc-claim-court-related-retry4-20261025-4.log": "\nrunning 6 tests\ntest palw_state_v2::funded_escrow::tests::funded_escrow_every_path_reverts_to_its_parent_row ... ok\ntest palw_state_v2::funded_escrow::tests::funded_escrow_rows_round_trip_the_carriage ... ok\ntest palw_state_v2::funded_escrow::tests::funded_escrow_settlement_reverts_to_the_locked_row ... ok\ntest palw_state_v2::funded_escrow::tests::funded_escrow_sweep_holds_live_and_pursued_claims ... ok\ntest palw_state_v2::funded_escrow::tests::r5_funded_liability_closes_only_at_resolution_and_reverts ... ok\ntest palw_state_v2::funded_escrow::tests::r6_d1_funded_admission_reserves_court_capacity_under_the_fence ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 5210 filtered out; finished in 0.32s\n\n",
+    "misaka-rfc-claim-court-related-retry4-20261025-5.log": "\nrunning 2 tests\ntest palw_court_paid_ingress_v1::tests::r5_f03_ingress_schedule_is_typed_missing_until_injected ... ok\ntest palw_court_paid_ingress_v1::tests::r5_f03_reserved_claims_leave_non_reserved_room ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5214 filtered out; finished in 0.01s\n\n",
+    "misaka-rfc-claim-court-related-retry4-20261025-6.log": "\nrunning 2 tests\ntest palw_funded_original_admission_v1::tests::r5_liability_predicate_needs_every_term ... ok\ntest palw_funded_original_admission_v1::tests::r5_required_amount_counts_fee_once_and_credits_held_deposit ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5214 filtered out; finished in 0.01s\n\n"
+  }
+}

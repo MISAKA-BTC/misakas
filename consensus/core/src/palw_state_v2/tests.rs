@@ -22,6 +22,7 @@ mod court_deadline_workspace_v2;
 mod court_capacity_workspace_v2;
 mod court_admission_workspace_v2;
 mod legacy_court_ingress_workspace_v2;
+mod claim_court_admission_workspace_v2;
 mod queue_drain_workspace_v2;
 mod aux_sweep_workspace_v2;
 mod native_routing_work_v2;

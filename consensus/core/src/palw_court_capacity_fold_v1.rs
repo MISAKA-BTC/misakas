@@ -15,6 +15,8 @@ mod sweep_workspace;
 mod admission_workspace;
 #[path = "palw_legacy_court_ingress_workspace_v2.rs"]
 mod legacy_ingress_workspace;
+#[path = "palw_claim_court_admission_workspace_v2.rs"]
+mod claim_admission_workspace;
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CourtCapacityRefused(why.into())
@@ -143,7 +145,26 @@ pub(super) fn check_court_claim_admission_v1(
     trace_retention_daa: u64,
     span_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
-    let Some(mirror) = params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(()) };
+    let Some(context) = court_claim_admission_context_v2(state, params, class_id, now, trace_retention_daa, span_daa)? else { return Ok(()) };
+    let funded = palw_funded_court_reserve_claims_v1(state);
+    check_court_claim_bucket_v2(state, params, context, &funded, now)
+}
+
+#[derive(Clone, Copy)]
+struct CourtClaimAdmissionContextV2 {
+    from_daa: u64, width: u64, bucket: u64, cap: u64,
+    w_disclose: u64, class: Hash64, exclude: Option<Hash64>,
+}
+
+fn court_claim_admission_context_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    now: u64,
+    trace_retention_daa: u64,
+    span_daa: u64,
+) -> Result<Option<CourtClaimAdmissionContextV2>, PalwStateV2Error> {
+    let Some(mirror) = params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(None) };
     // **The retention a court-demanding claim promises** (user decision 2026-10-17): a fused-attention attempt must promise at least
     // the court-demanding retention, or it is not reward-bearing (option (b)'s refusal); a class that is not court-demanding may not
     // take the longer canonical value (one value per class: no second lottery draw).
@@ -172,7 +193,7 @@ pub(super) fn check_court_claim_admission_v1(
         });
     }
     if !fused {
-        return Ok(());
+        return Ok(None);
     }
     let policy = mirror.policy;
     let turn = params.turn_deadline_daa();
@@ -191,24 +212,9 @@ pub(super) fn check_court_claim_admission_v1(
     } else {
         trace_retention_daa.saturating_sub(w_disclose) / width
     };
-    // G14 lane r6-d1-release: a funded original with an open liability holds its court reserve too (`check_funded_court_reserve_v1`).
-    let funded = palw_funded_court_reserve_claims_v1(state);
-    let admitted = state
-        .claims
-        .iter()
-        .filter(|(id, claim)| {
-            (palw_court_demanding_claim_v1(state, mirror.from_daa, claim) || (claim.accepted_daa >= mirror.from_daa && funded.contains(*id)))
-                && !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. })
-                && {
-                    let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, w_disclose);
-                    hard >= now && hard / width == bucket
-                }
-        })
-        .count() as u64;
-    if admitted >= cap {
-        return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: *class_id, bucket, admitted, cap });
-    }
-    Ok(())
+    Ok(Some(CourtClaimAdmissionContextV2 {
+        from_daa: mirror.from_daa, width, bucket, cap, w_disclose, class: *class_id, exclude: None,
+    }))
 }
 
 /// **G14 lane r6-d1-release (r5-original-admission open 4): the claims a funded original admission reserved court capacity for** —
@@ -233,7 +239,18 @@ pub(super) fn check_funded_court_reserve_v1(
     claim_id: Hash64,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
-    let Some(mirror) = params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(()) };
+    let Some(context) = funded_court_admission_context_v2(state, params, claim_id, now)? else { return Ok(()) };
+    let funded = palw_funded_court_reserve_claims_v1(state);
+    check_court_claim_bucket_v2(state, params, context, &funded, now)
+}
+
+fn funded_court_admission_context_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: Hash64,
+    now: u64,
+) -> Result<Option<CourtClaimAdmissionContextV2>, PalwStateV2Error> {
+    let Some(mirror) = params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(None) };
     let policy = mirror.policy;
     let turn = params.turn_deadline_daa();
     let width = policy.admission_bucket_daa(turn, params.window_court());
@@ -243,24 +260,30 @@ pub(super) fn check_funded_court_reserve_v1(
     let w_disclose = palw_da_disclose_window_daa_v1(params);
     let claim = state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
     let bucket = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, w_disclose) / width;
-    let funded = palw_funded_court_reserve_claims_v1(state);
-    let admitted = state
-        .claims
-        .iter()
-        .filter(|(id, other)| {
-            **id != claim_id
-                && (palw_court_demanding_claim_v1(state, mirror.from_daa, other)
-                    || (other.accepted_daa >= mirror.from_daa && funded.contains(*id)))
-                && !matches!(other.phase, PalwClaimPhaseV2::Voided { .. })
-                && {
-                    let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, other, w_disclose);
-                    hard >= now && hard / width == bucket
-                }
-        })
-        .count() as u64;
-    let cap = policy.admission_claims_per_bucket(turn);
-    if admitted >= cap {
-        return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: claim.class_id, bucket, admitted, cap });
+    Ok(Some(CourtClaimAdmissionContextV2 {
+        from_daa: mirror.from_daa, width, bucket, cap: policy.admission_claims_per_bucket(turn),
+        w_disclose, class: claim.class_id, exclude: Some(claim_id),
+    }))
+}
+
+fn check_court_claim_bucket_v2(
+    state: &PalwChainStateV2, params: &PalwStateParamsV2, context: CourtClaimAdmissionContextV2,
+    funded: &std::collections::BTreeSet<Hash64>, now: u64,
+) -> Result<(), PalwStateV2Error> {
+    let admitted = state.claims.iter().filter(|(id, claim)| {
+        Some(**id) != context.exclude
+            && (palw_court_demanding_claim_v1(state, context.from_daa, claim)
+                || (claim.accepted_daa >= context.from_daa && funded.contains(*id)))
+            && !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. })
+            && {
+                let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, context.w_disclose);
+                hard >= now && hard / context.width == context.bucket
+            }
+    }).count() as u64;
+    if admitted >= context.cap {
+        return Err(PalwStateV2Error::CourtClaimAdmissionFull {
+            class: context.class, bucket: context.bucket, admitted, cap: context.cap,
+        });
     }
     Ok(())
 }
@@ -529,7 +552,7 @@ pub(super) fn court_ingress_claim_admits_excluding_v1(
     let cap = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
     let reserved_cap = crate::palw_court_paid_ingress_v1::palw_court_ingress_reserved_claims_cap_v1(cap);
     let admitted =
-        court_ingress_inflight_v1(state, params, now).into_iter().filter(|(_, id)| Some(*id) != exclude).count() as u64;
+        court_ingress_inflight_borrowed_v2(state, params, now).filter(|(_, id)| Some(*id) != exclude).count() as u64;
     if admitted >= reserved_cap {
         return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: *class_id, bucket: 0, admitted, cap: reserved_cap });
     }
@@ -863,7 +886,47 @@ pub(super) fn court_unserved_at_lapse_v1(params: &PalwStateParamsV2, record: &cr
 }
 
 
+#[cfg(test)]
+pub(super) fn observe_claim_membership_admission_v2(observer: Option<Box<dyn Fn()>>) {
+    claim_admission_workspace::set_observer(observer);
+}
+
 impl TransitionBuilder<'_> {
+    fn check_court_claim_context_native_v2(
+        &mut self, context: CourtClaimAdmissionContextV2, now: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if self.native_writers_tracking_v1() {
+            let quote = claim_admission_workspace::quote(&self.state)?;
+            #[cfg(test)]
+            claim_admission_workspace::observe_before_admission();
+            self.admit_native_write_v1(quote)?;
+        }
+        // Insert directly: FromIterator's bulk collection/sorting workspace is
+        // unnecessary. At most F memberships for F qualifying input rows; D<=F.
+        let mut funded = std::collections::BTreeSet::new();
+        for claim in funded_court_reserve_claims_borrowed_v2(&self.state) { funded.insert(claim); }
+        check_court_claim_bucket_v2(&self.state, self.params, context, &funded, now)
+    }
+
+    pub(super) fn check_attempt_court_admission_native_v2(
+        &mut self, class: &Hash64, now: u64, retention: u64, span: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if let Some(context) = court_claim_admission_context_v2(&self.state, self.params, class, now, retention, span)? {
+            self.check_court_claim_context_native_v2(context, now)?;
+        }
+        palw_court_ingress_claim_admits_v1(&self.state, self.params, class, now)
+    }
+
+    pub(super) fn check_funded_original_court_admission_native_v2(
+        &mut self, claim: Hash64, now: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if let Some(context) = funded_court_admission_context_v2(&self.state, self.params, claim, now)? {
+            self.check_court_claim_context_native_v2(context, now)?;
+        }
+        let class = self.state.claims.get(&claim).map(|row| row.class_id).ok_or(PalwStateV2Error::MissingClaim(claim))?;
+        court_ingress_claim_admits_excluding_v1(&self.state, self.params, &class, now, Some(claim))
+    }
+
     pub(super) fn reserve_legacy_court_ingress_workspace_v2(
         &mut self, opener: PalwBondKeyV2, direct_evidence: bool, now: u64,
     ) -> Result<(), PalwStateV2Error> {
