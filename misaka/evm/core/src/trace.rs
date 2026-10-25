@@ -451,6 +451,7 @@ pub fn trace_candidate_tx(
     raw: &[u8],
     limits: TraceLimits,
 ) -> Result<CandidateTrace, TraceError> {
+    let market = crate::sim::market_handlers_for_env_v2(env).map_err(TraceError::Exec)?;
     let mut db = seed_cachedb(snapshot).map_err(TraceError::Exec)?;
     let txenv = decode_tx_to_env(raw).map_err(|e| TraceError::Exec(EvmExecError::TxDecode(e)))?;
     let target_gas_limit = txenv.gas_limit;
@@ -474,7 +475,7 @@ pub fn trace_candidate_tx(
                 b.difficulty = U256::ZERO;
                 b.prevrandao = Some(B256::ZERO);
             })
-            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, None)))
+            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, market.clone())))
             .append_handler_register(inspector_handle_register)
             .build();
         evm.context.evm.env.tx = txenv;
@@ -786,7 +787,7 @@ mod tests {
     const SELECTED_PARENT: [u8; 64] = [0xAA; 64];
 
     /// Sign a 1559 tx with the fixed default key → (sender, raw EIP-2718 bytes).
-    fn signed_tx(nonce: u64, to: revm::primitives::TxKind, value: u128, gas_limit: u64, input: Bytes) -> (Address, Vec<u8>) {
+    pub(super) fn signed_tx(nonce: u64, to: revm::primitives::TxKind, value: u128, gas_limit: u64, input: Bytes) -> (Address, Vec<u8>) {
         signed_tx_key(0x42, nonce, to, value, gas_limit, input)
     }
 
@@ -864,7 +865,7 @@ mod tests {
         (receipt, body)
     }
 
-    fn fund(addr: Address) -> EvmStateSnapshot {
+    pub(super) fn fund(addr: Address) -> EvmStateSnapshot {
         let mut db = CacheDB::new(EmptyDB::default());
         db.insert_account_info(
             addr,
@@ -1119,7 +1120,7 @@ mod tests {
         assert_eq!(s.post.as_ref().unwrap().nonce, 1, "sender nonce bumped");
     }
 
-    fn head_env() -> EthCallEnv {
+    pub(super) fn head_env() -> EthCallEnv {
         EthCallEnv {
             chain_id: EVM_CHAIN_ID,
             number: 1,
@@ -1210,3 +1211,7 @@ mod tests {
         assert!(plain.struct_logs.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "trace_candidate_market_tests_v2.rs"]
+mod candidate_market_tests_v2;

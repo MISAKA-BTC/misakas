@@ -97,14 +97,9 @@ fn effective_gas(call_gas: u64, env_gas: u64) -> u64 {
     }
 }
 
-/// Run `call` against `snapshot` read-only (no commit). `Err` only on a DB /
-/// setup fault; a reverted or halted call returns `Ok` with `success = false`
-/// (and any revert data in `output`).
-// The builder-style field assignment (default + reassign) is intentional and
-// mirrors the executor pattern; allow the pre-existing field_reassign_with_default
-// lint here to unblock the clippy gate.
-#[allow(clippy::field_reassign_with_default)]
-pub fn simulate_call(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCall) -> Result<EthCallOutcome, EvmExecError> {
+/// Shared read-only market setup for eth_call and candidate diagnosis.
+/// Both consumers retain the exact input view and admitted handler allocation.
+pub(crate) fn market_handlers_for_env_v2(env: &EthCallEnv) -> Result<Option<crate::model_market::MarketHandlers>, EvmExecError> {
     // Reject ambiguous inputs even below the fence; never select one silently.
     if env.palw_view.is_some() && env.palw_view_owned_v2.is_some() {
         return Err(EvmExecError::InvariantViolation("both legacy and retained PALW views supplied".into()));
@@ -116,6 +111,18 @@ pub fn simulate_call(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCa
             None => env.palw_view.as_ref().map(|view| crate::model_market::MarketHandlers::new(view.clone(), env.market_fences, env.chain_id_for_holders)),
         }
     } else { None };
+    Ok(market)
+}
+
+/// Run `call` against `snapshot` read-only (no commit). `Err` only on a DB /
+/// setup fault; a reverted or halted call returns `Ok` with `success = false`
+/// (and any revert data in `output`).
+// The builder-style field assignment (default + reassign) is intentional and
+// mirrors the executor pattern; allow the pre-existing field_reassign_with_default
+// lint here to unblock the clippy gate.
+#[allow(clippy::field_reassign_with_default)]
+pub fn simulate_call(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCall) -> Result<EthCallOutcome, EvmExecError> {
+    let market = market_handlers_for_env_v2(env)?;
     let mut db = seed_cachedb(snapshot)?;
     let gas_limit = effective_gas(call.gas_limit, env.gas_limit);
 
