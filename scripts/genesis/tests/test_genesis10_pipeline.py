@@ -361,3 +361,17 @@ class A16Windows(unittest.TestCase):
         self.report["windows"][0]["kl"] = {"mean": 0.0, "max": 0.0}
         self.report["windows"][-1]["kl"] = {"mean": 0.02, "max": 0.03}
         self.assertFalse(gp.a16_window_fit(self.report, self.digest, 32768, self.tol)["within"])
+
+
+class PrecisionMetadata(unittest.TestCase):
+    def test_selected_precision_is_recorded_without_changing_acceptance(self):
+        import copy
+        reg = gp.load_registry()
+        model = copy.deepcopy(gp.model_by_id(reg, 4))
+        model["convert_options"]["attention_weight_bits"] = 16
+        manifest = gp.manifest_for(model, None)
+        self.assertEqual(manifest["conversion"]["calibration"]["policy"]["attention_weight_bits"], 16)
+        self.assertEqual(manifest["conversion"]["calibration"]["policy"]["linear_weight_bits"], 8)
+        tol = reg["calibration_texts"]["fit_tolerance"]
+        self.assertEqual((tol["kl_mean_max"], tol["top1_min"], tol["window_kl_mean_max"]), (0.1, 0.8, 0.1))
+        self.assertIsNotNone(gp.upload_refusal({"measured": True, "within": True}))

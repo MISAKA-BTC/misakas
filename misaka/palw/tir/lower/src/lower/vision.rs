@@ -1282,6 +1282,8 @@ fn lower_vision_recipe(
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
         linear_weight_bits: 8,
+        attention_weight_bits: 8,
+        mlp_down_weight_bits: 8,
         conv_weight_bits: 8,
         out_major_rows: out_major,
         gdn_core_wide: false,

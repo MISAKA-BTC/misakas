@@ -123,6 +123,10 @@ pub struct LowerOpts {
     /// Includes split outlier main rows and expert stacks; stored quant formats stay exact.
     /// Opt-in changes canonical program/parameter identities, never an existing artifact.
     pub linear_weight_bits: u8,
+    /// Attention projections only; an opt-in precision profile using existing integer matmuls.
+    pub attention_weight_bits: u8,
+    /// Dense MLP output/down projections only.
+    pub mlp_down_weight_bits: u8,
     /// **The gated-delta core on a fine grid** (registrant's choice of fidelity; default off, and off leaves every program and artifact
     /// byte for byte as before). A gated-delta layer's core output is `i32` on the wire but carries ONE scale per tensor, set by the
     /// calibrated absmax of the 16-bit grid; the gated RMS norm after it is per head, so a head whose core is far smaller than the
@@ -144,6 +148,8 @@ impl Default for LowerOpts {
             table_chunk_rows: None,
             conv_weight_bits: 8,
             linear_weight_bits: 8,
+            attention_weight_bits: 8,
+            mlp_down_weight_bits: 8,
             gdn_core_wide: false,
         }
     }
@@ -413,6 +419,12 @@ pub(crate) fn lower_recipe(hl: &HlProgram, opts: &LowerOpts, profile: Option<&ti
     if let Some(profile) = profile {
         profile.check().map_err(LowerError::bad)?;
     }
+    if !matches!(opts.mlp_down_weight_bits, 8 | 16) {
+        return Err(LowerError::bad("mlp_down_weight_bits: expected 8 or 16"));
+    }
+    if !matches!(opts.attention_weight_bits, 8 | 16) {
+        return Err(LowerError::bad("attention_weight_bits: expected 8 or 16"));
+    }
     if !matches!(opts.linear_weight_bits, 8 | 16) {
         return Err(LowerError::bad(format!("linear_weight_bits {}: expected 8 or 16", opts.linear_weight_bits)));
     }
@@ -485,6 +497,8 @@ pub(crate) fn lower_recipe(hl: &HlProgram, opts: &LowerOpts, profile: Option<&ti
         table_chunk: i64::from(opts.table_chunk_rows.unwrap_or(1 << 24).clamp(1, 1 << 24)),
         conv_weight_bits: 8,
         linear_weight_bits: opts.linear_weight_bits,
+        attention_weight_bits: opts.attention_weight_bits,
+        mlp_down_weight_bits: opts.mlp_down_weight_bits,
         out_major_rows: profile.is_some(),
         gdn_core_wide: opts.gdn_core_wide,
     };
@@ -655,6 +669,8 @@ struct Cx<'h> {
     /// [`LowerOpts::conv_weight_bits`] (8 or 16).
     conv_weight_bits: u8,
     linear_weight_bits: u8,
+    attention_weight_bits: u8,
+    mlp_down_weight_bits: u8,
     /// **Encoder rows' projections stored OUT-major** (`[out, in]`, as the decoder's): `linear_rows` computes `(W · Xᵀ)ᵀ` instead
     /// of `X · Wᵀ` — the same integers — so a commit tile of `T` output channels reads `T` contiguous weight rows (`T` inventory
     /// pieces) rather than a column slice through every input row (`in` pieces). Off by default (the programs every existing
@@ -2782,7 +2798,15 @@ fn lower_linear(
     // too: the wide input gives up the outlier split, whose high-precision weight columns carried
     // most of such an input's energy (Mamba-370m: KL 0.0012 → 0.0041 at `i8`). `i16 × i32` over
     // `inp ≤ 2^16` terms stays inside `i64`.
-    let wide16 = x.dt == DType::I32 || lb.w16_now || cx.linear_weight_bits == 16;
+    let selected_bits = if site.starts_with("attn.") || site.contains(".attn.") {
+        cx.attention_weight_bits
+    } else if site.starts_with("mlp") && site.ends_with(".out") {
+        cx.mlp_down_weight_bits
+    } else {
+        8
+    };
+    let bits = cx.linear_weight_bits.max(selected_bits);
+    let wide16 = x.dt == DType::I32 || lb.w16_now || bits == 16;
     let r = if k == 0 {
         // A head tied to an embedding reads the table's `i16` codes (the same param).
         let rows16 = table || wide16;
@@ -2806,7 +2830,6 @@ fn lower_linear(
     } else {
         // Reserve the selected main weight width before the outlier shift: both
         // i8 × i16 and i16 × i16 accumulators retain the same i64 headroom.
-        let bits = cx.linear_weight_bits;
         let acc_bits = (i32::from(bits) - 1) + 15 + (inp as f64).log2().ceil() as i32;
         let f_max = (62 - acc_bits).clamp(0, 24);
         let (k1, k2, k3, k4) = (kx.clone(), kx.clone(), kx.clone(), kx.clone());

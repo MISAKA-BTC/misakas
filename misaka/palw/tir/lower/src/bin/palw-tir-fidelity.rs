@@ -68,6 +68,15 @@ struct Args {
     /// `LowerOpts::gdn_core_wide`: deliver a gated-delta core on the wide rail's finer grid (default off: the programs as before).
     #[arg(long)]
     gdn_core_wide: bool,
+    /// Main projection weight width; must match palw-tir-convert for a comparable program.
+    #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u8).range(8..=16))]
+    linear_weight_bits: u8,
+    /// Attention projection weight precision (8 or 16); other main weights keep their selected width.
+    #[arg(long, default_value_t = 8)]
+    attention_weight_bits: u8,
+    /// Dense MLP output/down projection precision (8 or 16).
+    #[arg(long, default_value_t = 8)]
+    mlp_down_weight_bits: u8,
     /// Stop after calibration (with `--stats-out`, a statistics dump).
     #[arg(long)]
     calibrate_only: bool,
@@ -203,7 +212,14 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             budget_bytes: a.spill_carries_budget_mib << 20,
         }));
     }
-    let opts = LowerOpts { max_window: a.max_window, gdn_core_wide: a.gdn_core_wide, ..LowerOpts::default() };
+    let opts = LowerOpts {
+        max_window: a.max_window,
+        gdn_core_wide: a.gdn_core_wide,
+        linear_weight_bits: a.linear_weight_bits,
+        attention_weight_bits: a.attention_weight_bits,
+        mlp_down_weight_bits: a.mlp_down_weight_bits,
+        ..LowerOpts::default()
+    };
     misaka_palw_tir_lower::detmath::set_mode(
         misaka_palw_tir_lower::detmath::MathMode::parse(&a.math).ok_or_else(|| format!("--math {}: libm-v1 or std", a.math))?,
     );
@@ -573,6 +589,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         "program_digest": artifact::program_digest(&prep.lowered.program),
         "artifact_digest": digest,
         "artifact_bytes": mat.params.bytes(),
+        "weight_precision": { "linear_bits": a.linear_weight_bits, "attention_bits": a.attention_weight_bits, "mlp_down_bits": a.mlp_down_weight_bits },
         "calibration": { "source": calib_src, "sequences": calib.len(), "positions": calib.iter().map(Vec::len).sum::<usize>(), "length_rule": calibrated },
         "evaluation": { "source": eval_src, "sequences": eval.len(), "positions": eval.iter().map(Vec::len).sum::<usize>() },
         "metrics": m,
