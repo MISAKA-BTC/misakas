@@ -1,6 +1,6 @@
 # Native pruner / virtual PALW-status lock order
 
-Status: production correction compiled and the deterministic real-store regression passed. Run 6 is live/PENDING. After its startup was verified, root intentionally stopped the deadlocked Run-5 writer; its database, fixed binary, source and logs remain preserved.
+Status: production correction compiled and the deterministic real-store regression passed. Run 6 advanced through the former deadlock, physically deleted the target body/delta, then terminated FAILED on current-point PALW snapshot availability. After its startup was verified, root intentionally stopped the deadlocked Run-5 writer; its database, fixed binary, source and logs remain preserved.
 
 ## Actual stopped path
 
@@ -44,3 +44,8 @@ The same immutable binary started the actual long Run 6 with writer **PID44103**
 The existing harness has no long-loop resume entrypoint: its writer creates a new temporary DB and reconstructs signed material, funding and Final. Acquisition-only cold readers do not mine, and their earlier expected-tip input is not a full wallet/clock/job checkpoint. Run 6 therefore starts fresh; Run-5 data are not rewritten to simulate a resume.
 
 Root verified the old exact writer command and last 72k/PP9 record, then sent SIGTERM only to owned writer PID32288 after actual Run-6 startup. Controller record: `/tmp/misaka-rfc08-typed-pruning-run5-controller-stop-20261025.json`; old parent handle16600 exited101 due to this controlled interruption. This is an intentional interruption for confirmed deadlock, not a natural failure, physical-pruning PASS or OS-crash campaign. Run 6 must independently reach actual body/delta deletion, cold receipt and all-generation GC; these results remain PENDING.
+
+
+## Run 6 terminal scope
+
+Run 6 reached beats72713 / DAA37876 / PP DAA409 with both target body and delta absent, then failed at the current-point snapshot loader returning None. Its public parent exited101 after2541.51s. In-process initial/replacement receipts passed preceding assertions; cold receipt and all-generation GC were not reached. The old lock cycle did not recur at the first PP movement. This does not make the full long filter PASS. The temporary Run-6 DB was naturally removed during failure unwinding; its exact None cause remains unproven. Confirmed capture-before-delete and recovery gaps, and the distinction from possible point-publication lag, are recorded in [the terminal pruning evidence](0008-typed-native-pruning-2026-10-25.md#run-6-terminal-failure-after-actual-deletion). Earlier PENDING statements in this document describe historical checkpoints.
