@@ -86,8 +86,17 @@ fn check_accepted_accounting_carriers_v1(
             if kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&original.commitment) != duty.claim_id {
                 continue;
             }
+            let decoded = original.commitment.decode_tokens_executed;
             drop(original);
-            // No native winning-carrier index exists. Never silently choose one same-claim carrier over another.
+            // The fold drops a carrier whose FPA1 answer fails `palw_fp_answer_for_carrier_v1` (framing, count, identity) before
+            // registering any claim, so such a carrier cannot be the winner and must not make the real one ambiguous. The test
+            // is the fold's own function; a local capacity refusal keeps its retryable type and is never read as "not a winner".
+            match kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_for_carrier_v1(tx, tx.id(), decoded) {
+                Ok(_ticket) => {}
+                Err(NativeDecodeErrorV1::Decode(_)) => continue,
+                Err(NativeDecodeErrorV1::Resource(why)) => return Err(NativeDecodeErrorV1::Resource(why)),
+            }
+            // No native winning-carrier index exists. Never silently choose one fold-admissible same-claim carrier over another.
             if carrier.replace(tx.id()).is_some() {
                 return Err(fail("ambiguous accounting winning carrier; index unavailable"));
             }
@@ -246,6 +255,27 @@ mod tests {
             check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Err(NativeDecodeErrorV1::Decode("missing body")))
                 .is_err()
         );
+    }
+    #[test]
+    fn accounting_seat_ignores_a_same_claim_decoy_the_fold_would_drop() {
+        let (backend, duty, tx, _ticket) = fixture();
+        // Same original (same claim id), but the answer count disagrees with the executed decode: the fold drops it.
+        let view = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
+            .unwrap();
+        let mut ids: Vec<u32> = view.answer_ids_v1().collect();
+        ids.push(1);
+        let wire = palw_fp_answer_envelope_retain_encode_v1(view.inner, &ids).unwrap();
+        let decoy = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, wire.to_vec());
+        assert_ne!(decoy.id(), tx.id());
+        for body in [vec![decoy.clone(), tx.clone()], vec![tx.clone(), decoy.clone()]] {
+            let body = Arc::new(body);
+            let accepted = acceptance(&body);
+            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).unwrap();
+        }
+        // A decoy alone is no carrier at all.
+        let body = Arc::new(vec![decoy]);
+        let accepted = acceptance(&body);
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
     }
     #[test]
     fn accounting_seat_skips_unrelated_undecodable_original_before_target() {
