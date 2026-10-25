@@ -1805,6 +1805,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_tir_native_header_identity_tests_v2.rs");
     include!("palw_tir_allocation_source_owned_tests_v2.rs");
     include!("palw_tir_preparation_sources_owned_tests_v2.rs");
     include!("palw_tir_three_source_consumers_tests_v2.rs");

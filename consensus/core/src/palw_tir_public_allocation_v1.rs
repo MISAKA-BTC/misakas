@@ -623,6 +623,34 @@ pub(crate) fn observe_allocation_source_borrow_v2(callback: Option<fn(&PalwTirPu
     ALLOCATION_SOURCE_BORROW_V2.with(|c| c.set(callback));
 }
 
+#[cfg(test)]
+thread_local! {
+    static NATIVE_HEADER_IDENTITY_V2: std::cell::Cell<[u64;3]> = const {std::cell::Cell::new([0;3])};
+    static NATIVE_HEADER_IDENTITY_OBSERVER_V2: std::cell::Cell<Option<fn(&crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1)>> = const {std::cell::Cell::new(None)};
+}
+#[cfg(test)]
+pub(crate) fn native_header_identity_stages_v2() -> [u64; 3] {
+    NATIVE_HEADER_IDENTITY_V2.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+pub(crate) fn reset_native_header_identity_stages_v2() {
+    NATIVE_HEADER_IDENTITY_V2.with(|c| c.set([0; 3]));
+}
+#[cfg(test)]
+pub(crate) fn observe_native_header_identity_v2(
+    observe: Option<fn(&crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1)>,
+) {
+    NATIVE_HEADER_IDENTITY_OBSERVER_V2.with(|c| c.set(observe));
+}
+#[cfg(test)]
+fn note_native_header_identity_v2(i: usize) {
+    NATIVE_HEADER_IDENTITY_V2.with(|c| {
+        let mut a = c.get();
+        a[i] += 1;
+        c.set(a);
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn derive_tir_public_allocation_native_v2(
     geometry: &PalwStagedClaimGeometryV1,
@@ -634,15 +662,35 @@ pub fn derive_tir_public_allocation_native_v2(
     inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
     rules: PalwTirPublicAllocationRulesV1,
 ) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-    let public_header = crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone());
-    crate::palw_staged_preclaim_v1::check_preclaim_identity_v1(
+    #[cfg(test)]
+    note_native_header_identity_v2(0);
+    let header_owner = crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(header)
+        .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource)?;
+    let (header_copy, header_ticket) = header_owner.into_parts_v1();
+    let public_header = crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header_copy);
+    #[cfg(test)]
+    note_native_header_identity_v2(1);
+    let identity = crate::palw_staged_preclaim_v1::check_preclaim_identity_v1(
         geometry,
         original,
         &public_header,
         rules.maximum_custodians,
         rules.config,
-    )
-    .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
+    );
+    #[cfg(test)]
+    {
+        note_native_header_identity_v2(2);
+        NATIVE_HEADER_IDENTITY_OBSERVER_V2.with(|cell| {
+            if let Some(observe) = cell.get() {
+                observe(&public_header);
+            }
+        });
+    }
+    // Drop the actual enum payload before its reservation, including semantic
+    // refusal. This independent copy is gone before Source construction starts.
+    drop(public_header);
+    drop(header_ticket);
+    identity.map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
     #[cfg(test)]
     note_allocation_source_v2(0);
     let source = PalwTirPublicSourceV1::new_native_v1(
