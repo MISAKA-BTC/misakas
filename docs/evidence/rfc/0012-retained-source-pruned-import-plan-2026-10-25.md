@@ -3,8 +3,9 @@
 ## Status and boundary
 
 The source-input retention code and connected importer compiled in the parent's coordinated build.
-Its runtime on the planned Run7 source is **NOT RUN**. That source DB is not yet an
-accepted reusable artifact. Actual fresh-DB pruned import is also **NOT RUN**.
+Run7 has now completed PASS, including retained source publication. Actual fresh-DB
+pruned import Run1 is running from that artifact; catchup, new-block and cold-reopen
+acceptance remain PENDING.
 This document is a design and source-retention record, not pruned-IBD acceptance.
 
 The previous long Run6 does not establish successful source readiness: actual
@@ -222,3 +223,10 @@ UTXO progress reports actual pages and cumulative rows after each appended page.
 Phase completion includes the actual processed count and point/tip identities.
 These logs do not alter consensus data or markers and are not acceptance gates,
 throughput measurements or evidence that any unexecuted importer succeeded.
+
+
+## Run7 source completed; actual Run1 import in progress
+
+The source producer completed the full long native pruning role **PASS/exit0 in2031.15s**, with actual cold receipt/all-generation GC and final manifest publication. Source DB is `/private/tmp/rusty-kaspa/typed-pruning-retained-54741-1792894786178740000`; source tip is `9b22d48f3e4dfead8cbcfd27a8ad0d78500d09ffe20b404765f098b66c389954bbb3e0c7e88944bbe27e3f48a2e883ab3f03185f625852fe91c8bc841347210e`. The source producer exited before any importer open. Its signed-input retention manifest SHA256 is `5deb85b1eaa3410983a1947569e1c2b9b3c7b5da94f2809094faf78339006988`; its producer binary SHA256 is `81afb1da4aed27e35de3b95762d77db77f8d9cf5f0d6f57b109da27eaf3201fe`. This manifest itself is not a signed campaign attestation.
+
+Root invoked the explicit ignored parent from corrected importer pin `58021023dc1a785bebed02e8b2b477c5ab44b27fcb293b41afdb74367a1baf1d`, with fresh run directory `/tmp/misaka-rfc12-pruned-import-run1-20261025`. Parent handle22954; controller `/tmp/misaka-rfc12-pruned-import-run1-controller-20261025.json`; log `/tmp/misaka-rfc12-pruned-import-run1-20261025.log`. Actual proof/trusted insertion,74,920 post-point headers, session-bound snapshot/UTXO import and completion have passed their assertions. Ordinary post-point body processing is in progress (15,000/74,920 observed). No finished import/new-block/cold-reopen PASS is yet claimed. Earlier NOT RUN paragraphs describe the pre-invocation history. The source remains separate from scratch server and empty target; no DB prefix copy is used to establish target state.
