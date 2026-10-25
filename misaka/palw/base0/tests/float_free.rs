@@ -128,6 +128,18 @@ const CONSENSUS_PATH: &[&str] = &[
     // what they hand the engine decides the K/V state a commitment's rows are computed from, so they are scanned, not exempt.
     "src/prefix_cache.rs",
     "src/decode_scheduler.rs",
+    // RFC-0001 P1: the cancellation flag every decode loop checks after reporting a token. It decides where a run stops, between
+    // a request and the engine — the same argument as `decode_scheduler.rs` above.
+    "src/cancel.rs",
+    // The read-at projection of a retained capture that the node's custodian and court responders serve. What it returns is what a
+    // seat replays and the chain authenticates against the claim's roots — the seat's half, as `segment_opening.rs` is.
+    "src/flat_public_source.rs",
+    // The court adapters over a real capture: each binds committed state with Merkle paths and then DIRECTLY RECOMPUTES the local
+    // step (the additive recurrence; the routed reader). A court's recomputation is the execution path at its most consequential.
+    "src/gdn_court_v2.rs",
+    "src/routing_court_v2.rs",
+    // Computes the canonical STEP leaf hashes a capture commits (and the inherited-prefix variant): committed bytes, on the path.
+    "src/step_tile_hasher.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the
@@ -202,6 +214,14 @@ const EXEMPT: &[(&str, &str)] = &[
     // milliseconds; it formats GiB and a rate for a person and executes no arithmetic. The 2M
     // producer's growth was silent because nothing on the path said what it held; this is what says.
     ("src/memory_phase.rs", "measurement: formats the engine's memory brackets for a person; executes no class arithmetic"),
+    // Behind `palw_staged_float_constraint_v1`: the public source of a FLOAT32 class, whose committed rows ARE f32 logits. It
+    // serializes and hashes those rows into the generic sidecar and opens ranges of it; it executes no model arithmetic, and the
+    // integer families (BASE-0, A16, Qwen36) never write it — their runs get `false` / a refusal from it. Decision A binds the
+    // integer family; a Float32 class is float by registration, so this is off Decision A's path by category, not by accident.
+    (
+        "src/float_public_source.rs",
+        "Float32 class material: serializes and hashes the f32 rows that class commits; executes no arithmetic, never written by an integer family",
+    ),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
     ("examples/gguf-probe.rs", "offline checkpoint inspector"),
     ("examples/class-weight-report.rs", "measurement tool: it reports what a class would be worth, in floats, and executes nothing"),
