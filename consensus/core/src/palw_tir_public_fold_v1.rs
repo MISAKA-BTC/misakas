@@ -624,7 +624,9 @@ pub(super) fn prepare_original_v1(
             "TIR original's semantic stage has no openable court here (staged courts need palw_legacy_public_filer_v1, G-18)",
         ));
     }
-    let original_source = crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_v1(
+    #[cfg(test)]
+    crate::palw_tir_public_claim_v1::note_preparation_source_stage_v2(0);
+    let original_source = crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(
         record,
         layout,
         header,
@@ -632,7 +634,12 @@ pub(super) fn prepare_original_v1(
         original.trace_root,
         native.maximum_leaves,
     )
-    .map_err(refused)?;
+    .map_err(|why| match why {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
+    })?;
+    #[cfg(test)]
+    crate::palw_tir_public_claim_v1::note_preparation_source_stage_v2(1);
     let producer = b.state.bond(&geometry.producer).ok_or(PalwStateV2Error::MissingBond(geometry.producer))?;
     let panel: BTreeSet<_> = b.state.panel(&claim).map(|p| p.seats.iter().map(|s| s.bond).collect()).unwrap_or_default();
     let custody = crate::palw_tir_public_custody_v1::PalwTirPublicCustodyContractV1::new_v1(
@@ -646,7 +653,8 @@ pub(super) fn prepare_original_v1(
         crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
     )
     .map_err(refused)?;
-    let frame = Frame::prepare_native_v1(
+    drop(original_source);
+    let frame = Frame::prepare_native_source_v2(
         original.clone(),
         header.clone(),
         plan,
@@ -661,7 +669,10 @@ pub(super) fn prepare_original_v1(
         object,
         crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
     )
-    .map_err(refused)?;
+    .map_err(|why| match why {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
+    })?;
     // The semantic stages' staged contract must build (pledge, identity, capacity, horizon) before anything is written.
     frame_semantic_bundle_v1(b, &frame, ctx.daa_score)?;
     Ok(frame)
@@ -1791,6 +1802,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_tir_preparation_sources_owned_tests_v2.rs");
     include!("palw_tir_three_source_consumers_tests_v2.rs");
     include!("palw_tir_output_source_owned_tests_v2.rs");
     include!("palw_court_shared_ids_typed_native_tests_v2.rs");

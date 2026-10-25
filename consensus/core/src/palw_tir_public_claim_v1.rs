@@ -43,6 +43,15 @@ pub struct PalwTirPublicClaimV1 {
     custody: PalwTirPublicOriginalCustodyV1,
 }
 
+#[cfg(test)]
+thread_local! { static PREPARATION_SOURCE_STAGES_V2: std::cell::Cell<[u64;4]> = const {std::cell::Cell::new([0;4])}; }
+#[cfg(test)]
+pub(crate) fn preparation_source_stages_v2() -> [u64;4] { PREPARATION_SOURCE_STAGES_V2.with(std::cell::Cell::get) }
+#[cfg(test)]
+pub(crate) fn reset_preparation_source_stages_v2() { PREPARATION_SOURCE_STAGES_V2.with(|c|c.set([0;4])); }
+#[cfg(test)]
+pub(crate) fn note_preparation_source_stage_v2(index:usize) { PREPARATION_SOURCE_STAGES_V2.with(|c|{let mut v=c.get();v[index]+=1;c.set(v);}); }
+
 impl PalwTirPublicClaimV1 {
     /// Construct a native-validated CANDIDATE at the original accepting block
     /// clock. `geometry`, rules, record/layout, Panel and original object must
@@ -81,12 +90,98 @@ impl PalwTirPublicClaimV1 {
             original.trace_root,
             rules.maximum_leaves,
         )?;
+        Self::finish_preparation_source_v2(
+            original,
+            header,
+            plan,
+            custody,
+            geometry,
+            record,
+            rules,
+            native_panel,
+            original_object,
+            &source,
+            verify,
+        )
+    }
+
+    /// Typed native Source admission only. Frame arguments are already owned;
+    /// their construction and header-digest scratch are separate boundaries.
+    /// Legacy prepare_native_v1 keeps its original raw constructor and String API.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_native_source_v2<F>(
+        original: PalwFreePromptCommitmentV3,
+        header: PalwPublicTirBindingHeaderV1,
+        plan: PalwTirPublicAllocationPlanV1,
+        custody: PalwTirPublicCustodyContractV1,
+        geometry: &crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1,
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+        rules: PalwTirPublicAllocationRulesV1,
+        native_panel: &BTreeSet<PalwBondKeyV2>,
+        original_object: &crate::palw_state_v2::PalwConsensusObjectV2,
+        verify: F,
+    ) -> Result<Self, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    where
+        F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    {
+        crate::palw_tir_public_allocation_v1::check_tir_public_allocation_native_v1(
+            &plan, geometry, &original, &header, record, layout, semantics, inventory, rules,
+        )
+        .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
+        #[cfg(test)]
+        note_preparation_source_stage_v2(2);
+        let source = PalwTirPublicSourceV1::new_native_v1(
+            record,
+            layout,
+            &header,
+            original.execution_root,
+            original.trace_root,
+            rules.maximum_leaves,
+        )?;
+        #[cfg(test)]
+        note_preparation_source_stage_v2(3);
+        Self::finish_preparation_source_v2(
+            original,
+            header,
+            plan,
+            custody,
+            geometry,
+            record,
+            rules,
+            native_panel,
+            original_object,
+            &source,
+            verify,
+        )
+        .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_preparation_source_v2<F>(
+        original: PalwFreePromptCommitmentV3,
+        header: PalwPublicTirBindingHeaderV1,
+        plan: PalwTirPublicAllocationPlanV1,
+        custody: PalwTirPublicCustodyContractV1,
+        geometry: &crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1,
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        rules: PalwTirPublicAllocationRulesV1,
+        native_panel: &BTreeSet<PalwBondKeyV2>,
+        original_object: &crate::palw_state_v2::PalwConsensusObjectV2,
+        source: &PalwTirPublicSourceV1,
+        verify: F,
+    ) -> Result<Self, String>
+    where
+        F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    {
         if custody.drawn_panel_v1() != native_panel || custody.liable_signers_v1() != std::iter::once(geometry.producer).collect() {
             return Err("original TIR frame imports a foreign Panel or a not-yet-credited custody grant".into());
         }
         custody.pledge_v1().authenticate_original_object_v1(
             original_object,
-            &source,
+            source,
             plan.resource_plan_id,
             rules.maximum_custodians,
             verify,
