@@ -736,13 +736,10 @@ impl PalwFoldReadV1<'_> {
     /// registry has since held. Below `Params::palw_audit_2026_09_23` nothing is asked, so
     /// testnet-11 — which arms the market — folds every seed and buy exactly as it did.
     pub(super) fn check_model_market_admits(&self, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
-        if !self.extras.audit_2026_09_23_active {
-            return Ok(());
-        }
-        match self.class_lifecycle_refusal(class_id) {
-            Some(state) => Err(PalwStateV2Error::ModelClassNotEligible { class: *class_id, state }),
-            None => Ok(()),
-        }
+        let mut inputs = NativeEvmMarketGateInputsV2::from_extras_v2(self.extras);
+        inputs.virtual_active = false; // This entry is the ordinary admission predicate.
+        self.state.evm_market_refusal_v2(self.params.base_class_id(), inputs, class_id)
+            .map_or(Ok(()), |reason| Err(reason.into_legacy_error_v2(*class_id)))
     }
 
     /// **ADR-0162 Decision 5: a line's market trades only once the chain has APPROVED its class** —
@@ -756,23 +753,10 @@ impl PalwFoldReadV1<'_> {
     /// first `Active`, and a holder can always leave a class that has since been held, frozen or
     /// retired. Not consulted below the fence.
     pub(super) fn check_model_trading_v2(&self, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
-        let class = self.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
-        if !matches!(class.status, PalwClassStatusV2::Active) {
-            return Err(PalwStateV2Error::ModelClassNotActive(*class_id));
-        }
-        if self.extras.model_registry.is_none() || *class_id == self.params.base_class_id() {
-            return Ok(());
-        }
-        let refusal = match self.state.model_lifecycles.get(class_id) {
-            Some(row) => {
-                (!matches!(row.state, crate::palw_model_registry_v1::PalwModelLifecycleV1::Active)).then(|| format!("{:?}", row.state))
-            }
-            None => self.class_lifecycle_refusal(class_id),
-        };
-        match refusal {
-            Some(state) => Err(PalwStateV2Error::ModelClassNotTrading { class: *class_id, state }),
-            None => Ok(()),
-        }
+        let mut inputs = NativeEvmMarketGateInputsV2::from_extras_v2(self.extras);
+        inputs.virtual_active = true; // Trading always checks class/status before registry.
+        self.state.evm_market_refusal_v2(self.params.base_class_id(), inputs, class_id)
+            .map_or(Ok(()), |reason| Err(reason.into_legacy_error_v2(*class_id)))
     }
 
     /// **The pair the reward's slice buys from at a claim's `Final`** (ADR-0091 Decision 2), as the

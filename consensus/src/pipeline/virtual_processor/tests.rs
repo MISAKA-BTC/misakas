@@ -17622,3 +17622,5 @@ mod carrier_bond_rent_conservation;
 mod funded_original_native_candidate;
 
 mod pruning_snapshot_readiness_v1;
+
+mod evm_asof_owned_v2;

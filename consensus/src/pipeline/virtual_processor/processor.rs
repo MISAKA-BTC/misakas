@@ -1285,6 +1285,8 @@ mod palw_validate;
 mod template;
 mod native_reserve_v1;
 mod palw_pruning_capture_v1;
+mod palw_evm_asof_v2;
+pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
 pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
 
 impl VirtualStateProcessor {
