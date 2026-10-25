@@ -1,0 +1,120 @@
+{
+  "read_only": true,
+  "remote_files_written": false,
+  "bytes": 351249321,
+  "complete_records_pages": 81,
+  "unique_blocks": 14673,
+  "max_daa": 2236,
+  "anchor": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+  "anchor_present": false,
+  "anchor_ancestor_closure_blocks": 0,
+  "reached_genesis": false,
+  "scope": "partial_enumeration_only",
+  "block_kinds": {
+    "LEGACY_HEARTBEAT": 4152,
+    "LEGACY_FLOOR": 7359,
+    "EXEC": 2745,
+    "REAL": 416,
+    "": 1
+  },
+  "pow_algorithms": {
+    "8": 4152,
+    "6": 7775,
+    "10": 2745,
+    "1": 1
+  },
+  "exec_verdicts": {
+    "unknown": 2745
+  },
+  "missing_verbose": 0,
+  "identity_matches": null,
+  "terminal_errors": [],
+  "coverage_status": "UNKNOWN_PARTIAL",
+  "compatibility_status": "UNKNOWN",
+  "limits": [
+    "Derived EVM gas_limit header unavailable via observed native RPC.",
+    "Live-node granted/refused verdict is observed node authority, not an independent upgraded-binary replay.",
+    "No assertion that a granted round maps to an old 30M header without replay/header evidence.",
+    "No native39 settlement mapping or K3 campaign evidence."
+  ],
+  "snapshot_utc": "2026-10-25T10:26:16.185942+00:00",
+  "before": {
+    "utc": "2026-10-25T10:16:12.634578+00:00",
+    "dag": {
+      "sink": "08c4734527a607923177807b7de88fc1ff3a2baab0f547e4c45105d154115d9416d1122af3bb7d62edf6575298a7cc87aedb6777b838d69cbd127a949cc3504f",
+      "blockCount": 15482,
+      "pruningPointHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "virtualDaaScore": 15482
+    },
+    "node": {
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "consensusParamsId": "ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e",
+      "consensusScheduleId": "9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5",
+      "importSessionEpoch": 0,
+      "importSessionPhase": "legacy-stable",
+      "pruningImportStable": true
+    },
+    "anchor": {
+      "header": {
+        "acceptedIdMerkleRoot": "7a85f8b26bb598b78136acf692672e49b2009500231401519d76bfd483e922d6c368bdcce7831b4690182ff13ca758f08f563baa05723d2b4142942133171d2f",
+        "bits": 545259519,
+        "blueScore": 53418,
+        "blueWork": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005dc9072e2",
+        "daaScore": 15477,
+        "evmCommitmentRoot": "940dc0a66deea5c37d9a114513753fdf2b5b7484d2077f9875aa2d0828d8682cdd1e4f39bfce6cd145f8b2e14c3ecc4e0e6ed6b78c743a3f834f3afbe7f6392a",
+        "evmPayloadHash": "877fcd175efdb52807879d7fca7f28b3257f5afdc596c39557d1fe3d6c30f85c9d3da6c0a8bb8b96dfbbd2c136408414ad59cf473c1646042499566e02d676b1",
+        "hash": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+        "hashMerkleRoot": "668705cd95d663581c044b869ef6f555229fec6bc779143e05740266ba7cd360f0bc8f450f999fb3b3320b0b894a06c5579894f678e77c08c0c3ee0afaaf5300",
+        "nonce": 9396570,
+        "overlayCommitmentRoot": "1170a63b5413037dbde426d61585f6662dc8c8f82a782b0b991bc8449a2406ccd67946c35cca7e018a84fdbf482d0e02f55af44f8ea48e3eabadf2b067382a62",
+        "palwCommitment": [],
+        "palwStateRoot": "ff82074b0d71fe30914838147bd231734bacecfc9ee6d96cea1c23e0e80578ac6b185b071067ed5474c5a26332005430c34b7f2b42833f5170ed9f8a601bdfc0",
+        "parentsByLevel": [
+          [
+            "e2faa2eb97fbe2d3bf3afa55f601e807878c6794e17cb74f78520480adaeff40a1ca16b9829d0e79d1f5645f55c6e376797f61a9661f827a2d9c3e30a8652154"
+          ]
+        ],
+        "powAlgoId": 8,
+        "pruningPoint": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+        "timestamp": 1792922408275,
+        "utxoCommitment": "db49ce1bc1f278a5f7e7c9d29e483a026815a0571df8a75f5446e2646bddb4f3ccee2e74afcf5ea8b912e938fb363cda2faddd4a94979cc9ba9219b4b9d30740",
+        "version": 2
+      },
+      "verboseData": {
+        "blockKind": "LEGACY_HEARTBEAT",
+        "blueScore": 53418,
+        "childrenHashes": [
+          "8302e5dc7ed9dea8bedbe0423380ba28eb5eeeeb1a501e3b40c0fdb8f586c8759646193993d910693c20450a6117816baf267a14439bc294ea521ebc9c298231"
+        ],
+        "difficulty": 1.0000001192093038,
+        "exec": null,
+        "hash": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+        "isChainBlock": true,
+        "isHeaderOnly": false,
+        "laneClass": "BLUE",
+        "mergeSetBluesHashes": [
+          "e2faa2eb97fbe2d3bf3afa55f601e807878c6794e17cb74f78520480adaeff40a1ca16b9829d0e79d1f5645f55c6e376797f61a9661f827a2d9c3e30a8652154"
+        ],
+        "mergeSetRedsHashes": [],
+        "palwMergeView": {
+          "genuineRedBlocks": [],
+          "roundBlocks": []
+        },
+        "selectedParentHash": "e2faa2eb97fbe2d3bf3afa55f601e807878c6794e17cb74f78520480adaeff40a1ca16b9829d0e79d1f5645f55c6e376797f61a9661f827a2d9c3e30a8652154",
+        "transactionIds": [
+          "2795829bfccbeebfd3c7299081520292634e2916454419b8043cbfc05b5f74a1c1ba720e955bf320e96cd7e8d512d4f20979971ce115137b1cbd699a95d7bf06"
+        ]
+      }
+    }
+  },
+  "after": null,
+  "raw_local_path": "/tmp/misaka-public-history-census-20261025.ndjson",
+  "script_path": "/tmp/misaka-public-history-census-readonly-20261025.py",
+  "analyzer_path": "/tmp/misaka-public-history-census-analyze-20261025.py",
+  "reader_script_sha256": "df570ad492a4ea4c20b1a4b73d1ec0a2431850353b489bbc621af5da05c56943",
+  "analyzer_sha256": "fb012d9abbf4ba934975e9d19a952e816ccfc21c7ddc33bf6e9c37fc8908319e",
+  "live_process_snapshot": "23593 37504 10:07 ssh",
+  "handle_owner_agent": "/root/rfc13_25",
+  "owner_exec_session": 51660,
+  "root_cannot_poll_owner_session_directly": true
+}
