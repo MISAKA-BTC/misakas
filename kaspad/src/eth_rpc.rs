@@ -326,20 +326,19 @@ impl EthProvider for NodeEthProvider {
         let h = EvmH256::from_bytes(tx_hash);
         // One spawn_blocking: the receipt view + (locate + decode) the raw tx for
         // from/to/contractAddress/type (RocksDB reads + k256 recovery are blocking).
-        let (view, decoded, accepting_base_fee) = session
+        let resolved = session
             .spawn_blocking(move |c| {
-                let view = c.get_evm_tx_receipt(h).ok().flatten();
-                // The accepting block's base fee, for the real effectiveGasPrice (M-08).
-                let base_fee = view
-                    .as_ref()
-                    .and_then(|v| c.get_evm_header_of(v.accepting_block).ok().flatten())
-                    .and_then(|hdr| hdr.base_fee_per_gas.try_to_u128());
-                // audit R-2: resolve the raw tx directly by hash (no included_in scan).
-                let decoded = c.get_evm_raw_tx(h).ok().flatten().and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok());
-                (view, decoded, base_fee)
+                with_canonical_receipt_v2(c, h, |view| {
+                    // Existing optional enrichment remains compatible; only
+                    // the canonical receipt authority is checked here.
+                    let base_fee = c.get_evm_header_of(view.accepting_block).ok().flatten()
+                        .and_then(|hdr| hdr.base_fee_per_gas.try_to_u128());
+                    let decoded = c.get_evm_raw_tx(h).ok().flatten().and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok());
+                    Ok((view, decoded, base_fee))
+                })
             })
-            .await;
-        Ok(view.map(|v| {
+            .await?;
+        Ok(resolved.map(|(v, decoded, accepting_base_fee)| {
             // The accepting L1 block hash is 64 bytes (BLAKE2b-512); expose the
             // leading 32 as a standard-shaped, client-opaque `blockHash`.
             let bh = v.accepting_block.as_bytes();
@@ -930,8 +929,19 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
     }
 }
 
-/// Activation metadata belongs to this exact executed L1 block. An unreadable
-/// header is unavailable, never a successful simulation with an invented DAA zero.
+/// Only a true absent canonical receipt is null. Local authority read faults
+/// stop enrichment and rendering instead of selecting an unknown result.
+fn with_canonical_receipt_v2<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    tx: EvmH256,
+    visit: impl FnOnce(kaspa_consensus_core::evm::EvmTxReceiptView) -> EthResult<T>,
+) -> EthResult<Option<T>> {
+    match c.get_evm_tx_receipt(tx).map_err(|e| EthRpcError::server(format!("canonical EVM receipt unavailable: {e}")))? {
+        Some(view) => visit(view).map(Some),
+        None => Ok(None),
+    }
+}
+
 /// Build one coherent latest/pending environment from the canonical executed
 /// head identity. The selected PALW tip may be newer than this prefix head.
 fn canonical_head_snapshot_and_env_v2(
@@ -974,6 +984,8 @@ fn with_historical_market_view_v2<T>(
     visit(view)
 }
 
+/// Activation metadata belongs to this exact executed L1 block. An unreadable
+/// header is unavailable, never a successful simulation with an invented DAA zero.
 fn with_executed_l1_daa<T>(
     c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
     l1: kaspa_consensus_core::BlockHash,
@@ -1247,3 +1259,7 @@ mod historical_market_tests;
 #[cfg(test)]
 #[path = "eth_rpc_canonical_head_env_tests.rs"]
 mod canonical_head_env_tests;
+
+#[cfg(test)]
+#[path = "eth_rpc_receipt_fault_tests.rs"]
+mod receipt_fault_tests;

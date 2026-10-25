@@ -4984,20 +4984,23 @@ impl ConsensusApi for Consensus {
         tx_hash: kaspa_hashes::EvmH256,
     ) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTxReceiptView>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
-        let row = self.storage.evm_tx_index_store.get_or_default(tx_hash).unwrap();
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM receipt read: {e}"));
+        let row = self.storage.evm_tx_index_store.get_or_default(tx_hash).map_err(unavailable)?;
         for (accepting, receipt_index) in row.accepted_in.iter().rev() {
             // Canonical resolution: only an acceptance on the CURRENT selected
             // chain counts (§16 — orphaned receipts read as null at `latest`).
-            if !self.is_chain_block(*accepting).unwrap_or(false) {
-                continue;
+            match self.is_chain_block(*accepting) {
+                Ok(true) => {}
+                Ok(false) | Err(ConsensusError::HeaderNotFound(_)) => continue,
+                Err(error) => return Err(error),
             }
-            let receipts = self.storage.evm_receipts_store.get(*accepting).optional().unwrap().unwrap_or_default();
+            let receipts = self.storage.evm_receipts_store.get(*accepting).optional().map_err(unavailable)?.unwrap_or_default();
             let idx = *receipt_index as usize;
             if idx >= receipts.receipts.len() || receipts.tx_hashes.get(idx) != Some(&tx_hash) {
                 continue; // defensive: index row out of sync with the receipts row
             }
             let evm_number =
-                self.storage.evm_header_store.get(*accepting).optional().unwrap().map(|h| h.evm_number).unwrap_or_default();
+                self.storage.evm_header_store.get(*accepting).optional().map_err(unavailable)?.map(|h| h.evm_number).unwrap_or_default();
             // Block-global offset of this receipt's first log (audit H-05): the
             // count of all logs in the receipts before this one in the block.
             let log_index_offset: u32 = receipts.receipts[..idx].iter().map(|r| r.logs.len() as u32).sum();
@@ -5869,3 +5872,6 @@ mod canonicality_fault_tests;
 
 #[cfg(all(test, feature = "evm"))]
 mod evm_state_fault_tests;
+
+#[cfg(test)]
+mod evm_receipt_fault_tests;
