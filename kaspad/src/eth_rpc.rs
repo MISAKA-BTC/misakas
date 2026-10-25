@@ -235,65 +235,41 @@ impl EthProvider for NodeEthProvider {
         session
             .spawn_blocking(move |c| -> EthResult<Option<kaspa_consensus_core::evm::EvmAccountSnapshot>> {
                 let target = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
-                let l1: Option<kaspa_consensus_core::BlockHash> = match &block {
-                    BlockId::Number(n) => c.get_evm_block_by_number(*n).ok().flatten().map(|b| b.l1_hash),
-                    BlockId::Tag(t) => match t.as_str() {
-                        "earliest" => c.get_evm_block_by_number(0).ok().flatten().map(|b| b.l1_hash),
-                        "safe" => resolve_executed_tag(c, "safe")?,
-                        "finalized" => resolve_executed_tag(c, "finalized")?,
-                        _ => resolve_executed_tag(c, "latest")?, // latest / pending
-                    },
-                    // EIP-1898 by hash: resolve the 32-byte eth id → its L1 block. With
-                    // requireCanonical, a side-branch (non-chain) block is an explicit
-                    // error rather than silently reading its state (§12.5).
-                    BlockId::Hash { hash, require_canonical } => {
-                        let rpc_hash = kaspa_hashes::EvmH256::from_bytes(*hash);
-                        match c.get_evm_block_by_rpc_hash(rpc_hash).ok().flatten() {
-                            Some(b) => {
-                                if *require_canonical && !c.is_chain_block(b.l1_hash).unwrap_or(false) {
-                                    return Err(EthRpcError::invalid_params(
-                                        "requireCanonical: the requested block is not on the canonical chain",
-                                    ));
-                                }
-                                Some(b.l1_hash)
-                            }
-                            None => None,
+                with_resolved_state_selector(c, &block, |l1| {
+                    // Selector did not resolve to a known block (e.g. a future number) ⇒ no account.
+                    let Some(l1) = l1 else {
+                        if matches!(&block, BlockId::Tag(t) if matches!(t.as_str(), "safe" | "finalized" | "latest" | "pending")) {
+                            return Err(EthRpcError::server("requested executed EVM head unavailable"));
                         }
+                        return Ok(None);
+                    };
+                    // C-01 S7 (audit H-03): when the resolved block IS the canonical head, answer from
+                    // the O(1) flat point-lookup instead of materializing the full state. `Stale` (flat
+                    // store not at the head) falls through to the authoritative path below.
+                    if l1 == c.get_sink()
+                        && let Ok(kaspa_consensus_core::evm::FlatHeadAccount::AtHead(acct)) = c.get_evm_flat_account_at_head(target)
+                    {
+                        return Ok(acct);
                     }
-                };
-                // Selector did not resolve to a known block (e.g. a future number) ⇒ no account.
-                let Some(l1) = l1 else {
-                    if matches!(&block, BlockId::Tag(t) if matches!(t.as_str(), "safe" | "finalized" | "latest" | "pending")) {
-                        return Err(EthRpcError::server("requested executed EVM head unavailable"));
-                    }
-                    return Ok(None);
-                };
-                // C-01 S7 (audit H-03): when the resolved block IS the canonical head, answer from
-                // the O(1) flat point-lookup instead of materializing the full state. `Stale` (flat
-                // store not at the head) falls through to the authoritative path below.
-                if l1 == c.get_sink()
-                    && let Ok(kaspa_consensus_core::evm::FlatHeadAccount::AtHead(acct)) = c.get_evm_flat_account_at_head(target)
-                {
-                    return Ok(acct);
-                }
-                // Hot path: the full snapshot is still in the reorg window (prefix 206).
-                // §12: past the window the snapshot is pruned but the state is
-                // reconstructable from the checkpoint/diff history — fall back to that.
-                // Fail CLOSED throughout so a historical query never silently reads
-                // latest (or empty) state.
-                let snapshot = match c.get_evm_state_snapshot_of(l1) {
-                    Ok(Some(snap)) => Some(snap),
-                    Ok(None) | Err(_) => match c.reconstruct_evm_state_at(l1) {
-                        // Reconstructed + state-root-verified historical state (§12.4).
+                    // Hot path: the full snapshot is still in the reorg window (prefix 206).
+                    // §12: past the window the snapshot is pruned but the state is
+                    // reconstructable from the checkpoint/diff history — fall back to that.
+                    // Fail CLOSED throughout so a historical query never silently reads
+                    // latest (or empty) state.
+                    let snapshot = match c.get_evm_state_snapshot_of(l1) {
                         Ok(Some(snap)) => Some(snap),
-                        // `l1` is not an EVM block (pre-activation): all accounts are the
-                        // empty genesis state ⇒ no entry for this address.
-                        Ok(None) => None,
-                        // EVM block but its history is not retained here, or is corrupt.
-                        Err(e) => return Err(EthRpcError::server(format!("EVM state unavailable at the requested block: {e}"))),
-                    },
-                };
-                Ok(snapshot.and_then(|snap| snap.accounts.into_iter().find(|a| a.address == target)))
+                        Ok(None) | Err(_) => match c.reconstruct_evm_state_at(l1) {
+                            // Reconstructed + state-root-verified historical state (§12.4).
+                            Ok(Some(snap)) => Some(snap),
+                            // `l1` is not an EVM block (pre-activation): all accounts are the
+                            // empty genesis state ⇒ no entry for this address.
+                            Ok(None) => None,
+                            // EVM block but its history is not retained here, or is corrupt.
+                            Err(e) => return Err(EthRpcError::server(format!("EVM state unavailable at the requested block: {e}"))),
+                        },
+                    };
+                    Ok(snapshot.and_then(|snap| snap.accounts.into_iter().find(|a| a.address == target)))
+                })
             })
             .await
     }
@@ -917,74 +893,52 @@ impl NodeEthProvider {
         let session = self.consensus_manager.consensus().session().await;
         session
             .spawn_blocking(move |c| -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
-                // Resolve the selector → L1 block (same resolution as account_at).
-                let l1: Option<kaspa_consensus_core::BlockHash> = match &block {
-                    BlockId::Number(n) => c.get_evm_block_by_number(*n).ok().flatten().map(|b| b.l1_hash),
-                    BlockId::Tag(t) => match t.as_str() {
-                        "earliest" => c.get_evm_block_by_number(0).ok().flatten().map(|b| b.l1_hash),
-                        "safe" => resolve_executed_tag(c, "safe")?,
-                        "finalized" => resolve_executed_tag(c, "finalized")?,
-                        _ => resolve_executed_tag(c, "latest")?,
-                    },
-                    BlockId::Hash { hash, require_canonical } => {
-                        let rpc_hash = kaspa_hashes::EvmH256::from_bytes(*hash);
-                        match c.get_evm_block_by_rpc_hash(rpc_hash).ok().flatten() {
-                            Some(b) => {
-                                if *require_canonical && !c.is_chain_block(b.l1_hash).unwrap_or(false) {
-                                    return Err(EthRpcError::invalid_params(
-                                        "requireCanonical: the requested block is not on the canonical chain",
-                                    ));
-                                }
-                                Some(b.l1_hash)
-                            }
-                            None => None,
-                        }
-                    }
-                };
-                let Some(l1) = l1 else {
-                    return Err(EthRpcError::invalid_params("eth_call/eth_estimateGas: the requested block is unknown"));
-                };
-                // §12.6 env from the TARGET block's committed header.
-                let header = match c.get_evm_header_of(l1) {
-                    Ok(Some(h)) => h,
-                    Ok(None) => return Err(EthRpcError::server("eth_call/eth_estimateGas: the requested block is not an EVM block")),
-                    Err(e) => return Err(EthRpcError::server(format!("consensus: {e:?}"))),
-                };
-                // State: hot snapshot, else §12 reconstruction past the window.
-                let snapshot = match c.get_evm_state_snapshot_of(l1) {
-                    Ok(Some(s)) => s,
-                    Ok(None) | Err(_) => match c.reconstruct_evm_state_at(l1) {
+                with_resolved_state_selector(c, &block, |l1| {
+                    let Some(l1) = l1 else {
+                        return Err(EthRpcError::invalid_params("eth_call/eth_estimateGas: the requested block is unknown"));
+                    };
+                    // §12.6 env from the TARGET block's committed header.
+                    let header = match c.get_evm_header_of(l1) {
+                        Ok(Some(h)) => h,
+                        Ok(None) => return Err(EthRpcError::server("eth_call/eth_estimateGas: the requested block is not an EVM block")),
+                        Err(e) => return Err(EthRpcError::server(format!("consensus: {e:?}"))),
+                    };
+                    // State: hot snapshot, else §12 reconstruction past the window.
+                    let snapshot = match c.get_evm_state_snapshot_of(l1) {
                         Ok(Some(s)) => s,
-                        Ok(None) => return Err(EthRpcError::server("eth_call/eth_estimateGas: state unavailable (not an EVM block)")),
-                        Err(e) => return Err(EthRpcError::server(format!("EVM state unavailable at the requested block: {e}"))),
-                    },
-                };
-                // PREA P0-1: F003 activation at the TARGET block — the SAME comparison
-                // the executor/trace replay use, against THIS block's L1 DAA score
-                // (`B.header.daa_score >= f003_mldsa_verify_activation_daa_score`; see
-                // kaspa_evm::executor `f003_active` and trace::trace_accepted_tx). The
-                // fence is `u64::MAX`-inert on every network today ⇒ `false` exactly as
-                // before, but tracks the executor automatically once F003 is deployed.
-                let (.., f003_mldsa_verify_fence) = c.evm_activation_fences();
-                let target_daa = c.get_header(l1).map(|h| h.daa_score).unwrap_or(0);
-                let env = kaspa_evm::sim::EthCallEnv {
-                    chain_id: EVM_CHAIN_ID,
-                    number: header.evm_number,
-                    timestamp: header.evm_timestamp_sec,
-                    coinbase: header.coinbase,
-                    gas_limit: header.gas_limit,
-                    f003_active: target_daa >= f003_mldsa_verify_fence,
-                    // ADR-0089 §7 (recorded gap): the PALW fold is kept only at the tip
-                    // (`load_tip_cached`); reconstructing the fold at a historical block
-                    // would mean a replay this RPC does not run. A historical simulation
-                    // therefore sees the market's doors CLOSED (no view ⇒ no handlers,
-                    // fences inert) — a call against 0xF010..0xF013 or a facade at a past
-                    // block returns as if the fence were dormant there, never a stale view.
-                    palw_view: None,
-                    market_fences: Default::default(),
-                    chain_id_for_holders: EVM_CHAIN_ID,
-                };
-                Ok((snapshot, env))
+                        Ok(None) | Err(_) => match c.reconstruct_evm_state_at(l1) {
+                            Ok(Some(s)) => s,
+                            Ok(None) => return Err(EthRpcError::server("eth_call/eth_estimateGas: state unavailable (not an EVM block)")),
+                            Err(e) => return Err(EthRpcError::server(format!("EVM state unavailable at the requested block: {e}"))),
+                        },
+                    };
+                    // PREA P0-1: F003 activation at the TARGET block — the SAME comparison
+                    // the executor/trace replay use, against THIS block's L1 DAA score
+                    // (`B.header.daa_score >= f003_mldsa_verify_activation_daa_score`; see
+                    // kaspa_evm::executor `f003_active` and trace::trace_accepted_tx). The
+                    // fence is `u64::MAX`-inert on every network today ⇒ `false` exactly as
+                    // before, but tracks the executor automatically once F003 is deployed.
+                    let (.., f003_mldsa_verify_fence) = c.evm_activation_fences();
+                    let target_daa = c.get_header(l1).map(|h| h.daa_score).unwrap_or(0);
+                    let env = kaspa_evm::sim::EthCallEnv {
+                        chain_id: EVM_CHAIN_ID,
+                        number: header.evm_number,
+                        timestamp: header.evm_timestamp_sec,
+                        coinbase: header.coinbase,
+                        gas_limit: header.gas_limit,
+                        f003_active: target_daa >= f003_mldsa_verify_fence,
+                        // ADR-0089 §7 (recorded gap): the PALW fold is kept only at the tip
+                        // (`load_tip_cached`); reconstructing the fold at a historical block
+                        // would mean a replay this RPC does not run. A historical simulation
+                        // therefore sees the market's doors CLOSED (no view ⇒ no handlers,
+                        // fences inert) — a call against 0xF010..0xF013 or a facade at a past
+                        // block returns as if the fence were dormant there, never a stale view.
+                        palw_view: None,
+                        market_fences: Default::default(),
+                        chain_id_for_holders: EVM_CHAIN_ID,
+                    };
+                    Ok((snapshot, env))
+                })
             })
             .await
     }
@@ -1036,9 +990,42 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
     }
 }
 
-/// The eth-rpc 32-byte parentHash of an EVM block: the first 32 bytes of the
-/// `evm_number − 1` block's L1 hash (audit H-04). Zero for EVM block 0 or when
-/// the parent cannot be read (a non-fatal best-effort field).
+/// Resolve once before either account lookup or historical simulation. API read
+/// errors must not become an absent account, unknown selector or canonicality denial.
+fn with_resolved_state_selector<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    block: &BlockId,
+    then: impl FnOnce(Option<kaspa_consensus_core::BlockHash>) -> EthResult<T>,
+) -> EthResult<T> {
+    let read_error = |e| EthRpcError::server(format!("EVM selector read: {e:?}"));
+    let l1 = match block {
+        BlockId::Number(n) => c.get_evm_block_by_number(*n).map_err(read_error)?.map(|b| b.l1_hash),
+        BlockId::Tag(t) => match t.as_str() {
+            "earliest" => c.get_evm_block_by_number(0).map_err(read_error)?.map(|b| b.l1_hash),
+            "safe" | "finalized" => resolve_executed_tag(c, t)?,
+            _ => resolve_executed_tag(c, "latest")?, // existing latest / pending semantics
+        },
+        BlockId::Hash { hash, require_canonical } => {
+            match c.get_evm_block_by_rpc_hash(EvmH256::from_bytes(*hash)).map_err(read_error)? {
+                Some(b) => {
+                    if *require_canonical && !c.is_chain_block(b.l1_hash).map_err(read_error)? {
+                        return Err(EthRpcError::invalid_params(
+                            "requireCanonical: the requested block is not on the canonical chain",
+                        ));
+                    }
+                    Some(b.l1_hash)
+                }
+                None => None,
+            }
+        }
+    };
+    then(l1)
+}
+
+#[cfg(test)]
+#[path = "eth_rpc_state_selector_tests.rs"]
+mod state_selector_tests;
+
 /// Errors in canonical evidence are surfaced; an absent safe/finalized tag stays absent.
 fn resolve_executed_tag(
     c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
@@ -1052,6 +1039,9 @@ fn resolve_executed_tag(
     }))
 }
 
+/// The eth-rpc 32-byte parentHash of an EVM block: the first 32 bytes of the
+/// `evm_number − 1` block's L1 hash (audit H-04). Zero for EVM block 0 or when
+/// the parent cannot be read (a non-fatal best-effort field).
 fn parent_l1_hash32(
     c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
     resp: &kaspa_consensus_core::errors::consensus::ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>>,
