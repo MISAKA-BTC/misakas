@@ -1,0 +1,182 @@
+{
+  "schema": "misaka.rfc06.consumer_review.v1",
+  "status": "REVIEW_ONLY_NOT_IMPLEMENTED_OR_COMPLETED",
+  "recorded_at": "2026-10-25T12:35:00.546732+00:00",
+  "workspace": "/Users/wata/.codex/worktrees/rfc06-12-continuation/MISAKA-testnet",
+  "head": "9135d8f4e274f4e18a7f7eef45b1960520fa6b41",
+  "scope": "Q36 SEAT-S4 partial resume through receipt signing",
+  "reviewed_sources_sha256": {
+    "kaspad/src/palw_panel.rs": "ce27785b8a127e178998c90080d9ca9ed3b5949a2b122e66311136786403098d",
+    "kaspad/src/palw_panel/seat_progress.rs": "e0faae64b77815c7792be8fa28a69ff1a7ff2dc9a4d008adca4938f630c081ec",
+    "kaspad/src/palw_native_routing_replay_v2.rs": "cb1680647dbbe1b3776ed65d9254e4066db6dad56e1a0e8554ae535d9c3a1ebd",
+    "kaspad/src/palw_fp_replay_routing_v2.rs": "86c4f576b54f650909e53c5fde3053fdb510c00be104ffb95df4c06551630cd7",
+    "kaspad/src/palw_panel/seat_s_tests.rs": "19fb2effc6f908460b78455ce53066e09321a043fed06774ab855ae5fea8f907",
+    "misaka/palw/base0/src/qwen36_backend.rs": "44479a636834602688bc5325445a0fa7d7100da561c12cfb29748719529d38fe",
+    "misaka/palw/base0/src/qwen36_backend/routing_v2.rs": "4e4b168ef799d3e4a10caa642db4e4560d4edd16d856468b3d671333b8f3425c",
+    "misaka/palw/base0/src/qwen36_plan/routing_v2.rs": "00d106f47a9d913eb0ef553b2f7d507628bd61568b48a6efdfb663f43af6ae6a",
+    "kaspad/src/palw_rider_outbox.rs": "3b0d7b41dfdfea696aa05fdbc3b01d79f61bfb0f24269d67dd7c7ac89e254167",
+    "kaspad/src/palw_panel/court_outbox_routing.rs": "ea7f8d7f769505dbe0ed2d69f76429c02f1566afb5f09c11ec3d7b58af81dc77"
+  },
+  "dirty_tracked_sources_sha256": {
+    "consensus/core/src/palw_claim_challenge_fold_v2.rs": "b3d1ae0ecf817375beb8dcd6383cfede2e408c42425e73290ef970facafbbbb9",
+    "consensus/core/src/palw_claim_challenge_v2.rs": "3cffbe031ff2d362e1ddc25026950fb27ce069d2c3a21fb0b1f162a42f80dafb",
+    "consensus/core/src/palw_held_da_v1.rs": "ce0b739e72023cd1538df5e496f6d2b556954dff53cd6c87d0e73fb3c34d48dc",
+    "consensus/core/src/palw_mesh_fold_v1.rs": "d4b6600d719f0d48c38fa80d2f7949b5dbe7ac2019e92ef6cb4b9c7017a30e01",
+    "consensus/core/src/palw_state_chunk_map.rs": "2406ee0dec60856731af51a9cbe1c9366ea73db603ad512e6625aebab750ba7b",
+    "consensus/core/src/palw_state_v2/tests/paid_claim_reader_v1.rs": "3a7ce0d2d2bedff5819128aae681c37499ab2dfc755fdf29a837f5e102a6bea9",
+    "consensus/core/src/palw_state_v2/tests/settlement_once_v1.rs": "ba0a798b0e714bda8a5b07a539724dcf3aea80d7178c6bf9bba3683683441461",
+    "consensus/core/src/palw_step.rs": "e5d803b93bf17c9a66febd325528f5538c94935bdedd858a3baf8316e086c0ca",
+    "kaspad/src/palw_gdn_held_filer.rs": "79c6ffe35717786ac8b8d66dce563f7e531c9648a93c5bc8b37d11835affe4aa",
+    "kaspad/src/palw_gdn_held_filer_tests.rs": "128bf7d92ec722b7f684b6dec98ca0f66b64b30a50d29ca0d8ba82dc6c493451"
+  },
+  "untracked_rust_sources_sha256": {
+    "consensus/core/src/palw_held_da_auth_workspace_tests_v2.rs": "2ecc20674fab5a61da7d9a1455ec5b3606554ad292fed2f3d69d3d310b8046ad",
+    "consensus/core/src/palw_held_da_auth_workspace_v2.rs": "a9132c1fca91841f02b84196c7610d6957644339a218e0a21af478686b9c0570",
+    "consensus/core/src/palw_paid_check_authority_checked_v2.rs": "ab316e9957d762b7887ccedc32cb93d04dc6f24feccb84afb60c8c01d0f87d9d",
+    "consensus/core/src/palw_state_v2/tests/mesh_once_atomicity_v1.rs": "34c38cb3e721beb3cadcde4c80e0e107a1b17bb22479a772975ae03334bfddf6",
+    "consensus/core/src/palw_state_v2/tests/paid_check_authority_resource_v2.rs": "5647250bb78bdc68076bb3fe6a536976ae52dae53c911d4466550c8b6e4f8f32",
+    "consensus/core/src/rfc07_normal_source_owned_draft.rs": "a67a15393bc74b368d77c7828b240d2a21da960ba7e7eb3b846b3d99666180d6",
+    "consensus/core/src/rfc07_normal_source_projection_draft.rs": "adb4052ce9dd615206d75f95d20fe45f87f3f68c5cc456fc999750966347e24e",
+    "kaspad/src/palw_gdn_held_answer_auth_tests_v2.rs": "9519cfcc78daf5b54a6c36c10c4d8da99aa57d1d6bc05a3af5d2abc2acd39168"
+  },
+  "verified_references": [
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwSeatTaskOutV1",
+      "line": 1183,
+      "source_line": "enum PalwSeatTaskOutV1 {"
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwSeatReplayDoneV1",
+      "line": 1200,
+      "source_line": "struct PalwSeatReplayDoneV1 {"
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwSeatReplaysV1::poll_task",
+      "line": 1420,
+      "source_line": "    async fn poll_task("
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwSeatReplaysV1::start_segment",
+      "line": 1634,
+      "source_line": "    pub(crate) fn start_segment<W>("
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwSeatResumesV1",
+      "line": 1904,
+      "source_line": "pub(crate) struct PalwSeatResumesV1 {"
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwSeatResumesV1::step matched insert",
+      "line": 1949,
+      "source_line": "                        self.matched.insert((claim.claim, segment));"
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwSeatResumesV1::step cached matched insert",
+      "line": 2037,
+      "source_line": "                self.matched.insert((claim.claim, segment));"
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwSeatResumesV1::step Licensed",
+      "line": 2062,
+      "source_line": "            PalwSeatResumeStepV1::Licensed(claim.mask)"
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "PalwPanelService::seat_s4_resume_v1",
+      "line": 13995,
+      "source_line": "    async fn seat_s4_resume_v1("
+    },
+    {
+      "path": "misaka/palw/base0/src/qwen36_backend.rs",
+      "function_or_boundary": "Qwen36Backend::interval_kernels_v1",
+      "line": 1665,
+      "source_line": "    fn interval_kernels_v1("
+    },
+    {
+      "path": "misaka/palw/base0/src/qwen36_backend.rs",
+      "function_or_boundary": "Qwen36Backend::replay_segment_from_checkpoint_v1",
+      "line": 1808,
+      "source_line": "    fn replay_segment_from_checkpoint_v1("
+    },
+    {
+      "path": "kaspad/src/palw_panel/seat_progress.rs",
+      "function_or_boundary": "FP Licensed -> segments_attested",
+      "line": 459,
+      "source_line": "                            PalwSeatResumeStepV1::Licensed(mask) => {"
+    },
+    {
+      "path": "kaspad/src/palw_panel/seat_progress.rs",
+      "function_or_boundary": "attempt Licensed -> segments_attested",
+      "line": 1369,
+      "source_line": "                                PalwSeatResumeStepV1::Licensed(mask) => {"
+    },
+    {
+      "path": "kaspad/src/palw_panel/seat_progress.rs",
+      "function_or_boundary": "V3 receipt signing",
+      "line": 1837,
+      "source_line": "                    let message = palw_receipt_message_v3(network_domain, duty.claim_id, verdict, signed_daa, mask);"
+    },
+    {
+      "path": "kaspad/src/palw_fp_replay_routing_v2.rs",
+      "function_or_boundary": "FpReplayRoutingGuardV2",
+      "line": 27,
+      "source_line": "pub(super) struct FpReplayRoutingGuardV2 {"
+    },
+    {
+      "path": "kaspad/src/palw_fp_replay_routing_v2.rs",
+      "function_or_boundary": "BoundFpReplayV2",
+      "line": 46,
+      "source_line": "pub(super) struct BoundFpReplayV2 {"
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "function_or_boundary": "refresh_fp_routed_with_v2",
+      "line": 1593,
+      "source_line": "    fn refresh_fp_routed_with_v2(&mut self,key:&PalwSeatReplayKeyV1,active:bool,read:impl FnOnce(Hash64,&kaspa_consensus_core::palw_v2::PalwJobContextV2)->Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,String>)->Result<(),fp_replay_routing::FpReplayRoutingFaultV2> {"
+    },
+    {
+      "path": "misaka/palw/base0/src/qwen36_plan/routing_v2.rs",
+      "function_or_boundary": "separate_native_readers_and_layers_retarget_actual_q36_execution",
+      "line": 204,
+      "source_line": "    fn separate_native_readers_and_layers_retarget_actual_q36_execution() {"
+    }
+  ],
+  "finding": "seat_s4_resume_v1 resolves a backend and reserves runtime memory but does not bind an accepted native claim owner before start_segment. Q36 segment entry does not call require_native_routing_job_v2. Segment results and matched masks retain no original routing decision for refresh before receipt signing.",
+  "already_closed": [
+    "Offline SDK router binding sign and CLI",
+    "Q36 per-reader/per-layer plan retarget",
+    "Prospective block, FP and rider owner binding",
+    "Accepted whole replay, FP bound worker, audit and operator binding",
+    "Rider pending/outbox native owner sidecar and refresh, per 0006-rider-pending-native-owners-2026-10-25.md"
+  ],
+  "proposed_ownership_chain": [
+    "Obtain exact original native Some(owner) or explicit None before backend replay; reserve job/prompt/guard retention before allocation.",
+    "Bind that same backend to the original owner and retain plan lease through actual segment restore and replay.",
+    "Carry guard in task result through detached/running/done storage.",
+    "Preserve guards beside matched segment mask; revalidate before reuse and receipt signing.",
+    "Keep transient Resource/read failures retryable; retire known changed local identity without conviction or monetary penalty."
+  ],
+  "reuse": "Generalize the existing FP BoundFpReplayV2/FpReplayRoutingGuardV2 and refresh_fp_routed_with_v2 pattern rather than creating an authority from a capture. FP-specific execution/count semantics must not be silently assumed for all segments.",
+  "required_tests": [
+    "Actual worker receives the same bound backend and original Arc; detached, done cache and matched mask retain its reservation and original decision.",
+    "A quota refusal before job/prompt/guard retention leaves openings, candidate count and matched mask unchanged; release permits the same input to retry.",
+    "Forward native progress preserving claim/job/import/declaration may reuse; changed import/router retires local result; native read failure retains it without a receipt.",
+    "Original explicit None cannot acquire a later Some authority without reexecution; no active missing guard may license a mask.",
+    "Use actual tiny Q36 independent-router/layer fixture to construct an authenticated checkpoint opening and run the real restore/segment arithmetic under its selected native plan.",
+    "Retain existing real floor opening controls for junk, forged path, stranger job and local failure; add a signing counter proving stale/unavailable native results issue no V3 receipt."
+  ],
+  "limits": [
+    "No Rust modified, no Cargo/runtime tests run by this review.",
+    "Source-string pins and floor opening tests are not native router admission or Q36 restore acceptance evidence.",
+    "No K3 inputs, native39 settlement map, selected-verifier approval or campaign gate supplied.",
+    "Activation None, normal bootstrap fences and model tiers unchanged."
+  ]
+}
