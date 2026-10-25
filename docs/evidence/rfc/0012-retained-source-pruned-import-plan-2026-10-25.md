@@ -3,9 +3,9 @@
 ## Status and boundary
 
 The source-input retention code and connected importer compiled in the parent's coordinated build.
-Run7 has now completed PASS, including retained source publication. Actual fresh-DB
-pruned import Run1 is running from that artifact; catchup, new-block and cold-reopen
-acceptance remain PENDING.
+Run7 completed PASS, including retained source publication. Actual fresh-DB
+native/store pruned import Run1 also completed PASS, including catchup, a new
+block and cold reopen. P2P wire, OS crash and campaign acceptance remain unexecuted.
 This document is a design and source-retention record, not pruned-IBD acceptance.
 
 The previous long Run6 does not establish successful source readiness: actual
@@ -230,3 +230,9 @@ throughput measurements or evidence that any unexecuted importer succeeded.
 The source producer completed the full long native pruning role **PASS/exit0 in2031.15s**, with actual cold receipt/all-generation GC and final manifest publication. Source DB is `/private/tmp/rusty-kaspa/typed-pruning-retained-54741-1792894786178740000`; source tip is `9b22d48f3e4dfead8cbcfd27a8ad0d78500d09ffe20b404765f098b66c389954bbb3e0c7e88944bbe27e3f48a2e883ab3f03185f625852fe91c8bc841347210e`. The source producer exited before any importer open. Its signed-input retention manifest SHA256 is `5deb85b1eaa3410983a1947569e1c2b9b3c7b5da94f2809094faf78339006988`; its producer binary SHA256 is `81afb1da4aed27e35de3b95762d77db77f8d9cf5f0d6f57b109da27eaf3201fe`. This manifest itself is not a signed campaign attestation.
 
 Root invoked the explicit ignored parent from corrected importer pin `58021023dc1a785bebed02e8b2b477c5ab44b27fcb293b41afdb74367a1baf1d`, with fresh run directory `/tmp/misaka-rfc12-pruned-import-run1-20261025`. Parent handle22954; controller `/tmp/misaka-rfc12-pruned-import-run1-controller-20261025.json`; log `/tmp/misaka-rfc12-pruned-import-run1-20261025.log`. Actual proof/trusted insertion,74,920 post-point headers, session-bound snapshot/UTXO import and completion have passed their assertions. Ordinary post-point body processing is in progress (15,000/74,920 observed). No finished import/new-block/cold-reopen PASS is yet claimed. Earlier NOT RUN paragraphs describe the pre-invocation history. The source remains separate from scratch server and empty target; no DB prefix copy is used to establish target state.
+
+## Run1 terminal native/store import PASS
+
+The parent completed naturally with **1/1 PASS in1147.57s**, exit0, at UTC2026-10-25T03:14:00.578210. All74,920 post-point bodies passed ordinary insertion. Source and target then agreed on actual tip, PALW state root, virtual UTXO rows and both original/replacement finalized receipt bindings. A newly built source block `d1ddd23ef727d3654e8fc6301e3598e11c99f4d3d32729975c8108402a6a0d2dd05550f5974a4e45a165d5b4b43ffd293dbe7f56714d5129028f63dbf4629123` was accepted by the target as StatusUTXOValid and the same comparisons passed again. All target DB owners were closed, the actual target DB reopened cold, and sink/stable flag/virtual UTXO rows/PALW root/receipt bindings still matched. Both cold-reopen phase completion and the final PASS marker were emitted before the test's terminal success.
+
+The controller above is now terminal PASS/exit0; importer binary/source identities and immutable source manifest remain as recorded. The original source, scratch checkpoint and fresh target are retained separately. The producer manifest's earlier NOT RUN scope is immutable historical source metadata, not a live experiment-status record. Earlier PENDING paragraphs record intermediate checkpoints and are superseded by this terminal result. This is actual native/store pruned import, not a P2P protocol transfer, staging-manager switch, process-kill recovery, K3,100k useful work or any of the15 UNKNOWN campaign gates. No acceptance policy or public activation value changed.
