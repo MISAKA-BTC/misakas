@@ -13816,6 +13816,7 @@ pub fn palw_panel_room_read_v1(
 mod native_mutation;
 mod native_writers;
 mod vesting_workspace_v2;
+mod aux_sweep_workspace_v2;
 mod transition_builder;
 mod block_preparation;
 mod input_views;
@@ -17794,6 +17795,10 @@ fn sweep_fp_prompt_rows(builder: &mut TransitionBuilder<'_>, parent: &PalwChainS
     if ctx.daa_score / epoch_length <= last.daa_score / epoch_length {
         return Ok(());
     }
+    if builder.native_writers_tracking_v1() {
+        let count = builder.state.fp_claim_prompts.values().filter(|row| row.expires_daa <= ctx.daa_score).count();
+        builder.reserve_aux_sweep_vec_v2::<(Hash64, PalwBondKeyV2, Hash64)>(count, "expired FP prompt keys")?;
+    }
     let expired: Vec<(Hash64, PalwBondKeyV2, Hash64)> =
         builder.state.fp_claim_prompts.iter().filter(|(_, row)| row.expires_daa <= ctx.daa_score).map(|(key, _)| *key).collect();
     for key in expired {
@@ -17864,6 +17869,7 @@ fn sweep_panel_obligations(
     let prunable = |expiry_daa: u64, settled_at: u64| {
         palw_panel_obligation_prunable_v1(expiry_daa, settled_at, now, settled_now, depth, window_court)
     };
+    builder.reserve_panel_sweep_workspace_v2()?;
     let mut locks_by_claim: BTreeMap<Hash64, Vec<((PalwBondKeyV2, Hash64), bool)>> = BTreeMap::new();
     for (key, lock) in &builder.state.slashable_locks {
         locks_by_claim.entry(key.1).or_default().push((*key, prunable(lock.expiry_daa, lock.settled_at_final)));
@@ -18385,6 +18391,10 @@ fn sweep_reward_reveals(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
     if !builder.params.rcore_plus_active_at(ctx.daa_score) || builder.state.reward_pending.is_empty() {
         return Ok(());
     }
+    if builder.native_writers_tracking_v1() {
+        let count = builder.state.reward_pending.values().filter(|pending| pending.reveal_until < ctx.daa_score).count();
+        builder.reserve_aux_sweep_vec_v2::<(Hash64, PalwPendingRewardV1)>(count, "due reporter reward copies")?;
+    }
     let due: Vec<(Hash64, PalwPendingRewardV1)> = builder
         .state
         .reward_pending
@@ -18481,6 +18491,11 @@ fn sweep_reporter_commitments(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
         return Ok(());
     }
     use std::ops::Bound::{Excluded, Included};
+    if builder.native_writers_tracking_v1() {
+        let count = builder.state.commitments_by_daa
+            .range((Included((guard, Hash64::default())), Excluded((expired_below, Hash64::default())))).count();
+        builder.reserve_aux_sweep_vec_v2::<Hash64>(count, "expired reporter commitment keys")?;
+    }
     let doomed: Vec<Hash64> = builder
         .state
         .commitments_by_daa

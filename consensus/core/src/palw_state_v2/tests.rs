@@ -22,6 +22,7 @@ mod court_deadline_workspace_v2;
 mod court_capacity_workspace_v2;
 mod court_admission_workspace_v2;
 mod queue_drain_workspace_v2;
+mod aux_sweep_workspace_v2;
 mod native_routing_work_v2;
 // RFC-0008: once-only settlement across consumers (dormant fence; kernel route aux 140).
 mod settlement_once_v1;
