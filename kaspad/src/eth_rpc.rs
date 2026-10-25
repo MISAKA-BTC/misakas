@@ -422,8 +422,12 @@ impl EthProvider for NodeEthProvider {
         let h = EvmH256::from_bytes(tx_hash);
         // Mempool raw (pending) — in-memory, no consensus session.
         let pending_raw = self.flow_context.mining_manager().get_evm_transaction_raw(&h);
-        // Head pre-state + env (reuses the eth_call head context; fee-free, F003 per
-        // the eth_call convention).
+        let session = self.consensus_manager.consensus().session().await;
+        let prepared = session.clone().spawn_blocking(move |c| {
+            with_candidate_authority_v2(c, h, pending_raw, |raw, skip, accepted| Ok((raw, skip, accepted)))
+        }).await?;
+        let Some((raw, recorded_skip_class, accepted)) = prepared else { return Ok(None); };
+        // Resolve authority before head reconstruction or candidate execution.
         let (snapshot, env) = self.head_snapshot_and_env().await?;
         // §11.5: cap concurrent replays; the permit is held across the blocking work.
         let permit = self
@@ -431,20 +435,9 @@ impl EthProvider for NodeEthProvider {
             .clone()
             .try_acquire_owned()
             .map_err(|_| EthRpcError::server("too many concurrent traces in flight; retry shortly"))?;
-        let session = self.consensus_manager.consensus().session().await;
         session
-            .spawn_blocking(move |c| {
+            .spawn_blocking(move |_c| {
                 let _permit = permit;
-                // Raw tx: mempool (pending) first, else the raw-tx store. Unknown ⇒ None.
-                let raw = match pending_raw {
-                    Some(r) => r,
-                    None => match c.get_evm_raw_tx(h).ok().flatten() {
-                        Some(r) => r,
-                        None => return Ok(None),
-                    },
-                };
-                let recorded_skip_class = c.get_evm_tx_locations(h).ok().and_then(|l| l.last_skip_class);
-                let accepted = c.get_evm_tx_receipt(h).ok().flatten().is_some();
                 let ct = kaspa_evm::trace::trace_candidate_tx(&snapshot, &env, &raw, kaspa_evm::trace::TraceLimits::default())
                     .map_err(|e| EthRpcError::server(format!("{e}")))?;
                 Ok(Some(EthCandidateTrace {
@@ -481,8 +474,9 @@ impl EthProvider for NodeEthProvider {
         // selected-chain acceptance and is the ONLY source of truth for "accepted"
         // (audit H-06 — a reorged-out acceptance must never read as accepted).
         let session = self.consensus_manager.consensus().session().await;
-        let (locs, canon) =
-            session.spawn_blocking(move |c| (c.get_evm_tx_locations(h).ok(), c.get_evm_tx_receipt(h).ok().flatten())).await;
+        let (locs, canon) = session.spawn_blocking(move |c| {
+            with_status_authority_v2(c, h, |locations, receipt| Ok((Some(locations), receipt)))
+        }).await?;
         // The L1 block ids are 64-byte (BLAKE2b-512); expose the leading 32 as
         // standard-shaped, client-opaque ids (as elsewhere here).
         let to32 = |b: &kaspa_hashes::Hash64| {
@@ -537,19 +531,18 @@ impl EthProvider for NodeEthProvider {
         let h = EvmH256::from_bytes(tx_hash);
         let (decoded, ctx) = session
             .spawn_blocking(move |c| {
-                // audit R-2: resolve the raw tx directly by hash (survives the
-                // bounded included_in cap + pruning of the payload's location row).
-                let decoded = c.get_evm_raw_tx(h).ok().flatten().and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok());
-                // Canonical block context (None ⇒ pending / not on the selected chain).
-                let ctx = c.get_evm_tx_receipt(h).ok().flatten().map(|v| {
-                    let bh = v.accepting_block.as_bytes();
-                    let mut block_hash = [0u8; 32];
-                    block_hash.copy_from_slice(&bh[..32]);
-                    (v.evm_number, block_hash, v.receipt_index)
-                });
-                (decoded, ctx)
+                with_transaction_authority_v2(c, h, |raw, receipt| {
+                    let decoded = raw.and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok());
+                    let ctx = receipt.map(|v| {
+                        let bh = v.accepting_block.as_bytes();
+                        let mut block_hash = [0u8; 32];
+                        block_hash.copy_from_slice(&bh[..32]);
+                        (v.evm_number, block_hash, v.receipt_index)
+                    });
+                    Ok((decoded, ctx))
+                })
             })
-            .await;
+            .await?;
         // Pending fallback (audit M-08): a tx that is in this node's mempool but
         // not yet in any payload is decoded from the pool, with null block context.
         let decoded = match decoded {
@@ -761,53 +754,30 @@ impl NodeEthProvider {
         session
             .spawn_blocking(move |c| {
                 let _permit = permit; // held until the blocking replay completes
-                // Resolve the tx to its canonical accepting block + receipt. `None` ⇒
-                // unknown / not accepted on the selected chain (skipped txs report a
-                // reason via misaka_getEvmTxStatus, §11.6).
-                let Some(view) = c.get_evm_tx_receipt(h).ok().flatten() else { return Ok(None) };
-                let accepting = view.accepting_block;
-                let Some(body) = c.get_evm_trace_replay_body(accepting).ok().flatten() else {
-                    return Err(EthRpcError::server(
-                        "trace data unavailable for this transaction's block (pruned or recorded before trace support)",
-                    ));
-                };
-                // Selected-parent committed post-state = the replay PRE-state. The
-                // parent's EVM header gates snapshot-vs-genesis-default; a header-
-                // present-but-snapshot-absent parent is pruned ⇒ unavailable (§11.5).
-                let parent_header = c.get_evm_header_of(body.selected_parent).ok().flatten();
-                let parent_snapshot = if parent_header.is_some() {
-                    match c.get_evm_state_snapshot_of(body.selected_parent).ok().flatten() {
-                        Some(s) => s,
-                        None => {
-                            return Err(EthRpcError::server(
-                                "historical state unavailable for trace (selected-parent state snapshot pruned)",
-                            ));
-                        }
-                    }
-                } else {
-                    Default::default()
-                };
-                // Replay under the SAME activation fences the accepting block executed
-                // with (gas-pool v1/v2, withdraw-cap, bridge ledger, F003) — read from the
-                // network Params, not assumed inert (testnet runs a finite gas-pool-v2 fence).
-                let (gas_pool_v2, f002_withdraw_cap, bridge_ledger, f003_mldsa_verify) = c.evm_activation_fences();
-                let traced = kaspa_evm::trace::trace_accepted_tx(
-                    &parent_snapshot,
-                    parent_header.as_ref(),
-                    &body,
-                    view.receipt_index,
-                    &view.receipt,
-                    gas_pool_v2,
-                    f002_withdraw_cap,
-                    bridge_ledger,
-                    f003_mldsa_verify,
-                    capture_struct_logs,
-                    kaspa_evm::trace::TraceLimits::default(),
-                )
-                .map_err(|e| EthRpcError::server(format!("{e}")))?;
-                let originating = kaspa_evm::trace::candidate_index_for_receipt(&body, view.receipt_index)
-                    .map(|i| body.txs[i].originating_payload_block);
-                Ok(Some((traced, accepting, originating)))
+                with_replay_authority_v2(c, h, |view, body, parent_header, parent_snapshot| {
+                    let accepting = view.accepting_block;
+                    // Replay under the SAME activation fences the accepting block executed
+                    // with (gas-pool v1/v2, withdraw-cap, bridge ledger, F003) — read from the
+                    // network Params, not assumed inert (testnet runs a finite gas-pool-v2 fence).
+                    let (gas_pool_v2, f002_withdraw_cap, bridge_ledger, f003_mldsa_verify) = c.evm_activation_fences();
+                    let traced = kaspa_evm::trace::trace_accepted_tx(
+                        &parent_snapshot,
+                        parent_header.as_ref(),
+                        &body,
+                        view.receipt_index,
+                        &view.receipt,
+                        gas_pool_v2,
+                        f002_withdraw_cap,
+                        bridge_ledger,
+                        f003_mldsa_verify,
+                        capture_struct_logs,
+                        kaspa_evm::trace::TraceLimits::default(),
+                    )
+                    .map_err(|e| EthRpcError::server(format!("{e}")))?;
+                    let originating = kaspa_evm::trace::candidate_index_for_receipt(&body, view.receipt_index)
+                        .map(|i| body.txs[i].originating_payload_block);
+                    Ok((traced, accepting, originating))
+                })
             })
             .await
     }
@@ -927,6 +897,75 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
         stack: l.stack.clone(),
         error: l.error.clone(),
     }
+}
+
+fn transaction_read_v2<T>(
+    label: &str,
+    result: kaspa_consensus_core::errors::consensus::ConsensusResult<T>,
+) -> EthResult<T> {
+    result.map_err(|e| EthRpcError::server(format!("{label}: {e}")))
+}
+
+fn with_candidate_authority_v2<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    tx: EvmH256,
+    pending_raw: Option<Vec<u8>>,
+    visit: impl FnOnce(Vec<u8>, Option<u8>, bool) -> EthResult<T>,
+) -> EthResult<Option<T>> {
+    let raw = match pending_raw {
+        Some(raw) => raw,
+        None => match transaction_read_v2("candidate raw transaction", c.get_evm_raw_tx(tx))? {
+            Some(raw) => raw,
+            None => return Ok(None),
+        },
+    };
+    let locations = transaction_read_v2("candidate transaction locations", c.get_evm_tx_locations(tx))?;
+    let receipt = with_canonical_receipt_v2(c, tx, Ok)?;
+    visit(raw, locations.last_skip_class, receipt.is_some()).map(Some)
+}
+
+fn with_status_authority_v2<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    tx: EvmH256,
+    visit: impl FnOnce(kaspa_consensus_core::evm::EvmTxLocations, Option<kaspa_consensus_core::evm::EvmTxReceiptView>) -> EthResult<T>,
+) -> EthResult<T> {
+    let locations = transaction_read_v2("transaction status locations", c.get_evm_tx_locations(tx))?;
+    let receipt = with_canonical_receipt_v2(c, tx, Ok)?;
+    visit(locations, receipt)
+}
+
+fn with_transaction_authority_v2<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    tx: EvmH256,
+    visit: impl FnOnce(Option<Vec<u8>>, Option<kaspa_consensus_core::evm::EvmTxReceiptView>) -> EthResult<T>,
+) -> EthResult<T> {
+    let raw = transaction_read_v2("raw transaction lookup", c.get_evm_raw_tx(tx))?;
+    let receipt = with_canonical_receipt_v2(c, tx, Ok)?;
+    visit(raw, receipt)
+}
+
+fn with_replay_authority_v2<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    tx: EvmH256,
+    visit: impl FnOnce(
+        kaspa_consensus_core::evm::EvmTxReceiptView,
+        kaspa_consensus_core::evm::EvmTraceReplayBodyV1,
+        Option<kaspa_consensus_core::evm::EvmExecutionHeader>,
+        kaspa_consensus_core::evm::EvmStateSnapshot,
+    ) -> EthResult<T>,
+) -> EthResult<Option<T>> {
+    with_canonical_receipt_v2(c, tx, |view| {
+        let body = transaction_read_v2("trace replay body", c.get_evm_trace_replay_body(view.accepting_block))?
+            .ok_or_else(|| EthRpcError::server("trace data unavailable for this transaction's block (pruned or recorded before trace support)"))?;
+        let parent_header = transaction_read_v2("trace parent execution header", c.get_evm_header_of(body.selected_parent))?;
+        // A true absent parent header keeps the existing genesis prestate
+        // contract. An unreadable header must never select that default.
+        let snapshot = if parent_header.is_some() {
+            transaction_read_v2("trace parent execution state", c.get_evm_state_snapshot_of(body.selected_parent))?
+                .ok_or_else(|| EthRpcError::server("historical state unavailable for trace (selected-parent state snapshot pruned)"))?
+        } else { Default::default() };
+        visit(view, body, parent_header, snapshot)
+    })
 }
 
 /// Only a true absent canonical receipt is null. Local authority read faults
@@ -1263,3 +1302,7 @@ mod canonical_head_env_tests;
 #[cfg(test)]
 #[path = "eth_rpc_receipt_fault_tests.rs"]
 mod receipt_fault_tests;
+
+#[cfg(test)]
+#[path = "eth_rpc_transaction_authority_tests.rs"]
+mod transaction_authority_tests;

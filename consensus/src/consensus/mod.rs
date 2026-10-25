@@ -4976,7 +4976,8 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_evm_tx_locations(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<kaspa_consensus_core::evm::EvmTxLocations> {
-        Ok(self.storage.evm_tx_index_store.get_or_default(tx_hash).unwrap())
+        self.storage.evm_tx_index_store.get_or_default(tx_hash)
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM transaction locations read: {e}")))
     }
 
     fn get_evm_tx_receipt(
@@ -5022,7 +5023,8 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_header_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmExecutionHeader>> {
         use crate::model::stores::evm::EvmHeaderStoreReader;
-        Ok(self.storage.evm_header_store.get(block).optional().unwrap())
+        self.storage.evm_header_store.get(block).optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM execution header read: {e}")))
     }
 
     fn get_native_settlement_snapshot(
@@ -5333,7 +5335,9 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_raw_tx(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<Vec<u8>>> {
         use crate::model::stores::evm::EvmRawTxStoreReader;
-        Ok(self.storage.evm_raw_tx_store.get(tx_hash).unwrap().map(|r| r.raw))
+        self.storage.evm_raw_tx_store.get(tx_hash)
+            .map(|row| row.map(|r| r.raw))
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM raw transaction read: {e}")))
     }
 
     fn get_evm_block_by_number(&self, evm_number: u64) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
@@ -5875,3 +5879,6 @@ mod evm_state_fault_tests;
 
 #[cfg(test)]
 mod evm_receipt_fault_tests;
+
+#[cfg(test)]
+mod evm_transaction_fault_tests;
