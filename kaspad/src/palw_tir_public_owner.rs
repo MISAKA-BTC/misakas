@@ -70,6 +70,10 @@ mod replay_owned;
 mod harvest;
 #[path = "palw_tir_material_share_owned_v2.rs"]
 mod material_share;
+#[path = "palw_tir_cone_inputs_owned_v2.rs"]
+mod cone_inputs_owned;
+#[path = "palw_tir_cone_derived_owned_v2.rs"]
+mod cone_derived_owned;
 use material_share::SharedMaterialV2;
 use kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1;
 #[path="palw_tir_source_worker_owned_v2.rs"]
@@ -248,43 +252,16 @@ fn owner_cone_probe_v1(
     let mut compact =
         header.resolve_registered_layout_v1(registered, layout, header.committed_execution_root, rules.max_step_leaf_count)?;
     kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut compact);
-    let mut intervals = Vec::new();
-    let mut runs = Vec::new();
-    for unit in units {
-        if unit.source_id_v1() != source.source_id_v1() {
-            return Err("TIR cone material belongs to another original source".into());
-        }
-        let (preimages, range) = match unit.response_v1() {
-            PalwTirPublicResponseV1::StepLeaf { preimage, opening } => (
-                vec![preimage.clone()],
-                kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 {
-                    first_leaf_index: opening.leaf_index,
-                    leaf_hashes: vec![opening.leaf_hash],
-                    siblings: opening.siblings.clone(),
-                },
-            ),
-            PalwTirPublicResponseV1::StepRun { preimages, range } => (preimages.clone(), range.clone()),
-            _ => continue,
-        };
-        if kaspa_consensus_core::palw_step_leg::step_range_opening_root_capped_v1(
-            compact.step_leaf_count,
-            &range,
-            rules.max_step_leaf_count,
-        )
-        .map_err(|e| e.to_string())?
-            != compact.step_merkle_root
-        {
-            return Err("TIR public range conversion changes the original step root".into());
-        }
-        let first = range.first_leaf_index;
-        intervals.push((first, first.saturating_add(preimages.len() as u64)));
-        runs.push(kaspa_consensus_core::palw_tir_court_v1::PalwTirStepRunDisclosureV1 { binding: compact.clone(), preimages, range });
-    }
-    intervals.sort_unstable();
+    let derived=cone_derived_owned::OwnedConeDerivedV2::prepare_v2(source.source_id_v1(),&compact,units,ids,rules.max_step_leaf_count)?;
+    // Each disclosure owns an admitted independent compact clone now. Retire
+    // the initial reconstruction before the backend can build another binding
+    // and StepSpace; do not overlap two baselines against one Source peak.
+    drop(compact);
+    let intervals=&derived.intervals;
     let gap = |first: u64, count: u64| -> Option<(u64, u64)> {
         let end = first.saturating_add(count);
         let mut cursor = first;
-        for &(lo, hi) in &intervals {
+        for &(lo, hi) in intervals {
             if hi <= cursor {
                 continue;
             }
@@ -305,10 +282,6 @@ fn owner_cone_probe_v1(
     if let Some((first, length)) = gap(leaf, 1) {
         return Ok(ConeOutcomeV1::Acquire(request_for(first, length)));
     }
-    let trace = ids.map(|ids| kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 {
-        rows_root: ids.rows_root_v1(),
-        generated_token_ids: ids.ids_v1().to_vec(),
-    });
     let limits = kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 {
         evaluation: rules.limits,
         max_target_requests: PALW_TIR_PUBLIC_OWNER_TARGETS_V1,
@@ -318,8 +291,8 @@ fn owner_cone_probe_v1(
         match backend.probe_tir_public_cone_owned_v2(
             header,
             prompt,
-            trace.as_ref(),
-            &runs,
+            derived.trace.as_ref(),
+            &derived.runs,
             leaf,
             rules,
             limits,
@@ -370,8 +343,7 @@ enum OwnerStepV1 {
     Cone {
         claim: Hash64,
         source: NativeRetainedV1<PalwTirPublicSourceV1>,
-        registered: Box<kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1>,
-        layout: Box<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1>,
+        inputs: Box<cone_inputs_owned::OwnedConeInputsV2>,
         leaf: u64,
         maximum_leaves: u64,
     },
@@ -691,11 +663,13 @@ impl PalwPanelService {
                                     original.job.class_id,
                                 )
                                 .ok_or("TIR owner: class layout is gone")?;
+                                let Some(inputs)=cone_inputs_owned::prepare_for_case_v2(registered,layout,case,&mut source_refusal) else {
+                                    return Ok(());
+                                };
                                 steps.push(OwnerStepV1::Cone {
                                     claim: *claim,
                                     source: context.into_source(),
-                                    registered: Box::new(registered.clone()),
-                                    layout: Box::new(layout.clone()),
+                                    inputs,
                                     leaf,
                                     maximum_leaves,
                                 });
@@ -911,24 +885,23 @@ impl PalwPanelService {
                         court_outbox.set_due(queue, due_daa);
                         court_outbox.mark_submitted(queue, now);
                     }
-                    OwnerStepV1::Cone { claim, source, registered, layout, leaf, maximum_leaves } => {
+                    OwnerStepV1::Cone { claim, source, inputs, leaf, maximum_leaves } => {
                         let Some(case) = book.cases.get(&claim) else { return Ok(()) };
-                        let class = registered.facts.class_id;
+                        let class = inputs.registered.facts.class_id;
                         let backend: Arc<dyn PalwExecutionBackendV1> =
                             Arc::from(self.resolve_backend(session, class, source.header_v1().artifact_root)?);
                         let material = material_share::MaterialWorkerInputsV2::from_case(case).map_err(|why|why.to_string())?;
-                        let prompt = case.prompt.clone();
                         let court = self.config.court;
                         let rules = kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1 {
                             max_step_leaf_count: maximum_leaves,
                             prompt_form: self.config.prompt_ids_form,
                             limits: kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&court),
                         };
-                        let outcome = source_owned::run_owned_source_v2(source, move |source| {
+                        let outcome = cone_inputs_owned::run_owned_inputs_v2(source, inputs, move |source, inputs| {
                             // Force whole-value capture: its pointer Vec ticket
                             // must enter the worker together with these fields.
                             let material = material;
-                            owner_cone_probe_v1(source, &registered, &layout, &material.units, material.ids.as_ref().map(|ids| &***ids), &prompt, backend.as_ref(), &rules, leaf)
+                            owner_cone_probe_v1(source, &inputs.registered, &inputs.layout, &material.units, material.ids.as_ref().map(|ids| &***ids), &inputs.prompt, backend.as_ref(), &rules, leaf)
                         })
                         .await
                         .map_err(|e| format!("TIR owner cone worker failed: {e}"))?;

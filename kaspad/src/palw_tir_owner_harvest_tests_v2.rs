@@ -10,7 +10,14 @@ use kaspa_consensus_core::{
 fn h(n: u64) -> Hash64 {
     Hash64::from_u64_word(n)
 }
-pub(crate) fn material() -> (PalwTirPublicFinishedOwnedV2, PalwTirPublicFinishedOwnedV2) {
+pub(crate) fn fixture_v2() -> (
+    PalwTirPublicSourceV1,
+    Vec<Hash64>,
+    Hash64,
+    Vec<u32>,
+    kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
+    PalwTirLayoutV1,
+) {
     use misaka_palw_tir::{
         builder::ProgramBuilder,
         program::{HISTORY_BOUND_V1_SMALL, Ref},
@@ -108,6 +115,10 @@ pub(crate) fn material() -> (PalwTirPublicFinishedOwnedV2, PalwTirPublicFinished
     let header = kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&binding);
     let source =
         PalwTirPublicSourceV1::new_v1(&record, &class.layout, &header, binding.committed_execution_root, trace, maximum).unwrap();
+    (source, hashes, rows_root, ids, record, class.layout)
+}
+pub(crate) fn material() -> (PalwTirPublicFinishedOwnedV2, PalwTirPublicFinishedOwnedV2) {
+    let (source, hashes, rows_root, ids, _, _) = fixture_v2();
     let (frontier, siblings) = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_node_parts_v1(&hashes, 1, 0).unwrap();
     let unit = source
         .authenticate_response_owned_v2(
