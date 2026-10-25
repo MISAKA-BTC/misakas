@@ -62,11 +62,14 @@ struct LegacyHeader<'a> {
     pruning_point: BlockHash,
 }
 fn legacy(header: &Header) -> Vec<u8> {
+    legacy_with_parents(header, vec![])
+}
+fn legacy_with_parents(header: &Header, parents_by_level: Vec<Vec<BlockHash>>) -> Vec<u8> {
     bincode::serialize(&(
         LegacyHeader {
             hash: header.hash,
             version: header.version,
-            parents_by_level: vec![],
+            parents_by_level,
             hash_merkle_root: header.hash_merkle_root,
             accepted_id_merkle_root: header.accepted_id_merkle_root,
             utxo_commitment: header.utxo_commitment,
@@ -122,4 +125,32 @@ fn native_header_malformed_primary_never_uses_a_positive_legacy_fallback() {
     n.put(DatabaseStorePrefixes::Headers, shadowed.hash, &legacy(&shadowed));
     n.put(DatabaseStorePrefixes::CompressedHeaders, shadowed.hash, &[0xff]);
     assert!(matches!(n.node.get_header(shadowed.hash), Err(ConsensusError::GeneralOwned(_))));
+}
+
+#[test]
+fn native_header_legacy_parent_levels_reject_overflow_and_preserve_valid_wire() {
+    let n = Native::new();
+    let parent = BlockHash::from_u64_word(0x1220);
+    // The maximum representable legacy vector still reads through the actual
+    // fallback. Its expanded levels must match without changing the old bytes.
+    let valid = header(0x1221, 255);
+    let levels = vec![vec![parent]; usize::from(u8::MAX)];
+    let raw = legacy_with_parents(&valid, levels.clone());
+    n.put(DatabaseStorePrefixes::Headers, valid.hash, &raw);
+    let read = n.node.get_header(valid.hash).unwrap();
+    assert_eq!((read.hash, read.daa_score), (valid.hash, 255));
+    assert_eq!(read.parents_by_level.expanded_iter().map(<[BlockHash]>::to_vec).collect::<Vec<_>>(), levels);
+    assert_eq!(
+        n.db.get(DbKey::new(&Vec::<u8>::from(DatabaseStorePrefixes::Headers), valid.hash)).unwrap(),
+        Some(raw),
+        "a successful legacy read does not rewrite its stored wire representation"
+    );
+
+    // This is valid bincode with an unrepresentable level count. Previously
+    // decoding succeeded and the conversion's unwrap panicked in get_header.
+    let invalid = header(0x1222, 256);
+    n.put(DatabaseStorePrefixes::Headers, invalid.hash, &legacy_with_parents(&invalid, vec![vec![parent]; 256]));
+    assert!(matches!(n.node.get_header(invalid.hash), Err(ConsensusError::GeneralOwned(_))));
+    // Failure must not publish a truncated or empty replacement into its cache.
+    assert!(matches!(n.node.get_header(invalid.hash), Err(ConsensusError::GeneralOwned(_))));
 }

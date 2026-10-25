@@ -53,6 +53,7 @@ pub trait HeaderStore: HeaderStoreReader {
 struct Header2 {
     pub hash: BlockHash,
     pub version: u16,
+    #[serde(deserialize_with = "legacy_parent_decode_v3::deserialize_parent_levels")]
     pub parents_by_level: Vec<Vec<BlockHash>>,
     pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
     pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
@@ -79,7 +80,9 @@ impl From<HeaderWithBlockLevel2> for HeaderWithBlockLevel {
             header: Header {
                 hash: value.header.hash,
                 version: value.header.version,
-                parents_by_level: value.header.parents_by_level.try_into().unwrap(),
+                // The old codec checks the only fallible Vec-to-compressed
+                // condition before this infallible compatibility conversion.
+                parents_by_level: value.header.parents_by_level.try_into().expect("legacy parent levels checked on decode"),
                 hash_merkle_root: value.header.hash_merkle_root,
                 accepted_id_merkle_root: value.header.accepted_id_merkle_root,
                 utxo_commitment: value.header.utxo_commitment,
@@ -254,3 +257,6 @@ impl HeaderStore for DbHeadersStore {
 
 #[path = "headers/historical_measure_v2.rs"]
 mod historical_measure_v2;
+
+#[path = "headers/legacy_parent_decode_v3.rs"]
+mod legacy_parent_decode_v3;
