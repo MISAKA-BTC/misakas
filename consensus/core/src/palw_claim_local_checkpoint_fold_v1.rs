@@ -102,6 +102,18 @@ pub(super) fn expected_claim_local_checkpoint_v1(
                 let mid = palw_liability_material_id_v1(&bytes);
                 manifest.insert(mid);
                 material.insert(mid, bytes);
+                // RFC-0023 §4.1 / RFC-0030 §1–4: a half-assembled close (ADR-0080 design A) is open
+                // court state of this liability — its declared digests, verdict, deadline and
+                // present chunks are what the remaining mover and any public prosecutor resume
+                // from after restart / pruned IBD. Canonical order: session id, then side.
+                for side in [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor] {
+                    if let Some(group) = state.court_close_groups.get(&(*sid, side)) {
+                        let bytes = borsh::to_vec(&(sid, side, group)).expect("canonical close group row");
+                        let gid = palw_liability_material_id_v1(&bytes);
+                        manifest.insert(gid);
+                        material.insert(gid, bytes);
+                    }
+                }
             }
             liability.open.push((*id, c.clone(), courts.get(id).cloned().unwrap_or_default()));
             if let Some(block) = birth {

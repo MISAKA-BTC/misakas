@@ -514,3 +514,68 @@ fn rfc23s2_checkpoint_admits_before_build_and_retains_until_drop() {
     );
     assert!(String::from_utf8_lossy(&child.stdout).contains("1 passed"), "the child must actually run its resource test");
 }
+
+/// RFC-0023 §4.1 / RFC-0030 §1–4 (lane B): an open claim's half-assembled court close is part of its
+/// liability material — bound in the checkpoint's exact manifest, in canonical (session, side) order,
+/// and a stored row that omits it is refused by the recomputation check (restart / pruned IBD).
+#[test]
+fn rfc23s2_checkpoint_binds_open_court_close_groups_as_liability_material() {
+    use crate::palw_claim_local_v1::*;
+    let (p, mut s, [a, b, _]) = world(false);
+    let point = *s.last_point().unwrap();
+    let build = |s: &PalwChainStateV2| {
+        super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(s, &p, &point).unwrap().unwrap()
+    };
+    let ladder = crate::palw_bisect::PalwBisectLadderV1::open(
+        &a,
+        &h64(900),
+        &h64(901),
+        &h64(902),
+        crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+        8,
+        80,
+        88,
+    )
+    .unwrap();
+    let sid = h64(800);
+    s.court_sessions.insert(
+        sid,
+        PalwCourtSessionStateV2 { claim: a, challenger_bond: bond_key(3), opened_daa: 80, deadline_daa: 500, ladder, dissection: None },
+    );
+    let without = build(&s);
+    let wa = PalwClaimLocalWorkRefV1::ChainClaim { claim: a };
+    let group = |verdict, n: u8| PalwCourtCloseGroupV2 {
+        declarer: bond_key(3),
+        count: 2,
+        chunk_digests: vec![h64(910), h64(911)],
+        close_digest: h64(912),
+        verdict,
+        declared_daa: 120,
+        assembly_deadline_daa: 140,
+        present: 1,
+        deposit_outpoint: TransactionOutpoint::new(Default::default(), n as u32),
+        deposit: 7,
+        chunks: BTreeMap::from([(0u8, vec![n; 16])]),
+    };
+    s.court_close_groups.insert((sid, PalwCourtSideV1::Executor), group(PalwCourtVerdictV2::ChallengerDefeated, 2));
+    s.court_close_groups.insert((sid, PalwCourtSideV1::Challenger), group(PalwCourtVerdictV2::ExecutorGuilty, 1));
+    let with = build(&s);
+    let (ra0, ra1) = (&without.records[&wa], &with.records[&wa]);
+    assert_eq!(ra1.material.len(), ra0.material.len() + 2, "both open sides are A's liability material");
+    for side in [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor] {
+        let bytes = borsh::to_vec(&(&sid, side, &s.court_close_groups[&(sid, side)])).unwrap();
+        let id = palw_liability_material_id_v1(&bytes);
+        assert!(ra1.material.contains(&id) && with.material[&id] == bytes, "exact bytes travel in the row");
+    }
+    // Independent B is untouched: its closure does not acquire A's court state.
+    let wb = PalwClaimLocalWorkRefV1::ChainClaim { claim: b };
+    assert_eq!(with.records[&wb], without.records[&wb]);
+    // Deterministic: recomputation is byte-identical.
+    assert_eq!(borsh::to_vec(&*build(&s)).unwrap(), borsh::to_vec(&*with).unwrap());
+    // A stored checkpoint that omits the close material is refused against the state that holds it.
+    let key = (PALW_CLAIM_LOCAL_TABLE_V1, super::super::palw_claim_local_checkpoint_key_v1().to_vec());
+    s.kernel_route.as_mut().unwrap().aux.insert(key.clone(), borsh::to_vec(&*without).unwrap());
+    assert!(super::super::palw_claim_local_checkpoint_fold_v1::assert_claim_local_checkpoint_v1(&s, &p).is_err());
+    s.kernel_route.as_mut().unwrap().aux.insert(key, borsh::to_vec(&*with).unwrap());
+    super::super::palw_claim_local_checkpoint_fold_v1::assert_claim_local_checkpoint_v1(&s, &p).unwrap();
+}

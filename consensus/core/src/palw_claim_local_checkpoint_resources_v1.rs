@@ -51,8 +51,15 @@ pub(super) fn requests(state: &PalwChainStateV2) -> Result<u64, NativeCoverageV1
     // twelve slots per session bounds grouping, plus one exact clone slot.
     q.exact_v1::<(Hash64, PalwCourtSessionStateV2)>(courts.checked_mul(13).ok_or_else(overflow)?)?;
     q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1, PalwClaimLocalRecordV1>>(claims)?;
-    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64, Vec<u8>>>(add(claims, courts)?)?;
-    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64, ()>>(add(claims, courts)?)?;
+    // Close groups are borrowed for serialization only (never cloned): one material entry,
+    // one manifest entry and one encoding buffer each, at most two per session.
+    let groups = state.court_close_groups.len() as u64;
+    let rows = add(add(claims, courts)?, groups)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64, Vec<u8>>>(rows)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64, ()>>(rows)?;
+    for ((sid, side), group) in &state.court_close_groups {
+        bytes(&mut q, encoded(&(sid, side, group))?)?;
+    }
     growing::<(Hash64, PalwClaimStateV2, Vec<(Hash64, PalwCourtSessionStateV2)>)>(&mut q, claims)?;
     growing::<Hash64>(&mut q, claims)?;
     // Two Vec length prefixes. Count every claim/court as open, independently
