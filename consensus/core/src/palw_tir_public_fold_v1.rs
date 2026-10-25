@@ -1114,7 +1114,7 @@ fn apply_verified_control_inner_v1(
             if matches!(action, Action::PreparationReady { .. }) && control.signer != frame.custody_v1().pledge_v1().producer {
                 return Err(refused("TIR seat Ready requires atomic ordinary Valid+raw grant"));
             }
-            crate::palw_tir_public_state_v1::palw_tir_public_preparation_transition_v1(
+            crate::palw_tir_public_state_v1::palw_tir_public_preparation_transition_native_v2(
                 &b.state,
                 frame.preparation_key_v1(),
                 control.source_id,
@@ -1124,7 +1124,10 @@ fn apply_verified_control_inner_v1(
                 action,
                 maximum_leaves,
             )
-            .map_err(refused)?
+            .map_err(|why| match why {
+                crate::palw_tir_public_state_v1::PalwTirPublicSourceErrorV2::Resource(why) => PalwStateV2Error::NativeResource(why),
+                crate::palw_tir_public_state_v1::PalwTirPublicSourceErrorV2::Decode(why) => refused(why),
+            })?
         }
         (T::Acquisition { owner, reserved_daa }, A::Acquisition(action)) => {
             if control.declared_rent_sompi != 0 {
@@ -1151,7 +1154,7 @@ fn apply_verified_control_inner_v1(
                     ));
                 }
             }
-            crate::palw_tir_public_state_v1::palw_tir_public_transition_v1(
+            crate::palw_tir_public_state_v1::palw_tir_public_transition_native_v2(
                 &b.state,
                 key,
                 control.source_id,
@@ -1162,7 +1165,10 @@ fn apply_verified_control_inner_v1(
                 maximum_leaves,
                 None,
             )
-            .map_err(refused)?
+            .map_err(|why| match why {
+                crate::palw_tir_public_state_v1::PalwTirPublicSourceErrorV2::Resource(why) => PalwStateV2Error::NativeResource(why),
+                crate::palw_tir_public_state_v1::PalwTirPublicSourceErrorV2::Decode(why) => refused(why),
+            })?
         }
         (T::Conviction, A::Convict(evidence)) => {
             if control.declared_rent_sompi != frame.conviction_rent_v1() || control.expected_turn != 0 {
@@ -1805,6 +1811,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_tir_continuation_source_owned_tests_v2.rs");
     include!("palw_tir_native_header_identity_tests_v2.rs");
     include!("palw_tir_allocation_source_owned_tests_v2.rs");
     include!("palw_tir_preparation_sources_owned_tests_v2.rs");

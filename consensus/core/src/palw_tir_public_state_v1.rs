@@ -18,6 +18,137 @@ use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+thread_local! {
+    static CONTINUATION_SOURCE_STAGES_V2: std::cell::Cell<[u64;3]> = const {std::cell::Cell::new([0;3])};
+    static CONTINUATION_SOURCE_BORROW_V2: std::cell::Cell<Option<fn(&PalwTirPublicSourceV1)>> = const {std::cell::Cell::new(None)};
+}
+#[cfg(test)]
+pub(crate) fn reset_continuation_source_stages_v2() {
+    CONTINUATION_SOURCE_STAGES_V2.with(|c| c.set([0; 3]));
+}
+#[cfg(test)]
+pub(crate) fn continuation_source_stages_v2() -> [u64; 3] {
+    CONTINUATION_SOURCE_STAGES_V2.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+pub(crate) fn observe_continuation_source_borrow_v2(f: Option<fn(&PalwTirPublicSourceV1)>) {
+    CONTINUATION_SOURCE_BORROW_V2.with(|c| c.set(f));
+}
+#[cfg(test)]
+pub(crate) fn note_continuation_source_stage_v2(i: usize) {
+    CONTINUATION_SOURCE_STAGES_V2.with(|c| {
+        let mut a = c.get();
+        a[i] += 1;
+        c.set(a);
+    });
+}
+#[cfg(test)]
+fn continuation_final_borrow_v2(source: &PalwTirPublicSourceV1) {
+    note_continuation_source_stage_v2(2);
+    CONTINUATION_SOURCE_BORROW_V2.with(|c| {
+        if let Some(observe) = c.get() {
+            observe(source);
+        }
+    });
+}
+
+/// Local construction fault; raw callers keep their original String API.
+#[derive(Debug)]
+pub(crate) enum PalwTirPublicSourceErrorV2 {
+    Resource(crate::palw_native_resource_v1::NativeCoverageV1),
+    Decode(String),
+}
+impl From<String> for PalwTirPublicSourceErrorV2 {
+    fn from(e: String) -> Self {
+        Self::Decode(e)
+    }
+}
+impl From<&'static str> for PalwTirPublicSourceErrorV2 {
+    fn from(e: &'static str) -> Self {
+        Self::Decode(e.into())
+    }
+}
+impl From<crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> for PalwTirPublicSourceErrorV2 {
+    fn from(e: crate::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> Self {
+        match e {
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => Self::Resource(e),
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => Self::Decode(e),
+        }
+    }
+}
+trait SourceValueV2: Sized {
+    type Error: From<String> + From<&'static str>;
+    fn payload_v2(&self) -> &PalwTirPublicSourceV1;
+    fn construct_v2(
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        execution: Hash64,
+        trace: Hash64,
+        maximum: u64,
+    ) -> Result<Self, Self::Error>;
+    fn frame_v2(
+        frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        maximum: u64,
+    ) -> Result<Self, Self::Error>;
+}
+impl SourceValueV2 for PalwTirPublicSourceV1 {
+    type Error = String;
+    fn payload_v2(&self) -> &PalwTirPublicSourceV1 {
+        self
+    }
+    fn construct_v2(
+        r: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        l: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        h: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        e: Hash64,
+        t: Hash64,
+        m: u64,
+    ) -> Result<Self, String> {
+        Self::new_v1(r, l, h, e, t, m)
+    }
+    fn frame_v2(
+        f: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+        r: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        l: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        m: u64,
+    ) -> Result<Self, String> {
+        f.source_identity_v1(r, l, m)
+    }
+}
+impl SourceValueV2 for crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1> {
+    type Error = PalwTirPublicSourceErrorV2;
+    fn payload_v2(&self) -> &PalwTirPublicSourceV1 {
+        self
+    }
+    fn construct_v2(
+        r: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        l: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        h: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        e: Hash64,
+        t: Hash64,
+        m: u64,
+    ) -> Result<Self, Self::Error> {
+        #[cfg(test)]
+        note_continuation_source_stage_v2(0);
+        let value = PalwTirPublicSourceV1::new_native_v1(r, l, h, e, t, m).map_err(PalwTirPublicSourceErrorV2::from)?;
+        #[cfg(test)]
+        note_continuation_source_stage_v2(1);
+        Ok(value)
+    }
+    fn frame_v2(
+        f: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+        r: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        l: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        m: u64,
+    ) -> Result<Self, Self::Error> {
+        f.source_identity_native_v2(r, l, m).map_err(Into::into)
+    }
+}
+
 fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Result<Hash64, String> {
     let bytes = borsh::to_vec(value).map_err(|e| e.to_string())?;
     Ok(Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(domain).hash(&bytes).as_bytes().try_into().expect("64")))
@@ -57,6 +188,24 @@ pub fn palw_tir_public_source_for_preparation_row_v1(
     row: &PalwTirPublicPreparationRowV1,
     maximum_leaves: u64,
 ) -> Result<PalwTirPublicSourceV1, String> {
+    palw_tir_public_source_for_preparation_row_with_v2::<PalwTirPublicSourceV1>(state, row, maximum_leaves)
+}
+pub(crate) fn palw_tir_public_source_for_preparation_row_native_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    row: &PalwTirPublicPreparationRowV1,
+    maximum_leaves: u64,
+) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>, PalwTirPublicSourceErrorV2> {
+    palw_tir_public_source_for_preparation_row_with_v2::<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>>(
+        state,
+        row,
+        maximum_leaves,
+    )
+}
+fn palw_tir_public_source_for_preparation_row_with_v2<S: SourceValueV2>(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    row: &PalwTirPublicPreparationRowV1,
+    maximum_leaves: u64,
+) -> Result<S, S::Error> {
     row.check_structure_v1(&row.key_v1())?;
     let c = row.preparation.contract_v1();
     if let Some(frame) = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, c.claim) {
@@ -76,8 +225,8 @@ pub fn palw_tir_public_source_for_preparation_row_v1(
         {
             return Err("TIR preparation substitutes original full allocation or qualified frozen source scope".into());
         }
-        let source = source_for_frame(state, frame, maximum_leaves)?;
-        row.preparation.check_source_v1(&source, &plan.acquisition)?;
+        let source = source_for_frame_with_v2::<S>(state, frame, maximum_leaves)?;
+        row.preparation.check_source_v1(source.payload_v2(), &plan.acquisition)?;
         return Ok(source);
     }
     // Old dormant rows may still reconstruct their original context. This does
@@ -108,21 +257,25 @@ pub fn palw_tir_public_source_for_preparation_row_v1(
     {
         return Err("TIR preparation substitutes original accepted clock/class/header/source context".into());
     }
-    let source = PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
-    let acquisition =
-        crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1::derive_v1(&source, d.native_custodian_upper, d.native_config, d.native_clock)?;
+    let source = S::construct_v2(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
+    let acquisition = crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1::derive_v1(
+        source.payload_v2(),
+        d.native_custodian_upper,
+        d.native_config,
+        d.native_clock,
+    )?;
     let allocation = crate::palw_tir_public_owned_v1::derive_tir_public_preparation_work_allocation_v1(
         record,
         layout,
         header,
-        &source,
+        source.payload_v2(),
         &acquisition,
         d.work_rules.ok_or("TIR preparation has no frozen native work rules")?,
     )?;
-    if source.source_id_v1() != d.source_id || allocation != row.preparation.work_v1().allocation {
+    if source.payload_v2().source_id_v1() != d.source_id || allocation != row.preparation.work_v1().allocation {
         return Err("TIR preparation work differs from original registered native quote".into());
     }
-    row.preparation.check_source_v1(&source, &acquisition)?;
+    row.preparation.check_source_v1(source.payload_v2(), &acquisition)?;
     Ok(source)
 }
 
@@ -161,6 +314,37 @@ pub fn palw_tir_public_preparation_transition_v1(
         return Err("TIR preparation has no original funded row".into());
     };
     let source = palw_tir_public_source_for_preparation_row_v1(state, old, maximum_leaves)?;
+    preparation_transition_source_v2(old, key, expected_source, expected_turn, signer, now, action, &source)
+}
+pub(crate) fn palw_tir_public_preparation_transition_native_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: Key,
+    expected_source: Hash64,
+    expected_turn: u64,
+    signer: PalwBondKeyV2,
+    now: u64,
+    action: &PalwTirPublicOwnedActionV1,
+    maximum_leaves: u64,
+) -> Result<PalwTirPublicTransitionV1, PalwTirPublicSourceErrorV2> {
+    let Some(Row::TirPreparation(old)) = state.staged_court_row_v1(&key) else {
+        return Err("TIR preparation has no original funded row".into());
+    };
+    let source = palw_tir_public_source_for_preparation_row_native_v2(state, old, maximum_leaves)?;
+    let result = preparation_transition_source_v2(old, key, expected_source, expected_turn, signer, now, action, &source);
+    #[cfg(test)]
+    continuation_final_borrow_v2(&source);
+    result.map_err(Into::into)
+}
+fn preparation_transition_source_v2(
+    old: &PalwSharedCourtV1<PalwTirPublicPreparationRowV1>,
+    key: Key,
+    expected_source: Hash64,
+    expected_turn: u64,
+    signer: PalwBondKeyV2,
+    now: u64,
+    action: &PalwTirPublicOwnedActionV1,
+    source: &PalwTirPublicSourceV1,
+) -> Result<PalwTirPublicTransitionV1, String> {
     if expected_source != source.source_id_v1() || expected_turn != 0 {
         return Err("TIR preparation changes original source/turn domain".into());
     }
@@ -307,6 +491,24 @@ pub fn palw_tir_public_source_for_row_v1(
     row: &PalwTirPublicAcquisitionRowV1,
     maximum_leaves: u64,
 ) -> Result<PalwTirPublicSourceV1, String> {
+    palw_tir_public_source_for_row_with_v2::<PalwTirPublicSourceV1>(state, row, maximum_leaves)
+}
+pub(crate) fn palw_tir_public_source_for_row_native_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    row: &PalwTirPublicAcquisitionRowV1,
+    maximum_leaves: u64,
+) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>, PalwTirPublicSourceErrorV2> {
+    palw_tir_public_source_for_row_with_v2::<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>>(
+        state,
+        row,
+        maximum_leaves,
+    )
+}
+fn palw_tir_public_source_for_row_with_v2<S: SourceValueV2>(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    row: &PalwTirPublicAcquisitionRowV1,
+    maximum_leaves: u64,
+) -> Result<S, S::Error> {
     row.check_structure_v1(&row.key_v1()?)?;
     let c = row.owned.contract_v1();
     if let Some(frame) = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, c.claim) {
@@ -328,8 +530,8 @@ pub fn palw_tir_public_source_for_row_v1(
         // Exact membership at Open is a native admission duty. Later qualified
         // grants cannot retroactively enlarge or erase this already-paid row's
         // protected slots. Membership here is never inferred from drawn Panel.
-        let source = source_for_frame(state, frame, maximum_leaves)?;
-        check_source(row, &source)?;
+        let source = source_for_frame_with_v2::<S>(state, frame, maximum_leaves)?;
+        check_source(row, source.payload_v2())?;
         return Ok(source);
     }
     let bundle = state.staged_bundle_contract_v1(c.claim).ok_or("TIR sidecar has no retained original ClaimBundle")?;
@@ -359,14 +561,19 @@ pub fn palw_tir_public_source_for_row_v1(
     {
         return Err("TIR sidecar substitutes accepted class/layout/header/native geometry or source hold".into());
     }
-    let source = PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
-    check_source(row, &source)?;
+    let source = S::construct_v2(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
+    check_source(row, source.payload_v2())?;
     if let Some(work) = row.owned.work_v1() {
         let rules = row.descriptor.work_rules.ok_or("TIR work allocation lost frozen native rules")?;
         if rules.max_step_leaf_count != maximum_leaves
             || work.allocation
                 != crate::palw_tir_public_owned_v1::derive_tir_public_work_allocation_v1(
-                    record, layout, header, &source, &c.plan, rules,
+                    record,
+                    layout,
+                    header,
+                    source.payload_v2(),
+                    &c.plan,
+                    rules,
                 )?
         {
             return Err("TIR rooted work allocation differs from original registered full-source quote".into());
@@ -375,15 +582,15 @@ pub fn palw_tir_public_source_for_row_v1(
     Ok(source)
 }
 
-fn source_for_frame(
+fn source_for_frame_with_v2<S: SourceValueV2>(
     state: &crate::palw_state_v2::PalwChainStateV2,
     frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
     maximum_leaves: u64,
-) -> Result<PalwTirPublicSourceV1, String> {
+) -> Result<S, S::Error> {
     let record = state.tir_class_v1(&frame.descriptor_v1().class_id).ok_or("original TIR full frame lost registered class")?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
         .ok_or("original TIR full frame lost authenticated layout")?;
-    frame.source_identity_v1(record, layout, maximum_leaves)
+    S::frame_v2(frame, record, layout, maximum_leaves)
 }
 
 fn check_source(row: &PalwTirPublicAcquisitionRowV1, source: &PalwTirPublicSourceV1) -> Result<(), String> {
@@ -923,6 +1130,28 @@ pub fn palw_tir_public_transition_v1(
     row.check_structure_v1(&key)?;
     let source = palw_tir_public_source_for_row_v1(state, row, maximum_leaves)?;
     transition(row, &source, expected_source, expected_turn, signer, now, action, |key| state.staged_court_row_v1(key), ids)
+}
+pub(crate) fn palw_tir_public_transition_native_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: Key,
+    expected_source: Hash64,
+    expected_turn: u64,
+    signer: PalwBondKeyV2,
+    now: u64,
+    action: &PalwTirPublicOwnedActionV1,
+    maximum_leaves: u64,
+    ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
+) -> Result<PalwTirPublicTransitionV1, PalwTirPublicSourceErrorV2> {
+    let Some(Row::TirAcquisition(row)) = state.staged_court_row_v1(&key) else {
+        return Err("TIR acquisition has no preadmitted metadata row".into());
+    };
+    row.check_structure_v1(&key)?;
+    let source = palw_tir_public_source_for_row_native_v2(state, row, maximum_leaves)?;
+    let result =
+        transition(row, &source, expected_source, expected_turn, signer, now, action, |key| state.staged_court_row_v1(key), ids);
+    #[cfg(test)]
+    continuation_final_borrow_v2(&source);
+    result.map_err(Into::into)
 }
 
 fn transition<'a>(

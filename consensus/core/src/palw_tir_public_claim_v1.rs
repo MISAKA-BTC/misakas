@@ -332,12 +332,7 @@ impl PalwTirPublicClaimV1 {
         layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
         maximum_leaves: u64,
     ) -> Result<PalwTirPublicSourceV1, String> {
-        if maximum_leaves != self.descriptor.maximum_leaves
-            || record.facts.class_id != self.descriptor.class_id
-            || record.layout_digest != self.descriptor.layout_digest
-        {
-            return Err("original TIR frame substitutes native class, layout or leaf ceiling".into());
-        }
+        self.check_source_identity_inputs_v2(record, layout, maximum_leaves)?;
         let source = PalwTirPublicSourceV1::new_v1(
             record,
             layout,
@@ -350,6 +345,52 @@ impl PalwTirPublicClaimV1 {
             return Err("original TIR frame substitutes source identity".into());
         }
         Ok(source)
+    }
+
+    pub(crate) fn source_identity_native_v2(
+        &self,
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        maximum_leaves: u64,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>,
+        crate::palw_native_resource_v1::NativeDecodeErrorV1<String>,
+    > {
+        self.check_source_identity_inputs_v2(record, layout, maximum_leaves)
+            .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
+        #[cfg(test)]
+        crate::palw_tir_public_state_v1::note_continuation_source_stage_v2(0);
+        let source = PalwTirPublicSourceV1::new_native_v1(
+            record,
+            layout,
+            &self.header,
+            self.original.execution_root,
+            self.original.trace_root,
+            maximum_leaves,
+        )?;
+        if source.source_id_v1() != self.plan.source_id {
+            return Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(
+                "original TIR frame substitutes source identity".into(),
+            ));
+        }
+        #[cfg(test)]
+        crate::palw_tir_public_state_v1::note_continuation_source_stage_v2(1);
+        Ok(source)
+    }
+
+    fn check_source_identity_inputs_v2(
+        &self,
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        _layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        maximum_leaves: u64,
+    ) -> Result<(), String> {
+        if maximum_leaves != self.descriptor.maximum_leaves
+            || record.facts.class_id != self.descriptor.class_id
+            || record.layout_digest != self.descriptor.layout_digest
+        {
+            return Err("original TIR frame substitutes native class, layout or leaf ceiling".into());
+        }
+        Ok(())
     }
 
     pub(crate) fn bind_original_panel_native_v1(
