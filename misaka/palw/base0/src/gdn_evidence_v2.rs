@@ -158,6 +158,24 @@ fn honest_chunks_v2<K: Base0FpRecomputeKernelsV1>(
         .then_some(state.chunks))
 }
 
+/// Actual held predecessor route. The raw recompute helpers remain compatible;
+/// root-workspace capacity on this path must never become a String refusal.
+fn honest_chunks_root_retained_v3<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>, leaf: &PalwCheckpointLeafV2, mut kernels: K,
+) -> Result<Option<Vec<Vec<u8>>>, NativeDecodeErrorV1<String>> {
+    let b = material.binding;
+    let state = crate::fp_recompute::base0_fp_recompute_state_at_covered_root_retained_v3(
+        &b.shape_profile, &b.job_context, material.prompt_token_ids, material.output_token_ids,
+        leaf.covered_decode_call, &mut kernels, material.prompt_ids_form,
+    ).map_err(|why| match why {
+        NativeDecodeErrorV1::Resource(capacity) => NativeDecodeErrorV1::Resource(capacity),
+        NativeDecodeErrorV1::Decode(semantic) => NativeDecodeErrorV1::Decode(
+            format!("the accuser cannot recompute checkpoint {}: {semantic}", leaf.checkpoint_index)),
+    })?;
+    Ok((state.state_chunks_root == leaf.state_chunks_root && state.chunks.len() as u32 == leaf.state_chunk_count)
+        .then_some(state.chunks))
+}
+
 fn tile_source_v2<'m>(material: &'m Base0GdnMaterialV2<'_>) -> impl Fn(PalwStepCoordinateV1) -> Option<PalwStepTileLeafV1> + 'm {
     move |coord| {
         let b = material.binding;

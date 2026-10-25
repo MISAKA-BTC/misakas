@@ -11,6 +11,9 @@ use crate::palw_gdn_state_map_v2::PalwGdnStateGeometryV2;
 use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1};
 use crate::palw_state_chunk_map as maps;
 use crate::palw_step_leg as leg;
+#[path = "memory_v2/state_root_owner_v3.rs"]
+mod state_root_owner;
+pub use state_root_owner::{PalwGdnStateRootRequestV3, gdn_state_root_request_v3};
 
 mod capture;
 pub use capture::{PalwGdnCaptureV2, gdn_refutation_from_capture_v2, gdn_refutation_from_leaves_v2};

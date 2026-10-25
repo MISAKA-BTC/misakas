@@ -537,3 +537,6 @@ mod predecessor_owner_tests;
 
 #[path = "palw_gdn_held_transition_demand_tests_v3.rs"]
 mod transition_demand_tests;
+
+#[path = "palw_gdn_held_state_root_tests_v3.rs"]
+mod state_root_tests;

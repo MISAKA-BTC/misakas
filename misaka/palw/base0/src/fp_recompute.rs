@@ -55,6 +55,9 @@
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
+#[path = "fp_recompute/root_retained_v3.rs"]
+mod root_retained;
+pub use root_retained::base0_fp_recompute_state_at_covered_root_retained_v3;
 
 /// Why a seat cannot recompute a class's state. Every arm is a REFUSAL a seat files as
 /// `Incapable`, never an accusation: a seat that cannot run the class has learned nothing about

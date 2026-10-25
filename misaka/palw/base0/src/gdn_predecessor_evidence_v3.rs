@@ -1,5 +1,5 @@
 //! Actual retained held transition: typed predecessor assembly and guard transfer.
-//! The replay/serialization performed by honest_chunks_v2 is still a separate boundary.
+//! Prefix/serialization remain separate from the new root-only admission.
 use super::*;
 use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, memory_v2::PalwGdnCourtErrorV2};
 
@@ -20,14 +20,15 @@ pub(super) fn transition_with_owned_predecessor_v3<K: Base0FpRecomputeKernelsV1>
     let checkpoint = |i: u32| -> Result<Option<(PalwCheckpointLeafV2, Vec<Vec<u8>>)>, PalwGdnCourtErrorV2> {
         let Some(leaf) = leg.leaves.get(i as usize) else { return Ok(None) };
         let fresh = (&mut *kernels.borrow_mut())();
-        match honest_chunks_v2(material, leaf, fresh) {
+        match honest_chunks_root_retained_v3(material, leaf, fresh) {
             Ok(Some(chunks)) => Ok(Some((leaf.clone(), chunks))),
             Ok(None) => {
                 *failure.borrow_mut() =
                     Some(format!("checkpoint {i} is already not the job's state: accuse the first forged checkpoint"));
                 Err(PalwStepRefuteError::Unadjudicable.into())
             }
-            Err(why) => {
+            Err(NativeDecodeErrorV1::Resource(capacity)) => Err(PalwGdnCourtErrorV2::Resource(capacity)),
+            Err(NativeDecodeErrorV1::Decode(why)) => {
                 *failure.borrow_mut() = Some(why);
                 Err(PalwStepRefuteError::Unadjudicable.into())
             }
