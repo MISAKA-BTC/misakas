@@ -1,0 +1,11 @@
+# RFC12 public history — segment 2 closed
+
+The read-only collector stopped normally at its 1-GiB output bound after 175 complete inclusive pages, 1092.94 remote seconds. It saved its terminal after-stamp and did not advance the cursor for unsaved page 175. The SSH/collector session exited zero. Source node configuration, files, database and processes were not modified.
+
+Combined with segment 1, the analyzer observed **90,632 unique headers, maximum DAA 10,702**. The fixed DAA-15,477 anchor remains absent: header coverage is **UNKNOWN_PARTIAL**, EVM compatibility **UNKNOWN**. All 45,760 observed round verdicts were UNKNOWN; that does not mean zero accepted permits. No header conflicts, missing exec metadata, known-verdict conflicts or stamp faults were observed in these two closed segments. Empty ancestor-hole lists do not establish full closure while the fixed anchor is absent.
+
+Segment 2 raw identity: 936,070,474 bytes, SHA256 `c6a2c3f590a651425ed4c61222549346851a17c787c6f37939edf7061cf4f326`. The verified gzip is `/tmp/misaka-public-history-census-segment2-20261025.ndjson.gz`, 365,567,725 bytes, SHA256 `d0cee94dec75f7385c4ac6e15dd6d990dcd69c663d6c3722a77882feda86d88c`. Complete decompression reproduced the exact raw SHA and byte count. Only after the combined analysis completed and the raw SHA was rechecked was its redundant uncompressed copy removed. Historical raw paths in the analysis identify acquisition-time files; current storage is gzip.
+
+[Durable terminal/coverage/compression index](0012-public-history-segment2-closed-2026-10-25.json). Full combined observations are preserved locally in `/tmp/misaka-public-history-segments12-analysis-20261025.json.gz`. Segment 3 has been launched as a new bounded local output with the same original identity/anchor; its prepare stage revalidates the two closed inputs before any new remote reads. No segment-3 results are included here.
+
+The source genesis/params/schedule/import identity stayed coherent. Neither that observation nor native RPC header collection verifies derived EVM gas headers, historical signatures or upgraded-binary replay. K3 input, native39 settlement mapping and unexecuted campaign gates remain unresolved; public full activation remains None.
