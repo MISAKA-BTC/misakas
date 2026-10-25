@@ -34,7 +34,10 @@ use crate::palw_state_v2::{PALW_STATE_V2_DOMAIN_COLLECTION, palw_state_root_of_p
 use std::collections::BTreeSet;
 use std::io::Write;
 
+mod coverage;
+mod resume;
 mod spill_reader;
+pub use resume::{PalwRowStreamResumedV1, palw_resume_row_stream_v1};
 pub use spill_reader::{PalwRowSpillEventV1, PalwRowSpillLimitsV1, palw_visit_row_spill_v1};
 
 /// Upper bound on the preimage a peer may send (it is every collection's 64-byte root plus small scalar blocks; the
@@ -76,6 +79,23 @@ pub enum PalwRowStreamErrorV1 {
     WholeState(String),
     #[error("collection {0:?}: a row does not decode under its rooting rule: {1}")]
     Projection(Vec<u8>, String),
+    /// Coverage (peer): the required layout names a collection the stream never sent.
+    #[error("required collection {0:?} was never streamed")]
+    MissingCollection(Vec<u8>),
+    /// Coverage (peer): the stream sent a collection the required layout does not name.
+    #[error("collection {0:?} is not part of the required layout")]
+    UnexpectedCollection(Vec<u8>),
+    #[error("collection {label:?} was streamed for preimage offset {got} but the required layout puts it at {expected}")]
+    CollectionOffsetDiffers { label: Vec<u8>, expected: usize, got: usize },
+    #[error("the required layout names collection {0:?} twice")]
+    RequiredLayoutDuplicate(Vec<u8>),
+    /// Resume (local spill): a completed collection in the stored spill is not the committed one, repeats, or is
+    /// malformed. The spill is unusable; nothing is resumed from it.
+    #[error("stored spill cannot be resumed: {0}")]
+    ResumeSpill(String),
+    /// Resume (local): a local limit or allocation refusal while replaying the stored spill. Not peer misbehaviour.
+    #[error("local limit while replaying the stored spill: {0}")]
+    ResumeLocalLimit(String),
 }
 
 /// A collection whose root hashes a PROJECTION of each record (e.g. `gen_classes` / `tir_classes`, rooted over
