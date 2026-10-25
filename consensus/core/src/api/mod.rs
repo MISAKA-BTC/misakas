@@ -2928,6 +2928,14 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// Exact selected-parent EVM block identity for an existing immutable EVM
+    /// header. None is only an EVM-zero/first-execution boundary. Missing or
+    /// unreadable referenced history is Err; never substitute the current
+    /// canonical number index, including for retained side branches.
+    fn get_evm_parent_l1_hash(&self, _l1_hash: BlockHash) -> ConsensusResult<Option<BlockHash>> {
+        Err(crate::errors::consensus::ConsensusError::General("exact EVM parent reader unavailable"))
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§9, `eth_subscribe("logs")`): ALL logs of the block
     /// at `l1_hash`, in block-global `logIndex` order, read straight from the
     /// immutable receipts store by hash WITHOUT canonical filtering — the WebSocket

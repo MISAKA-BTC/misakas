@@ -5312,6 +5312,34 @@ impl ConsensusApi for Consensus {
         Ok(Some(kaspa_consensus_core::evm::EvmBlockResponse { header, l1_hash, tx_hashes, encoded_size }))
     }
 
+    fn get_evm_parent_l1_hash(&self, l1_hash: BlockHash) -> ConsensusResult<Option<BlockHash>> {
+        use crate::model::stores::evm::EvmHeaderStoreReader;
+        use kaspa_consensus_core::evm::EVM_GENESIS_STATE_ROOT;
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM exact parent read: {e}"));
+        let child = self.storage.evm_header_store.get(l1_hash).optional().map_err(unavailable)?
+            .ok_or(ConsensusError::MissingData(l1_hash))?;
+        if child.evm_number == 0 {
+            return Ok(None);
+        }
+        let parent = self.ghostdag_store.get_selected_parent(l1_hash).map_err(unavailable)?;
+        if let Some(header) = self.storage.evm_header_store.get(parent).optional().map_err(unavailable)? {
+            if header.evm_number.checked_add(1) != Some(child.evm_number) || header.state_root != child.parent_state_root {
+                return Err(ConsensusError::General("immutable EVM parent number/state-root mismatch"));
+            }
+            return Ok(Some(parent));
+        }
+        // The first execution has no preceding EVM header, only the native
+        // genesis or pre-activation selected parent. Missing post-activation
+        // history must not masquerade as that boundary or a zero parentHash.
+        let first = parent == self.config.params.genesis.hash
+            || self.headers_store.get_daa_score(parent).map_err(unavailable)? < self.config.params.evm_activation_daa_score;
+        if first && child.evm_number == 1 && child.parent_state_root == EVM_GENESIS_STATE_ROOT {
+            Ok(None)
+        } else {
+            Err(ConsensusError::MissingData(parent))
+        }
+    }
+
     fn get_evm_block_logs(&self, l1_hash: BlockHash) -> ConsensusResult<Vec<kaspa_consensus_core::evm::EvmLogEntry>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
         let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM immutable logs read: {e}"));
@@ -5925,3 +5953,6 @@ mod evm_transaction_fault_tests;
 
 #[cfg(test)]
 mod evm_logs_fault_tests;
+
+#[cfg(test)]
+mod evm_parent_fault_tests;
