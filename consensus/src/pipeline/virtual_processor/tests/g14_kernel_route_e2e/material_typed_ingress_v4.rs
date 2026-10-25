@@ -8,6 +8,8 @@ mod reorg;
 mod terminal;
 #[path = "material_typed_source_manifest_v4.rs"]
 mod source_manifest;
+#[path = "signed_provider_challenge_v4.rs"]
+mod signed_provider;
 use kaspa_consensus_core::{
     api::ConsensusApi,
     palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4,
@@ -26,6 +28,12 @@ use misaka_palw_sdk::claim_paid_v2::{
 // Reuse the explicit private policy values of the legacy mechanism control,
 // but activate before work: this fixture must satisfy prospective admission.
 fn config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    if signed_provider::enabled() {
+        // Same pre-derivation mechanics-fixture eligibility as material_gc.
+        // This class seam supplies no selected-verifier receipt or approval.
+        opv_test_eligible(&opv_admitted());
+        return signed_provider::config();
+    }
     let (c, _, premine, floats) = super::material_gc_v4::config();
     let mut p = c.params.clone();
     p.palw_provider_court_v1 = Some(ForkActivation::new(1));
@@ -215,6 +223,7 @@ async fn typed_writer_child() {
     }
     let mut w = World::on_opv(net).await;
     let job = w.job().await;
+    let paid = if signed_provider::enabled() { Some(signed_provider::paid_job(&mut w, &job).await) } else { None };
     let ledger = w.net.ledger();
     assert_eq!(ledger.commitment_scope_from_daa, Some(1), "native route persisted the explicit private commitment-only court fence");
     let mut scope_control = ledger.clone();
@@ -312,7 +321,8 @@ async fn typed_writer_child() {
     let diagnostic_replay = observed.apply_object(&reveal, &misaka_palw_kernel::ledger::AuthV1 { signer_bond: w.net.kid(0) });
     eprintln!("TYPED_INGRESS_V4 observed_ledger_replay={:?}", diagnostic_replay.as_ref().map(|events| events.len()));
     drop(observed);
-    let object = w.net.route(0, &reveal);
+    let committing = match paid { Some((class, job)) => signed_provider::paid_commit(&w, class, job, commit, *salt, admission.consent), None => reveal.clone() };
+    let object = w.net.route(0, &committing);
     let folded = w.net.send(vec![(0, object)]).await;
     let native: &dyn ConsensusApi = w.net.chain.ctx.consensus.as_ref();
     let carried = native.get_ghostdag_data(folded.hash()).unwrap().selected_parent;
@@ -328,6 +338,10 @@ async fn typed_writer_child() {
         w.net.ledger().claims.contains_key(&root.as_bytes()),
         "actual claim passes active material gate after funded TypedKernelV4 acceptance"
     );
+    if signed_provider::enabled() {
+        signed_provider::finish(w, db, &dir, &committing, &public, commit.clone(), root, admission.consent).await;
+        return;
+    }
     (w, db) = reader_roundtrip(w, db, &dir, request, true, false, false);
     assert!(w.net.chain.ctx.consensus.palw_kernel_material_consent_accepted_v4(root, admission.consent).unwrap());
     if std::env::var("MISAKA_TYPED_REPLACEMENT_CHILD_V4").as_deref() == Ok("1") {

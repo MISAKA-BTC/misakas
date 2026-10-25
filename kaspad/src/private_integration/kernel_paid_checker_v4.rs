@@ -876,3 +876,6 @@ mod saved_receipt_binding;
 mod failed_query;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod signed_socket_native;

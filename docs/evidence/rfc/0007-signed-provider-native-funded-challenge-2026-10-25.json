@@ -1,0 +1,375 @@
+{
+  "scope": "one private signed-socket SDK failure to production checker WAL to actual native funded challenge and cold checkpoint; not all-stage/independence/approval/campaign",
+  "build": {
+    "head": "14fc6e997dd656f20d2b9f15ebdf5f388f0e2d69",
+    "files": [
+      {
+        "path": "Cargo.lock",
+        "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+      },
+      {
+        "path": "Cargo.toml",
+        "sha256": "288fab6f6c4aff360a22f53e4f75bae60027a49afa1ef74326cc43d56de566c9"
+      },
+      {
+        "path": "components/consensusmanager/Cargo.toml",
+        "sha256": "a93633ac943f962bb17b35afc6b8d16bfd855b151ee3ca5f49663d69ce0f23ac"
+      },
+      {
+        "path": "components/consensusmanager/src/session.rs",
+        "sha256": "c0d76e3785f2fedf714d6015fbcaeb52d8d100c0b6698b2c60fb9af0d3b6ed51"
+      },
+      {
+        "path": "consensus/Cargo.toml",
+        "sha256": "623586e150fed14d9df4c55465be33374427a1730d4f763c4289316bc34b9c83"
+      },
+      {
+        "path": "consensus/core/Cargo.toml",
+        "sha256": "ba7e84c40620b97d32e323613fcf22623df3a1f80b60ef89cbcac4c622968e80"
+      },
+      {
+        "path": "consensus/core/src/config/params/full_activation_v1.rs",
+        "sha256": "982293432351e14d12b5b749c36d3e45152eb9558bb66d34968902de100e431f"
+      },
+      {
+        "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/material_typed_ingress_v4.rs",
+        "sha256": "03196734701bfb248a92b72ad8bcc913ba54539fcde18ba3959c4100f12b9256"
+      },
+      {
+        "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs",
+        "sha256": "6afed5c86f7db9926a8ceec3919a7326dd8600ee39ea93e82a112cb7183a4134"
+      },
+      {
+        "path": "consensus/tests/fixtures/signed_provider_config_v4.rs",
+        "sha256": "2c5c2e6d8551732afcc807cd8b962047d8031819ae123b6c0953f182468cbce7"
+      },
+      {
+        "path": "kaspad/Cargo.toml",
+        "sha256": "e7a9c98ef2c74e09be69ac66bf1cbf20f3bc7d644281dba5cad8071438c5a78f"
+      },
+      {
+        "path": "kaspad/src/private_integration/kernel_paid_checker_v4.rs",
+        "sha256": "caf03e207dd5468e1dded8c4f1c52fc8c543a64039cfd6b9cb59ba9af27c493a"
+      },
+      {
+        "path": "kaspad/src/private_integration/kernel_paid_checker_v4/signed_socket_native.rs",
+        "sha256": "9ac8fb9713974dc36448c316d1cc7bbd0d2d292001345bc11893c5731ad2a20d"
+      },
+      {
+        "path": "misaka/evm/core/Cargo.toml",
+        "sha256": "44bd39f36d62f54c0b8e3b60f54bd0412d7e8023b8b803ca93aa89717ac49db2"
+      },
+      {
+        "path": "misaka/palw/remote/Cargo.toml",
+        "sha256": "cc386ed1719a7bbe67012b452440b3c55242f63a222fe3f7180ded3321442da1"
+      },
+      {
+        "path": "misaka/palw/sdk/Cargo.toml",
+        "sha256": "5db4c9200ef3695cd613e48ddd05e6660f55cdc19e7ffd1d1d876cab23d3ea45"
+      },
+      {
+        "path": "rpc/eth/Cargo.toml",
+        "sha256": "c98fb8bedd276e0d58312ccc7358ac6a63087bf57efdc8cad1953d3f98900daa"
+      }
+    ],
+    "build_result": "PASS",
+    "scope": "native funded claim admission membership and real checker/provider process Challenge fixture; no campaign promotion",
+    "exit_code": 0,
+    "wall_seconds": 46.15,
+    "identity_matches": true
+  },
+  "executable_pins": {
+    "kaspa_consensus": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry6-20261025",
+      "sha256": "0db425d2945297f607cc94b1a8af2bd96261700bc71c2ae2604ba50d5df154f6"
+    },
+    "kaspa_consensus_core": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry6-20261025",
+      "sha256": "f6ef7a107f7d6b456efccf8ce348c43e6090253899b49544ad505605bcbadc64"
+    },
+    "kaspa_eth_rpc": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_eth_rpc-retry6-20261025",
+      "sha256": "1aca96e6452bb29c1d3306586e2d334c233430c2be5183523ca018831e1cba4e"
+    },
+    "kaspa_evm": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_evm-retry6-20261025",
+      "sha256": "1dd31f0e62ba539079fc432f1462bbfa89ddc5c0a3be347e3a021c31fec02f02"
+    },
+    "kaspad_lib": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry6-20261025",
+      "sha256": "674ae455b5ec538ba37d696892fbf87190986256107776088dc2987749b0f6e6"
+    },
+    "misaka_palw_sdk": {
+      "path": "/tmp/misaka-rfc-claim-provider-native-misaka_palw_sdk-retry6-20261025",
+      "sha256": "c56264b84771f10a3edb86e828e597ffa87b0f86c23ebd80ca71073dce5a7448"
+    }
+  },
+  "parent": {
+    "command": [
+      "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry6-20261025",
+      "--ignored",
+      "--exact",
+      "pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "pins": {
+      "kaspa_consensus": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry6-20261025",
+        "sha256": "0db425d2945297f607cc94b1a8af2bd96261700bc71c2ae2604ba50d5df154f6"
+      },
+      "kaspa_consensus_core": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry6-20261025",
+        "sha256": "f6ef7a107f7d6b456efccf8ce348c43e6090253899b49544ad505605bcbadc64"
+      },
+      "kaspa_eth_rpc": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_eth_rpc-retry6-20261025",
+        "sha256": "1aca96e6452bb29c1d3306586e2d334c233430c2be5183523ca018831e1cba4e"
+      },
+      "kaspa_evm": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_evm-retry6-20261025",
+        "sha256": "1dd31f0e62ba539079fc432f1462bbfa89ddc5c0a3be347e3a021c31fec02f02"
+      },
+      "kaspad_lib": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry6-20261025",
+        "sha256": "674ae455b5ec538ba37d696892fbf87190986256107776088dc2987749b0f6e6"
+      },
+      "misaka_palw_sdk": {
+        "path": "/tmp/misaka-rfc-claim-provider-native-misaka_palw_sdk-retry6-20261025",
+        "sha256": "c56264b84771f10a3edb86e828e597ffa87b0f86c23ebd80ca71073dce5a7448"
+      }
+    },
+    "exit_code": 0,
+    "timeout": false,
+    "wall_seconds": 9.43,
+    "log": "/tmp/misaka-rfc-claim-provider-native-provider-runtime-retry6-20261025.log",
+    "summary": [
+      "ok",
+      "1",
+      "0",
+      "0",
+      "9.32"
+    ],
+    "scope_pass": true
+  },
+  "related_initial": [
+    {
+      "label": "checker",
+      "command": [
+        "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry6-20261025",
+        "private_integration::kernel_paid_checker_v4::",
+        "--skip",
+        "signed_socket_native",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit": 101,
+      "seconds": 0.29,
+      "log": "/tmp/misaka-rfc-signed-provider-related-checker-retry6-20261025.log",
+      "summary": [
+        "test result: FAILED. 8 passed; 11 failed; 0 ignored; 0 measured; 1013 filtered out; finished in 0.21s"
+      ]
+    },
+    {
+      "label": "typed-provider",
+      "command": [
+        "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry6-20261025",
+        "--exact",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::rfc08_typed_provider_exact_publication_native_acceptance_and_cold_restore",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit": 0,
+      "seconds": 1.57,
+      "log": "/tmp/misaka-rfc-signed-provider-related-typed-provider-retry6-20261025.log",
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 0.32s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 0.26s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 1.45s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 1.50s"
+      ]
+    }
+  ],
+  "related_checker_canonical_tmp": {
+    "command": [
+      "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry6-20261025",
+      "private_integration::kernel_paid_checker_v4::",
+      "--skip",
+      "signed_socket_native",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "environment": {
+      "TMPDIR": "/private/tmp",
+      "RUST_MIN_STACK": "67108864"
+    },
+    "exit": 0,
+    "seconds": 0.85,
+    "log": "/tmp/misaka-rfc-signed-provider-related-checker-canonical-tmp-retry6-20261025.log",
+    "summary": [
+      "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1013 filtered out; finished in 0.69s"
+    ]
+  },
+  "prior_runtime_failures": [
+    {
+      "command": [
+        "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry3-20261025",
+        "--ignored",
+        "--exact",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "pins": {
+        "kaspa_consensus": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry3-20261025",
+          "sha256": "bc87785b488ee0c49a3ed2d0b76e6fa7bd5e23ed04ae2aceca1860efb6402afe"
+        },
+        "kaspa_consensus_core": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry3-20261025",
+          "sha256": "bb61b668a4c319cebdb941460f8122255657c495bdb505a474bb4b1e8e258bd5"
+        },
+        "kaspa_eth_rpc": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_eth_rpc-retry3-20261025",
+          "sha256": "1aca96e6452bb29c1d3306586e2d334c233430c2be5183523ca018831e1cba4e"
+        },
+        "kaspa_evm": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_evm-retry3-20261025",
+          "sha256": "1dd31f0e62ba539079fc432f1462bbfa89ddc5c0a3be347e3a021c31fec02f02"
+        },
+        "kaspad_lib": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry3-20261025",
+          "sha256": "78425c1c69d2d48c921a63eb8a74a2878ff91e648c0edc2fbd7d0c1210af72cd"
+        },
+        "misaka_palw_sdk": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-misaka_palw_sdk-retry3-20261025",
+          "sha256": "c56264b84771f10a3edb86e828e597ffa87b0f86c23ebd80ca71073dce5a7448"
+        }
+      },
+      "exit_code": 101,
+      "timeout": false,
+      "wall_seconds": 6.91,
+      "log": "/tmp/misaka-rfc-claim-provider-native-provider-runtime-retry3-20261025.log",
+      "summary": [
+        "FAILED",
+        "0",
+        "1",
+        "0",
+        "6.82"
+      ],
+      "scope_pass": false
+    },
+    {
+      "command": [
+        "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry4-20261025",
+        "--ignored",
+        "--exact",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "pins": {
+        "kaspa_consensus": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry4-20261025",
+          "sha256": "0db425d2945297f607cc94b1a8af2bd96261700bc71c2ae2604ba50d5df154f6"
+        },
+        "kaspa_consensus_core": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry4-20261025",
+          "sha256": "f6ef7a107f7d6b456efccf8ce348c43e6090253899b49544ad505605bcbadc64"
+        },
+        "kaspa_eth_rpc": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_eth_rpc-retry4-20261025",
+          "sha256": "1aca96e6452bb29c1d3306586e2d334c233430c2be5183523ca018831e1cba4e"
+        },
+        "kaspa_evm": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_evm-retry4-20261025",
+          "sha256": "1dd31f0e62ba539079fc432f1462bbfa89ddc5c0a3be347e3a021c31fec02f02"
+        },
+        "kaspad_lib": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry4-20261025",
+          "sha256": "78425c1c69d2d48c921a63eb8a74a2878ff91e648c0edc2fbd7d0c1210af72cd"
+        },
+        "misaka_palw_sdk": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-misaka_palw_sdk-retry4-20261025",
+          "sha256": "c56264b84771f10a3edb86e828e597ffa87b0f86c23ebd80ca71073dce5a7448"
+        }
+      },
+      "exit_code": 101,
+      "timeout": false,
+      "wall_seconds": 51.35,
+      "log": "/tmp/misaka-rfc-claim-provider-native-provider-runtime-retry4-20261025.log",
+      "summary": [
+        "FAILED",
+        "0",
+        "1",
+        "0",
+        "51.28"
+      ],
+      "scope_pass": false
+    },
+    {
+      "command": [
+        "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry5-20261025",
+        "--ignored",
+        "--exact",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "pins": {
+        "kaspa_consensus": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus-retry5-20261025",
+          "sha256": "0db425d2945297f607cc94b1a8af2bd96261700bc71c2ae2604ba50d5df154f6"
+        },
+        "kaspa_consensus_core": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_consensus_core-retry5-20261025",
+          "sha256": "f6ef7a107f7d6b456efccf8ce348c43e6090253899b49544ad505605bcbadc64"
+        },
+        "kaspa_eth_rpc": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_eth_rpc-retry5-20261025",
+          "sha256": "1aca96e6452bb29c1d3306586e2d334c233430c2be5183523ca018831e1cba4e"
+        },
+        "kaspa_evm": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspa_evm-retry5-20261025",
+          "sha256": "1dd31f0e62ba539079fc432f1462bbfa89ddc5c0a3be347e3a021c31fec02f02"
+        },
+        "kaspad_lib": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-kaspad_lib-retry5-20261025",
+          "sha256": "7ed5b9f901b5c4224053d7efbc0c1022cf3abaf18bc6da6cf2d086c3f9275404"
+        },
+        "misaka_palw_sdk": {
+          "path": "/tmp/misaka-rfc-claim-provider-native-misaka_palw_sdk-retry5-20261025",
+          "sha256": "c56264b84771f10a3edb86e828e597ffa87b0f86c23ebd80ca71073dce5a7448"
+        }
+      },
+      "exit_code": 101,
+      "timeout": false,
+      "wall_seconds": 7.74,
+      "log": "/tmp/misaka-rfc-claim-provider-native-provider-runtime-retry5-20261025.log",
+      "summary": [
+        "FAILED",
+        "0",
+        "1",
+        "0",
+        "7.65"
+      ],
+      "scope_pass": false
+    }
+  ],
+  "logs": {
+    "misaka-rfc-claim-provider-native-provider-runtime-retry6-20261025.log": "\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge ... \nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child ... TYPED_INGRESS_V4 without_commitment_scope=COURT_SCOPE_INCOMPLETE: a K2-TIR-v1/v2 class serves every model-dependent value in the clear and has no commitment-only form; its model relations (elementwise 0, smallest linear K Some(16)) allow 15 clear position(s) over the model's lifetime \u2014 only a K2-TIR-v4/v5 class (withheld or hiding values) is reward-bearing past the court scope\n\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_reader_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 0.50s\n\nTYPED_INGRESS_V4 request_commit_daa=26 sink_daa=26 virtual_daa=26 checkpoint=dec7b9eb3bb613b793ea0a7ee8ec2fefe65f23d7427d73671d34e20862c385f6c27c10b3c01f9a0f3036bb9f5c84705a90e91fd98dcfbf5ac9f5ffdaa86a4726 quote_daa=27 native_quote=Ok(())\nTYPED_INGRESS_V4 ledger_daa=26 seal=Some(SealRowV1 { seal: [133, 196, 200, 195, 5, 138, 216, 180, 191, 55, 141, 41, 111, 90, 38, 30, 145, 138, 239, 32, 61, 202, 248, 139, 21, 83, 100, 84, 32, 110, 11, 11, 20, 27, 54, 151, 60, 60, 32, 211, 27, 226, 191, 180, 6, 67, 21, 76, 179, 245, 100, 25, 30, 160, 125, 52, 169, 177, 224, 136, 152, 137, 193, 66], daa: 6, deposit: 100000000 }) producer=Some(BondRowV1 { collateral: 93906319001040, reserved: 100000000, exit_requested: None }) native_consent=Ok(true) native_admission=Ok(true)\nTYPED_INGRESS_V4 observed_ledger_replay=Ok(5)\nTYPED_INGRESS_V4 carrying_block=2f44aa256adadf65b41870fe94ebceeba2690d33f42695e164635e043a97e8dad009c087c67d9bcb110b4c3e3c2fcc7ee0487a1ea851e0f53d082439ec8b412c carrying_header_daa=26 folded_block=fa299683b7a82eca0e724cb3ed7b59e93f1da407bc9d6091e76fe92101c18ea921a1c19e6e808b643272b63f269cda01c1f9287f01e4a43465a60c0f9de73d71 folded_header_daa=27 actual_sink=fa299683b7a82eca0e724cb3ed7b59e93f1da407bc9d6091e76fe92101c18ea921a1c19e6e808b643272b63f269cda01c1f9287f01e4a43465a60c0f9de73d71 actual_virtual_daa=27\n\nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child ... \nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::provider_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1031 filtered out; finished in 2.20s\n\nSIGNED_UNIT_NATIVE_V4 checker_pid=30342 provider_pid=30457 sdk_unit=(0, 2) production_wal=ready\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1031 filtered out; finished in 2.85s\n\nSIGNED_UNIT_NATIVE_V4 claim=2fb9b697e19e49cb7d8402af796c3e38218297b90c75740b82a5a36ac6c7b70fe7948e0756410ef2991656ae3ea4ed4d3c0c1bbb4d947ebe7e13b3b65da0c8c6 enrollment=43820d9a8a9149885e8b6192019b57c830ead8fbcf0ac5ab418fe12712b28546752d9bd2220105e164183475e2948bb6354a0babe6e6cd13fb32dca16a167670 provider=PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 2 }) consent=c4a541e99d79a6244aa4c55c004dd4481318f061834f53daeb9d611322dfe23efc695a9e3292317bf8b13f8833c960fe60d0ec7bf5610b77e477e1db592095e4 checker=PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 6 }) tx=dee74898f2e67b1d8cb831e8da99ce050bacd69a4958da9266ce42f27a14c91b3bf2efea6b95c301c11f341527625a163be159e21cf397b3538d4da530944809 accepted_checkpoint=1268749b38673163ab43ca2274c0f0a3ffb9f45fd7e24a558acc1a479d8237802f7d515eff095abdcfd90f51d192ab837406626207c34a3c685915ac6c5a598d\nSIGNED_UNIT_NATIVE_V4 cold_checkpoint=1268749b38673163ab43ca2274c0f0a3ffb9f45fd7e24a558acc1a479d8237802f7d515eff095abdcfd90f51d192ab837406626207c34a3c685915ac6c5a598d exact_fee=289712 obligation_sequence=1\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 9.26s\n\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 9.32s\n\n",
+    "misaka-rfc-signed-provider-related-checker-canonical-tmp-retry6-20261025.log": "\nrunning 19 tests\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::applied_subject_waits_for_own_finality_then_successor_rollback_keeps_exact_slot ... ok\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::cold_current_prefix_confirms_multiple_subjects_and_reorg_reselects_original_pending_wal ... ok\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::fixed_base_rejects_another_job_and_trailing_data ... ok\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::missing_baseline_cannot_move_existing_signed_subject_after_a_foreign_latest_one ... ok\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::new_baseline_requires_positive_caught_up_finality_without_creating_a_file ... ok\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::old_single_checkpoint_bridge_and_cold_applied_history_preserve_distinct_domains ... ok\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::repeated_unit_waits_for_reacquisition_and_never_rebinds_an_accepted_consent ... ok\ntest private_integration::kernel_paid_checker_v4::failed_query::tests::decoded_unit_failure_keeps_current_scope_and_existing_transport_retry ... ok\ntest private_integration::kernel_paid_checker_v4::failed_query::tests::failure_from_another_generation_provider_or_claim_cannot_authorize_a_query ... ok\ntest private_integration::kernel_paid_checker_v4::outbox::tests::canonical_material_obligation_is_monitored_but_cannot_hide_an_earlier_rolled_back_demand ... ok\ntest private_integration::kernel_paid_checker_v4::outbox::tests::canonical_negative_claim_moots_old_demand_but_rollback_reselects_exact_wal ... ok\ntest private_integration::kernel_paid_checker_v4::outbox::tests::cold_history_advances_only_native_own_or_served_demands_and_rewinds_after_reorg ... ok\ntest private_integration::kernel_paid_checker_v4::outbox::tests::cold_scan_retains_exact_transaction_and_rejects_funding_reuse_across_actions ... ok\ntest private_integration::kernel_paid_checker_v4::outbox::tests::history_rejects_gaps_or_smaller_funding_authorization_and_reports_exhaustion ... ok\ntest private_integration::kernel_paid_checker_v4::outbox::tests::legacy_moved_demands_never_become_unused_funding_or_a_fresh_action_slot ... ok\ntest private_integration::kernel_paid_checker_v4::outbox::tests::saved_receipt_for_another_enrollment_or_round_is_not_this_jobs_completion ... ok\ntest private_integration::kernel_paid_checker_v4::saved_receipt_binding::tests::changed_native_binding_holds_the_same_signature_until_its_original_snapshot_returns ... ok\ntest private_integration::kernel_paid_checker_v4::saved_receipt_binding::tests::fixed_wal_identity_mismatch_is_hard_even_when_native_binding_also_changed ... ok\ntest private_integration::kernel_paid_checker_v4::tests::cold_receipt_walks_inner_borsh_after_its_route_version_and_preserves_actor ... ok\n\ntest result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1013 filtered out; finished in 0.69s\n\n",
+    "misaka-rfc-signed-provider-related-checker-retry6-20261025.log": "\nrunning 19 tests\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::applied_subject_waits_for_own_finality_then_successor_rollback_keeps_exact_slot ... \nthread 'private_integration::kernel_paid_checker_v4::challenge_history::tests::applied_subject_waits_for_own_finality_then_successor_rollback_keeps_exact_slot' (4855500) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/challenge_history.rs:368:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::cold_current_prefix_confirms_multiple_subjects_and_reorg_reselects_original_pending_wal ... \nthread 'private_integration::kernel_paid_checker_v4::challenge_history::tests::cold_current_prefix_confirms_multiple_subjects_and_reorg_reselects_original_pending_wal' (4855504) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/challenge_history.rs:388:79:\ncalled `Result::unwrap()` on an `Err` value: Outbox(\"kernel paid outbox traverses a symlink\")\nFAILED\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::fixed_base_rejects_another_job_and_trailing_data ... ok\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::missing_baseline_cannot_move_existing_signed_subject_after_a_foreign_latest_one ... \nthread 'private_integration::kernel_paid_checker_v4::challenge_history::tests::missing_baseline_cannot_move_existing_signed_subject_after_a_foreign_latest_one' (4855506) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/challenge_history.rs:368:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::new_baseline_requires_positive_caught_up_finality_without_creating_a_file ... ok\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::old_single_checkpoint_bridge_and_cold_applied_history_preserve_distinct_domains ... \nthread 'private_integration::kernel_paid_checker_v4::challenge_history::tests::old_single_checkpoint_bridge_and_cold_applied_history_preserve_distinct_domains' (4855508) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/challenge_history.rs:368:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::challenge_history::tests::repeated_unit_waits_for_reacquisition_and_never_rebinds_an_accepted_consent ... \nthread 'private_integration::kernel_paid_checker_v4::challenge_history::tests::repeated_unit_waits_for_reacquisition_and_never_rebinds_an_accepted_consent' (4855509) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/challenge_history.rs:368:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::failed_query::tests::decoded_unit_failure_keeps_current_scope_and_existing_transport_retry ... ok\ntest private_integration::kernel_paid_checker_v4::failed_query::tests::failure_from_another_generation_provider_or_claim_cannot_authorize_a_query ... ok\ntest private_integration::kernel_paid_checker_v4::outbox::tests::canonical_material_obligation_is_monitored_but_cannot_hide_an_earlier_rolled_back_demand ... \nthread 'private_integration::kernel_paid_checker_v4::outbox::tests::canonical_material_obligation_is_monitored_but_cannot_hide_an_earlier_rolled_back_demand' (4855512) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/outbox.rs:339:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::outbox::tests::canonical_negative_claim_moots_old_demand_but_rollback_reselects_exact_wal ... \nthread 'private_integration::kernel_paid_checker_v4::outbox::tests::canonical_negative_claim_moots_old_demand_but_rollback_reselects_exact_wal' (4855513) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/outbox.rs:339:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::outbox::tests::cold_history_advances_only_native_own_or_served_demands_and_rewinds_after_reorg ... \nthread 'private_integration::kernel_paid_checker_v4::outbox::tests::cold_history_advances_only_native_own_or_served_demands_and_rewinds_after_reorg' (4855514) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/outbox.rs:339:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::outbox::tests::cold_scan_retains_exact_transaction_and_rejects_funding_reuse_across_actions ... \nthread 'private_integration::kernel_paid_checker_v4::outbox::tests::cold_scan_retains_exact_transaction_and_rejects_funding_reuse_across_actions' (4855515) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/outbox.rs:339:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::outbox::tests::history_rejects_gaps_or_smaller_funding_authorization_and_reports_exhaustion ... \nthread 'private_integration::kernel_paid_checker_v4::outbox::tests::history_rejects_gaps_or_smaller_funding_authorization_and_reports_exhaustion' (4855516) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/outbox.rs:339:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::outbox::tests::legacy_moved_demands_never_become_unused_funding_or_a_fresh_action_slot ... \nthread 'private_integration::kernel_paid_checker_v4::outbox::tests::legacy_moved_demands_never_become_unused_funding_or_a_fresh_action_slot' (4855517) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/outbox.rs:339:31:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid outbox traverses a symlink\"\nFAILED\ntest private_integration::kernel_paid_checker_v4::outbox::tests::saved_receipt_for_another_enrollment_or_round_is_not_this_jobs_completion ... ok\ntest private_integration::kernel_paid_checker_v4::saved_receipt_binding::tests::changed_native_binding_holds_the_same_signature_until_its_original_snapshot_returns ... ok\ntest private_integration::kernel_paid_checker_v4::saved_receipt_binding::tests::fixed_wal_identity_mismatch_is_hard_even_when_native_binding_also_changed ... ok\ntest private_integration::kernel_paid_checker_v4::tests::cold_receipt_walks_inner_borsh_after_its_route_version_and_preserves_actor ... ok\n\nfailures:\n\nfailures:\n    private_integration::kernel_paid_checker_v4::challenge_history::tests::applied_subject_waits_for_own_finality_then_successor_rollback_keeps_exact_slot\n    private_integration::kernel_paid_checker_v4::challenge_history::tests::cold_current_prefix_confirms_multiple_subjects_and_reorg_reselects_original_pending_wal\n    private_integration::kernel_paid_checker_v4::challenge_history::tests::missing_baseline_cannot_move_existing_signed_subject_after_a_foreign_latest_one\n    private_integration::kernel_paid_checker_v4::challenge_history::tests::old_single_checkpoint_bridge_and_cold_applied_history_preserve_distinct_domains\n    private_integration::kernel_paid_checker_v4::challenge_history::tests::repeated_unit_waits_for_reacquisition_and_never_rebinds_an_accepted_consent\n    private_integration::kernel_paid_checker_v4::outbox::tests::canonical_material_obligation_is_monitored_but_cannot_hide_an_earlier_rolled_back_demand\n    private_integration::kernel_paid_checker_v4::outbox::tests::canonical_negative_claim_moots_old_demand_but_rollback_reselects_exact_wal\n    private_integration::kernel_paid_checker_v4::outbox::tests::cold_history_advances_only_native_own_or_served_demands_and_rewinds_after_reorg\n    private_integration::kernel_paid_checker_v4::outbox::tests::cold_scan_retains_exact_transaction_and_rejects_funding_reuse_across_actions\n    private_integration::kernel_paid_checker_v4::outbox::tests::history_rejects_gaps_or_smaller_funding_authorization_and_reports_exhaustion\n    private_integration::kernel_paid_checker_v4::outbox::tests::legacy_moved_demands_never_become_unused_funding_or_a_fresh_action_slot\n\ntest result: FAILED. 8 passed; 11 failed; 0 ignored; 0 measured; 1013 filtered out; finished in 0.21s\n\n",
+    "misaka-rfc-signed-provider-related-typed-provider-retry6-20261025.log": "\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::rfc08_typed_provider_exact_publication_native_acceptance_and_cold_restore ... \nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child ... TYPED_INGRESS_V4 without_commitment_scope=COURT_SCOPE_INCOMPLETE: a K2-TIR-v1/v2 class serves every model-dependent value in the clear and has no commitment-only form; its model relations (elementwise 0, smallest linear K Some(16)) allow 15 clear position(s) over the model's lifetime \u2014 only a K2-TIR-v4/v5 class (withheld or hiding values) is reward-bearing past the court scope\n\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_reader_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 0.32s\n\nTYPED_INGRESS_V4 request_commit_daa=24 sink_daa=24 virtual_daa=24 checkpoint=979fecac85b332ed5e704fe367e18360d3b40774f42e6c1145e6b02ec7efb6557909c75feb14afa5ccb9130464977a7e4312d25d28769b40c691b90e19ddef8d quote_daa=25 native_quote=Ok(())\nTYPED_INGRESS_V4 ledger_daa=24 seal=Some(SealRowV1 { seal: [133, 196, 200, 195, 5, 138, 216, 180, 191, 55, 141, 41, 111, 90, 38, 30, 145, 138, 239, 32, 61, 202, 248, 139, 21, 83, 100, 84, 32, 110, 11, 11, 20, 27, 54, 151, 60, 60, 32, 211, 27, 226, 191, 180, 6, 67, 21, 76, 179, 245, 100, 25, 30, 160, 125, 52, 169, 177, 224, 136, 152, 137, 193, 66], daa: 4, deposit: 100000000 }) producer=Some(BondRowV1 { collateral: 93906321001038, reserved: 100000000, exit_requested: None }) native_consent=Ok(true) native_admission=Ok(true)\nTYPED_INGRESS_V4 observed_ledger_replay=Ok(5)\nTYPED_INGRESS_V4 carrying_block=2cda78efe5a279ef46638a0b02341c70241cff38557d188be3273f4ba879474c9e48d9c115daad54c4e1654db31a5be6284fb2a793e33872293938d7ea9fdcae carrying_header_daa=24 folded_block=1fb34574c76dddfa2b93439d0b9813dc8a47456296360db241aa5aae13e134997ff11589278662731e0cd44883bf0958df850cdd2bf793a95a334ad27bb67a8a folded_header_daa=25 actual_sink=1fb34574c76dddfa2b93439d0b9813dc8a47456296360db241aa5aae13e134997ff11589278662731e0cd44883bf0958df850cdd2bf793a95a334ad27bb67a8a actual_virtual_daa=25\n\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_reader_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 0.26s\n\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 1.45s\n\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 1.50s\n\n",
+    "misaka-rfc-claim-provider-native-provider-runtime-retry3-20261025.log": "\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge ... \nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child ... TYPED_INGRESS_V4 without_commitment_scope=COURT_SCOPE_INCOMPLETE: a K2-TIR-v1/v2 class serves every model-dependent value in the clear and has no commitment-only form; its model relations (elementwise 0, smallest linear K Some(16)) allow 15 clear position(s) over the model's lifetime \u2014 only a K2-TIR-v4/v5 class (withheld or hiding values) is reward-bearing past the court scope\n\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_reader_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 0.52s\n\nTYPED_INGRESS_V4 request_commit_daa=26 sink_daa=26 virtual_daa=26 checkpoint=d0529142a4816b67c946f760ee13900c31bbde64016904e18c50ad17bb768ecf7c41a0f57bd82e4c198101ae79c20ac1ab408c24a899c955d0fcc59ead1f5833 quote_daa=27 native_quote=Ok(())\nTYPED_INGRESS_V4 ledger_daa=26 seal=Some(SealRowV1 { seal: [133, 196, 200, 195, 5, 138, 216, 180, 191, 55, 141, 41, 111, 90, 38, 30, 145, 138, 239, 32, 61, 202, 248, 139, 21, 83, 100, 84, 32, 110, 11, 11, 20, 27, 54, 151, 60, 60, 32, 211, 27, 226, 191, 180, 6, 67, 21, 76, 179, 245, 100, 25, 30, 160, 125, 52, 169, 177, 224, 136, 152, 137, 193, 66], daa: 6, deposit: 100000000 }) producer=Some(BondRowV1 { collateral: 93906319001040, reserved: 100000000, exit_requested: None }) native_consent=Ok(true) native_admission=Ok(true)\nTYPED_INGRESS_V4 observed_ledger_replay=Ok(5)\nTYPED_INGRESS_V4 carrying_block=9c725c3a8586ef564eaa8159dfca91cc4f420de501534c84e0d1d11a74278e30cfbcb56e21b3b5c0298a3c2750f4f62d41d75e21606cb7599555aff778e1d326 carrying_header_daa=26 folded_block=a2dd0c7c68f914ed71f89e75a737a78a66b7c0f81d46e557bba27bf9a3f69a759177063bf6a0e309d6ef64de30c62c8d69daae95536f964cb93b627a48909e0e folded_header_daa=27 actual_sink=a2dd0c7c68f914ed71f89e75a737a78a66b7c0f81d46e557bba27bf9a3f69a759177063bf6a0e309d6ef64de30c62c8d69daae95536f964cb93b627a48909e0e actual_virtual_daa=27\n\nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child ... \nthread 'private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child' (4816137) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/signed_socket_native.rs:128:65:\ncalled `Result::unwrap()` on an `Err` value: \"CLAIM_AUTHORITY_INVALID: the frozen source target is missing\"\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: core::result::unwrap_failed\n   3: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child::{{closure}}\n   4: <core::pin::Pin<P> as core::future::future::Future>::poll\n   5: <core::pin::Pin<P> as core::future::future::Future>::poll\n   6: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}::{{closure}}::{{closure}}\n   7: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}::{{closure}}\n   8: tokio::runtime::scheduler::current_thread::Context::enter\n   9: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}\n  10: tokio::runtime::scheduler::current_thread::CoreGuard::enter::{{closure}}\n  11: tokio::runtime::context::scoped::Scoped<T>::set\n  12: tokio::runtime::context::set_scheduler::{{closure}}\n  13: std::thread::local::LocalKey<T>::try_with\n  14: std::thread::local::LocalKey<T>::with\n  15: tokio::runtime::context::set_scheduler\n  16: tokio::runtime::scheduler::current_thread::CoreGuard::enter\n  17: tokio::runtime::scheduler::current_thread::CoreGuard::block_on\n  18: tokio::runtime::scheduler::current_thread::CurrentThread::block_on::{{closure}}\n  19: tokio::runtime::context::runtime::enter_runtime\n  20: tokio::runtime::scheduler::current_thread::CurrentThread::block_on\n  21: tokio::runtime::runtime::Runtime::block_on_inner\n  22: tokio::runtime::runtime::Runtime::block_on\n  23: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child\n  24: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child::{{closure}}\n  25: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1031 filtered out; finished in 0.54s\n\n\nthread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child' (4815963) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs:160:5:\nproduction checker child failed: exit status: 101\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::finish::{{closure}}\n   3: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child::{{closure}}\n   4: tokio::runtime::scheduler::current_thread::Context::enter\n   5: tokio::runtime::context::scoped::Scoped<T>::set\n   6: tokio::runtime::scheduler::current_thread::CurrentThread::block_on\n   7: tokio::runtime::runtime::Runtime::block_on\n   8: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child\n   9: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 6.63s\n\n\nthread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge' (4815961) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs:20:5:\nsame-claim native writer failed: exit status: 101\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge\n   3: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 6.82s\n\n",
+    "misaka-rfc-claim-provider-native-provider-runtime-retry4-20261025.log": "\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge ... \nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child ... TYPED_INGRESS_V4 without_commitment_scope=COURT_SCOPE_INCOMPLETE: a K2-TIR-v1/v2 class serves every model-dependent value in the clear and has no commitment-only form; its model relations (elementwise 0, smallest linear K Some(16)) allow 15 clear position(s) over the model's lifetime \u2014 only a K2-TIR-v4/v5 class (withheld or hiding values) is reward-bearing past the court scope\n\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_reader_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 1.97s\n\nTYPED_INGRESS_V4 request_commit_daa=26 sink_daa=26 virtual_daa=26 checkpoint=c7b1064d2416f9c9ff5c0bd997beca623ffb385c56452d5fd5c9ed1acfb109255905aa55eef5996a20abc4d95f8a3b3cf8d95766aa1b542905f03b23478fb32e quote_daa=27 native_quote=Ok(())\nTYPED_INGRESS_V4 ledger_daa=26 seal=Some(SealRowV1 { seal: [133, 196, 200, 195, 5, 138, 216, 180, 191, 55, 141, 41, 111, 90, 38, 30, 145, 138, 239, 32, 61, 202, 248, 139, 21, 83, 100, 84, 32, 110, 11, 11, 20, 27, 54, 151, 60, 60, 32, 211, 27, 226, 191, 180, 6, 67, 21, 76, 179, 245, 100, 25, 30, 160, 125, 52, 169, 177, 224, 136, 152, 137, 193, 66], daa: 6, deposit: 100000000 }) producer=Some(BondRowV1 { collateral: 93906319001040, reserved: 100000000, exit_requested: None }) native_consent=Ok(true) native_admission=Ok(true)\nTYPED_INGRESS_V4 observed_ledger_replay=Ok(5)\nTYPED_INGRESS_V4 carrying_block=8166404a9736ec258842662637c143723e13a5ea6cdc4eba5fd3e20f9394f7cbd00de2b5582366de03f7ce000d5a226631ef60cff12aef225840f5622f8ef728 carrying_header_daa=26 folded_block=09d1c782ca615aeb9b4dbf9c0797506dc186616f453c0cf683285cbfb7addc3f87bb8197619b3886aad87734c407b1e07612c7b8af13422e9ee51c9477364382 folded_header_daa=27 actual_sink=09d1c782ca615aeb9b4dbf9c0797506dc186616f453c0cf683285cbfb7addc3f87bb8197619b3886aad87734c407b1e07612c7b8af13422e9ee51c9477364382 actual_virtual_daa=27\n\nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child ... \nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::provider_child ... \nthread 'private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child' (4842608) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/signed_socket_native.rs:249:67:\ncalled `Result::unwrap()` on an `Err` value: \"kernel paid path traverses a symlink\"\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: core::result::unwrap_failed\n   3: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child::{{closure}}\n   4: <core::pin::Pin<P> as core::future::future::Future>::poll\n   5: <core::pin::Pin<P> as core::future::future::Future>::poll\n   6: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}::{{closure}}::{{closure}}\n   7: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}::{{closure}}\n   8: tokio::runtime::scheduler::current_thread::Context::enter\n   9: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}\n  10: tokio::runtime::scheduler::current_thread::CoreGuard::enter::{{closure}}\n  11: tokio::runtime::context::scoped::Scoped<T>::set\n  12: tokio::runtime::context::set_scheduler::{{closure}}\n  13: std::thread::local::LocalKey<T>::try_with\n  14: std::thread::local::LocalKey<T>::with\n  15: tokio::runtime::context::set_scheduler\n  16: tokio::runtime::scheduler::current_thread::CoreGuard::enter\n  17: tokio::runtime::scheduler::current_thread::CoreGuard::block_on\n  18: tokio::runtime::scheduler::current_thread::CurrentThread::block_on::{{closure}}\n  19: tokio::runtime::context::runtime::enter_runtime\n  20: tokio::runtime::scheduler::current_thread::CurrentThread::block_on\n  21: tokio::runtime::runtime::Runtime::block_on_inner\n  22: tokio::runtime::runtime::Runtime::block_on\n  23: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child\n  24: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child::{{closure}}\n  25: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1031 filtered out; finished in 0.70s\n\n\nthread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child' (4837932) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs:180:5:\nproduction checker child failed: exit status: 101\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::finish::{{closure}}\n   3: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child::{{closure}}\n   4: tokio::runtime::scheduler::current_thread::Context::enter\n   5: tokio::runtime::context::scoped::Scoped<T>::set\n   6: tokio::runtime::scheduler::current_thread::CurrentThread::block_on\n   7: tokio::runtime::runtime::Runtime::block_on\n   8: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child\n   9: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 51.07s\n\n\nthread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge' (4837930) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs:20:5:\nsame-claim native writer failed: exit status: 101\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge\n   3: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 51.28s\n\n",
+    "misaka-rfc-claim-provider-native-provider-runtime-retry5-20261025.log": "\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge ... \nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child ... TYPED_INGRESS_V4 without_commitment_scope=COURT_SCOPE_INCOMPLETE: a K2-TIR-v1/v2 class serves every model-dependent value in the clear and has no commitment-only form; its model relations (elementwise 0, smallest linear K Some(16)) allow 15 clear position(s) over the model's lifetime \u2014 only a K2-TIR-v4/v5 class (withheld or hiding values) is reward-bearing past the court scope\n\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_reader_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 0.57s\n\nTYPED_INGRESS_V4 request_commit_daa=26 sink_daa=26 virtual_daa=26 checkpoint=c7046aff6590fa16b64bfc1002e4043596fff29899b13118f29724a39726d0ea0fba10a560daa784df64762d95b111f5c416e30ec19d8957468a7e4967f98f3e quote_daa=27 native_quote=Ok(())\nTYPED_INGRESS_V4 ledger_daa=26 seal=Some(SealRowV1 { seal: [133, 196, 200, 195, 5, 138, 216, 180, 191, 55, 141, 41, 111, 90, 38, 30, 145, 138, 239, 32, 61, 202, 248, 139, 21, 83, 100, 84, 32, 110, 11, 11, 20, 27, 54, 151, 60, 60, 32, 211, 27, 226, 191, 180, 6, 67, 21, 76, 179, 245, 100, 25, 30, 160, 125, 52, 169, 177, 224, 136, 152, 137, 193, 66], daa: 6, deposit: 100000000 }) producer=Some(BondRowV1 { collateral: 93906319001040, reserved: 100000000, exit_requested: None }) native_consent=Ok(true) native_admission=Ok(true)\nTYPED_INGRESS_V4 observed_ledger_replay=Ok(5)\nTYPED_INGRESS_V4 carrying_block=ce0c2a1f8249433d4425e4781b51dd5aecadfaed7bf4e2d6619c9ddd3f7f5100e07a5dea6ee66aab7d3d392fbeff380626a9604537b7672579782205c73d6b2a carrying_header_daa=26 folded_block=2be3231203d1a8c259380fc221d68aca2f2c66f1eea0dfc8bc7d21393b7ae6c5e93a34b2bdc5a52b6b41410cde2d320ad94485e2ab68d3fd5712d5920ee75e44 folded_header_daa=27 actual_sink=2be3231203d1a8c259380fc221d68aca2f2c66f1eea0dfc8bc7d21393b7ae6c5e93a34b2bdc5a52b6b41410cde2d320ad94485e2ab68d3fd5712d5920ee75e44 actual_virtual_daa=27\n\nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child ... \nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::provider_child ... \nthread 'private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child' (4848551) panicked at kaspad/src/private_integration/kernel_paid_checker_v4/signed_socket_native.rs:250:90:\ncalled `Result::unwrap()` on an `Err` value: \"kernel producer/payer seed must be private (0600)\"\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: core::result::unwrap_failed\n   3: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child::{{closure}}\n   4: <core::pin::Pin<P> as core::future::future::Future>::poll\n   5: <core::pin::Pin<P> as core::future::future::Future>::poll\n   6: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}::{{closure}}::{{closure}}\n   7: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}::{{closure}}\n   8: tokio::runtime::scheduler::current_thread::Context::enter\n   9: tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}\n  10: tokio::runtime::scheduler::current_thread::CoreGuard::enter::{{closure}}\n  11: tokio::runtime::context::scoped::Scoped<T>::set\n  12: tokio::runtime::context::set_scheduler::{{closure}}\n  13: std::thread::local::LocalKey<T>::try_with\n  14: std::thread::local::LocalKey<T>::with\n  15: tokio::runtime::context::set_scheduler\n  16: tokio::runtime::scheduler::current_thread::CoreGuard::enter\n  17: tokio::runtime::scheduler::current_thread::CoreGuard::block_on\n  18: tokio::runtime::scheduler::current_thread::CurrentThread::block_on::{{closure}}\n  19: tokio::runtime::context::runtime::enter_runtime\n  20: tokio::runtime::scheduler::current_thread::CurrentThread::block_on\n  21: tokio::runtime::runtime::Runtime::block_on_inner\n  22: tokio::runtime::runtime::Runtime::block_on\n  23: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child\n  24: kaspad_lib::private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child::{{closure}}\n  25: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1031 filtered out; finished in 0.74s\n\n\nthread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child' (4848247) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs:180:5:\nproduction checker child failed: exit status: 101\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::finish::{{closure}}\n   3: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child::{{closure}}\n   4: tokio::runtime::scheduler::current_thread::Context::enter\n   5: tokio::runtime::context::scoped::Scoped<T>::set\n   6: tokio::runtime::scheduler::current_thread::CurrentThread::block_on\n   7: tokio::runtime::runtime::Runtime::block_on\n   8: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child\n   9: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 7.44s\n\n\nthread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge' (4848235) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs:20:5:\nsame-claim native writer failed: exit status: 101\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge\n   3: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\n\nfailures:\n\nfailures:\n    pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 7.65s\n\n"
+  },
+  "counting": {
+    "new_independent_parent_passes": 1,
+    "related_checker_passes": 19,
+    "related_existing_native_provider_parent_passes": 1,
+    "nested_child_tests_additional_acceptance_count": 0,
+    "initial_related_checker_failure": "8 passed/11 failed due noncanonical default temp path; same pinned executable then 19 passed under TMPDIR=/private/tmp; failure preserved"
+  }
+}
