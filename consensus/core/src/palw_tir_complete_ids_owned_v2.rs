@@ -24,27 +24,34 @@ pub(crate) fn observed_v2() -> (u64, u64) {
     OBSERVED.with(std::cell::Cell::get)
 }
 
+#[cfg(test)]
+thread_local! { static BORROWED_OBSERVED:std::cell::Cell<(u64,u64)>=const{std::cell::Cell::new((0,0))}; }
+#[cfg(test)]
+pub(crate) fn reset_borrowed_observed_v2() {
+    BORROWED_OBSERVED.with(|c| c.set((0, 0)));
+}
+#[cfg(test)]
+pub(crate) fn borrowed_observed_v2() -> (u64, u64) {
+    BORROWED_OBSERVED.with(std::cell::Cell::get)
+}
+
 impl PalwTirPublicSourceV1 {
-    /// Same exact EOF and outer trace-root authentication as the legacy chunk
-    /// assembler, directly over an already complete borrowed slice. The caller
-    /// retains this owner for every use of the authenticated owned sequence.
-    pub fn retain_complete_ids_classified_v2(
-        &self,
-        rows_root: Hash64,
-        ids: &[u32],
-    ) -> Result<NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, Fault> {
+    fn complete_ids_eof_v2(&self, ids: &[u32]) -> Result<(), Fault> {
         self.trace().map_err(Fault::Decode)?;
         if ids.is_empty() || ids.len() != self.decode_count_v1() as usize {
             return Err(Fault::Decode("complete original IDs do not reach exact nonempty EOF".into()));
         }
+        Ok(())
+    }
+    /// Borrowed identity authentication for an actual retained native source.
+    /// It supplies no stored context, admission, approval or authority.
+    pub fn validate_complete_ids_classified_v2(&self, rows_root: Hash64, ids: &[u32]) -> Result<(), Fault> {
+        self.complete_ids_eof_v2(ids)?;
         #[cfg(test)]
-        OBSERVED.with(|c| {
+        BORROWED_OBSERVED.with(|c| {
             let (a, b) = c.get();
             c.set((a + 1, b));
         });
-        let mut owned = TirNativeRequestsV1::new();
-        owned.exact_v1::<u32>(ids.len() as u64).map_err(Fault::Resource)?;
-        let persistent = reserve_native_requests_v1(owned.bytes_v1()).map_err(Fault::Resource)?;
         let mut scratch = TirNativeRequestsV1::new();
         // tiled_logits_outer_root_v1 materializes exactly4 ID bytes per token.
         let id_bytes = (ids.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64).ok_or_else(overflow)?;
@@ -67,7 +74,7 @@ impl PalwTirPublicSourceV1 {
         scratch.exact_v1::<u8>(envelope as u64).map_err(Fault::Resource)?;
         let _scratch = reserve_native_requests_v1(scratch.bytes_v1()).map_err(Fault::Resource)?;
         #[cfg(test)]
-        OBSERVED.with(|c| {
+        BORROWED_OBSERVED.with(|c| {
             let (a, b) = c.get();
             c.set((a, b + 1));
         });
@@ -80,6 +87,29 @@ impl PalwTirPublicSourceV1 {
         {
             return Err(Fault::Decode("complete IDs do not authenticate the original trace root".into()));
         }
+        Ok(())
+    }
+    /// Same exact EOF/root as the legacy assembler, with one retained owned Vec.
+    pub fn retain_complete_ids_classified_v2(
+        &self,
+        rows_root: Hash64,
+        ids: &[u32],
+    ) -> Result<NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, Fault> {
+        self.complete_ids_eof_v2(ids)?;
+        #[cfg(test)]
+        OBSERVED.with(|c| {
+            let (a, b) = c.get();
+            c.set((a + 1, b));
+        });
+        let mut owned = TirNativeRequestsV1::new();
+        owned.exact_v1::<u32>(ids.len() as u64).map_err(Fault::Resource)?;
+        let persistent = reserve_native_requests_v1(owned.bytes_v1()).map_err(Fault::Resource)?;
+        self.validate_complete_ids_classified_v2(rows_root, ids)?;
+        #[cfg(test)]
+        OBSERVED.with(|c| {
+            let (a, b) = c.get();
+            c.set((a, b + 1));
+        });
         let mut retained = Vec::new();
         retained.try_reserve_exact(ids.len()).map_err(|_| {
             Fault::Resource(NativeCoverageV1::unsupported::<Vec<u32>>("complete original IDs", "owned ID allocation refused"))

@@ -141,6 +141,25 @@ impl SharedTirIdsV1 {
         if self.version!=1 || *key!=Key::CourtSharedIds(self.claim) {return Err("invalid shared ID row version/key".into());}
         Ok(())
     }
+    /// Typed counterpart for the actual shared-IDs dispatcher. The compatibility
+    /// String validator remains available to existing reload/build consumers.
+    pub(crate) fn check_context_classified_v2(
+        &self,
+        state: &PalwChainStateV2,
+    ) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1 as Fault;
+        self.check(&Key::CourtSharedIds(self.claim)).map_err(Fault::Decode)?;
+        let c = context(state, self.claim).map_err(Fault::Decode)?;
+        let source = c.source(state).map_err(Fault::Decode)?;
+        if self.scope_id != c.scope_id
+            || self.material_until_daa != c.material_until_daa
+            || self.accepted_daa < c.original_accepted_daa
+            || self.accepted_daa >= c.hard_daa
+        {
+            return Err(Fault::Decode("shared ID row substitutes context/clock".into()));
+        }
+        source.validate_complete_ids_classified_v2(self.rows_root, &self.ids)
+    }
     pub fn check_context(&self,state:&PalwChainStateV2)->Result<(),String> {
         self.check(&Key::CourtSharedIds(self.claim))?;
         let c=context(state,self.claim)?;let source=c.source(state)?;

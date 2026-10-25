@@ -105,26 +105,57 @@ fn share_body_inner(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,claim:H
         digest:shared::shared_body_digest_v1(bytes),bytes:bytes.to_vec()});
     b.write_staged_row_v1(key,Some(Row::CourtSharedQuery(Box::new(row))))?;Ok(true)
 }
-pub(super) fn share_ids(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,claim:Hash64,
-    rows_root:Hash64,ids:&[u32])->Result<bool,PalwStateV2Error> {
-    let saved=b.try_checkpoint()?;
-    let result=(|| {
-        let c=shared::context(&b.state,claim).map_err(refused)?;clock(c,ctx)?;
-        let source=c.source(&b.state).map_err(refused)?;source.validate_complete_ids_v1(rows_root,ids).map_err(refused)?;
-        let key=Key::CourtSharedIds(claim);
-        if let Some(old)=b.state.staged_court_row_v1(&key) {
-            let Row::CourtSharedIds(old)=old else {return Err(refused("shared ID key contains foreign row"));};
-            old.check_context(&b.state).map_err(refused)?;
-            if ctx.daa_score<old.accepted_daa {return Err(refused("shared replay precedes accepted IDs"));}
+fn shared_ids_auth_fault_v2(why: crate::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> PalwStateV2Error {
+    match why {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
+    }
+}
+pub(super) fn share_ids(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+    rows_root: Hash64,
+    ids: &[u32],
+) -> Result<bool, PalwStateV2Error> {
+    let saved = b.try_checkpoint()?;
+    let result = (|| {
+        let c = shared::context(&b.state, claim).map_err(refused)?;
+        clock(c, ctx)?;
+        let source = c.source(&b.state).map_err(refused)?;
+        source.validate_complete_ids_classified_v2(rows_root, ids).map_err(shared_ids_auth_fault_v2)?;
+        let key = Key::CourtSharedIds(claim);
+        if let Some(old) = b.state.staged_court_row_v1(&key) {
+            let Row::CourtSharedIds(old) = old else {
+                return Err(refused("shared ID key contains foreign row"));
+            };
+            old.check_context_classified_v2(&b.state).map_err(shared_ids_auth_fault_v2)?;
+            if ctx.daa_score < old.accepted_daa {
+                return Err(refused("shared replay precedes accepted IDs"));
+            }
             return Ok(false);
         }
-        let mut q=crate::palw_native_resource_v1::TirNativeRequestsV1::new();q.exact_v1::<u32>(ids.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
-        let _owned=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
-        let row=shared::SharedTirIdsV1 {version:1,claim,scope_id:c.scope_id,rows_root,ids:ids.to_vec(),block:ctx.block,
-            accepted_daa:ctx.daa_score,material_until_daa:c.material_until_daa};
-        b.write_staged_row_v1(key,Some(Row::CourtSharedIds(Box::new(row))))?;Ok(true)
+        let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        q.exact_v1::<u32>(ids.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+        let _owned =
+            crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+        let row = shared::SharedTirIdsV1 {
+            version: 1,
+            claim,
+            scope_id: c.scope_id,
+            rows_root,
+            ids: ids.to_vec(),
+            block: ctx.block,
+            accepted_daa: ctx.daa_score,
+            material_until_daa: c.material_until_daa,
+        };
+        b.write_staged_row_v1(key, Some(Row::CourtSharedIds(Box::new(row))))?;
+        Ok(true)
     })();
-    if result.is_err() {b.restore(saved);}result
+    if result.is_err() {
+        b.restore(saved);
+    }
+    result
 }
 
 /// Private signed-data stream, not a production ingress or signed duty result.
