@@ -12141,8 +12141,8 @@ fn palw_t12_params_with_registry_v1(
     // `PALW_T12_INT13_DAA`, after the int-11 flag day whose `palw_gen_v1` the range twin needs below it; dormant while the height is `None`.
     palw_t12_arm_int13_flag_day_v1(&mut params);
     // **The full-activation flag day** (lane g14p/r7-fence-16000): `PALW_T12_FULL_ACTIVATION_FENCES_V1` — the int-13 list's
-    // entries plus every G14 / RFC fence of the full-activation release — at `PALW_T12_FULL_ACTIVATION_DAA` (user order 2026-10-24:
-    // DAA 15,100), after the int-13 flag day.
+    // entries plus every G14 / RFC fence of the full-activation release — at `PALW_T12_FULL_ACTIVATION_DAA` (user order 2026-10-25:
+    // DAA 15,400), after the int-13 flag day.
     full_activation_v1::palw_t12_arm_full_activation_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has

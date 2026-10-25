@@ -32,7 +32,9 @@
 //!   inner root the container commits) and refuses a non-TIR model without it.
 
 use crate::Hash64;
-use crate::palw_annual_catalog_v1::{AnnualModelCatalogV1, ApprovedModelV1, PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1};
+use crate::palw_annual_catalog_v1::{
+    AnnualModelCatalogV1, ApprovedModelV1, PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1, PalwAnnualCatalogChainV1,
+};
 
 /// The weight route a genesis model is adjudicated on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -291,6 +293,45 @@ pub fn palw_genesis8_model_v1(genesis_id: u8) -> Option<&'static PalwGenesisMode
     PALW_GENESIS8_MODELS_V1.iter().find(|m| m.genesis_id == genesis_id)
 }
 
+/// **Dolphin 3.0 on testnet-12, RFC-0019's annual edition** (user order 2026-10-24).
+///
+/// The conversion record names `Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW` and nothing on chain is registered
+/// under it. RFC-0019 §6.6 allows the catalog to name that class anyway: an unregistered listing has no
+/// capital, no share and no effect on block validity. The Solana-style rollout is the edition's own height
+/// inside `palw_model_tier_v1` — nodes ship the edition early, `consensus_identity_id` drops it until the
+/// height, and at that height `ApprovedModels` gains this one pair.
+///
+/// The class id is the graph-v7 profile at the record's served context, 32,768
+/// ([`PALW_GENESIS_SERVED_CONTEXT_V1`]). That width is not a testnet-12 genesis row. The 8,192 graph is:
+/// it is the genesis dense class, and this edition does not re-list it (ADR-0175). The artifact root is
+/// the one hash the record contains, the published 8k file's A16 digest
+/// (`palw-runtime/dolphin3.0-qwen25-1.5b-a16-8k.palwart`, revision `816208c4`). A later registration is
+/// this 1.0 model only when both the class id and that root match.
+pub const PALW_DOLPHIN3_A16_N_CTX_V1: u32 = PALW_GENESIS_SERVED_CONTEXT_V1;
+pub const PALW_DOLPHIN3_A16_8K_ARTIFACT_DIGEST_V1: Hash64 = Hash64::from_bytes([
+    0x50, 0xe8, 0xac, 0xbe, 0x17, 0x67, 0xa9, 0xeb, 0x6b, 0x0c, 0x5b, 0x55, 0x0c, 0x60, 0xc0, 0x19, 0xa0, 0xd9, 0xa8, 0x82,
+    0x4c, 0xcc, 0x64, 0x34, 0x3b, 0xcd, 0x06, 0x61, 0xd5, 0x5c, 0x66, 0xbc, 0x0b, 0x15, 0x6a, 0x69, 0x6e, 0xe2, 0x00, 0xf8,
+    0x88, 0x1f, 0x26, 0x5e, 0x89, 0x28, 0x20, 0xf5, 0xae, 0x6c, 0xde, 0xbb, 0xc4, 0x4c, 0x09, 0xeb, 0xcd, 0xf8, 0xfa, 0x80,
+    0xd8, 0x00, 0xc2, 0x17,
+]);
+
+/// Edition 0 empty (genesis-assembly classes stay 1.0 without being re-listed) plus one annual edition at
+/// `activation_daa` that adds Dolphin. The chain passes [`PalwAnnualCatalogChainV1::validate`].
+pub fn palw_t12_dolphin3_soft_fork_catalog_v1(activation_daa: u64) -> PalwAnnualCatalogChainV1 {
+    use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
+    let profile = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 {
+        n_ctx: PALW_DOLPHIN3_A16_N_CTX_V1,
+        ..QWEN25_1_5B
+    })
+    .expect("Dolphin's graph-v7 row at its served context derives");
+    let chain = PalwAnnualCatalogChainV1::genesis_only(Vec::new()).with_edition(
+        activation_daa,
+        vec![ApprovedModelV1::of(profile.shape_profile_id(), PALW_DOLPHIN3_A16_8K_ARTIFACT_DIGEST_V1)],
+    );
+    chain.validate().expect("Dolphin's annual edition is add-only and activates at a real height");
+    chain
+}
+
 /// **Edition 0 of the next network** over the roots supplied for each genesis model. Every listed model must have roots (a tentative
 /// one only when `include_tentative`; without it, a tentative model is left out and its roots, if supplied, are refused as
 /// unknown so a decision is never made by accident). The result passes `AnnualModelCatalogV1::validate_shape`.
@@ -458,5 +499,30 @@ mod tests {
         let mut other = roots_for(&all);
         other[1].1.container_root = crate::palw_artifact_identity_v1::PalwContainerRootV1::named(Hash64::from_u64_word(99)).unwrap();
         assert_ne!(palw_genesis8_edition0_v1(&other, true).unwrap().root(), c.root());
+    }
+
+    /// **RFC-0019: Dolphin is an annual edition at the caller's height, not the genesis 8k class.** Below the height the
+    /// pair is not in `ApprovedModels`. The class id is the artifact-epsilon graph, so it is not testnet-12's genesis row.
+    #[test]
+    fn dolphin_joins_approved_models_at_the_edition_height_and_not_before() {
+        let at = 15_400;
+        let chain = palw_t12_dolphin3_soft_fork_catalog_v1(at);
+        assert_eq!(chain.editions.len(), 2);
+        assert!(chain.editions[0].models.is_empty());
+        assert_eq!(chain.editions[1].activation_daa, at);
+        let added = &chain.editions[1].models[0];
+        for n_ctx in [8_192u32, 2_097_152] {
+            let genesis = crate::palw_context_ladder::palw_a16_context_row_profile_v7(n_ctx)
+                .expect("genesis dense profile")
+                .shape_profile_id();
+            assert_ne!(added.class_id, genesis, "Dolphin does not re-list a genesis dense class at {n_ctx}");
+        }
+        assert_eq!(added.artifact_root, PALW_DOLPHIN3_A16_8K_ARTIFACT_DIGEST_V1);
+        assert!(chain.listed_at(&added.class_id, &added.artifact_root, at - 1).is_none());
+        let listed = chain.listed_at(&added.class_id, &added.artifact_root, at).expect("active at the height");
+        assert_eq!(listed.edition, 1);
+        let mut fence = crate::palw_model_tier_v1::PalwModelTierFenceV1::at(crate::config::params::ForkActivation::new(at));
+        fence.catalogs = chain;
+        assert!(fence.validate().is_ok(), "{}", fence.validate().unwrap_err());
     }
 }

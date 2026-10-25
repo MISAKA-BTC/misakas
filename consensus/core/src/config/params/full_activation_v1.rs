@@ -1,6 +1,6 @@
 //! **testnet-12's full-activation flag day** (lane g14p/r7-fence-16000, 2026-10-22) — ONE list, [`PALW_T12_FULL_ACTIVATION_FENCES_V1`],
 //! that arms every G14 / RFC fence of the full-activation release at ONE height, [`PALW_T12_FULL_ACTIVATION_DAA`].
-//! The user set that height to DAA 15,100 on 2026-10-24. The arming-record lists stay empty: this file does not invent evidence digests.
+//! The user set that height to DAA 15,400 on 2026-10-25, after 15,100 had already passed on the unarmed binary. The arming-record lists stay empty: this file does not invent evidence digests.
 //! `validate_palw_v2` accepts the public testnet-12 preset at exactly this height and still refuses every other height and genesis.
 //!
 //! The pattern is the int-13 list's ([`super::PALW_T12_INT13_FENCES_V1`]) exactly: each entry sets its field AND the mirrors the fold
@@ -112,8 +112,11 @@ pub const PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY: PalwPostLaunchFenceV1 = PalwP
     },
 };
 
-/// `palw_model_tier_v1` (ADR-0179): value-carrying. `Some(at)` re-times installed tiers/catalogs; with none it installs
-/// `PalwModelTierFenceV1::at` (design values, empty genesis catalog — "NOT A PROPOSAL"), which validation refuses when armed.
+/// `palw_model_tier_v1` (ADR-0179 / RFC-0019): value-carrying. `Some(at)` re-times installed tiers/catalogs; with none it
+/// installs the design coefficients and RFC-0019's catalog: edition 0 empty, edition 1 at the same height adding Dolphin
+/// ([`crate::palw_genesis8_catalog_v1::palw_t12_dolphin3_soft_fork_catalog_v1`]). The class is not registered. The edition
+/// names it, and it joins `ApprovedModels` at this height. Arming records stay empty, so validation still refuses the fence
+/// except through testnet-12's full-activation waiver at [`PALW_T12_FULL_ACTIVATION_DAA`].
 pub const PALW_T12_FULL_MODEL_TIER_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_model_tier_v1",
     set: |params, at| {
@@ -123,7 +126,11 @@ pub const PALW_T12_FULL_MODEL_TIER_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunch
                 installed.activation = at;
                 Some(installed)
             }
-            (Some(at), None) => Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at)),
+            (Some(at), None) => {
+                let mut fence = crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at);
+                fence.catalogs = crate::palw_genesis8_catalog_v1::palw_t12_dolphin3_soft_fork_catalog_v1(at.daa_score());
+                Some(fence)
+            }
         };
         palw_full_activation_sync_mirrors_v1(params);
     },
@@ -232,16 +239,17 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
 ];
 
-/// **The full-activation list's height: DAA 15,100.** User order 2026-10-24. A height no other list uses (not 750, 1,000, 1,300,
-/// 1,700, 2,000, 3,600, 5,300, 5,395, 5,490, 5,585). The arming-record lists stay empty — G14 arm-readiness, TIR frame-cost, RFC-0608
+/// **The full-activation list's height: DAA 15,400.** User order 2026-10-25, moved forward from 15,100 after the public tip had
+/// already passed 15,100 on the unarmed binary. A height no other list uses (not 750, 1,000, 1,300, 1,700, 2,000, 3,600, 5,300,
+/// 5,395, 5,490, 5,585, and not 16,000). The arming-record lists stay empty — G14 arm-readiness, TIR frame-cost, RFC-0608
 /// measured records, and the X3 / court-capacity / monetary-material / model-tier evidence digests are not invented here. The policies
 /// installed are the ones each entry's `set` already installs when no reviewed policy is present. `validate_palw_v2` accepts that exact
 /// public testnet-12 preset and refuses the same list at any other height or on any other genesis. The same height is
 /// `contrib/t12-deploy-kit/fleet.env.example`'s `FULL_ACTIVATION_FLAG_DAY_DAA`. One constant the preset, the drill flag
 /// `--palw-drill-full-activation-at` and the kit share.
 ///
-/// The fleet must be on this binary before the live tip reaches 15,100. A fence already behind the tip is a fired-fence mismatch.
-pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = Some(15_100);
+/// The fleet must be on this binary before the live tip reaches 15,400. A fence already behind the tip is a fired-fence mismatch.
+pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = Some(15_400);
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.
 pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 16_000;

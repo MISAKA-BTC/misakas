@@ -236,7 +236,7 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     );
 }
 
-/// **The kit's copy of the full-activation list's height is the core's** (user order 2026-10-24: DAA 15,100).
+/// **The kit's copy of the full-activation list's height is the core's** (user order 2026-10-25: DAA 15,400).
 /// 16,000 stays off the schedule. When the height changes, both move together and this reads it again.
 #[test]
 fn the_kit_names_the_full_activation_height_the_preset_arms() {
@@ -245,7 +245,7 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
     let kit = shell_value(FLEET, &fleet, "FULL_ACTIVATION_FLAG_DAY_DAA");
     let core = PALW_T12_FULL_ACTIVATION_DAA.map(|at| at.to_string()).unwrap_or_default();
     assert_eq!(kit, core, "{FLEET}: FULL_ACTIVATION_FLAG_DAY_DAA is the preset's (empty = no full-activation flag day)");
-    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_100), "user order 2026-10-24");
+    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_400), "user order 2026-10-25");
     let p = Params::from(t12());
     for fence in PALW_T12_FULL_ACTIVATION_FENCES_V1 {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());

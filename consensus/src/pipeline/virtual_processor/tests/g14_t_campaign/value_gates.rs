@@ -57,8 +57,8 @@ fn t_campaign_value_gated_paths_are_refused_in_a_node_build() {
     // V8 position terminal / lookahead budgets (tags 201–204; T07/T14 terminal deadlines): not adopted.
     assert!(terminal::PALW_TIR_POSITION_WITNESS_BUDGET_V2.is_none(), "V8: no position witness budget");
     assert!(terminal::PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2.is_none(), "V8: no lookahead frontier bound");
-    // T15: the public list is armed at DAA 15100. Arming the same list at 16,000 is still refused.
-    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_100), "user order 2026-10-24");
+    // T15: the public list is armed at DAA 15400. Arming the same list at 16,000 is still refused.
+    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_400), "user order 2026-10-25");
     let mut armed = palw_t12_shipped_params();
     palw_t12_arm_full_activation_at_v1(&mut armed, Some(16_000));
     let refusal = armed.validate_palw_v2().expect_err("the full-activation list is refused while its arming records are unpinned");

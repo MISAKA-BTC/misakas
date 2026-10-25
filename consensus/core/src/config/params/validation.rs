@@ -92,7 +92,7 @@ impl Params {
             crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1,
             crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
         );
-        // User order 2026-10-24: testnet-12 arms PALW_T12_FULL_ACTIVATION_FENCES_V1 at
+        // User order 2026-10-25: testnet-12 arms PALW_T12_FULL_ACTIVATION_FENCES_V1 at
         // PALW_T12_FULL_ACTIVATION_DAA, including a drill of those shipping rules. The record lists stay
         // empty; this does not fill them. Any other height or network keeps the refusal.
         if verdict.is_err() && self.palw_t12_ordered_full_activation_v1() {

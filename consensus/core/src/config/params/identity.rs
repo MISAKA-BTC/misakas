@@ -377,6 +377,26 @@ impl Params {
         if self.palw_tir_container_identity_v1 == Some(ForkActivation::never()) {
             self.palw_tir_container_identity_v1 = None;
         }
+        // These six are hashed Some-only. A future height has to collapse to absent, or a build that
+        // schedules one and a build that does not refuse each other before either has reached it.
+        if self.palw_tir_bounded_door_v1 == Some(ForkActivation::never()) {
+            self.palw_tir_bounded_door_v1 = None;
+        }
+        if self.palw_tir_designated_answers_v1 == Some(ForkActivation::never()) {
+            self.palw_tir_designated_answers_v1 = None;
+        }
+        if self.palw_court_outsider_lane_v1 == Some(ForkActivation::never()) {
+            self.palw_court_outsider_lane_v1 = None;
+        }
+        if self.palw_state_row_map_v1 == Some(ForkActivation::never()) {
+            self.palw_state_row_map_v1 = None;
+        }
+        if self.palw_kernel_route_panel_one_v1 == Some(ForkActivation::never()) {
+            self.palw_kernel_route_panel_one_v1 = None;
+        }
+        if self.palw_court_clock_v2 == Some(ForkActivation::never()) {
+            self.palw_court_clock_v2 = None;
+        }
         if self.palw_staged_float_constraint_v1 == Some(ForkActivation::never()) {
             self.palw_staged_float_constraint_v1 = None;
         }
@@ -2898,12 +2918,12 @@ impl Params {
             palw_tir_public_conviction_v1,
             palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1: _,
-            palw_tir_bounded_door_v1: _,
-            palw_tir_designated_answers_v1: _,
-            palw_court_outsider_lane_v1: _,
-            palw_state_row_map_v1: _,
-            palw_kernel_route_panel_one_v1: _,
-            palw_court_clock_v2: _,
+            palw_tir_bounded_door_v1,
+            palw_tir_designated_answers_v1,
+            palw_court_outsider_lane_v1,
+            palw_state_row_map_v1,
+            palw_kernel_route_panel_one_v1,
+            palw_court_clock_v2,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -3556,6 +3576,26 @@ impl Params {
             fork(activation, visit);
         }
         if let Some(activation) = palw_tir_container_identity_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // Some-only. Absent stays absent, so an unarmed preset's schedule id does not move. A future
+        // height becomes `never()` and the identity collapse drops it.
+        if let Some(activation) = palw_tir_bounded_door_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_tir_designated_answers_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_court_outsider_lane_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_state_row_map_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_kernel_route_panel_one_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_court_clock_v2.as_mut() {
             fork(activation, visit);
         }
         if let Some(activation) = palw_staged_float_constraint_v1.as_mut() {
@@ -5212,23 +5252,23 @@ impl Params {
             h.write(b"palw_tir_frame_cost_v1");
             h.write(borsh::to_vec(cost).expect("PalwTirFrameCostV1 is borsh-serializable"));
         }
-        if let Some(at) = palw_tir_bounded_door_v1 {
+        if let Some(at) = palw_tir_bounded_door_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_tir_bounded_door_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        if let Some(at) = palw_tir_designated_answers_v1 {
+        if let Some(at) = palw_tir_designated_answers_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_tir_designated_answers_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        if let Some(at) = palw_court_outsider_lane_v1 {
+        if let Some(at) = palw_court_outsider_lane_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_court_outsider_lane_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        if let Some(at) = palw_state_row_map_v1 {
+        if let Some(at) = palw_state_row_map_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_state_row_map_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        if let Some(at) = palw_kernel_route_panel_one_v1 {
+        if let Some(at) = palw_kernel_route_panel_one_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_kernel_route_panel_one_v1");
             h.write(at.daa_score().to_le_bytes());
         }

@@ -1,5 +1,5 @@
 //! **testnet-12's full-activation list** (lane g14p/r7-fence-16000): `PALW_T12_FULL_ACTIVATION_FENCES_V1` at
-//! `PALW_T12_FULL_ACTIVATION_DAA` — DAA 15,100 (user order 2026-10-24). Target 16,000 stays unused.
+//! `PALW_T12_FULL_ACTIVATION_DAA` — DAA 15,400 (user order 2026-10-25). Target 16,000 stays unused.
 //!
 //! * **dormant** — with the height `None` every shipped id is the int-12 release's, byte for byte (the int-13 twin, extended);
 //! * **ordered** — every "needs X at or below it" of validation names an EARLIER entry (or a rule outside the list, named below);
@@ -21,7 +21,7 @@ use kaspa_consensus_core::config::params::{
 };
 
 /// The list's names, in the order its prerequisites need. Adding an entry is one line here, one line in the list, and the notes.
-const LIST: [&str; 36] = [
+const LIST: [&str; 37] = [
     "palw_audit_1004_v1",
     "palw_gen_range_twin_v1",
     "palw_model_court_window",
@@ -154,19 +154,19 @@ fn the_list_is_the_int13_list_then_the_g14_fences_in_prerequisite_order() {
 
 #[test]
 fn the_user_ordered_height_arms_every_list_fence_and_keeps_the_int12_identity() {
-    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_100), "user order 2026-10-24");
+    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_400), "user order 2026-10-25");
     assert_eq!(PALW_T12_INT13_DAA, None);
     let shipped = palw_t12_shipped_params();
     for name in LIST {
-        assert_eq!(fence_at(&shipped, name), Some(15_100), "{name} is armed on the shipped ruleset");
+        assert_eq!(fence_at(&shipped, name), Some(15_400), "{name} is armed on the shipped ruleset");
     }
-    shipped.validate_palw_v2().expect("the public preset at DAA 15100 validates");
+    shipped.validate_palw_v2().expect("the public preset at DAA 15400 validates");
     let (params, identity, schedule) = ids(&shipped);
     let (old_params, old_identity, old_schedule) = int12_ids();
     assert_ne!(params, old_params, "the params id moves");
     assert_eq!(identity, old_identity, "a future fence leaves the identity");
-    assert_ne!(schedule, old_schedule, "the schedule names 15100");
-    assert!(shipped.fence_schedule_v1().contains(&15_100));
+    assert_ne!(schedule, old_schedule, "the schedule names 15400");
+    assert!(shipped.fence_schedule_v1().contains(&15_400));
     assert_eq!(ids(&palw_t12_release_v7_params()), int12_ids(), "clearing the list is the int-12 release");
     assert_eq!(ids(&palw_t12_release_v6_params()), int12_ids(), "v6 clears it too");
     let mut again = shipped.clone();
@@ -250,7 +250,7 @@ fn drill_with_the_earlier_flag_days_low() -> Params {
 fn the_drill_flag_refuses_untouched_until_the_records_exist() {
     let before = drill_with_the_earlier_flag_days_low();
     for name in LIST {
-        assert_eq!(fence_at(&before, name), Some(15_100), "{name}: the shipping height on the drill ruleset");
+        assert_eq!(fence_at(&before, name), Some(15_400), "{name}: the shipping height on the drill ruleset");
     }
     let mut p = before.clone();
     match palw_drill_full_activation_at_v1(&mut p, 60) {
@@ -273,4 +273,47 @@ fn the_drill_flag_refuses_untouched_until_the_records_exist() {
     assert!(palw_drill_full_activation_at_v1(&mut public, 60).is_err(), "public testnet-12's genesis");
     let mut mainnet = kaspa_consensus_core::config::params::mainnet_shipped_params();
     assert!(palw_drill_full_activation_at_v1(&mut mainnet, 60).is_err(), "another network");
+}
+
+/// RFC-0019 edition 1 names Dolphin at the same height as the tier fence. Edition 0 stays empty, so the genesis
+/// dense classes are not re-listed. The pair is unregistered; listing it is what makes it 1.0 at that height.
+#[test]
+fn dolphin_joins_approved_models_at_daa_15400() {
+    use kaspa_consensus_core::palw_annual_catalog_v1::model_tier_permille;
+    use kaspa_consensus_core::palw_genesis8_catalog_v1::PALW_DOLPHIN3_A16_8K_ARTIFACT_DIGEST_V1;
+    let shipped = palw_t12_shipped_params();
+    let fence = shipped.palw_model_tier_v1.as_ref().expect("the tier fence is armed");
+    assert_eq!(fence.activation.daa_score(), 15_400);
+    let catalogs = &fence.catalogs;
+    assert_eq!(catalogs.editions.len(), 2);
+    assert!(catalogs.editions[0].models.is_empty(), "edition 0 does not re-list genesis classes");
+    assert_eq!(catalogs.editions[1].edition, 1);
+    assert_eq!(catalogs.editions[1].activation_daa, 15_400);
+    assert_eq!(catalogs.editions[1].models.len(), 1);
+    let added = &catalogs.editions[1].models[0];
+    assert_eq!(added.artifact_root, PALW_DOLPHIN3_A16_8K_ARTIFACT_DIGEST_V1);
+    for n_ctx in [8_192u32, 2_097_152] {
+        let genesis = kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v7(n_ctx)
+            .expect("genesis dense profile")
+            .shape_profile_id();
+        assert_ne!(added.class_id, genesis, "Dolphin does not re-list the genesis dense class at {n_ctx}");
+    }
+    assert!(catalogs.listed_at(&added.class_id, &added.artifact_root, 15_399).is_none());
+    assert_eq!(catalogs.listed_at(&added.class_id, &added.artifact_root, 15_400).map(|c| c.edition), Some(1));
+    let mirror = fence.mirror();
+    assert_eq!(model_tier_permille(Some(&mirror), &added.class_id, &added.artifact_root, false, 15_400), 1_000);
+    let stranger = kaspa_consensus_core::Hash64::default();
+    assert_eq!(model_tier_permille(Some(&mirror), &stranger, &stranger, false, 15_400), fence.registered_permille);
+    let mut empty = shipped.clone();
+    if let Some(f) = empty.palw_model_tier_v1.as_mut() {
+        f.catalogs = kaspa_consensus_core::palw_annual_catalog_v1::PalwAnnualCatalogChainV1::genesis_only(Vec::new());
+    }
+    empty.sync_palw_model_tier_v1();
+    let (params, identity, schedule) = ids(&shipped);
+    let (old_params, old_identity, old_schedule) = int12_ids();
+    assert_eq!(identity, old_identity, "a future edition leaves the identity");
+    assert_eq!(empty.consensus_identity_id().to_string(), identity, "the edition's contents are not in the identity");
+    assert_ne!(schedule, old_schedule, "the schedule names the edition");
+    assert_ne!(params, old_params, "the params id names the edition");
+    assert_eq!(ids(&palw_t12_release_v7_params()), int12_ids());
 }
