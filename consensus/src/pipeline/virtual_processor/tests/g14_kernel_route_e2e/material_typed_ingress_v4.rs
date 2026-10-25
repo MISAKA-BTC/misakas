@@ -6,6 +6,8 @@ mod pruning;
 mod reorg;
 #[path = "material_typed_terminal_v4.rs"]
 mod terminal;
+#[path = "material_typed_source_manifest_v4.rs"]
+mod source_manifest;
 use kaspa_consensus_core::{
     api::ConsensusApi,
     palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4,
@@ -193,7 +195,18 @@ async fn typed_writer_child() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     kaspa_core::log::try_init_logger("warn");
     assert!(kaspa_consensus_core::palw_native_resource_v1::native_declared_logical_limits_v1().is_none());
-    let (_life, mut db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (_life, mut db) = if std::env::var("MISAKA_TYPED_PRUNING_CHILD_V4").as_deref() == Ok("1") {
+        // Retain this expensive long-run source for cold diagnosis and a later
+        // real pruned-import role. The ordinary quick fixtures keep temp DBs.
+        let parent = std::env::temp_dir().join("rusty-kaspa");
+        std::fs::create_dir_all(&parent).unwrap();
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = parent.join(format!("typed-pruning-retained-{}-{unique}", std::process::id()));
+        eprintln!("TYPED_PRUNING_V4 retained_database={path:?} cleanup=explicit");
+        kaspa_database::create_permanent_db!(path, ConnBuilder::default().with_files_limit(10))
+    } else {
+        create_temp_db!(ConnBuilder::default().with_files_limit(10))
+    };
     let (tx, rx) = async_channel::unbounded();
     let mut net = Net::over_cfg(config(), |c| TestConsensus::with_db(db.clone(), c, tx));
     net._keep.push(Box::new(rx));
@@ -362,6 +375,9 @@ async fn typed_writer_child() {
     }
     if std::env::var("MISAKA_TYPED_TERMINAL_CHILD_V4").as_deref() == Ok("1") {
         (w, db) = terminal::release_and_collect(w, db, &dir, request).await;
+    }
+    if std::env::var("MISAKA_TYPED_PRUNING_CHILD_V4").as_deref() == Ok("1") {
+        source_manifest::retain(&w, db.path(), &dir);
     }
     drop(w);
     drop(db);

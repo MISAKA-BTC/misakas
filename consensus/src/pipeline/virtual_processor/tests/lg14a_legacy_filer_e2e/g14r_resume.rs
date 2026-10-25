@@ -174,7 +174,7 @@ async fn g14r_lg14a_a_pruned_import_after_the_reservation_and_binding_carries_th
     }
     arrive(&importer, Block::from_header_arc(t.header.clone()), "T's header").await;
     let vp = lg.chain.vp();
-    vp.capture_pruning_point_palw_state(p);
+    vp.capture_pruning_point_palw_state(p).expect("exact PALW snapshot capture succeeds");
     let wire = borsh::to_vec(&vp.pruning_point_palw_state(p).expect("servable")).expect("serializes");
     let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).expect("the wire bytes decode");
     {

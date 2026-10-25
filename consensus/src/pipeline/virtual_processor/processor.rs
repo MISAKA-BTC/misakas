@@ -1284,6 +1284,8 @@ pub(crate) mod palw_h1_guard;
 mod palw_validate;
 mod template;
 mod native_reserve_v1;
+mod palw_pruning_capture_v1;
+pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
 
 impl VirtualStateProcessor {
     #[cfg(test)]
@@ -7210,52 +7212,8 @@ impl VirtualStateProcessor {
     ///
     /// Must run BEFORE `prune` deletes the below-pruning-point delta rows — the walk back from the
     /// tip is what needs them — which is why the call site sits beside the overlay one.
-    pub fn capture_pruning_point_palw_state(&self, pruning_point: BlockHash) {
-        let Some(params) = self.palw_state_params_v2.as_ref() else {
-            return;
-        };
-        let store = self.palw_state_v2_store.read();
-        let loaded = match store.load_tip_retained_v1(params) {
-            Ok(Some(loaded)) => loaded,
-            Ok(None) => {
-                warn!("PALW: no V2 state tip to capture a pruning-point snapshot from; peers cannot be served a pruned sync yet");
-                return;
-            }
-            Err(e) => {
-                warn!("PALW: the V2 state tip does not load ({e}); no pruning-point snapshot captured");
-                return;
-            }
-        };
-        let (tip_block, tip_state) = loaded;
-        let state = if tip_block == pruning_point {
-            tip_state
-        } else {
-            let path = self.dag_traversal_manager.calculate_chain_path(tip_block, pruning_point, None);
-            let removed: Vec<BlockHash> = path.removed.to_vec();
-            let added: Vec<BlockHash> = path.added.to_vec();
-            match crate::processes::palw_state_walk::walk_chain_path_retained_v1(&store, params, tip_state, &removed, &added) {
-                Ok(state) => state,
-                Err(e) => {
-                    warn!(
-                        "PALW: cannot walk the V2 state from tip {tip_block} back to pruning point {pruning_point} ({e}); no snapshot captured, so this node cannot serve a pruned sync"
-                    );
-                    return;
-                }
-            }
-        };
-        drop(store);
-        let mut batch = WriteBatch::default();
-        let mut store = self.palw_state_v2_store.write();
-        let _native_snapshot_write = match store.set_pruning_snapshot_batch_tracked_v1(&mut batch, pruning_point, &state) {
-            Ok(ticket) => ticket,
-            Err(e) => {
-                warn!("PALW: the pruning-point snapshot did not stage ({e})");
-                return;
-            }
-        };
-        drop(store);
-        self.db.write(batch).unwrap();
-        info!("PALW: captured the V2 state at pruning point {pruning_point} — peers can now sync from it");
+    pub fn capture_pruning_point_palw_state(&self, pruning_point: BlockHash) -> Result<(), PalwPruningCaptureFaultV1> {
+        self.capture_pruning_point_palw_state_checked_v1(pruning_point)
     }
 
     pub fn capture_pruning_point_overlay_snapshot(&self, pruning_point: BlockHash) -> BlockProcessResult<()> {

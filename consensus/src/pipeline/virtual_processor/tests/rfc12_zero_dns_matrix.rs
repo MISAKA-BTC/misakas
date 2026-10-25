@@ -3102,7 +3102,7 @@ async fn rfc12_process_sidecar_crash_worker() {
         // moving its pruning boundary first would truncate the legacy window walk.
         let pending_overlay = (kind == "overlay").then(|| vp.compute_overlay_snapshot(point, &vp.initial_active_bond_view()).unwrap());
         let pending_carriage = (kind == "palw").then(|| {
-            vp.capture_pruning_point_palw_state(point);
+            vp.capture_pruning_point_palw_state(point).expect("exact PALW snapshot capture succeeds");
             vp.pruning_point_palw_state(point).expect("the node serves its root-verified historical carriage")
         });
         rig.api()

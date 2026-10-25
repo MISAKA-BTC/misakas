@@ -1070,7 +1070,7 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
     }
     arrive(&importer, Block::from_header_arc(t.header.clone()), "T's header").await;
     let vp = cw.net.chain.vp();
-    vp.capture_pruning_point_palw_state(p);
+    vp.capture_pruning_point_palw_state(p).expect("exact PALW snapshot capture succeeds");
     let wire = borsh::to_vec(&vp.pruning_point_palw_state(p).expect("servable")).expect("serializes");
     let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).expect("the wire bytes decode");
     {

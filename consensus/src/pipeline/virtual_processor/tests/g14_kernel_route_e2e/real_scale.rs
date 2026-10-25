@@ -1367,7 +1367,7 @@ async fn g14_k2s_survives_a_pruned_import_with_live_tiled_job_and_progress_rows(
     }
     arrive(&importer, Block::from_header_arc(t.header.clone()), "T's header").await;
     let vp = w.net.chain.vp();
-    vp.capture_pruning_point_palw_state(p);
+    vp.capture_pruning_point_palw_state(p).expect("exact PALW snapshot capture succeeds");
     let wire = borsh::to_vec(&vp.pruning_point_palw_state(p).expect("servable")).expect("serializes");
     let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).expect("the wire bytes decode");
     {

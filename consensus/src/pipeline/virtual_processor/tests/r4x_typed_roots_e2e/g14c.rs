@@ -142,7 +142,7 @@ async fn pruned_node(main: &mut Net) -> Net {
     }
     arrive(&importer, Block::from_header_arc(all[k + 1].header.clone()), "T's header").await;
     let vp = main.chain.vp();
-    vp.capture_pruning_point_palw_state(p);
+    vp.capture_pruning_point_palw_state(p).expect("exact PALW snapshot capture succeeds");
     let carriage: PalwStateCarriageV2 =
         borsh::from_slice(&borsh::to_vec(&vp.pruning_point_palw_state(p).expect("servable")).unwrap()).unwrap();
     {

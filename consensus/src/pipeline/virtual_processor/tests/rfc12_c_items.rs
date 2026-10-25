@@ -310,7 +310,7 @@ async fn rfc12_c2_a_pruned_join_with_evm_state_installs_the_sidecars_and_follows
 
     // ---- the source captures what a peer would serve ---------------------------------------------------------------------
     let source_vp = source.vp();
-    source_vp.capture_pruning_point_palw_state(pp);
+    source_vp.capture_pruning_point_palw_state(pp).expect("exact PALW snapshot capture succeeds");
     let wire_palw = borsh::to_vec(&source.api().pruning_point_palw_state(pp).expect("servable at P")).expect("serializes");
     let evm_header = source.api().get_evm_header_of(pp).expect("readable").expect("P's EVM header");
     let evm_snapshot = source.api().get_evm_state_snapshot_of(pp).expect("readable").expect("P's EVM state");

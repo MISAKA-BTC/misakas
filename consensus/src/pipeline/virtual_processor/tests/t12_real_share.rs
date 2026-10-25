@@ -846,7 +846,7 @@ async fn pruned_join(mut rig: Rig, at_p: PalwFloorStateV1, expires_at: u64, what
 
     // The archival node serves P, as `RequestPruningPointPalwState` answers.
     let vp = rig.c.vp();
-    vp.capture_pruning_point_palw_state(p);
+    vp.capture_pruning_point_palw_state(p).expect("exact PALW snapshot capture succeeds");
     let wire = borsh::to_vec(&vp.pruning_point_palw_state(p).expect("the captured point is servable")).expect("serializes");
     let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).expect("the wire bytes decode");
     assert_eq!(carriage.floor_state, at_p.canonical(), "{what}: the carriage names the floor state ({} bytes)", wire.len());

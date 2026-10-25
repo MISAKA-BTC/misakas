@@ -533,7 +533,7 @@ impl DbPalwStateV2Store {
     }
 
     /// Same durable identity projection, before any native allocation.
-    fn pruning_snapshot_key(&self) -> StoreResult<Option<(BlockHash, Hash64)>> {
+    pub(crate) fn pruning_snapshot_key(&self) -> StoreResult<Option<(BlockHash, Hash64)>> {
         self.native_identity_v1(true)
     }
 

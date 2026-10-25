@@ -24,7 +24,7 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     claim: Hash64,
 ) {
     let point = chain.tc.get_sink();
-    chain.tc.virtual_processor().capture_pruning_point_palw_state(point);
+    chain.tc.virtual_processor().capture_pruning_point_palw_state(point).expect("exact PALW snapshot capture succeeds");
     let wire =
         borsh::to_vec(&chain.tc.pruning_point_palw_state(point).expect("the source serves a captured pruning-point state")).unwrap();
     let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).unwrap();

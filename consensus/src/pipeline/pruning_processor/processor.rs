@@ -190,7 +190,7 @@ impl PruningProcessor {
                 }
                 recovered = true;
             }
-            self.advance_pruning_point_if_possible(sink_ghostdag_data);
+            recovered = self.advance_pruning_point_if_possible(sink_ghostdag_data);
         }
     }
 
@@ -246,12 +246,17 @@ impl PruningProcessor {
         // This indicates the node crashed or was forced to stop during a former data prune operation hence
         // we need to complete it
         if retention_checkpoint != retention_period_root {
-            self.prune(pruning_point, retention_period_root);
+            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_v1(
+                pruning_point, || self.prune(pruning_point, retention_period_root),
+            ) {
+                warn!("Pruning recovery deferred before snapshot readiness at {pruning_point}: {why}");
+                return false;
+            }
         }
         true
     }
 
-    fn advance_pruning_point_if_possible(&self, sink_ghostdag_data: CompactGhostdagData) {
+    fn advance_pruning_point_if_possible(&self, sink_ghostdag_data: CompactGhostdagData) -> bool {
         let pruning_point_read = self.pruning_point_store.upgradable_read();
         let (current_pruning_point, current_index) = pruning_point_read.pruning_point_and_index().unwrap();
         let new_pruning_points = self.pruning_point_manager.next_pruning_points(sink_ghostdag_data, current_pruning_point);
@@ -271,7 +276,7 @@ impl PruningProcessor {
                 info!(
                     "Pruning point movement to {new_pruning_point} is above the PALW safe frontier — history under trial is not                      prunable; keeping {current_pruning_point}"
                 );
-                return;
+                return true;
             }
             let retention_period_root = pruning_point_read.retention_period_root().unwrap();
 
@@ -304,31 +309,20 @@ impl PruningProcessor {
             // Advance the pruning point utxoset to the state of the new pruning point using chain-block UTXO diffs
             if !self.advance_pruning_utxoset(current_pruning_point, new_pruning_point) {
                 info!("Interrupted while advancing the pruning point UTXO set: Process is exiting");
-                return;
+                return false;
             }
             info!("Updated the pruning point UTXO set");
 
-            // Finally, prune data in the new pruning point past
-            // kaspa-pq ADR-0022: capture the overlay snapshot as-of the new pruning point
-            // BEFORE `prune` deletes the below-pruning-point overlay rows the snapshot's
-            // window reads. Same compute path the virtual processor validates with, so a
-            // node serving this snapshot matches a pruned-IBD importer's first post-pruning
-            // block `c == v`. No-op when the overlay is dormant.
-            if let Err(why) = self.virtual_processor.capture_pruning_point_overlay_snapshot(new_pruning_point) {
-                // Retain all source rows on a local read fault. Never publish a
-                // zero-balance snapshot and then delete the history it needed.
-                warn!("Pruning deferred before overlay capture at {new_pruning_point}: {why}");
-                return;
+            // Both normal advancement and cold recovery require exact servable
+            // snapshots before the first below-point row may be removed.
+            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_v1(
+                new_pruning_point, || self.prune(new_pruning_point, adjusted_retention_period_root),
+            ) {
+                warn!("Pruning deferred before snapshot readiness at {new_pruning_point}: {why}");
+                return false;
             }
-            // And the PALW state, for exactly the same reason and with the same ordering
-            // constraint: the walk back from the tip reads the delta rows `prune` is about to
-            // delete. Without it a running node's tip never equals its pruning point, so it
-            // answered every peer's request with `found: false` and no node could ever join by a
-            // pruned sync. No-op when ConsensusV2 is dormant.
-            self.virtual_processor.capture_pruning_point_palw_state(new_pruning_point);
-
-            self.prune(new_pruning_point, adjusted_retention_period_root);
         }
+        true
     }
 
     fn advance_pruning_utxoset(&self, utxoset_position: BlockHash, new_pruning_point: BlockHash) -> bool {

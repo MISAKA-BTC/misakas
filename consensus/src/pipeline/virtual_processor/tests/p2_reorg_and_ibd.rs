@@ -584,7 +584,7 @@ async fn p2_t49_a_node_that_imports_its_pruning_point_inside_a_backlog_mints_wha
 
     // The archival node serves P, as `RequestPruningPointPalwState` answers.
     let vp = archival.chain.vp();
-    vp.capture_pruning_point_palw_state(p);
+    vp.capture_pruning_point_palw_state(p).expect("exact PALW snapshot capture succeeds");
     let wire = borsh::to_vec(&vp.pruning_point_palw_state(p).expect("the captured point is servable")).expect("serializes");
     let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).expect("the wire bytes decode");
 
@@ -724,7 +724,7 @@ async fn p2_t49_a_carriage_at_the_t3b_row_bound_is_served_within_one_peer_window
     });
     let tip = m.chain.sink();
     let vp = m.chain.vp();
-    vp.capture_pruning_point_palw_state(tip);
+    vp.capture_pruning_point_palw_state(tip).expect("exact PALW snapshot capture succeeds");
     let served = vp.pruning_point_palw_state(tip).expect("the captured tip is servable");
     let wire = borsh::to_vec(&served).expect("serializes");
     eprintln!(

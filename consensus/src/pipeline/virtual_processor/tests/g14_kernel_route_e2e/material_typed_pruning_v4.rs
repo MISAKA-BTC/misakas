@@ -11,6 +11,9 @@ use kaspa_consensus_core::{
 };
 use std::{io::Write, path::Path};
 
+#[path = "material_typed_pruning_readiness_v4.rs"]
+mod readiness;
+
 const INHERITED_DEPTH: u64 = 74_920;
 const MAX_BEATS: u64 = 2 * INHERITED_DEPTH + 10_000;
 
@@ -423,14 +426,9 @@ pub(super) async fn advance(
         assert!(receipt.covers(root, consent));
         assert_eq!((receipt.tail_block, receipt.release_block), (tail, release));
     }
-    let point = w.net.chain.ctx.consensus.pruning_point();
-    let carriage = w
-        .net
-        .chain
-        .ctx
-        .consensus
-        .pruning_point_palw_state(point)
-        .expect("actual pruner captured serveable PALW carriage before deleting deltas");
+    // The target point is published before capture and pruning complete. Stop
+    // foreground mining and require exact serving readiness/finished markers.
+    let (point, carriage) = readiness::drain(&w.net, db).await;
     assert_eq!(carriage.last_point.as_ref().unwrap().block, point);
     progress(format!(
         "event=physical_prune_complete daa={} pp={point} release={release} native_claim={native_claim} disk_bytes={}",

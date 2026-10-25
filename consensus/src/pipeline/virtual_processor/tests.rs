@@ -4297,7 +4297,7 @@ async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
     // because it served the same row it had just written. Now it captures first, as
     // `advance_pruning_point_if_possible` does, and asks for what the capture put there.
     assert!(vp.pruning_point_palw_state(tip).is_none(), "nothing is servable before a snapshot is captured");
-    vp.capture_pruning_point_palw_state(tip);
+    vp.capture_pruning_point_palw_state(tip).expect("exact PALW snapshot capture succeeds");
     let served = vp.pruning_point_palw_state(tip).expect("the captured snapshot is servable");
     assert_eq!(served, PalwStateCarriageV2::from_state(&vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap().1));
     assert!(vp.pruning_point_palw_state(kaspa_consensus_core::BlockHash::from_u64_word(0xBAD)).is_none(), "and nothing else");
@@ -13222,7 +13222,7 @@ async fn palw_v2_a_pruning_point_state_request_costs_one_materialization_and_a_w
 
     let vp = ctx.consensus.virtual_processor();
     let (tip, _) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
-    vp.capture_pruning_point_palw_state(tip);
+    vp.capture_pruning_point_palw_state(tip).expect("exact PALW snapshot capture succeeds");
 
     const CALLS: usize = 64;
     let wrong = kaspa_consensus_core::BlockHash::from_u64_word(0xBAD);
@@ -13257,6 +13257,11 @@ async fn palw_v2_a_pruning_point_state_request_costs_one_materialization_and_a_w
         PalwStateCarriageV2::from_state(&state)
     };
     let one_carriage = vp.palw_state_v2_store.read().pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+    // Capture now proves retained serving readiness, which warms this cache.
+    // Start this independent serving-cost control cold, preserving its exact
+    // one-materialization contract rather than treating a warm hit as a miss.
+    let cold_store = vp.palw_state_v2_store.read().clone_with_new_cache(kaspa_database::prelude::CachePolicy::Empty);
+    *vp.palw_state_v2_store.write() = cold_store;
     let snapshot_before = vp.palw_state_v2_store.read().pruning_snapshot_bytes_decoded();
     for _ in 0..CALLS {
         let served = vp.pruning_point_palw_state(tip).expect("the captured snapshot is servable");
@@ -17615,3 +17620,5 @@ mod rfc12_reserve_settlement;
 mod carrier_bond_rent_conservation;
 
 mod funded_original_native_candidate;
+
+mod pruning_snapshot_readiness_v1;
