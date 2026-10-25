@@ -175,7 +175,10 @@ impl ConsensusSessionOwned {
         F: FnOnce(&dyn ConsensusApi) -> R + Send + 'static,
         R: Send + 'static,
     {
-        spawn_blocking(move || f(self.consensus.as_ref())).await.unwrap()
+        // Capture the whole session, including its read guard, in the worker.
+        // Capturing only self.consensus leaves the guard in this async future;
+        // cancelling its await would then release it before blocking work ends.
+        spawn_blocking(move || self.with_consensus_api_v1(f)).await.unwrap()
     }
 }
 
@@ -1837,3 +1840,7 @@ impl ConsensusSessionOwned {
 }
 
 pub type ConsensusProxy = ConsensusSessionOwned;
+
+#[cfg(test)]
+#[path = "session_guard_lifetime_tests.rs"]
+mod session_guard_lifetime_tests;
