@@ -21,6 +21,9 @@ use crate::palw_model_eligibility_v1::{
 };
 use crate::palw_security_certification_v1::*;
 
+#[path = "palw_security_certification_sweep_workspace_v2.rs"]
+mod sweep_workspace;
+
 fn refuse(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(why.into())
 }
@@ -620,6 +623,11 @@ pub(super) fn sweep_security_certification_v1(
         return Ok(());
     }
     let policy = mirror.certification;
+    if builder.state.kernel_route.is_none() {
+        return Ok(());
+    }
+    // RFC-0006: the snapshot below is admitted before it is constructed and stays owned past its last use.
+    builder.reserve_security_certification_sweep_workspace_v2()?;
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let table = PALW_SECURITY_CERTIFICATION_TABLE_V1;
     let rows: Vec<(Vec<u8>, Vec<u8>)> =
@@ -772,4 +780,15 @@ pub(super) fn sweep_security_certification_v1(
         write_row(builder, certification_network_key_v1(), Some(&network))?;
     }
     Ok(())
+}
+
+impl TransitionBuilder<'_> {
+    /// RFC-0006: admit the certification sweep's row snapshot (caller scratch, not the writers' budgets) before it is built.
+    pub(super) fn reserve_security_certification_sweep_workspace_v2(&mut self) -> Result<(), PalwStateV2Error> {
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
+        }
+        let quote = sweep_workspace::quote(&self.state)?;
+        self.admit_native_write_v1(quote)
+    }
 }
