@@ -301,6 +301,8 @@ pub struct Factory {
     /// staging DB will hold), from creation until commit or cancel. Always `None` on a node without
     /// `--storage-cap-bytes`.
     staging_reservation: parking_lot::Mutex<Option<(kaspa_utils::storage_budget::StorageReservation, PathBuf)>>,
+    #[cfg(test)]
+    retained_fixture_clock_v1: Option<Arc<retained_source_wire_fixture_v1::FixtureClockV1>>,
 }
 
 impl Factory {
@@ -326,6 +328,31 @@ impl Factory {
         // utxo_commitment + hash for every network, so all nodes agree on the
         // premine-aware genesis identity. (Multisig/P2SH is consensus-disabled in PQ-only.)
         set_genesis_utxo_commitment_from_config(&mut config);
+        Self::from_prepared_config_v1(
+            management_db, config, db_root_dir, db_parallelism, notification_root, counters,
+            tx_script_cache_counters, fd_budget, mining_rules, rocksdb_preset, wal_dir, cache_budget,
+        )
+    }
+
+    // Production enters only after the unchanged canonical-genesis guard above.
+    // A cfg(test)-only exact retained-fixture seam shares the ordinary factories,
+    // management publication and controls without exposing an Args override.
+    #[allow(clippy::too_many_arguments)]
+    fn from_prepared_config_v1(
+        management_db: Arc<DB>,
+        mut config: Config,
+        db_root_dir: PathBuf,
+        db_parallelism: usize,
+        notification_root: Arc<ConsensusNotificationRoot>,
+        counters: Arc<ProcessingCounters>,
+        tx_script_cache_counters: Arc<TxScriptCacheCounters>,
+        fd_budget: i32,
+        mining_rules: Arc<MiningRules>,
+        rocksdb_preset: RocksDbPreset,
+        wal_dir: Option<PathBuf>,
+        cache_budget: Option<usize>,
+    ) -> Self {
+        assert!(fd_budget > 0, "fd_budget has to be positive");
         config.process_genesis = false;
         let management_store = Arc::new(RwLock::new(MultiConsensusManagementStore::new(management_db)));
         management_store.write().set_is_archival_node(config.is_archival);
@@ -343,6 +370,8 @@ impl Factory {
             wal_dir,
             cache_budget,
             staging_reservation: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            retained_fixture_clock_v1: None,
         };
         factory.delete_inactive_consensus_entries();
         factory
@@ -474,6 +503,8 @@ impl ConsensusFactory for Factory {
             self.management_store.write().save_new_active_consensus(entry).unwrap();
         }
 
+        #[cfg(test)]
+        self.register_retained_fixture_instance_v1(&consensus, false);
         Ok((ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus))))
     }
 
@@ -550,6 +581,8 @@ impl ConsensusFactory for Factory {
         // But The default value for the pruning_utxoset_stable_flag is true, but a staging consensus does not have a utxo and hence the flag is dropped explicitly
         consensus.set_pruning_utxoset_stable_flag(false).unwrap();
 
+        #[cfg(test)]
+        self.register_retained_fixture_instance_v1(&consensus, true);
         Ok((ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus))))
     }
 
@@ -632,3 +665,7 @@ mod g14_orphan_dir_tests {
         fs::remove_dir_all(&root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "factory/retained_source_wire_fixture_v1.rs"]
+pub(crate) mod retained_source_wire_fixture_v1;

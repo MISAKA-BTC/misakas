@@ -369,3 +369,6 @@ fn assert_same_tip(
     assert_eq!(virtual_rows(source), virtual_rows(target));
     assert_same_receipts(source, target, root, consents);
 }
+
+#[path = "material_typed_pruned_wire_v1.rs"]
+mod wire;

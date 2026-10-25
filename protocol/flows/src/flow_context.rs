@@ -121,6 +121,13 @@ pub(crate) const PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED: u32 = 107;
 /// G14 public prefix-history pages; separated from 107 at the RFC06 + G14 integration merge.
 pub(crate) const PROTOCOL_VERSION_PALW_PREFIX_HISTORY: u32 = 108;
 
+/// Read-only dialect metadata from the same constants used by handshake and
+/// snapshot/history route registration: current, complete snapshot, history pages.
+pub fn palw_pruning_protocol_versions_v1() -> (u32, u32, u32) {
+    (PROTOCOL_VERSION, PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED, PROTOCOL_VERSION_PALW_PREFIX_HISTORY)
+}
+
+
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
 

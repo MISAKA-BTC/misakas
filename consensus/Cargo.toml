@@ -68,6 +68,12 @@ misaka-palw-kernel.workspace = true
 [dev-dependencies]
 # Fresh pruned-import fixture reuses the shipped trusted-subdag conversion.
 kaspa-p2p-lib.workspace = true
+# Retained-source TCP fixture uses the shipping flows and native manager staging.
+kaspa-p2p-flows.workspace = true
+kaspa-addressmanager.workspace = true
+kaspa-mining.workspace = true
+kaspa-p2p-mining.workspace = true
+kaspa-utils-tower.workspace = true
 # Typed provider handoff fixture signs with the actual native registry key.
 kaspa-pq-validator-core.workspace = true
 criterion.workspace = true
