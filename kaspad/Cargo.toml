@@ -14,6 +14,10 @@ repository.workspace = true
 # Offline private fixture tooling is built only with the explicit construction
 # feature. It adds no activation flag to the ordinary kaspad executable.
 [[bin]]
+name = "palw-attempt-exec"
+path = "src/bin/palw-attempt-exec.rs"
+
+[[bin]]
 name = "misaka-private-paid-work-export"
 path = "src/bin/misaka-private-paid-work-export.rs"
 required-features = ["private-integration-config"]

@@ -30,6 +30,17 @@ misaka --network testnet-12 key address --key-file ~/.misaka/miner.seed
 
 **1 つの key で登録できる bond は、チェーンの存続期間を通じて 1 つだけです。** bond を退役させても key は解放されません。collateral は後から追加できません。容量を増やしたいときは、新しい key を作って新しい bond を登録します。
 
+## 2.5 node なしで掘る
+
+自分の PC で `kaspad` を動かさない場合は、P2P `26311` には繋ぎません。現行 `main` の `palw-remote-miner` は、次の公開 wRPC に接続します。
+
+| ホスト | miner が接続する URL |
+|---|---|
+| `169.58.232.113`（`wallet.misakascan.com`） | `wss://wallet.misakascan.com/t12/wrpc/borsh` |
+| `169.58.39.220`（`llm.misakascan.com`） | `wss://llm.misakascan.com/t12/wrpc/borsh` |
+
+手順の正本は [testnet12-node-free.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-node-free.md) です。2 台とも要ります。1 台だけでは miner は起動しません。
+
 ## 3. Node
 
 ```bash

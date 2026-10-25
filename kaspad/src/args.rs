@@ -2779,7 +2779,10 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help(
-                    "MISAKA PALW (RFC-0009 stage B): comma-separated evidence provider directories. A panel seat's material pull is also answered                      from these: a manifest any directory holds for the claim that agrees with the claim's on-chain roots, every chunk checked against                      it, then handed to the same verification and re-execution a peer's copy goes through. The producer pull stays the fallback.",
+                    "MISAKA PALW (RFC-0009 stage B): comma-separated evidence providers. Each entry is a directory, dir:<path>, or an \
+                     http:// / https:// URL. A panel seat's material pull is also answered from these: a manifest that agrees with the \
+                     claim's on-chain roots, every chunk checked against it, then the same verification and re-execution a peer's copy goes \
+                     through. The producer pull stays the fallback.",
                 ),
         )
         .arg(

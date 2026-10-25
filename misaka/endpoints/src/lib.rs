@@ -93,9 +93,41 @@ impl EndpointRegistry {
     }
 }
 
+/// One public testnet-12 wRPC. Borsh is what `palw-remote-miner` speaks. JSON is the same node
+/// for a browser. gRPC stays on the host's loopback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Testnet12PublicWrpcV1 {
+    pub name: &'static str,
+    pub wrpc_borsh: &'static str,
+    pub wrpc_json: &'static str,
+}
+
+/// The public testnet-12 wRPC list. Studio and `misaka node endpoints` read this same table.
+/// Two hosts, each fronting its own node. A remote miner passes at least these two.
+pub fn testnet12_public_wrpc_v1() -> &'static [Testnet12PublicWrpcV1] {
+    &[
+        Testnet12PublicWrpcV1 {
+            name: "misakascan",
+            wrpc_borsh: "wss://wallet.misakascan.com/t12/wrpc/borsh",
+            wrpc_json: "wss://wallet.misakascan.com/t12/wrpc/json",
+        },
+        Testnet12PublicWrpcV1 {
+            name: "llm.misakascan",
+            wrpc_borsh: "wss://llm.misakascan.com/t12/wrpc/borsh",
+            wrpc_json: "wss://llm.misakascan.com/t12/wrpc/json",
+        },
+    ]
+}
+
+/// The public evidence provider a remote miner publishes to and a fleet panel reads.
+pub fn testnet12_evidence_provider_v1() -> &'static str {
+    "http://169.58.232.113:8088"
+}
+
 /// Resolve one endpoint, design §7.3: an `explicit` value (CLI/env/config, already merged
 /// by the caller) wins; else the `registry` (the node's actually-bound endpoint, which may
 /// be a non-standard port); else the network-id default loopback (`127.0.0.1:<port>`).
+/// A joiner with no local node uses [`testnet12_public_wrpc_v1`] rather than this loopback.
 pub fn resolve(network_id: &NetworkId, kind: EndpointKind, explicit: Option<&str>, registry: Option<&EndpointRegistry>) -> String {
     if let Some(e) = explicit {
         return e.to_string();
@@ -133,6 +165,15 @@ mod tests {
         assert_eq!(resolve(&net, EndpointKind::NodeWrpcBorsh, None, Some(&reg)), "127.0.0.1:27610");
         // an endpoint the registry doesn't carry falls through to the default
         assert_eq!(resolve(&net, EndpointKind::NodeGrpc, None, Some(&reg)), "127.0.0.1:26210");
+    }
+
+    #[test]
+    fn testnet12_publishes_two_independent_wrpc_endpoints() {
+        let nodes = testnet12_public_wrpc_v1();
+        assert!(nodes.len() >= 2);
+        assert!(nodes.iter().all(|n| n.wrpc_borsh.starts_with("wss://") && n.wrpc_json.starts_with("wss://")));
+        assert_ne!(nodes[0].wrpc_borsh, nodes[1].wrpc_borsh);
+        assert!(testnet12_evidence_provider_v1().starts_with("http://") || testnet12_evidence_provider_v1().starts_with("https://"));
     }
 
     #[test]

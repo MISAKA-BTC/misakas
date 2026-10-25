@@ -35,6 +35,8 @@ pub fn endpoints(output: OutputFormat, network: &str) -> CliResult {
                 "node_wrpc_borsh": borsh,
                 "node_wrpc_json": json,
                 "evm_rpc_http": evm,
+                "public_wrpc": (network == "testnet-12").then(misaka_endpoints::testnet12_public_wrpc_v1),
+                "evidence_provider": (network == "testnet-12").then(misaka_endpoints::testnet12_evidence_provider_v1),
             })
         ),
         OutputFormat::Human => {
@@ -45,6 +47,13 @@ pub fn endpoints(output: OutputFormat, network: &str) -> CliResult {
             println!("  node-wrpc-borsh: {borsh}   validator / wallet");
             println!("  node-wrpc-json:  {}   explorer", json.as_deref().unwrap_or("disabled"));
             println!("  evm-rpc-http:    {}   Ethereum JSON-RPC", evm.as_deref().unwrap_or("disabled"));
+            if network == "testnet-12" {
+                println!("  public wRPC (remote miner, no local node):");
+                for node in misaka_endpoints::testnet12_public_wrpc_v1() {
+                    println!("    {}  borsh {}  json {}", node.name, node.wrpc_borsh, node.wrpc_json);
+                }
+                println!("  evidence provider: {}", misaka_endpoints::testnet12_evidence_provider_v1());
+            }
         }
     }
     Ok(())

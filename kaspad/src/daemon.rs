@@ -2051,12 +2051,13 @@ Do you confirm? (y/n)";
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
-                        // RFC-0009 stage B: the directories a material pull is also answered from (empty: as before).
-                        evidence_provider_dirs: args
+                        // RFC-0009 stage B: directories and http(s) providers a material pull is also answered from (empty: as before).
+                        evidence_providers: args
                             .palw_evidence_provider_dir
                             .as_deref()
-                            .map(|dirs| {
-                                dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect()
+                            .map(|text| {
+                                misaka_palw_remote::transport::parse_provider_list_v1(text)
+                                    .unwrap_or_else(|e| panic!("--palw-evidence-provider-dir: {e}"))
                             })
                             .unwrap_or_default(),
                         // Lane G14-K: the kernel-route verifier's registered models (empty: it does nothing).

@@ -4119,10 +4119,10 @@ pub struct PalwPanelConfig {
     /// (`trace_retention_daa`); this is the panel reading it rather than a second copy of the
     /// same promise. Measured on the drill: 143 sessions opened, 4 answered.
     pub retention_dir: PathBuf,
-    /// **RFC-0009 stage B: evidence provider directories** (`--palw-evidence-provider-dir`). A pull for a claim's material is ALSO answered from
-    /// these — a manifest any provider holds for the claim that agrees with the claim's own roots, every chunk checked against it — in addition
-    /// to the producer pull, which is unchanged and stays the fallback. Empty: no provider source, the node behaves as before.
-    pub evidence_provider_dirs: Vec<PathBuf>,
+    /// **RFC-0009 stage B: evidence providers** (`--palw-evidence-provider-dir`). A pull for a claim's material is ALSO answered from
+    /// these — a directory, or an `http(s)://` provider — when a manifest agrees with the claim's own roots and every chunk checks against it.
+    /// The producer pull stays the fallback. Empty: no provider source, the node behaves as before.
+    pub evidence_providers: Vec<misaka_palw_remote::transport::ProviderSpecV1>,
     /// **Lane G14-K: the registered kernel models this node's verifier holds** (`--palw-kernel-model`, one `PALWKM01` file a model;
     /// ADR-0177 D7). A model is used for a kernel class only when it opens to the class's REGISTERED parameter commitments. Empty: the
     /// kernel-route verifier (`palw_kernel_verifier`) does nothing.
@@ -18819,11 +18819,13 @@ impl PalwPanelService {
             trace_chunk_count: state.trace_chunk_count,
             retention_deadline: state.trace_retention_daa,
         };
-        let dirs = self.config.evidence_provider_dirs.clone();
+        let specs = self.config.evidence_providers.clone();
         let claim_hex = claim.to_string();
         let fetched = tokio::task::spawn_blocking(move || {
-            misaka_palw_remote::evidence::fs::fetch_claim_material(
-                &dirs,
+            let opened = misaka_palw_remote::transport::open_providers_v1(&specs);
+            let refs: Vec<&dyn misaka_palw_remote::transport::EvidenceProvider> = opened.iter().map(|p| p.as_ref()).collect();
+            misaka_palw_remote::transport::fetch_claim_material_any(
+                &refs,
                 &claim_hex,
                 &roots,
                 &misaka_palw_remote::evidence::ManifestLimits::default(),
@@ -18854,7 +18856,7 @@ impl PalwPanelService {
     pub async fn request_material_signed(&self, network_domain: Hash64, claim: Hash64, requested_daa: u64) {
         self.flow_context.palw_gossip().note_pull_request(claim);
         // RFC-0009 stage B: a provider may already hold the material — ask the directories too, before and beside the producer pull.
-        if !self.config.evidence_provider_dirs.is_empty() {
+        if !self.config.evidence_providers.is_empty() {
             self.pull_material_from_evidence_providers(network_domain, claim).await;
         }
         let signed = self.keypair.as_ref().and_then(|kp| {
