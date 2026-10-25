@@ -9,6 +9,9 @@
 use super::*;
 use crate::palw_court_capacity_v1::*;
 
+#[path = "palw_court_capacity_sweep_workspace_v2.rs"]
+mod sweep_workspace;
+
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CourtCapacityRefused(why.into())
 }
@@ -774,6 +777,7 @@ pub(super) fn court_row_held_until_v1(state: &PalwChainStateV2, row: &PalwReserv
 pub(super) fn sweep_court_capacity_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
     let Some(policy) = builder.params.court_capacity_at_v1(now) else { return Ok(()) };
+    builder.reserve_court_capacity_sweep_workspace_v2()?;
     let turn = builder.params.turn_deadline_daa();
     let ticket_window = policy.ticket_window(turn);
     // 1–2. Ended sessions and expired tickets.
@@ -837,4 +841,12 @@ pub(super) fn court_unserved_at_lapse_v1(params: &PalwStateParamsV2, record: &cr
             && row.waiting()
             && row.admitted_daa.saturating_add(ticket_window).saturating_add(row.service_daa) <= record.hard_deadline_daa
     })
+}
+
+
+impl TransitionBuilder<'_> {
+    pub(super) fn reserve_court_capacity_sweep_workspace_v2(&mut self) -> Result<(), PalwStateV2Error> {
+        if !self.native_writers_tracking_v1() { return Ok(()); }
+        self.admit_native_write_v1(sweep_workspace::quote(&self.state)?)
+    }
 }
