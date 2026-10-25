@@ -853,7 +853,8 @@ pub fn palw_rfc0016_quote_v1(
 
 /// **The per-model and per-miner report** at `now_daa` (RFC-0016 §11): consensus-derived where the state holds it (targets, physical
 /// blocks, rights, Finals, coinbase payout, per-miner revenue, escrow payout, queue wait, REAL gap, heartbeat-dependent DAA), node-local
-/// observations where it cannot (refusals, labelled as such), `None` only below the fences. It changes nothing.
+/// observations where it cannot (refusals, labelled as such), `None` only below the fences (capacity: below the capacity fence or
+/// without the registry fold). It changes nothing.
 pub fn palw_rfc0016_model_report_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -921,6 +922,20 @@ pub fn palw_rfc0016_model_report_v1(
         _ => None,
     };
     let (heartbeat_dependent, _): (u64, u64) = state.rfc0016_telemetry_u64s_v1(telemetry_heartbeat_key_v1(epoch.epoch_index));
+    // §11 column 7 (audit 16 PARTIAL): the capacity and shortfall come from the SAME attested/water-filled read the admission uses,
+    // only where it is defined (past the capacity fence, with the registry fold). Elsewhere they stay `None` = UNKNOWN, never 0.
+    let capacity_fold = params.rfc0016_capacity_active_at(now_daa).then_some(extras.model_registry.as_ref()).flatten();
+    let capacity_read = PalwFoldReadV1::outside(state, params, extras);
+    let base_class = params.base_class_id();
+    // Where the capacity is defined, every model with a non-base class gets a row (its capacity is reported even before it has
+    // rights or blocks); below the capacity fence the row set is unchanged.
+    if capacity_fold.is_some() {
+        for (model, classes) in &classes_of {
+            if classes.iter().any(|c| *c != base_class) {
+                models.insert(*model);
+            }
+        }
+    }
     let rows = models
         .into_iter()
         .map(|model| {
@@ -946,6 +961,12 @@ pub fn palw_rfc0016_model_report_v1(
                     ended.get(&model).map_or(&[][..], |v| v.as_slice()),
                 );
             let observed = |kind| classes.iter().map(|c| palw_rfc0016_observed_v1(c, kind)).sum::<u64>();
+            let (capacity_per_span, capacity_shortfall_per_span) = match capacity_fold {
+                Some(fold) => palw_rfc0016_model_capacity_v1(
+                    classes.iter().filter(|c| **c != base_class).map(|c| capacity_read.rfc0016_capacity_read_v1(c, fold, now_daa, None)),
+                ),
+                None => (None, None),
+            };
             PalwModelReportRowV1 {
                 model,
                 epoch_index: epoch.epoch_index,
@@ -965,8 +986,8 @@ pub fn palw_rfc0016_model_report_v1(
                 heartbeat_dependent_daa: armed.then_some(heartbeat_dependent),
                 checked_share_permille,
                 completed_within_deadline_permille,
-                capacity_per_span: None,
-                capacity_shortfall_per_span: None,
+                capacity_per_span,
+                capacity_shortfall_per_span,
                 queue_len: classes.iter().map(|c| state.rfc0016_queue_v1(c).len() as u64).sum(),
             }
         })
@@ -976,6 +997,20 @@ pub fn palw_rfc0016_model_report_v1(
         .map(|((bond, model), (paid, claims))| PalwMinerRevenueRowV1 { bond, model, payout_coinbase_sompi: paid, claims })
         .collect();
     (rows, miners)
+}
+
+/// **§11 column 7: one model's capacity and shortfall per span** from its classes' `(capacity, demand, ready)` reads (the demand
+/// terms' unit, `× PALW_PANEL_DEMAND_SCALE_V1`). Capacity is the sum of the classes' water-filled shares; the shortfall is the sum
+/// of each class's own `demand − capacity` (a class's share is not transferable to a sibling after the split). A model with no
+/// non-base class reads `Some(0)`: a real zero. An arithmetic overflow yields `None` (unknown), never a clipped value.
+pub(super) fn palw_rfc0016_model_capacity_v1(reads: impl Iterator<Item = (u128, u128, u32)>) -> (Option<u128>, Option<u128>) {
+    let mut capacity = Some(0u128);
+    let mut shortfall = Some(0u128);
+    for (cap, demand, _) in reads {
+        capacity = capacity.and_then(|sum| sum.checked_add(cap));
+        shortfall = shortfall.and_then(|sum| sum.checked_add(demand.saturating_sub(cap)));
+    }
+    (capacity, shortfall)
 }
 
 /// **V8, audit 16-A: the attested capacity of `class_id`** — [`PalwFoldReadV1::rfc0016_capacity_read_v1`]'s reading past

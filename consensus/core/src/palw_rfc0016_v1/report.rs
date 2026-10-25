@@ -52,7 +52,8 @@ pub struct PalwModelReportRowV1 {
     /// …and the share that COMPLETED verification within its deadline (`Final`). A checked claim voided by a court is checked but not
     /// completed; a timeout is neither.
     pub completed_within_deadline_permille: Option<u32>,
-    /// Elastic capacity per span and the shortfall, where the capacity fence reads them.
+    /// Elastic capacity per span and the shortfall (`× PALW_PANEL_DEMAND_SCALE_V1`, the admission read's unit), from the attested
+    /// capacity read past the capacity fence; `None` = UNKNOWN (below it or without the registry fold), `Some(0)` = a real zero.
     pub capacity_per_span: Option<u128>,
     pub capacity_shortfall_per_span: Option<u128>,
 }
@@ -231,7 +232,8 @@ pub fn palw_rfc0016_report_json_v1(
                     "\"outcomes\":{{\"physicalBlocks\":\"{}\",\"rightsConsumed\":\"{}\",\"rightsUnused\":\"{}\",\"finals\":{},",
                     "\"payoutCoinbaseSompi\":{},\"payoutEscrowSompi\":{},\"queueLen\":\"{}\",\"queueWaitMeanDaa\":{},",
                     "\"queueWaitMaxDaa\":{},\"realGapDaa\":{},\"heartbeatDependentDaa\":{},",
-                    "\"checkedSharePermille\":{},\"completedWithinDeadlinePermille\":{}}},",
+                    "\"checkedSharePermille\":{},\"completedWithinDeadlinePermille\":{},",
+                    "\"capacityPerSpan\":{},\"capacityShortfallPerSpan\":{}}},",
                     "\"nodeLocal\":{{\"refusedForCapacity\":{},\"refusedForRights\":{}}}}}"
                 ),
                 r.model,
@@ -251,6 +253,8 @@ pub fn palw_rfc0016_report_json_v1(
                 json_opt(r.heartbeat_dependent_daa),
                 json_opt(r.checked_share_permille),
                 json_opt(r.completed_within_deadline_permille),
+                json_opt(r.capacity_per_span),
+                json_opt(r.capacity_shortfall_per_span),
                 json_opt(r.refused_for_capacity),
                 json_opt(r.refused_for_rights),
             )

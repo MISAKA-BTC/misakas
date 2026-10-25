@@ -280,3 +280,67 @@ fn rfc16_v8_the_court_bucket_bound_is_derived_from_the_attested_court_units() {
     assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &p, &h64(MODEL_A), now, 300, 0), Some(0), "no span clock: fail closed");
     assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &armed(&[]), &h64(MODEL_A), now, 300, 10), Some(0), "unmeasured class");
 }
+
+/// RFC-0016 §11 column 7 (audit 16 PARTIAL): the per-model report's capacity and shortfall come from the actual attested capacity
+/// read past the capacity fence (with the registry fold), are `None` (UNKNOWN) below it or without the fold, and a real zero reads
+/// `Some(0)` — the RPC JSON keeps `null` and `"0"` apart.
+#[test]
+fn rfc16_report_capacity_columns_come_from_the_actual_read_and_keep_unknown_apart_from_zero() {
+    use crate::palw_rfc0016_v1::report::palw_rfc0016_report_json_v1;
+    use crate::palw_state_v2::palw_rfc0016_fold_v1::palw_rfc0016_model_capacity_v1;
+    let p = armed(load());
+    let s = world(&p);
+    let now = FENCE + 10;
+    let rich = step(&s, &p, now, &[attest(1, attestation(1, MODEL_A, 100, 1 << 40, 1 << 40, 1_000))]).expect("folds");
+    let mut with_fold = extras();
+    with_fold.model_registry = Some(crate::palw_model_registry_v1::PalwModelRegistryFoldV1 {
+        globals: crate::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1,
+        span_daa: 10,
+        genesis_works: Default::default(),
+        grace_until_daa: u64::MAX,
+        admission_audit_period_daa: None,
+        readiness_v2_active: false,
+        bond_maturity: None,
+    });
+    let model_a = palw_rfc0016_model_of_v1(&rich, false, &h64(MODEL_A));
+    let row_of = |rows: &[crate::palw_rfc0016_v1::report::PalwModelReportRowV1]| {
+        rows.iter().find(|r| r.model == model_a).expect("past the capacity fence every model with a class has a row").clone()
+    };
+    // Past the fence with the fold: exactly the admission's read, summed over the model's non-base classes.
+    let (rows, miners) = palw_rfc0016_model_report_v1(&rich, &p, &with_fold, now);
+    let row = row_of(&rows);
+    let read = PalwFoldReadV1::outside(&rich, &p, &with_fold);
+    let fold = with_fold.model_registry.as_ref().unwrap();
+    let expected = palw_rfc0016_model_capacity_v1(
+        rich.model_lifecycles
+            .keys()
+            .filter(|c| **c != p.base_class_id() && palw_rfc0016_model_of_v1(&rich, false, c) == model_a)
+            .map(|c| read.rfc0016_capacity_read_v1(c, fold, now, None)),
+    );
+    assert!(expected.0.is_some() && expected.1.is_some(), "a defined read is never unknown");
+    assert_eq!((row.capacity_per_span, row.capacity_shortfall_per_span), expected);
+    let json = palw_rfc0016_report_json_v1(now, true, &rows, &miners, None);
+    assert!(json.contains(&format!("\"capacityPerSpan\":\"{}\"", expected.0.unwrap())), "{json}");
+    // A registered class nobody attested reads a REAL zero capacity (the read is defined; it credits nothing), not UNKNOWN.
+    let model_b = palw_rfc0016_model_of_v1(&rich, false, &h64(MODEL_B));
+    let zero = rows.iter().find(|r| r.model == model_b).expect("model B has a row past the fence");
+    assert_eq!(zero.capacity_per_span, Some(0));
+    assert!(zero.capacity_shortfall_per_span.is_some());
+    assert!(json.contains("\"capacityPerSpan\":\"0\""), "{json}");
+    // Without the registry fold, and below the capacity fence: UNKNOWN, never zero.
+    // (A model with neither rights nor blocks has no row there, as before; any row that exists reads UNKNOWN.)
+    let (rows, _) = palw_rfc0016_model_report_v1(&rich, &p, &extras(), now);
+    assert!(rows.iter().all(|r| (r.capacity_per_span, r.capacity_shortfall_per_span) == (None, None)));
+    let mut unknown = row.clone();
+    (unknown.capacity_per_span, unknown.capacity_shortfall_per_span) = (None, None);
+    assert!(palw_rfc0016_report_json_v1(now, true, &[unknown], &[], None).contains("\"capacityPerSpan\":null,\"capacityShortfallPerSpan\":null"));
+    let (rows, _) = palw_rfc0016_model_report_v1(&rich, &p, &with_fold, FENCE - 1);
+    if let Some(row) = rows.iter().find(|r| r.model == model_a) {
+        assert_eq!((row.capacity_per_span, row.capacity_shortfall_per_span), (None, None), "below the fence");
+    }
+    // The aggregation: per-class shortfalls add (a class's share does not move to a sibling); no class is a real zero; overflow
+    // is unknown, never clipped.
+    assert_eq!(palw_rfc0016_model_capacity_v1([(10, 4, 1), (2, 7, 1)].into_iter()), (Some(12), Some(5)));
+    assert_eq!(palw_rfc0016_model_capacity_v1(std::iter::empty()), (Some(0), Some(0)));
+    assert_eq!(palw_rfc0016_model_capacity_v1([(u128::MAX, 0, 1), (1, 0, 1)].into_iter()), (None, Some(0)));
+}
