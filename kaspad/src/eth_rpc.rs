@@ -816,63 +816,7 @@ impl NodeEthProvider {
     /// Fetch the canonical-head EVM state snapshot + the call env (one spawn_blocking).
     async fn head_snapshot_and_env(&self) -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
         let session = self.consensus_manager.consensus().session().await;
-        let (snap, header, head_daa, fences, market) = session
-            .spawn_blocking(|c| {
-                let heads = c.get_evm_canonical_heads().map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?;
-                let sink = match heads {
-                    Some(heads) => heads.latest_head().ok_or_else(|| EthRpcError::server("latest executed EVM head unavailable"))?,
-                    None => return Err(EthRpcError::server("canonical EVM heads unavailable")),
-                };
-                with_executed_l1_daa(c, sink, |head_daa| {
-                    Ok((
-                        c.get_evm_state_snapshot_of(sink),
-                        c.get_evm_header_of(sink),
-                        head_daa,
-                        c.evm_activation_fences(),
-                        c.palw_evm_view_v1(),
-                    ))
-                })
-            })
-            .await?;
-        let snap = snap.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        let header = header.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        // PREA P0-1: the F003 `MLDSA87_VERIFY` precompile is active iff this block's
-        // DAA score has reached the fence — the EXACT comparison the executor and the
-        // trace replay use (`daa_score >= f003_mldsa_verify_activation_daa_score`;
-        // see kaspa_evm::executor `f003_active` and trace::trace_accepted_tx). The
-        // fence is `u64::MAX` (inert) on every network today, so this is `false`
-        // exactly as before — but the simulator now tracks the executor automatically
-        // once a finite F003 score is deployed (no code change needed for parity).
-        let (.., f003_mldsa_verify_fence) = fences;
-        let f003_active = head_daa >= f003_mldsa_verify_fence;
-        // A latest tag requires a persisted execution header and its state. Missing history is
-        // unavailable, never a successful simulation against an invented empty chain.
-        if header.is_none() {
-            return Err(EthRpcError::server("latest executed EVM header unavailable"));
-        }
-        let snap = snap
-            .ok_or_else(|| EthRpcError::server("EVM state snapshot unavailable for head; refusing to simulate against empty state"))?;
-        let env = kaspa_evm::sim::EthCallEnv {
-            chain_id: EVM_CHAIN_ID,
-            number: header.as_ref().map(|h| h.evm_number).unwrap_or(0),
-            timestamp: header.as_ref().map(|h| h.evm_timestamp_sec).unwrap_or(0),
-            coinbase: header.as_ref().map(|h| h.coinbase).unwrap_or_default(),
-            gas_limit: header.as_ref().map(|h| h.gas_limit).unwrap_or(30_000_000),
-            // Fence-driven (see above): `head_daa >= f003_mldsa_verify_fence`.
-            // `false` today (fence is `u64::MAX`-inert on every network), matching
-            // the executor below the fence; flips with the executor when F003 ships.
-            f003_active,
-            // ADR-0089 Decision 2 / Decision 9: the fold's rows at the head and the market
-            // fences at the head's DAA — the SAME view and handler set the executor registers
-            // for the block built on this head (parity). `None` off ConsensusV2 (or before the
-            // first fold) leaves the market's doors unregistered in simulation, exactly as the
-            // executor leaves them for a lane whose fold has no window to show.
-            palw_view: market.as_ref().map(|(view, _)| view.clone()),
-            palw_view_owned_v2: None,
-            market_fences: market.as_ref().map(|(_, fences)| *fences).unwrap_or_default(),
-            chain_id_for_holders: EVM_CHAIN_ID,
-        };
-        Ok((snap, env))
+        session.spawn_blocking(|c| canonical_head_snapshot_and_env_v2(c)).await
     }
 
     /// The EVM state snapshot + call env at `block` (§12.5/§12.6). `latest`/`pending`
@@ -988,6 +932,38 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
 
 /// Activation metadata belongs to this exact executed L1 block. An unreadable
 /// header is unavailable, never a successful simulation with an invented DAA zero.
+/// Build one coherent latest/pending environment from the canonical executed
+/// head identity. The selected PALW tip may be newer than this prefix head.
+fn canonical_head_snapshot_and_env_v2(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+) -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
+    let heads = c.get_evm_canonical_heads().map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?
+        .ok_or_else(|| EthRpcError::server("canonical EVM heads unavailable"))?;
+    let head = heads.latest_head().ok_or_else(|| EthRpcError::server("latest executed EVM head unavailable"))?;
+    with_executed_l1_daa(c, head, |head_daa| {
+        let snapshot = c.get_evm_state_snapshot_of(head).map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?
+            .ok_or_else(|| EthRpcError::server("EVM state snapshot unavailable for head; refusing to simulate against empty state"))?;
+        let header = c.get_evm_header_of(head).map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?
+            .ok_or_else(|| EthRpcError::server("latest executed EVM header unavailable"))?;
+        with_historical_market_view_v2(c, head, |market| {
+            let (.., f003_fence) = c.evm_activation_fences();
+            let env = kaspa_evm::sim::EthCallEnv {
+                chain_id: EVM_CHAIN_ID,
+                number: header.evm_number,
+                timestamp: header.evm_timestamp_sec,
+                coinbase: header.coinbase,
+                gas_limit: header.gas_limit,
+                f003_active: head_daa >= f003_fence,
+                palw_view: None,
+                palw_view_owned_v2: market.as_ref().map(|(view, _)| view.clone()),
+                market_fences: market.as_ref().map(|(_, fences)| *fences).unwrap_or_default(),
+                chain_id_for_holders: EVM_CHAIN_ID,
+            };
+            Ok((snapshot, env))
+        })
+    })
+}
+
 fn with_historical_market_view_v2<T>(
     c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
     target: kaspa_consensus_core::BlockHash,
@@ -1267,3 +1243,7 @@ mod tests {
 #[cfg(test)]
 #[path = "eth_rpc_historical_market_tests.rs"]
 mod historical_market_tests;
+
+#[cfg(test)]
+#[path = "eth_rpc_canonical_head_env_tests.rs"]
+mod canonical_head_env_tests;
