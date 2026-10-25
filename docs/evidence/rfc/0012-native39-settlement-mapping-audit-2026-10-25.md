@@ -32,3 +32,8 @@ The actual native39 fixture `consensus/src/pipeline/virtual_processor/tests/g14_
 The reviewed current RFC-0012, RFC-0002 and native39 operating/source contracts supply general certification/conservation rules and several required component identities, but an explicit complete native39→RFC-0012 fact mapping was not found. The production settlement consumer currently has no such branch. Implementing one by choosing receipt quanta, MACs, F grant, anchor or maturity semantics would make an unapproved policy decision. This audit therefore records the concrete missing contract/consumer boundary without adding one.
 
 No BASE relabelling, planted frontier/fact, model review, new public policy, arming value or made-up K3 input is used. Actual nonBASE approved-work→matured evidence→native EVM Safe/Finalized remains open; K3, the 15-gate campaign and historical-signature replay remain UNKNOWN/unexecuted.
+
+
+## User confirmation
+
+The user answered **未策定** to the formal mapping question on 2026-10-25. This is now a confirmed missing normative input, rather than an unanswered search for an existing specification. No W/PWU conversion, anchor, concentration class, maturity or void mapping is adopted by this note. Independent implementation and native-store validation continue; the dependent approved-work→EVM settlement path remains open.
