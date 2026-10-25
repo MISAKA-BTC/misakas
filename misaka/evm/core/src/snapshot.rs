@@ -161,6 +161,11 @@ pub fn execute_block_from_snapshot(
     parent_snapshot: &EvmStateSnapshot,
     input: &crate::EvmBlockInput,
 ) -> Result<(EvmExecutionResult, EvmStateSnapshot), crate::EvmExecError> {
+    // The identity fast path must not bypass the same input contract checked
+    // by the full executor, even when no callbacks would be installed.
+    if input.market.palw_view.is_some() && input.market.palw_view_owned_v2.is_some() {
+        return Err(crate::EvmExecError::InvariantViolation("both legacy and retained market views supplied".into()));
+    }
     // O12 (IBD catch-up): empty-acceptance fast path — no accepted txs and no
     // system ops means the state transition is the identity, so skip revm, the
     // keccak-MPT root recompute and the snapshot extraction entirely. The header

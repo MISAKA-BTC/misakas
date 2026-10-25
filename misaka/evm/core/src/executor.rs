@@ -137,6 +137,9 @@ pub struct EvmMarketInput<'a> {
     /// The fold's rows at the block's selected parent (`PalwChainStateV2::evm_view_v1`). `None`
     /// ⇒ the market's doors are not registered whatever the fences say.
     pub palw_view: Option<std::sync::Arc<PalwEvmViewV1>>,
+    /// Native producer/validator owner; cloned callbacks retain its admission.
+    /// Supplying this together with the compatibility view is invalid.
+    pub palw_view_owned_v2: Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewOwnedV2>,
     /// The three fences at the block's DAA (`Params::palw_evm_market_fences_at`).
     pub fences: PalwEvmMarketFencesV1,
     /// The settlement list the selected parent's fold decided — the block's `MarketSettle` ops
@@ -150,6 +153,7 @@ impl Default for EvmMarketInput<'_> {
     fn default() -> Self {
         Self {
             palw_view: None,
+            palw_view_owned_v2: None,
             fences: PalwEvmMarketFencesV1::default(),
             expected_settlements: &[],
             chain_id: kaspa_consensus_core::evm::EVM_CHAIN_ID,
@@ -227,7 +231,10 @@ pub fn execute_block_evm(
     state_db: CacheDB<EmptyDB>,
     input: &EvmBlockInput,
 ) -> Result<(EvmExecutionResult, CacheDB<EmptyDB>), EvmExecError> {
-    execute_block_evm_inner_v2(state_db, input, None)
+    if input.market.palw_view.is_some() && input.market.palw_view_owned_v2.is_some() {
+        return Err(EvmExecError::InvariantViolation("both legacy and retained market views supplied".into()));
+    }
+    execute_block_evm_inner_v2(state_db, input, input.market.palw_view_owned_v2.clone())
 }
 
 /// Replay-only retained market input; consensus keeps the original entry point.
@@ -237,7 +244,7 @@ pub fn execute_block_evm_with_retained_market_v2(
     input: &EvmBlockInput,
     view: kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewOwnedV2,
 ) -> Result<(EvmExecutionResult, CacheDB<EmptyDB>), EvmExecError> {
-    if input.market.palw_view.is_some() {
+    if input.market.palw_view.is_some() || input.market.palw_view_owned_v2.is_some() {
         return Err(EvmExecError::InvariantViolation("both legacy and retained replay market views supplied".into()));
     }
     execute_block_evm_inner_v2(state_db, input, Some(view))
@@ -1888,6 +1895,7 @@ mod tests {
     ) -> EvmMarketInput<'a> {
         EvmMarketInput {
             palw_view: Some(view.clone()),
+            palw_view_owned_v2: None,
             fences: PalwEvmMarketFencesV1 {
                 market_active: true,
                 lines_active: true,
@@ -2335,5 +2343,6 @@ mod tests {
         assert!(matches!(err, EvmExecError::MarketSettlementMismatch(_)), "{err:?}");
     }
     include!("accepted_market_replay_tests_v2.rs");
+    include!("production_market_owned_tests_v2.rs");
 
 }

@@ -2539,10 +2539,11 @@ impl VirtualStateProcessor {
                         &mut ctx,
                         &selected_parent_utxo_view,
                         evm_pipeline.as_ref(),
-                        palw_state.as_deref(),
+                        palw_state.as_ref(),
                     ) {
                         Ok(staged) => staged,
-                        Err(evm_error) => {
+                        Err(evm::EvmChainContextFaultV2::Local(why)) => return Err(why),
+                        Err(evm::EvmChainContextFaultV2::Invalid(evm_error)) => {
                             info!("Block {} is disqualified from virtual chain (EVM): {}", current, evm_error);
                             self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
                             chain_disqualified_counter += 1;

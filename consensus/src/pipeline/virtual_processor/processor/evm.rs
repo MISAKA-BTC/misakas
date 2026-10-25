@@ -1,13 +1,21 @@
 //! **`VirtualStateProcessor`: evm methods** — moved out of `processor.rs` (2026-10-13, a behaviour-preserving split: the methods are the same; each keeps the reach it had).
 
 use super::*;
+#[cfg(feature = "evm")]
+#[path = "evm_market_owned_v2.rs"]
+mod market_owned_v2;
+#[cfg(feature = "evm")]
+pub(super) use market_owned_v2::EvmChainContextFaultV2;
+#[cfg(not(feature = "evm"))]
+pub(crate) enum EvmChainContextFaultV2 { Invalid(String), Local(PalwLocalTransitionFaultV1) }
+
 
 impl VirtualStateProcessor {
     /// kaspa-pq EVM Lane v0.4 (§2.3): the lazy chain-context EVM step for one
     /// selected-chain candidate. Gated on `evm_activation_daa_score` (a single
     /// u64 compare on every current network); no-replay and the commitment
-    /// check live in `processes::evm::evm_validate`. `Err` = the block is
-    /// disqualified from the chain (commitment fault), mirroring a UTXO fault.
+    /// check live in `processes::evm::evm_validate`. Semantic errors disqualify
+    /// the block; local capacity/history/store faults leave it retryable.
     #[cfg(feature = "evm")]
     pub(super) fn evm_chain_context_step<V: UtxoView>(
         &self,
@@ -17,11 +25,11 @@ impl VirtualStateProcessor {
         ctx: &mut UtxoProcessingContext<'_>,
         selected_parent_utxo_view: &V,
         pipeline: Option<&crate::processes::evm::EvmPipeline>,
-        palw_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
-    ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
+        palw_state: Option<&kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
+    ) -> Result<Option<crate::processes::evm::EvmStaged>, EvmChainContextFaultV2> {
         use crate::model::stores::evm::EvmPayloadStoreReader; // EvmHeaderStoreReader is in module scope
         use crate::processes::evm::{
-            EvmValidateError, apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims,
+            apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims,
         };
         if header.daa_score < self.evm_activation_daa_score {
             return Ok(None);
@@ -33,7 +41,7 @@ impl VirtualStateProcessor {
         let own_payload = match self.evm_payload_store.get(current) {
             Ok(p) => p,
             Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => Default::default(),
-            Err(e) => return Err(format!("evm payload store: {e}")),
+            Err(e) => return Err(market_owned_v2::local_store_v2(e).into()),
         };
         // §9.2: deposit claims are validated against the CLAIM VIEW = the
         // selected-parent UTXO set composed with the mergeset diff so far (a
@@ -48,19 +56,14 @@ impl VirtualStateProcessor {
         // this block's DAA. Below the fence the list is empty and no door is registered — and a
         // settlement op carried below the fence is refused by the same equality.
         let market_fences = self.palw_evm_market_fences_at(header.daa_score);
-        let expected_settlements: Vec<kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1> =
-            if market_fences.evm_active { palw_state.map(|s| s.evm_settlements()).unwrap_or_default() } else { Vec::new() };
-        crate::processes::evm::validate_evm_market_settlements(&own_payload, &expected_settlements)?;
-        let market_view = match (market_fences.evm_active, palw_state, self.palw_state_params_v2.as_ref()) {
-            (true, Some(state), Some(params)) => {
-                Some(std::sync::Arc::new(self.palw_evm_view_with_market_gate_v1(state, params, selected_parent, header.daa_score)))
-            }
-            _ => None,
-        };
+        let market_context = self.evm_market_context_owned_v2(palw_state, selected_parent, header.daa_score)?;
+        let expected_settlements = market_context.as_ref().map(|c| c.settlements.as_slice()).unwrap_or(&[]);
+        crate::processes::evm::validate_evm_market_settlements(&own_payload, expected_settlements)?;
         let market = kaspa_evm::EvmMarketInput {
-            palw_view: market_view,
+            palw_view: None,
+            palw_view_owned_v2: market_context.as_ref().map(|c| c.view.clone()),
             fences: market_fences,
-            expected_settlements: &expected_settlements,
+            expected_settlements,
             chain_id: kaspa_consensus_core::evm::EVM_CHAIN_ID,
         };
         // C-01 S9 cutover: when flat-authoritative (and the shadow backend that maintains the flat
@@ -81,7 +84,7 @@ impl VirtualStateProcessor {
         let pipelined = pipeline.and_then(|p| p.recv(current)).filter(|_| !market_fences.evm_active);
         let staged = match pipelined {
             Some(Ok(staged)) => Some(staged),
-            Some(Err(msg)) => return Err(msg),
+            Some(Err(why)) => return Err(market_owned_v2::execution_fault_v2(why)),
             None => {
                 // AcceptedEvmTxs(B) source: the consensus-ordered mergeset (selected
                 // parent first, then ascending blue work — §3.1 canonical order).
@@ -97,13 +100,7 @@ impl VirtualStateProcessor {
                             .map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses))
                             .unwrap_or(0)
                     }));
-                let map_err = |e| match e {
-                    EvmValidateError::CommitmentMismatch { .. } => {
-                        "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string()
-                    }
-                    EvmValidateError::Exec(e) => format!("evm execution: {e}"),
-                    EvmValidateError::Store(e) => format!("evm store: {e}"),
-                };
+                let map_err = market_owned_v2::execution_fault_v2;
                 // The validated flat/reconstruct seed (S9), or None ⇒ seed from 206 (the default,
                 // and the fallback for pre-activation / Unavailable parents).
                 match flat_auth.then(|| self.validated_flat_parent_seed(selected_parent)).flatten() {
@@ -203,7 +200,7 @@ impl VirtualStateProcessor {
             &mut ctx.multiset_hash,
             header.daa_score,
             selected_parent,
-            &expected_settlements,
+            expected_settlements,
         )?;
         // kaspa-pq EVM bridge observability (P0-4): a deposit lock that reaches
         // this point is being APPLIED into this accepted chain block's committed
@@ -242,8 +239,8 @@ impl VirtualStateProcessor {
         _ctx: &mut UtxoProcessingContext<'_>,
         _selected_parent_utxo_view: &V,
         _pipeline: Option<&crate::processes::evm::EvmPipeline>,
-        _palw_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
-    ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
+        _palw_state: Option<&kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
+    ) -> Result<Option<crate::processes::evm::EvmStaged>, EvmChainContextFaultV2> {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
                 "the EVM lane is active at DAA {} but this kaspad was built without the `evm` feature — refusing to follow a chain it cannot validate (rebuild with --features evm)",
@@ -294,13 +291,8 @@ impl VirtualStateProcessor {
         // and all (the PALW tip is the template's selected parent for a fresh template).
         let template_selected_parent = virtual_state.ghostdag_data.selected_parent;
         let market_fences = self.palw_evm_market_fences_at(header.daa_score);
-        let template_palw_state = self
-            .palw_state_params_v2
-            .as_ref()
-            .filter(|_| market_fences.evm_active)
-            .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
-            .filter(|(block, _)| *block == template_selected_parent)
-            .map(|(_, state)| state);
+        let template_palw_state = self.evm_template_parent_owned_v2(template_selected_parent, header.daa_score)
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
         // ADR-0139: the template's accepted-user-gas cap is what validation will compute for it —
         // one round budget per DISTINCT permitted round among the round blocks the template merges.
         let user_gas_cap = kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
@@ -311,21 +303,14 @@ impl VirtualStateProcessor {
                 .unwrap_or(0)
         }));
 
-        let expected_settlements: Vec<kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1> =
-            template_palw_state.as_ref().map(|s| s.evm_settlements()).unwrap_or_default();
-        let market_view = match (&template_palw_state, self.palw_state_params_v2.as_ref()) {
-            (Some(state), Some(params)) => Some(std::sync::Arc::new(self.palw_evm_view_with_market_gate_v1(
-                state,
-                params,
-                template_selected_parent,
-                header.daa_score,
-            ))),
-            _ => None,
-        };
+        let market_context = self.evm_market_context_owned_v2(template_palw_state.as_ref(), template_selected_parent, header.daa_score)
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+        let expected_settlements = market_context.as_ref().map(|c| c.settlements.as_slice()).unwrap_or(&[]);
         let market = kaspa_evm::EvmMarketInput {
-            palw_view: market_view,
+            palw_view: None,
+            palw_view_owned_v2: market_context.as_ref().map(|c| c.view.clone()),
             fences: market_fences,
-            expected_settlements: &expected_settlements,
+            expected_settlements,
             chain_id: kaspa_consensus_core::evm::EVM_CHAIN_ID,
         };
         // §15 step 6: assemble the own payload from the mempool candidates.
@@ -372,7 +357,7 @@ impl VirtualStateProcessor {
                 payload.system_ops.push(kaspa_consensus_core::evm::EvmSystemOp::DepositClaim(claim));
             }
             // ADR-0089 Decision 6: the settlements the selected parent's fold decided, in order.
-            for settlement in &expected_settlements {
+            for settlement in expected_settlements {
                 payload.system_ops.push(kaspa_consensus_core::evm::EvmSystemOp::MarketSettle(*settlement));
             }
             // audit #3: the tx loop above budgets ONLY the txs against the byte
@@ -407,7 +392,10 @@ impl VirtualStateProcessor {
         let parent_override = (self.evm_flat_authoritative && self.evm_shadow_state_backend)
             .then(|| self.validated_flat_parent_seed(selected_parent))
             .flatten();
-        let mapper = |e| RuleError::EvmTemplateExecutionFailed(format!("{e:?}"));
+        let mapper = |e| match market_owned_v2::execution_fault_v2(e) {
+            EvmChainContextFaultV2::Local(why) => why.into_rule_error_v1(),
+            EvmChainContextFaultV2::Invalid(why) => RuleError::EvmTemplateExecutionFailed(why),
+        };
         let result = match parent_override {
             Some(seed) => {
                 evm_execute_acceptance_with_parent(
@@ -498,7 +486,7 @@ impl VirtualStateProcessor {
                 &mut multiset,
                 header.daa_score,
                 template_selected_parent,
-                &expected_settlements,
+                expected_settlements,
             )
             .expect("template market effects mirror validation on already-validated inputs");
             header.utxo_commitment = multiset.finalize();

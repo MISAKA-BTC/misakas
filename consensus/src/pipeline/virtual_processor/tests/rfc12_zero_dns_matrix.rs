@@ -52,6 +52,9 @@ use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutpoin
 use kaspa_hashes::Hash64;
 use std::collections::BTreeMap;
 
+#[path = "evm_market_production_pipeline_v2.rs"]
+mod production_market_pipeline_v2;
+
 /// The first DAA at which the retirement is in force in these tests. A TEST value: the harness clock reaches DAA 1 and stops.
 const FENCE: u64 = 1;
 const DEPOSIT: u64 = 100_000_000;

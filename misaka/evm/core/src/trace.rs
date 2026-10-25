@@ -260,7 +260,7 @@ pub fn trace_accepted_tx_with_market_owned_v2(
     let prefix = &all_candidates[..target_idx];
     let input_prefix = EvmBlockInput {
         market: match market_context {
-            Some(context) => crate::EvmMarketInput { palw_view: None, fences: context.fences,
+            Some(context) => crate::EvmMarketInput { palw_view: None, palw_view_owned_v2: None, fences: context.fences,
                 expected_settlements: &context.settlements, chain_id: context.view.chain_id },
             None => Default::default(),
         },

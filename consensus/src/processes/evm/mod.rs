@@ -366,8 +366,13 @@ pub struct EvmStaged {
 /// the stale results that precede the next consumed block — stale entries are
 /// always for earlier chain positions. When the walk ends, dropping the
 /// pipeline closes the channel and the worker exits on its next send.
+#[cfg(feature = "evm")]
+pub type EvmPipelineResultV2 = Result<EvmStaged, EvmValidateError>;
+#[cfg(not(feature = "evm"))]
+pub type EvmPipelineResultV2 = Result<EvmStaged, String>;
+
 pub struct EvmPipeline {
-    rx: std::sync::mpsc::Receiver<(kaspa_consensus_core::BlockHash, Result<EvmStaged, String>)>,
+    rx: std::sync::mpsc::Receiver<(kaspa_consensus_core::BlockHash, EvmPipelineResultV2)>,
     _handle: std::thread::JoinHandle<()>,
 }
 
@@ -376,7 +381,7 @@ impl EvmPipeline {
     /// blocks the walk disqualified before consuming theirs. `None` ⇒ the
     /// pipeline ended (worker error already delivered, or channel closed) — the
     /// caller falls back to inline validation.
-    pub fn recv(&self, expected: kaspa_consensus_core::BlockHash) -> Option<Result<EvmStaged, String>> {
+    pub fn recv(&self, expected: kaspa_consensus_core::BlockHash) -> Option<EvmPipelineResultV2> {
         while let Ok((block, res)) = self.rx.recv() {
             if block == expected {
                 return Some(res);
@@ -1857,6 +1862,9 @@ mod driver {
         Exec(String),
         /// A store read/write failed.
         Store(StoreError),
+        /// A local native allocation refusal cannot disqualify a block.
+        Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+        Context(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
     }
 
     /// The lazy chain-context EVM step (design v0.4 §2.3/§3): execute a
@@ -2121,9 +2129,9 @@ mod driver {
                     match state_store.get(selected_parent) {
                         Ok(s) => s,
                         Err(StoreError::KeyNotFound(_)) => {
-                            return Err(EvmValidateError::Exec(format!(
-                                "EVM-active selected parent {selected_parent} has an EVM header but no persisted state snapshot (store corruption / pruning bug)"
-                            )));
+                            return Err(EvmValidateError::Context(
+                                kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+                            ));
                         }
                         Err(e) => return Err(EvmValidateError::Store(e)),
                     }
@@ -2152,7 +2160,10 @@ mod driver {
         };
 
         let (result, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input)
-            .map_err(|e| EvmValidateError::Exec(e.to_string()))?;
+            .map_err(|e| match e {
+                kaspa_evm::EvmExecError::NativeResource(why) => EvmValidateError::Resource(why),
+                other => EvmValidateError::Exec(other.to_string()),
+            })?;
 
         // §11: assemble the `debug_traceTransaction` replay plan from the exact
         // acceptance this block performed — the env inputs, B's own system ops, and
@@ -2745,17 +2756,12 @@ impl EvmPipeline {
                             }
                         }
                         Err(e) => {
-                            // Map to the EXACT strings the inline path produces, so a
-                            // pipelined disqualification reads identically in logs.
-                            let msg = match e {
-                                driver::EvmValidateError::CommitmentMismatch { .. } => {
-                                    "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string()
-                                }
-                                driver::EvmValidateError::Exec(e) => format!("evm execution: {e}"),
-                                driver::EvmValidateError::Store(e) => format!("evm store: {e}"),
-                            };
-                            let _ = tx.send((item.block, Err(msg)));
-                            return; // the chain past an invalid block is dead on this path
+                            // Preserve typed local faults across the worker boundary;
+                            // the consumer applies the same classification as inline.
+                            let _ = tx.send((item.block, Err(e)));
+                            // End this speculative run; the consumer distinguishes
+                            // semantic rejection from a retryable local failure.
+                            return;
                         }
                     }
                 }

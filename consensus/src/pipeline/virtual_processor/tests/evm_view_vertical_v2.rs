@@ -143,3 +143,6 @@ async fn historical_market_native_api_active_resource_and_dormant_zero_state_wor
 
 #[path = "evm_replay_market_vertical_v2.rs"]
 mod replay_market_v2;
+
+#[path = "evm_market_production_owner_v2.rs"]
+mod production_market_owner_v2;
