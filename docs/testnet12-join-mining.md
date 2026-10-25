@@ -2,8 +2,9 @@
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-**testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`, now
-`main`). The identity values below were checked against that release. Read
+**testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`).
+The public fleet runs commit `247ade1f9` (rev `247ade1f90b6`). Build current `main`, which carries
+that source. The startup lines in §3 are the check. Read
 [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists what the release contains, the
 known issues (two CRITICAL ones are fixed by post-launch activation fences) and when a payment may be
 treated as final.
@@ -45,10 +46,15 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 1. Build
 
-Use the testnet-12 release commit `0e8ec984e` (current `main`). The public fleet runs the x86_64 Linux
-release build of that commit (kaspad sha256 `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149`).
+Build current `main`. The public fleet runs commit `247ade1f9` (rev `247ade1f90b6`). Its x86_64 Linux
+release kaspad sha256 is `c57c8c13744aa29a8295b05bb7c495ef91bf1be4d5c755ecaa638e957fa403b8`.
+The int-13 list arms at DAA 15,500. A release build of `main` prints the fingerprint and the fence schedule in §3.
 
 ```bash
+git clone https://github.com/MISAKA-BTC/misakas.git
+cd misakas
+git switch main
+git pull --ff-only
 cargo build --release -p kaspad -p misaka-cli
 # only if you will serve a model class:
 cargo build --release --bin qwen25-convert --bin palw-class
@@ -80,6 +86,12 @@ kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default
 ```
 
 The node bootstraps from the built-in DNS seeders. `--addpeer` takes IP addresses, not hostnames.
+If the seeders return no peers, add the public entry points:
+
+```bash
+kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default \
+  --addpeer=169.58.232.113:26311 --addpeer=169.58.39.220:26311
+```
 
 | purpose | port |
 |---|---:|
@@ -92,7 +104,7 @@ Check the startup log for these lines:
 
 ```text
 Consensus params fingerprint: ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e (network testnet-12)
-Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585 (schedule id 9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 15500 (schedule id 9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a

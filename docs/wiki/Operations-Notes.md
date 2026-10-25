@@ -21,16 +21,26 @@ RPC は原則 loopback のままにして、リモートからの操作は SSH t
 kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default
 ```
 
-DNS seeder で peer が見つからない場合は `--addpeer=169.58.232.113:26311` を追加します。同期と監視だけの node には、model artifact、producer key、Bond は要りません。
+DNS seeder で peer が見つからない場合は `--addpeer=169.58.232.113:26311` と `--addpeer=169.58.39.220:26311` を追加します。同期と監視だけの node には、model artifact、producer key、Bond は要りません。
 
 ## Identity の確認
 
 起動ログの次の 2 行を確認します。
 
 ```text
-Consensus params fingerprint: 24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff (network testnet-12)
-Consensus fence schedule: 750, 1000, 1300 (schedule id d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a)
+Consensus params fingerprint: ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e (network testnet-12)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 15500 (schedule id 9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5)
 ```
+
+2026-10-25 の公開 fleet(`247ade1f9`、rev `247ade1f90b6`、x86_64 Linux、glibc 2.39 floor)の sha256:
+
+| binary | sha256 |
+|---|---|
+| kaspad | `c57c8c13744aa29a8295b05bb7c495ef91bf1be4d5c755ecaa638e957fa403b8` |
+| misaka | `eeee25bb31d680300875cdd532a295c5e0a4c44ef338d9d4baec63b1dc928e99` |
+| palw-class | `9a435da402655f8fc50a11c74ba22646a8ade81bd3d67d8006241e9ccb1bb0b7` |
+
+DNS seeder はこの更新では入れ替えていません。参加ノードは DNS で peer が見つからないとき、`--addpeer=169.58.232.113:26311` と `--addpeer=169.58.39.220:26311` で公開エントリポイントに接続します。
 
 2026-09-27 19:37 JST からの release バイナリ(`587cab2b0`、x86_64 Linux、glibc 2.39 floor)の sha256:
 

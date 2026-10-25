@@ -2,7 +2,7 @@
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の 2 回目の post-launch flag day のリリース `587cab2b0` です。2 本の fence が DAA 1,300(2026-09-28 05:25 JST 前後)で有効になるので、それより前に動かしてください。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
+対象は公開テストネット `testnet-12` です。ビルドする commit は現行 `main` です。公開 fleet は commit `247ade1f9`(rev `247ade1f90b6`)を動かしていて、int-13 の 4 本は DAA 15,500 で有効になります。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
 
 ## 1. Build
 
@@ -11,13 +11,12 @@ git clone https://github.com/MISAKA-BTC/misakas.git
 cd misakas
 git switch main
 git pull --ff-only
-git checkout 587cab2b0
 cargo build --release -p kaspad -p misaka-cli
 ```
 
 `misaka-cli` から作られるバイナリは `target/release/misaka` です。以下では `target/release` を PATH に加えた前提で書きます。加えない場合は `./target/release/kaspad` と `./target/release/misaka` と読み替えてください。
 
-公開 fleet は 2026-09-27 19:37 JST に `587cab2b0` の x86_64 Linux release build へ入れ替えました(kaspad の sha256 は `84b8c8c931de24ed57a9197b26e11692989ce4c15e2029c8e99aef0121926f2e`)。DAA 1,300 で 2 本の fence が有効になり、`c3dbaee3c` 以前のノードは DAA 1,300 から handshake で拒否されます。古いビルドのまま DAA 1,300 を越えたノードは `<appdir>/misaka-testnet-12/datadir` を退避し、`587cab2b0` で同期し直します(公開ノート §000)。
+公開 fleet は 2026-10-25 に commit `247ade1f9`(rev `247ade1f90b6`)の x86_64 Linux release build へ入れ替えました(kaspad の sha256 は `c57c8c13744aa29a8295b05bb7c495ef91bf1be4d5c755ecaa638e957fa403b8`)。起動ログの fingerprint と fence schedule が下の 2 行と一致するビルドが、この fleet に参加できます。
 
 > 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドします。
 
@@ -41,14 +40,14 @@ node は組み込みの DNS seeder から peer を探します。DNS で見つ�
 
 ```bash
 kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default \
-  --addpeer=169.58.232.113:26311
+  --addpeer=169.58.232.113:26311 --addpeer=169.58.39.220:26311
 ```
 
 起動ログに次の 2 行が出ることを確認します。
 
 ```text
-Consensus params fingerprint: 24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff (network testnet-12)
-Consensus fence schedule: 750, 1000, 1300 (schedule id d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a)
+Consensus params fingerprint: ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e (network testnet-12)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 15500 (schedule id 9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5)
 ```
 
 最初の testnet-12(genesis `a8cabac4…`)の datadir を使うと、起動時に genesis mismatch で拒否されます。その datadir は削除せずに別名へ退避し、新しい node には使わないでください。

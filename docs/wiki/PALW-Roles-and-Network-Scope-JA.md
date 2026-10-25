@@ -4,7 +4,7 @@
 
 ## 現行ネットワーク
 
-この Wiki で案内する現行の公開テストネットは **`testnet-12`**(R-core+、公開時の release commit `0e8ec984e`、2026-09-27 19:37 JST からの現行ビルド `587cab2b0`、fence は DAA 750)です。testnet-11 は旧ネットワークで、現行 `main` のビルドでは参加できません。
+この Wiki で案内する現行の公開テストネットは **`testnet-12`** です。参加するビルドは現行 `main`(公開 fleet は commit `247ade1f9`、rev `247ade1f90b6`、int-13 は DAA 15,500)です。testnet-11 は旧ネットワークで、現行 `main` のビルドでは参加できません。
 
 ## PALW の参加者のロールは 2 つ
 

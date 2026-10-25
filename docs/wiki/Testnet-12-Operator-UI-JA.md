@@ -2,7 +2,7 @@
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-`misaka` は mining、Bond、work、reward、model、verifier、validator を 1 つの入口から扱います。対象は testnet-12 と、その現行ビルド `587cab2b0`(2026-09-27 の 2 回目の post-launch flag day のリリース。2 本の fence が DAA 1,300 で有効になる)です。`misaka` はネットワークを指定しなければ testnet-12 を使いますが、このページの例では `--network testnet-12` を明示しています。
+`misaka` は mining、Bond、work、reward、model、verifier、validator を 1 つの入口から扱います。対象は testnet-12 と現行 `main`(公開 fleet は commit `247ade1f9`)です。`misaka` はネットワークを指定しなければ testnet-12 を使いますが、このページの例では `--network testnet-12` を明示しています。
 
 ## セットアップ
 

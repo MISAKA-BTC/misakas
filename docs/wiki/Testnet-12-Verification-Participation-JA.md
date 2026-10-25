@@ -4,12 +4,12 @@
 
 このページは、testnet-12 に PALW の検証席(panel seat / verifier)として参加する手順です。検証席は、他の参加者が出した PALW claim を再実行し、その結果(receipt)をチェーンに提出します。検証席は block を採掘しませんが、claim を Final に進めるのに欠かせない役割です。
 
-対象は **testnet-12 と、その現行ビルド `587cab2b0`**(2026-09-27 の 2 回目の post-launch flag day のリリース。2 本の fence が DAA 1,300 で有効になる。DAA 750 の 13 本も含む)です。network id や consensus fingerprint が違う node は参加できません。
+対象は **testnet-12 と、現行 `main`**(公開 fleet は commit `247ade1f9`、rev `247ade1f90b6`)です。int-13 の 4 本は DAA 15,500 で有効になります。起動ログの consensus fingerprint が公開 fleet と違う node は参加できません。
 
 ## testnet-11 からの主な変更
 
 - **seat の bond は 130,000 BILI 以上**(producer floor 13,000 BILI の 10 倍)。testnet-11 の少額 bond は使えません。
-- **S1 / S2 / S3 は DAA 0 から有効です。** testnet-11 のように DAA 7,200 / 8,600 / 8,700 で切り替わることはありません。fence schedule は `750, 1000` です(750 は post-launch fence 13 本、1000 は bond maturity window)。
+- **S1 / S2 / S3 は DAA 0 から有効です。** fence schedule は `750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 15500` です。15500 は int-13 の 4 本です。
 - **DAA 750 以降、genesis 以外の bond は登録から 1,000 DAA(約 33 時間)経つまで panel の抽選と ready seat の数に入りません**(ADR-0065 D1、`palw_bond_maturity_early`)。DAA 750 より前に登録した bond も登録 DAA から数えるので、DAA 750 でいったん外れ、登録 DAA + 1,000 で戻ります。
 - **seat の義務は常に on です。** `--palw-panel` は受け付けますが何もせず、警告を 1 行出すだけです。
 - **1 つの bond は 1 つの process だけで動かします。** producer の node は同じ bond の seat の義務をすでに実行しているので、同じ bond で verifier を別に起動してはいけません。
@@ -32,7 +32,6 @@
 ```bash
 git switch main
 git pull --ff-only
-git checkout 587cab2b0
 cargo build --release -p kaspad -p misaka-cli
 ```
 
@@ -48,14 +47,14 @@ DNS seeder で peer が見つからない場合は、公開エントリポイン
 
 ```bash
 ./target/release/kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default \
-  --addpeer=169.58.232.113:26311
+  --addpeer=169.58.232.113:26311 --addpeer=169.58.39.220:26311
 ```
 
 起動ログで fingerprint と fence schedule を確認します。
 
 ```text
-Consensus params fingerprint: dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9 (network testnet-12)
-Consensus fence schedule: 750, 1000 (schedule id 7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397)
+Consensus params fingerprint: ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e (network testnet-12)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 15500 (schedule id 9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5)
 ```
 
 ### 4. 検証席をセットアップする
