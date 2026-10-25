@@ -66,6 +66,8 @@ use std::sync::Arc;
 
 #[path = "palw_tir_owner_replay_owned_v2.rs"]
 mod replay_owned;
+#[path = "palw_tir_owner_harvest_v2.rs"]
+mod harvest;
 #[path="palw_tir_source_worker_owned_v2.rs"]
 pub(super) mod source_owned;
 use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, NativeRetainedV1};
@@ -564,24 +566,13 @@ impl PalwPanelService {
                         for slot in p.slots.values() {
                             let Some(reference) = slot.finished.as_ref() else { continue };
                             let id = reference.hash_v1()?;
-                            if !case.harvested.insert(id) {
-                                continue;
-                            }
-                            match kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_finished_material_v1(
-                                state,
-                                reference,
-                                maximum_leaves,
-                            )? {
-                                Some(PalwTirPublicFinishedV1::Unit(unit)) => {
-                                    if !case.units.iter().any(|u| u.request_v1() == unit.request_v1()) {
-                                        case.units.push(Arc::new(unit));
-                                    }
-                                }
-                                Some(PalwTirPublicFinishedV1::Ids(ids)) => case.ids = Some(ids),
-                                None => {
-                                    case.harvested.remove(&id);
-                                }
-                            }
+                            harvest::harvest_accepted_v2(case, id, || {
+                                kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_finished_material_v1(
+                                    state,
+                                    reference,
+                                    maximum_leaves,
+                                )
+                            })?;
                         }
                     }
                     // 3. A finding from the harvested material, or the next unit this case wants.
