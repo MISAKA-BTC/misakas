@@ -1,0 +1,19 @@
+# RFC-0012: native EVM state reader fault boundaries
+
+Status: parent-coordinated compilation and all three actual native/store tests passed.
+
+Two existing result-returning native queries had three unchecked read boundaries. `get_evm_state_snapshot_of` unwrapped the prefix-206 hot snapshot read and discarded an error from the prefix-231 latest flat pointer before attempting historical reconstruction. `reconstruct_evm_state_at` unwrapped the target EVM execution header read. Malformed serialized bytes could therefore panic a query, or a failed pointer read could be hidden by a successful reconstruction.
+
+These three reads now propagate the existing `ConsensusError::GeneralOwned` with read context. Genuine missing hot state still proceeds to the flat/reconstruction path; an absent or valid stale flat pointer still permits reconstruction. A valid exact pointer keeps the existing flat materialization behavior. A missing target execution header still returns `Ok(None)`. Hot snapshot priority, checkpoint/diff replay and root verification, feature-disabled reconstruction behavior and state serialization are unchanged.
+
+The new `consensus/src/consensus/evm_state_fault_tests.rs` uses real cold DB rows and calls the actual native APIs. Three controls distinguish: corrupt hot state while an independently successful root-verified checkpoint reconstruction exists; corrupt flat pointer while that alternative also exists, followed by valid exact/stale pointer behavior; and corrupt target header versus true absence and a valid reconstructed result. A separate cold native instance contains valid hot state and an actually corrupt pointer; it verifies that a hot positive remains authoritative before a pointer read is needed, without a cached valid pointer masking the fault. The alternative checkpoint is explicitly exercised through `reconstruct_evm_state_at`; an error cannot be explained away as absence of a valid fallback.
+
+These are storage/query fixtures. Their direct execution-header/checkpoint rows do not establish EVM block acceptance, native claim approval, certified heads, public policy approval or a campaign. The node account/simulation callers retain their existing validated-reconstruction fallback, including handling a returned snapshot API error. The RFC-0012 import/retry corruption rule is not reinterpreted here as a general prohibition on query recovery. Other convenience unwraps, flat account fast-path semantics, reconstruction code lookup error taxonomy and broader allocation coverage remain outside this three-read repair. No native39 settlement mapping is invented; public fences and UNKNOWN gates remain unchanged.
+
+Package/features/filter: `kaspa-consensus --features evm native_evm_state_` (three tests). New-leaf formatting, production parse-to-stdout and `git diff --check` passed. No Cargo was launched by this worker; observed parent-coordinated results are recorded below.
+
+## Observed verification
+
+The coordinated three-package no-run build passed in **4m44s**. The ten captured source identities are recorded at `/tmp/misaka-rfc-header-state-import-wave-source-20261025/record.json`; source capture is not runtime coverage for all those files. The immutable Consensus test binary is `/tmp/misaka-rfc-header-state-import-consensus-20261025`, SHA-256 `cc92539beb6234ea2b37cf89c240c8935ebf22d941afdd5175cd76c5867e2221`.
+
+Its `native_evm_state_` filter passed **3/3 in 0.05s**, with no ignored tests, in `/tmp/misaka-rfc-header-state-import-evm-tests-20261025.log`. This covers the actual cold snapshot/pointer/header fault and healthy-alternative controls above, including a separate cold hot-first instance with a malformed pointer. Other wave groups, EVM execution acceptance, historical market views and campaign gates are not claimed by these results.

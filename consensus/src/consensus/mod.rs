@@ -5101,7 +5101,8 @@ impl ConsensusApi for Consensus {
     fn get_evm_state_snapshot_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmStateSnapshot>> {
         use crate::model::stores::evm::EvmStateStoreReader;
         // Hot path: the per-block 206 snapshot (present on every node that persists it — the default).
-        if let Some(snapshot) = self.storage.evm_state_store.get(block).optional().unwrap() {
+        if let Some(snapshot) = self.storage.evm_state_store.get(block).optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM hot snapshot read: {e}")))? {
             return Ok(Some(snapshot));
         }
         // C-01 S9b: 206 was retired (--evm-retire-206) or this block was committed while retired. Serve
@@ -5110,7 +5111,8 @@ impl ConsensusApi for Consensus {
         // trace / account reads working without the 206 store. Read-path only; behavior-preserving when
         // 206 is present (returned above) and on inert/non-EVM nets (no flat head ⇒ reconstruct ⇒ None).
         #[cfg(feature = "evm")]
-        if let Ok(Some(ptr)) = self.storage.evm_latest_state_ptr_store.read().get()
+        if let Some(ptr) = self.storage.evm_latest_state_ptr_store.read().get()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM flat state pointer read: {e}")))?
             && ptr.canonical_head == block
         {
             let snap = crate::processes::evm::materialize_snapshot(&self.storage.evm_flat_account_store, &self.storage.evm_code_store)
@@ -5146,7 +5148,8 @@ impl ConsensusApi for Consensus {
 
         // Not an EVM block (no committed header) ⇒ None — distinct from "EVM block
         // whose state history this node doesn't retain", which is an Err below.
-        let Some(target_header) = self.storage.evm_header_store.get(block).optional().unwrap() else {
+        let Some(target_header) = self.storage.evm_header_store.get(block).optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM reconstruction target header read: {e}")))? else {
             return Ok(None);
         };
 
@@ -5815,3 +5818,6 @@ mod native_header_fault_tests;
 
 #[cfg(test)]
 mod canonicality_fault_tests;
+
+#[cfg(all(test, feature = "evm"))]
+mod evm_state_fault_tests;
