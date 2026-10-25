@@ -1,0 +1,188 @@
+{
+  "scope": "bounded public header census segment 1; not execution compatibility or campaign acceptance",
+  "summary": {
+    "coverage_status": "UNKNOWN_PARTIAL",
+    "compatibility_status": "UNKNOWN",
+    "original_identity": {
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "consensusParamsId": "ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e",
+      "consensusScheduleId": "9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5",
+      "importSessionEpoch": 0,
+      "importSessionPhase": "legacy-stable",
+      "pruningPointHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    },
+    "anchor": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+    "unique_blocks": 64680,
+    "max_daa": 8896,
+    "round_header_count": 24359,
+    "observed_node_verdicts": {
+      "unknown": 24359
+    },
+    "last_complete_page_cursor": "337bbb66cabc860746535dba3baa0d0d0740f5c5714a38eb0d1040752220cf9a08e202835d2f7ef2148ba9fb80dd05ff82a792601641f7d718a2775b7b1f49b0",
+    "ancestor_holes": [],
+    "selected_chain_holes": [
+      "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2"
+    ],
+    "conflicting_known_verdicts": [],
+    "faults": [],
+    "round_headers_without_exec_count": 0,
+    "transition_hash_count": 0,
+    "segments": [
+      {
+        "path": "/tmp/misaka-public-history-census-20261025.ndjson",
+        "sha256": "e65938258f04bcc9ae8276ff6ac4e50fe9c74f1e72adb5670b35818bc59eb7c5",
+        "observed_bytes": 1685695025,
+        "storage_bytes": 1685695025,
+        "storage_sha256": "e65938258f04bcc9ae8276ff6ac4e50fe9c74f1e72adb5670b35818bc59eb7c5",
+        "encoding": "identity",
+        "parse_faults": [],
+        "pages": 376,
+        "errors": [
+          {
+            "kind": "error",
+            "utc": "2026-10-25T10:56:14.026784+00:00",
+            "error": "bounded 2400 second budget exhausted",
+            "elapsed_seconds": 2401.404627252021
+          }
+        ],
+        "bounded_stops": [
+          {
+            "kind": "error",
+            "utc": "2026-10-25T10:56:14.026784+00:00",
+            "error": "bounded 2400 second budget exhausted",
+            "elapsed_seconds": 2401.404627252021
+          }
+        ],
+        "last_complete_page_cursor": "337bbb66cabc860746535dba3baa0d0d0740f5c5714a38eb0d1040752220cf9a08e202835d2f7ef2148ba9fb80dd05ff82a792601641f7d718a2775b7b1f49b0"
+      }
+    ],
+    "full_analysis_path": "/tmp/misaka-public-history-segment1-final-analysis-20261025.json"
+  },
+  "compression": {
+    "source_path": "/tmp/misaka-public-history-census-20261025.ndjson",
+    "preserved_gzip_path": "/tmp/misaka-public-history-census-20261025.ndjson.gz",
+    "original_bytes": 1685695025,
+    "gzip_bytes": 554675756,
+    "original_sha256": "e65938258f04bcc9ae8276ff6ac4e50fe9c74f1e72adb5670b35818bc59eb7c5",
+    "verified_decompressed_sha256": "e65938258f04bcc9ae8276ff6ac4e50fe9c74f1e72adb5670b35818bc59eb7c5",
+    "gzip_sha256": "7f9d1ab499eab6b28e99ccfa77beb897148821c39dd9bc53d1bd884d39c94ece",
+    "source_stable": true,
+    "original_ssh_pid_terminal": 23593,
+    "decompression_verified": true,
+    "seconds": 133.23,
+    "raw_duplicate_removed": true
+  },
+  "terminal": {
+    "observed_utc": "2026-10-25T10:59:16.318693+00:00",
+    "tool_session": 51660,
+    "tool_exit_code": 0,
+    "ssh_pid": 23593,
+    "ssh_pid_alive": false,
+    "raw_bytes": 1685695025,
+    "terminal_records": [
+      {
+        "kind": "error",
+        "utc": "2026-10-25T10:56:14.026784+00:00",
+        "error": "bounded 2400 second budget exhausted",
+        "elapsed_seconds": 2401.404627252021
+      },
+      {
+        "kind": "after_error",
+        "data": {
+          "utc": "2026-10-25T10:56:14.138520+00:00",
+          "dag": {
+            "sink": "4ca31b1e97673a66eadd923ffc192c97e45da4ede56676ccb48e7a444ca42470e5ab35d7c3e7e6e86750c2f24420f9d8826bd2fd79b000331bc06fe76dd91193",
+            "blockCount": 15497,
+            "pruningPointHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+            "virtualDaaScore": 15497
+          },
+          "node": {
+            "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+            "consensusParamsId": "ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e",
+            "consensusScheduleId": "9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5",
+            "importSessionEpoch": 0,
+            "importSessionPhase": "legacy-stable",
+            "pruningImportStable": true
+          },
+          "anchor": {
+            "block": {
+              "evmPayload": [],
+              "header": {
+                "acceptedIdMerkleRoot": "7a85f8b26bb598b78136acf692672e49b2009500231401519d76bfd483e922d6c368bdcce7831b4690182ff13ca758f08f563baa05723d2b4142942133171d2f",
+                "bits": 545259519,
+                "blueScore": 53418,
+                "blueWork": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005dc9072e2",
+                "daaScore": 15477,
+                "evmCommitmentRoot": "940dc0a66deea5c37d9a114513753fdf2b5b7484d2077f9875aa2d0828d8682cdd1e4f39bfce6cd145f8b2e14c3ecc4e0e6ed6b78c743a3f834f3afbe7f6392a",
+                "evmPayloadHash": "877fcd175efdb52807879d7fca7f28b3257f5afdc596c39557d1fe3d6c30f85c9d3da6c0a8bb8b96dfbbd2c136408414ad59cf473c1646042499566e02d676b1",
+                "hash": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+                "hashMerkleRoot": "668705cd95d663581c044b869ef6f555229fec6bc779143e05740266ba7cd360f0bc8f450f999fb3b3320b0b894a06c5579894f678e77c08c0c3ee0afaaf5300",
+                "nonce": 9396570,
+                "overlayCommitmentRoot": "1170a63b5413037dbde426d61585f6662dc8c8f82a782b0b991bc8449a2406ccd67946c35cca7e018a84fdbf482d0e02f55af44f8ea48e3eabadf2b067382a62",
+                "palwCommitment": [],
+                "palwStateRoot": "ff82074b0d71fe30914838147bd231734bacecfc9ee6d96cea1c23e0e80578ac6b185b071067ed5474c5a26332005430c34b7f2b42833f5170ed9f8a601bdfc0",
+                "parentsByLevel": [
+                  [
+                    "e2faa2eb97fbe2d3bf3afa55f601e807878c6794e17cb74f78520480adaeff40a1ca16b9829d0e79d1f5645f55c6e376797f61a9661f827a2d9c3e30a8652154"
+                  ]
+                ],
+                "powAlgoId": 8,
+                "pruningPoint": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+                "timestamp": 1792922408275,
+                "utxoCommitment": "db49ce1bc1f278a5f7e7c9d29e483a026815a0571df8a75f5446e2646bddb4f3ccee2e74afcf5ea8b912e938fb363cda2faddd4a94979cc9ba9219b4b9d30740",
+                "version": 2
+              },
+              "transactions": [],
+              "verboseData": {
+                "blockKind": "LEGACY_HEARTBEAT",
+                "blueScore": 53418,
+                "childrenHashes": [
+                  "8302e5dc7ed9dea8bedbe0423380ba28eb5eeeeb1a501e3b40c0fdb8f586c8759646193993d910693c20450a6117816baf267a14439bc294ea521ebc9c298231"
+                ],
+                "difficulty": 1.0000001192093038,
+                "exec": null,
+                "hash": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+                "isChainBlock": true,
+                "isHeaderOnly": false,
+                "laneClass": "BLUE",
+                "mergeSetBluesHashes": [
+                  "e2faa2eb97fbe2d3bf3afa55f601e807878c6794e17cb74f78520480adaeff40a1ca16b9829d0e79d1f5645f55c6e376797f61a9661f827a2d9c3e30a8652154"
+                ],
+                "mergeSetRedsHashes": [],
+                "palwMergeView": {
+                  "genuineRedBlocks": [],
+                  "roundBlocks": []
+                },
+                "selectedParentHash": "e2faa2eb97fbe2d3bf3afa55f601e807878c6794e17cb74f78520480adaeff40a1ca16b9829d0e79d1f5645f55c6e376797f61a9661f827a2d9c3e30a8652154",
+                "transactionIds": [
+                  "2795829bfccbeebfd3c7299081520292634e2916454419b8043cbfc05b5f74a1c1ba720e955bf320e96cd7e8d512d4f20979971ce115137b1cbd699a95d7bf06"
+                ]
+              }
+            }
+          }
+        }
+      }
+    ],
+    "new_job_started": false
+  },
+  "offline_controls": {
+    "command": "python3 -m unittest discover -s scripts/drills -p test_misaka_public_history.py -v",
+    "passed": 14,
+    "failed": 0,
+    "seconds": 0.05
+  },
+  "tool_sources": [
+    {
+      "path": "scripts/drills/misaka_public_history_collect.py",
+      "sha256": "92beb6f6802485167ed7702b35ab0350ff3771ae2a5d4f220482f13f573369ca"
+    },
+    {
+      "path": "scripts/drills/misaka_public_history_analyze.py",
+      "sha256": "3fce9d96329e08fd5bbb6ec83b783fe1935910980b93e1ef2c7f7c8b3e5da125"
+    },
+    {
+      "path": "scripts/drills/test_misaka_public_history.py",
+      "sha256": "26c9f546ef7aa67fb35c097b54bad5d15fa9b01cfbff0251b13ceb2ea140aeb7"
+    }
+  ]
+}
