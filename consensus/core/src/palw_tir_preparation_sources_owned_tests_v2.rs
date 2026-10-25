@@ -110,16 +110,19 @@ fn preparation_sources_child_v2(name: &str, mode: u8) {
     }
 }
 #[test]
-fn preparation_sources_owned_actual_paired_and_quote_first_quota_retry() {
-    preparation_sources_child_v2("preparation_sources_owned_actual_paired_and_quote_first_quota_retry", 0)
+fn preparation_sources_owned_actual_paired_and_quote_earliest_allocation_quota_retry() {
+    preparation_sources_child_v2("preparation_sources_owned_actual_paired_and_quote_earliest_allocation_quota_retry", 0)
 }
 #[test]
-fn preparation_sources_owned_actual_frame_second_quota_signature_lifetime() {
-    preparation_sources_child_v2("preparation_sources_owned_actual_frame_second_quota_signature_lifetime", 1)
+fn preparation_sources_owned_actual_frame_allocation_refusal_and_second_signature_lifetime() {
+    preparation_sources_child_v2("preparation_sources_owned_actual_frame_allocation_refusal_and_second_signature_lifetime", 1)
 }
 fn preparation_sources_worker_v2(mode: u8) {
     use crate::palw_native_resource_v1::{
         NativeDecodeErrorV1, NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
+    };
+    use crate::palw_tir_public_allocation_v1::{
+        allocation_source_stages_v2 as allocation_stages, reset_allocation_source_stages_v2 as reset_allocation,
     };
     use crate::palw_tir_public_claim_v1::{preparation_source_stages_v2 as stages, reset_preparation_source_stages_v2 as reset};
     let f = preparation_sources_fixture_v2();
@@ -173,6 +176,7 @@ fn preparation_sources_worker_v2(mode: u8) {
         let run = |available: u64| {
             let blocker = reserve_native_requests_v1(LOCAL_BYTES - available).unwrap();
             reset();
+            reset_allocation();
             let result = match TransitionBuilder::try_new(&f.state, &f.params, false, false, false, false, &extras) {
                 Err(e) => Err(e),
                 Ok(b) => {
@@ -186,26 +190,30 @@ fn preparation_sources_worker_v2(mode: u8) {
                     })
                 }
             };
-            let observed = stages();
+            let observed = (stages(), allocation_stages());
             drop(blocker);
             (result, observed)
         };
         let (ok, observed) = run(LOCAL_BYTES);
         ok.unwrap();
-        assert_eq!(observed, [1, 1, 1, 1]);
+        assert_eq!(observed, ([1, 1, 1, 1], [2, 2, 2]));
         let (mut lo, mut hi) = (0, LOCAL_BYTES);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let (_, s) = run(mid);
-            if s[1] > 0 { hi = mid } else { lo = mid + 1 }
+            if s.1[1] > 0 { hi = mid } else { lo = mid + 1 }
         }
         assert!(lo > 0);
         let (err, s) = run(lo - 1);
-        assert_eq!(s, [1, 0, 0, 0], "target first retained Source, not earlier builder/plan rejection");
+        assert_eq!(
+            s,
+            ([0; 4], [1, 0, 0]),
+            "target earliest native allocation Source, not earlier builder rejection or later direct constructors"
+        );
         assert!(matches!(err, Err(PalwStateV2Error::NativeResource(_))));
         let (ok, s) = run(LOCAL_BYTES);
         ok.unwrap();
-        assert_eq!(s, [1, 1, 1, 1]);
+        assert_eq!(s, ([1, 1, 1, 1], [2, 2, 2]));
         // Quote is an actual caller too, and must preserve the same resulting plan.
         assert_eq!(palw_tir_public_preclaim_quote_v1(&f.state, &f.params, &f.ctx, &extras, &f.object, &f.envelope).unwrap(), plan);
     } else {
@@ -218,13 +226,19 @@ fn preparation_sources_worker_v2(mode: u8) {
         assert!(q > 0 && q < LOCAL_BYTES);
         let blocker = reserve_native_requests_v1(LOCAL_BYTES - (q - 1)).unwrap();
         reset();
+        reset_allocation();
         let called = std::cell::Cell::new(0);
         let actual = |pk: &[u8], message: &[u8], sig: &[u8], ctx: &[u8]| {
             called.set(called.get() + 1);
             verify(pk, message, sig, ctx)
         };
         assert!(matches!(make_frame(&actual), Err(NativeDecodeErrorV1::Resource(_))));
-        assert_eq!(stages(), [0, 0, 1, 0]);
+        assert_eq!(stages(), [0; 4]);
+        assert_eq!(
+            allocation_stages(),
+            [1, 0, 0],
+            "Frame API refused in its earlier native derivation, not second direct constructor"
+        );
         assert_eq!(called.get(), 0);
         drop(blocker);
         let blocker = reserve_native_requests_v1(LOCAL_BYTES - q).unwrap();

@@ -594,6 +594,94 @@ pub fn derive_tir_public_allocation_v1(
     )?;
     let source =
         PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, rules.maximum_leaves)?;
+    finish_allocation_source_v2(geometry, original, header, record, layout, semantics, inventory, rules, &source)
+}
+
+#[cfg(test)]
+thread_local! { static ALLOCATION_SOURCE_V2: std::cell::Cell<[u64;3]> = const {std::cell::Cell::new([0;3])}; }
+#[cfg(test)]
+pub(crate) fn allocation_source_stages_v2() -> [u64; 3] {
+    ALLOCATION_SOURCE_V2.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+pub(crate) fn reset_allocation_source_stages_v2() {
+    ALLOCATION_SOURCE_V2.with(|c| c.set([0; 3]));
+}
+#[cfg(test)]
+fn note_allocation_source_v2(i: usize) {
+    ALLOCATION_SOURCE_V2.with(|c| {
+        let mut v = c.get();
+        v[i] += 1;
+        c.set(v);
+    });
+}
+
+#[cfg(test)]
+thread_local! { static ALLOCATION_SOURCE_BORROW_V2: std::cell::Cell<Option<fn(&PalwTirPublicSourceV1)>> = const {std::cell::Cell::new(None)}; }
+#[cfg(test)]
+pub(crate) fn observe_allocation_source_borrow_v2(callback: Option<fn(&PalwTirPublicSourceV1)>) {
+    ALLOCATION_SOURCE_BORROW_V2.with(|c| c.set(callback));
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn derive_tir_public_allocation_native_v2(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    rules: PalwTirPublicAllocationRulesV1,
+) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    let public_header = crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone());
+    crate::palw_staged_preclaim_v1::check_preclaim_identity_v1(
+        geometry,
+        original,
+        &public_header,
+        rules.maximum_custodians,
+        rules.config,
+    )
+    .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
+    #[cfg(test)]
+    note_allocation_source_v2(0);
+    let source = PalwTirPublicSourceV1::new_native_v1(
+        record,
+        layout,
+        header,
+        original.execution_root,
+        original.trace_root,
+        rules.maximum_leaves,
+    )?;
+    #[cfg(test)]
+    note_allocation_source_v2(1);
+    let result = finish_allocation_source_v2(geometry, original, header, record, layout, semantics, inventory, rules, &source)
+        .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode);
+    // source remains borrowed by the complete native derivation, including
+    // its last source-ID field; this owner does not cover other geometry.
+    #[cfg(test)]
+    ALLOCATION_SOURCE_BORROW_V2.with(|c| {
+        if let Some(observe) = c.get() {
+            observe(&source);
+        }
+    });
+    #[cfg(test)]
+    note_allocation_source_v2(2);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_allocation_source_v2(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    rules: PalwTirPublicAllocationRulesV1,
+    source: &PalwTirPublicSourceV1,
+) -> Result<PalwTirPublicAllocationQuoteV1, String> {
     let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, rules.maximum_leaves)?;
     let binding = header.resolve_registered_layout_v1(record, layout, original.execution_root, rules.maximum_leaves)?;
     let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, rules.maximum_leaves).map_err(|e| e.to_string())?;
@@ -764,7 +852,8 @@ pub fn derive_tir_public_allocation_v1(
         generic_end
     };
     // The collection door holds a filing that starts at the stream door: its witness parts and conviction at the measured capacity.
-    let filing = crate::palw_tir_frame_cost_v1::tir_public_filing_daa_v1(terminal.envelope.maximum_moves, &rules.config, &rules.clock)?;
+    let filing =
+        crate::palw_tir_frame_cost_v1::tir_public_filing_daa_v1(terminal.envelope.maximum_moves, &rules.config, &rules.clock)?;
     let collect = add(stream, rules.config.collection_daa.max(filing))?;
     // External audit 10-17 §7 P0(3): an accepted pursuit ends inside the liability horizon the record pins (validated at arming
     // against `window_challenge + window_court`); a longer door is refused, never accepted with an unbounded Final delay.
@@ -969,6 +1058,30 @@ pub fn check_tir_public_allocation_native_v1(
         PalwTirPublicAllocationQuoteV1::Complete(_) => Err("carried TIR plan substitutes native derivation".into()),
         PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => Err(format!("native TIR allocation is incomplete: {missing:?}")),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn check_tir_public_allocation_retained_v2(
+    carried: &PalwTirPublicAllocationPlanV1,
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    rules: PalwTirPublicAllocationRulesV1,
+) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    carried.check_v1().map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
+    let result: Result<(), String> =
+        match derive_tir_public_allocation_native_v2(geometry, original, header, record, layout, semantics, inventory, rules)? {
+            PalwTirPublicAllocationQuoteV1::Complete(expected) if expected.as_ref() == carried => Ok(()),
+            PalwTirPublicAllocationQuoteV1::Complete(_) => Err("carried TIR plan substitutes native derivation".into()),
+            PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => {
+                Err(format!("native TIR allocation is incomplete: {missing:?}"))
+            }
+        };
+    result.map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)
 }
 
 #[cfg(test)]

@@ -127,10 +127,9 @@ impl PalwTirPublicClaimV1 {
     where
         F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
     {
-        crate::palw_tir_public_allocation_v1::check_tir_public_allocation_native_v1(
+        crate::palw_tir_public_allocation_v1::check_tir_public_allocation_retained_v2(
             &plan, geometry, &original, &header, record, layout, semantics, inventory, rules,
-        )
-        .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
+        )?;
         #[cfg(test)]
         note_preparation_source_stage_v2(2);
         let source = PalwTirPublicSourceV1::new_native_v1(

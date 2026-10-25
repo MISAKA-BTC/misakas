@@ -379,7 +379,7 @@ fn original_plan_v1(
     ),
     PalwStateV2Error,
 > {
-    use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_v1};
+    use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_native_v2};
     let mut native = rules(b)?;
     native.maximum_leaves = b.state.class_step_ladder_v1(&original.job.class_id, native.maximum_leaves);
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
@@ -408,8 +408,11 @@ fn original_plan_v1(
         .ok_or_else(|| refused("TIR original layout is not registered"))?;
     let semantics = b.state.class_semantics.get(&geometry.class_id);
     let inventory = semantics.and_then(|s| b.state.staged_tokenizer_inventory_v1(s.tokenizer_id));
-    let plan = match derive_tir_public_allocation_v1(&geometry, original, header, record, layout, semantics, inventory, native)
-        .map_err(refused)?
+    let plan = match derive_tir_public_allocation_native_v2(&geometry, original, header, record, layout, semantics, inventory, native)
+        .map_err(|why| match why {
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)=>PalwStateV2Error::NativeResource(why),
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)=>refused(why),
+        })?
     {
         PalwTirPublicAllocationQuoteV1::Complete(plan) => *plan,
         PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => {
@@ -1802,6 +1805,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_tir_allocation_source_owned_tests_v2.rs");
     include!("palw_tir_preparation_sources_owned_tests_v2.rs");
     include!("palw_tir_three_source_consumers_tests_v2.rs");
     include!("palw_tir_output_source_owned_tests_v2.rs");
