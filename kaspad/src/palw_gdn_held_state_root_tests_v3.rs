@@ -138,6 +138,27 @@ impl<K: Base0FpRecomputeKernelsV1> Base0FpRecomputeKernelsV1 for AtRoot<'_, K> {
         self.serialized.set(self.serialized.get() + 1);
         Ok(chunks)
     }
+    fn state_chunks_snapshot_retained_v4(
+        &self,
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        positions: u32,
+    ) -> Result<Vec<Vec<u8>>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        let chunks = self.inner.state_chunks_snapshot_retained_v4(profile, positions)?;
+        assert_eq!(positions, 16, "real native predecessor, not a fabricated cache");
+        let request = gdn_state_root_request_v3(profile, positions, &chunks).expect("real serialized source has a native layout");
+        self.metadata.set(request.metadata_bytes_v3());
+        self.workspace.set(request.workspace_bytes_v3());
+        assert!(self.metadata.get() > 0 && self.workspace.get() > 0);
+        drop(request); // quote only: no native root has been computed here
+        let available = free(self.ceiling);
+        assert!(available > self.metadata.get());
+        let ticket = reserve_native_requests_v1(available - self.metadata.get()).unwrap();
+        assert!(self.blocker.borrow().is_none());
+        *self.blocker.borrow_mut() = ticket;
+        assert_eq!(free(self.ceiling), self.metadata.get(), "only actual metadata can fit; root workspace cannot");
+        self.serialized.set(self.serialized.get() + 1);
+        Ok(chunks)
+    }
 }
 
 #[test]
@@ -209,3 +230,6 @@ fn actual_serialized_predecessor_root_capacity_remains_typed_without_advance_or_
     drop(next);
     assert_eq!(free(ceiling), ceiling);
 }
+
+#[path = "palw_gdn_held_snapshot_tests_v4.rs"]
+mod snapshot_tests;

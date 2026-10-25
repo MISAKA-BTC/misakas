@@ -58,6 +58,8 @@ use kaspa_hashes::Hash64;
 #[path = "fp_recompute/root_retained_v3.rs"]
 mod root_retained;
 pub use root_retained::base0_fp_recompute_state_at_covered_root_retained_v3;
+#[path = "fp_recompute/snapshot_retained_v4.rs"]
+mod snapshot_retained;
 
 /// Why a seat cannot recompute a class's state. Every arm is a REFUSAL a seat files as
 /// `Incapable`, never an accusation: a seat that cannot run the class has learned nothing about
@@ -155,6 +157,18 @@ pub trait Base0FpRecomputeKernelsV1 {
     /// row short would otherwise serialize as a shorter state and the shortfall would look like a
     /// job that ran fewer calls (`Base0CheckpointCaptureV1::push`'s rule).
     fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError>;
+
+    /// Admits the actual recurrence snapshot used by the retained GDN route.
+    /// Implementations without that boundary must refuse explicitly. This does
+    /// not admit prefix execution or the serializer's returned chunks.
+    fn state_chunks_snapshot_retained_v4(
+        &self, _profile: &PalwShapeProfileV3, _positions: u32,
+    ) -> Result<Vec<Vec<u8>>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
+        Err(NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<Self>(
+            "GDN recurrence snapshot", "this kernel has no retained recurrence-snapshot implementation",
+        )))
+    }
 }
 
 /// **Run the job's prefix and return the state a seat holds at `decode_calls`** (Decision 9).
@@ -578,9 +592,26 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
     }
 
     fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+        let (layers, states) = self.recurrence_state();
+        self.state_chunks_from_recurrence_v4(profile, positions, &layers, &states)
+    }
+
+    fn state_chunks_snapshot_retained_v4(
+        &self, profile: &PalwShapeProfileV3, positions: u32,
+    ) -> Result<Vec<Vec<u8>>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        snapshot_retained::serialize_v4(self, profile, positions)
+    }
+}
+
+impl Qwen36RecomputeKernelsV1<'_> {
+    /// Raw and retained snapshot construction share the same serializer and map
+    /// dispatch. Validation order and historical bytes stay in this one body.
+    fn state_chunks_from_recurrence_v4(
+        &self, profile: &PalwShapeProfileV3, positions: u32,
+        layers: &[u16], states: &[crate::fp_capture::Base0GdnLayerStateV1],
+    ) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
         use kaspa_consensus_core::palw_state_chunk_map as map;
         let declared = profile.state_chunk_map_id;
-        let (layers, states) = self.recurrence_state();
         let heads = self.shape.linear_v_heads as u32;
         let dim = self.shape.linear_head_dim as u32;
         let kernel = self.shape.conv_kernel as u32;
@@ -589,8 +620,8 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
         if declared == map::gdn_state_chunk_map_id_v3() {
             return crate::fp_capture::base0_gdn_state_chunks_for_map_v2(
                 profile,
-                &layers,
-                &states,
+                layers,
+                states,
                 self.shape.linear_k_heads as u32,
                 heads,
                 dim,
@@ -599,15 +630,15 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
             .map_err(|e| Base0FpRecomputeError::Map(e.to_string()));
         }
         if declared == map::gdn_state_chunk_map_id_v2() {
-            let geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel)
+            let geometry = crate::fp_capture::base0_gdn_state_geometry_v2(layers, heads, dim, dim, kernel)
                 .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
-            return crate::fp_capture::base0_gdn_state_chunks_v2(&geometry, &states)
+            return crate::fp_capture::base0_gdn_state_chunks_v2(&geometry, states)
                 .map_err(|e| Base0FpRecomputeError::Map(e.to_string()));
         }
         if declared == map::gdn_state_chunk_map_id_v1() {
-            let geometry = crate::fp_capture::base0_gdn_state_geometry_v1(&layers, heads, dim, dim, kernel)
+            let geometry = crate::fp_capture::base0_gdn_state_geometry_v1(layers, heads, dim, dim, kernel)
                 .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
-            return crate::fp_capture::base0_gdn_state_chunks_v1(&geometry, &states)
+            return crate::fp_capture::base0_gdn_state_chunks_v1(&geometry, states)
                 .map_err(|e| Base0FpRecomputeError::Map(e.to_string()));
         }
         // **The v3 composition, in the order its own NAME spells** (ADR-0082 Decision 4; stream
@@ -630,7 +661,7 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
             // P0a: the class's gather — v3's window for a class whose map spells its key heads.
             let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_for_class_v1(
                 profile,
-                &layers,
+                layers,
                 self.shape.linear_k_heads as u32,
                 heads,
                 dim,
@@ -656,7 +687,7 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
                         geometry.gdn_chunk_count()
                     )));
                 }
-                crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, &states)
+                crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, states)
                     .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?
             };
             // **The walk is the PRODUCER's** (audit B, H-1). `base0_composed_state_chunks_v1` is
@@ -678,8 +709,8 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
                 .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
             let gdn_chunks = crate::fp_capture::base0_gdn_state_chunks_for_map_v2(
                 profile,
-                &layers,
-                &states,
+                layers,
+                states,
                 self.shape.linear_k_heads as u32,
                 heads,
                 dim,
@@ -697,7 +728,7 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
             });
         }
         Err(Base0FpRecomputeError::Map(format!("this family serves no geometry for the map {declared}")))
-    }
+        }
 }
 
 /// **The floor's recompute kernels** (ADR-0086 Decision 2): the RC floor recomputes a checkpoint's

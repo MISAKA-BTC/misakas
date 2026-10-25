@@ -32,7 +32,7 @@ pub fn base0_fp_recompute_state_at_covered_root_retained_v3<K: Base0FpRecomputeK
     let (prefill, _) = walk_inputs_at_position_v1(profile, ctx, prompt_token_ids, output_token_ids, positions, prompt_ids_form)
         .map_err(replay_error)?;
     walk_rows_v1(kernels, prompt_token_ids, output_token_ids, prefill, 0, positions as usize).map_err(replay_error)?;
-    let chunks = kernels.state_chunks(profile, positions).map_err(replay_error)?;
+    let chunks = kernels.state_chunks_snapshot_retained_v4(profile, positions)?;
     let state_chunks_root =
         gdn_state_root_request_v3(profile, positions, &chunks).map_err(root_error)?.root_v3().map_err(root_error)?;
     Ok(Base0FpSeatStateV1 { covered_decode_call: covered, positions, state_chunks_root, chunks })

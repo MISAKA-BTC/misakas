@@ -24,6 +24,12 @@ impl<K: Base0FpRecomputeKernelsV1> Base0FpRecomputeKernelsV1 for Observed<'_, K>
     ) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
         self.inner.state_chunks(profile, positions)
     }
+    fn state_chunks_snapshot_retained_v4(
+        &self, profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, positions: u32,
+    ) -> Result<Vec<Vec<u8>>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        self.inner.state_chunks_snapshot_retained_v4(profile, positions)
+    }
+
 }
 
 #[test]

@@ -364,6 +364,12 @@ impl Base0FpRecomputeKernelsV1 for PalwGdnBoxedKernelsV1<'_> {
     ) -> Result<Vec<Vec<u8>>, misaka_palw_base0::fp_recompute::Base0FpRecomputeError> {
         self.0.state_chunks(profile, positions)
     }
+    fn state_chunks_snapshot_retained_v4(
+        &self, profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, positions: u32,
+    ) -> Result<Vec<Vec<u8>>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        self.0.state_chunks_snapshot_retained_v4(profile, positions)
+    }
+
 }
 
 /// **One tick**: open a case for every accusable claim not yet seen (the accuser's own recompute decides), step every open case,
