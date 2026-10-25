@@ -10,6 +10,9 @@ use crate::palw_tir_public_owned_v1::{
 };
 use crate::palw_tir_public_state_v1::{PalwTirPublicAcquisitionRowV1, PalwTirPublicPreparationRowV1};
 
+#[path = "palw_tir_output_source_owned_v2.rs"]
+mod output_source_owned_v2;
+
 include!("palw_tir_prepared_original_geometry_v1.rs");
 include!("palw_funded_original_coordinator_fold_v1.rs");
 
@@ -1461,7 +1464,8 @@ fn apply_conviction_v1(
             }
         }
         E::Output { rows_root, ids } => {
-            let original_source = source(b, frame)?;
+            // The original Source owner remains live through IDs, grading and stop.
+            let original_source = output_source_owned_v2::source_v2(&b.state, frame)?;
             let authenticated = authenticated_original_ids_v1(&original_source, *rows_root, ids)?;
             match crate::palw_tir_objective_v1::adjudicate_original_output_v1(
                 &b.state,
@@ -1778,6 +1782,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_tir_output_source_owned_tests_v2.rs");
     include!("palw_court_shared_ids_typed_native_tests_v2.rs");
     include!("palw_court_shared_output_native_tests.rs");
     include!("palw_court_shared_selection_native_tests.rs");
