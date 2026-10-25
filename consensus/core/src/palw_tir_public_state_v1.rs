@@ -20,6 +20,8 @@ use std::collections::BTreeMap;
 
 #[path = "palw_tir_source_validation_owner_v3.rs"]
 pub(crate) mod source_validation_v3;
+#[path = "palw_tir_legacy_original_owner_v4.rs"]
+pub(crate) mod legacy_original_v4;
 
 #[cfg(test)]
 thread_local! {
@@ -83,6 +85,11 @@ impl From<crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> for PalwT
 trait SourceValueV2: Sized {
     type Error: From<String> + From<&'static str>;
     fn payload_v2(&self) -> &PalwTirPublicSourceV1;
+    fn original_v4(
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        claim: Hash64,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>, Self::Error>;
+
     fn preparation_validation_v3(row: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error>;
     fn acquisition_validation_v3(row: &PalwTirPublicAcquisitionRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error>;
 
@@ -103,6 +110,12 @@ trait SourceValueV2: Sized {
 }
 impl SourceValueV2 for PalwTirPublicSourceV1 {
     type Error = String;
+    fn original_v4(state: &crate::palw_state_v2::PalwChainStateV2, claim: Hash64)
+        -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>, String> {
+        state.staged_original_job_v1(claim).map(|value| value.map(|value|
+            crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(value, None)))
+    }
+
     fn preparation_validation_v3(_: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, String> { Ok(None) }
     fn acquisition_validation_v3(_: &PalwTirPublicAcquisitionRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, String> { Ok(None) }
 
@@ -130,6 +143,11 @@ impl SourceValueV2 for PalwTirPublicSourceV1 {
 }
 impl SourceValueV2 for crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1> {
     type Error = PalwTirPublicSourceErrorV2;
+    fn original_v4(state: &crate::palw_state_v2::PalwChainStateV2, claim: Hash64)
+        -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>, Self::Error> {
+        state.staged_original_job_native_v4(claim).map_err(Into::into)
+    }
+
     fn preparation_validation_v3(row: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error> {
         source_validation_v3::preparation_reserve_v3(row).map_err(Into::into)
     }
@@ -253,7 +271,7 @@ fn palw_tir_public_source_for_preparation_row_with_v2<S: SourceValueV2>(
     let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &bundle.original_binding else {
         return Err("TIR preparation cannot reinterpret a legacy original binding".into());
     };
-    let original = state.staged_original_job_v1(c.claim)?.ok_or("TIR preparation original public commitment is missing")?;
+    let original = S::original_v4(state, c.claim)?.ok_or("TIR preparation original public commitment is missing")?;
     let record = state.tir_class_v1(&header.job_context.shape_profile_id).ok_or("TIR preparation registered class is missing")?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
         .ok_or("TIR preparation registered layout is missing")?;
@@ -262,7 +280,7 @@ fn palw_tir_public_source_for_preparation_row_with_v2<S: SourceValueV2>(
         || c.producer != bundle.claim.producer
         || c.drawn_panel != bundle.claim.panel
         || c.material_until_daa > bundle.claim.terms.material_until_daa
-        || crate::palw_freeprompt_v3::fp_claim_id_v3(&original) != c.claim
+        || legacy_original_v4::claim_id_v4(&original)? != c.claim
         || d.class_id != record.facts.class_id
         || d.layout_digest != record.layout_digest
         || d.header_digest != hash(b"misaka-palw/tir-source-header/v1", header)?
@@ -578,7 +596,7 @@ fn palw_tir_public_source_for_row_with_v2<S: SourceValueV2>(
     let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &bundle.original_binding else {
         return Err("TIR sidecar cannot reinterpret a legacy binding".into());
     };
-    let original = state.staged_original_job_v1(c.claim)?.ok_or("TIR sidecar lost retained original public commitment")?;
+    let original = S::original_v4(state, c.claim)?.ok_or("TIR sidecar lost retained original public commitment")?;
     let record = state.tir_class_v1(&header.job_context.shape_profile_id).ok_or("TIR sidecar registered class absent")?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
         .ok_or("TIR sidecar original class layout absent")?;
@@ -595,7 +613,7 @@ fn palw_tir_public_source_for_row_with_v2<S: SourceValueV2>(
         || c.terms.material_until_daa > bundle.claim.terms.material_until_daa
         || !c.custodians.iter().all(|bond| *bond == c.producer || bundle.claim.panel.contains(bond))
         || bundle.claim.panel.contains(&c.owner)
-        || crate::palw_freeprompt_v3::fp_claim_id_v3(&original) != c.claim
+        || legacy_original_v4::claim_id_v4(&original)? != c.claim
         || crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&header.job_context)
             != bundle.history_custody.pledge.job_identity
     {

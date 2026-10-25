@@ -32,3 +32,7 @@ The legacy fallback still uses `staged_original_job_v1` to decode its stored ori
 ## Final coordinated verification
 
 Source three dedicated parents and related continuation/public-row/response/material checks PASS. Six-package retry1 no-run PASS in 186.13 seconds with 40 identities matched. Initial missing test import failure is preserved. Earlier PENDING statements describe the preparation checkpoint and are superseded by this terminal result. [Pinned executables, exact counts, logs and scope](0006-0012-source-cone-replay-logs-verification-2026-10-25.md). No campaign status is promoted.
+
+## Later legacy-original continuation
+
+The two native legacy Source readers now retain their exact cold original commitment decoder and stream its length-prefixed claim identity. Their derived work-plan costs remain open. [Scoped reader controls and explicit lack of legacy Source end-to-end evidence](0006-tir-legacy-original-retained-reader-2026-10-25.md).

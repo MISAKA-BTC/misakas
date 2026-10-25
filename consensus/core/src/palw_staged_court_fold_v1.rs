@@ -394,6 +394,15 @@ impl PalwChainStateV2 {
     ) -> Result<Option<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>, String> {
         self.fp_public_jobs.get(&claim).map(|raw| borsh::from_slice(raw).map_err(|e| e.to_string())).transpose()
     }
+    /// Native legacy-original reader. Its exact typed decode reservation is
+    /// retained by the returned owner, including during downstream validation.
+    pub(crate) fn staged_original_job_native_v4(
+        &self,
+        claim: Hash64,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,
+        crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        crate::palw_tir_public_state_v1::legacy_original_v4::read_v4(self.fp_public_jobs.get(&claim).map(Vec::as_slice))
+    }
     pub fn staged_owned_row_v1(&self, claim: Hash64, owner: PalwBondKeyV2) -> Option<&PalwStagedCourtRowV1> {
         self.staged_courts.get(&PalwStagedCourtKeyV1::Owner(claim, owner))
     }
@@ -3998,4 +4007,9 @@ fn collect_prefix_default(
     // the existing economic helper skips an already charged producer and S4 key.
     let unpaid = default.panel.iter().copied().chain(std::iter::once(default.producer)).collect();
     b.staged_selected_default_charge_v1(ctx, default.claim, &claim, default.producer, &unpaid, default.owner)
+}
+
+#[cfg(test)]
+mod legacy_original_owner_tests_v4 {
+    include!("palw_tir_legacy_original_owner_tests_v4.rs");
 }
