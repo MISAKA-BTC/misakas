@@ -11,6 +11,18 @@ use misaka_palw_kernel::{ledger::OutsiderFindingV1, route::KernelRouteObjectV1};
 fn bad(e: impl ToString) -> Refusal {
     Refusal::new("PROVIDER_COURT_ACTION_V4", e.to_string())
 }
+/// Select only an exact failed unit, as identified by the reader at that
+/// unit's decode/authentication boundary. A native caller still needs its own
+/// current generation, query authority, explicit funding and deadline. No
+/// cross-unit checker failure, local capacity or opaque error selects a duty.
+pub fn provider_material_challenge_unit_v4(
+    failure: &super::provider_reader_v4::ProviderReaderFailureV4,
+) -> Option<(u8, u32)> {
+    match failure.cause() {
+        super::provider_reader_v4::ProviderReaderErrorV4::InvalidMaterial(_) => failure.invalid_unit(),
+        _ => None,
+    }
+}
 pub struct ProviderObjectiveActionV4 {
     object: KernelRouteObjectV1,
     _construction: Option<NativeDemandLeaseV1>,

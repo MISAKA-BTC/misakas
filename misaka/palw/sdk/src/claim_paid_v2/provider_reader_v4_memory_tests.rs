@@ -344,6 +344,7 @@ fn only_the_exact_registered_mutable_slot_is_an_optional_artifact_miss() {
             charged: Cell::new(0),
             lease: RefCell::new(None),
             error: RefCell::new(None),
+            invalid_unit: Cell::new(None),
         };
         assert!(reader.param(0, 1, Some(0)).is_none());
         assert!(reader.error.borrow().is_none());
@@ -375,3 +376,6 @@ fn authentic_lie_in_each_memory_step_is_localized_and_convicted_without_complete
 
 #[path = "provider_reader_v4_resource_tests.rs"]
 mod resource_tests;
+
+#[path = "provider_reader_v4_located_tests.rs"]
+mod located_tests;

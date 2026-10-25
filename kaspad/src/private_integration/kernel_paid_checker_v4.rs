@@ -25,7 +25,7 @@ use misaka_palw_kernel::{
 use misaka_palw_sdk::claim_paid_v2::{
     VerifiedPaidClaimSourcesV2, paid_claim_round_sources_from_route_v3, paid_claim_sources_from_route_v2,
     private_bootstrap::ProgramPaidBootstrapWorkV3,
-    provider_actions_v4::{objective_action_from_provider_check_v4, sign_provider_objective_action_v4},
+    provider_actions_v4::{objective_action_from_provider_check_v4, provider_material_challenge_unit_v4, sign_provider_objective_action_v4},
     provider_reader_v4::{ProviderReaderLimitsV4, ProviderReaderErrorV4},
 };
 use std::{
@@ -545,7 +545,7 @@ impl PreparedKernelPaidCheckV4 {
                 if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
                     return Err(misaka_palw_kernel::claim_paid_v2::COMPACT_V4_RETIRED_REASON.into());
                 }
-                let checked_result = source.verify_using_provider_classified_v4(&work.material, limits, query);
+                let checked_result = source.verify_using_provider_located_v4(&work.material, limits, query);
                 let signed = match checked_result {
                     Ok(checked) => {
                         let Some(index) =
@@ -567,11 +567,19 @@ impl PreparedKernelPaidCheckV4 {
                         use kaspa_consensus_core::palw_kernel_material_query_v4::{
                             PalwKernelMaterialFetchErrorV4 as E, monetary_material_challenge_object_v4,
                         };
+                        let invalid_unit = provider_material_challenge_unit_v4(&error);
+                        let error = error.into_cause();
                         if matches!(error, E::LocalCapacity(_)) {
                             kaspa_core::debug!("checker local capacity pending; no provider obligation or conviction: {error}");
                             continue;
                         }
-                        let Some(unit) = failure.into_inner() else {
+                        // SDK unit validation runs after a successful signed
+                        // transport read. Its exact coordinate is not a guessed
+                        // last request; cross-unit reconstruction has none.
+                        let unit = failed_query::select_failed_material_query_v4(
+                            base, material_consent, self.provider, failure.into_inner(), invalid_unit,
+                        );
+                        let Some(unit) = unit else {
                             kaspa_core::debug!(
                                 "checker fresh verification/authority unknown; no new obligation or conviction: {error}"
                             );
@@ -865,5 +873,6 @@ mod challenge_history;
 mod outbox;
 mod saved_receipt_binding;
 
+mod failed_query;
 #[cfg(test)]
 mod tests;
