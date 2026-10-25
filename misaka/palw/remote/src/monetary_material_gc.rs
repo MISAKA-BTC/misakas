@@ -376,6 +376,7 @@ impl MonetaryMaterialGcJanitorV1 {
         intent: &MonetaryGcIntentV1,
         native_claims: Vec<Hash64>,
     ) -> Result<bool, String> {
+        store.ensure_published_state_v4()?;
         if intent.version != JOURNAL_VERSION_V1 {
             return Err("provider GC intent version differs".into());
         }
@@ -424,6 +425,7 @@ impl MonetaryMaterialGcJanitorV1 {
         store: &mut DurableMonetaryMaterialProviderV1,
         oracle: &mut impl MonetaryMaterialGcOracleV1,
     ) -> Result<MonetaryGcTickReportV1, String> {
+        store.ensure_published_state_v4()?;
         let mut report = MonetaryGcTickReportV1::default();
         // 1. Replay an interrupted deletion first, under the same witness.
         match fs::metadata(&self.intent) {
@@ -460,10 +462,19 @@ impl MonetaryMaterialGcJanitorV1 {
                         report.deleted.push(intent.stored_consent);
                     }
                     Ok(false) => {
-                        // The store still contains every byte. A reorg can revoke
-                        // this candidate; clear the unexecuted intent and resume
-                        // discovery rather than pinning forever to a stale tuple.
-                        remove_durably(&self.intent)?;
+                        if store.held_contracts().iter().any(|(consent, _)| *consent == intent.stored_consent) {
+                            // The deletion did not publish: a revoked candidate
+                            // can return to discovery with all material intact.
+                            remove_durably(&self.intent)?;
+                        } else {
+                            // A prior process may already have published raw
+                            // deletion. The WAL is now the only durable cleanup
+                            // tuple/claim inventory. Keep it across an authority
+                            // refusal and retry; absence cannot finish or forget it.
+                            report.refused = Some("interrupted deletion authority changed after raw publication; exact intent retained".into());
+                            report.retained = store.held_contracts().len();
+                            return Ok(report);
+                        }
                     }
                     Err(error) => {
                         report.refused = Some(format!("an interrupted deletion could not be replayed: {error}"));
@@ -512,6 +523,7 @@ impl MonetaryMaterialGcJanitorV1 {
             }
         }
         for consent in consents {
+            store.ensure_published_state_v4()?;
             // Rotate after every inspected contract. A large/unfinalized first
             // contract may exhaust the budget but cannot starve later ones.
             if budget == 0 {
@@ -671,6 +683,7 @@ impl MonetaryMaterialGcJanitorV1 {
                 }
             }
         }
+        store.ensure_published_state_v4()?;
         self.persist()?;
         report.retained = store.held_contracts().len();
         report.pinned = self.watches.values().filter_map(|w| w.pinned.clone().map(|why| (w.stored_consent, why))).collect();
@@ -793,6 +806,7 @@ impl<A: RemoteFinalityAuthorityV1, F: FnMut(BlockHash) -> Result<crate::monetary
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod publication { include!("monetary_material_gc_publication_tests.rs"); }
 
     struct Fake {
         rows: Result<Vec<PalwMonetaryMaterialRowV1>, String>,

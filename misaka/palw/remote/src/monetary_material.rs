@@ -42,8 +42,20 @@ pub struct DurableMonetaryMaterialProviderV1 {
     store: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialProviderStoreV1>,
     contexts: Option<crate::kernel_material_context_v4::KernelMaterialContextArchiveV4>,
     expiry_cursor: Option<Hash64>,
+    // A rename may have published a different generation before directory fsync
+    // fails. The old in-memory projection must never serve or mutate it.
+    publication_uncertain: bool,
 }
 impl DurableMonetaryMaterialProviderV1 {
+    /// A failed publication after the rename boundary requires dropping this
+    /// owner and reopening/revalidating the actual persisted generation. This
+    /// is local storage health, never evidence about a provider or native claim.
+    pub fn ensure_published_state_v4(&self) -> Result<(), String> {
+        if self.publication_uncertain {
+            return Err("provider snapshot publication outcome is uncertain; close and reopen before serving or mutating".into());
+        }
+        Ok(())
+    }
     /// Actual native work replay and complete bundle verification precede this
     /// call; a liability signature must follow successful atomic publication.
     pub fn prepare_prospective_kernel_v4(
@@ -55,6 +67,7 @@ impl DurableMonetaryMaterialProviderV1 {
         context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
         capsule: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
     ) -> Result<Hash64, String> {
+        self.ensure_published_state_v4()?;
         if !enrollment.offers.iter().any(|o| o.provider == provider)
             || enrollment.terms.sponsor != material.authority().producer
             || enrollment.terms.root != material.authority().root
@@ -106,6 +119,7 @@ impl DurableMonetaryMaterialProviderV1 {
         bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
         context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
     ) -> Result<Hash64, String> {
+        self.ensure_published_state_v4()?;
         // This fixed request ID comes from native covenant/nonce and identity
         // replay, not the independently supplied context. Refuse before hashing
         // the capsule, constructing a candidate, or publishing either file.
@@ -133,6 +147,7 @@ impl DurableMonetaryMaterialProviderV1 {
         context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
         capsule: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
     ) -> Result<(), String> {
+        self.ensure_published_state_v4()?;
         self.contexts.as_mut().ok_or("kernel context archive unavailable")?.insert(context, capsule)?;
         Ok(())
     }
@@ -146,6 +161,7 @@ impl DurableMonetaryMaterialProviderV1 {
         bundle: &PalwHeldMaterialBundleV1,
         authority: kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1,
     ) -> Result<Hash64, String> {
+        self.ensure_published_state_v4()?;
         if row.terms.root != ready.session
             || row.consent != ready.consent
             || row.terms.native_session.is_none()
@@ -181,6 +197,7 @@ impl DurableMonetaryMaterialProviderV1 {
         authority: &kaspa_consensus_core::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
     ) -> Result<Hash64, kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
         use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+        self.ensure_published_state_v4().map_err(E::Authentication)?;
         if row.terms.root != ready.session
             || row.consent != ready.consent
             || row.terms.native_session.is_none()
@@ -225,6 +242,7 @@ impl DurableMonetaryMaterialProviderV1 {
         kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1,
     > {
         use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+        self.ensure_published_state_v4().map_err(E::Authentication)?;
         let historical = load_routed_authority_v2(&self.file, claim, self.max_contract_bytes)?;
         if &*historical != authority.record() {
             return Err(E::Substitution);
@@ -236,12 +254,13 @@ impl DurableMonetaryMaterialProviderV1 {
         candidate: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialProviderStoreV1>,
     ) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
         use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+        self.ensure_published_state_v4().map_err(E::Authentication)?;
         let len = borsh::object_length(&*candidate).map_err(|_| E::Capacity)? as u64;
         let _encoding =
             kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(len.checked_mul(2).ok_or(E::Capacity)?)
                 .map_err(E::LocalResource)?;
         let raw = borsh::to_vec(&*candidate).map_err(|e| E::Authentication(e.to_string()))?;
-        atomic_routed_file_v2(&self.file, &raw)?;
+        self.publish_encoded_v4(&raw).map_err(E::Authentication)?;
         self.store = candidate;
         self.sweep_routed_authorities_v2()?;
         Ok(())
@@ -280,6 +299,7 @@ impl DurableMonetaryMaterialProviderV1 {
         ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
         authority: impl FnMut(Hash64) -> Option<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1>,
     ) -> Result<Hash64, String> {
+        self.ensure_published_state_v4()?;
         if !enrollment.offers.iter().any(|o| o.provider == provider) || enrollment.terms.max_material_bytes > self.max_contract_bytes {
             return Err("provider did not offer this complete material capacity".into());
         }
@@ -321,6 +341,7 @@ impl DurableMonetaryMaterialProviderV1 {
         provider: PalwBondKeyV2,
         demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        self.ensure_published_state_v4()?;
         if self.store.material_generation_scope_v4(consent, root, dependency).is_some_and(|(_, scope)| {
             scope.codec == kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldCompleteV2
         }) {
@@ -430,6 +451,7 @@ impl DurableMonetaryMaterialProviderV1 {
         ) -> Result<(), kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4>,
         mut build: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<T, String>,
     ) -> Result<T, String> {
+        self.ensure_published_state_v4()?;
         let mut last = String::from("no current eligible retained material generation");
         for (consent, scope) in self.store.material_generation_scopes_v4(preferred, root, dependency) {
             if exact && consent != preferred {
@@ -549,7 +571,7 @@ impl DurableMonetaryMaterialProviderV1 {
             }
         }
         let opened =
-            Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store, contexts, expiry_cursor: None };
+            Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store, contexts, expiry_cursor: None, publication_uncertain: false };
         opened.sweep_routed_authorities_v2().map_err(|e| e.to_string())?;
         Ok(opened)
     }
@@ -557,18 +579,32 @@ impl DurableMonetaryMaterialProviderV1 {
         &mut self,
         candidate: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialProviderStoreV1>,
     ) -> Result<(), String> {
+        self.ensure_published_state_v4()?;
         let encoded = candidate.provider_encoded_v1()?;
+        self.publish_encoded_v4(&encoded)?;
+        self.store = candidate;
+        self.sweep_routed_authorities_v2().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    fn publish_encoded_v4(&mut self, encoded: &[u8]) -> Result<(), String> {
+        self.ensure_published_state_v4()?;
         let parent = self.file.parent().ok_or("provider file has no parent directory")?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let name = self.file.file_name().and_then(|name| name.to_str()).ok_or("provider filename is not UTF-8")?;
         let temporary = parent.join(format!("{name}.pending-{}", std::process::id()));
-        // Never overwrite another writer's pending generation. Failure retains
-        // the old memory/durable generation and does not authorize a signature.
+        // Before rename, failure leaves the old generation usable. Once the
+        // rename is attempted, a failure requires reopen; no signature or
+        // answer may rely on the old in-memory generation.
         let mut output = OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e| e.to_string())?;
         let result = (|| {
             output.write_all(&encoded)?;
             output.sync_all()?;
+            #[cfg(test)]
+            publication_checkpoint_v4(1)?;
+            self.publication_uncertain = true;
             fs::rename(&temporary, &self.file)?;
+            #[cfg(test)]
+            publication_checkpoint_v4(2)?;
             File::open(parent)?.sync_all()?;
             Ok::<_, std::io::Error>(())
         })();
@@ -576,8 +612,7 @@ impl DurableMonetaryMaterialProviderV1 {
             let _ = fs::remove_file(temporary);
             return Err(error.to_string());
         }
-        self.store = candidate;
-        self.sweep_routed_authorities_v2().map_err(|e| e.to_string())?;
+        self.publication_uncertain = false;
         Ok(())
     }
     /// Call before signing the enrollment. The complete canonical material and
@@ -589,6 +624,7 @@ impl DurableMonetaryMaterialProviderV1 {
         bundles: &[PalwHeldMaterialBundleV1],
         authority: impl FnMut(Hash64) -> Option<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1>,
     ) -> Result<Hash64, String> {
+        self.ensure_published_state_v4()?;
         if !enrollment.offers.iter().any(|offer| offer.provider == provider)
             || enrollment.terms.max_material_bytes > self.max_contract_bytes
         {
@@ -635,6 +671,7 @@ impl DurableMonetaryMaterialProviderV1 {
         bundles: &[PalwHeldMaterialBundleV1],
         authority: impl FnMut(Hash64) -> Option<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1>,
     ) -> Result<Hash64, String> {
+        self.ensure_published_state_v4()?;
         let e = &replacement.enrollment;
         if replacement.root != e.terms.root
             || !e.offers.iter().any(|o| o.provider == provider)
@@ -677,6 +714,7 @@ impl DurableMonetaryMaterialProviderV1 {
         release_block: kaspa_consensus_core::BlockHash,
         native_witness: impl FnMut(Hash64, Hash64, Hash64, kaspa_consensus_core::BlockHash) -> Result<bool, String>,
     ) -> Result<bool, String> {
+        self.ensure_published_state_v4()?;
         let (candidate, released) =
             self.store.provider_release_finalized_v1(root, stored_consent, release_consent, tail, release_block, native_witness)?;
         if !released {
@@ -700,6 +738,7 @@ impl DurableMonetaryMaterialProviderV1 {
         block: kaspa_consensus_core::BlockHash,
         mut witness: impl FnMut(Hash64, Hash64, Hash64, kaspa_consensus_core::BlockHash) -> Result<bool, String>,
     ) -> Result<bool, String> {
+        self.ensure_published_state_v4()?;
         let Some(archive) = self.contexts.as_mut() else { return Ok(true) };
         if archive.get(stored)?.is_none() {
             return Ok(true);
@@ -716,6 +755,7 @@ impl DurableMonetaryMaterialProviderV1 {
     /// One bounded round-robin metadata row per tick; no first-live row can
     /// starve later expired offers. A failed read leaves its WAL and bytes held.
     pub fn expire_unused_kernel_offer_tick_v4(&mut self, native: &dyn kaspa_consensus_core::api::ConsensusApi) -> Result<(), String> {
+        self.ensure_published_state_v4()?;
         let Some(archive) = self.contexts.as_ref() else { return Ok(()) };
         let pending = archive.pending_expiry();
         let Some(consent) = pending.map(|(id, _, _)| id).or_else(|| archive.next_consent(self.expiry_cursor)) else { return Ok(()) };
@@ -760,6 +800,7 @@ impl DurableMonetaryMaterialProviderV1 {
         enrollment: &PalwMonetaryMaterialEnrollmentV1,
         native_expiry: impl FnMut(Hash64, u64) -> Result<bool, String>,
     ) -> Result<bool, String> {
+        self.ensure_published_state_v4()?;
         let (candidate, expired) = self.store.provider_discard_expired_offer_v1(enrollment, native_expiry)?;
         if !expired {
             return Ok(false);
@@ -899,3 +940,12 @@ fn atomic_routed_file_v2(
 #[cfg(test)]
 #[path = "monetary_material_current_tests.rs"]
 mod current_generation_tests;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PUBLICATION_CHECKPOINT_V4: std::cell::Cell<Option<fn(u8) -> std::io::Result<()>>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+fn publication_checkpoint_v4(stage: u8) -> std::io::Result<()> {
+    PUBLICATION_CHECKPOINT_V4.with(|hook| hook.get().map_or(Ok(()), |call| call(stage)))
+}

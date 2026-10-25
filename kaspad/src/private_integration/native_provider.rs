@@ -560,6 +560,14 @@ impl LoopbackNativeProviderV3 {
                     "RFC12 PRIVATE: PAV3 provider GC stopped; verified prior deletions may be durable, other material retained: {error}"
                 ),
             }
+            // Expiry or the janitor may have renamed the snapshot and then
+            // failed its durability barrier in this same tick. The diagnostic
+            // held-set is then stale: it cannot authorize metadata retirement
+            // or a signed recovery ACK until the provider is reopened.
+            if let Err(error) = store.ensure_published_state_v4() {
+                kaspa_core::warn!("RFC08 provider metadata/ACK waits for snapshot reopen: {error}");
+                continue;
+            }
             // Receipts survive store deletion, marker replay and restart. Never
             // infer cleanup authority from a missing bundle alone.
             let receipts: Vec<_> = janitor.completed_receipts().cloned().collect();

@@ -30,6 +30,10 @@ impl Drop for FixtureDir {
     }
 }
 fn typed_store(file: &Path) -> (DurableMonetaryMaterialProviderV1, Hash64, Hash64, Hash64, PalwBondKeyV2) {
+    let (store, preferred, fallback, root, provider, _) = typed_store_with_ledger(file);
+    (store, preferred, fallback, root, provider)
+}
+fn typed_store_with_ledger(file: &Path) -> (DurableMonetaryMaterialProviderV1, Hash64, Hash64, Hash64, PalwBondKeyV2, misaka_palw_kernel::ledger::KernelLedgerV1) {
     use crate::monetary_gc_kernel_fixture::ledger_world::{position, World};
     use kaspa_consensus_core::{
         palw_material_capacity_v1::{PalwKernelMaterialBundleV1, PalwMaterialManifestV1},
@@ -78,7 +82,7 @@ fn typed_store(file: &Path) -> (DurableMonetaryMaterialProviderV1, Hash64, Hash6
     let fallback = replacement.id();
     drop(store);
     let store = DurableMonetaryMaterialProviderV1::open(file, 1 << 24, 1 << 26, Some(&world.l), |_| None).unwrap();
-    (store, preferred, fallback, root, provider)
+    (store, preferred, fallback, root, provider, world.l)
 }
 
 #[test]
@@ -238,3 +242,6 @@ fn initial_native_capacity_and_unavailable_are_not_generation_denials() {
         assert_eq!(calls.get(), 1);
     }
 }
+
+#[path = "monetary_material_publication_tests.rs"]
+mod publication;
