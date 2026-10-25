@@ -1,0 +1,3954 @@
+{
+  "schema": "misaka.latest-rfc-audit.recheck.v1",
+  "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+  "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+  "read_only": true,
+  "requirements_checked": 52,
+  "rfc_count": 13,
+  "counts": {
+    "code_complete": 3,
+    "formally_complete": 1,
+    "implementation_distribution": {
+      "PARTIAL": 9,
+      "DEFERRED": 1,
+      "COMPLETE": 3
+    }
+  },
+  "code_complete_revalidation": {
+    "RFC-0017": {
+      "production_and_requirement_reference_paths": 11,
+      "unchanged_source_paths": true,
+      "counterevidence_found": false,
+      "note": "17/19はhelperのみでなくfold/dispatch/identity/CLI実callerを再確認。21は文書/検査/原本保存scopeでありnode dutyを追加しない。"
+    },
+    "RFC-0019": {
+      "production_and_requirement_reference_paths": 8,
+      "unchanged_source_paths": true,
+      "counterevidence_found": false,
+      "note": "17/19はhelperのみでなくfold/dispatch/identity/CLI実callerを再確認。21は文書/検査/原本保存scopeでありnode dutyを追加しない。"
+    },
+    "RFC-0021": {
+      "production_and_requirement_reference_paths": 5,
+      "unchanged_source_paths": true,
+      "counterevidence_found": false,
+      "note": "17/19はhelperのみでなくfold/dispatch/identity/CLI実callerを再確認。21は文書/検査/原本保存scopeでありnode dutyを追加しない。"
+    }
+  },
+  "primary_documents": [
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "unchanged": true,
+      "sha256": "8c9c2a6e3b5cb2b1c95d62da8a60670d826b5ecd27e56c661819a171102c2df0"
+    },
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "unchanged": true,
+      "sha256": "b6abbf1fcc2c62fe91397078274339ac6cb11942ccd4632dc6a00296a2d3bab8"
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "unchanged": true,
+      "sha256": "9f005a05fd7c732069baa47195f4c56ef9995b423e9cf35876937f8d1046618c"
+    },
+    {
+      "path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "unchanged": true,
+      "sha256": "e821fe260743d5b9bad78d8918647c6f71a946818d1ac0bcd410c1673984f47a"
+    },
+    {
+      "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "unchanged": true,
+      "sha256": "6f91c20b1650ec66336df78bd6715a742e97edde4c5cdbc396afb3544c32fabc"
+    },
+    {
+      "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "unchanged": true,
+      "sha256": "3672c8774d690749527351c5276e622f19a623798a16e29386c2265392b28390"
+    },
+    {
+      "path": "docs/rfc/0019-annual-model-upgrade.md",
+      "unchanged": true,
+      "sha256": "ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e"
+    },
+    {
+      "path": "docs/rfc/0020-long-context-calibration-memory.md",
+      "unchanged": true,
+      "sha256": "9ea21859e194f85dedd83868df1c397b982df9f65f30e34de281fa2a355f6fce"
+    },
+    {
+      "path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "unchanged": true,
+      "sha256": "1d780be260b557208bf4bdf3310e09bb3b1b7f463d1dbc13cfe6a0f81b68183a"
+    },
+    {
+      "path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "unchanged": true,
+      "sha256": "753f83e076fc1228ddf8b29ae0520c9a61457ff66842da20d3fd31e773df4717"
+    },
+    {
+      "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "unchanged": true,
+      "sha256": "cfe54859d881c7201abbd9e2253d29fff83af7615b170f1e5b9efb4932cf8759"
+    },
+    {
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "unchanged": true,
+      "sha256": "ab4f29ce187abefcc408a26fcd0b9c0f4e4e862311a0406bab3a658037a9f62f"
+    },
+    {
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "unchanged": true,
+      "sha256": "c4cf2e50999f29623cde90fff5e96b70b07f8e2f0c7fcf24d7df82c02a78f8db"
+    }
+  ],
+  "referenced_source_files": [
+    {
+      "path": "consensus/core/src/config/params.rs",
+      "unchanged": true,
+      "old_sha256": "321c2d708a28b7ae97abdae9feceafe76bcb6fb2551b7fddc35908966de25dcb",
+      "new_sha256": "321c2d708a28b7ae97abdae9feceafe76bcb6fb2551b7fddc35908966de25dcb"
+    },
+    {
+      "path": "consensus/core/src/config/params/identity.rs",
+      "unchanged": true,
+      "old_sha256": "5900405ff29a07540c83e996c3aa4e25432290d73a7d38d5c1f1d8c047598eae",
+      "new_sha256": "5900405ff29a07540c83e996c3aa4e25432290d73a7d38d5c1f1d8c047598eae"
+    },
+    {
+      "path": "consensus/core/src/config/params/validation.rs",
+      "unchanged": true,
+      "old_sha256": "3f16ff611d4efd22bc874ceee4e06880a4d99ebe7d90f3c4bf816dfb08da7489",
+      "new_sha256": "3f16ff611d4efd22bc874ceee4e06880a4d99ebe7d90f3c4bf816dfb08da7489"
+    },
+    {
+      "path": "consensus/core/src/palw_annual_catalog_v1.rs",
+      "unchanged": true,
+      "old_sha256": "3465fb8cb179744a4bbcb47620bd97d3586ff1768570bf8d7250065e315dd368",
+      "new_sha256": "3465fb8cb179744a4bbcb47620bd97d3586ff1768570bf8d7250065e315dd368"
+    },
+    {
+      "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "27fd0506595bac1c026b4751c679cf875161f8aa9d184f8804a1ed8bf0e33cac",
+      "new_sha256": "27fd0506595bac1c026b4751c679cf875161f8aa9d184f8804a1ed8bf0e33cac"
+    },
+    {
+      "path": "consensus/core/src/palw_bond_budget_v1.rs",
+      "unchanged": true,
+      "old_sha256": "aba1585376dae2e3ba578629ebf263abe91cef346c52a78adc7b2e38c72ccb5f",
+      "new_sha256": "aba1585376dae2e3ba578629ebf263abe91cef346c52a78adc7b2e38c72ccb5f"
+    },
+    {
+      "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+      "unchanged": true,
+      "old_sha256": "3e2e9623c8251c4b0c15451c5f9e6b90e073e3e166746c14f9948a0e3d095e5a",
+      "new_sha256": "3e2e9623c8251c4b0c15451c5f9e6b90e073e3e166746c14f9948a0e3d095e5a"
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a",
+      "new_sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a"
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_checkpoint_resources_v1.rs",
+      "unchanged": true,
+      "old_sha256": "c4ca53a49fa6e03f593a8c4d6110c01d0f543344cdcadfc2050af22f440815fe",
+      "new_sha256": "c4ca53a49fa6e03f593a8c4d6110c01d0f543344cdcadfc2050af22f440815fe"
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "9151820828e798f4825a563811ee5fa78ea2aed3bfed69c6cb93fe79415189b3",
+      "new_sha256": "9151820828e798f4825a563811ee5fa78ea2aed3bfed69c6cb93fe79415189b3"
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_rewards_v1.rs",
+      "unchanged": true,
+      "old_sha256": "9edf3a01ee706005fb726d85773239feb13b2eac2acd44c5a6776c065b6aea2a",
+      "new_sha256": "9edf3a01ee706005fb726d85773239feb13b2eac2acd44c5a6776c065b6aea2a"
+    },
+    {
+      "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+      "unchanged": false,
+      "old_sha256": "647c604ec9582823b048496396ce4f6aca36235af2f21408a00c2036647876fa",
+      "new_sha256": "f67b04b181d56b67814fc1d675c2b04eadbf8f319dcfc5866885d01d95f89cb0"
+    },
+    {
+      "path": "consensus/core/src/palw_court_capacity_v1.rs",
+      "unchanged": true,
+      "old_sha256": "3289e294e02b20a4f038dbf19e6ff79a056c46cc5636fec50204b6391843fdff",
+      "new_sha256": "3289e294e02b20a4f038dbf19e6ff79a056c46cc5636fec50204b6391843fdff"
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_tir_bottom_v1.rs",
+      "unchanged": true,
+      "old_sha256": "3d477b2da761a85974e01b2074b0d3bdb2097b64326f915dd420c076e595aa4a",
+      "new_sha256": "3d477b2da761a85974e01b2074b0d3bdb2097b64326f915dd420c076e595aa4a"
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005",
+      "new_sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005"
+    },
+    {
+      "path": "consensus/core/src/palw_court_v2.rs",
+      "unchanged": true,
+      "old_sha256": "8cc1e9993849f23294f55ca84f45c521d6176039abddc5893a64593497dde364",
+      "new_sha256": "8cc1e9993849f23294f55ca84f45c521d6176039abddc5893a64593497dde364"
+    },
+    {
+      "path": "consensus/core/src/palw_fork_choice_rule_e_v1.rs",
+      "unchanged": true,
+      "old_sha256": "185c7a6c8e52a42e7bed7c56abf06c4c90b615b92261652a07cabb4f3dade4e5",
+      "new_sha256": "185c7a6c8e52a42e7bed7c56abf06c4c90b615b92261652a07cabb4f3dade4e5"
+    },
+    {
+      "path": "consensus/core/src/palw_gen_v1.rs",
+      "unchanged": true,
+      "old_sha256": "9cec87571679e0a62b040f4ce73097041eb6736e6588a0346fb27dca7f2210fb",
+      "new_sha256": "9cec87571679e0a62b040f4ce73097041eb6736e6588a0346fb27dca7f2210fb"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2",
+      "new_sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2"
+    },
+    {
+      "path": "consensus/core/src/palw_model_eligibility_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "3b467da7692035b3a4be7e8225d750c218d2911ffe8bb9ef24f061bb1d6193d6",
+      "new_sha256": "3b467da7692035b3a4be7e8225d750c218d2911ffe8bb9ef24f061bb1d6193d6"
+    },
+    {
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "unchanged": true,
+      "old_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71",
+      "new_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71"
+    },
+    {
+      "path": "consensus/core/src/palw_panel_free_gate_v1.rs",
+      "unchanged": true,
+      "old_sha256": "875c6126c797e5ad8de91343434c557f1c30d4108bb902064cd573c3085cd69e",
+      "new_sha256": "875c6126c797e5ad8de91343434c557f1c30d4108bb902064cd573c3085cd69e"
+    },
+    {
+      "path": "consensus/core/src/palw_panel_free_v1.rs",
+      "unchanged": true,
+      "old_sha256": "f48f45cdacf3b93eab4ce7af8f81c39feead3cb7dc414dbad20b07ce1e1179b1",
+      "new_sha256": "f48f45cdacf3b93eab4ce7af8f81c39feead3cb7dc414dbad20b07ce1e1179b1"
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "fcc405cd39ca782f418dbdc52c10656dacfc00c075f477910e1a807af23c0676",
+      "new_sha256": "fcc405cd39ca782f418dbdc52c10656dacfc00c075f477910e1a807af23c0676"
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_v1/capacity.rs",
+      "unchanged": true,
+      "old_sha256": "6d782ca118d24d12ca841e7d60baa31ffbd5577ff09a4c5787f37eb5c488ffa8",
+      "new_sha256": "6d782ca118d24d12ca841e7d60baa31ffbd5577ff09a4c5787f37eb5c488ffa8"
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_v1/report.rs",
+      "unchanged": true,
+      "old_sha256": "c550e54ed17d30b1480b887e5b70032b2318f14547d7d81328e8b576dde6b9f2",
+      "new_sha256": "c550e54ed17d30b1480b887e5b70032b2318f14547d7d81328e8b576dde6b9f2"
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_v1/values.rs",
+      "unchanged": true,
+      "old_sha256": "e8f3d94a2d3e9c574f84ca6f8eb69306fee541eae85700a887c5d8a20d8004d9",
+      "new_sha256": "e8f3d94a2d3e9c574f84ca6f8eb69306fee541eae85700a887c5d8a20d8004d9"
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "unchanged": true,
+      "old_sha256": "df9a810523b90f04a6646d38a42141aa37a51df02a9c9042174c25580d9aedc6",
+      "new_sha256": "df9a810523b90f04a6646d38a42141aa37a51df02a9c9042174c25580d9aedc6"
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0018_v1/attack_tests.rs",
+      "unchanged": true,
+      "old_sha256": "39dff0d299b9c7d877c359c30175edf48c56466f89bb93ac5cb45b5ce531543b",
+      "new_sha256": "39dff0d299b9c7d877c359c30175edf48c56466f89bb93ac5cb45b5ce531543b"
+    },
+    {
+      "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "0121ea99291c9d8af1983c5bc5b1057aaadab1cc5e5fe662ee4d85656cf598a7",
+      "new_sha256": "0121ea99291c9d8af1983c5bc5b1057aaadab1cc5e5fe662ee4d85656cf598a7"
+    },
+    {
+      "path": "consensus/core/src/palw_settlement_v1.rs",
+      "unchanged": true,
+      "old_sha256": "25bc6d35248e3e5259710b032ce3be1c6edfa88894cda51787bae6dc174ff31f",
+      "new_sha256": "25bc6d35248e3e5259710b032ce3be1c6edfa88894cda51787bae6dc174ff31f"
+    },
+    {
+      "path": "consensus/core/src/palw_staged_court_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "e350caf1d8e8473a7932d8b74420620f2f0d7720db440529e285aed49b56069a",
+      "new_sha256": "e350caf1d8e8473a7932d8b74420620f2f0d7720db440529e285aed49b56069a"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "unchanged": false,
+      "old_sha256": "4a964ed53e2babd9de5cfb69d75a42ed8cae135ada256d3cabb3eb2723d62ee5",
+      "new_sha256": "512241ddc3e15501e1bf56386e3ddb38dee5ab17fd4040e02f2e47f84f578101"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/fold_read.rs",
+      "unchanged": true,
+      "old_sha256": "e380f6d761777e36d5e8f9a624ef1245ed6b857e378b929b7b94739efa78f033",
+      "new_sha256": "e380f6d761777e36d5e8f9a624ef1245ed6b857e378b929b7b94739efa78f033"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/transition_builder.rs",
+      "unchanged": true,
+      "old_sha256": "db00904e9dac7bb1642f50bb3b225decb98c1ba828c2d5adffde577d53080f9b",
+      "new_sha256": "db00904e9dac7bb1642f50bb3b225decb98c1ba828c2d5adffde577d53080f9b"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+      "unchanged": true,
+      "old_sha256": "10b0a63ffc9ca217e49b675b1f1af9659153f89bec12c60c39200ab057cb4325",
+      "new_sha256": "10b0a63ffc9ca217e49b675b1f1af9659153f89bec12c60c39200ab057cb4325"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "unchanged": true,
+      "old_sha256": "13efb8b76b56120b0c70d5c9dd19c95ff68491065c1db5c473c8f1dbde650b5e",
+      "new_sha256": "13efb8b76b56120b0c70d5c9dd19c95ff68491065c1db5c473c8f1dbde650b5e"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_public_fold_v1.rs",
+      "unchanged": true,
+      "old_sha256": "d2ecb21cbc1cc40f9e6746d7e2133adaf4688b939260a27f9725aa61e17c4685",
+      "new_sha256": "d2ecb21cbc1cc40f9e6746d7e2133adaf4688b939260a27f9725aa61e17c4685"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_public_source_v1.rs",
+      "unchanged": true,
+      "old_sha256": "54fc66ff6d8e89f2f95f2184206f4095f05b6d6467e88b8d679546450550ecee",
+      "new_sha256": "54fc66ff6d8e89f2f95f2184206f4095f05b6d6467e88b8d679546450550ecee"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_public_state_v1.rs",
+      "unchanged": true,
+      "old_sha256": "ca1de7257cdd7fcd0f17212ea3c98e4cc7522cb8697e1f4db7cbd45da73cb7ac",
+      "new_sha256": "ca1de7257cdd7fcd0f17212ea3c98e4cc7522cb8697e1f4db7cbd45da73cb7ac"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+      "unchanged": true,
+      "old_sha256": "00fa950539389792ec99f2d71b856351c24c300ba75b29cd0baa150a2d75160f",
+      "new_sha256": "00fa950539389792ec99f2d71b856351c24c300ba75b29cd0baa150a2d75160f"
+    },
+    {
+      "path": "docs/adr/0182-defer-media-and-model-improvement-until-post-mainnet.md",
+      "unchanged": true,
+      "old_sha256": "8276d2dcbdd7068914774944c28e6b283542d004899ae847bccdc092a9a3350e",
+      "new_sha256": "8276d2dcbdd7068914774944c28e6b283542d004899ae847bccdc092a9a3350e"
+    },
+    {
+      "path": "docs/governance/design-freeze.md",
+      "unchanged": true,
+      "old_sha256": "aaf370f3d7b68df12574318139ba0d42bd1299a9e1630288b3466574bdde3527",
+      "new_sha256": "aaf370f3d7b68df12574318139ba0d42bd1299a9e1630288b3466574bdde3527"
+    },
+    {
+      "path": "docs/governance/parameter-register.md",
+      "unchanged": true,
+      "old_sha256": "65933be511ba8c8a7479cc12489abfd16cf611b008288031b5de15f13bdfbe92",
+      "new_sha256": "65933be511ba8c8a7479cc12489abfd16cf611b008288031b5de15f13bdfbe92"
+    },
+    {
+      "path": "docs/governance/post-mainnet-scope.md",
+      "unchanged": true,
+      "old_sha256": "f167bbd91342a6b34da0c1d98ebe1cc71be843b2d0e94c4ef9ab3a82b3d235a2",
+      "new_sha256": "f167bbd91342a6b34da0c1d98ebe1cc71be843b2d0e94c4ef9ab3a82b3d235a2"
+    },
+    {
+      "path": "docs/maintenance/check_docs.py",
+      "unchanged": true,
+      "old_sha256": "b3c60cb961354414b99cfad25f517401aa885bddd28400928cb52e7fa630287d",
+      "new_sha256": "b3c60cb961354414b99cfad25f517401aa885bddd28400928cb52e7fa630287d"
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "unchanged": true,
+      "old_sha256": "646a29148a2bc3a3b84a141c36cfe98d10a3820aee085099bc2265f305f56ce8",
+      "new_sha256": "646a29148a2bc3a3b84a141c36cfe98d10a3820aee085099bc2265f305f56ce8"
+    },
+    {
+      "path": "docs/maintenance/validation-report.md",
+      "unchanged": true,
+      "old_sha256": "7cb1f7f8781362dd77174cc706648d9b343cf259500b4a645ea78cb757813789",
+      "new_sha256": "7cb1f7f8781362dd77174cc706648d9b343cf259500b4a645ea78cb757813789"
+    },
+    {
+      "path": "docs/rfc/0025-assets/capacity_planner.py",
+      "unchanged": true,
+      "old_sha256": "ec57a30a50e24ce96c97788f58fcd263576341345067fe0adf35806d46ff57d0",
+      "new_sha256": "ec57a30a50e24ce96c97788f58fcd263576341345067fe0adf35806d46ff57d0"
+    },
+    {
+      "path": "kaspad/src/palw_fraud_filer.rs",
+      "unchanged": true,
+      "old_sha256": "c155a3f077097528356d4a717af5679654b442c7a07b11e1d7e829584e6230e8",
+      "new_sha256": "c155a3f077097528356d4a717af5679654b442c7a07b11e1d7e829584e6230e8"
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "unchanged": true,
+      "old_sha256": "ce27785b8a127e178998c90080d9ca9ed3b5949a2b122e66311136786403098d",
+      "new_sha256": "ce27785b8a127e178998c90080d9ca9ed3b5949a2b122e66311136786403098d"
+    },
+    {
+      "path": "kaspad/src/palw_tir_acquisition_driver.rs",
+      "unchanged": true,
+      "old_sha256": "17209475b912cb9dbe3ae10010067bffcde4f355b37d535ca56eb652035bc2ec",
+      "new_sha256": "17209475b912cb9dbe3ae10010067bffcde4f355b37d535ca56eb652035bc2ec"
+    },
+    {
+      "path": "kaspad/src/palw_tir_public_filer_scheduler.rs",
+      "unchanged": true,
+      "old_sha256": "0d97e3ea6096ef2ba43aeac933a9a968f5038140f210128d41e102ca7156e241",
+      "new_sha256": "0d97e3ea6096ef2ba43aeac933a9a968f5038140f210128d41e102ca7156e241"
+    },
+    {
+      "path": "misaka/palw/sdk/src/onboarding_chain.rs",
+      "unchanged": true,
+      "old_sha256": "f4164836655d9802fa5fce058badd8dd754fb3da33f48098a66646ac525d5364",
+      "new_sha256": "f4164836655d9802fa5fce058badd8dd754fb3da33f48098a66646ac525d5364"
+    },
+    {
+      "path": "misaka/palw/sdk/src/onboarding_snapshot.rs",
+      "unchanged": true,
+      "old_sha256": "1279d03937744602b8400ba1335966ffcf8761ef7c5f7fde6bd70c8913257d4e",
+      "new_sha256": "1279d03937744602b8400ba1335966ffcf8761ef7c5f7fde6bd70c8913257d4e"
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/beacon_run.rs",
+      "unchanged": true,
+      "old_sha256": "94c9ea724738c5cf71a97af74e61df5f354dddd401387afbd83a61b5b3f7d892",
+      "new_sha256": "94c9ea724738c5cf71a97af74e61df5f354dddd401387afbd83a61b5b3f7d892"
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/bind.rs",
+      "unchanged": true,
+      "old_sha256": "f9ef347dab27462fccc5e8c7c5c077a9a9a7520004ebbdf214d63e848564be43",
+      "new_sha256": "f9ef347dab27462fccc5e8c7c5c077a9a9a7520004ebbdf214d63e848564be43"
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/cli.rs",
+      "unchanged": true,
+      "old_sha256": "3af1e2f1645be2b6116750fd91b83b45c2708f1a96dc75d4c0bdb06725585021",
+      "new_sha256": "3af1e2f1645be2b6116750fd91b83b45c2708f1a96dc75d4c0bdb06725585021"
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/conformance.rs",
+      "unchanged": true,
+      "old_sha256": "3c0b57501cd215a85ef4a481379ebb255559f227ea198e6c9b940016020cdf43",
+      "new_sha256": "3c0b57501cd215a85ef4a481379ebb255559f227ea198e6c9b940016020cdf43"
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/manifest.rs",
+      "unchanged": true,
+      "old_sha256": "e6dca71e8de52ce444b5753ec41ccec807b1d4bc4242ecffca8f3f5a09f2a5d3",
+      "new_sha256": "e6dca71e8de52ce444b5753ec41ccec807b1d4bc4242ecffca8f3f5a09f2a5d3"
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/verify.rs",
+      "unchanged": true,
+      "old_sha256": "965a00812c80fcbb95a24b76c3f657aa966f608616f89296b27a275a989156bf",
+      "new_sha256": "965a00812c80fcbb95a24b76c3f657aa966f608616f89296b27a275a989156bf"
+    },
+    {
+      "path": "misaka/palw/tir/lower/src/bin/palw-tir-convert.rs",
+      "unchanged": true,
+      "old_sha256": "6180c5d68089e92f279212157af37a4d752cc0c743402000f5a1abf748d43dbe",
+      "new_sha256": "6180c5d68089e92f279212157af37a4d752cc0c743402000f5a1abf748d43dbe"
+    },
+    {
+      "path": "misaka/palw/tir/lower/src/float_ref/mod.rs",
+      "unchanged": true,
+      "old_sha256": "7591b68ebdd5821febddc3a39ef6bcf2dfe0961f7211134437df70d159c1edac",
+      "new_sha256": "7591b68ebdd5821febddc3a39ef6bcf2dfe0961f7211134437df70d159c1edac"
+    },
+    {
+      "path": "misaka/palw/tir/lower/src/float_ref/stream.rs",
+      "unchanged": true,
+      "old_sha256": "26811517f3f3f7cd7dab4a36fb6fc60878b3b62e0a8bd06efd6d80f8f5d73531",
+      "new_sha256": "26811517f3f3f7cd7dab4a36fb6fc60878b3b62e0a8bd06efd6d80f8f5d73531"
+    },
+    {
+      "path": "misaka/palw/tir/lower/src/ram_account.rs",
+      "unchanged": true,
+      "old_sha256": "5364ae0ab8799966c08d40101ff3f5fc56bf2e4b4738170ec923588b13b019f2",
+      "new_sha256": "5364ae0ab8799966c08d40101ff3f5fc56bf2e4b4738170ec923588b13b019f2"
+    },
+    {
+      "path": "misaka/palw/tir/lower/tests/position_blocks.rs",
+      "unchanged": true,
+      "old_sha256": "6c6365e0d209591831b4429ad4f2e27e49f8695703948785f89779585f7b6783",
+      "new_sha256": "6c6365e0d209591831b4429ad4f2e27e49f8695703948785f89779585f7b6783"
+    },
+    {
+      "path": "scripts/drills/rfc0016_sigma_k_measure.py",
+      "unchanged": true,
+      "old_sha256": "c8381b38794d00e4ff11f6d2a4eb01c17707834af652132c8e081028c1f58a6e",
+      "new_sha256": "c8381b38794d00e4ff11f6d2a4eb01c17707834af652132c8e081028c1f58a6e"
+    },
+    {
+      "path": "scripts/drills/rfc0018_dag_drill.py",
+      "unchanged": true,
+      "old_sha256": "7f7f088ff6ac4234cb541401bf85e280bccf61e4a421c927c62b211e90b1c691",
+      "new_sha256": "7f7f088ff6ac4234cb541401bf85e280bccf61e4a421c927c62b211e90b1c691"
+    },
+    {
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "unchanged": true,
+      "old_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05",
+      "new_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05"
+    },
+    {
+      "path": "scripts/genesis/genesis10_pipeline.py",
+      "unchanged": true,
+      "old_sha256": "e0e3859c0da9a02b44afefc6f29d8692ff1706dbf3f2dba6dcbde3a2a3efc80c",
+      "new_sha256": "e0e3859c0da9a02b44afefc6f29d8692ff1706dbf3f2dba6dcbde3a2a3efc80c"
+    },
+    {
+      "path": "scripts/genesis/rfc20_acceptance.py",
+      "unchanged": true,
+      "old_sha256": "7b23a209067f1c6ffd7293b29f1d50ae6faa248767ebd8b0c31e149d1f96cd0f",
+      "new_sha256": "7b23a209067f1c6ffd7293b29f1d50ae6faa248767ebd8b0c31e149d1f96cd0f"
+    },
+    {
+      "path": "scripts/release/misaka-release-manifest.py",
+      "unchanged": true,
+      "old_sha256": "fe8a45654f77e1a484e91e5d09a41fd23c4016e4cda09dc7838b1eafb681df8b",
+      "new_sha256": "fe8a45654f77e1a484e91e5d09a41fd23c4016e4cda09dc7838b1eafb681df8b"
+    },
+    {
+      "path": "scripts/release/misaka-release-readiness.py",
+      "unchanged": true,
+      "old_sha256": "d8ff9786e9d2ba62592b37872d8e36373ead54e15128768d28265887b1886b16",
+      "new_sha256": "d8ff9786e9d2ba62592b37872d8e36373ead54e15128768d28265887b1886b16"
+    }
+  ],
+  "decisive_current_checks": [
+    {
+      "id": "rfc16-capacity-report",
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "line": 968,
+      "excerpt": "capacity_per_span: None",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    },
+    {
+      "id": "rfc16-capacity-shortfall",
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "line": 969,
+      "excerpt": "capacity_shortfall_per_span: None",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    },
+    {
+      "id": "rfc23-input-map",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "line": 121,
+      "excerpt": "inputs: BTreeSet::new()",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    },
+    {
+      "id": "rfc23-chain-only-builder",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "line": 78,
+      "excerpt": "PalwClaimLocalWorkRefV1::ChainClaim",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    },
+    {
+      "id": "rfc24-position-budget-present",
+      "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+      "line": 56,
+      "excerpt": "PALW_TIR_POSITION_WITNESS_BUDGET_V2: Option",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    },
+    {
+      "id": "rfc24-frontier-budget-present",
+      "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+      "line": 64,
+      "excerpt": "PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2: Option",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    },
+    {
+      "id": "rfc22-improvement-inactive",
+      "path": "consensus/core/src/config/params.rs",
+      "line": 7501,
+      "excerpt": "palw_improvement_v1: None",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    },
+    {
+      "id": "rfc17-review-retired",
+      "path": "consensus/core/src/palw_model_eligibility_fold_v1.rs",
+      "line": 289,
+      "excerpt": "model-level review is abolished",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    },
+    {
+      "id": "rfc19-actual-dispatch",
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "line": 658,
+      "excerpt": "getattr(drill, 'scenario_' + args.scenario.replace('-', '_'))()",
+      "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c"
+    }
+  ],
+  "changed_paths_since_prior_audit": [
+    "components/consensusmanager/src/session.rs",
+    "components/consensusmanager/src/session_guard_lifetime_tests.rs",
+    "consensus/core/src/api/mod.rs",
+    "consensus/core/src/palw_court_admission_workspace_v2.rs",
+    "consensus/core/src/palw_court_capacity_fold_v1.rs",
+    "consensus/core/src/palw_court_capacity_sweep_workspace_v2.rs",
+    "consensus/core/src/palw_state_v2.rs",
+    "consensus/core/src/palw_state_v2/aux_sweep_workspace_v2.rs",
+    "consensus/core/src/palw_state_v2/block_preparation.rs",
+    "consensus/core/src/palw_state_v2/queue_drain_workspace_v2.rs",
+    "consensus/core/src/palw_state_v2/tests.rs",
+    "consensus/core/src/palw_state_v2/tests/aux_sweep_workspace_v2.rs",
+    "consensus/core/src/palw_state_v2/tests/court_admission_workspace_v2.rs",
+    "consensus/core/src/palw_state_v2/tests/court_capacity_workspace_v2.rs",
+    "consensus/core/src/palw_state_v2/tests/queue_drain_workspace_v2.rs",
+    "consensus/core/src/palw_state_v2/tests/source_verifier_economics_v2.rs",
+    "consensus/src/consensus/evm_parent_fault_tests.rs",
+    "consensus/src/consensus/mod.rs",
+    "consensus/src/pipeline/virtual_processor/processor/evm.rs",
+    "consensus/src/pipeline/virtual_processor/processor/evm_market_owned_v2.rs",
+    "consensus/src/pipeline/virtual_processor/tests/evm_round_gas_production_v2.rs",
+    "consensus/src/pipeline/virtual_processor/tests/t12_round_lane_e2e.rs",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/README.md",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/baseline-verification.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/primary-inventory.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/requirements.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/rfc01-12.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/rfc01-12.md",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/rfc13-25.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/rfc13-25.md",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/rfc26-38.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/rfc26-38.md",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/audit-validation.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/docs-validation.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/results.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc21-doc-tools.log",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc21-original-archive.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-auth-map.log",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-row-access.log",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-state-adapter.log",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/source-manifest.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/summary.json",
+    "docs/audit/palw/rfc-implementation-audit-2026-10-25/verify_audit.py",
+    "docs/evidence/rfc/0006-0007-0008-0012-court-aux-provider-round-verification-2026-10-25.md",
+    "docs/evidence/rfc/0006-0008-0012-queue-session-verification-2026-10-25.md",
+    "docs/evidence/rfc/0006-0008-auxiliary-sweep-workspace-2026-10-25.md",
+    "docs/evidence/rfc/0006-0008-pre-object-queue-workspace-2026-10-25.md",
+    "docs/evidence/rfc/0006-0012-capacity-parent-head-verification-2026-10-25.md",
+    "docs/evidence/rfc/0006-court-admission-workspace-2026-10-25.md",
+    "docs/evidence/rfc/0006-court-capacity-sweep-workspace-2026-10-25.md",
+    "docs/evidence/rfc/0007-provider-unit-failure-challenge-provenance-2026-10-25.md",
+    "docs/evidence/rfc/0012-blocking-consensus-session-guard-lifetime-2026-10-25.md",
+    "docs/evidence/rfc/0012-checked-block-parent-and-head-retry-2026-10-25.md",
+    "docs/evidence/rfc/0012-evm-round-gas-production-parity-2026-10-25.md",
+    "docs/evidence/rfc/0012-evm-round-gas-without-market-2026-10-25.md",
+    "docs/evidence/rfc/0012-native-exact-selected-parent-2026-10-25.md",
+    "kaspad/src/eth_rpc.rs",
+    "kaspad/src/eth_rpc_head_fault_tests.rs",
+    "kaspad/src/private_integration/kernel_paid_checker_v4.rs",
+    "kaspad/src/private_integration/kernel_paid_checker_v4/failed_query.rs",
+    "misaka/evm/core/src/executor.rs",
+    "misaka/palw/sdk/src/claim_paid_v2/provider_actions_v4.rs",
+    "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4.rs",
+    "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4_failure.rs",
+    "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4_located_tests.rs",
+    "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4_memory_tests.rs"
+  ],
+  "excluded_dirty_worktree": [
+    " M consensus/core/src/palw_court_capacity_fold_v1.rs",
+    " M consensus/core/src/palw_state_v2/tests.rs",
+    "?? consensus/core/src/palw_legacy_court_ingress_workspace_v2.rs",
+    "?? consensus/core/src/palw_state_v2/tests/legacy_court_ingress_workspace_v2.rs",
+    "?? docs/audit/palw/rfc-implementation-audit-2026-10-25-head1257/",
+    "?? docs/evidence/rfc/0006-legacy-court-ingress-workspace-2026-10-25.md"
+  ],
+  "latest_execution_scope_note": "c5a7b200a actual native round test nowPASS and empty/fullgas fixed; earlier hypothesis of rejection was disproved (oldempty fastpath accepted30M vsrequired33M). This repair is consensus-visible; public historical compatibility/release review remains pending. native39mapping未策定/K3未作成/15campaignUNKNOWN are unchanged.",
+  "rfcs": [
+    {
+      "rfc": "RFC-0013",
+      "primary_document": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "テキスト・固定登録・再現可能なtool artifactの要件。画像/動画/RFC04改善は延期、モデル審査/可用性審査と計算証明を要求する旧節はSUPERSEDED。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§3; §7.1",
+          "requirement": "実効layout/context/tile/tokenizer/artifactを固定し、新packへbind。旧packを上書きせずidentityを再計算。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "misaka/palw/sdk/src/runtime_pack/manifest.rs",
+              "line": 351,
+              "symbol_or_excerpt": "pub struct ExactLayoutRec",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 351,
+              "source_sha256": "e6dca71e8de52ce444b5753ec41ccec807b1d4bc4242ecffca8f3f5a09f2a5d3"
+            },
+            {
+              "path": "misaka/palw/sdk/src/runtime_pack/bind.rs",
+              "line": 57,
+              "symbol_or_excerpt": "pub fn bind_class",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 57,
+              "source_sha256": "f9ef347dab27462fccc5e8c7c5c077a9a9a7520004ebbdf214d63e848564be43"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "misaka/palw/sdk/src/runtime_pack/cli.rs",
+              "line": 239,
+              "symbol_or_excerpt": "bind_class",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 239,
+              "source_sha256": "3af1e2f1645be2b6116750fd91b83b45c2708f1a96dc75d4c0bdb06725585021"
+            }
+          ],
+          "verification": "既存runtime-pack試験/旧実artifact記録はある。全mutation/旧binary互換の現baseline網羅再実行なし。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§4; §7.3",
+          "requirement": "historical/live/pinned rulesetを区別し同一snapshotでSDK/native admission照合。UNKNOWNを成功としない。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "misaka/palw/sdk/src/onboarding_snapshot.rs",
+              "line": 130,
+              "symbol_or_excerpt": "pub fn into_onboarding_reads_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 130,
+              "source_sha256": "1279d03937744602b8400ba1335966ffcf8761ef7c5f7fde6bd70c8913257d4e"
+            },
+            {
+              "path": "misaka/palw/sdk/src/runtime_pack/verify.rs",
+              "line": 549,
+              "symbol_or_excerpt": "exact_layout",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 549,
+              "source_sha256": "965a00812c80fcbb95a24b76c3f657aa966f608616f89296b27a275a989156bf"
+            }
+          ],
+          "production_callers": [],
+          "verification": "source readerと旧live preflight存在。歴史/現行node同一入力parityの全条件は未確認。",
+          "gap": "正式snapshot parityと全refusal gate/測定値・単位・censor表示の網羅証拠不足。",
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§5; §7.2",
+          "requirement": "独立ref2をlazy/row-tiledにし、巨大artifactもskip成功にしない。全commit/logitsを照合。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "misaka/palw/sdk/src/runtime_pack/conformance.rs",
+              "line": 398,
+              "symbol_or_excerpt": "pub fn run_streamed_tiled_with_progress",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 398,
+              "source_sha256": "3c0b57501cd215a85ef4a481379ebb255559f227ea198e6c9b940016020cdf43"
+            }
+          ],
+          "production_callers": [],
+          "verification": "row-tiled実装を再確認。旧2.24GB Llama recordは実run範囲限定、全architecture/最大tensor/RSS保証ではない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§6; §7.4–5",
+          "requirement": "exact calibrationとatomic stage records、入力変更時無効化、キャンセル/枯渇、accepted state観測を区別。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "misaka/palw/sdk/src/runtime_pack/beacon_run.rs",
+              "line": 66,
+              "symbol_or_excerpt": "pub fn write_atomic",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 66,
+              "source_sha256": "94c9ea724738c5cf71a97af74e61df5f354dddd401387afbd83a61b5b3f7d892"
+            },
+            {
+              "path": "misaka/palw/sdk/src/runtime_pack/beacon_run.rs",
+              "line": 269,
+              "symbol_or_excerpt": "pub fn rebind",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 269,
+              "source_sha256": "94c9ea724738c5cf71a97af74e61df5f354dddd401387afbd83a61b5b3f7d892"
+            },
+            {
+              "path": "misaka/palw/sdk/src/onboarding_chain.rs",
+              "line": 281,
+              "symbol_or_excerpt": "PublicOnboarding",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 281,
+              "source_sha256": "f4164836655d9802fa5fce058badd8dd754fb3da33f48098a66646ac525d5364"
+            }
+          ],
+          "production_callers": [],
+          "verification": "atomic write/rebindとchain reader存在。全stageのinterrupt/resume/exhaustion/accepted-registration/reorg一貫実行の網羅証拠なし。",
+          "gap": "既存recordだけではresolve→observe全stageの終了/再実行契約を満たしたと確定できない。",
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§9–10; mission/bond amendments",
+          "requirement": "固定identity/claim material責任を保持し、旧model-level Beacon/availability screeningは現行tier決定で置換。",
+          "implementation_status": "SUPERSEDED",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_model_tier_v1.rs",
+              "line": 183,
+              "symbol_or_excerpt": "pub fn palw_model_tier_of_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 183,
+              "source_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71"
+            }
+          ],
+          "production_callers": [],
+          "verification": "PRINCIPLES§8/9を優先。旧GKR/モデル審査・Seeder試験を新規受入義務にしない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "TEST: §7の実Llama/全commit・同一schedule parity・全stage interruption/資源枯渇/accepted registration-reorgを一つの現候補で確認した証拠が不足。",
+        "CODE/UNKNOWN: typed APIとstage個別実装はあるが、全stageの共同完了契約/producer-independent最大artifact範囲をsource＋実行で閉じていない。モデル審査を復活して埋めない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/rfc/0013-onboarding-tool-validation.json",
+          "scope": "exact bind/stream conformance/旧live preflightと未実行stageを区別。source808baa6、実artifact約2.24GB、現在全要件のPASSではない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/evidence/rfc/0013-llama-t12-registration.json",
+          "scope": "別登録試行の限定観測。accepted mining/認証の全要件と同一視しない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 22,
+          "heading": "## 0. 日本語での結論と範囲"
+        },
+        {
+          "line": 37,
+          "heading": "## 1. Evidence and its limits"
+        },
+        {
+          "line": 107,
+          "heading": "## 2. Coverage by existing RFCs — no duplicate protocol redesign"
+        },
+        {
+          "line": 124,
+          "heading": "## 3. Exact layout is data, not a search result to guess later"
+        },
+        {
+          "line": 148,
+          "heading": "## 4. Target-ruleset admission and useful diagnostics"
+        },
+        {
+          "line": 168,
+          "heading": "## 5. Large-artifact independent conformance"
+        },
+        {
+          "line": 194,
+          "heading": "## 6. Exact calibration interchange and resumable stages"
+        },
+        {
+          "line": 218,
+          "heading": "## 7. Release tests and observable completion"
+        },
+        {
+          "line": 242,
+          "heading": "## 8. Implementation boundary of the accompanying patch"
+        },
+        {
+          "line": 263,
+          "heading": "## 9. Beacon-aware packs and asynchronous conformance evidence (2026-10-08)"
+        },
+        {
+          "line": 350,
+          "heading": "## 10. Immutable identity and model-bond allocation evidence — 2026-10-10後続改定"
+        },
+        {
+          "line": 375,
+          "heading": "## Mission alignment amendment — 2026-10-07"
+        },
+        {
+          "line": 381,
+          "heading": "## Bond予算・総影響保存の改定 — 2026-10-10"
+        },
+        {
+          "line": 390,
+          "heading": "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 5,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0014",
+      "primary_document": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "public non-seat prosecution、認証material、客観court、期限/費用/責任保持。旧Torrent/Seeder/FPR/model審査は撤回済。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§§2–5; §16.2–4",
+          "requirement": "claim固定の認証materialから独立localization、DA/defaultと計算不正を分離。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_tir_public_claim_v1.rs",
+              "line": 112,
+              "symbol_or_excerpt": "pub fn prepare_native_source_v2",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 112,
+              "source_sha256": "13efb8b76b56120b0c70d5c9dd19c95ff68491065c1db5c473c8f1dbde650b5e"
+            },
+            {
+              "path": "consensus/core/src/palw_tir_public_fold_v1.rs",
+              "line": 37,
+              "symbol_or_excerpt": "pub fn palw_funded_original_candidate_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 37,
+              "source_sha256": "d2ecb21cbc1cc40f9e6746d7e2133adaf4688b939260a27f9725aa61e17c4685"
+            }
+          ],
+          "production_callers": [],
+          "verification": "typed retained original準備/受理と多数局所試験あり。全reward-class/fault routeのfresh outsider完遂は未実証。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§6; §13.1–2",
+          "requirement": "seat/non-seat共通filer、普通のpublic bondが公開sourceのみで訴追しcold復帰。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "kaspad/src/palw_fraud_filer.rs",
+              "line": 1,
+              "symbol_or_excerpt": "Lane LG14-A",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1,
+              "source_sha256": "c155a3f077097528356d4a717af5679654b442c7a07b11e1d7e829584e6230e8"
+            },
+            {
+              "path": "kaspad/src/palw_tir_public_filer_scheduler.rs",
+              "line": 349,
+              "symbol_or_excerpt": "tir_public_filer_tick_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 349,
+              "source_sha256": "0d97e3ea6096ef2ba43aeac933a9a968f5038140f210128d41e102ca7156e241"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "kaspad/src/palw_panel.rs",
+              "line": 10207,
+              "symbol_or_excerpt": "self.fraud_filer_tick_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 10207,
+              "source_sha256": "ce27785b8a127e178998c90080d9ca9ed3b5949a2b122e66311136786403098d"
+            }
+          ],
+          "verification": "実node/private/source/retained controlsは経路ごと。全profile/全owner共謀/完全fresh one-outsider campaignではない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§§7–9; 2026-10-19 B–G; 2026-10-19整合",
+          "requirement": "有効異議だけ原受理起点期限延長、署名最大責任、正規収録機会、default帰責とFinal/hold連動。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+              "line": 133,
+              "symbol_or_excerpt": "hard-deadline bucket",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 128,
+              "source_sha256": "f67b04b181d56b67814fc1d675c2b04eadbf8f319dcfc5866885d01d95f89cb0"
+            },
+            {
+              "path": "consensus/core/src/palw_staged_court_fold_v1.rs",
+              "line": 372,
+              "symbol_or_excerpt": "collect_until",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 372,
+              "source_sha256": "e350caf1d8e8473a7932d8b74420620f2f0d7720db440529e285aed49b56069a"
+            }
+          ],
+          "production_callers": [],
+          "verification": "予約/EDF/応答別default等存在。受信/producer/network各層全体の保証と最大負荷費用境界は未閉鎖。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [
+              "consensus/core/src/palw_court_capacity_fold_v1.rs"
+            ],
+            "current_decision": "前回区分を維持。変更箇所は下記deltaとしてscope別評価。"
+          }
+        },
+        {
+          "sections": "§16.5–13; 2026-10-12 amendment",
+          "requirement": "miner+拘束verifier資本の重複なし配分、tier係数一回、個別Q/B/R/Fと経済優位の二段評価。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+              "line": 305,
+              "symbol_or_excerpt": "palw_model_tier_weight_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 305,
+              "source_sha256": "3e2e9623c8251c4b0c15451c5f9e6b90e073e3e166746c14f9948a0e3d095e5a"
+            },
+            {
+              "path": "consensus/core/src/palw_bond_budget_v1.rs",
+              "line": 75,
+              "symbol_or_excerpt": "pub const PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 75,
+              "source_sha256": "aba1585376dae2e3ba578629ebf263abe91cef346c52a78adc7b2e38c72ccb5f"
+            }
+          ],
+          "production_callers": [],
+          "verification": "旧「未実装」断言を更新: 配分コードは存在。実モデル・公開監視者の測定/独立経済評価は未完。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§12–13; §16.8; amendment G",
+          "requirement": "全route fresh outsider→mempool→native fold→conviction→責任回収、pruning/reorg/IBD後も完結。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_panel_free_gate_v1.rs",
+              "line": 5,
+              "symbol_or_excerpt": "PalwPanelFree",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 5,
+              "source_sha256": "875c6126c797e5ad8de91343434c557f1c30d4108bb902064cd573c3085cd69e"
+            },
+            {
+              "path": "kaspad/src/palw_fraud_filer.rs",
+              "line": 32,
+              "symbol_or_excerpt": "fresh",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 32,
+              "source_sha256": "c155a3f077097528356d4a717af5679654b442c7a07b11e1d7e829584e6230e8"
+            }
+          ],
+          "production_callers": [],
+          "verification": "小型/合成/private fixtureの局所PASSを全モデル対象受入へ格上げしない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "CODE: 公開source/typed preparationは接続済だが、全class/fault/回答/host-memory/cost consumerを包含した非Panel外部1人の完結性は未閉鎖。",
+        "TEST/EXTERNAL: 全員非協力・owner占有・late filing・大量court/検閲/再編・cold取得/経済優位の現候補横断受入不足。",
+        "SUPERSEDED: Seeder/Torrent/FPRやモデル単位審査は残件に戻さない。None arming自体をコード不足としない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/rfc/0029-node-owner-custodian-retained-source-handoff-2026-10-25.md",
+          "scope": "実node owner/custodian retained sourceの狭いhandoff。raw/shared他callerと費用全体は除外。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/evidence/rfc/0029-tir-complete-output-ids-typed-resource-2026-10-25.md",
+          "scope": "Output authentication stageだけのtyped resource。全Source/原courtの全coverageではない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/evidence/rfc/0006-0007-0008-0012-court-aux-provider-round-verification-2026-10-25.md",
+          "scope": "最新commit1257f0ae8:6package no-run179.37s/31source一致、158 distinct passing parents。court3/aux5/provider3/checker2等とrelated。各局所scopeであり本RFC全受入でない。",
+          "identity": "source/pins/logsは当該committed record参照。実roundgas1はroundlane8へ内包、empty比較はexecutor31へ内包、子processは内数。"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。",
+        "30e25e6d3/b80e1fc10/3237a50ae:実capacity sweep、court admission/session handoff、aux groupingをtyped予約へ接続。scopeはscratch/コピー各callerで、全fault/全model/fresh outsider/inclusion/cost保証は未完。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 12,
+          "heading": "## 2026-10-09 登録不変性との整合"
+        },
+        {
+          "line": 34,
+          "heading": "## 0. 採用する設計"
+        },
+        {
+          "line": 72,
+          "heading": "## 1. 現行コードの到達点"
+        },
+        {
+          "line": 93,
+          "heading": "## 2. 安全性の定義と仮定"
+        },
+        {
+          "line": 154,
+          "heading": "## 3. Dispute Completenessをclass admissionへ追加する"
+        },
+        {
+          "line": 253,
+          "heading": "## 4. 階層commitmentと独立した局所化"
+        },
+        {
+          "line": 290,
+          "heading": "## 5. held/fusedのDA gapを閉じる"
+        },
+        {
+          "line": 335,
+          "heading": "## 6. seat/non-seat共通のfraud filer"
+        },
+        {
+          "line": 384,
+          "heading": "## 7. non-seatの追及予約とFinal"
+        },
+        {
+          "line": 479,
+          "heading": "## 8. challengerの経済条件と処罰"
+        },
+        {
+          "line": 498,
+          "heading": "## 9. Valid receiptの検証範囲"
+        },
+        {
+          "line": 525,
+          "heading": "## 10. ADR0171との接続"
+        },
+        {
+          "line": 551,
+          "heading": "## 11. wire・合意移行"
+        },
+        {
+          "line": 578,
+          "heading": "## 12. 実装対象と段階ごとの出口条件"
+        },
+        {
+          "line": 599,
+          "heading": "## 13. 必須の敵対的試験とrelease gate"
+        },
+        {
+          "line": 651,
+          "heading": "## 14. baseline確認記録と未決パラメータ"
+        },
+        {
+          "line": 685,
+          "heading": "## 15. Pinned source references"
+        },
+        {
+          "line": 747,
+          "heading": "## 16. モデル入手への不介入と拘束bond連動coinbase配分（2026-10-10後続改定）"
+        },
+        {
+          "line": 899,
+          "heading": "## Mission alignment amendment — 2026-10-07"
+        },
+        {
+          "line": 905,
+          "heading": "## Bond予算・総影響保存の改定 — 2026-10-10"
+        },
+        {
+          "line": 914,
+          "heading": "## 改定 — 2026-10-12（固定期限と有限終了、共通経済会計：提案）"
+        },
+        {
+          "line": 931,
+          "heading": "## 改定 — 2026-10-19(異議があった claim だけ延長する期限、応答義務に基づく勝敗、court 提出経路の liveness と DDoS 対策:採用方針)"
+        },
+        {
+          "line": 1035,
+          "heading": "## 整合性修正 — 2026-10-19(RFC 全件整合性監査)"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 5,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0015",
+      "primary_document": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "Panel=0は現行明示方針で有効化しない。休眠OPV実装は存在するが抽選claim認証を代替しない。",
+      "implementation_status": "DEFERRED",
+      "acceptance_status": "MISSING",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§§1–9; §12; 2026-10-12改定",
+          "requirement": "G14完全性を前提にしたOPV lifecycle/予約/bounty/Final、Panel-freeを未達のまま開けない。",
+          "implementation_status": "DEFERRED",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_panel_free_v1.rs",
+              "line": 178,
+              "symbol_or_excerpt": "pub fn validate_palw_panel_free_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 178,
+              "source_sha256": "f48f45cdacf3b93eab4ce7af8f81c39feead3cb7dc414dbad20b07ce1e1179b1"
+            },
+            {
+              "path": "consensus/core/src/palw_panel_free_gate_v1.rs",
+              "line": 5,
+              "symbol_or_excerpt": "PalwPanelFree",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 5,
+              "source_sha256": "875c6126c797e5ad8de91343434c557f1c30d4108bb902064cd573c3085cd69e"
+            }
+          ],
+          "production_callers": [],
+          "verification": "OPV/activation gateコードとtests存在。Panel=0は承認済稼働経路ではない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§8.3–5; 第4回追記",
+          "requirement": "Q/B/R/F・資本配分・固定tier一回適用、escrowと発行予算を区別。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_bond_budget_v1.rs",
+              "line": 75,
+              "symbol_or_excerpt": "pub const PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 75,
+              "source_sha256": "aba1585376dae2e3ba578629ebf263abe91cef346c52a78adc7b2e38c72ccb5f"
+            },
+            {
+              "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+              "line": 305,
+              "symbol_or_excerpt": "palw_model_tier_weight_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 305,
+              "source_sha256": "3e2e9623c8251c4b0c15451c5f9e6b90e073e3e166746c14f9948a0e3d095e5a"
+            }
+          ],
+          "production_callers": [],
+          "verification": "配分/予約は実装、実モデル経済実測と監視市場不足。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§10; §13; 2026-10-15実装状況追記",
+          "requirement": "旧計算証明案は除外。全対象class G14と実node OPV/work-slice/native settlementを満たすまでdefer。",
+          "implementation_status": "DEFERRED",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_panel_free_v1.rs",
+              "line": 178,
+              "symbol_or_excerpt": "pub fn validate_palw_panel_free_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 178,
+              "source_sha256": "f48f45cdacf3b93eab4ce7af8f81c39feead3cb7dc414dbad20b07ce1e1179b1"
+            }
+          ],
+          "production_callers": [],
+          "verification": "単体/private OPV fixtureをPanel-free本番受入に読み替えない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "DEFERRED: Panel=0の現行有効化禁止は設計上の状態。外す作業を実装残件として提案しない。",
+        "TEST/EXTERNAL: §13全reward profileのG14/実資源/経済・監視主体評価/敵対実network受入なし。",
+        "SUPERSEDED: §10計算証明、旧取得審査やモデル資格審査は対象外。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/design/palw/integration/rfc-0015-implementation-status-2026-10-15.md",
+          "scope": "旧実装対応表。実コードで存在を再確認、古いunbuilt表示を現在の実行結果と同一視しない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 26,
+          "heading": "## 0. 日本語での決定と有効化禁止条件"
+        },
+        {
+          "line": 49,
+          "heading": "## 1. 必須のactivation gate: Public Fraud Prosecution Complete"
+        },
+        {
+          "line": 107,
+          "heading": "## 2. 検証する役割と安全性の前提"
+        },
+        {
+          "line": 130,
+          "heading": "## 3. なぜ現行のseats/quorumを0にするだけでは成立しないか"
+        },
+        {
+          "line": 150,
+          "heading": "## 4. 選択する新modeとclaim lifecycle"
+        },
+        {
+          "line": 209,
+          "heading": "## 5. public materialと後から参加するverifier"
+        },
+        {
+          "line": 242,
+          "heading": "## 6. challenge window、Final、censorshipとspam"
+        },
+        {
+          "line": 295,
+          "heading": "## 7. 通常時の検査、soundnessと監視市場"
+        },
+        {
+          "line": 337,
+          "heading": "## 8. Panel担保を外した後の経済設計"
+        },
+        {
+          "line": 680,
+          "heading": "## 9. work weight、PALW blockとsettlement"
+        },
+        {
+          "line": 704,
+          "heading": "## 10. 将来のnode-verifiable compact proofとの関係"
+        },
+        {
+          "line": 723,
+          "heading": "## 11. 移行・wire互換・公開表示"
+        },
+        {
+          "line": 764,
+          "heading": "## 12. 実装変更の対応表"
+        },
+        {
+          "line": 782,
+          "heading": "## 13. 必須試験とactivation checklist"
+        },
+        {
+          "line": 854,
+          "heading": "## 14. 本RFCで決めない値と現状"
+        },
+        {
+          "line": 877,
+          "heading": "## 15. 参照"
+        },
+        {
+          "line": 924,
+          "heading": "## Mission alignment amendment — 2026-10-07"
+        },
+        {
+          "line": 930,
+          "heading": "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+        },
+        {
+          "line": 936,
+          "heading": "## 改定 — 2026-10-12（Panel=0は当面有効化しない：提案）"
+        },
+        {
+          "line": 942,
+          "heading": "## 実装状況 — 2026-10-15（implemented, dormant, unverified）"
+        },
+        {
+          "line": 954,
+          "heading": "## ユーザー方針 2026-10-15 第4回 — §8.5.5 の配分式に階層係数"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 3,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0016",
+      "primary_document": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "採択V+、mode別予算・tier改定を現行優先。未承認値/real measured outcomesは別。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§§2–3; §13 C1–C5; ユーザー方針2026-10-15/第4回改定",
+          "requirement": "mode別共有cap/hold、α1.5、拘束verifier資本、escrow非clip、tier一回とε0。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_bond_budget_v1.rs",
+              "line": 75,
+              "symbol_or_excerpt": "pub const PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 75,
+              "source_sha256": "aba1585376dae2e3ba578629ebf263abe91cef346c52a78adc7b2e38c72ccb5f"
+            },
+            {
+              "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+              "line": 305,
+              "symbol_or_excerpt": "palw_model_tier_weight_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 305,
+              "source_sha256": "3e2e9623c8251c4b0c15451c5f9e6b90e073e3e166746c14f9948a0e3d095e5a"
+            },
+            {
+              "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+              "line": 107,
+              "symbol_or_excerpt": "pub fn palw_rfc0016_rights_epoch_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 107,
+              "source_sha256": "fcc405cd39ca782f418dbdc52c10656dacfc00c075f477910e1a807af23c0676"
+            }
+          ],
+          "production_callers": [],
+          "verification": "旧C1–C3未実装表を踏襲しない。コードは存在、旧30日/7日文言より後続の7日平均/hold決定を優先。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§8; §§10,12 H1–4",
+          "requirement": "epoch発行/σ再発行/採用時消費/quote/容量/queue、heartbeatは権利を消費しない。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+              "line": 272,
+              "symbol_or_excerpt": "fn rfc0016_rights_admit_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 272,
+              "source_sha256": "fcc405cd39ca782f418dbdc52c10656dacfc00c075f477910e1a807af23c0676"
+            },
+            {
+              "path": "consensus/core/src/palw_rfc0016_v1/capacity.rs",
+              "line": 8,
+              "symbol_or_excerpt": "Palw",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 8,
+              "source_sha256": "6d782ca118d24d12ca841e7d60baa31ffbd5577ff09a4c5787f37eb5c488ffa8"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_state_v2/fold_read.rs",
+              "line": 1020,
+              "symbol_or_excerpt": "self.rfc0016_rights_admit_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1020,
+              "source_sha256": "e380f6d761777e36d5e8f9a624ef1245ed6b857e378b929b7b94739efa78f033"
+            },
+            {
+              "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+              "line": 2032,
+              "symbol_or_excerpt": "pub fn palw_rfc0016_report_v1_impl",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 2032,
+              "source_sha256": "00fa950539389792ec99f2d71b856351c24c300ba75b29cd0baa150a2d75160f"
+            }
+          ],
+          "verification": "実fold/admission/RPC接続を確認。k=1で未配線tiltは採用値の欠落と断定しない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§11 列7; V9/V10報告",
+          "requirement": "目標と実物理/支払/検査率を分け、容量/不足も実値で報告。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+              "line": 968,
+              "symbol_or_excerpt": "capacity_per_span: None",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 968,
+              "source_sha256": "fcc405cd39ca782f418dbdc52c10656dacfc00c075f477910e1a807af23c0676"
+            },
+            {
+              "path": "consensus/core/src/palw_rfc0016_v1/report.rs",
+              "line": 57,
+              "symbol_or_excerpt": "pub capacity_shortfall_per_span",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 57,
+              "source_sha256": "c550e54ed17d30b1480b887e5b70032b2318f14547d7d81328e8b576dde6b9f2"
+            }
+          ],
+          "production_callers": [],
+          "verification": "実RPC報告の2 fieldは現在もNone。",
+          "gap": "CODE: capacity_per_span/capacity_shortfall_per_spanが固定Noneで、§11列7の容量実績consumerは未完成。",
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§§12–14",
+          "requirement": "全T/N/M/H/敵対条件とphysical/payout/各miner実収入を独立評価、同候補実node/reorg/restart/IBD。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_rfc0016_v1/values.rs",
+              "line": 6,
+              "symbol_or_excerpt": "PALW_RFC0016_MEASURED_RECORDS_V1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 6,
+              "source_sha256": "e8f3d94a2d3e9c574f84ca6f8eb69306fee541eae85700a887c5d8a20d8004d9"
+            },
+            {
+              "path": "scripts/drills/rfc0016_sigma_k_measure.py",
+              "line": 99,
+              "symbol_or_excerpt": "def ",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 99,
+              "source_sha256": "c8381b38794d00e4ff11f6d2a4eb01c17707834af652132c8e081028c1f58a6e"
+            }
+          ],
+          "production_callers": [],
+          "verification": "324run planはNOT RUN。unit/source/simを実計測の代替としない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "CODE: report容量/不足field固定None。",
+        "TEST: §12全物理・支払・miner別収入と敵対mode/再編/IBDの実測不足。",
+        "EXTERNAL: measured-value profile、σ/k/資源/価格と独立reviewの入力が必要。armingNoneだけを不足とは数えない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-measure-2026-10-18/rfc0016/summary.json",
+          "scope": "324run計画のみNOT RUN。対象/機材・source・class前提を明示、架空実測なし。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。",
+        "capacity caller予約は進展したが、model reportのcapacity_per_span/shortfall固定None(968–969行)は現在も存在。実物理/支払/機材measurement profile一式は未完。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 38,
+          "heading": "## ユーザー判断 2026-10-15（第1回: review、拘束）"
+        },
+        {
+          "line": 49,
+          "heading": "## ユーザー判断 2026-10-15（第2回: 設計決定、本番値・有効化の承認ではない）"
+        },
+        {
+          "line": 60,
+          "heading": "## ユーザー判断 2026-10-15（第3回: 設計採用、本番値・有効化の承認ではない）"
+        },
+        {
+          "line": 68,
+          "heading": "## 0. 要約"
+        },
+        {
+          "line": 87,
+          "heading": "## 1. レビュー主張の検証"
+        },
+        {
+          "line": 112,
+          "heading": "## 2. Panel=0の前提（決定済み）"
+        },
+        {
+          "line": 157,
+          "heading": "## 3. 拘束期間・発行能力の調整とmode切替（D-H、ADR-0176と整合）"
+        },
+        {
+          "line": 221,
+          "heading": "## 4. 用語と記号"
+        },
+        {
+          "line": 233,
+          "heading": "## 5. 目標と保持する制約"
+        },
+        {
+          "line": 252,
+          "heading": "## 6. 物理ブロックと報酬権利の分析（背景）"
+        },
+        {
+          "line": 279,
+          "heading": "## 7. 物理層の設計空間（D-Q1）— V+以外は検討した代替案（D-V1）"
+        },
+        {
+          "line": 314,
+          "heading": "## 8. 採用設計 V+: 事前発行権 ＋ σ上限付きの途中再発行 ＋ 抽選前のquote（D-V1で採用、値は測定待ち）"
+        },
+        {
+          "line": 420,
+          "heading": "## 9. B+（報酬権利だけ）— 検討した代替案（D-V1）"
+        },
+        {
+          "line": 429,
+          "heading": "## 10. 弾力的Final容量（Panel経路）"
+        },
+        {
+          "line": 439,
+          "heading": "## 11. 計測と報告"
+        },
+        {
+          "line": 455,
+          "heading": "## 12. 受入試験"
+        },
+        {
+          "line": 512,
+          "heading": "## 13. codeは決定に従う（選択肢ではない）"
+        },
+        {
+          "line": 522,
+          "heading": "## 14. 有効化gate"
+        },
+        {
+          "line": 574,
+          "heading": "## 16. 実装（休眠、未有効化、未build）"
+        },
+        {
+          "line": 633,
+          "heading": "## 15. 参照"
+        },
+        {
+          "line": 650,
+          "heading": "## ユーザー方針 2026-10-15 による改定"
+        },
+        {
+          "line": 663,
+          "heading": "## ユーザー方針 2026-10-15 第4回 — `P_m` は階層係数 `c_m` を含み、一度だけ適用する"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 4,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0017",
+      "primary_document": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "現行は固定モデル二階層のみ。旧Registered/Probation/Eligible/Lapsed審査制度はSUPERSEDED。",
+      "implementation_status": "COMPLETE",
+      "acceptance_status": "PARTIAL",
+      "code_complete": true,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "現行仕様1–2",
+          "requirement": "genesis/年次指定ID+root1.0、後登録0.3固定、追加のみ。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_model_tier_v1.rs",
+              "line": 183,
+              "symbol_or_excerpt": "pub fn palw_model_tier_of_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 183,
+              "source_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71"
+            },
+            {
+              "path": "consensus/core/src/palw_annual_catalog_v1.rs",
+              "line": 258,
+              "symbol_or_excerpt": "pub fn listed_at",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 258,
+              "source_sha256": "3465fb8cb179744a4bbcb47620bd97d3586ff1768570bf8d7250065e315dd368"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_model_tier_v1.rs",
+              "line": 271,
+              "symbol_or_excerpt": "pub fn palw_model_tier_at_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 271,
+              "source_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71"
+            },
+            {
+              "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+              "line": 2389,
+              "symbol_or_excerpt": "palw_model_tier_of_model_v1(state, params, model, now)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 2389,
+              "source_sha256": "27fd0506595bac1c026b4751c679cf875161f8aa9d184f8804a1ed8bf0e33cac"
+            },
+            {
+              "path": "consensus/core/src/palw_model_eligibility_fold_v1.rs",
+              "line": 648,
+              "symbol_or_excerpt": "palw_model_tier_at_v1(state, params, class_id, daa)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 648,
+              "source_sha256": "3b467da7692035b3a4be7e8225d750c218d2911ffe8bb9ef24f061bb1d6193d6"
+            }
+          ],
+          "verification": "現sourceとtier/line-root/annual testsあり。formal release受入の全証拠とは別。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "現行仕様3; 実装欄",
+          "requirement": "モデル審査/更新/失効/試行feeを無効にし、旧wire読取履歴と区別。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_model_eligibility_fold_v1.rs",
+              "line": 289,
+              "symbol_or_excerpt": "model-level review is abolished",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 289,
+              "source_sha256": "3b467da7692035b3a4be7e8225d750c218d2911ffe8bb9ef24f061bb1d6193d6"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+              "line": 1600,
+              "symbol_or_excerpt": "apply_commit_eligibility_exam_v1(builder, ctx, signer, commit)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1600,
+              "source_sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2"
+            },
+            {
+              "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+              "line": 1610,
+              "symbol_or_excerpt": "apply_attest_eligibility_exam_v1(builder, ctx, signer, attestation)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1610,
+              "source_sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2"
+            },
+            {
+              "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+              "line": 2315,
+              "symbol_or_excerpt": "sweep_model_eligibility_v1(builder, ctx)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 2315,
+              "source_sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2"
+            }
+          ],
+          "verification": "tier有効時のreview拒否/無処理を確認。旧審査sourceは履歴、実装残件ではない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "現行仕様4",
+          "requirement": "c一回、登録tier全体κ、ε0。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+              "line": 305,
+              "symbol_or_excerpt": "palw_model_tier_weight_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 305,
+              "source_sha256": "3e2e9623c8251c4b0c15451c5f9e6b90e073e3e166746c14f9948a0e3d095e5a"
+            },
+            {
+              "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+              "line": 314,
+              "symbol_or_excerpt": "palw_model_tier_cap_factor_ppm_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 314,
+              "source_sha256": "3e2e9623c8251c4b0c15451c5f9e6b90e073e3e166746c14f9948a0e3d095e5a"
+            },
+            {
+              "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+              "line": 107,
+              "symbol_or_excerpt": "pub fn palw_rfc0016_rights_epoch_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 107,
+              "source_sha256": "fcc405cd39ca782f418dbdc52c10656dacfc00c075f477910e1a807af23c0676"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+              "line": 2395,
+              "symbol_or_excerpt": "budget.roll_epoch_v3_tiered(",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 2395,
+              "source_sha256": "27fd0506595bac1c026b4751c679cf875161f8aa9d184f8804a1ed8bf0e33cac"
+            },
+            {
+              "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+              "line": 144,
+              "symbol_or_excerpt": "values.entrant_reserve_permille = 0",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 144,
+              "source_sha256": "fcc405cd39ca782f418dbdc52c10656dacfc00c075f477910e1a807af23c0676"
+            },
+            {
+              "path": "consensus/core/src/palw_state_v2/fold_read.rs",
+              "line": 1020,
+              "symbol_or_excerpt": "self.rfc0016_rights_admit_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1020,
+              "source_sha256": "e380f6d761777e36d5e8f9a624ef1245ed6b857e378b929b7b94739efa78f033"
+            }
+          ],
+          "verification": "allocationとrightsは共通配分を読む。κ承認は空recordで拒否する仕様。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "現行仕様5; 2026-10-22 arm-record改定",
+          "requirement": "全tierでGate Cを維持し、edition/root/κ承認recordと年次upgrade受入を要求。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_model_tier_v1.rs",
+              "line": 443,
+              "symbol_or_excerpt": "pub fn palw_model_tier_arming_record_admits_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 443,
+              "source_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71"
+            },
+            {
+              "path": "consensus/core/src/palw_rfc0018_v1.rs",
+              "line": 125,
+              "symbol_or_excerpt": "palw_gate_c",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 125,
+              "source_sha256": "df9a810523b90f04a6646d38a42141aa37a51df02a9c9042174c25580d9aedc6"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/config/params/validation.rs",
+              "line": 301,
+              "symbol_or_excerpt": "self.validate_palw_model_tier_v1()?",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 301,
+              "source_sha256": "3f16ff611d4efd22bc874ceee4e06880a4d99ebe7d90f3c4bf816dfb08da7489"
+            },
+            {
+              "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+              "line": 1606,
+              "symbol_or_excerpt": "try_attest_claim_certification_v1(builder, ctx, signer, attestation)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1606,
+              "source_sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2"
+            },
+            {
+              "path": "consensus/core/src/palw_state_v2/transition_builder.rs",
+              "line": 9838,
+              "symbol_or_excerpt": "commit_at_final_v1(self, &id, claim, final_daa)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 9838,
+              "source_sha256": "db00904e9dac7bb1642f50bb3b225decb98c1ba828c2d5adffde577d53080f9b"
+            }
+          ],
+          "verification": "選出verifierのclaim単位認証は維持。空recordは意図した未承認状態。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "TEST/EXTERNAL: κ/対象catalog editionの承認済recordとRFC19 release/実node annual受入は未提供/未完。コードの意図したrefusalを実装欠落としない。",
+        "全tier全consumerのcampaign合格は本監査で立証していないためformal complete=false。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+          "scope": "現行仕様と2026-10-22 record条件。古いモデル審査の判定を撤回。",
+          "identity": "本監査baseline全行を現行仕様として直接照合"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 9,
+          "heading": "## 現行仕様 — ユーザー判断 2026-10-15 第 4 回・第 5 回"
+        },
+        {
+          "line": 44,
+          "heading": "## 廃止した審査の履歴"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 4,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0018",
+      "primary_document": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "canonical sibling attribution/permissionless anchor/Rule E v2/Gate C。DAG widthは仕様上stub止まり、実幅変更を追加要求しない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§4; T1",
+          "requirement": "mergeset集合関数のround robin/各claim帰属/RED保持/seed anchor。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_rfc0018_v1.rs",
+              "line": 454,
+              "symbol_or_excerpt": "palw_sibling_canonical_order_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 454,
+              "source_sha256": "df9a810523b90f04a6646d38a42141aa37a51df02a9c9042174c25580d9aedc6"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_state_v2.rs",
+              "line": 15093,
+              "symbol_or_excerpt": "palw_sibling_canonical_order_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 15092,
+              "source_sha256": "512241ddc3e15501e1bf56386e3ddb38dee5ab17fd4040e02f2e47f84f578101"
+            }
+          ],
+          "verification": "unitとnative sibling testsource存在。3実process全到着順campaign証拠不足。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [
+              "consensus/core/src/palw_state_v2.rs"
+            ],
+            "current_decision": "前回区分を維持。変更箇所は下記deltaとしてscope別評価。"
+          }
+        },
+        {
+          "sections": "§5; T2",
+          "requirement": "確定stateの他bond貢献からanchor。bond最早1件、producer除外、header近似しない。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_rfc0018_v1.rs",
+              "line": 520,
+              "symbol_or_excerpt": "palw_permissionless_contributions_from_state_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 520,
+              "source_sha256": "df9a810523b90f04a6646d38a42141aa37a51df02a9c9042174c25580d9aedc6"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+              "line": 7371,
+              "symbol_or_excerpt": "palw_permissionless_contributions_from_state_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 7371,
+              "source_sha256": "00fa950539389792ec99f2d71b856351c24c300ba75b29cd0baa150a2d75160f"
+            }
+          ],
+          "verification": "実reader接続あり。grinding bound実測T2b不足。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§6–7; §13.3",
+          "requirement": "Finalと認証を分離し、weight/frontier/RuleE/settled anchor/発行legを一箇所認証で付与・void取消。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+              "line": 613,
+              "symbol_or_excerpt": "fn sweep_security_certification_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 613,
+              "source_sha256": "0121ea99291c9d8af1983c5bc5b1057aaadab1cc5e5fe662ee4d85656cf598a7"
+            },
+            {
+              "path": "consensus/core/src/palw_fork_choice_rule_e_v1.rs",
+              "line": 406,
+              "symbol_or_excerpt": "palw_gate_c",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 406,
+              "source_sha256": "185c7a6c8e52a42e7bed7c56abf06c4c90b615b92261652a07cabb4f3dade4e5"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+              "line": 2318,
+              "symbol_or_excerpt": "sweep_security_certification_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 2318,
+              "source_sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2"
+            },
+            {
+              "path": "consensus/core/src/palw_settlement_v1.rs",
+              "line": 89,
+              "symbol_or_excerpt": "palw_gate_c",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 89,
+              "source_sha256": "25bc6d35248e3e5259710b032ce3be1c6edfa88894cda51787bae6dc174ff31f"
+            }
+          ],
+          "verification": "主要chain consumersは接続。全native仕事から成熟credit/旧consumerまでの正式横断写像は未閉鎖(とくにRFC12native39 mapping未策定)。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§8; T4",
+          "requirement": "width schedule構造/identity/推定stubを置き、実block単位reader未実装を明示。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_rfc0018_v1.rs",
+              "line": 633,
+              "symbol_or_excerpt": "PalwDagWidthSchedule",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 633,
+              "source_sha256": "df9a810523b90f04a6646d38a42141aa37a51df02a9c9042174c25580d9aedc6"
+            }
+          ],
+          "production_callers": [],
+          "verification": "実reader未実装は本RFCの明示scope。未承認幅の武装拒否を欠陥扱いしない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§7.11 T0; §10; §14",
+          "requirement": "closed-model/self-panel attackの6量、partition/restart/prune/new IBD、各fence A2と前提失敗報告。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_rfc0018_v1/attack_tests.rs",
+              "line": 173,
+              "symbol_or_excerpt": "#[test]",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 173,
+              "source_sha256": "39dff0d299b9c7d877c359c30175edf48c56466f89bb93ac5cb45b5ce531543b"
+            },
+            {
+              "path": "scripts/drills/rfc0018_dag_drill.py",
+              "line": 10,
+              "symbol_or_excerpt": "attack",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 10,
+              "source_sha256": "7f7f088ff6ac4234cb541401bf85e280bccf61e4a421c927c62b211e90b1c691"
+            }
+          ],
+          "production_callers": [],
+          "verification": "attack unit/driver存在だけでは実T0f/T1e/T3c/dのPASSにならない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "TEST: 本RFCの実process最上位T0f/T1e/T3c/T3d、認証再実行費用/grinding実測の包括記録不足。",
+        "CODE/EXTERNAL: 全native workloadからRFC12成熟証拠の正式写像は未策定。既存chain GateC unitを全nativeconsumer閉鎖に読み替えない。",
+        "SUPERSEDED:旧Probation bar/モデル審査/暗号学的計算証明は除外。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/design/palw/integration/rfc-0018-implementation-status-2026-10-15.md",
+          "scope": "当時の対応表は探索補助のみ。現callerを再確認しunbuilt旧断言は流用しない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/evidence/rfc/0006-0008-0012-queue-session-verification-2026-10-25.md",
+          "scope": "queue/session6new＋related143distinctPASS。実lock/cancel/unwindとcommondrain予約/ACKであり全native settlement/pruned campaignではない。",
+          "identity": "8e1c0147f/2fa327369/49cfec978。RED immutable binary/logは保存、GREEN既存3session tests変更なし。"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。",
+        "dc1e2886a/debf7c93c/2fa327369/c5a7b200aはnative EVM exactparent、notification/session、roundgasを改善。GateC対象実workとSafe/Finalized成熟native39正式写像を作る変更ではない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 23,
+          "heading": "## ユーザー方針 2026-10-15(本RFCを拘束する)"
+        },
+        {
+          "line": 29,
+          "heading": "## 0. 要約と目標状態"
+        },
+        {
+          "line": 42,
+          "heading": "## 1. レビュー主張の検証(STEP 1)"
+        },
+        {
+          "line": 71,
+          "heading": "## 2. 主要な所見"
+        },
+        {
+          "line": 83,
+          "heading": "## 3. liveと休眠の対応"
+        },
+        {
+          "line": 98,
+          "heading": "## 4. 設計変更1: 多モデル同時生成とRED取り込み(`palw_dag_sibling_attribution_v1`)"
+        },
+        {
+          "line": 129,
+          "heading": "## 5. 設計変更2: Panel anchorの特権除去(`palw_panel_anchor_permissionless_v1`)"
+        },
+        {
+          "line": 157,
+          "heading": "## 6. 設計変更3: DNS廃止後の収束 — rule E v2(`palw_rule_e_participation_v2`)"
+        },
+        {
+          "line": 191,
+          "heading": "## 7. Gate C — `SecurityCertified`(`palw_independently_work_certified_v1`、ユーザー方針により採用)"
+        },
+        {
+          "line": 292,
+          "heading": "## 8. DAG幅(`palw_dag_width_schedule_v1`、仕様とstub)"
+        },
+        {
+          "line": 321,
+          "heading": "## 9. 他RFC・ADRとの関係"
+        },
+        {
+          "line": 330,
+          "heading": "## 10. 受入試験の一覧"
+        },
+        {
+          "line": 334,
+          "heading": "## 11. 本RFCで決めない値"
+        },
+        {
+          "line": 350,
+          "heading": "## 12. ユーザー判断が必要な事項"
+        },
+        {
+          "line": 361,
+          "heading": "## 13. 実装(休眠、未build、未試験)"
+        },
+        {
+          "line": 406,
+          "heading": "## 14. 有効化gate"
+        },
+        {
+          "line": 420,
+          "heading": "## 15. 参照"
+        },
+        {
+          "line": 427,
+          "heading": "## 改訂(2026-10-17)— 共有 frontier と独立な進行"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 5,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0019",
+      "primary_document": "docs/rfc/0019-annual-model-upgrade.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "追加のみ年次catalog/固定tier/署名release/readinessとrolling switch。現sourceで追加済R7/R8driverを未実装としない。",
+      "implementation_status": "COMPLETE",
+      "acceptance_status": "PARTIAL",
+      "code_complete": true,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§§5–7; A1–3/C1",
+          "requirement": "canonical bytes/root/連鎖追加のみ、受理DAA境界、tier一回、旧claim/RED、fingerprint/forkID/P2P。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_annual_catalog_v1.rs",
+              "line": 200,
+              "symbol_or_excerpt": "pub fn validate(&self)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 200,
+              "source_sha256": "3465fb8cb179744a4bbcb47620bd97d3586ff1768570bf8d7250065e315dd368"
+            },
+            {
+              "path": "consensus/core/src/palw_annual_catalog_v1.rs",
+              "line": 239,
+              "symbol_or_excerpt": "pub fn extends",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 239,
+              "source_sha256": "3465fb8cb179744a4bbcb47620bd97d3586ff1768570bf8d7250065e315dd368"
+            },
+            {
+              "path": "consensus/core/src/config/params/identity.rs",
+              "line": 720,
+              "symbol_or_excerpt": "annual catalog edition",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 720,
+              "source_sha256": "5900405ff29a07540c83e996c3aa4e25432290d73a7d38d5c1f1d8c047598eae"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_model_tier_v1.rs",
+              "line": 140,
+              "symbol_or_excerpt": "self.catalogs.listed_at(model_id, artifact_root, daa)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 140,
+              "source_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71"
+            },
+            {
+              "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+              "line": 2395,
+              "symbol_or_excerpt": "budget.roll_epoch_v3_tiered(",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 2395,
+              "source_sha256": "27fd0506595bac1c026b4751c679cf875161f8aa9d184f8804a1ed8bf0e33cac"
+            },
+            {
+              "path": "consensus/core/src/config/params/identity.rs",
+              "line": 727,
+              "symbol_or_excerpt": "fence.catalogs.drop_unscheduled_for_identity()",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 727,
+              "source_sha256": "5900405ff29a07540c83e996c3aa4e25432290d73a7d38d5c1f1d8c047598eae"
+            },
+            {
+              "path": "consensus/core/src/config/params/identity.rs",
+              "line": 4001,
+              "symbol_or_excerpt": "for catalog in fence.catalogs.editions.iter_mut().skip(1)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 4001,
+              "source_sha256": "5900405ff29a07540c83e996c3aa4e25432290d73a7d38d5c1f1d8c047598eae"
+            }
+          ],
+          "verification": "catalog/identity/fork-id tests/source接続あり。モデル審査ではなく政策的指定。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§§8–9; M1–2",
+          "requirement": "署名manifest/checksum/reproducible builder/fingerprint/追加-only検証、readiness非投票。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "scripts/release/misaka-release-manifest.py",
+              "line": 302,
+              "symbol_or_excerpt": "def verify(",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 302,
+              "source_sha256": "fe8a45654f77e1a484e91e5d09a41fd23c4016e4cda09dc7838b1eafb681df8b"
+            },
+            {
+              "path": "scripts/release/misaka-release-readiness.py",
+              "line": 49,
+              "symbol_or_excerpt": "def ",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 49,
+              "source_sha256": "d8ff9786e9d2ba62592b37872d8e36373ead54e15128768d28265887b1886b16"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "scripts/release/misaka-release-manifest.py",
+              "line": 509,
+              "symbol_or_excerpt": "report = verify(load(args.manifest), args)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 509,
+              "source_sha256": "fe8a45654f77e1a484e91e5d09a41fd23c4016e4cda09dc7838b1eafb681df8b"
+            },
+            {
+              "path": "scripts/release/misaka-release-manifest.py",
+              "line": 324,
+              "symbol_or_excerpt": "report[\"signers\"] = verify_signatures",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 324,
+              "source_sha256": "fe8a45654f77e1a484e91e5d09a41fd23c4016e4cda09dc7838b1eafb681df8b"
+            },
+            {
+              "path": "scripts/release/misaka-release-readiness.py",
+              "line": 288,
+              "symbol_or_excerpt": "readings = {n[\"name\"]: poll(n, args.timeout)",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 288,
+              "source_sha256": "d8ff9786e9d2ba62592b37872d8e36373ead54e15128768d28265887b1886b16"
+            }
+          ],
+          "verification": "道具とself-test/署名tamper履歴あり。現候補実運用の署名releaseは別。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§11 R1–6; §12",
+          "requirement": "同一catalog rolling/stale/boundary/restart/liveness、固定DAAと各role収束を観測。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+              "line": 390,
+              "symbol_or_excerpt": "def scenario_rolling",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 390,
+              "source_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+              "line": 658,
+              "symbol_or_excerpt": "getattr(drill, 'scenario_' + args.scenario.replace('-', '_'))()",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 658,
+              "source_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05"
+            }
+          ],
+          "verification": "実process driver存在、固定binary/genesis全scenario実行結果不足。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§11 R7–8; §12.1",
+          "requirement": "追加model旧新root/tierを各roleで照合し、旧新gatewayがH前後とも実応答、actual DAAと宣言manifestをbind。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+              "line": 534,
+              "symbol_or_excerpt": "def scenario_model_add",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 534,
+              "source_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05"
+            },
+            {
+              "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+              "line": 571,
+              "symbol_or_excerpt": "def scenario_local_llm",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 571,
+              "source_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05"
+            },
+            {
+              "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+              "line": 162,
+              "symbol_or_excerpt": "def check_gateway_identity",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 162,
+              "source_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+              "line": 658,
+              "symbol_or_excerpt": "getattr(drill, 'scenario_' + args.scenario.replace('-', '_'))()",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 658,
+              "source_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05"
+            },
+            {
+              "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+              "line": 413,
+              "symbol_or_excerpt": "roles = self.scenario_rolling()",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 413,
+              "source_sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05"
+            }
+          ],
+          "verification": "最終Python16/16 mechanism PASS。real-shaped wire/role registry/prePOST拒否であり実LLM/certification campaignではない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§16; release gates",
+          "requirement": "対象artifact/承認catalog/署名release/readiness/全実drill・独立reviewまで未承認editionを武装しない。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_model_tier_v1.rs",
+              "line": 397,
+              "symbol_or_excerpt": "PALW_MODEL_TIER_ARMING_RECORDS_V1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 397,
+              "source_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/config/params/validation.rs",
+              "line": 301,
+              "symbol_or_excerpt": "self.validate_palw_model_tier_v1()?",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 301,
+              "source_sha256": "3f16ff611d4efd22bc874ceee4e06880a4d99ebe7d90f3c4bf816dfb08da7489"
+            },
+            {
+              "path": "consensus/core/src/palw_model_tier_v1.rs",
+              "line": 394,
+              "symbol_or_excerpt": "palw_model_tier_arming_record_admits_v1(",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 394,
+              "source_sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71"
+            }
+          ],
+          "verification": "空recordは意図した承認待ち、codegapではない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "TEST/EXTERNAL: fixed old/new binaries・catalog/release signatures・実gateway/worker/artifact・R1–R8実node複数roleの一貫受入不足。",
+        "旧本文の「R7/R8未実装」は現在のdriverには適用しない。model ID/manifest照合だけは推論正しさ/claim認証の根拠にならない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/rfc/0019-gateway-advertised-model-identity-2026-10-25.md",
+          "scope": "Python16/16、canonical MODEL_ID/uniqueadvertisement/manifest identity/invalid request negative。実gateway未起動。",
+          "identity": "commit c934c7991、log /tmp/misaka-rfc19-gateway-model-identity-tests-final-20261025.log"
+        },
+        {
+          "path": "docs/evidence/rfc/0019-local-llm-pre-post-switch-observation-2026-10-25.md",
+          "scope": "前後H・全role registry orchestration11/11。後続16/16に内包。",
+          "identity": "commit725771300; actual model/claim/campaign証拠ではない"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 25,
+          "heading": "## ユーザー方針 2026-10-15(本RFCを拘束する)"
+        },
+        {
+          "line": 35,
+          "heading": "## 0. 要約"
+        },
+        {
+          "line": 45,
+          "heading": "## 1. 用語"
+        },
+        {
+          "line": 56,
+          "heading": "## 2. Solana(Agave)からの参照 — 採ったパターンと採らなかったもの"
+        },
+        {
+          "line": 71,
+          "heading": "## 3. 合意に入るもの・入らないもの"
+        },
+        {
+          "line": 83,
+          "heading": "## 4. 運用 lifecycle"
+        },
+        {
+          "line": 104,
+          "heading": "## 5. カタログの型と規則"
+        },
+        {
+          "line": 147,
+          "heading": "## 6. 階層規則"
+        },
+        {
+          "line": 187,
+          "heading": "## 7. 既存基盤への対応"
+        },
+        {
+          "line": 233,
+          "heading": "## 8. リリース手順"
+        },
+        {
+          "line": 274,
+          "heading": "## 9. readiness の測定 — 投票しない"
+        },
+        {
+          "line": 289,
+          "heading": "## 10. 互換性 — hard fork と soft fork"
+        },
+        {
+          "line": 296,
+          "heading": "## 11. 受入試験"
+        },
+        {
+          "line": 331,
+          "heading": "## 12. 最初の開発段階 — 同じカタログでの rolling upgrade(testnet-12 DAA 14,000)"
+        },
+        {
+          "line": 359,
+          "heading": "## 13. 本RFCで決めない値"
+        },
+        {
+          "line": 375,
+          "heading": "## 14. ユーザー判断が必要な事項"
+        },
+        {
+          "line": 384,
+          "heading": "## 15. 実装(休眠、未build、未試験)"
+        },
+        {
+          "line": 426,
+          "heading": "## 16. 有効化 gate"
+        },
+        {
+          "line": 441,
+          "heading": "## 17. 参照"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 5,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0020",
+      "primary_document": "docs/rfc/0020-long-context-calibration-memory.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "較正/変換/忠実度のhost memory道具。合意変更なし。全系列attentionがない経路のtile化は不要、KVspillは必要性計測後の条件付き仕様。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§2",
+          "requirement": "phase/kind別live/peak/RSSを計上、weights/carry/KV/GDN/attention/stats/logitsを区別。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "misaka/palw/tir/lower/src/ram_account.rs",
+              "line": 145,
+              "symbol_or_excerpt": "pub fn snapshot",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 145,
+              "source_sha256": "5364ae0ab8799966c08d40101ff3f5fc56bf2e4b4738170ec923588b13b019f2"
+            },
+            {
+              "path": "misaka/palw/tir/lower/src/bin/palw-tir-convert.rs",
+              "line": 285,
+              "symbol_or_excerpt": "ram_account::enable",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 285,
+              "source_sha256": "6180c5d68089e92f279212157af37a4d752cc0c743402000f5a1abf748d43dbe"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "scripts/genesis/genesis10_pipeline.py",
+              "line": 1317,
+              "symbol_or_excerpt": "--ram-accounting",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1317,
+              "source_sha256": "e0e3859c0da9a02b44afefc6f29d8692ff1706dbf3f2dba6dcbde3a2a3efc80c"
+            }
+          ],
+          "verification": "CLI→実collector接続あり。実32K/モデル別peak監査表の完了証拠なし。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§3–4; §5.5",
+          "requirement": "入力carryを取り出し退役、lazy重み/位置runの意味を保持しbit同一を検査。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "misaka/palw/tir/lower/src/float_ref/stream.rs",
+              "line": 296,
+              "symbol_or_excerpt": "pub fn set_carry_spill",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 296,
+              "source_sha256": "26811517f3f3f7cd7dab4a36fb6fc60878b3b62e0a8bd06efd6d80f8f5d73531"
+            },
+            {
+              "path": "misaka/palw/tir/lower/tests/position_blocks.rs",
+              "line": 125,
+              "symbol_or_excerpt": "consumed_and_spilled_carries_are_the_two_sequence_run_bit_for_bit",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 125,
+              "source_sha256": "6c6365e0d209591831b4429ad4f2e27e49f8695703948785f89779585f7b6783"
+            }
+          ],
+          "production_callers": [],
+          "verification": "旧2系列参照とのtoy7architecture対照source。実長文脈全GDN/logits/統計の現候補測定は限定。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§5.1–4; §8 表の項目3",
+          "requirement": "存在する全行列経路にのみ厳密attention/observer。full-key正規化・因果mask・RoPE等を維持。",
+          "implementation_status": "DEFERRED",
+          "code": [
+            {
+              "path": "misaka/palw/tir/lower/src/float_ref/mod.rs",
+              "line": 1946,
+              "symbol_or_excerpt": "Kind::AttentionTemp",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1946,
+              "source_sha256": "7591b68ebdd5821febddc3a39ef6bcf2dfe0961f7211134437df70d159c1edac"
+            }
+          ],
+          "production_callers": [],
+          "verification": "主文書§8はgenesis経路全行列無しで不要と判断。実在しない全行列primitiveを新規義務にしない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§6.2–3; §7; §10",
+          "requirement": "carry disk quota/cleanupとKV条件付きspill、長context drift/cancel/I/O error/RAM比較。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "misaka/palw/tir/lower/src/float_ref/stream.rs",
+              "line": 296,
+              "symbol_or_excerpt": "pub fn set_carry_spill",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 296,
+              "source_sha256": "26811517f3f3f7cd7dab4a36fb6fc60878b3b62e0a8bd06efd6d80f8f5d73531"
+            },
+            {
+              "path": "scripts/genesis/rfc20_acceptance.py",
+              "line": 92,
+              "symbol_or_excerpt": "ram_accounting_peak",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 92,
+              "source_sha256": "7b23a209067f1c6ffd7293b29f1d50ae6faa248767ebd8b0c31e149d1f96cd0f"
+            }
+          ],
+          "production_callers": [],
+          "verification": "carry spill実装とacceptance runnerあり。KV diskspillは未実装、導入時期は必要性実測待ち。32K計測なしをRSS保証にしない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "CODE/DEFERRED: §6.3 KV履歴diskspillは仕様のみ。現在32Kで必要性が示されていない条件付き作業として区別。",
+        "TEST: 実checkpoint32K、64K/128K比較、OS RSS/allocator/filecache/I/O枯渇と全統計/logits/GDN bit同一の受入証拠不足。",
+        "既存toy parityは意味の対照で、巨大モデルの最悪RAM/cost実測ではない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/rfc/0020-long-context-calibration-memory.md",
+          "scope": "§3旧algorithm対照sourceと§8/§10条件付きscopeを現実装と照合。見積り表は未計測。",
+          "identity": "baseline仕様＋source review; 本監査でCargo/実モデルrunなし"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 19,
+          "heading": "## ユーザー方針 2026-10-16(本RFCを拘束する)"
+        },
+        {
+          "line": 30,
+          "heading": "## 0. 要約"
+        },
+        {
+          "line": 42,
+          "heading": "## 1. 範囲"
+        },
+        {
+          "line": 55,
+          "heading": "## 2. 計測を先にする — RAM 計上モード(実装済み・未検証)"
+        },
+        {
+          "line": 64,
+          "heading": "## 3. carry の二重保持を除く(実装済み・未検証)"
+        },
+        {
+          "line": 74,
+          "heading": "## 4. lazy 重み(既存機能の既定値と案内)"
+        },
+        {
+          "line": 85,
+          "heading": "## 5. attention のメモリ"
+        },
+        {
+          "line": 134,
+          "heading": "## 6. 32K を超える文脈(64K / 128K)"
+        },
+        {
+          "line": 155,
+          "heading": "## 7. 検証"
+        },
+        {
+          "line": 161,
+          "heading": "## 8. 実装順と状態"
+        },
+        {
+          "line": 170,
+          "heading": "## 9. 32K の見積り(未計測)"
+        },
+        {
+          "line": 182,
+          "heading": "## 10. 本RFCで決めないこと"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 4,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0021",
+      "primary_document": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "文書/手続き/tooling RFC。独立したnode runtime dutyは要求しない。",
+      "implementation_status": "COMPLETE",
+      "acceptance_status": "VERIFIED",
+      "code_complete": true,
+      "complete": true,
+      "requirements": [
+        {
+          "sections": "方針; 文書の役割",
+          "requirement": "設計凍結と変数調整/重大問題RFC+ADR手続き、採択/実装/検証/activationを区別。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "docs/governance/design-freeze.md",
+              "line": 26,
+              "symbol_or_excerpt": "## 例外変更の手順",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 26,
+              "source_sha256": "aaf370f3d7b68df12574318139ba0d42bd1299a9e1630288b3466574bdde3527"
+            },
+            {
+              "path": "docs/governance/parameter-register.md",
+              "line": 1,
+              "symbol_or_excerpt": "#",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1,
+              "source_sha256": "65933be511ba8c8a7479cc12489abfd16cf611b008288031b5de15f13bdfbe92"
+            }
+          ],
+          "production_callers": [],
+          "verification": "正式規程・台帳・PRINCIPLES/AGENTS crosslinkを確認。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "移行・検査",
+          "requirement": "既存番号/主path/原文/hash維持、collision台帳・役割分類・新規不備検査。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "docs/maintenance/check_docs.py",
+              "line": 11,
+              "symbol_or_excerpt": "def ",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 11,
+              "source_sha256": "b3c60cb961354414b99cfad25f517401aa885bddd28400928cb52e7fa630287d"
+            },
+            {
+              "path": "docs/maintenance/numbering.md",
+              "line": 1,
+              "symbol_or_excerpt": "#",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1,
+              "source_sha256": "646a29148a2bc3a3b84a141c36cfe98d10a3820aee085099bc2265f305f56ce8"
+            },
+            {
+              "path": "docs/maintenance/validation-report.md",
+              "line": 18,
+              "symbol_or_excerpt": "16 tests PASS",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 18,
+              "source_sha256": "7cb1f7f8781362dd77174cc706648d9b343cf259500b4a645ea78cb757813789"
+            }
+          ],
+          "production_callers": [],
+          "verification": "root提供実docs tooling16/16 PASS 0.002秒 (wall0.07秒)。既知43は明示baselineで新規0方式、外部URLや既存欠落を全修復する義務ではない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [],
+      "evidence": [
+        {
+          "path": "docs/maintenance/validation-report.md",
+          "scope": "16tooling testsと6negative checks、番号/path/manifest/knownissue運用の記録。旧既知43を隠さず保持。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/results.json",
+          "scope": "docs maintenance unit16PASS 0.002s (wall0.07s)。rootのruntime/rfc21-original-archive.json:原Markdown660/660 SHA一致・全2481移動先missing0。archiveSHA1771a6c263bca628a8c0ccc91f94fb4a72ed5f4cf2d2ddce3d41fa4f6134530b。node/Cargo非対象。",
+          "identity": "audit baseline0ec2efc4c; finalno-newdocs checkはroot統合予定"
+        },
+        {
+          "path": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc21-original-archive.json",
+          "scope": "root actual archival audit:660原Markdown全SHA一致、全2481移動先存在。後続編集後のorganizedhash一致は要求/主張しない。",
+          "identity": "archive SHA256 1771a6c263bca628a8c0ccc91f94fb4a72ed5f4cf2d2ddce3d41fa4f6134530b"
+        }
+      ],
+      "notes": [
+        "文書上の完了。全過去リンク正常・全設計意味の機械的検証を意味しない。",
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 10,
+          "heading": "## 方針"
+        },
+        {
+          "line": 15,
+          "heading": "## 文書の役割"
+        },
+        {
+          "line": 19,
+          "heading": "## 移行・検査"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 2,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0022",
+      "primary_document": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "方針は採択・文書化済。延期機能肯定的実装は不要だが§3の無効化/迂回不能/restart/sync/共通回帰は免除されない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "MISSING",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§§1,4–5",
+          "requirement": "画像/動画/RFC04改善を初期mainnetから除外し、自動再開せず、別承認とimmutable registrationを維持。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "docs/governance/post-mainnet-scope.md",
+              "line": 21,
+              "symbol_or_excerpt": "## 無効化の要求",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 21,
+              "source_sha256": "f167bbd91342a6b34da0c1d98ebe1cc71be843b2d0e94c4ef9ab3a82b3d235a2"
+            },
+            {
+              "path": "docs/adr/0182-defer-media-and-model-improvement-until-post-mainnet.md",
+              "line": 1,
+              "symbol_or_excerpt": "#",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1,
+              "source_sha256": "8276d2dcbdd7068914774944c28e6b283542d004899ae847bccdc092a9a3350e"
+            }
+          ],
+          "production_callers": [],
+          "verification": "文書方針はCOMPLETE。年次catalog/較正は改善protocolと混同しない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§2; 正式方針「無効化の要求」",
+          "requirement": "共有gen/FP fenceやSDK/gateway/RPC/claim/foldを使ったmedia/improvement迂回を拒否。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_gen_v1.rs",
+              "line": 98,
+              "symbol_or_excerpt": "Image = 1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 98,
+              "source_sha256": "9cec87571679e0a62b040f4ce73097041eb6736e6588a0346fb27dca7f2210fb"
+            },
+            {
+              "path": "consensus/core/src/config/params.rs",
+              "line": 7501,
+              "symbol_or_excerpt": "palw_improvement_v1: None",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 7501,
+              "source_sha256": "321c2d708a28b7ae97abdae9feceafe76bcb6fb2551b7fddc35908966de25dcb"
+            },
+            {
+              "path": "consensus/core/src/palw_state_v2.rs",
+              "line": 7904,
+              "symbol_or_excerpt": "pub fn palw_object_is_improvement_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 7904,
+              "source_sha256": "512241ddc3e15501e1bf56386e3ddb38dee5ab17fd4040e02f2e47f84f578101"
+            }
+          ],
+          "production_callers": [],
+          "verification": "presetNoneとA2 improvement dropは存在。媒体profileenumと共通admissionも残る。releaseの全通常/代替入口を閉じる独立guardの網羅は確認できない。",
+          "gap": "CODE/UNKNOWN:公開presetNoneのみで全SDK/gateway/alternate shared pathの無効化完了とは断定できない。",
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [
+              "consensus/core/src/palw_state_v2.rs"
+            ],
+            "current_decision": "前回区分を維持。変更箇所は下記deltaとしてscope別評価。"
+          }
+        },
+        {
+          "sections": "§3",
+          "requirement": "通常/別入口拒否、epoch/評価/候補/固有報酬の不進行、再起動/再同期一貫性、テキスト/認証/予算の回帰。",
+          "implementation_status": "UNKNOWN",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_state_v2.rs",
+              "line": 7034,
+              "symbol_or_excerpt": "palw_object_is_improvement_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 7034,
+              "source_sha256": "512241ddc3e15501e1bf56386e3ddb38dee5ab17fd4040e02f2e47f84f578101"
+            },
+            {
+              "path": "consensus/core/src/palw_gen_v1.rs",
+              "line": 101,
+              "symbol_or_excerpt": "Video = 4",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 101,
+              "source_sha256": "9cec87571679e0a62b040f4ce73097041eb6736e6588a0346fb27dca7f2210fb"
+            }
+          ],
+          "production_callers": [],
+          "verification": "baselineに対応するRFC22全入口negative＋coldrestart/resync合同受入記録を特定できず。旧media肯定fixture/None定数はこの証拠でない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [
+              "consensus/core/src/palw_state_v2.rs"
+            ],
+            "current_decision": "前回区分を維持。変更箇所は下記deltaとしてscope別評価。"
+          }
+        }
+      ],
+      "gaps": [
+        "TEST: §3 runtime拒否/共通経路迂回不能/再起動再同期の対象release証拠不足。",
+        "CODE/UNKNOWN:実装未照合部分の閉鎖を文書だけでCOMPLETEとしない。一方、延期した画像動画改善の肯定的E2E/性能を新たなblockerに戻さない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/governance/post-mainnet-scope.md",
+          "scope": "方針はDISABLEDだがruntime未確認と明示。現sourceのNone/drop存在を追加照合。",
+          "identity": "採択文書＋baseline読取、全拒否testは未特定"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 10,
+          "heading": "## 1. 要求"
+        },
+        {
+          "line": 14,
+          "heading": "## 2. 共通経路との分離"
+        },
+        {
+          "line": 18,
+          "heading": "## 3. 検査"
+        },
+        {
+          "line": 22,
+          "heading": "## 4. 再開"
+        },
+        {
+          "line": 26,
+          "heading": "## 5. 非変更事項"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 3,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0023",
+      "primary_document": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "段階1 bounded unresolved＋段階2依存局所checkpointを分離。実claim-local frameworkは存在、全native dependency/material closureは未完。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§3.1–5; §7 stage1",
+          "requirement": "original受付起点の有限責任、期限をfraud proofにせずhold、late conviction/floor巻戻しと後続claimの別進捗。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+              "line": 403,
+              "symbol_or_excerpt": "deferred floor",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 403,
+              "source_sha256": "0121ea99291c9d8af1983c5bc5b1057aaadab1cc5e5fe662ee4d85656cf598a7"
+            },
+            {
+              "path": "consensus/core/src/palw_claim_local_rewards_v1.rs",
+              "line": 436,
+              "symbol_or_excerpt": "pub(super) fn reward_readiness_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 436,
+              "source_sha256": "9edf3a01ee706005fb726d85773239feb13b2eac2acd44c5a6776c065b6aea2a"
+            }
+          ],
+          "production_callers": [],
+          "verification": "core/helper実装と12 focused回帰記録あり。全継続攻撃実node測定は別。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§4.1–5; §7 stage2; 2026-10-24追記",
+          "requirement": "未解決集合/materialをcheckpointへ拘束、ownerを保持し、state root/carriage/rollback/readerで再検査。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+              "line": 51,
+              "symbol_or_excerpt": "fn expected_claim_local_checkpoint_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 51,
+              "source_sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a"
+            },
+            {
+              "path": "consensus/core/src/palw_claim_local_checkpoint_resources_v1.rs",
+              "line": 4,
+              "symbol_or_excerpt": "Native",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 4,
+              "source_sha256": "c4ca53a49fa6e03f593a8c4d6110c01d0f543344cdcadfc2050af22f440815fe"
+            },
+            {
+              "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+              "line": 270,
+              "symbol_or_excerpt": "fn assert_claim_local_checkpoint_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 270,
+              "source_sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_state_v2.rs",
+              "line": 15400,
+              "symbol_or_excerpt": "write_claim_local_checkpoint_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 15399,
+              "source_sha256": "512241ddc3e15501e1bf56386e3ddb38dee5ab17fd4040e02f2e47f84f578101"
+            },
+            {
+              "path": "consensus/core/src/palw_claim_local_fold_v1.rs",
+              "line": 117,
+              "symbol_or_excerpt": "assert_claim_local_checkpoint_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 117,
+              "source_sha256": "9151820828e798f4825a563811ee5fa78ea2aed3bfed69c6cb93fe79415189b3"
+            }
+          ],
+          "verification": "fold-derived checkpoint/restore/RPC/frontier接続を再確認。namespace型だけで全部native記録builderがあるとはしない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [
+              "consensus/core/src/palw_state_v2.rs"
+            ],
+            "current_decision": "前回区分を維持。変更箇所は下記deltaとしてscope別評価。"
+          }
+        },
+        {
+          "sections": "§4.2,4.4",
+          "requirement": "tx出力/共有execution/担保予約の実依存だけを追い、A有罪の影響をA＋真依存先へ限定。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+              "line": 121,
+              "symbol_or_excerpt": "inputs: BTreeSet::new()",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 121,
+              "source_sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a"
+            },
+            {
+              "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+              "line": 78,
+              "symbol_or_excerpt": "PalwClaimLocalWorkRefV1::ChainClaim",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 78,
+              "source_sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a"
+            }
+          ],
+          "production_callers": [],
+          "verification": "本番builderはstate.claimsからChainClaimを生成。inputs空、generic KernelClaim/ExecSession/ExecSlice対応型は実native記録生成を代替しない。",
+          "gap": "CODE: 全native/EXEC/input-output依存のfold-derived builderとmaterial archive closureが未接続。",
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§4.5; §6",
+          "requirement": "fork choice/tx settled/native lifecycle/prune/IBDを同じfenceで変更し、同一artifact複数node正常/攻撃campaign。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+              "line": 195,
+              "symbol_or_excerpt": "fn write_claim_local_checkpoint_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 195,
+              "source_sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a"
+            },
+            {
+              "path": "consensus/core/src/palw_settlement_v1.rs",
+              "line": 40,
+              "symbol_or_excerpt": "safe_frontier",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 40,
+              "source_sha256": "25bc6d35248e3e5259710b032ce3be1c6edfa88894cda51787bae6dc174ff31f"
+            }
+          ],
+          "production_callers": [],
+          "verification": "shared frontierへclaim-local値を反映するconsumer接続あり。ただし全native lifecycleと外部反証資料のprunedIBD後取得は未閉鎖。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "CODE: ChainClaim中心・inputs空のbuilder。全native/EXEC transaction/material/provenance依存閉包とclaim-local frontier/native lifecycle横断未完。",
+        "TEST: §6同一候補複数node複数claim、A後有罪でB不変、prune/IBD/restart/reorg後fresh outsider反証campaign未実行。",
+        "2026-10-24 owner/quote/wire不変修正と12/12は局所完了で、stage2全完了ではない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/rfc/0001-0038-parallel-continuation-2026-10-24.md",
+          "scope": "RFC23 retained checkpoint/12focusedと既存stage1fixture条件訂正。",
+          "identity": "logs /tmp/misaka-rfc23-final-20261024.log; underlyingtests限定"
+        },
+        {
+          "path": "docs/evidence/palw/g14-parallel-2026-10-22/rfc23-stage2.md",
+          "scope": "stage2 source map/inputs空/native scope/§6未実行の明示。古いuncompiledは現在build欠落の断言に使わない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/evidence/rfc/0006-0008-0012-queue-session-verification-2026-10-25.md",
+          "scope": "queue/session6new＋related143distinctPASS。実lock/cancel/unwindとcommondrain予約/ACKであり全native settlement/pruned campaignではない。",
+          "identity": "8e1c0147f/2fa327369/49cfec978。RED immutable binary/logは保存、GREEN既存3session tests変更なし。"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。",
+        "8e1c0147fは実consumed payout/settlement key bufferとACK共同drainを予約。checkpoint実builderは引き続きChainClaimとinputs空(121行)、§6全native依存/pruned反証campaign未閉鎖。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 9,
+          "heading": "## 1. 設計目標"
+        },
+        {
+          "line": 15,
+          "heading": "## 2. 現行規則(変更前の記録)"
+        },
+        {
+          "line": 25,
+          "heading": "## 3. 段階 1 — 現行 frontier を保ち、足止め時間に上限を置く(次回 fence)"
+        },
+        {
+          "line": 35,
+          "heading": "## 4. 段階 2 — 未解決 claim を局所管理する(別の休眠 fence)"
+        },
+        {
+          "line": 51,
+          "heading": "## 5. 採らない案"
+        },
+        {
+          "line": 60,
+          "heading": "## 6. 受入条件"
+        },
+        {
+          "line": 68,
+          "heading": "## 7. 実装メモ(段階 1、2026-10-17、branch `integ/g14-court-capacity-r2`)"
+        },
+        {
+          "line": 190,
+          "heading": "## 整合性修正 — 2026-10-19(RFC 全件整合性監査)"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 4,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0024",
+      "primary_document": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "A一位置terminal/B深さ2lookahead/C先行取得。3,200は性能目標で、現主契約3,120/10,000と混同しない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§§4–5; §7; §11.1",
+          "requirement": "一位置/row認証・完全witness budget、全候補lookahead/choiceを同じexact verdictへ接続。",
+          "implementation_status": "COMPLETE",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+              "line": 56,
+              "symbol_or_excerpt": "PALW_TIR_POSITION_WITNESS_BUDGET_V2: Option",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 56,
+              "source_sha256": "10b0a63ffc9ca217e49b675b1f1af9659153f89bec12c60c39200ab057cb4325"
+            },
+            {
+              "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+              "line": 64,
+              "symbol_or_excerpt": "PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 64,
+              "source_sha256": "10b0a63ffc9ca217e49b675b1f1af9659153f89bec12c60c39200ab057cb4325"
+            },
+            {
+              "path": "consensus/core/src/palw_court_v2.rs",
+              "line": 1611,
+              "symbol_or_excerpt": "pub fn check_tir_lookahead_disclosed_acceptance_v2",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 1611,
+              "source_sha256": "8cc1e9993849f23294f55ca84f45c521d6176039abddc5893a64593497dde364"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+              "line": 361,
+              "symbol_or_excerpt": "RFC-0024 A",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 361,
+              "source_sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005"
+            }
+          ],
+          "verification": "実tags201–204/83,333B/3,072 boundとshared terminal存在。古いNone commentを残件に流用しない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§6; §8; AppendixC",
+          "requirement": "source manifest/indexと強制開示、permit/冷起動/再取得を含むoriginal起点door、step搬送費用。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_tir_public_source_v1.rs",
+              "line": 184,
+              "symbol_or_excerpt": "Source",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 184,
+              "source_sha256": "54fc66ff6d8e89f2f95f2184206f4095f05b6d6467e88b8d679546450550ecee"
+            },
+            {
+              "path": "kaspad/src/palw_tir_acquisition_driver.rs",
+              "line": 10,
+              "symbol_or_excerpt": "pub",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 10,
+              "source_sha256": "17209475b912cb9dbe3ae10010067bffcde4f355b37d535ca56eb652035bc2ec"
+            }
+          ],
+          "production_callers": [],
+          "verification": "public acquisition/retained source/typed provider等は実在。全2M fault/完全cold/全者非協力の資源上限とdoor boundは未実証。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§§9–14; AppendixC.3; 整合性修正",
+          "requirement": "全route32K/2M adversarial node、owner/capacity競合、restart/reorg/prunedIBD、実費Δ/採択record。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_capacity_v1.rs",
+              "line": 196,
+              "symbol_or_excerpt": "pub fn palw_court_capacity_placeholder_policy_v1",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 196,
+              "source_sha256": "3289e294e02b20a4f038dbf19e6ff79a056c46cc5636fec50204b6391843fdff"
+            },
+            {
+              "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+              "line": 28,
+              "symbol_or_excerpt": "PALW_TIR_POSITION_WITNESS_BUDGET_V2",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 28,
+              "source_sha256": "10b0a63ffc9ca217e49b675b1f1af9659153f89bec12c60c39200ab057cb4325"
+            }
+          ],
+          "production_callers": [],
+          "verification": "計算補助derived_upperは測定ではない。部分small native/controlを全対応profile harddeadlineに格上げしない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "TEST/DESIGN: 全対応形状/ctx2M/fault routeで完全witness/rounds/byte/work/IO/RAMとoriginal起点doorの閉鎖証拠不足。",
+        "TEST: one-outsider/all-owner/cold/prune/IBD/再編を含む対象profile受入と独立review不足。",
+        "EXTERNAL:profile費用/資本・導出と正式承認record。Noneのarmだけをcodegapとしない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md",
+          "scope": "V8 position/frontier値の決定記録。独立profile最悪時測定の代替ではない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/rfc/0024-assets/geometry-report.json",
+          "scope": "式のgeometry reportのみ、実出荷binary時間/容量保証ではない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/evidence/rfc/0006-0007-0008-0012-court-aux-provider-round-verification-2026-10-25.md",
+          "scope": "最新commit1257f0ae8:6package no-run179.37s/31source一致、158 distinct passing parents。court3/aux5/provider3/checker2等とrelated。各局所scopeであり本RFC全受入でない。",
+          "identity": "source/pins/logsは当該committed record参照。実roundgas1はroundlane8へ内包、empty比較はexecutor31へ内包、子processは内数。"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。",
+        "court admission/sweep、actual provider failed-query座標伝播などの局所consumerが進展。全ctx2M/fault-route完全witness/最悪door/cold-one-outsiderの受入を閉じない。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 15,
+          "heading": "## 最新 branch との照合(2026-10-19 時点、g14/door-design)"
+        },
+        {
+          "line": 39,
+          "heading": "## 0. 根拠・対象版・未確認事項"
+        },
+        {
+          "line": 71,
+          "heading": "## 1. 問題と設計目標"
+        },
+        {
+          "line": 84,
+          "heading": "## 2. 脅威モデルと保証の正確な範囲"
+        },
+        {
+          "line": 106,
+          "heading": "## 3. 提案する全体経路"
+        },
+        {
+          "line": 129,
+          "heading": "## 4. A — 最後の裁定を 1 位置に絞る"
+        },
+        {
+          "line": 189,
+          "heading": "## 5. B — 最大 2 段の先読み開示で適応的な往復を減らす"
+        },
+        {
+          "line": 248,
+          "heading": "## 6. C — 原本の先行取得と、非協力時の強制開示"
+        },
+        {
+          "line": 307,
+          "heading": "## 7. 合意状態と codec の契約"
+        },
+        {
+          "line": 321,
+          "heading": "## 8. door の算出契約"
+        },
+        {
+          "line": 390,
+          "heading": "## 9. 記録と arming gate"
+        },
+        {
+          "line": 412,
+          "heading": "## 10. 安全性・完結性のレビュー義務"
+        },
+        {
+          "line": 431,
+          "heading": "## 11. 必須試験"
+        },
+        {
+          "line": 462,
+          "heading": "## 12. 実装手順と変更箇所"
+        },
+        {
+          "line": 476,
+          "heading": "## 13. 移行・有効化・失敗時対応"
+        },
+        {
+          "line": 486,
+          "heading": "## 14. 受入チェックリスト"
+        },
+        {
+          "line": 506,
+          "heading": "## 15. 不採用・本 RFC に含めない案"
+        },
+        {
+          "line": 520,
+          "heading": "## 付録 A. 外部参考の位置づけ"
+        },
+        {
+          "line": 524,
+          "heading": "## 付録 B. 同梱の計算補助"
+        },
+        {
+          "line": 528,
+          "heading": "## 付録 C. 逐次 step block 搬送の削減を優先する(2026-10-19 追記、ユーザー指示)"
+        },
+        {
+          "line": 595,
+          "heading": "## 整合性修正 — 2026-10-19(RFC 全件整合性監査)"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 3,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    },
+    {
+      "rfc": "RFC-0025",
+      "primary_document": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "baseline_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "Draft統合案。RFC26主期限契約が優先。既存capacity実装・後続改定を照合し、本文未実装という日付だけでABSENTにしない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "MISSING",
+      "code_complete": false,
+      "complete": false,
+      "requirements": [
+        {
+          "sections": "§§2–3; §13; C1",
+          "requirement": "各faultの最小exact primitive、row authenticationとbounded全transcript/verify/codec。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+              "line": 28,
+              "symbol_or_excerpt": "PALW_TIR_POSITION_WITNESS_BUDGET_V2",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 28,
+              "source_sha256": "10b0a63ffc9ca217e49b675b1f1af9659153f89bec12c60c39200ab057cb4325"
+            },
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_bottom_v1.rs",
+              "line": 185,
+              "symbol_or_excerpt": "Row version 2",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 185,
+              "source_sha256": "3d477b2da761a85974e01b2074b0d3bdb2097b64326f915dd420c076e595aa4a"
+            }
+          ],
+          "production_callers": [],
+          "verification": "一位置/typed shared source/court実装あり。全合法形状/fault/object-routeのglobal bound未閉鎖。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§5; §7; C3–5",
+          "requirement": "cross-model service vector/責任受付/予約calendar/control保護/EDF/dedup/one-outsider、先着予約を後続が奪わない。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+              "line": 2,
+              "symbol_or_excerpt": "deadline-aware queue",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 2,
+              "source_sha256": "f67b04b181d56b67814fc1d675c2b04eadbf8f319dcfc5866885d01d95f89cb0"
+            },
+            {
+              "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+              "line": 133,
+              "symbol_or_excerpt": "hard-deadline bucket",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 128,
+              "source_sha256": "f67b04b181d56b67814fc1d675c2b04eadbf8f319dcfc5866885d01d95f89cb0"
+            }
+          ],
+          "production_callers": [
+            {
+              "path": "consensus/core/src/palw_state_v2.rs",
+              "line": 199,
+              "symbol_or_excerpt": "court_capacity",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 199,
+              "source_sha256": "512241ddc3e15501e1bf56386e3ddb38dee5ab17fd4040e02f2e47f84f578101"
+            }
+          ],
+          "verification": "既存court budget/予約/EDF/admissionあり。完全v2 service-vector calendar/control/inclusion契約まで同一視しない。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [
+              "consensus/core/src/palw_court_capacity_fold_v1.rs",
+              "consensus/core/src/palw_state_v2.rs"
+            ],
+            "current_decision": "前回区分を維持。変更箇所は下記deltaとしてscope別評価。"
+          }
+        },
+        {
+          "sections": "§§4,6; C6",
+          "requirement": "署名済最大terms内でextensionにFinal/bond/material/lease/rentを原子的更新、clock reset禁止。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+              "line": 304,
+              "symbol_or_excerpt": "hard_deadline_daa",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 295,
+              "source_sha256": "f67b04b181d56b67814fc1d675c2b04eadbf8f319dcfc5866885d01d95f89cb0"
+            },
+            {
+              "path": "consensus/core/src/palw_staged_court_fold_v1.rs",
+              "line": 372,
+              "symbol_or_excerpt": "collect_until",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 372,
+              "source_sha256": "e350caf1d8e8473a7932d8b74420620f2f0d7720db440529e285aed49b56069a"
+            }
+          ],
+          "production_callers": [],
+          "verification": "有限hardclock/holdあり。RFC25有界混雑extension policy/id/calendarと全依存signedterms更新の一般経路は未特定。",
+          "gap": "CODE/DESIGN: 固定hard deadline/claim-specific extensionを、v2動的な予約混雑extension ledgerの完成と見なせない。",
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [
+              "consensus/core/src/palw_court_capacity_fold_v1.rs"
+            ],
+            "current_decision": "前回区分を維持。変更箇所は下記deltaとしてscope別評価。"
+          }
+        },
+        {
+          "sections": "§§10–12; C7–8",
+          "requirement": "未解決material/予約/partialcloseをcheckpoint/prune/IBDで保存・再検証し、解放後GC。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+              "line": 121,
+              "symbol_or_excerpt": "inputs: BTreeSet::new()",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 121,
+              "source_sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a"
+            },
+            {
+              "path": "consensus/core/src/palw_tir_public_state_v1.rs",
+              "line": 12,
+              "symbol_or_excerpt": "pub",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 12,
+              "source_sha256": "ca1de7257cdd7fcd0f17212ea3c98e4cc7522cb8697e1f4db7cbd45da73cb7ac"
+            }
+          ],
+          "production_callers": [],
+          "verification": "carriage/shared partial material/局所GC/prunedIBD機構は存在。RFC25全nativev2予約・extension一貫snapshotとarchival同判定の実証なし。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        },
+        {
+          "sections": "§14 C1–10; §17; §18",
+          "requirement": "100/1k/10k burst/持続spam、全owner拒否、ctx2M、capacity1/2/4×比較、door/deadline/IO/RAM/DB/IBDを実測pin。",
+          "implementation_status": "PARTIAL",
+          "code": [
+            {
+              "path": "docs/rfc/0025-assets/capacity_planner.py",
+              "line": 24,
+              "symbol_or_excerpt": "def ",
+              "revision": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+              "prior_line": 24,
+              "source_sha256": "ec57a30a50e24ce96c97788f58fcd263576341345067fe0adf35806d46ff57d0"
+            }
+          ],
+          "production_callers": [],
+          "verification": "capacity planner27tests/算術reportは実court/native負荷ではない。100/1000/10000実matrixとprofile審査なし。",
+          "gap": null,
+          "latest_revalidation": {
+            "checked_at": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+            "code_and_caller_symbols_resolved": true,
+            "changed_referenced_paths": [],
+            "current_decision": "仕様・参照source/consumer無変更を確認。前回区分を維持。"
+          }
+        }
+      ],
+      "gaps": [
+        "CODE/DESIGN: 既存court容量管理はあるが、一般v2 resource-vector予約calendar、bounded混雑extension/全依存terms原子更新/全native checkpoint closureが未閉鎖。",
+        "TEST: C1–C10実model/ctx2M/massdispute/load/one-outsider/IBD/GC/各容量profileの実binary証拠なし。",
+        "Draft提案の全件3,200固定等は後続主契約に従って読む。未承認容量profile・model review・計算証明を新規採用しない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/rfc/0025-assets/capacity-report.json",
+          "scope": "式によるcapacity sensitivity/最低帯域。native実測・case完了の証拠ではない。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/rfc/0025-assets/arithmetic-test-results.txt",
+          "scope": "planner算術試験の限定結果。C1–C10 campaignとは別。",
+          "identity": "historical evidence: identity is stated by the source record; not rerun in this audit"
+        },
+        {
+          "path": "docs/evidence/rfc/0006-0007-0008-0012-court-aux-provider-round-verification-2026-10-25.md",
+          "scope": "最新commit1257f0ae8:6package no-run179.37s/31source一致、158 distinct passing parents。court3/aux5/provider3/checker2等とrelated。各局所scopeであり本RFC全受入でない。",
+          "identity": "source/pins/logsは当該committed record参照。実roundgas1はroundlane8へ内包、empty比較はexecutor31へ内包、子processは内数。"
+        }
+      ],
+      "notes": [
+        "最新再監査:現行主文書の規範・改定は前回から無変更。全要件のsource/caller位置を最新HEADへ再解決し、累積差分を追加照合。旧日付のverdictを未検証で移送していない。",
+        "court EDF/ingress補助workspaceと資源拒否が進展。一般v2 calendar/混雑extension全署名依存terms/大量実court matrixは未閉鎖。"
+      ],
+      "reviewed_primary_sections": [
+        {
+          "line": 16,
+          "heading": "## 0. 前版との関係・根拠"
+        },
+        {
+          "line": 39,
+          "heading": "## 1. 保証と非保証"
+        },
+        {
+          "line": 68,
+          "heading": "## 2. 固定上限の証拠と局所演算"
+        },
+        {
+          "line": 120,
+          "heading": "## 3. A・B・Cを統合した経路"
+        },
+        {
+          "line": 150,
+          "heading": "## 4. 時間の定義: 通常3,200、混雑時は予約に応じて延長"
+        },
+        {
+          "line": 201,
+          "heading": "## 5. モデル横断の容量予約とスケジューリング"
+        },
+        {
+          "line": 272,
+          "heading": "## 6. 混雑時の延長・bond・経済的Final"
+        },
+        {
+          "line": 333,
+          "heading": "## 7. 外部1人の訴追権と大量濫用"
+        },
+        {
+          "line": 363,
+          "heading": "## 8. 容量試算と3,200 DAAの達成判定"
+        },
+        {
+          "line": 412,
+          "heading": "## 9. ブロック容量拡張の検討"
+        },
+        {
+          "line": 445,
+          "heading": "## 10. 10,000 DAA checkpointと安全なpruning"
+        },
+        {
+          "line": 492,
+          "heading": "## 11. 検証可能なcheckpointとpruned IBD"
+        },
+        {
+          "line": 528,
+          "heading": "## 12. ノード実装のスケーリング条件"
+        },
+        {
+          "line": 547,
+          "heading": "## 13. 状態・codec・再生の契約"
+        },
+        {
+          "line": 573,
+          "heading": "## 14. 受入条件と試験計画"
+        },
+        {
+          "line": 633,
+          "heading": "## 15. 実装順序と統合箇所"
+        },
+        {
+          "line": 649,
+          "heading": "## 16. 移行と互換性"
+        },
+        {
+          "line": 659,
+          "heading": "## 17. arming recordと未確定事項"
+        },
+        {
+          "line": 684,
+          "heading": "## 18. このRFCが達成したと主張しないこと"
+        },
+        {
+          "line": 692,
+          "heading": "## 19. 参考一次資料"
+        },
+        {
+          "line": 700,
+          "heading": "## 整合性修正 — 2026-10-19(RFC 全件整合性監査)"
+        }
+      ],
+      "prior_audit_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_recheck": {
+        "all_primary_normative_sections_and_amendments_unchanged": true,
+        "requirements_checked": 5,
+        "verdict_changed": false,
+        "scope": "指定HEADのcommitted sourceのみ。現dirty ingress workspaceは除外。"
+      }
+    }
+  ]
+}

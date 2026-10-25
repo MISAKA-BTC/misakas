@@ -1,0 +1,5142 @@
+{
+  "baseline": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+  "reference_count": 354,
+  "all_marker_resolved": true,
+  "moved_references": 18,
+  "references": [
+    {
+      "rfc": "RFC-0001",
+      "path": "consensus/core/src/palw_decode_pipeline_v4.rs",
+      "previous_line": 148,
+      "marker": "pub fn validate_penalties",
+      "same_line_match": true,
+      "current_matching_lines": [
+        148
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "consensus/core/src/palw_freeprompt_v3.rs",
+      "previous_line": 583,
+      "marker": "pub fn fp_job_id_v4",
+      "same_line_match": true,
+      "current_matching_lines": [
+        583
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "consensus/core/src/palw_freeprompt_v3.rs",
+      "previous_line": 531,
+      "marker": "pub fn decoder_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        531
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "misaka/palw/gateway/src/surface.rs",
+      "previous_line": 545,
+      "marker": "pub fn candidate_seed_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        545
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "misaka/palw/gateway/src/main.rs",
+      "previous_line": 2340,
+      "marker": "fn handle_chat_candidates",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2340
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "misaka/palw/constraint/src/schema.rs",
+      "previous_line": 222,
+      "marker": "pub fn parse_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        222
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "consensus/core/src/palw_freeprompt_v3.rs",
+      "previous_line": 514,
+      "marker": "pub fn is_prefix_inherit",
+      "same_line_match": true,
+      "current_matching_lines": [
+        514
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "misaka/palw/base0/tests/fp_prefix_inherit_e2e.rs",
+      "previous_line": 112,
+      "marker": "#[test]",
+      "same_line_match": true,
+      "current_matching_lines": [
+        112
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "misaka/palw/gateway/src/main.rs",
+      "previous_line": 2431,
+      "marker": "fn handle_embeddings",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2431
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "misaka/palw/gateway/src/surface.rs",
+      "previous_line": 468,
+      "marker": "pub fn admit_embeddings",
+      "same_line_match": true,
+      "current_matching_lines": [
+        468
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0001",
+      "path": "docs/design/serving/rfc1-serving-surface.md",
+      "previous_line": 14,
+      "marker": "##",
+      "same_line_match": true,
+      "current_matching_lines": [
+        14
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "misaka/palw/tir/core/src/validate.rs",
+      "previous_line": 354,
+      "marker": "pub fn validate(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        354
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "misaka/palw/tir/core/src/validate_v2.rs",
+      "previous_line": 66,
+      "marker": "pub fn validate_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        66
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "misaka/palw/tir/core/src/eval.rs",
+      "previous_line": 306,
+      "marker": "pub fn eval_primitive",
+      "same_line_match": true,
+      "current_matching_lines": [
+        306
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "misaka/palw/sdk/src/preflight/mod.rs",
+      "previous_line": 435,
+      "marker": "pub fn run_remote",
+      "same_line_match": true,
+      "current_matching_lines": [
+        435
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "misaka/palw/sdk/src/tir_registration.rs",
+      "previous_line": 135,
+      "marker": "pub fn build_tir_registration_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        135
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "misaka/palw/sdk/tests/direct_tir_registration.rs",
+      "previous_line": 102,
+      "marker": "#[test]",
+      "same_line_match": true,
+      "current_matching_lines": [
+        102,
+        171,
+        213,
+        217,
+        221,
+        225,
+        229,
+        233,
+        237,
+        982
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "misaka/palw/tir/core/src/pipeline.rs",
+      "previous_line": 361,
+      "marker": "pub fn validate_pipeline",
+      "same_line_match": true,
+      "current_matching_lines": [
+        361
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 183,
+      "marker": "pub fn palw_model_tier_of_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        183
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 220,
+      "marker": "pub fn palw_native_independently_work_certified_v39",
+      "same_line_match": true,
+      "current_matching_lines": [
+        220
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "docs/PRINCIPLES.md",
+      "previous_line": 224,
+      "marker": "## 8.",
+      "same_line_match": true,
+      "current_matching_lines": [
+        224
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "docs/PRINCIPLES.md",
+      "previous_line": 243,
+      "marker": "## 9.",
+      "same_line_match": true,
+      "current_matching_lines": [
+        243,
+        253
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "consensus/core/src/palw_tir_public_state_v1.rs",
+      "previous_line": 548,
+      "marker": "pub fn palw_tir_public_source_for_row_owned_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        548
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "consensus/core/src/palw_tir_public_state_v1.rs",
+      "previous_line": 226,
+      "marker": "pub(crate) fn palw_tir_public_source_for_preparation_row_native_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        226
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "consensus/core/src/palw_staged_court_fold_v1.rs",
+      "previous_line": 391,
+      "marker": "staged_original_job_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        391,
+        2632,
+        2874,
+        3074,
+        3243
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "misaka/palw/tir/core/src/program_v39.rs",
+      "previous_line": 53,
+      "marker": "pub fn decode_canonical",
+      "same_line_match": true,
+      "current_matching_lines": [
+        53
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "previous_line": 4575,
+      "marker": "#### II.14.60a",
+      "same_line_match": true,
+      "current_matching_lines": [
+        4575
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "docs/evidence/rfc/0011-existing-coverage-audit.json",
+      "previous_line": 1,
+      "marker": "{",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        5,
+        9,
+        13,
+        17,
+        21,
+        25,
+        29,
+        34,
+        36,
+        42,
+        48,
+        50,
+        56,
+        62,
+        66,
+        67,
+        71,
+        76,
+        85,
+        91,
+        98,
+        105,
+        113
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0002",
+      "path": "docs/design/palw/integration/genesis8-status.md",
+      "previous_line": 1,
+      "marker": "#",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        11,
+        13,
+        14,
+        15,
+        19,
+        20,
+        21,
+        31,
+        35,
+        38,
+        42,
+        43,
+        47,
+        53,
+        55,
+        56,
+        59,
+        61,
+        65,
+        66,
+        67,
+        69,
+        70,
+        80,
+        94,
+        102,
+        109,
+        110,
+        127,
+        136,
+        139,
+        144,
+        145,
+        146,
+        147,
+        149,
+        157,
+        162,
+        166,
+        180,
+        183,
+        185,
+        190,
+        193,
+        195,
+        207,
+        216
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0003",
+      "path": "consensus/core/src/palw_gen_v1.rs",
+      "previous_line": 74,
+      "marker": "pub fn palw_gen_court_root_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        74
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0003",
+      "path": "consensus/core/src/palw_freeprompt_v3.rs",
+      "previous_line": 519,
+      "marker": "pub fn is_gen_tensor",
+      "same_line_match": true,
+      "current_matching_lines": [
+        519
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0003",
+      "path": "misaka/palw/tir/core/src/pipeline.rs",
+      "previous_line": 361,
+      "marker": "pub fn validate_pipeline",
+      "same_line_match": true,
+      "current_matching_lines": [
+        361
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0003",
+      "path": "consensus/core/src/palw_gen_v1.rs",
+      "previous_line": 467,
+      "marker": "pub fn validate_palw_gen_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        467
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0003",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 180,
+      "marker": "pub fn palw_independently_work_certified_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        180
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0003",
+      "path": "docs/governance/post-mainnet-scope.md",
+      "previous_line": 21,
+      "marker": "## 無効化の要求",
+      "same_line_match": true,
+      "current_matching_lines": [
+        21
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0003",
+      "path": "consensus/core/src/palw_gen_v1.rs",
+      "previous_line": 426,
+      "marker": "pub fn palw_gen_v1_active_at",
+      "same_line_match": true,
+      "current_matching_lines": [
+        426
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0003",
+      "path": "consensus/core/src/palw_gen_v1.rs",
+      "previous_line": 97,
+      "marker": "pub enum PalwGenProfileV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        97
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0004",
+      "path": "consensus/core/src/palw_model_registration_v1.rs",
+      "previous_line": 34,
+      "marker": "pub fn palw_registration_carrier_class_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        34
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0004",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 183,
+      "marker": "pub fn palw_model_tier_of_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        183
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0004",
+      "path": "docs/governance/post-mainnet-scope.md",
+      "previous_line": 19,
+      "marker": "改善版が独立",
+      "same_line_match": true,
+      "current_matching_lines": [
+        19
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0004",
+      "path": "consensus/core/src/palw_improve_v1.rs",
+      "previous_line": 300,
+      "marker": "pub fn palw_improvement_v1_active_at",
+      "same_line_match": true,
+      "current_matching_lines": [
+        300
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0004",
+      "path": "consensus/core/src/palw_improve_fold_v1.rs",
+      "previous_line": 71,
+      "marker": "pub fn improvement_governed_at",
+      "same_line_match": true,
+      "current_matching_lines": [
+        71
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0004",
+      "path": "docs/governance/post-mainnet-scope.md",
+      "previous_line": 37,
+      "marker": "## 初期 mainnet の受入",
+      "same_line_match": true,
+      "current_matching_lines": [
+        37
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0004",
+      "path": "consensus/core/src/palw_improve_v1.rs",
+      "previous_line": 325,
+      "marker": "pub fn validate_palw_improvement_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        325
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0005",
+      "path": "docs/rfc/0005-palw-ml-vm.md",
+      "previous_line": 1,
+      "marker": "#",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0005",
+      "path": "docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md",
+      "previous_line": 1,
+      "marker": "#",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        25,
+        46,
+        58,
+        79,
+        98,
+        126,
+        143,
+        165,
+        167,
+        189,
+        198
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0005",
+      "path": "docs/PRINCIPLES.md",
+      "previous_line": 224,
+      "marker": "## 8.",
+      "same_line_match": true,
+      "current_matching_lines": [
+        224
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0005",
+      "path": "docs/PRINCIPLES.md",
+      "previous_line": 243,
+      "marker": "## 9.",
+      "same_line_match": true,
+      "current_matching_lines": [
+        243,
+        253
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_cell_coverage_v1.rs",
+      "previous_line": 483,
+      "marker": "pub fn palw_legacy_cell_coverage_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        483
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_cell_coverage_v1.rs",
+      "previous_line": 207,
+      "marker": "pub fn palw_tir_cell_coverage_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        207
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_step_refute/memory_v2/transition.rs",
+      "previous_line": 373,
+      "marker": "pub fn check_gdn_transition_refutation_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        373
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+      "previous_line": 592,
+      "marker": "pub(super) fn advance_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        592
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_state_v2/block_preparation.rs",
+      "previous_line": 148,
+      "marker": "palw_panel_v3_fold_v1::advance_v1",
+      "same_line_match": false,
+      "current_matching_lines": [
+        141
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "kaspad/src/palw_gdn_held_filer.rs",
+      "previous_line": 212,
+      "marker": "pub fn palw_gdn_held_step_retained_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        212
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_state_v2/native_writers.rs",
+      "previous_line": 30,
+      "marker": "pub(super) fn local_capacity_or_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        30
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_state_v2/vesting_workspace_v2.rs",
+      "previous_line": 59,
+      "marker": "pub(super) fn reserve_vesting_workspace_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        59
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "previous_line": 14184,
+      "marker": "builder.reserve_vesting_workspace_v2()?",
+      "same_line_match": false,
+      "current_matching_lines": [
+        14185
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_state_v2/deadlines.rs",
+      "previous_line": 9,
+      "marker": "builder.reserve_court_deadline_workspace_v2(ctx.daa_score)?",
+      "same_line_match": true,
+      "current_matching_lines": [
+        9
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_state_v2/court_deadline_workspace_v2.rs",
+      "previous_line": 5,
+      "marker": "pub(super) fn quote",
+      "same_line_match": true,
+      "current_matching_lines": [
+        5
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "misaka/palw/base0/src/fp_recompute.rs",
+      "previous_line": 164,
+      "marker": "fn state_chunks_snapshot_retained_v4",
+      "same_line_match": true,
+      "current_matching_lines": [
+        164,
+        599
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_state_v2/block_preparation.rs",
+      "previous_line": 14,
+      "marker": "for claim_id in builder.state.pending_payouts",
+      "same_line_match": false,
+      "current_matching_lines": [],
+      "resolved": true,
+      "replacement": {
+        "path": "consensus/core/src/palw_state_v2/queue_drain_workspace_v2.rs",
+        "marker": "payouts.extend(",
+        "matching_lines": [
+          39
+        ],
+        "reason": "Committed extracted/admitted queue consumer or located-failure API replaces previous marker; semantic review in rfc01-12 refresh."
+      }
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_state_v2/block_preparation.rs",
+      "previous_line": 22,
+      "marker": "for seq in builder.state.evm_settlements",
+      "same_line_match": false,
+      "current_matching_lines": [],
+      "resolved": true,
+      "replacement": {
+        "path": "consensus/core/src/palw_state_v2/queue_drain_workspace_v2.rs",
+        "marker": "settlements.extend(",
+        "matching_lines": [
+          49
+        ],
+        "reason": "Committed extracted/admitted queue consumer or located-failure API replaces previous marker; semantic review in rfc01-12 refresh."
+      }
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+      "previous_line": 780,
+      "marker": "let mut ended: Vec",
+      "same_line_match": false,
+      "current_matching_lines": [
+        794
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 180,
+      "marker": "pub fn palw_independently_work_certified_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        180
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0006",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 201,
+      "marker": "pub fn palw_model_tier_coefficient_permille_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        201
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4.rs",
+      "previous_line": 547,
+      "marker": "let checked = match target",
+      "same_line_match": false,
+      "current_matching_lines": [
+        605
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 180,
+      "marker": "pub fn palw_independently_work_certified_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        180
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "consensus/core/src/palw_paid_claim_read_v1.rs",
+      "previous_line": 58,
+      "marker": "pub fn palw_paid_claim_read_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        58
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "consensus/core/src/palw_claim_challenge_v2.rs",
+      "previous_line": 375,
+      "marker": "pub fn paid_claim_check_authority_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        375
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "kaspad/src/private_integration/kernel_paid_checker_v4.rs",
+      "previous_line": 548,
+      "marker": "let checked_result = source.verify_using_provider_classified_v4",
+      "same_line_match": false,
+      "current_matching_lines": [],
+      "resolved": true,
+      "replacement": {
+        "path": "kaspad/src/private_integration/kernel_paid_checker_v4.rs",
+        "marker": "let checked_result = source.verify_using_provider_located_v4",
+        "matching_lines": [
+          548
+        ],
+        "reason": "Committed extracted/admitted queue consumer or located-failure API replaces previous marker; semantic review in rfc01-12 refresh."
+      }
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "consensus/core/src/palw_paid_claim_bootstrap_read_v6.rs",
+      "previous_line": 66,
+      "marker": "fn paid_claim_approved_final_exists_checked_v6",
+      "same_line_match": true,
+      "current_matching_lines": [
+        66
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "consensus/core/src/palw_claim_challenge_fold_v2.rs",
+      "previous_line": 710,
+      "marker": "let material = r.paid_claim_bootstrap_material_checked_v6",
+      "same_line_match": true,
+      "current_matching_lines": [
+        710
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "misaka/palw/kernel/src/claim_paid_bootstrap_source_v6.rs",
+      "previous_line": 12,
+      "marker": "pub fn supports_approved_bootstrap_source_v6",
+      "same_line_match": true,
+      "current_matching_lines": [
+        12
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4.rs",
+      "previous_line": 252,
+      "marker": "fn decoded<",
+      "same_line_match": false,
+      "current_matching_lines": [
+        277
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4.rs",
+      "previous_line": 559,
+      "marker": "if let Some(error) = reader.error.into_inner()",
+      "same_line_match": false,
+      "current_matching_lines": [
+        617
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "kaspad/src/private_integration/kernel_paid_checker_v4.rs",
+      "previous_line": 570,
+      "marker": "if matches!(error, E::LocalCapacity",
+      "same_line_match": false,
+      "current_matching_lines": [
+        572
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "kaspad/src/private_integration/source_bootstrap_factory_v1.rs",
+      "previous_line": 27,
+      "marker": "pub fn private_source_bootstrap_paid_params_with_consumer_v6",
+      "same_line_match": true,
+      "current_matching_lines": [
+        27
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0007",
+      "path": "consensus/core/src/palw_beacon_source_fee_v1.rs",
+      "previous_line": 105,
+      "marker": "pub fn unapproved_probe_at",
+      "same_line_match": true,
+      "current_matching_lines": [
+        105
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_exec_v2_fold.rs",
+      "previous_line": 74,
+      "marker": "pub fn exec_v2_canonical_work_plan_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        74
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_exec_v2_fold.rs",
+      "previous_line": 198,
+      "marker": "pub fn exec_v2_admit_slice_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        198
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_exec_v2_fold.rs",
+      "previous_line": 162,
+      "marker": "fn exec_v2_selected_approvals_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        162
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_source_verifier_economics_fold_v2.rs",
+      "previous_line": 468,
+      "marker": "acknowledge_consumed_prefix",
+      "same_line_match": true,
+      "current_matching_lines": [
+        468
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_state_v2/block_preparation.rs",
+      "previous_line": 19,
+      "marker": "palw_source_verifier_economics_fold_v2::acknowledge_consumed_prefix",
+      "same_line_match": false,
+      "current_matching_lines": [],
+      "resolved": true,
+      "replacement": {
+        "path": "consensus/core/src/palw_state_v2/queue_drain_workspace_v2.rs",
+        "marker": "palw_source_verifier_economics_fold_v2::acknowledge_consumed_prefix",
+        "matching_lines": [
+          45
+        ],
+        "reason": "Committed extracted/admitted queue consumer or located-failure API replaces previous marker; semantic review in rfc01-12 refresh."
+      }
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_state_v2/vesting_workspace_v2.rs",
+      "previous_line": 59,
+      "marker": "pub(super) fn reserve_vesting_workspace_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        59
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_monetary_material_fold_v1.rs",
+      "previous_line": 33,
+      "marker": "fn check_enrollment",
+      "same_line_match": true,
+      "current_matching_lines": [
+        33
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "misaka/palw/remote/src/monetary_material.rs",
+      "previous_line": 47,
+      "marker": "publication_uncertain",
+      "same_line_match": true,
+      "current_matching_lines": [
+        47,
+        54,
+        574,
+        604,
+        615
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "misaka/palw/remote/src/monetary_material_gc.rs",
+      "previous_line": 423,
+      "marker": "pub fn tick(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        423
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_beacon_source_fee_v1.rs",
+      "previous_line": 89,
+      "marker": "pub fn minimum_fee_for",
+      "same_line_match": true,
+      "current_matching_lines": [
+        89
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0008",
+      "path": "consensus/core/src/palw_source_verifier_economics_fold_v2.rs",
+      "previous_line": 55,
+      "marker": "fn governor(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        55
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/bundle.rs",
+      "previous_line": 594,
+      "marker": "pub fn check_bundle_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        594
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/relay.rs",
+      "previous_line": 193,
+      "marker": "pub fn broadcast_signed_tx",
+      "same_line_match": true,
+      "current_matching_lines": [
+        193
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/tests/adv_c4_registration.rs",
+      "previous_line": 219,
+      "marker": "#[test]",
+      "same_line_match": true,
+      "current_matching_lines": [
+        219,
+        286,
+        357,
+        402,
+        459
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/miner.rs",
+      "previous_line": 309,
+      "marker": "pub fn step_with_custody",
+      "same_line_match": true,
+      "current_matching_lines": [
+        309
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/miner.rs",
+      "previous_line": 717,
+      "marker": "fn publish_block",
+      "same_line_match": true,
+      "current_matching_lines": [
+        717
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/monetary_material.rs",
+      "previous_line": 47,
+      "marker": "publication_uncertain",
+      "same_line_match": true,
+      "current_matching_lines": [
+        47,
+        54,
+        574,
+        604,
+        615
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/verify.rs",
+      "previous_line": 101,
+      "marker": "pub fn signing_gate_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        101
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/verify.rs",
+      "previous_line": 631,
+      "marker": "pub fn l2_status_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        631
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/miner.rs",
+      "previous_line": 359,
+      "marker": "signing_gate_v1(label",
+      "same_line_match": true,
+      "current_matching_lines": [
+        359
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/verify.rs",
+      "previous_line": 13,
+      "marker": "the transition leading to the root is not re-executed here",
+      "same_line_match": true,
+      "current_matching_lines": [
+        13
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0009",
+      "path": "misaka/palw/remote/src/transport.rs",
+      "previous_line": 58,
+      "marker": "DESIGN_GAP",
+      "same_line_match": true,
+      "current_matching_lines": [
+        58
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0010",
+      "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+      "previous_line": 634,
+      "marker": "fn freeze_source_epochs_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        634
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0010",
+      "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+      "previous_line": 830,
+      "marker": "fn bind_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        830
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0010",
+      "path": "consensus/core/src/palw_state_v2/block_preparation.rs",
+      "previous_line": 148,
+      "marker": "palw_panel_v3_fold_v1::advance_v1",
+      "same_line_match": false,
+      "current_matching_lines": [
+        141
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0010",
+      "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+      "previous_line": 788,
+      "marker": "fn end_claim",
+      "same_line_match": true,
+      "current_matching_lines": [
+        788
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0010",
+      "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+      "previous_line": 1115,
+      "marker": "pub(super) fn apply_claim_entry_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1115
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0010",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 264,
+      "marker": "pub fn palw_gate_c_settles_anchor_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        264
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0010",
+      "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+      "previous_line": 479,
+      "marker": "fn epoch_sources",
+      "same_line_match": true,
+      "current_matching_lines": [
+        479
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0010",
+      "path": "consensus/core/src/palw_beacon_source_fee_v1.rs",
+      "previous_line": 105,
+      "marker": "pub fn unapproved_probe_at",
+      "same_line_match": true,
+      "current_matching_lines": [
+        105
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "misaka/palw/sdk/src/preflight/node.rs",
+      "previous_line": 50,
+      "marker": "pub fn parse(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        50
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "misaka/palw/sdk/src/tir_registration.rs",
+      "previous_line": 135,
+      "marker": "pub fn build_tir_registration_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        135
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "consensus/core/src/palw_model_registration_v1.rs",
+      "previous_line": 34,
+      "marker": "pub fn palw_registration_carrier_class_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        34
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "misaka/palw/tir/core/src/validate_v2.rs",
+      "previous_line": 66,
+      "marker": "pub fn validate_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        66
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "misaka/palw/sdk/tests/direct_tir_registration.rs",
+      "previous_line": 102,
+      "marker": "#[test]",
+      "same_line_match": true,
+      "current_matching_lines": [
+        102,
+        171,
+        213,
+        217,
+        221,
+        225,
+        229,
+        233,
+        237,
+        982
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "consensus/core/src/palw_tir_public_state_v1.rs",
+      "previous_line": 548,
+      "marker": "pub fn palw_tir_public_source_for_row_owned_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        548
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "consensus/core/src/palw_claim_challenge_v2.rs",
+      "previous_line": 572,
+      "marker": "pub fn paid_claim_actual_algebraic_bound_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        572
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 220,
+      "marker": "pub fn palw_native_independently_work_certified_v39",
+      "same_line_match": true,
+      "current_matching_lines": [
+        220
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "docs/PRINCIPLES.md",
+      "previous_line": 224,
+      "marker": "## 8.",
+      "same_line_match": true,
+      "current_matching_lines": [
+        224
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "docs/PRINCIPLES.md",
+      "previous_line": 243,
+      "marker": "## 9.",
+      "same_line_match": true,
+      "current_matching_lines": [
+        243,
+        253
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 183,
+      "marker": "pub fn palw_model_tier_of_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        183
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "docs/evidence/rfc/0011-existing-coverage-audit.json",
+      "previous_line": 1,
+      "marker": "{",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        5,
+        9,
+        13,
+        17,
+        21,
+        25,
+        29,
+        34,
+        36,
+        42,
+        48,
+        50,
+        56,
+        62,
+        66,
+        67,
+        71,
+        76,
+        85,
+        91,
+        98,
+        105,
+        113
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0011",
+      "path": "docs/evidence/rfc/0011-hf-census-coverage-2026-10-08.json",
+      "previous_line": 1,
+      "marker": "{",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        4,
+        13,
+        25,
+        40,
+        41,
+        42,
+        49,
+        55,
+        61,
+        67,
+        73,
+        79,
+        85,
+        92,
+        98,
+        104,
+        105,
+        111,
+        118,
+        128,
+        133,
+        137,
+        141,
+        142,
+        146,
+        150,
+        154,
+        158,
+        162,
+        167,
+        175,
+        183,
+        184,
+        185,
+        186,
+        192,
+        198,
+        205,
+        215,
+        219,
+        226,
+        234,
+        242,
+        250,
+        258,
+        266,
+        274,
+        282,
+        290,
+        298,
+        308,
+        322,
+        331,
+        340,
+        382,
+        404,
+        446,
+        460,
+        494,
+        503,
+        529,
+        571,
+        613,
+        622,
+        631,
+        640,
+        682,
+        724,
+        738,
+        747,
+        761,
+        803,
+        845,
+        863,
+        889,
+        911,
+        941,
+        959,
+        973,
+        991,
+        1033,
+        1047,
+        1065,
+        1074,
+        1083,
+        1099,
+        1126,
+        1153,
+        1168,
+        1187,
+        1214,
+        1241,
+        1268,
+        1283,
+        1310,
+        1325,
+        1340,
+        1355,
+        1370,
+        1399,
+        1403,
+        1404,
+        1411,
+        1417,
+        1423,
+        1429,
+        1435,
+        1441,
+        1447,
+        1454,
+        1460,
+        1466,
+        1467,
+        1473,
+        1480,
+        1490,
+        1495,
+        1499,
+        1503,
+        1504,
+        1508,
+        1512,
+        1516,
+        1520,
+        1524,
+        1529,
+        1538,
+        1546,
+        1547,
+        1548,
+        1549,
+        1555,
+        1561,
+        1568,
+        1578,
+        1582,
+        1589,
+        1597,
+        1605,
+        1613,
+        1621,
+        1629,
+        1637,
+        1645,
+        1653,
+        1661,
+        1671,
+        1685,
+        1694,
+        1703,
+        1745,
+        1767,
+        1809,
+        1823,
+        1857,
+        1866,
+        1892,
+        1934,
+        1976,
+        1985,
+        1994,
+        2003,
+        2045,
+        2087,
+        2096,
+        2110,
+        2124,
+        2166,
+        2208,
+        2226,
+        2252,
+        2274,
+        2304,
+        2322,
+        2336,
+        2354,
+        2396,
+        2410,
+        2428,
+        2437,
+        2446,
+        2462,
+        2489,
+        2516,
+        2531,
+        2550,
+        2577,
+        2604,
+        2631,
+        2646,
+        2673,
+        2688,
+        2703,
+        2718,
+        2733,
+        2762,
+        2767,
+        2801,
+        2802,
+        2810,
+        2819,
+        2821,
+        2829,
+        2832,
+        2848,
+        2856,
+        2872,
+        2876,
+        2879,
+        2888,
+        2893
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "previous_line": 74,
+      "marker": "pub fn creates_dns_participation",
+      "same_line_match": true,
+      "current_matching_lines": [
+        74
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "previous_line": 80,
+      "marker": "pub fn legacy_dns_evidence_allowed_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        80
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "wallet/core/src/misaka_preflight.rs",
+      "previous_line": 277,
+      "marker": "pub async fn preflight(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        277
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 264,
+      "marker": "pub fn palw_gate_c_settles_anchor_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        264
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "previous_line": 325,
+      "marker": "pub fn native_facts_and_skips_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        325
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "previous_line": 710,
+      "marker": "pub fn certify_native_prefix_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        710
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_mining_fold_v39.rs",
+      "previous_line": 644,
+      "marker": "pub(super) fn native_mining_receipt_leg_v39",
+      "same_line_match": true,
+      "current_matching_lines": [
+        644
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "previous_line": 163,
+      "marker": "pub fn native_delta_evidence_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        163
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "previous_line": 338,
+      "marker": "rules.state.claim(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        338,
+        360
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "previous_line": 18,
+      "marker": "pub fn native_worker_base_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        18
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "misaka/evm/core/src/trace.rs",
+      "previous_line": 223,
+      "marker": "pub fn trace_accepted_tx_with_market_owned_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        223
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/src/processes/evm/mod.rs",
+      "previous_line": 218,
+      "marker": "pub fn apply_evm_market_effects",
+      "same_line_match": true,
+      "current_matching_lines": [
+        218
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "kaspad/src/eth_rpc.rs",
+      "previous_line": 1152,
+      "marker": "fn resolve_executed_tag",
+      "same_line_match": false,
+      "current_matching_lines": [
+        1126
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "previous_line": 501,
+      "marker": "pub struct NativeSettlementSnapshotV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        501
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/src/consensus/factory.rs",
+      "previous_line": 511,
+      "marker": "fn new_staging_consensus(&self)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        511
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/src/consensus/factory.rs",
+      "previous_line": 160,
+      "marker": "fn new_staging",
+      "same_line_match": true,
+      "current_matching_lines": [
+        160,
+        511
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/material_typed_pruned_import_v1.rs",
+      "previous_line": 19,
+      "marker": "async fn retained_source_fresh_pruned_import_and_one_native_block_then_cold_reopen",
+      "same_line_match": true,
+      "current_matching_lines": [
+        19
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "previous_line": 550,
+      "marker": "**The §6 split is not adopted.**",
+      "same_line_match": true,
+      "current_matching_lines": [
+        550
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0012",
+      "path": "wallet/core/src/misaka_preflight.rs",
+      "previous_line": 277,
+      "marker": "pub async fn preflight(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        277
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/runtime_pack/manifest.rs",
+      "previous_line": 351,
+      "marker": "pub struct ExactLayoutRec",
+      "same_line_match": true,
+      "current_matching_lines": [
+        351
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/runtime_pack/bind.rs",
+      "previous_line": 57,
+      "marker": "pub fn bind_class",
+      "same_line_match": true,
+      "current_matching_lines": [
+        57
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/runtime_pack/cli.rs",
+      "previous_line": 239,
+      "marker": "bind_class",
+      "same_line_match": true,
+      "current_matching_lines": [
+        239
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/onboarding_snapshot.rs",
+      "previous_line": 130,
+      "marker": "pub fn into_onboarding_reads_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        130
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/runtime_pack/verify.rs",
+      "previous_line": 549,
+      "marker": "exact_layout",
+      "same_line_match": true,
+      "current_matching_lines": [
+        549
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/runtime_pack/conformance.rs",
+      "previous_line": 398,
+      "marker": "pub fn run_streamed_tiled_with_progress",
+      "same_line_match": true,
+      "current_matching_lines": [
+        398
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/runtime_pack/beacon_run.rs",
+      "previous_line": 66,
+      "marker": "pub fn write_atomic",
+      "same_line_match": true,
+      "current_matching_lines": [
+        66
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/runtime_pack/beacon_run.rs",
+      "previous_line": 269,
+      "marker": "pub fn rebind",
+      "same_line_match": true,
+      "current_matching_lines": [
+        269
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "misaka/palw/sdk/src/onboarding_chain.rs",
+      "previous_line": 281,
+      "marker": "PublicOnboarding",
+      "same_line_match": true,
+      "current_matching_lines": [
+        281
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0013",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 183,
+      "marker": "pub fn palw_model_tier_of_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        183
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "previous_line": 112,
+      "marker": "pub fn prepare_native_source_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        112
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "consensus/core/src/palw_tir_public_fold_v1.rs",
+      "previous_line": 37,
+      "marker": "pub fn palw_funded_original_candidate_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        37
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "kaspad/src/palw_fraud_filer.rs",
+      "previous_line": 1,
+      "marker": "Lane LG14-A",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "kaspad/src/palw_tir_public_filer_scheduler.rs",
+      "previous_line": 349,
+      "marker": "tir_public_filer_tick_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        349
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "kaspad/src/palw_panel.rs",
+      "previous_line": 10207,
+      "marker": "self.fraud_filer_tick_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        10207
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+      "previous_line": 128,
+      "marker": "hard-deadline bucket",
+      "same_line_match": false,
+      "current_matching_lines": [
+        133,
+        226
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "consensus/core/src/palw_staged_court_fold_v1.rs",
+      "previous_line": 372,
+      "marker": "collect_until",
+      "same_line_match": true,
+      "current_matching_lines": [
+        372,
+        376,
+        1431,
+        2298,
+        2330,
+        2449,
+        2592,
+        2722,
+        3036,
+        3121,
+        3204,
+        3291,
+        3424
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+      "previous_line": 305,
+      "marker": "palw_model_tier_weight_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        305
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "consensus/core/src/palw_bond_budget_v1.rs",
+      "previous_line": 75,
+      "marker": "pub const PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        75
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "consensus/core/src/palw_panel_free_gate_v1.rs",
+      "previous_line": 5,
+      "marker": "PalwPanelFree",
+      "same_line_match": true,
+      "current_matching_lines": [
+        5,
+        24,
+        33,
+        38,
+        52,
+        81,
+        129,
+        138,
+        139,
+        149,
+        162,
+        164,
+        169,
+        174,
+        176,
+        191,
+        241,
+        263,
+        270,
+        272,
+        274,
+        275,
+        277,
+        282,
+        286,
+        297,
+        300,
+        303,
+        306,
+        329,
+        334,
+        338,
+        342,
+        367
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0014",
+      "path": "kaspad/src/palw_fraud_filer.rs",
+      "previous_line": 32,
+      "marker": "fresh",
+      "same_line_match": true,
+      "current_matching_lines": [
+        32,
+        1210,
+        1357,
+        1360,
+        1361,
+        1365,
+        1368,
+        2095,
+        2098,
+        2937,
+        3087,
+        6605,
+        7333,
+        7505,
+        7511,
+        7520,
+        7529,
+        7534,
+        7541,
+        7553,
+        7563,
+        7572,
+        7601,
+        7673,
+        7748,
+        7789,
+        7974,
+        8000,
+        8013,
+        8025,
+        8040,
+        8083,
+        8113,
+        8131,
+        8144,
+        8175,
+        8195,
+        8301,
+        8503,
+        8616,
+        8627,
+        8658,
+        8803,
+        8867,
+        9010,
+        9034,
+        9060,
+        9090,
+        9094,
+        9145,
+        9151,
+        9172,
+        9190,
+        9200,
+        9211,
+        9215,
+        9225,
+        9234,
+        9254,
+        9280,
+        9281,
+        9282,
+        9313,
+        9335,
+        9356
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0015",
+      "path": "consensus/core/src/palw_panel_free_v1.rs",
+      "previous_line": 178,
+      "marker": "pub fn validate_palw_panel_free_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        178
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0015",
+      "path": "consensus/core/src/palw_panel_free_gate_v1.rs",
+      "previous_line": 5,
+      "marker": "PalwPanelFree",
+      "same_line_match": true,
+      "current_matching_lines": [
+        5,
+        24,
+        33,
+        38,
+        52,
+        81,
+        129,
+        138,
+        139,
+        149,
+        162,
+        164,
+        169,
+        174,
+        176,
+        191,
+        241,
+        263,
+        270,
+        272,
+        274,
+        275,
+        277,
+        282,
+        286,
+        297,
+        300,
+        303,
+        306,
+        329,
+        334,
+        338,
+        342,
+        367
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0015",
+      "path": "consensus/core/src/palw_bond_budget_v1.rs",
+      "previous_line": 75,
+      "marker": "pub const PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        75
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0015",
+      "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+      "previous_line": 305,
+      "marker": "palw_model_tier_weight_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        305
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0015",
+      "path": "consensus/core/src/palw_panel_free_v1.rs",
+      "previous_line": 178,
+      "marker": "pub fn validate_palw_panel_free_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        178
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_bond_budget_v1.rs",
+      "previous_line": 75,
+      "marker": "pub const PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        75
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+      "previous_line": 305,
+      "marker": "palw_model_tier_weight_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        305
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "previous_line": 107,
+      "marker": "pub fn palw_rfc0016_rights_epoch_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        107
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "previous_line": 272,
+      "marker": "fn rfc0016_rights_admit_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        272
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_rfc0016_v1/capacity.rs",
+      "previous_line": 8,
+      "marker": "Palw",
+      "same_line_match": true,
+      "current_matching_lines": [
+        8,
+        10,
+        17,
+        19,
+        20,
+        24,
+        32,
+        67,
+        83,
+        91,
+        92,
+        102,
+        104,
+        112,
+        127,
+        128,
+        131,
+        135,
+        138,
+        139,
+        141,
+        144,
+        147,
+        150,
+        154,
+        166,
+        195,
+        216,
+        229,
+        240,
+        242,
+        243,
+        254,
+        264,
+        277,
+        279,
+        281,
+        284,
+        287,
+        290,
+        293,
+        300,
+        319,
+        321,
+        322,
+        323,
+        345,
+        347,
+        355,
+        356,
+        357,
+        360,
+        376,
+        378,
+        379,
+        384,
+        390,
+        392,
+        393,
+        396,
+        437,
+        446,
+        457,
+        483,
+        501,
+        502,
+        505,
+        508,
+        513,
+        516,
+        517,
+        519,
+        522,
+        526,
+        535,
+        539,
+        541,
+        543,
+        546,
+        551,
+        561,
+        567,
+        576,
+        577,
+        580,
+        599,
+        600,
+        601,
+        602,
+        603,
+        604,
+        609,
+        610,
+        611,
+        612,
+        618,
+        624,
+        626,
+        634,
+        653,
+        654,
+        673,
+        676,
+        692,
+        711,
+        717,
+        718,
+        724,
+        725,
+        726,
+        730,
+        731,
+        732,
+        740,
+        754,
+        771,
+        779,
+        791,
+        792,
+        803,
+        816,
+        817,
+        820,
+        821,
+        824,
+        825,
+        854,
+        855,
+        856,
+        864,
+        866,
+        867,
+        869,
+        871,
+        874,
+        893,
+        894,
+        895,
+        896
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_state_v2/fold_read.rs",
+      "previous_line": 1020,
+      "marker": "self.rfc0016_rights_admit_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1020
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+      "previous_line": 2032,
+      "marker": "pub fn palw_rfc0016_report_v1_impl",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2032
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "previous_line": 968,
+      "marker": "capacity_per_span: None",
+      "same_line_match": true,
+      "current_matching_lines": [
+        968
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_rfc0016_v1/report.rs",
+      "previous_line": 57,
+      "marker": "pub capacity_shortfall_per_span",
+      "same_line_match": true,
+      "current_matching_lines": [
+        57
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "consensus/core/src/palw_rfc0016_v1/values.rs",
+      "previous_line": 6,
+      "marker": "PALW_RFC0016_MEASURED_RECORDS_V1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        6,
+        199,
+        590,
+        646,
+        751,
+        752,
+        767
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0016",
+      "path": "scripts/drills/rfc0016_sigma_k_measure.py",
+      "previous_line": 99,
+      "marker": "def ",
+      "same_line_match": true,
+      "current_matching_lines": [
+        99,
+        103,
+        110,
+        124,
+        132,
+        137,
+        175,
+        191,
+        215,
+        244,
+        310,
+        325,
+        344,
+        378
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 183,
+      "marker": "pub fn palw_model_tier_of_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        183
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_annual_catalog_v1.rs",
+      "previous_line": 258,
+      "marker": "pub fn listed_at",
+      "same_line_match": true,
+      "current_matching_lines": [
+        258
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 271,
+      "marker": "pub fn palw_model_tier_at_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        271
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+      "previous_line": 2389,
+      "marker": "palw_model_tier_of_model_v1(state, params, model, now)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2389
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_model_eligibility_fold_v1.rs",
+      "previous_line": 648,
+      "marker": "palw_model_tier_at_v1(state, params, class_id, daa)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        648
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_model_eligibility_fold_v1.rs",
+      "previous_line": 289,
+      "marker": "model-level review is abolished",
+      "same_line_match": true,
+      "current_matching_lines": [
+        289,
+        397
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "previous_line": 1600,
+      "marker": "apply_commit_eligibility_exam_v1(builder, ctx, signer, commit)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1600
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "previous_line": 1610,
+      "marker": "apply_attest_eligibility_exam_v1(builder, ctx, signer, attestation)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1610
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "previous_line": 2315,
+      "marker": "sweep_model_eligibility_v1(builder, ctx)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2315
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+      "previous_line": 305,
+      "marker": "palw_model_tier_weight_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        305
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+      "previous_line": 314,
+      "marker": "palw_model_tier_cap_factor_ppm_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        314
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "previous_line": 107,
+      "marker": "pub fn palw_rfc0016_rights_epoch_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        107
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+      "previous_line": 2395,
+      "marker": "budget.roll_epoch_v3_tiered(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2395
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "previous_line": 144,
+      "marker": "values.entrant_reserve_permille = 0",
+      "same_line_match": true,
+      "current_matching_lines": [
+        144
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_state_v2/fold_read.rs",
+      "previous_line": 1020,
+      "marker": "self.rfc0016_rights_admit_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1020
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 443,
+      "marker": "pub fn palw_model_tier_arming_record_admits_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        443
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 125,
+      "marker": "palw_gate_c",
+      "same_line_match": true,
+      "current_matching_lines": [
+        125,
+        138,
+        141,
+        148,
+        241,
+        242,
+        245,
+        248,
+        252,
+        264,
+        265,
+        270,
+        276,
+        319,
+        351,
+        369
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/config/params/validation.rs",
+      "previous_line": 301,
+      "marker": "self.validate_palw_model_tier_v1()?",
+      "same_line_match": true,
+      "current_matching_lines": [
+        301
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "previous_line": 1606,
+      "marker": "try_attest_claim_certification_v1(builder, ctx, signer, attestation)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1606
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0017",
+      "path": "consensus/core/src/palw_state_v2/transition_builder.rs",
+      "previous_line": 9838,
+      "marker": "commit_at_final_v1(self, &id, claim, final_daa)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        9838
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 454,
+      "marker": "palw_sibling_canonical_order_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        454
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "previous_line": 15092,
+      "marker": "palw_sibling_canonical_order_v1",
+      "same_line_match": false,
+      "current_matching_lines": [
+        15093
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 520,
+      "marker": "palw_permissionless_contributions_from_state_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        520,
+        533
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+      "previous_line": 7371,
+      "marker": "palw_permissionless_contributions_from_state_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        7371,
+        10716
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+      "previous_line": 613,
+      "marker": "fn sweep_security_certification_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        613
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_fork_choice_rule_e_v1.rs",
+      "previous_line": 406,
+      "marker": "palw_gate_c",
+      "same_line_match": true,
+      "current_matching_lines": [
+        406
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "previous_line": 2318,
+      "marker": "sweep_security_certification_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2318
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_settlement_v1.rs",
+      "previous_line": 89,
+      "marker": "palw_gate_c",
+      "same_line_match": true,
+      "current_matching_lines": [
+        89
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "previous_line": 633,
+      "marker": "PalwDagWidthSchedule",
+      "same_line_match": true,
+      "current_matching_lines": [
+        633,
+        641,
+        667,
+        669,
+        672,
+        677,
+        880
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "consensus/core/src/palw_rfc0018_v1/attack_tests.rs",
+      "previous_line": 173,
+      "marker": "#[test]",
+      "same_line_match": true,
+      "current_matching_lines": [
+        173,
+        179,
+        210,
+        222,
+        249,
+        262
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0018",
+      "path": "scripts/drills/rfc0018_dag_drill.py",
+      "previous_line": 10,
+      "marker": "attack",
+      "same_line_match": true,
+      "current_matching_lines": [
+        10,
+        466,
+        482,
+        483,
+        554,
+        562,
+        573,
+        574
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/palw_annual_catalog_v1.rs",
+      "previous_line": 200,
+      "marker": "pub fn validate(&self)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        200
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/palw_annual_catalog_v1.rs",
+      "previous_line": 239,
+      "marker": "pub fn extends",
+      "same_line_match": true,
+      "current_matching_lines": [
+        239
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/config/params/identity.rs",
+      "previous_line": 720,
+      "marker": "annual catalog edition",
+      "same_line_match": true,
+      "current_matching_lines": [
+        720,
+        3997
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 140,
+      "marker": "self.catalogs.listed_at(model_id, artifact_root, daa)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        140
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+      "previous_line": 2395,
+      "marker": "budget.roll_epoch_v3_tiered(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2395
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/config/params/identity.rs",
+      "previous_line": 727,
+      "marker": "fence.catalogs.drop_unscheduled_for_identity()",
+      "same_line_match": true,
+      "current_matching_lines": [
+        727
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/config/params/identity.rs",
+      "previous_line": 4001,
+      "marker": "for catalog in fence.catalogs.editions.iter_mut().skip(1)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        4001
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/release/misaka-release-manifest.py",
+      "previous_line": 302,
+      "marker": "def verify(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        302
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/release/misaka-release-readiness.py",
+      "previous_line": 49,
+      "marker": "def ",
+      "same_line_match": true,
+      "current_matching_lines": [
+        49,
+        53,
+        60,
+        67,
+        93,
+        116,
+        121,
+        208,
+        221,
+        229,
+        267
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/release/misaka-release-manifest.py",
+      "previous_line": 509,
+      "marker": "report = verify(load(args.manifest), args)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        509
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/release/misaka-release-manifest.py",
+      "previous_line": 324,
+      "marker": "report[\"signers\"] = verify_signatures",
+      "same_line_match": true,
+      "current_matching_lines": [
+        324
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/release/misaka-release-readiness.py",
+      "previous_line": 288,
+      "marker": "readings = {n[\"name\"]: poll(n, args.timeout)",
+      "same_line_match": true,
+      "current_matching_lines": [
+        288
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "previous_line": 390,
+      "marker": "def scenario_rolling",
+      "same_line_match": true,
+      "current_matching_lines": [
+        390
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "previous_line": 658,
+      "marker": "getattr(drill, 'scenario_' + args.scenario.replace('-', '_'))()",
+      "same_line_match": true,
+      "current_matching_lines": [
+        658
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "previous_line": 534,
+      "marker": "def scenario_model_add",
+      "same_line_match": true,
+      "current_matching_lines": [
+        534
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "previous_line": 571,
+      "marker": "def scenario_local_llm",
+      "same_line_match": true,
+      "current_matching_lines": [
+        571
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "previous_line": 162,
+      "marker": "def check_gateway_identity",
+      "same_line_match": true,
+      "current_matching_lines": [
+        162
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "previous_line": 658,
+      "marker": "getattr(drill, 'scenario_' + args.scenario.replace('-', '_'))()",
+      "same_line_match": true,
+      "current_matching_lines": [
+        658
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "previous_line": 413,
+      "marker": "roles = self.scenario_rolling()",
+      "same_line_match": true,
+      "current_matching_lines": [
+        413,
+        455,
+        537,
+        587
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 397,
+      "marker": "PALW_MODEL_TIER_ARMING_RECORDS_V1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        397,
+        399,
+        439,
+        452
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/config/params/validation.rs",
+      "previous_line": 301,
+      "marker": "self.validate_palw_model_tier_v1()?",
+      "same_line_match": true,
+      "current_matching_lines": [
+        301
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0019",
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "previous_line": 394,
+      "marker": "palw_model_tier_arming_record_admits_v1(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        394,
+        443
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0020",
+      "path": "misaka/palw/tir/lower/src/ram_account.rs",
+      "previous_line": 145,
+      "marker": "pub fn snapshot",
+      "same_line_match": true,
+      "current_matching_lines": [
+        145
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0020",
+      "path": "misaka/palw/tir/lower/src/bin/palw-tir-convert.rs",
+      "previous_line": 285,
+      "marker": "ram_account::enable",
+      "same_line_match": true,
+      "current_matching_lines": [
+        285
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0020",
+      "path": "scripts/genesis/genesis10_pipeline.py",
+      "previous_line": 1317,
+      "marker": "--ram-accounting",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1317,
+        1321,
+        2066
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0020",
+      "path": "misaka/palw/tir/lower/src/float_ref/stream.rs",
+      "previous_line": 296,
+      "marker": "pub fn set_carry_spill",
+      "same_line_match": true,
+      "current_matching_lines": [
+        296
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0020",
+      "path": "misaka/palw/tir/lower/tests/position_blocks.rs",
+      "previous_line": 125,
+      "marker": "consumed_and_spilled_carries_are_the_two_sequence_run_bit_for_bit",
+      "same_line_match": true,
+      "current_matching_lines": [
+        125
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0020",
+      "path": "misaka/palw/tir/lower/src/float_ref/mod.rs",
+      "previous_line": 1946,
+      "marker": "Kind::AttentionTemp",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1946
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0020",
+      "path": "misaka/palw/tir/lower/src/float_ref/stream.rs",
+      "previous_line": 296,
+      "marker": "pub fn set_carry_spill",
+      "same_line_match": true,
+      "current_matching_lines": [
+        296
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0020",
+      "path": "scripts/genesis/rfc20_acceptance.py",
+      "previous_line": 92,
+      "marker": "ram_accounting_peak",
+      "same_line_match": true,
+      "current_matching_lines": [
+        92
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0021",
+      "path": "docs/governance/design-freeze.md",
+      "previous_line": 26,
+      "marker": "## 例外変更の手順",
+      "same_line_match": true,
+      "current_matching_lines": [
+        26
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0021",
+      "path": "docs/governance/parameter-register.md",
+      "previous_line": 1,
+      "marker": "#",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        20,
+        52,
+        61,
+        64,
+        75,
+        81,
+        105
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0021",
+      "path": "docs/maintenance/check_docs.py",
+      "previous_line": 11,
+      "marker": "def ",
+      "same_line_match": true,
+      "current_matching_lines": [
+        11
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0021",
+      "path": "docs/maintenance/numbering.md",
+      "previous_line": 1,
+      "marker": "#",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        5,
+        7,
+        12,
+        17,
+        23,
+        31,
+        36,
+        40
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0021",
+      "path": "docs/maintenance/validation-report.md",
+      "previous_line": 18,
+      "marker": "16 tests PASS",
+      "same_line_match": true,
+      "current_matching_lines": [
+        18
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0022",
+      "path": "docs/governance/post-mainnet-scope.md",
+      "previous_line": 21,
+      "marker": "## 無効化の要求",
+      "same_line_match": true,
+      "current_matching_lines": [
+        21
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0022",
+      "path": "docs/adr/0182-defer-media-and-model-improvement-until-post-mainnet.md",
+      "previous_line": 1,
+      "marker": "#",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        9,
+        12,
+        16,
+        20,
+        24
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0022",
+      "path": "consensus/core/src/palw_gen_v1.rs",
+      "previous_line": 98,
+      "marker": "Image = 1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        98
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0022",
+      "path": "consensus/core/src/config/params.rs",
+      "previous_line": 7501,
+      "marker": "palw_improvement_v1: None",
+      "same_line_match": true,
+      "current_matching_lines": [
+        7501,
+        7874,
+        8229,
+        13787
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0022",
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "previous_line": 7904,
+      "marker": "pub fn palw_object_is_improvement_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        7904
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0022",
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "previous_line": 7034,
+      "marker": "palw_object_is_improvement_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        7034,
+        7904
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0022",
+      "path": "consensus/core/src/palw_gen_v1.rs",
+      "previous_line": 101,
+      "marker": "Video = 4",
+      "same_line_match": true,
+      "current_matching_lines": [
+        101
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+      "previous_line": 403,
+      "marker": "deferred floor",
+      "same_line_match": true,
+      "current_matching_lines": [
+        403,
+        408
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_claim_local_rewards_v1.rs",
+      "previous_line": 436,
+      "marker": "pub(super) fn reward_readiness_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        436
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "previous_line": 51,
+      "marker": "fn expected_claim_local_checkpoint_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        51
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_resources_v1.rs",
+      "previous_line": 4,
+      "marker": "Native",
+      "same_line_match": true,
+      "current_matching_lines": [
+        4,
+        6,
+        7,
+        9,
+        12,
+        15,
+        21,
+        36,
+        38,
+        43
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "previous_line": 270,
+      "marker": "fn assert_claim_local_checkpoint_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        270
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "previous_line": 15399,
+      "marker": "write_claim_local_checkpoint_v1",
+      "same_line_match": false,
+      "current_matching_lines": [
+        15400
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_claim_local_fold_v1.rs",
+      "previous_line": 117,
+      "marker": "assert_claim_local_checkpoint_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        117
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "previous_line": 121,
+      "marker": "inputs: BTreeSet::new()",
+      "same_line_match": true,
+      "current_matching_lines": [
+        121
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "previous_line": 78,
+      "marker": "PalwClaimLocalWorkRefV1::ChainClaim",
+      "same_line_match": true,
+      "current_matching_lines": [
+        78,
+        174,
+        209,
+        236,
+        243,
+        302
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "previous_line": 195,
+      "marker": "fn write_claim_local_checkpoint_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        195
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0023",
+      "path": "consensus/core/src/palw_settlement_v1.rs",
+      "previous_line": 40,
+      "marker": "safe_frontier",
+      "same_line_match": true,
+      "current_matching_lines": [
+        40,
+        42,
+        69,
+        75,
+        110,
+        120,
+        124,
+        125,
+        295,
+        300,
+        352,
+        363,
+        372,
+        375
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0024",
+      "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+      "previous_line": 56,
+      "marker": "PALW_TIR_POSITION_WITNESS_BUDGET_V2: Option",
+      "same_line_match": true,
+      "current_matching_lines": [
+        56
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0024",
+      "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+      "previous_line": 64,
+      "marker": "PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        64,
+        566
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0024",
+      "path": "consensus/core/src/palw_court_v2.rs",
+      "previous_line": 1611,
+      "marker": "pub fn check_tir_lookahead_disclosed_acceptance_v2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1611
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0024",
+      "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+      "previous_line": 361,
+      "marker": "RFC-0024 A",
+      "same_line_match": true,
+      "current_matching_lines": [
+        361,
+        386
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0024",
+      "path": "consensus/core/src/palw_tir_public_source_v1.rs",
+      "previous_line": 184,
+      "marker": "Source",
+      "same_line_match": true,
+      "current_matching_lines": [
+        184,
+        207,
+        211,
+        213,
+        251,
+        256,
+        259,
+        261,
+        289,
+        745,
+        774,
+        850,
+        852,
+        862,
+        874,
+        951,
+        970,
+        983,
+        1016,
+        1141,
+        1148,
+        1215,
+        1337,
+        1339,
+        1345,
+        1347,
+        1375,
+        1387,
+        1393,
+        1399,
+        1411
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0024",
+      "path": "kaspad/src/palw_tir_acquisition_driver.rs",
+      "previous_line": 10,
+      "marker": "pub",
+      "same_line_match": true,
+      "current_matching_lines": [
+        10,
+        13,
+        15,
+        19,
+        26,
+        28,
+        29,
+        32,
+        33,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        50,
+        80,
+        110,
+        115,
+        169,
+        181,
+        191,
+        242,
+        246,
+        250,
+        265,
+        268,
+        272,
+        285,
+        295,
+        297,
+        305,
+        337,
+        341,
+        345,
+        348,
+        352,
+        353,
+        413,
+        414,
+        415,
+        416,
+        417,
+        418,
+        419,
+        420,
+        421,
+        423,
+        424,
+        428,
+        433,
+        438,
+        475,
+        512,
+        629,
+        630,
+        631,
+        632,
+        633,
+        634,
+        635,
+        636,
+        640,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646,
+        649,
+        658,
+        663,
+        668,
+        671,
+        674,
+        677,
+        681,
+        698,
+        706,
+        716,
+        723,
+        728,
+        735,
+        752,
+        774,
+        784,
+        850,
+        872,
+        880,
+        895,
+        965,
+        966,
+        967,
+        968,
+        969,
+        970,
+        973,
+        974,
+        979,
+        987,
+        1001,
+        1007,
+        1042,
+        1066,
+        1094,
+        1176,
+        1178,
+        1181,
+        1245,
+        1266,
+        1299,
+        1385,
+        1521,
+        1568,
+        1591
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0024",
+      "path": "consensus/core/src/palw_court_capacity_v1.rs",
+      "previous_line": 196,
+      "marker": "pub fn palw_court_capacity_placeholder_policy_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        196
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0024",
+      "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+      "previous_line": 28,
+      "marker": "PALW_TIR_POSITION_WITNESS_BUDGET_V2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        28,
+        56,
+        275,
+        549,
+        567
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+      "previous_line": 28,
+      "marker": "PALW_TIR_POSITION_WITNESS_BUDGET_V2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        28,
+        56,
+        275,
+        549,
+        567
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_court_shared_tir_bottom_v1.rs",
+      "previous_line": 185,
+      "marker": "Row version 2",
+      "same_line_match": true,
+      "current_matching_lines": [
+        185
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+      "previous_line": 2,
+      "marker": "deadline-aware queue",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2,
+        575
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+      "previous_line": 128,
+      "marker": "hard-deadline bucket",
+      "same_line_match": false,
+      "current_matching_lines": [
+        133,
+        226
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "previous_line": 199,
+      "marker": "court_capacity",
+      "same_line_match": true,
+      "current_matching_lines": [
+        199,
+        200,
+        2032,
+        2033,
+        2035,
+        10498,
+        10499,
+        10502,
+        10505,
+        12788,
+        12790,
+        12804,
+        12806,
+        13403,
+        13404,
+        13407,
+        22035,
+        22037,
+        22050,
+        22120
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+      "previous_line": 295,
+      "marker": "hard_deadline_daa",
+      "same_line_match": false,
+      "current_matching_lines": [
+        304,
+        664,
+        709,
+        852
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_staged_court_fold_v1.rs",
+      "previous_line": 372,
+      "marker": "collect_until",
+      "same_line_match": true,
+      "current_matching_lines": [
+        372,
+        376,
+        1431,
+        2298,
+        2330,
+        2449,
+        2592,
+        2722,
+        3036,
+        3121,
+        3204,
+        3291,
+        3424
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "previous_line": 121,
+      "marker": "inputs: BTreeSet::new()",
+      "same_line_match": true,
+      "current_matching_lines": [
+        121
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "consensus/core/src/palw_tir_public_state_v1.rs",
+      "previous_line": 12,
+      "marker": "pub",
+      "same_line_match": true,
+      "current_matching_lines": [
+        12,
+        16,
+        22,
+        24,
+        32,
+        36,
+        40,
+        44,
+        63,
+        99,
+        105,
+        128,
+        136,
+        164,
+        177,
+        191,
+        192,
+        193,
+        194,
+        197,
+        200,
+        219,
+        224,
+        226,
+        231,
+        237,
+        245,
+        271,
+        274,
+        297,
+        303,
+        320,
+        321,
+        322,
+        323,
+        324,
+        326,
+        338,
+        341,
+        354,
+        357,
+        370,
+        417,
+        418,
+        419,
+        420,
+        421,
+        422,
+        423,
+        425,
+        426,
+        427,
+        430,
+        436,
+        437,
+        438,
+        441,
+        447,
+        472,
+        473,
+        474,
+        475,
+        476,
+        479,
+        496,
+        497,
+        498,
+        499,
+        500,
+        501,
+        504,
+        527,
+        532,
+        534,
+        539,
+        548,
+        556,
+        562,
+        570,
+        596,
+        599,
+        628,
+        647,
+        671,
+        672,
+        673,
+        674,
+        675,
+        676,
+        678,
+        689,
+        696,
+        713,
+        722,
+        723,
+        730,
+        731,
+        738,
+        746,
+        766,
+        803,
+        804,
+        805,
+        811,
+        814,
+        817,
+        820,
+        823,
+        828,
+        836,
+        855,
+        871,
+        875,
+        878,
+        879,
+        889,
+        898,
+        916,
+        925,
+        974,
+        976,
+        990,
+        992,
+        994,
+        995,
+        996,
+        998,
+        999,
+        1003,
+        1005,
+        1019,
+        1032,
+        1057,
+        1066,
+        1089,
+        1100,
+        1119,
+        1120,
+        1121,
+        1122,
+        1124,
+        1126,
+        1129,
+        1132,
+        1140,
+        1176,
+        1191,
+        1194,
+        1209,
+        1270,
+        1271,
+        1349,
+        1355,
+        1424,
+        1427,
+        1468,
+        1469,
+        1491,
+        1492,
+        1504,
+        1613,
+        1832,
+        1833
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": "RFC-0025",
+      "path": "docs/rfc/0025-assets/capacity_planner.py",
+      "previous_line": 24,
+      "marker": "def ",
+      "same_line_match": true,
+      "current_matching_lines": [
+        24,
+        32,
+        37,
+        42,
+        49,
+        58,
+        70,
+        74,
+        81,
+        90,
+        122,
+        134,
+        150,
+        156,
+        178,
+        202
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_court_policy_v1.rs",
+      "previous_line": 17,
+      "marker": "pub struct CourtClockBounds",
+      "same_line_match": true,
+      "current_matching_lines": [
+        17
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+      "previous_line": 254,
+      "marker": "pub fn classify_shared_notice_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        254
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+      "previous_line": 72,
+      "marker": "classify_shared_notice_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        72
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_funded_original_coordinator_v1.rs",
+      "previous_line": 169,
+      "marker": "pub fn palw_funded_original_schedule_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        169
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+      "previous_line": 120,
+      "marker": "fn reservation_readiness_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        120
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs",
+      "previous_line": 158,
+      "marker": "pub(super) fn coordinate_funded_original_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        158
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+      "previous_line": 14,
+      "marker": "PALW_COURT_SERVICE_PROFILE_V1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        14,
+        50,
+        54,
+        56
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_court_end_archive_v1.rs",
+      "previous_line": 11,
+      "marker": "pub enum",
+      "same_line_match": true,
+      "current_matching_lines": [
+        11,
+        45
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_court_service_lifecycle_fold_v1.rs",
+      "previous_line": 79,
+      "marker": "pub(super) fn observe_court_service_block_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        79
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 26,
+      "path": "consensus/core/src/palw_g14_gates_v1.rs",
+      "previous_line": 503,
+      "marker": "OneOutsiderCapacityIncomplete",
+      "same_line_match": true,
+      "current_matching_lines": [
+        503,
+        507
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 28,
+      "path": "consensus/core/src/palw_court_duty_clock_v1.rs",
+      "previous_line": 9,
+      "marker": "pub struct CourtDutyClockV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        9
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 28,
+      "path": "consensus/core/src/palw_tir_public_fold_v1.rs",
+      "previous_line": 1305,
+      "marker": "CourtDutyClockV1::from_native",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1305
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 28,
+      "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+      "previous_line": 14,
+      "marker": "PALW_COURT_SERVICE_PROFILE_V1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        14,
+        50,
+        54,
+        56
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 28,
+      "path": "consensus/core/src/palw_court_service_lifecycle_fold_v1.rs",
+      "previous_line": 9,
+      "marker": "observe_court_service_block_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        9,
+        79
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 28,
+      "path": "consensus/core/src/palw_state_v2/chain_state.rs",
+      "previous_line": 2465,
+      "marker": "CourtDutyClock",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2465,
+        2470,
+        2482,
+        4031
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_tir_requests_v1.rs",
+      "previous_line": 73,
+      "marker": "TirSharedRequestSetV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        73,
+        77,
+        354,
+        359,
+        574,
+        622,
+        628,
+        659,
+        682,
+        686,
+        689,
+        723
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_shared_tir_frontier_v1.rs",
+      "previous_line": 16,
+      "marker": "SignedSharedRequestV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        16,
+        20,
+        31,
+        79,
+        137,
+        139,
+        219,
+        223,
+        225,
+        226
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+      "previous_line": 45,
+      "marker": "fn request_inner",
+      "same_line_match": true,
+      "current_matching_lines": [
+        45
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_shared_tir_state_v1.rs",
+      "previous_line": 15,
+      "marker": "pub struct SharedTirContextV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        15
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_shared_tir_response_v1.rs",
+      "previous_line": 12,
+      "marker": "SharedDataResponseV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        12,
+        16,
+        29,
+        48,
+        60,
+        105,
+        136,
+        137,
+        145,
+        146,
+        147,
+        150,
+        151,
+        178,
+        193
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_service_lifecycle_fold_v1.rs",
+      "previous_line": 158,
+      "marker": "pub(super) fn apply_shared_court_wire_op_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        158
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_shared_tir_root_v1.rs",
+      "previous_line": 144,
+      "marker": "SharedTirRootRowV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        144,
+        151,
+        173
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+      "previous_line": 281,
+      "marker": "fn root(",
+      "same_line_match": true,
+      "current_matching_lines": [
+        281
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_numerical_transport_v1.rs",
+      "previous_line": 164,
+      "marker": "fn decode_numerical_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        164
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_shared_tir_bottom_v1.rs",
+      "previous_line": 189,
+      "marker": "SharedTirBottomRowV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        189,
+        196,
+        207,
+        225
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 29,
+      "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+      "previous_line": 14,
+      "marker": "fn numerical_transport",
+      "same_line_match": true,
+      "current_matching_lines": [
+        14
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 30,
+      "path": "consensus/core/src/palw_court_end_archive_v1.rs",
+      "previous_line": 11,
+      "marker": "pub enum",
+      "same_line_match": true,
+      "current_matching_lines": [
+        11,
+        45
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 30,
+      "path": "consensus/core/src/palw_court_end_archive_fold_v1.rs",
+      "previous_line": 1,
+      "marker": "archive",
+      "same_line_match": true,
+      "current_matching_lines": [
+        1,
+        4,
+        22,
+        55,
+        77,
+        80,
+        81,
+        83,
+        89,
+        114,
+        115,
+        119,
+        124,
+        125,
+        126,
+        128,
+        130,
+        131
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 30,
+      "path": "consensus/core/src/palw_state_v2/transition_builder.rs",
+      "previous_line": 8833,
+      "marker": "let pending = self.build_pending_court_archive_v1(key)?;",
+      "same_line_match": true,
+      "current_matching_lines": [
+        8833
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 30,
+      "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+      "previous_line": 120,
+      "marker": "fn reservation_readiness_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        120
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 30,
+      "path": "consensus/core/src/palw_court_close_receipt_v1.rs",
+      "previous_line": 33,
+      "marker": "CourtCloseReceiptV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        33,
+        48
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 30,
+      "path": "consensus/core/src/palw_court_archive_verify_v1.rs",
+      "previous_line": 110,
+      "marker": "apply_native_archived_chunk_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        110
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 31,
+      "path": "consensus/core/src/palw_court_policy_v1.rs",
+      "previous_line": 61,
+      "marker": "pub fn shared_initial_notice_daa_in_window_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        61
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 31,
+      "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+      "previous_line": 254,
+      "marker": "pub fn classify_shared_notice_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        254
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 31,
+      "path": "consensus/core/src/palw_state_v2/chain_state.rs",
+      "previous_line": 2497,
+      "marker": "pub fn court_shared_initial_notice_daa_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2497
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 31,
+      "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+      "previous_line": 72,
+      "marker": "classify_shared_notice_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        72
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 32,
+      "path": "consensus/core/src/palw_court_shared_numerical_material_join_v1.rs",
+      "previous_line": 90,
+      "marker": "fn build_terminal_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        90
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 32,
+      "path": "consensus/core/src/palw_court_shared_semantic_material_v1.rs",
+      "previous_line": 124,
+      "marker": "fn retain_semantic_material_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        124
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 32,
+      "path": "consensus/core/src/palw_court_shared_material_intake_v1.rs",
+      "previous_line": 85,
+      "marker": "pub fn material_intake_schedule_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        85
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 32,
+      "path": "consensus/core/src/palw_court_shared_material_intake_fold_v1.rs",
+      "previous_line": 34,
+      "marker": "pub(super) fn",
+      "same_line_match": true,
+      "current_matching_lines": [
+        34,
+        210,
+        233,
+        254
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 33,
+      "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_root.rs",
+      "previous_line": 275,
+      "marker": "pub fn palw_d2_readiness_path_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        275
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 33,
+      "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_disclosure.rs",
+      "previous_line": 344,
+      "marker": "pub fn palw_d2_disclosure_sweep_with_supply_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        344
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 33,
+      "path": "consensus/core/src/palw_state_v2/d2_readiness.rs",
+      "previous_line": 61,
+      "marker": "pub(super) fn open_d2_disclosure_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        61
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 33,
+      "path": "consensus/core/src/palw_state_v2/objects.rs",
+      "previous_line": 825,
+      "marker": "PalwConsensusObjectV2::SeatReadinessDemandedV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        825
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 33,
+      "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_disclosure.rs",
+      "previous_line": 67,
+      "marker": "PALW_D2_READINESS_CONVICTION_SLASH_SOMPI_V1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        67,
+        438
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 33,
+      "path": "consensus/core/src/palw_state_v2/d2_readiness.rs",
+      "previous_line": 107,
+      "marker": "book.supply.range",
+      "same_line_match": true,
+      "current_matching_lines": [
+        107
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 34,
+      "path": "consensus/core/src/palw_court_archive_discharge_v1.rs",
+      "previous_line": 24,
+      "marker": "pub struct ArchiveDeclarationProgressV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        24
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 34,
+      "path": "consensus/core/src/palw_court_archive_verify_v1.rs",
+      "previous_line": 110,
+      "marker": "apply_native_archived_chunk_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        110
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 34,
+      "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+      "previous_line": 120,
+      "marker": "fn reservation_readiness_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        120
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 35,
+      "path": "consensus/core/src/palw_funded_original_coordinator_v1.rs",
+      "previous_line": 211,
+      "marker": "pub fn palw_funded_original_pairing_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        211
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 35,
+      "path": "consensus/core/src/palw_funded_escrow_v1.rs",
+      "previous_line": 608,
+      "marker": "pub fn palw_tfo1_provisional_lock_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        608
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 35,
+      "path": "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs",
+      "previous_line": 318,
+      "marker": "pub(super) fn install_original_admission_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        318
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 35,
+      "path": "consensus/core/src/palw_funded_escrow_v1.rs",
+      "previous_line": 442,
+      "marker": "pub fn palw_escrow_qualified_spend_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        442
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 35,
+      "path": "consensus/core/src/palw_funded_escrow_v1.rs",
+      "previous_line": 386,
+      "marker": "pub fn palw_escrow_fee_schedule_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        386
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 35,
+      "path": "consensus/core/src/palw_funded_original_coordinator_v1.rs",
+      "previous_line": 169,
+      "marker": "pub fn palw_funded_original_schedule_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        169
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 35,
+      "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+      "previous_line": 120,
+      "marker": "fn reservation_readiness_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        120
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 35,
+      "path": "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs",
+      "previous_line": 158,
+      "marker": "pub(super) fn coordinate_funded_original_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        158
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 36,
+      "path": "consensus/core/src/palw_state_auth_map_v1.rs",
+      "previous_line": 32,
+      "marker": "pub use proof",
+      "same_line_match": true,
+      "current_matching_lines": [
+        32
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 36,
+      "path": "consensus/core/src/palw_state_auth_map_v1/trie.rs",
+      "previous_line": 30,
+      "marker": "pub struct AuthTableSpecV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        30
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 36,
+      "path": "consensus/core/src/palw_state_auth_map_v1/proof.rs",
+      "previous_line": 180,
+      "marker": "pub fn verify_rows_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        180
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 36,
+      "path": "consensus/core/src/palw_state_auth_map_v1/state.rs",
+      "previous_line": 159,
+      "marker": "pub fn verify_state_change_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        159
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 36,
+      "path": "consensus/core/src/palw_state_row_access_v1.rs",
+      "previous_line": 367,
+      "marker": "pub struct PalwProvenRowSourceV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        367
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 36,
+      "path": "consensus/core/src/palw_state_row_access_v1.rs",
+      "previous_line": 604,
+      "marker": "pub struct PalwCachedRowSourceV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        604
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 36,
+      "path": "consensus/core/src/palw_state_row_access_v1.rs",
+      "previous_line": 661,
+      "marker": "pub fn validate_palw_state_row_map_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        661
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 37,
+      "path": "consensus/core/src/palw_row_stream_v1.rs",
+      "previous_line": 145,
+      "marker": "pub struct PalwRowStreamVerifierV1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        145
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 37,
+      "path": "consensus/core/src/palw_row_stream_v1/spill_reader.rs",
+      "previous_line": 90,
+      "marker": "pub fn palw_visit_row_spill_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        90
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 37,
+      "path": "consensus/core/src/palw_row_stream_v1.rs",
+      "previous_line": 131,
+      "marker": "enum Rooter",
+      "same_line_match": true,
+      "current_matching_lines": [
+        131
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 37,
+      "path": "database/src/storage_generations/mod.rs",
+      "previous_line": 152,
+      "marker": "pub struct GenerationStore",
+      "same_line_match": true,
+      "current_matching_lines": [
+        152
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 38,
+      "path": "consensus/core/src/palw_fp_answer_accounting_v1.rs",
+      "previous_line": 112,
+      "marker": "pub fn validate_palw_fp_answer_accounting_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        112
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 38,
+      "path": "consensus/core/src/palw_state_v2/objects.rs",
+      "previous_line": 3799,
+      "marker": "let answer = if builder.extras.fp_answer_accounting_active",
+      "same_line_match": true,
+      "current_matching_lines": [
+        3799
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 38,
+      "path": "consensus/src/pipeline/virtual_processor/processor/palw_accept.rs",
+      "previous_line": 2544,
+      "marker": "let _answer_workspace",
+      "same_line_match": true,
+      "current_matching_lines": [
+        2544
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 38,
+      "path": "kaspad/src/palw_panel/answer_accounting.rs",
+      "previous_line": 94,
+      "marker": "palw_fp_answer_bind_duty_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        94,
+        107,
+        202,
+        214,
+        223
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 38,
+      "path": "kaspad/src/palw_panel.rs",
+      "previous_line": 7975,
+      "marker": "answer_accounting_active",
+      "same_line_match": true,
+      "current_matching_lines": [
+        7975,
+        8128,
+        8301,
+        8313,
+        8330
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 38,
+      "path": "misaka/palw/gateway/src/bin/rail.rs",
+      "previous_line": 740,
+      "marker": "wrap_fp_answer_accounting_tx_explicit_with_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        740
+      ],
+      "resolved": true
+    },
+    {
+      "rfc": 38,
+      "path": "kaspad/src/palw_panel.rs",
+      "previous_line": 8394,
+      "marker": "wrap_fp_answer_accounting_tx_with_v1",
+      "same_line_match": true,
+      "current_matching_lines": [
+        8394
+      ],
+      "resolved": true
+    }
+  ],
+  "replaced_references": 4
+}

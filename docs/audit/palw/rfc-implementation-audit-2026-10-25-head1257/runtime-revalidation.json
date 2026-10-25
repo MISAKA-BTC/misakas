@@ -1,0 +1,123 @@
+{
+  "binary_sha256_verified": [
+    "kaspa_consensus",
+    "kaspa_consensus_core",
+    "kaspa_eth_rpc",
+    "kaspa_evm",
+    "kaspad_lib",
+    "misaka_palw_sdk"
+  ],
+  "groups": [
+    {
+      "filter": "palw_state_v2::tests::court_admission_workspace_v2",
+      "passing_names": 3,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-court-admission-retry1-20261025.log",
+      "log_sha256": "992cc8bb9777c714551c1abd58beccb4904e7456a70d100a30e0389ab585051d"
+    },
+    {
+      "filter": "palw_state_v2::tests::aux_sweep_workspace_v2",
+      "passing_names": 5,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-aux-sweeps-retry1-20261025.log",
+      "log_sha256": "7e751a7bd4f97fdf7744a1c89192fbd48775314893b8f1e05d1ee49de33d9b45"
+    },
+    {
+      "filter": "provider_reader_v4::memory_tests::located_tests",
+      "passing_names": 3,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-provider-located-retry1-20261025.log",
+      "log_sha256": "5f4360d90a37e708bc6c29c546f8cea1cf6d8093d6da72a791e8089ecbd255f9"
+    },
+    {
+      "filter": "kernel_paid_checker_v4::failed_query::tests",
+      "passing_names": 2,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-checker-failed-query-retry1-20261025.log",
+      "log_sha256": "a7bfdf88d4d3f72f07986b3b1ddabe551f16ab0e4c805389ffe850960257533d"
+    },
+    {
+      "filter": "executor::tests::empty_fast_path_equals_full_execution",
+      "passing_names": 1,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-empty-fast-full-retry1-20261025.log",
+      "log_sha256": "67f778981e7b8690a7c2b39dcb5ddd7623b8bd688267e3d12f307355f79f6bf5"
+    },
+    {
+      "filter": "evm_round_gas_actual_permitted_merge_with_market_inactive_matches_producer_and_validator",
+      "passing_names": 1,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-round-runtime-retry1-20261025.log",
+      "log_sha256": "ae44e94931cd38abea3b5437e961b12460d1d114e491bb1b5d6c20873c1a3aeb"
+    },
+    {
+      "filter": "court_capacity",
+      "passing_names": 4,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-core-capacity-regression-20261025.log",
+      "log_sha256": "8a78bb61a51ec5d80b7ce487e500f17ba08f010989d9ba435c4a893a9d624c12"
+    },
+    {
+      "filter": "palw_court_paid_ingress_v1::",
+      "passing_names": 2,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-core-ingress-regression-20261025.log",
+      "log_sha256": "1185e8108415f427153725a5ecc9545a0d342e4fc7c4779cb28018410ba8a5f5"
+    },
+    {
+      "filter": "rcore_s7_reporter",
+      "passing_names": 15,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-core-reporter-regression-20261025.log",
+      "log_sha256": "65b60c81952ab6bba57ab9990a6df71935d892efa79fc86c5437c36fa3f00ed6"
+    },
+    {
+      "filter": "palw_panel_var_v1::tests",
+      "passing_names": 16,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-core-panel-clocks-regression-20261025.log",
+      "log_sha256": "bc4c01723474d4e7df7c7d809b1fb83902b212178fe5741682bbd4caa1f5db8b"
+    },
+    {
+      "filter": "fp_compute_pricing::",
+      "passing_names": 12,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-core-prompt-retention-regression-20261025.log",
+      "log_sha256": "11ebd9a17976fac32a98e3eb73da938f0ddf8e0310778e6ec37cf251c63410d4"
+    },
+    {
+      "filter": "settlement_once_v1",
+      "passing_names": 21,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-core-settlement-once-regression-20261025.log",
+      "log_sha256": "fa79af634143d8200ce19c9832b021a1d93513786e1322dd49f848863c620303"
+    },
+    {
+      "filter": "provider_reader_v4",
+      "passing_names": 14,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-sdk-reader-regression-20261025.log",
+      "log_sha256": "8df18782eedb33a54eed27d4537a1bde0878e00037177f845bbe040bf8cfbc17"
+    },
+    {
+      "filter": "provider_actions_v4",
+      "passing_names": 5,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-sdk-actions-regression-20261025.log",
+      "log_sha256": "558c229c9d6b59bc22f31d5d4392090f63f51f51b1cc2c4c0f6314ce496dc423"
+    },
+    {
+      "filter": "kernel_paid_checker_v4::",
+      "passing_names": 19,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-node-checker-regression-20261025.log",
+      "log_sha256": "06bad973d2c2fcb4e9c79303cd380d4bcfc7e8924b6875b4ce7b4874d31a27b7"
+    },
+    {
+      "filter": "evm_market_production",
+      "passing_names": 3,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-native-market-regression-20261025.log",
+      "log_sha256": "8dfb718c7f5dd57dfc01bb9ab1c5423c476e3f1377c0fd327be4978c402ad4f2"
+    },
+    {
+      "filter": "t12_round_lane_e2e::",
+      "passing_names": 8,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-native-round-lane-regression-20261025.log",
+      "log_sha256": "73ebdffe1d28d81226beaf2f0c3b39e37c5bc26ec0ba76a60ef4cd6d67453c63"
+    },
+    {
+      "filter": "executor::tests::",
+      "passing_names": 31,
+      "log": "/tmp/misaka-rfc-court-aux-provider-round-evm-executor-regression-20261025.log",
+      "log_sha256": "48b195ea4ed84c5a279c03e1825d85ce62848086284da17b8933a89664cf6374"
+    }
+  ],
+  "unique_passing_tests": 158,
+  "note": "Existing recorded executions revalidated; no new runtime execution in this audit.",
+  "method": "Distinct named registered tests in zero-failed/zero-ignored completed harnesses, deduplicated by crate and full name; handles child runs and interleaved diagnostics."
+}

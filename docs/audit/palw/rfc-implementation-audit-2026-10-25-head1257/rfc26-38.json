@@ -1,0 +1,2548 @@
+{
+  "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+  "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+  "scope": "RFC26–38 committed HEAD only. Dirty/untracked work explicitly excluded; no repo edits, Cargo, commit or new runtime.",
+  "counts": {
+    "rfcs": 13,
+    "requirement_groups_revalidated": 37,
+    "primary_headings_revalidated": 181,
+    "code_caller_references_revalidated": 75,
+    "unique_referenced_code_files": 46,
+    "complete_within_declared_scope": 1,
+    "partial": 11,
+    "absent_runtime_proposal": 1
+  },
+  "conclusions": "区分変更なし。RFC36のみ明記されたpurelibrary/dormantfence範囲で完了。RFC27新runtimeなし。残り11本部分実装。未武装だけを未実装理由にしない。",
+  "records": [
+    {
+      "rfc": 26,
+      "primary_document": "docs/rfc/0026-court-policy-master-contract.md",
+      "primary_sha256": "8dfdc4e80aa7a50f7f2b00f1dc302c347bb50a8da8e8f169865cef6fe038c687",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "current court policy主契約。F01–F11とT01–T15。SC64は未達性能目標、旧hash-only fold案は現規範にしない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1, §2.1–2.2, §8.2, §9 F01/F09/F10/F11",
+          "requirement": "original accepting-chain DAAから3120/10000、checked overflow、各境界/置換と旧規則を保持。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_policy_v1.rs",
+              "line": 17,
+              "symbol_or_match": "pub struct CourtClockBounds",
+              "sha256": "cbf7a6dd478b27ba9e63e9f12b77beef59322474fa33fe64a72932a5d55cfeb8"
+            },
+            {
+              "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+              "line": 254,
+              "symbol_or_match": "pub fn classify_shared_notice_v1",
+              "sha256": "f6fa64121481eba43caf55e69d370bb2da45cdde338d5664251cd8f7abfb7226"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+              "line": 72,
+              "symbol_or_match": "classify_shared_notice_v1",
+              "sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005"
+            }
+          ],
+          "verification": "pure clock、native noticeの実装を確認。全stageの同一block順/期限/新旧境界網羅の現HEAD実行は未確認。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§3.1–3.3, §5, §9 F03/F07",
+          "requirement": "全敵対分岐・依存署名horizon・費用/容量/資本をoriginal受付で原子予約し、一人の外部訴追を確保。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_funded_original_coordinator_v1.rs",
+              "line": 169,
+              "symbol_or_match": "pub fn palw_funded_original_schedule_v1",
+              "sha256": "44116eff5b7e7b9e43032d85b433433339c0af444836a6382ac6e0916adb7aeb"
+            },
+            {
+              "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+              "line": 120,
+              "symbol_or_match": "fn reservation_readiness_v1",
+              "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs",
+              "line": 158,
+              "symbol_or_match": "pub(super) fn coordinate_funded_original_v1",
+              "sha256": "53fce64afb53c782eaaac9d340b10610df3c4163c4d00a3bbb518e9b02058e51"
+            }
+          ],
+          "verification": "funded coordinator/seamは存在するがproduction Schedule未提供、aggregateは成功型を持たない。全owner占有fixtureは実有料全graph保証を代替しない。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§4.1–4.3, §6, §9 F02/F04/F08",
+          "requirement": "literal役割、観測した供給機会、no-slash hold/recovery、終了原因別責任/資料を保持。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+              "line": 14,
+              "symbol_or_match": "PALW_COURT_SERVICE_PROFILE_V1",
+              "sha256": "f6fa64121481eba43caf55e69d370bb2da45cdde338d5664251cd8f7abfb7226"
+            },
+            {
+              "path": "consensus/core/src/palw_court_end_archive_v1.rs",
+              "line": 11,
+              "symbol_or_match": "pub enum",
+              "sha256": "68f4b75c95a0cb28f797c68e706269e529979380d555dad97c31a77dad568801"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_service_lifecycle_fold_v1.rs",
+              "line": 79,
+              "symbol_or_match": "pub(super) fn observe_court_service_block_v1",
+              "sha256": "304fca3c8a308f6531f46a6799664778d825ea571dd65ffefa5705405a60bf7a"
+            }
+          ],
+          "verification": "supply/attribution/lifecycle/archive実装あり。profile None、全役割契約と実配送/収録前提の完結なし。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§7.1–7.2, §8.1, §10, 2026-10-21追記",
+          "requirement": "数値fold検査維持、SC64現状を偽装せず、T01–T15を同一候補で受入。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_g14_gates_v1.rs",
+              "line": 503,
+              "symbol_or_match": "OneOutsiderCapacityIncomplete",
+              "sha256": "2294c9b0881acfe6c0cc1bdf73bd3c34b195b9e4c6d427767a50405d57ad3e65"
+            }
+          ],
+          "production_caller": [],
+          "verification": "既存証拠の限定fixture/hash/commandsは存在。T01–T15総体・全model実door/費用は未証明。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 8,
+          "heading": "## 1. 監査の結論(要約)"
+        },
+        {
+          "line": 26,
+          "heading": "## 2. 時計(F01・F09)"
+        },
+        {
+          "line": 28,
+          "heading": "### 2.1 主契約"
+        },
+        {
+          "line": 44,
+          "heading": "### 2.2 境界表(F09。値は未決、形式だけ固定)"
+        },
+        {
+          "line": 48,
+          "heading": "## 3. 事前予約と責任期間(F01・F07)"
+        },
+        {
+          "line": 50,
+          "heading": "### 3.1 受付時の予約"
+        },
+        {
+          "line": 54,
+          "heading": "### 3.2 混雑と過負荷"
+        },
+        {
+          "line": 58,
+          "heading": "### 3.3 署名済み依存契約の内側に収める(F07)"
+        },
+        {
+          "line": 66,
+          "heading": "## 4. 無応答の帰責(F02、P0)"
+        },
+        {
+          "line": 68,
+          "heading": "### 4.1 規範"
+        },
+        {
+          "line": 88,
+          "heading": "### 4.2 DDoS 防御の層"
+        },
+        {
+          "line": 95,
+          "heading": "### 4.3 終了理由ごとの効果(F08)"
+        },
+        {
+          "line": 102,
+          "heading": "## 5. 外部検証者 1 人の訴追経路(F03、P0)"
+        },
+        {
+          "line": 109,
+          "heading": "## 6. 署名者・資料提供者の役割(F04)"
+        },
+        {
+          "line": 117,
+          "heading": "## 7. 証拠量の目標(F05・F06)"
+        },
+        {
+          "line": 119,
+          "heading": "### 7.1 SC64(64 KiB)は現行形式の未達目標"
+        },
+        {
+          "line": 132,
+          "heading": "### 7.2 数値 fold 検査は削らない"
+        },
+        {
+          "line": 136,
+          "heading": "## 8. 実装状態と置換表(F10・F11)"
+        },
+        {
+          "line": 138,
+          "heading": "### 8.1 実装状態の区別"
+        },
+        {
+          "line": 158,
+          "heading": "### 8.2 置換表"
+        },
+        {
+          "line": 172,
+          "heading": "## 9. 未決(武装を拒否する条件)"
+        },
+        {
+          "line": 186,
+          "heading": "## 10. 統合受入試験"
+        },
+        {
+          "line": 192,
+          "heading": "## 2026-10-21 追加隔離checkpoint — original parameter footprint / archive S1"
+        }
+      ],
+      "gaps": [
+        "CODE/POLICY: service profile未pin、production funded schedule未提供、全semantic/parameter/roleを含む全分岐予約が閉じていない。",
+        "VERIFICATION: T01–T15全体、実供給・外部一人・最大負荷・実doorの同一候補受入なし。",
+        "DOCUMENTATION: §8の別branch/未接続記述は現在の統合codeより古く、現実装不在の根拠には使わない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-integration-candidate-2026-10-20/README.md",
+          "sha256": "dac1f1967cb6ea868cf9262bfb97f0281bbfaf03e93abcf8ac256ed418881f1f",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/evidence/palw/g14-completion-2026-10-21/s1-and-original-cover.md",
+          "sha256": "e8525e4815330936ba1b4cbff2ea874a1a60d551c4bd408d90b1a79aceec9705",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "0ec以後のcourt ingress/pool/scheduler、capacity sweep、pre-object queue/aux consumerは既に事前予約へ接続済み。これらを旧記録に基づいて未接続と数えない。ただし全original全合法branchの資本・役割・実費/供給契約とは別。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+          "line": 120,
+          "symbol": "fn reservation_readiness_v1",
+          "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222"
+        },
+        "finding": "全branch original draftは成功capabilityに変換できず、UnresolvedSupplyContract/UnsupportedNativeGrammarを返す。production service profileもNone。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [
+        "consensus/core/src/palw_court_admission_workspace_v2.rs",
+        "consensus/core/src/palw_court_capacity_fold_v1.rs",
+        "consensus/core/src/palw_court_capacity_sweep_workspace_v2.rs",
+        "consensus/core/src/palw_state_v2/aux_sweep_workspace_v2.rs"
+      ],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 27,
+      "primary_document": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "primary_sha256": "337747d946ea2685c2920767eb9c552705fc38f42f2e299139808470ab582053",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "未採択Miner Account Bond・Panel incentive提案。既存bond/escrowをこの専用accountの実装と数えない。",
+      "implementation_status": "ABSENT",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§0–4.3, §5.1–5.3, §9.1–9.4, §13–14",
+          "requirement": "専用lot/purposeでAとPを分離しmax(100000,E_A)、全claim責任和、原子的受付/exit、RPC/保存/移行。",
+          "code": [],
+          "production_caller": [],
+          "verification": "Rust全域の MinerAccount/AccountBond/account_bond/miner_account_bond 検索で実装なし。現coreテスト在庫にも専用account実装根拠なし。",
+          "status": "ABSENT",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§6.1–6.4, §7.1–7.3, §8.1–8.3",
+          "requirement": "通常/追及/成果を実原資で別払いし一回償還・固定cap・非還流損失・客観裁定を適用。",
+          "code": [],
+          "production_caller": [],
+          "verification": "既存panel報酬/escrowはあるがこの新account責任・milestone・tariff結合とは異なる。",
+          "status": "ABSENT",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§10–12, §15.1 AB01–AB16, §15.2, §16–18",
+          "requirement": "全終了理由・F02/F03・REAL継続性と経済7gateを同一profileで実測/承認。",
+          "code": [],
+          "production_caller": [],
+          "verification": "assetsの数式/旧ログ再集計/合成shadowは存在。AB node試験およびG-REAL/G-Concentrationは未成立。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 11,
+          "heading": "## 0. 一文でいう設計"
+        },
+        {
+          "line": 24,
+          "heading": "## 1. 問題、確認済みの事実、変更が必要な理由"
+        },
+        {
+          "line": 26,
+          "heading": "### 1.1 解く問題"
+        },
+        {
+          "line": 32,
+          "heading": "### 1.2 既存設計との照合"
+        },
+        {
+          "line": 45,
+          "heading": "### 1.3 入力の範囲"
+        },
+        {
+          "line": 49,
+          "heading": "## 2. 目的と非目的"
+        },
+        {
+          "line": 55,
+          "heading": "## 3. 用語と勘定の境界"
+        },
+        {
+          "line": 73,
+          "heading": "## 4. 最低額と追加 bond"
+        },
+        {
+          "line": 75,
+          "heading": "### 4.1 推奨式: 基礎担保を先に使い、不足だけを追加する"
+        },
+        {
+          "line": 87,
+          "heading": "### 4.2 例: 数式の説明であり採択値ではない"
+        },
+        {
+          "line": 101,
+          "heading": "### 4.3 基礎額の限界"
+        },
+        {
+          "line": 105,
+          "heading": "## 5. `L_c` の導出と最悪責任"
+        },
+        {
+          "line": 107,
+          "heading": "### 5.1 original acceptance で固定する項目"
+        },
+        {
+          "line": 113,
+          "heading": "### 5.2 費用 envelope"
+        },
+        {
+          "line": 126,
+          "heading": "### 5.3 既存担保との二重徴収防止"
+        },
+        {
+          "line": 132,
+          "heading": "## 6. Panel の報酬: 通常作業、追及作業、立証成功を分ける"
+        },
+        {
+          "line": 134,
+          "heading": "### 6.1 三つの報酬"
+        },
+        {
+          "line": 144,
+          "heading": "### 6.2 正常時の財源を没収見込みに依存させない"
+        },
+        {
+          "line": 152,
+          "heading": "### 6.3 court の段階払いと費用償還"
+        },
+        {
+          "line": 162,
+          "heading": "### 6.4 料金と「十分」の判定"
+        },
+        {
+          "line": 176,
+          "heading": "## 7. 成果報酬と slash の客観性"
+        },
+        {
+          "line": 178,
+          "heading": "### 7.1 裁定権限"
+        },
+        {
+          "line": 184,
+          "heading": "### 7.2 新 account charge の配分"
+        },
+        {
+          "line": 195,
+          "heading": "### 7.3 無応答は四条件を維持する"
+        },
+        {
+          "line": 199,
+          "heading": "## 8. 自作自演、Sybil、重複報酬への防御"
+        },
+        {
+          "line": 201,
+          "heading": "### 8.1 誰が仕事を取っても額と開示権を増減させない"
+        },
+        {
+          "line": 207,
+          "heading": "### 8.2 共謀者の合計収支で評価する"
+        },
+        {
+          "line": 215,
+          "heading": "### 8.3 「作業した」の偽装"
+        },
+        {
+          "line": 219,
+          "heading": "## 9. 原子的 admission、状態、退出"
+        },
+        {
+          "line": 221,
+          "heading": "### 9.1 新規 Miner の参加範囲"
+        },
+        {
+          "line": 229,
+          "heading": "### 9.2 original acceptance の原子的処理"
+        },
+        {
+          "line": 238,
+          "heading": "### 9.3 状態の分離"
+        },
+        {
+          "line": 251,
+          "heading": "### 9.4 退出と余剰資本"
+        },
+        {
+          "line": 257,
+          "heading": "## 10. 終了理由の効果"
+        },
+        {
+          "line": 270,
+          "heading": "## 11. Miner の資本負担と heartbeat への配慮"
+        },
+        {
+          "line": 272,
+          "heading": "### 11.1 守ること"
+        },
+        {
+          "line": 280,
+          "heading": "### 11.2 必要資本と生産量の評価"
+        },
+        {
+          "line": 291,
+          "heading": "### 11.3 heartbeat は非常用のまま残す"
+        },
+        {
+          "line": 297,
+          "heading": "### 11.4 未達時の順序"
+        },
+        {
+          "line": 303,
+          "heading": "## 12. RFC-0026 F02/F03 との接続"
+        },
+        {
+          "line": 311,
+          "heading": "## 13. 合意状態・RPC・保存要件（設計契約、未実装）"
+        },
+        {
+          "line": 323,
+          "heading": "## 14. 互換性・最小変更・移行"
+        },
+        {
+          "line": 339,
+          "heading": "## 15. 受入試験と有効化 gate"
+        },
+        {
+          "line": 341,
+          "heading": "### 15.1 合意・会計・攻撃試験（すべて node-level は未実施）"
+        },
+        {
+          "line": 364,
+          "heading": "### 15.2 経済・継続性の同時 gate"
+        },
+        {
+          "line": 380,
+          "heading": "## 16. パラメーター候補と未決事項"
+        },
+        {
+          "line": 396,
+          "heading": "## 17. 証拠・レビュー・採択記録"
+        },
+        {
+          "line": 405,
+          "heading": "## 18. 2026-10-20 追記 — 実測ログ再集計とAccount Bond負荷実験"
+        },
+        {
+          "line": 409,
+          "heading": "### 18.1 実施した範囲"
+        },
+        {
+          "line": 415,
+          "heading": "### 18.2 最低額と実用頻度に関する結論"
+        },
+        {
+          "line": 423,
+          "heading": "### 18.3 Panel費用と財源"
+        },
+        {
+          "line": 431,
+          "heading": "### 18.4 RFCへの反映"
+        }
+      ],
+      "gaps": [
+        "CODE: 専用AccountID/元本lot/新責任・料金・RPC・原子admission・新報酬台帳は未実装。",
+        "DESIGN/EXTERNAL: tariff/責任額/成熟/経済gate閾値・新rulesetは未採択。100000は提案要件で稼働preset値ではない。",
+        "VERIFICATION: AB01–AB16 node-level、全branch支払保証、同profileのPanel採算/参入/REAL/集中度gate未達。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/rfc/0027-assets/measurement/measurement-report.md",
+          "sha256": "0cbf7757e642773e897abd721a673a2ed17cb2e88f1ba25252cd8e32e7a4582c",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/rfc/0027-assets/validation-results.json",
+          "sha256": "ba02d738c5add43e0f1b8f7102c4b9ba68afd81f53ad634a5102bd4d30f3779b",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "§17–18の文書成果は存在するが、runtime実装完了とは別。",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "この区間でAccount Bond専用runtimeは追加されていない。source verifier economicsの既存fixture修正は新AccountID/lot/Panel milestone台帳の実装ではない。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+          "line": 311,
+          "symbol": "## 13.",
+          "sha256": "337747d946ea2685c2920767eb9c552705fc38f42f2e299139808470ab582053"
+        },
+        "finding": "新AccountID/元本purpose/責任和/料金/milestone/RPC/admission/exitのruntimeがなく、AB01–16と7経済gateは未成立。提案・旧実測再集計は別に存在。"
+      },
+      "final_classification": "ABSENT_RUNTIME_PROPOSAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 28,
+      "primary_document": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "primary_sha256": "8bfeec2011ee648014ff4ee4207167189ff74d3828e99a70649d38832bd273b8",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "rooted response eligibility履歴。old snapshotに存在しない前提時刻を補わない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–4, §8",
+          "requirement": "実stage変更の同一journal内で前提受理block/DAAとchecked successorをmarkerに保存。旧歴史はUnavailable。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_duty_clock_v1.rs",
+              "line": 9,
+              "symbol_or_match": "pub struct CourtDutyClockV1",
+              "sha256": "5c8d85d8316eeecd94158ce3056377775bfa19f7bba3cd6c52160035c9228135"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_tir_public_fold_v1.rs",
+              "line": 1305,
+              "symbol_or_match": "CourtDutyClockV1::from_native",
+              "sha256": "d2ecb21cbc1cc40f9e6746d7e2133adaf4688b939260a27f9725aa61e17c4685"
+            }
+          ],
+          "verification": "marker/corecodec/scannerとnativehook確認。旧履歴に時刻を捏造しない。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§5",
+          "requirement": "markerをpacket/actor/profile/branch/実供給に対応づけ、markerだけでslashしない。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+              "line": 14,
+              "symbol_or_match": "PALW_COURT_SERVICE_PROFILE_V1",
+              "sha256": "f6fa64121481eba43caf55e69d370bb2da45cdde338d5664251cd8f7abfb7226"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_service_lifecycle_fold_v1.rs",
+              "line": 9,
+              "symbol_or_match": "observe_court_service_block_v1",
+              "sha256": "304fca3c8a308f6531f46a6799664778d825ea571dd65ffefa5705405a60bf7a"
+            }
+          ],
+          "verification": "service主体は接続済みだが完全な全branch/current-authority/costed profileなし。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§6–7",
+          "requirement": "原子rollback、wire/preflight、保持・reorg/restart/pruned IBD、全履歴/期限/費用を検証。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_state_v2/chain_state.rs",
+              "line": 2465,
+              "symbol_or_match": "CourtDutyClock",
+              "sha256": "81f742387b29ec11e747e4762694ad74b6d2beff074289cad3eedb84581c9177"
+            }
+          ],
+          "production_caller": [],
+          "verification": "primary§8の64件は当時fixture。現binaryに該当関連testsあり、完全node lifecycle/容量費用の再実行根拠ではない。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 8,
+          "heading": "## 1. Required fact"
+        },
+        {
+          "line": 14,
+          "heading": "## 2. Proposed separate marker"
+        },
+        {
+          "line": 37,
+          "heading": "## 3. Recording rule"
+        },
+        {
+          "line": 45,
+          "heading": "## 4. First-block convention"
+        },
+        {
+          "line": 51,
+          "heading": "## 5. Packet correspondence and responsibility"
+        },
+        {
+          "line": 59,
+          "heading": "## 6. Atomicity, retention and load validation"
+        },
+        {
+          "line": 67,
+          "heading": "## 7. Required verification"
+        },
+        {
+          "line": 80,
+          "heading": "## 8. Isolated runtime candidate (2026-10-21)"
+        }
+      ],
+      "gaps": [
+        "CODE/POLICY: preparation/default/non-ORIGINAL全dutiesの完全な因果graph・packet対応と原子的全branch予約/費用契約は未閉鎖。",
+        "VERIFICATION: 全WorkDebit/旧snapshot・同DAA/skip・各失敗注入・real restart/pruned IBDを通じた総体受入未確認。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-integration-candidate-2026-10-20/README.md",
+          "sha256": "dac1f1967cb6ea868cf9262bfb97f0281bbfaf03e93abcf8ac256ed418881f1f",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "marker/native transition/query対応の引用codeは無変更。parent/header/sessionの一般的なResource retry改善をRFC28の全pruned duty履歴受入へ転用しない。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+          "line": 50,
+          "symbol": "pub const PALW_COURT_SERVICE_PROFILE_V1",
+          "sha256": "f6fa64121481eba43caf55e69d370bb2da45cdde338d5664251cd8f7abfb7226"
+        },
+        "finding": "完全profile/全duties因果graphとpacket correspondenceが閉じず、全node restart/prunedIBD履歴受入の証拠なし。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 29,
+      "primary_document": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
+      "primary_sha256": "9fb6257c28155e32e66c3dba004f6baf2e2c0661ad49ca858ff0c9a7ba6c723e",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "owner非依存共有TIR query/data。root/dataの認証は計算creditやliteral signer完了ではない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–4, §6",
+          "requirement": "閉query宇宙・署名intent・重複統合・source/FullIds認証・checked部分upper。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_tir_requests_v1.rs",
+              "line": 73,
+              "symbol_or_match": "TirSharedRequestSetV1",
+              "sha256": "736a14230244c54a0d89776c9a7783bd9f5c1ea770f1ad413d00447e588358cf"
+            },
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_frontier_v1.rs",
+              "line": 16,
+              "symbol_or_match": "SignedSharedRequestV1",
+              "sha256": "3789ae9fa4259bbded7e626cee7cf39e9883de3f0943e618a3bb374520902f65"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+              "line": 45,
+              "symbol_or_match": "fn request_inner",
+              "sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005"
+            }
+          ],
+          "verification": "actual scope/ordinal/currentbond/real signatureとnative source再認証をcodeで確認。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§5, §7–10",
+          "requirement": "native original/source/profile導出、rooted data/IDs・signed stream・EOF・fresh signer response、notice、native lifecycle。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_state_v1.rs",
+              "line": 15,
+              "symbol_or_match": "pub struct SharedTirContextV1",
+              "sha256": "a5af4623c9204bfeef219e42c409e49dff8a314e555406152e7d9f4efa2d6e4e"
+            },
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_response_v1.rs",
+              "line": 12,
+              "symbol_or_match": "SharedDataResponseV1",
+              "sha256": "27317c6cdd272abe89389a56a14185af95b3402d34a4d5e9b26e0477a1db1a0d"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_service_lifecycle_fold_v1.rs",
+              "line": 158,
+              "symbol_or_match": "pub(super) fn apply_shared_court_wire_op_v1",
+              "sha256": "304fca3c8a308f6531f46a6799664778d825ea571dd65ffefa5705405a60bf7a"
+            }
+          ],
+          "verification": "tag178 actualwire dispatcher存在。旧RFCのno lifecycle記述は古い。dataとresponse dutiesは分離。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§11–14",
+          "requirement": "signed transport upper、row借用ID、非独占frontier、namedroot/contextの固定。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_root_v1.rs",
+              "line": 144,
+              "symbol_or_match": "SharedTirRootRowV1",
+              "sha256": "60f4ffa8f541e8169242b974f5b4dcb3da0f08558ea8ac888b93dd9f66d36a87"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+              "line": 281,
+              "symbol_or_match": "fn root(",
+              "sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005"
+            }
+          ],
+          "verification": "source/data導出とimmutable rootcoalescing実装。完全fee/CPU/IO/保持・現実供給は別。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§15–19",
+          "requirement": "producer root/round/bottomの実署名・native判定・retention、byte ceilings・allocation-first bounded fragment decode。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_numerical_transport_v1.rs",
+              "line": 164,
+              "symbol_or_match": "fn decode_numerical_v1",
+              "sha256": "6f2fdd5e4ae5ab2a413aa6bcb75b60794d1ee3e7edcffc056d2eafac15b7a21a"
+            },
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_bottom_v1.rs",
+              "line": 189,
+              "symbol_or_match": "SharedTirBottomRowV1",
+              "sha256": "3d477b2da761a85974e01b2074b0d3bdb2097b64326f915dd420c076e595aa4a"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+              "line": 14,
+              "symbol_or_match": "fn numerical_transport",
+              "sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005"
+            }
+          ],
+          "verification": "bounded complete-bundle→root/round/bottom、bottom NativeFault→conviction接続。全source資料供給とpre-original全graphは未完。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 8,
+          "heading": "## 1. Closed query scope"
+        },
+        {
+          "line": 14,
+          "heading": "## 2. Signed request intent"
+        },
+        {
+          "line": 22,
+          "heading": "## 3. Authenticated public data"
+        },
+        {
+          "line": 32,
+          "heading": "## 4. Source-data upper components"
+        },
+        {
+          "line": 47,
+          "heading": "## 5. Required native protocol"
+        },
+        {
+          "line": 57,
+          "heading": "## 6. Verification and limits"
+        },
+        {
+          "line": 66,
+          "heading": "## 7. Rooted native data candidate (after b318ea946)"
+        },
+        {
+          "line": 82,
+          "heading": "## 8. Signed bounded stream envelope candidate"
+        },
+        {
+          "line": 94,
+          "heading": "## 9. Rooted signed-prefix candidate (after 33738ea26)"
+        },
+        {
+          "line": 114,
+          "heading": "## 10. Explicit fresh data-response candidate (after fa1104eed)"
+        },
+        {
+          "line": 129,
+          "heading": "## 11. Derived signed data transport components"
+        },
+        {
+          "line": 138,
+          "heading": "## 12. Query-local rows identity without per-read ID ownership"
+        },
+        {
+          "line": 147,
+          "heading": "## 13. Nonexclusive numerical disclosure frontier"
+        },
+        {
+          "line": 158,
+          "heading": "## 14. Named root binding without a fabricated session"
+        },
+        {
+          "line": 168,
+          "heading": "## 15. Private canonical numerical root retention candidate"
+        },
+        {
+          "line": 182,
+          "heading": "## 16. Private signed numerical disclosure retention"
+        },
+        {
+          "line": 194,
+          "heading": "## 17. Private per-terminal bottom comparison records"
+        },
+        {
+          "line": 207,
+          "heading": "## 18. Private numerical evidence byte ceilings and original-wide inventory"
+        },
+        {
+          "line": 216,
+          "heading": "## 19. Private complete-bundle numerical fragment transport"
+        }
+      ],
+      "gaps": [
+        "CODE/POLICY: OriginalAggregateDraft::reservation_readinessはUnresolvedSupplyContractを必ず返す。native allbranch packet/funding/semantic supplier契約なし。",
+        "VERIFICATION: 全owner占有/再充填下のunfinished outsiderを実有料受付から裁定まで通すT05総体、全model/cost/real delivery未証明。",
+        "SCOPE: source/RAMupperと局所testsを全physical profile・fullactivationと同一視しない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/rfc/0029-cone-input-derived-native-owners-2026-10-25.md",
+          "sha256": "c0b1a5037141dcfb8a23b8e2c27cd19de389b5ce6b0b4b5d659fe6693d01ad0f",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/evidence/palw/g14-integration-candidate-2026-10-20/README.md",
+          "sha256": "dac1f1967cb6ea868cf9262bfb97f0281bbfaf03e93abcf8ac256ed418881f1f",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/evidence/palw/g14-completion-2026-10-21/terminal-intent.md",
+          "sha256": "5a4b91562333602fd099b3ed9bf458d15f7f2299a77a6012dadd065704fdd28c",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "shared native TIR query/data/stream/fresh response/numerical/retained-sourceの引用codeは無変更。新provider unit失敗→Challenge selectorはkernel paid consumerであり、shared court全branch funding完了ではない。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+          "line": 120,
+          "symbol": "fn reservation_readiness_v1",
+          "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222"
+        },
+        "finding": "全owner再充填下のunfinished outsiderについて、実有料original受付から全material/開示/裁定への供給契約が未閉鎖。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 30,
+      "primary_document": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "primary_sha256": "1c46304fa175f2b1f214c397c682b829f3c0e3a23ef2729c7234746453ae501d",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "court終了原因別の確定/未決責任・資料・hold/archive。延期familyは新入口から開かない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–4, §8",
+          "requirement": "6終了原因+完成不整合を区別しactive解除と他side未決・資料保存を原子化。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_end_archive_v1.rs",
+              "line": 11,
+              "symbol_or_match": "pub enum",
+              "sha256": "68f4b75c95a0cb28f797c68e706269e529979380d555dad97c31a77dad568801"
+            },
+            {
+              "path": "consensus/core/src/palw_court_end_archive_fold_v1.rs",
+              "line": 1,
+              "symbol_or_match": "archive",
+              "sha256": "ef2fe1f145466ce1af1eb2cfd62feca30ba7bae990f8c3fd30a669fcccd85e70"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_state_v2/transition_builder.rs",
+              "line": 8833,
+              "symbol_or_match": "let pending = self.build_pending_court_archive_v1(key)?;",
+              "sha256": "db00904e9dac7bb1642f50bb3b225decb98c1ba828c2d5adffde577d53080f9b"
+            }
+          ],
+          "verification": "write_court共通archive funnelとnominalhold存在。全経済責任移行とは別。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§5–7 E01–E10",
+          "requirement": "全原始branch・archive最大負荷・他claim資本・finite保持前提・fees/供給をoriginalで被覆。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+              "line": 120,
+              "symbol_or_match": "fn reservation_readiness_v1",
+              "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222"
+            }
+          ],
+          "production_caller": [],
+          "verification": "aggregate draftはunresolved。E01–E10総体/実原資と費用検証なし。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§9–12",
+          "requirement": "元declaration署名/native rules保存、同root borrowed v5再判定、private missing bytes追加、時刻補完やcreditなし。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_close_receipt_v1.rs",
+              "line": 33,
+              "symbol_or_match": "CourtCloseReceiptV1",
+              "sha256": "125fd6b87114939ecd7c331317d3bd5c4a49fcf45f05c190db483957539add9a"
+            },
+            {
+              "path": "consensus/core/src/palw_court_archive_verify_v1.rs",
+              "line": 110,
+              "symbol_or_match": "apply_native_archived_chunk_v1",
+              "sha256": "54a94e76505ed65236f34eb29f2bc7b21e51b06615167a9730eaf11e7c33ce5d"
+            }
+          ],
+          "production_caller": [],
+          "verification": "元raw署名/受理点とv5/archiveS1処理あり。D3 prunerも既存codeにあり、古い未実装記述のみでpruner不在としない。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 7,
+          "heading": "## 1. 問題と実コードの境界"
+        },
+        {
+          "line": 15,
+          "heading": "## 2. 終了効果を分離するfield"
+        },
+        {
+          "line": 31,
+          "heading": "## 3. 終了理由ごとの効果表"
+        },
+        {
+          "line": 45,
+          "heading": "## 4. 推奨A:裁定とpending保存を原子的に分離する"
+        },
+        {
+          "line": 59,
+          "heading": "## 5. original受付と資本・容量の条件"
+        },
+        {
+          "line": 71,
+          "heading": "## 6. 比較案と採択境界"
+        },
+        {
+          "line": 77,
+          "heading": "## 7. 検証条件（全条件の合格は未達）"
+        },
+        {
+          "line": 92,
+          "heading": "## 8. A案の隔離実装 — 2026-10-21"
+        },
+        {
+          "line": 125,
+          "heading": "## 9. 宣言時の署名・native裁定入力の保存候補"
+        },
+        {
+          "line": 140,
+          "heading": "## 10. 保存した入力によるprivate v5再検査候補"
+        },
+        {
+          "line": 153,
+          "heading": "## 11. 借用recordを使う共通v5 kernel"
+        },
+        {
+          "line": 160,
+          "heading": "## 12. Private append of precommitted archive material"
+        }
+      ],
+      "gaps": [
+        "CODE/POLICY: 全終了grammar・全合法branchの原資/役割契約/finite保持・資本compositionの完全な導出がない。",
+        "VERIFICATION: E01–E10および全branchのfailure injection/実node公開支払・pruned IBD総体は未確認。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-completion-2026-10-21/s1-and-original-cover.md",
+          "sha256": "e8525e4815330936ba1b4cbff2ea874a1a60d551c4bd408d90b1a79aceec9705",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "archive/receipt/private v5/append/S1/actualD3prunerは既に存在。court入口scratch予約の追加は進捗だが全終了grammar・他claim金融compositionの完了ではない。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+          "line": 61,
+          "symbol": "NativeAllBranchPacketAndFundingTerms",
+          "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222"
+        },
+        "finding": "全終了理由・最大branch・保持/資本compositionの全原資保証がない。E01–E10/実公開native総体の受入なし。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 31,
+      "primary_document": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "primary_sha256": "5a969226d9d4b4a805d6e2f80df6df2b05dd5bac745927d717e2cc8f53d83b2f",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "採用Aのinclusive initial notice境界。pure predicateだけをnative wholegraph完了と数えない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–2, §5",
+          "requirement": "a<=d<=a+3120、hard a+10000 checked、overflow拒否。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_policy_v1.rs",
+              "line": 61,
+              "symbol_or_match": "pub fn shared_initial_notice_daa_in_window_v1",
+              "sha256": "cbf7a6dd478b27ba9e63e9f12b77beef59322474fa33fe64a72932a5d55cfeb8"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+              "line": 254,
+              "symbol_or_match": "pub fn classify_shared_notice_v1",
+              "sha256": "f6fa64121481eba43caf55e69d370bb2da45cdde338d5664251cd8f7abfb7226"
+            }
+          ],
+          "verification": "predicateとnotice/followup境界test実装あり。",
+          "status": "IMPLEMENTED",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§3–4",
+          "requirement": "実original先行・共通noticeとadaptiveを別判定し重複/後続でも時計resetせず、native journal undo/reorg。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_state_v2/chain_state.rs",
+              "line": 2497,
+              "symbol_or_match": "pub fn court_shared_initial_notice_daa_v1",
+              "sha256": "81f742387b29ec11e747e4762694ad74b6d2beff074289cad3eedb84581c9177"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+              "line": 72,
+              "symbol_or_match": "classify_shared_notice_v1",
+              "sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005"
+            }
+          ],
+          "verification": "actual requestのclaim存在/acceptedDAAチェック、queryrowsからinitial導出・coalescingとjournalあり。全late graph/hard内余裕は未被覆。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 5,
+          "heading": "## 1. 固定値と隔離実装の選択"
+        },
+        {
+          "line": 18,
+          "heading": "## 2. 機械的な境界表"
+        },
+        {
+          "line": 31,
+          "heading": "## 3. adaptive要求と原子受付への接続"
+        },
+        {
+          "line": 37,
+          "heading": "## 4. 次の実装・検証"
+        },
+        {
+          "line": 43,
+          "heading": "## 5. 隔離predicateの範囲"
+        }
+      ],
+      "gaps": [
+        "CODE/POLICY: 元期限内で全最遅branchが完了できる全graph/費用・予約契約は未閉鎖（§3–4の別条件）。",
+        "VERIFICATION: repeatedDAA別block/元originalとの順序/notice undo/replay/全latebranchを同一native受入として網羅する最新証拠未確認。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-integration-candidate-2026-10-20/README.md",
+          "sha256": "dac1f1967cb6ea868cf9262bfb97f0281bbfaf03e93abcf8ac256ed418881f1f",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "predicate+native notice integrationは実装済み。§5のpure-only説明は現HEADより古い。",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "inclusive predicateに加え実native request→initial/followup・dedupe・rooted journalが存在する。pure-onlyという古い本文を現在コードへ適用しない。全最遅branchのhard内供給とnative受入検証は別途残る。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+          "line": 72,
+          "symbol": "classify_shared_notice_v1",
+          "sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005"
+        },
+        "finding": "codeはnative noticeへ接続済み。§3–4の全最遅作業/予約と同DAA因果・reorgを含む要件全体の受入は未証明。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 32,
+      "primary_document": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "primary_sha256": "da14fa673ee16cbf368bf1caa10b27a388a06aa4425de5d51062be75a6c1ae36",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "A=認証済みmaterial+terminal intent。任意filer prefixに共通slot独占権を与えない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–3, §6–8",
+          "requirement": "original/program/artifact/prompt/IDsに認証したmaterialだけからcanonical terminalを構築し適格署名intentを検査。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_shared_numerical_material_join_v1.rs",
+              "line": 90,
+              "symbol_or_match": "fn build_terminal_v1",
+              "sha256": "a245d029d5dc91e1c4f298a4f22986d11cd2b93d62d29213c95eec00fc8919d0"
+            },
+            {
+              "path": "consensus/core/src/palw_court_shared_semantic_material_v1.rs",
+              "line": 124,
+              "symbol_or_match": "fn retain_semantic_material_v1",
+              "sha256": "19b8ca7f5e4f3fdc843fbeadbf0ac1f0bb6bf337ba76c51249e4d1a8fa801498"
+            }
+          ],
+          "production_caller": [],
+          "verification": "retained native sources・signed terminalbuilder・parameter/prompt/rowpinは存在。局所builder成果は供給authorityではない。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§2, §4–5",
+          "requirement": "非独占multi-block materialを有界/有料で保持・原資予約し公平に完成可能。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_shared_material_intake_v1.rs",
+              "line": 85,
+              "symbol_or_match": "pub fn material_intake_schedule_v1",
+              "sha256": "755d258d4051584db315c4150821e491a4d1913dba57d5876e563c510fcb76c8"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_court_shared_material_intake_fold_v1.rs",
+              "line": 34,
+              "symbol_or_match": "pub(super) fn",
+              "sha256": "211e8fbf20a036418f24f50c3eb3daa41080ec4a590b7e2d0af51a8ba7a601a9"
+            }
+          ],
+          "verification": "actual distinctsubmitter draft/part/finish/expiry・firstcomplete canonical実装、tag255あり。production schedule alwaysErr、nonzero feeはpayer未採択で拒否。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 5,
+          "heading": "## 1. 解く問題と確認済み範囲"
+        },
+        {
+          "line": 11,
+          "heading": "## 2. 比較する方式"
+        },
+        {
+          "line": 20,
+          "heading": "## 3. Aの認証・canonical化境界"
+        },
+        {
+          "line": 29,
+          "heading": "## 4. 供給・原資・期限は別の必須条件"
+        },
+        {
+          "line": 37,
+          "heading": "## 5. 検証と進行順"
+        },
+        {
+          "line": 46,
+          "heading": "## 6. 隔離borrowed material viewの実装範囲"
+        },
+        {
+          "line": 54,
+          "heading": "## 7. Promptとrow-pinの隔離projection"
+        },
+        {
+          "line": 62,
+          "heading": "## 8. 保持された終端への署名付きintent（隔離・限定検証済み）"
+        }
+      ],
+      "gaps": [
+        "CODE/POLICY: storage price/payer/TTL・実資金/全branchmaterial供給契約が未完成。Semantic tablesはmaterialtarget対象外でborrowed供給に留まる。",
+        "VERIFICATION: fixture byte/outcome一致・partialcoexistence/rollbackは存在するが実有料公開ingress/全owner再充填・T05総体未成立。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-integration-candidate-2026-10-20/material-builder.md",
+          "sha256": "6876f28e6a94bdb06084fa1f05524b45fc0e70f76ab28dfe2f39b6620a35d28f",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/evidence/palw/g14-completion-2026-10-21/terminal-intent.md",
+          "sha256": "5a4b91562333602fd099b3ed9bf458d15f7f2299a77a6012dadd065704fdd28c",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "既存tag255のsubmitter別draft/Part/Finish/expiry、retained material/terminal builderを確認。multi-block実装不在という古い記録は使わない。production storage schedule拒否・semantic material供給境界は維持。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_court_shared_material_intake_v1.rs",
+          "line": 85,
+          "symbol": "pub fn material_intake_schedule_v1",
+          "sha256": "755d258d4051584db315c4150821e491a4d1913dba57d5876e563c510fcb76c8"
+        },
+        "finding": "production scheduleはErr(Schedule)。非zero feeの実payer未採択/未接続、semantic tablesはmaterial target対象外。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 33,
+      "primary_document": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
+      "primary_sha256": "3339abc3303c7e80e22a64778b65643d7bcaea049f6241fa040b8d0726d5215e",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "C1 literal seatのdigest/path開示。モデル審査/係数変更は対象外。C2は代替案で必須実装としない。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–2, §3代替案, C1承認追記",
+          "requirement": "literal署名rootとdrawordinalへ要求/回答を束縛、外部opening認証とroot standing、供給なしno-slash。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_root.rs",
+              "line": 275,
+              "symbol_or_match": "pub fn palw_d2_readiness_path_v1",
+              "sha256": "b2315094e1e445814913e596f235ecdf9631023f64d46e9fccbf9abfbb517ce5"
+            },
+            {
+              "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_disclosure.rs",
+              "line": 344,
+              "symbol_or_match": "pub fn palw_d2_disclosure_sweep_with_supply_v1",
+              "sha256": "c8f3cc7e4575d4be07c5f18b46c8a908ff4cd0b6503dc44f97cfd2209b996712"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_state_v2/d2_readiness.rs",
+              "line": 61,
+              "symbol_or_match": "pub(super) fn open_d2_disclosure_v1",
+              "sha256": "770bc9d3d081267e2f30392c30a28d47f4e5303c4132e06200b89078a0e30071"
+            },
+            {
+              "path": "consensus/core/src/palw_state_v2/objects.rs",
+              "line": 825,
+              "symbol_or_match": "PalwConsensusObjectV2::SeatReadinessDemandedV1",
+              "sha256": "100a740ff9cd34a20289efcfa17087fe8f7118b3bb077c12c4c9fcdecabbc086"
+            }
+          ],
+          "verification": "tags230–232/rootregistry+actual journal/native sweep存在。cap64、fee1.3Msompiは現在Some（旧コメントNoneは古い）。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§2 全draw事前予約/金融, §4",
+          "requirement": "root前に全ordinal branch/実費・資本/保持/機会を予約し客観違反を一回精算、restart/reorg/pruned IBD。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_disclosure.rs",
+              "line": 67,
+              "symbol_or_match": "PALW_D2_READINESS_CONVICTION_SLASH_SOMPI_V1",
+              "sha256": "c8f3cc7e4575d4be07c5f18b46c8a908ff4cd0b6503dc44f97cfd2209b996712"
+            },
+            {
+              "path": "consensus/core/src/palw_state_v2/d2_readiness.rs",
+              "line": 107,
+              "symbol_or_match": "book.supply.range",
+              "sha256": "770bc9d3d081267e2f30392c30a28d47f4e5303c4132e06200b89078a0e30071"
+            }
+          ],
+          "production_caller": [],
+          "verification": "feeはfree collateral要件のみ、実movementなし。slashconstantはno fold applies。ANYbook supplyの存在はcase-specific packet費用/前提/全branch予約の証拠でない。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 5,
+          "heading": "## 1. 未解決の条件"
+        },
+        {
+          "line": 11,
+          "heading": "## 2. C1：F02に束縛したdigest/path開示court（推奨候補）"
+        },
+        {
+          "line": 19,
+          "heading": "## 3. C2：補助materialの完成公開後にrootを受理"
+        },
+        {
+          "line": 23,
+          "heading": "## 4. 必須検証"
+        },
+        {
+          "line": 30,
+          "heading": "## C1の詳細仕様化・隔離実装承認 — 2026-10-21"
+        }
+      ],
+      "gaps": [
+        "CODE: 新feeの実徴収/返還・3MSKslashは未接続。全draw branchのroot受付前capacity/funding/retention原子予約が未完。",
+        "POLICY/VERIFICATION: F02実profile未pin。全外部占有/再充填・偽root拒否・実node restart/prunedIBD・全費用の総体検証不足。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-completion-2026-10-21/readiness-root-first.rs",
+          "sha256": "f4dcf0f2a2607c6709bec4fd17fe0151ef671d7c4e03bde03dabd997cdc7be71",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md",
+          "sha256": "4e10d666025035eecb886dbbc901f854aaf0f6febfaa022263d6c01ed5a7ec87",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "draw cap64、fee1.3M、slash300Mの定数とactualtags230–232/registry/journalは存在。ただしfeeはfree collateral条件でmovement未接続、slashは定数でno fold applies、全ordinal原子予約/供給とは別。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_disclosure.rs",
+          "line": 67,
+          "symbol": "PALW_D2_READINESS_CONVICTION_SLASH_SOMPI_V1",
+          "sha256": "c8f3cc7e4575d4be07c5f18b46c8a908ff4cd0b6503dc44f97cfd2209b996712"
+        },
+        "finding": "root standingはあるが実fee movement/slashfoldと全draw事前容量・資金/保持予約が未接続。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 34,
+      "primary_document": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
+      "primary_sha256": "9f23efd19a8949949a1c8abfa192226e552de303045f33b3dbbc1102d2ad2ae8",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "S1期限内実履行だけ当該declaration名目責任を解消。late妥当資料と金融履行を分離。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–3, §5–8, S1承認/checkpoint",
+          "requirement": "native event・元署名期限・全chunkqualification・same-root v5、原子onceprogress/hold解除とundo/reload。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_archive_discharge_v1.rs",
+              "line": 24,
+              "symbol_or_match": "pub struct ArchiveDeclarationProgressV1",
+              "sha256": "4f1cddc01457ca8eb23f98ec41d07c975382253dfe439c0276631d8805092d36"
+            },
+            {
+              "path": "consensus/core/src/palw_court_archive_verify_v1.rs",
+              "line": 110,
+              "symbol_or_match": "apply_native_archived_chunk_v1",
+              "sha256": "54a94e76505ed65236f34eb29f2bc7b21e51b06615167a9730eaf11e7c33ce5d"
+            }
+          ],
+          "production_caller": [],
+          "verification": "actual rootedprogress+nativearchivedchunk+positivequalificationとoldunknown時刻補完拒否あり。現prunerは全解消/materialhorizonを要求。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§3 original全graph/公開有料受付, §4, §5最終条件",
+          "requirement": "全資金/IO/署名/retentionとbranch原子予約、他side/他claimを保持し全条件後だけprune。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+              "line": 120,
+              "symbol_or_match": "fn reservation_readiness_v1",
+              "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222"
+            }
+          ],
+          "production_caller": [],
+          "verification": "private名目解除/fixturepruningは実public資金/全金融composition/E01–E10/T01–T15合格ではない。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 7,
+          "heading": "## 1. 問題と現在の根拠"
+        },
+        {
+          "line": 15,
+          "heading": "## 2. S1の区別"
+        },
+        {
+          "line": 26,
+          "heading": "## 3. 実受付と権限の構成"
+        },
+        {
+          "line": 38,
+          "heading": "## 4. 金銭と保持"
+        },
+        {
+          "line": 46,
+          "heading": "## 5. 隔離実装範囲と受入条件"
+        },
+        {
+          "line": 59,
+          "heading": "## 6. 採択非依存のprivate native event検査候補"
+        },
+        {
+          "line": 65,
+          "heading": "## 7. S1のprivate実装初稿"
+        },
+        {
+          "line": 79,
+          "heading": "## 8. 次候補のresource分類と期限内の新たな実受理"
+        },
+        {
+          "line": 89,
+          "heading": "## 2026-10-21 ユーザー選択 — S1の詳細仕様化・隔離実装"
+        },
+        {
+          "line": 95,
+          "heading": "## 2026-10-21 隔離候補の検証checkpoint"
+        }
+      ],
+      "gaps": [
+        "CODE/POLICY: 公開有料coordinatorの全branch/material/料金・実原資・金融作業の契約は未完。",
+        "VERIFICATION: nativeS1小型署名fixtureはあるが全金融入口・別claim composition/全failurepoint・realnode E01–E10/T01–T15総体未成立。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-completion-2026-10-21/s1-and-original-cover.md",
+          "sha256": "e8525e4815330936ba1b4cbff2ea874a1a60d551c4bd408d90b1a79aceec9705",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "rooted S1 provenance/private qualification/once nominal dischargeとD3prunerは存在。apply_native_archived_chunk_v1の非test実呼出元はなく、private fixture経路を公開有料受付へ数えない。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_court_archive_verify_v1.rs",
+          "line": 110,
+          "symbol": "apply_native_archived_chunk_v1",
+          "sha256": "54a94e76505ed65236f34eb29f2bc7b21e51b06615167a9730eaf11e7c33ce5d"
+        },
+        "finding": "S1 private qualificationは実装済みだが公開有料dispatch/全金融・保持契約と全node検証は未完。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 35,
+      "primary_document": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
+      "primary_sha256": "746be1d58ec259fb8aaca4b55dd988025f9f558cd05b7c7d145cc0a468786042",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "A実UTXO独立escrow・payer/role consent、全原始graph・fee保存則。旧TFP1 byte意味を保持。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–3, §6–8",
+          "requirement": "同actualcarrierのTFO1consent・payerfallback・sameblock/mergeset lock・exactUTXO認可・rootedfundingを一括適用。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_funded_original_coordinator_v1.rs",
+              "line": 211,
+              "symbol_or_match": "pub fn palw_funded_original_pairing_v1",
+              "sha256": "44116eff5b7e7b9e43032d85b433433339c0af444836a6382ac6e0916adb7aeb"
+            },
+            {
+              "path": "consensus/core/src/palw_funded_escrow_v1.rs",
+              "line": 608,
+              "symbol_or_match": "pub fn palw_tfo1_provisional_lock_v1",
+              "sha256": "9dbeb89ea6b845c657ecb49a47e0678a78186feefdc73d8df2ad148b7ab942ca"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs",
+              "line": 318,
+              "symbol_or_match": "pub(super) fn install_original_admission_v1",
+              "sha256": "53fce64afb53c782eaaac9d340b10610df3c4163c4d00a3bbb518e9b02058e51"
+            }
+          ],
+          "verification": "actualoriginalcoordinator/prewrite/checkpoint+escrowrow+provisionallock存在。古い§8–9.1のno rootedcoordinator記述は現在不適切。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§7.1, §9, §9.1",
+          "requirement": "実fee一回割当、同branch/inputs/tx/pointの認可・同WriteBatchcommit・undo/replay、qualified thirdparty支出。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_funded_escrow_v1.rs",
+              "line": 442,
+              "symbol_or_match": "pub fn palw_escrow_qualified_spend_v1",
+              "sha256": "9dbeb89ea6b845c657ecb49a47e0678a78186feefdc73d8df2ad148b7ab942ca"
+            },
+            {
+              "path": "consensus/core/src/palw_funded_escrow_v1.rs",
+              "line": 386,
+              "symbol_or_match": "pub fn palw_escrow_fee_schedule_v1",
+              "sha256": "9dbeb89ea6b845c657ecb49a47e0678a78186feefdc73d8df2ad148b7ab942ca"
+            }
+          ],
+          "production_caller": [],
+          "verification": "qualifiedspend/fallback/onceUTXO検査・refund道あり。ただしpayee settlement schedule productionNone→SettlementScheduleMissing。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§3–5, §9.2",
+          "requirement": "native allfamilygraph・全rolecurrentauthority/consent・horizon・実費/資本をoriginal前導出し不足拒否。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_funded_original_coordinator_v1.rs",
+              "line": 169,
+              "symbol_or_match": "pub fn palw_funded_original_schedule_v1",
+              "sha256": "44116eff5b7e7b9e43032d85b433433339c0af444836a6382ac6e0916adb7aeb"
+            },
+            {
+              "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+              "line": 120,
+              "symbol_or_match": "fn reservation_readiness_v1",
+              "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs",
+              "line": 158,
+              "symbol_or_match": "pub(super) fn coordinate_funded_original_v1",
+              "sha256": "53fce64afb53c782eaaac9d340b10610df3c4163c4d00a3bbb518e9b02058e51"
+            }
+          ],
+          "verification": "actualsource/numerical/parameterrequirementsとcoordinatorは存在。onlytestschedule・missingrolebodies・wholegrammar未閉鎖。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 5,
+          "heading": "## 1. 問題と既存経路"
+        },
+        {
+          "line": 11,
+          "heading": "## 2. 選択肢"
+        },
+        {
+          "line": 13,
+          "heading": "### A — 実UTXOで全額裏付けた独立運用escrow（推奨候補）"
+        },
+        {
+          "line": 23,
+          "heading": "### B — 新carrier feeの実徴収額を運用口へ分配"
+        },
+        {
+          "line": 27,
+          "heading": "## 3. A/Bに共通の原子的契約"
+        },
+        {
+          "line": 37,
+          "heading": "## 4. 未決値と拒否条件"
+        },
+        {
+          "line": 43,
+          "heading": "## 5. 受入条件"
+        },
+        {
+          "line": 53,
+          "heading": "## 2026-10-21 ユーザー選択 — Aの詳細仕様化・隔離実装"
+        },
+        {
+          "line": 57,
+          "heading": "## 6. Aの実装境界調査 — 未接続のUTXO保護"
+        },
+        {
+          "line": 67,
+          "heading": "## 7. 次の隔離実装で必要なnative adapter"
+        },
+        {
+          "line": 80,
+          "heading": "### 7.1 同じcarrierの実feeの一回割当"
+        },
+        {
+          "line": 84,
+          "heading": "## 8. Aの隔離実装の第一段階"
+        },
+        {
+          "line": 96,
+          "heading": "## 9. Native feeとsource graphの接続 — 2026-10-22"
+        },
+        {
+          "line": 107,
+          "heading": "### 9.1 同branchの事前plan・commit・復旧の接続条件"
+        },
+        {
+          "line": 131,
+          "heading": "### 9.2 数値geometryと実native policyの照合"
+        }
+      ],
+      "gaps": [
+        "CODE/POLICY: productionfundingschedule常時Err、fee/capital/retention/settlement/profile・role契約未提供。paidsettlementResolverNone。",
+        "CODE: OriginalAggregateDraftはUnsupportedGrammarまたはUnresolvedSupplyで実allbranchauthorityに変換不可。",
+        "VERIFICATION: 全実UTXO・全role・全nativefamily/合法終了grammar・全failurepoints・realT05/T01–T15総体未証明。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/palw/g14-completion-2026-10-22/native-fee-and-source-graph.md",
+          "sha256": "b23616f0ed5351e9296e36c9e10661a939b60ce60cbcacd704bea7752681e8b0",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/evidence/palw/g14-completion-2026-10-22/material-and-native-candidate.md",
+          "sha256": "2e346f8e7b75994fd5104b151826e4f1c7611a7cf4aaed8a86bfc9dbd149d259",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "funded-original prewrite coordinator・actualsamecarrier pairing・rootedescrow/provisionallock/UTXO qualifiedspend/fallbackは存在。旧no coordinator/no rooted row記録で欠落としない。production scheduleErrとpayeesettlementNoneが残る。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_funded_original_coordinator_v1.rs",
+          "line": 169,
+          "symbol": "pub fn palw_funded_original_schedule_v1",
+          "sha256": "44116eff5b7e7b9e43032d85b433433339c0af444836a6382ac6e0916adb7aeb"
+        },
+        "finding": "production scheduleが常時Err(Schedule)。payee settlement resolverもNone。テスト注入値を正式原資/契約承認として使わない。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 36,
+      "primary_document": "docs/rfc/0036-authenticated-palw-state-map-and-row-access.md",
+      "primary_sha256": "2a7da16331868ede8756e30c9e2d069a4827dee36b07ef62fa1729123b690920",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "RFC明記の実装範囲は純ライブラリ+休眠fence。§5のmigration/nodeintegrationと§6のconsensus変更は将来の別採択・別RFC条件。",
+      "implementation_status": "COMPLETE",
+      "acceptance_status": "VERIFIED_WITHIN_DECLARED_SCOPE",
+      "complete": true,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–2.1–2.5, §4",
+          "requirement": "prefixfree順序key・canonicalPatricia・membership/absence/range/update/stream・directory/parent/branchpin・sizebounds。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_state_auth_map_v1.rs",
+              "line": 32,
+              "symbol_or_match": "pub use proof",
+              "sha256": "a57db658ff87c12ff03f95a7bd62f5aa702791b9ddd295cf3c1c966928a1f3f9"
+            },
+            {
+              "path": "consensus/core/src/palw_state_auth_map_v1/trie.rs",
+              "line": 30,
+              "symbol_or_match": "pub struct AuthTableSpecV1",
+              "sha256": "b810be47825430c61cc226a4995afe0b0eac703bfd03f893e6a72a7d7ffb2439"
+            },
+            {
+              "path": "consensus/core/src/palw_state_auth_map_v1/proof.rs",
+              "line": 180,
+              "symbol_or_match": "pub fn verify_rows_v1",
+              "sha256": "dd5f731f45a9ed4d09c303091dca5fa90c132ce45e5a21b25d64b1f6c19a866f"
+            },
+            {
+              "path": "consensus/core/src/palw_state_auth_map_v1/state.rs",
+              "line": 159,
+              "symbol_or_match": "pub fn verify_state_change_v1",
+              "sha256": "7b222c23888e7eefcc73520f232d1884788c3feb2d959b9f8aada77bf4a48cd1"
+            }
+          ],
+          "production_caller": [],
+          "verification": "authmap19件PASS(6.45s)。encoding/empty/specdomain・parent/branchpin・membership/absence/rangecompleteness・update/streamの各実装と敵対testsを照合。purelibraryをproductioncaller欠如のみで欠陥としない。",
+          "status": "VERIFIED_WITHIN_DECLARED_SCOPE",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§3, §7",
+          "requirement": "pinしたtypedrowsource/overlayinverse・byteLRU・fullstate8fixture/provenbackend・Unavailable区別。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_state_row_access_v1.rs",
+              "line": 367,
+              "symbol_or_match": "pub struct PalwProvenRowSourceV1",
+              "sha256": "bfb34224948e7ee2ab14c5f42de4c9a1bb814c2b2e903e860fd49c6dbafb514b"
+            },
+            {
+              "path": "consensus/core/src/palw_state_row_access_v1.rs",
+              "line": 604,
+              "symbol_or_match": "pub struct PalwCachedRowSourceV1",
+              "sha256": "bfb34224948e7ee2ab14c5f42de4c9a1bb814c2b2e903e860fd49c6dbafb514b"
+            }
+          ],
+          "production_caller": [],
+          "verification": "rowaccess7PASS(0.05s)+stateadapter1親PASS(0.04s、内8fixture)。current pin/typed unavailable、proven source、LRUbytes、overlay old/new・inverseのcodeとgetter/absence/range/limits比較を確認。",
+          "status": "VERIFIED_WITHIN_DECLARED_SCOPE",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§5–6",
+          "requirement": "現root/paramsはdormant/Some-onlyhash・armed拒否。将来migration/integration/fulltable意味変更を分離。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_state_row_access_v1.rs",
+              "line": 661,
+              "symbol_or_match": "pub fn validate_palw_state_row_map_v1",
+              "sha256": "bfb34224948e7ee2ab14c5f42de4c9a1bb814c2b2e903e860fd49c6dbafb514b"
+            }
+          ],
+          "production_caller": [],
+          "verification": "全presetNone/validatearmed拒否をcode確認。将来root採択やnodeintegrationは未実施で、完了scopeから明示的に除外。",
+          "status": "VERIFIED_WITHIN_DECLARED_SCOPE",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 5,
+          "heading": "## 1. 問題"
+        },
+        {
+          "line": 19,
+          "heading": "## 2. 提案 — 二分 Patricia Merkle trie と state directory"
+        },
+        {
+          "line": 21,
+          "heading": "### 2.1 鍵の符号化"
+        },
+        {
+          "line": 25,
+          "heading": "### 2.2 表（table）"
+        },
+        {
+          "line": 32,
+          "heading": "### 2.3 証明"
+        },
+        {
+          "line": 47,
+          "heading": "### 2.4 state level"
+        },
+        {
+          "line": 53,
+          "heading": "### 2.5 上限"
+        },
+        {
+          "line": 57,
+          "heading": "## 3. 行アクセス層（dormant）"
+        },
+        {
+          "line": 65,
+          "heading": "## 4. 採らない案"
+        },
+        {
+          "line": 73,
+          "heading": "## 5. 互換と有効化"
+        },
+        {
+          "line": 79,
+          "heading": "## 6. 全表操作 — consensus の意味に触れるもの（別途 RFC が要る）"
+        },
+        {
+          "line": 88,
+          "heading": "## 7. 試験（実装済み、dormant）"
+        }
+      ],
+      "gaps": [
+        "FUTURE/OUTSIDE DECLARED IMPLEMENTATION SCOPE: nativeconsensus行lookup化・newrootmigration・rowwire/nodefetchcache/drillは未接続。これをoperational prunedbackend完了と呼ばない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/design/palw/storage/state-inventory.md",
+          "sha256": "aee809c2c2acad8362cd2b2c7641f1aa0b1f0a7e459a58fa1a58c7ff7f3981ee",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "実装complete/完了判定はRFC自体のpurelibrary境界だけ。operational backend・新root採択・30GB達成を意味しない。",
+      "scope_boundary": "COMPLETE is only RFC0036 expressly authorized pure library+dormant fence, never live consensus/backend integration.",
+      "runtime_evidence": {
+        "path": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/results.json",
+        "tests": 27,
+        "passed": 27,
+        "failed": 0,
+        "ignored": 0,
+        "binary_sha256": "7e1310d6926e6f6a26e5f785ec3cb37ec6144062da37333012f0cdf10127be1c",
+        "selectors": [
+          "palw_state_auth_map_v1::tests",
+          "palw_state_row_access_v1::tests",
+          "palw_state_v2::tests::row_access_v1"
+        ]
+      },
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "authmap/rowaccess/そのtestとfence実装は0ecからbyte同一。前回immutablebinaryの27件PASSを同一sourceへの受入証拠として維持。new root/nodebackend/30GB達成はこの限定完了へ含まない。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_state_auth_map_v1.rs",
+          "line": 1,
+          "symbol": "a pure library, wired to nothing",
+          "sha256": "a57db658ff87c12ff03f95a7bd62f5aa702791b9ddd295cf3c1c966928a1f3f9"
+        },
+        "finding": "適用scopeはRFC自身が明記したpurelibrary+dormantfence。hashによるデータidentityのみ。§5将来移行/実backendと§6別RFC変更は未完でも今回限定scopeのcodegapにしない。"
+      },
+      "final_classification": "COMPLETE_WITHIN_DECLARED_DORMANT_LIBRARY_SCOPE",
+      "final_completion_evidence": true,
+      "scope_complete": true,
+      "recent_source_paths": [],
+      "latest_acceptance": "前回27PASS/source unchanged。19authmap +7rowaccess +1parent(8statefixtures)。新root/adoption/nodeintegration/30GBは証明していない。限定scope完了に反証を確認せず。"
+    },
+    {
+      "rfc": 37,
+      "primary_document": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
+      "primary_sha256": "55f9c44976a289045f147c59f0a5cddbfe56efa1e0c81689d7cf5384b59515d3",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "rowstream検証と世代storage。P2P転送形式提案（consensus root不変）。全serve→importを要件に含む。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "§1–2, §2.1–2.2",
+          "requirement": "preimage/headerroot先照合、collectionstream認証、二段wholeimport後のみverified、local/peer分類。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_row_stream_v1.rs",
+              "line": 145,
+              "symbol_or_match": "pub struct PalwRowStreamVerifierV1",
+              "sha256": "3c11b3760884aa92f1e4a9d58776ca4da6296fa41b1092e21b70a4520b847c93"
+            },
+            {
+              "path": "consensus/core/src/palw_row_stream_v1/spill_reader.rs",
+              "line": 90,
+              "symbol_or_match": "pub fn palw_visit_row_spill_v1",
+              "sha256": "dfd156c9fce6ce6963d69faa2b10943b1236b1866fe8da0f0e45495fafed5152"
+            }
+          ],
+          "production_caller": [],
+          "verification": "streamverifier/spillvisitor実装と6visitor在庫あり。実typed全collection組立/既存importへのlive統合なし。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§3, §5.1–5.4",
+          "requirement": "全collectioncodec・projection・非標準root、boundedsecondstage、negotiatednewwire/resume/旧fallback。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_row_stream_v1.rs",
+              "line": 131,
+              "symbol_or_match": "enum Rooter",
+              "sha256": "3c11b3760884aa92f1e4a9d58776ca4da6296fa41b1092e21b70a4520b847c93"
+            }
+          ],
+          "production_caller": [],
+          "verification": "protocol/consensuscaller検索でproduction rowstream利用なし。特殊root Buffered はcollectionをVec保持。codec/serve/assembly/newmessage未実装。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "§4, §6",
+          "requirement": "2generation/VERIFIED marker/atomicswitch/crash、actualallcollectionequivalence。",
+          "code": [
+            {
+              "path": "database/src/storage_generations/mod.rs",
+              "line": 152,
+              "symbol_or_match": "pub struct GenerationStore",
+              "sha256": "7436f6152d490a32df6bf869772ab586b3491c8adbc18fd5774aba05ce496c94"
+            }
+          ],
+          "production_caller": [],
+          "verification": "node-localライブラリあり。consensus/core/tests/ibd_row_stream_generations.rsはlocalstream/generationintegration、公開P2P/prunedIBD受入ではない。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 8,
+          "heading": "## 1. 問題"
+        },
+        {
+          "line": 16,
+          "heading": "## 2. 提案: preimage 先行・collection 単位で検証する row stream"
+        },
+        {
+          "line": 42,
+          "heading": "### 2.1 何を保証し、何を保証しないか"
+        },
+        {
+          "line": 50,
+          "heading": "### 2.2 失敗の帰責"
+        },
+        {
+          "line": 58,
+          "heading": "## 3. 互換性と休眠"
+        },
+        {
+          "line": 67,
+          "heading": "## 4. 世代番号付き保存(node-local、参考)"
+        },
+        {
+          "line": 74,
+          "heading": "## 5. 未決事項"
+        },
+        {
+          "line": 84,
+          "heading": "## 6. 検証"
+        }
+      ],
+      "gaps": [
+        "CODE: 全collectionserve/codec/typedassembly/wholeimport integration・NativeDemand接続が未完。newwire protocol/resume未接続。",
+        "VERIFICATION: 実t12 pruning snapshotを全collection serve→receive→assemble→既存gateまで通す等価性なし。bounded-memorywholeimport/30GBnode達成の根拠なし。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/design/palw/storage/ibd-generations.md",
+          "sha256": "0a05bf67b42eab4df21d45a9207b8d9b89438314893f8a6114bf5480e53e311f",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "consensus/core/tests/ibd_row_stream_generations.rs",
+          "sha256": "1e379b1c24020c68c0c2c7e397175ece07255deb4a5450488086ecdda5d8f839",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "rowstreamverifier/spillvisitor/2generationstorageは存在。全collectioncodec/serve/typedassembly/既存wholeimport/newnegotiatedwire/NativeDemand統合は未接続。一般のprunedimportやP2P実験を新rowstreamの受入へ置換しない。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "consensus/core/src/palw_row_stream_v1.rs",
+          "line": 145,
+          "symbol": "pub struct PalwRowStreamVerifierV1",
+          "sha256": "3c11b3760884aa92f1e4a9d58776ca4da6296fa41b1092e21b70a4520b847c93"
+        },
+        "finding": "検証器・spill/generation部品はあるが全collection serve→typedassemble→既存importgateのactualnode pathがない。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    },
+    {
+      "rfc": 38,
+      "primary_document": "docs/rfc/0038-palw-fp-answer-accounting.md",
+      "primary_sha256": "c6f5f27e7426fb99920201e90dba22931029b54128ede4f81b9f127c0bd75bbf",
+      "audited_commit": "1257f0ae8b2f33f5421e09be416f3aa86af0b47c",
+      "applicability": "FPA1回答を支払済み計算として記録・再課金を抑止。旧served FPA1別schemaと区別。",
+      "implementation_status": "PARTIAL",
+      "acceptance_status": "PARTIAL",
+      "complete": false,
+      "completion_rule": "RFC全体の該当する契約・実装・受入を証拠で確認できた場合のみ完了。未武装だけでは未実装と判定しない。",
+      "requirements": [
+        {
+          "section_refs": "仕様1–4, 互換性",
+          "requirement": "bounded/nonnestedFPA1とinnergates、実carrier答案extras、prompt+answerrowexpiry・coveredpositions/ZeroQuanta・同一fee/identity。",
+          "code": [
+            {
+              "path": "consensus/core/src/palw_fp_answer_accounting_v1.rs",
+              "line": 112,
+              "symbol_or_match": "pub fn validate_palw_fp_answer_accounting_v1",
+              "sha256": "71b104348acafd84d5c5f4ddab05c37fb97efb342eaefc363c9ac8488aec6365"
+            },
+            {
+              "path": "consensus/core/src/palw_state_v2/objects.rs",
+              "line": 3799,
+              "symbol_or_match": "let answer = if builder.extras.fp_answer_accounting_active",
+              "sha256": "100a740ff9cd34a20289efcfa17087fe8f7118b3bb077c12c4c9fcdecabbc086"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "consensus/src/pipeline/virtual_processor/processor/palw_accept.rs",
+              "line": 2544,
+              "symbol_or_match": "let _answer_workspace",
+              "sha256": "3347263fb141c086d6b2057d7a41b72b543804ca18f7a6dc23ca243dd172d374"
+            }
+          ],
+          "verification": "nativeisolation/headercontext/extraction/realacceptedcarrier/retainedextraownerとfold実装確認。core accounting10tests在庫。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "仕様5, arming前提 seat",
+          "requirement": "実transaction回答をreplay outputrootへ束縛しcarried mismatchではlicenceしない。",
+          "code": [
+            {
+              "path": "kaspad/src/palw_panel/answer_accounting.rs",
+              "line": 94,
+              "symbol_or_match": "palw_fp_answer_bind_duty_v1",
+              "sha256": "018ee80f45c30ca89f5a6e842d6744d150df010e7c55e0017c94d0af94d975c0"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "kaspad/src/palw_panel.rs",
+              "line": 7975,
+              "symbol_or_match": "answer_accounting_active",
+              "sha256": "ce27785b8a127e178998c90080d9ca9ed3b5949a2b122e66311136786403098d"
+            }
+          ],
+          "verification": "actualseatcheck追加済み。sameclaim複数carrierはexactwinningindex欠如でfailclosed。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        },
+        {
+          "section_refs": "arming前提 producer/worker/fp-submit/gateway/CLI, 互換性",
+          "requirement": "各実producerがnative価格/shape/contextを用いてinnerを維持しactualouterFPA1を署名/送出。",
+          "code": [
+            {
+              "path": "misaka/palw/gateway/src/bin/rail.rs",
+              "line": 740,
+              "symbol_or_match": "wrap_fp_answer_accounting_tx_explicit_with_v1",
+              "sha256": "0f2a355cbd0d710e8052450dbe994a5c30288d86d01a0c39453f8d945afc0f85"
+            }
+          ],
+          "production_caller": [
+            {
+              "path": "kaspad/src/palw_panel.rs",
+              "line": 8394,
+              "symbol_or_match": "wrap_fp_answer_accounting_tx_with_v1",
+              "sha256": "ce27785b8a127e178998c90080d9ca9ed3b5949a2b122e66311136786403098d"
+            }
+          ],
+          "verification": "canonical node+rail delegatedHFP1経路は接続。plainworkercontext・prefixpublichandshake・liveTFP1/TFO1multiinput・SDK/他emissionpathsは残る。",
+          "status": "PARTIAL",
+          "latest_revalidation": "HEAD1257f0ae8のgit objectを読んで既存symbol/code/callerと原文要件を再照合。引用code byte同一。新規runtime実行はしていない。"
+        }
+      ],
+      "normative_section_inventory": [
+        {
+          "line": 7,
+          "heading": "## 動機"
+        },
+        {
+          "line": 21,
+          "heading": "## 仕様"
+        },
+        {
+          "line": 39,
+          "heading": "## 互換性"
+        },
+        {
+          "line": 44,
+          "heading": "## arming 前提(未実装)"
+        }
+      ],
+      "gaps": [
+        "CODE: actualwinningcarrierindexなし。plainworker context/nativehandshake、liveTFP1/TFO1 producer、SDK/workerと他gateway出力経路の接続が未完。",
+        "VERIFICATION: actualRPC integration NOT RUN、全producer end-to-end/全model calibration・restart/campaign evidenceなし。",
+        "ARMING: record未pinは検証不足を示すが、Noneだけを実装欠如と判定していない。"
+      ],
+      "evidence": [
+        {
+          "path": "docs/evidence/rfc/0038-retained-native-answer-ingress-2026-10-24.md",
+          "sha256": "bc9fbfb139bf84e84d52f84c43beb8c0c049cbf9e39fdc06b702f8fe58ad0886",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/evidence/rfc/0038-producer-seat-answer-binding-2026-10-24.md",
+          "sha256": "5107a54a5a93f4efbb48d7b8d9dbb19cd077954d738340265f86b75ae8ec34a8",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        },
+        {
+          "path": "docs/evidence/rfc/0038-native-rail-answer-quote-2026-10-25.md",
+          "sha256": "33184776a0ac23f3378e85ead282869e7a4acf564696c4f40dd8af9814776f3a",
+          "audit_use": "実在と本文のscopeを確認。過去runを現HEADの新規実行PASSへ読み替えない。"
+        }
+      ],
+      "notes": "",
+      "test_inventory": {
+        "path": "/tmp/misaka-rfc26-38-core-test-inventory-20261025.txt",
+        "binary": "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "kind": "--list only; no runtime PASS inferred"
+      },
+      "previous_audited_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+      "latest_progress": "nativeFPA1 ingress/extras/fold/seatcheck・canonicalproducer/rail delegatedHFP1を現在実装として計上。0ec以後のEVMgas/checkedparent/SDKprovider改善は残るFPA1producer/RPCintegrationを閉じない。",
+      "decisive_status_evidence": {
+        "anchor": {
+          "path": "docs/evidence/rfc/0038-native-rail-answer-quote-2026-10-25.md",
+          "line": 50,
+          "symbol": "## Remaining scope",
+          "sha256": "33184776a0ac23f3378e85ead282869e7a4acf564696c4f40dd8af9814776f3a"
+        },
+        "finding": "winning-carrier exactindex、plainworker context/nativehandshake、liveTFP1/TFO1/他SDKgateway output、actualRPC integrationと全経路campaignが未完。"
+      },
+      "final_classification": "PARTIAL",
+      "final_completion_evidence": false,
+      "scope_complete": false,
+      "recent_source_paths": [],
+      "latest_acceptance": "局所部品の証拠あり。明示した全契約/実受入の欠落が残るためRFC全体完了を証明していない。"
+    }
+  ],
+  "referenced_source_identity": {
+    "consensus/core/src/palw_court_policy_v1.rs": {
+      "sha256": "cbf7a6dd478b27ba9e63e9f12b77beef59322474fa33fe64a72932a5d55cfeb8",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_service_binding_v1.rs": {
+      "sha256": "f6fa64121481eba43caf55e69d370bb2da45cdde338d5664251cd8f7abfb7226",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_tir_fold_v1.rs": {
+      "sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_funded_original_coordinator_v1.rs": {
+      "sha256": "44116eff5b7e7b9e43032d85b433433339c0af444836a6382ac6e0916adb7aeb",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_original_aggregate_v1.rs": {
+      "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs": {
+      "sha256": "53fce64afb53c782eaaac9d340b10610df3c4163c4d00a3bbb518e9b02058e51",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_end_archive_v1.rs": {
+      "sha256": "68f4b75c95a0cb28f797c68e706269e529979380d555dad97c31a77dad568801",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_service_lifecycle_fold_v1.rs": {
+      "sha256": "304fca3c8a308f6531f46a6799664778d825ea571dd65ffefa5705405a60bf7a",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_g14_gates_v1.rs": {
+      "sha256": "2294c9b0881acfe6c0cc1bdf73bd3c34b195b9e4c6d427767a50405d57ad3e65",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_duty_clock_v1.rs": {
+      "sha256": "5c8d85d8316eeecd94158ce3056377775bfa19f7bba3cd6c52160035c9228135",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_tir_public_fold_v1.rs": {
+      "sha256": "d2ecb21cbc1cc40f9e6746d7e2133adaf4688b939260a27f9725aa61e17c4685",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_v2/chain_state.rs": {
+      "sha256": "81f742387b29ec11e747e4762694ad74b6d2beff074289cad3eedb84581c9177",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_tir_requests_v1.rs": {
+      "sha256": "736a14230244c54a0d89776c9a7783bd9f5c1ea770f1ad413d00447e588358cf",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_tir_frontier_v1.rs": {
+      "sha256": "3789ae9fa4259bbded7e626cee7cf39e9883de3f0943e618a3bb374520902f65",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_tir_state_v1.rs": {
+      "sha256": "a5af4623c9204bfeef219e42c409e49dff8a314e555406152e7d9f4efa2d6e4e",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_tir_response_v1.rs": {
+      "sha256": "27317c6cdd272abe89389a56a14185af95b3402d34a4d5e9b26e0477a1db1a0d",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_tir_root_v1.rs": {
+      "sha256": "60f4ffa8f541e8169242b974f5b4dcb3da0f08558ea8ac888b93dd9f66d36a87",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_numerical_transport_v1.rs": {
+      "sha256": "6f2fdd5e4ae5ab2a413aa6bcb75b60794d1ee3e7edcffc056d2eafac15b7a21a",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_tir_bottom_v1.rs": {
+      "sha256": "3d477b2da761a85974e01b2074b0d3bdb2097b64326f915dd420c076e595aa4a",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_end_archive_fold_v1.rs": {
+      "sha256": "ef2fe1f145466ce1af1eb2cfd62feca30ba7bae990f8c3fd30a669fcccd85e70",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_v2/transition_builder.rs": {
+      "sha256": "db00904e9dac7bb1642f50bb3b225decb98c1ba828c2d5adffde577d53080f9b",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_close_receipt_v1.rs": {
+      "sha256": "125fd6b87114939ecd7c331317d3bd5c4a49fcf45f05c190db483957539add9a",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_archive_verify_v1.rs": {
+      "sha256": "54a94e76505ed65236f34eb29f2bc7b21e51b06615167a9730eaf11e7c33ce5d",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_numerical_material_join_v1.rs": {
+      "sha256": "a245d029d5dc91e1c4f298a4f22986d11cd2b93d62d29213c95eec00fc8919d0",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_semantic_material_v1.rs": {
+      "sha256": "19b8ca7f5e4f3fdc843fbeadbf0ac1f0bb6bf337ba76c51249e4d1a8fa801498",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_material_intake_v1.rs": {
+      "sha256": "755d258d4051584db315c4150821e491a4d1913dba57d5876e563c510fcb76c8",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_shared_material_intake_fold_v1.rs": {
+      "sha256": "211e8fbf20a036418f24f50c3eb3daa41080ec4a590b7e2d0af51a8ba7a601a9",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_model_scope_routes_v1/readiness_root.rs": {
+      "sha256": "b2315094e1e445814913e596f235ecdf9631023f64d46e9fccbf9abfbb517ce5",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_model_scope_routes_v1/readiness_disclosure.rs": {
+      "sha256": "c8f3cc7e4575d4be07c5f18b46c8a908ff4cd0b6503dc44f97cfd2209b996712",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_v2/d2_readiness.rs": {
+      "sha256": "770bc9d3d081267e2f30392c30a28d47f4e5303c4132e06200b89078a0e30071",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_v2/objects.rs": {
+      "sha256": "100a740ff9cd34a20289efcfa17087fe8f7118b3bb077c12c4c9fcdecabbc086",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_court_archive_discharge_v1.rs": {
+      "sha256": "4f1cddc01457ca8eb23f98ec41d07c975382253dfe439c0276631d8805092d36",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_funded_escrow_v1.rs": {
+      "sha256": "9dbeb89ea6b845c657ecb49a47e0678a78186feefdc73d8df2ad148b7ab942ca",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_auth_map_v1.rs": {
+      "sha256": "a57db658ff87c12ff03f95a7bd62f5aa702791b9ddd295cf3c1c966928a1f3f9",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_auth_map_v1/trie.rs": {
+      "sha256": "b810be47825430c61cc226a4995afe0b0eac703bfd03f893e6a72a7d7ffb2439",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_auth_map_v1/proof.rs": {
+      "sha256": "dd5f731f45a9ed4d09c303091dca5fa90c132ce45e5a21b25d64b1f6c19a866f",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_auth_map_v1/state.rs": {
+      "sha256": "7b222c23888e7eefcc73520f232d1884788c3feb2d959b9f8aada77bf4a48cd1",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_state_row_access_v1.rs": {
+      "sha256": "bfb34224948e7ee2ab14c5f42de4c9a1bb814c2b2e903e860fd49c6dbafb514b",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_row_stream_v1.rs": {
+      "sha256": "3c11b3760884aa92f1e4a9d58776ca4da6296fa41b1092e21b70a4520b847c93",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_row_stream_v1/spill_reader.rs": {
+      "sha256": "dfd156c9fce6ce6963d69faa2b10943b1236b1866fe8da0f0e45495fafed5152",
+      "byte_identical_to_previous_audit": true
+    },
+    "database/src/storage_generations/mod.rs": {
+      "sha256": "7436f6152d490a32df6bf869772ab586b3491c8adbc18fd5774aba05ce496c94",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/core/src/palw_fp_answer_accounting_v1.rs": {
+      "sha256": "71b104348acafd84d5c5f4ddab05c37fb97efb342eaefc363c9ac8488aec6365",
+      "byte_identical_to_previous_audit": true
+    },
+    "consensus/src/pipeline/virtual_processor/processor/palw_accept.rs": {
+      "sha256": "3347263fb141c086d6b2057d7a41b72b543804ca18f7a6dc23ca243dd172d374",
+      "byte_identical_to_previous_audit": true
+    },
+    "kaspad/src/palw_panel/answer_accounting.rs": {
+      "sha256": "018ee80f45c30ca89f5a6e842d6744d150df010e7c55e0017c94d0af94d975c0",
+      "byte_identical_to_previous_audit": true
+    },
+    "kaspad/src/palw_panel.rs": {
+      "sha256": "ce27785b8a127e178998c90080d9ca9ed3b5949a2b122e66311136786403098d",
+      "byte_identical_to_previous_audit": true
+    },
+    "misaka/palw/gateway/src/bin/rail.rs": {
+      "sha256": "0f2a355cbd0d710e8052450dbe994a5c30288d86d01a0c39453f8d945afc0f85",
+      "byte_identical_to_previous_audit": true
+    }
+  },
+  "all_13_primary_documents_byte_identical_to_previous_audit": true,
+  "rfc36_runtime_reference": [
+    {
+      "name": "rfc36-auth-map",
+      "command": [
+        "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "palw_state_auth_map_v1::tests",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 6.46,
+      "expected": 19,
+      "log": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-auth-map.log",
+      "passed": true,
+      "binary_sha256": "7e1310d6926e6f6a26e5f785ec3cb37ec6144062da37333012f0cdf10127be1c",
+      "summary": [
+        "ok",
+        "19",
+        "0",
+        "6.45"
+      ]
+    },
+    {
+      "name": "rfc36-row-access",
+      "command": [
+        "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "palw_state_row_access_v1::tests",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.06,
+      "expected": 7,
+      "log": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-row-access.log",
+      "passed": true,
+      "binary_sha256": "7e1310d6926e6f6a26e5f785ec3cb37ec6144062da37333012f0cdf10127be1c",
+      "summary": [
+        "ok",
+        "7",
+        "0",
+        "0.05"
+      ]
+    },
+    {
+      "name": "rfc36-state-adapter",
+      "command": [
+        "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+        "palw_state_v2::tests::row_access_v1",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.05,
+      "expected": 1,
+      "log": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-state-adapter.log",
+      "passed": true,
+      "binary_sha256": "7e1310d6926e6f6a26e5f785ec3cb37ec6144062da37333012f0cdf10127be1c",
+      "summary": [
+        "ok",
+        "1",
+        "0",
+        "0.04"
+      ]
+    }
+  ],
+  "latest_wave_context": {
+    "path": "docs/evidence/rfc/0006-0007-0008-0012-court-aux-provider-round-verification-2026-10-25.md",
+    "scope": "root verified6pkg/31identities/158distinctPASS。court/aux/provider/EVM bounded mechanisms。RFC26–38全体完了へ転用不可。"
+  },
+  "rfc34_callsite_search": [
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_court_archive_verify_v1.rs:110:    pub(super) fn apply_native_archived_chunk_v1(&mut self)->Result<bool,PalwStateV2Error>{",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4829:                let result=trial.apply_native_archived_chunk_v1();",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4844:                    assert!(trial.apply_native_archived_chunk_v1().is_err());assert_eq!(trial.state.state_root(),changed);assert_eq!(trial.entries.len(),entries);",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4869:                assert!(unproven.apply_native_archived_chunk_v1().is_err());assert_eq!(unproven.state.state_root(),root);assert!(unproven.entries.is_empty());",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4963:                assert_eq!(trial.apply_native_archived_chunk_v1().unwrap(),false);",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4970:            assert!(trial.apply_native_archived_chunk_v1().is_err());assert_eq!(trial.state,saved);assert_eq!(trial.entries.len(),entries);",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4972:            assert_eq!(trial.apply_native_archived_chunk_v1().unwrap(),middle_clocked);",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4988:                assert!(trial.apply_native_archived_chunk_v1().is_err());",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4990:                trial.prepare_native_court_end_cause_v1(&point,&forged).unwrap();assert!(trial.apply_native_archived_chunk_v1().is_err());",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4991:                trial.prepare_native_court_end_cause_v1(&point,&final_chunk).unwrap();assert!(trial.apply_native_archived_chunk_v1().is_err(),\"already qualified final chunk is not another delivery\");",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:4993:                trial.prepare_native_court_end_cause_v1(&point,&reobserve).unwrap();assert!(trial.apply_native_archived_chunk_v1().unwrap());",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:5001:                assert!(trial.apply_native_archived_chunk_v1().is_err());assert_eq!(trial.state.state_root(),after);assert_eq!(trial.entries.len(),entries);",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:5053:            assert!(late.apply_native_archived_chunk_v1().is_err());late.court_end_evidence=None;",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:5067:        assert!(t.apply_native_archived_chunk_v1().unwrap());t.court_end_evidence=None;",
+    "1257f0ae8b2f33f5421e09be416f3aa86af0b47c:consensus/core/src/palw_tir_public_fold_v1.rs:5134:        assert!(b.apply_native_archived_chunk_v1().unwrap());b.court_end_evidence=None;"
+  ]
+}
