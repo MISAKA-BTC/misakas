@@ -255,11 +255,7 @@ fn fund_action(b: &mut TransitionBuilder<'_>, f: &Fx) {
     .unwrap();
 }
 fn common_prefix(b: &mut TransitionBuilder<'_>, c: &PalwBlockContextV2) {
-    let keys = b.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>();
-    for k in keys {
-        b.write_payout(k, None).unwrap();
-    }
-    acknowledge_consumed_prefix(b, c).unwrap();
+    super::super::block_preparation::queue_drain_workspace_v2::drain_consumed_queues_v2(b, c).unwrap();
 }
 #[test]
 fn no_approvals_refund_uses_real_debit_horizon_and_journal_ack_without_r() {

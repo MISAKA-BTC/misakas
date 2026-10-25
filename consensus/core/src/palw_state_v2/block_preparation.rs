@@ -3,6 +3,9 @@
 //! order or move the caller-specific material-retirement rearm.
 use super::*;
 
+#[path = "queue_drain_workspace_v2.rs"]
+pub(super) mod queue_drain_workspace_v2;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ArtifactMigrationOrderV1 { BeforeClassRetarget, AfterMeshSweep }
 
@@ -11,17 +14,7 @@ pub(super) fn prepare_block_objects_v1(
     ctx: &PalwBlockContextV2, facts: PalwBlockFactsV1<'_>, rules: PalwRulesAtBlockV1<'_>,
     migration: ArtifactMigrationOrderV1,
 ) -> Result<(), PalwStateV2Error> {
-    for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
-        builder.write_payout(claim_id, None)?;
-    }
-    // Dedicated checker fee/refund ACK reads only this exact consumed prefix;
-    // principal refunds do not depend on an R engine being active.
-    palw_source_verifier_economics_fold_v2::acknowledge_consumed_prefix(builder,ctx)?;
-    // 1c′. ADR-0089 Decision 6: the settlement list the parent decided was carried and settled
-    //      by THIS block's EVM step; it leaves the state here, before this block's own is written.
-    for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {
-        builder.write_evm_settlement(seq, None)?;
-    }
+    queue_drain_workspace_v2::drain_consumed_queues_v2(builder, ctx)?;
 
     // 1c″. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
     //      claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
