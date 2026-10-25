@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import tempfile
 
+import rfc_gate_inputs
 from rfc_integration_campaign import (CampaignError, FrozenCampaign, GATES, final_status,
     load_base_drill, make_campaign_drill, require)
 
@@ -46,7 +47,7 @@ def gates_report(frozen, scenarios, base_passed, resources_passed):
             'PASS' if all(fact.get('status') == 'PASS' for fact in evidence) else 'UNKNOWN')
         result[name] = dict(status=status,
             requiredKind=needed_kind, evidence=evidence)
-    return result
+    return rfc_gate_inputs.cap_gates(result)
 
 
 def main():
@@ -54,14 +55,29 @@ def main():
     parser.add_argument('--plan', required=True)
     parser.add_argument('--out', required=True, help='new aggregate report; never overwrite an existing campaign report')
     parser.add_argument('--root', help='new owned campaign directory; each role gets one DB reused throughout')
+    parser.add_argument('--inputs', help='optional external-input manifest; unavailable K3/native39 inputs are refused, never substituted')
+    parser.add_argument('--aggregate-root', help='existing campaign root: rebuild the report from its scenario ledger without launching anything')
     parser.add_argument('--execute', action='store_true', help='only after all implementation is complete; run the frozen campaign once')
     args = parser.parse_args()
     require(not Path(args.out).exists(), 'campaign output already exists; preserving the prior report')
+    if args.inputs:
+        rfc_gate_inputs.load_input_manifest(args.inputs)
     frozen = FrozenCampaign(args.plan)
     base = load_base_drill()
     base.validate_scenario_bounds(frozen.drill)
     limits = base.read_process_limits(frozen.limits_pin.path)
     freeze = frozen.manifest()
+    if args.aggregate_root:
+        ledger = Path(args.aggregate_root) / 'scenario-ledger.jsonl'
+        lines = ledger.read_text().splitlines() if ledger.is_file() else []
+        scenarios = rfc_gate_inputs.aggregate_ledger(lines, [row['id'] for row in frozen.plan['scenarios']])
+        # base-drill mechanics cannot be reconstructed from a ledger: stays UNKNOWN.
+        gates = gates_report(frozen, scenarios, False, False)
+        status = 'FAIL' if any(row.get('status') == 'FAIL' for row in scenarios) else 'UNKNOWN'
+        exclusive_json(args.out, dict(schemaVersion=1, kind='misaka-rfc-integration-campaign-report-v1', status=status,
+            reason='re-aggregated from scenario ledger; nothing was launched or resumed; never PASS',
+            freeze=freeze, actualExecution=False, scenarios=scenarios, gates=gates, securitySoundnessMeasured=False))
+        return 1 if status == 'FAIL' else 2
     if not args.execute:
         exclusive_json(args.out, dict(schemaVersion=1, kind='misaka-rfc-integration-campaign-report-v1',
             status='UNKNOWN', reason='freeze only; implementation-complete execution was not requested',
@@ -81,6 +97,7 @@ def main():
     exclusive_json(root / 'campaign-once.json', dict(campaignId=frozen.plan['campaignId'], freezeSha256=marker_sha256,
         candidateSha256=frozen.candidate.sha256, root=str(root), actualExecutionStarted=True))
     drill = make_campaign_drill(base)(frozen, root)
+    drill.ledger_path = root / 'scenario-ledger.jsonl'
     result = dict(schemaVersion=1, kind='misaka-rfc-integration-campaign-report-v1', freeze=freeze,
         status='UNKNOWN', actualExecution=True, artifactDirectory=str(root), securitySoundnessMeasured=False,
         releaseApproval=False, baseDrill=dict(status='UNKNOWN'), resourceLimits=limits, resourceLimitsMet=False,

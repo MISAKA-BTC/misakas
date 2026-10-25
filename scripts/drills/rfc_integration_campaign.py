@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import time
@@ -47,7 +48,7 @@ GATES = {
 }
 SOURCE_LEAVES = ('misaka-rfc-integration-campaign.py', 'rfc_integration_campaign.py', 'misaka-rfc12-multiprocess.py',
     'rfc12_owned_resources.py', 'rfc12_owned_fixture.py', 'misaka_wrpc_json.py', 'rfc12_kernel_consumers.py', 'rfc12_native_recovery_observation.py',
-    'rfc08_native_paid_observation.py', 'rfc08_native_paid_bootstrap_observation.py')
+    'rfc08_native_paid_observation.py', 'rfc08_native_paid_bootstrap_observation.py', 'rfc_gate_inputs.py')
 BUILD_TOOLS = frozenset(('cargo', 'rustc', 'rustup', 'make', 'cmake', 'ninja', 'meson', 'git', 'rebase', 'reset'))
 IDENTIFIER = re.compile(r'[a-z0-9][a-z0-9._-]{0,95}\Z')
 
@@ -595,6 +596,17 @@ def make_campaign_drill(base):
                 genesis=node['genesisHash'], params=node['consensusParamsId'], importStamp=base.import_stamp(node))
             return result
 
+        def persist_scenario(self, record):
+            # Append-only, fsynced per scenario so a killed campaign keeps its
+            # failures and completed rows; --aggregate-root rebuilds from this.
+            ledger = getattr(self, 'ledger_path', None)
+            if ledger is None:
+                return
+            with open(ledger, 'a') as output:
+                output.write(json.dumps(record, sort_keys=True) + '\n')
+                output.flush()
+                os.fsync(output.fileno())
+
         def scenario(self, scenario):
             require(scenario['id'] not in self.executed_scenarios, 'scenario attempted twice in the same campaign')
             self.executed_scenarios.add(scenario['id'])
@@ -649,6 +661,7 @@ def make_campaign_drill(base):
                 record.update(status='FAIL', reason=type(error).__name__ + ': ' + str(error))
             finally:
                 record['elapsedSeconds'] = time.monotonic() - began
+                self.persist_scenario(record)
                 self.integrity('scenario.after.' + scenario['id'])
 
     return CampaignDrill
