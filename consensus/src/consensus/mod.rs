@@ -4758,7 +4758,9 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
-        self.headers_store.get_header(hash).optional().unwrap().ok_or(ConsensusError::HeaderNotFound(hash))
+        self.headers_store.get_header(hash).optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("native header read: {e}")))?
+            .ok_or(ConsensusError::HeaderNotFound(hash))
     }
 
     fn get_header_download_hint(&self) -> BlockHash {
@@ -5805,3 +5807,6 @@ impl Consensus {
 
 #[cfg(test)]
 mod evm_reader_fault_tests;
+
+#[cfg(test)]
+mod native_header_fault_tests;
