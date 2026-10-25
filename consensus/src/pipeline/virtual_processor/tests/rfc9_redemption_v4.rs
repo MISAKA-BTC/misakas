@@ -322,7 +322,7 @@ impl Rig {
     }
 
     fn unentitled(&self, state: &PalwChainStateV2, gd: &GhostdagData) -> BlockHashSet {
-        self.ctx.consensus.virtual_processor().palw_v2_unentitled_blues_checked_v1(state, gd, &BlockHashSet::default(), &self.point()).expect("the merged pay set resolves")
+        self.ctx.consensus.virtual_processor().palw_v2_unentitled_blues(state, gd, &BlockHashSet::default(), &self.point())
     }
 
     fn payouts(

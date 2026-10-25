@@ -28,10 +28,6 @@ impl NativeDemandLeaseV1 {
         self.memory = remaining;
         Ok(transferred)
     }
-    /// The typed memory this ticket holds (RFC-0006 RFC06-1: an owner's admitted size bounds the scratch derived from it).
-    pub(crate) fn memory_v1(&self) -> u64 {
-        self.memory
-    }
     /// Extend an existing owner before its next allocation. Reuse the same
     /// ticket so tracking an unbounded walk does not itself allocate a second
     /// collection whose ownership would need another reservation.

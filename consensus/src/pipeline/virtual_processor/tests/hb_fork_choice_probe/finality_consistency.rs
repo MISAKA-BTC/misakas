@@ -1,7 +1,7 @@
 //! **FINX (2026-10-08) — P0: is the GHOSTDAG finality guard consistent with the PALW fork choice?
 //! Multi-node adversarial runs through the real pipeline.** A probe: no rule is changed.
 //!
-//! Record: `docs/design/palw/consensus/finality-palw-consistency.md`. The model that compares the change
+//! Record: `docs/design/palw/finality-palw-consistency.md`. The model that compares the change
 //! candidates is `consensus/core/tests/finality_palw_consistency_model.rs`.
 //!
 //! The property tested, in two halves:
@@ -912,5 +912,3 @@ async fn finx_p0_f_a_branch_one_tick_ahead_crosses_a_pre_fork_final_first_and_re
 
 /// ADR-0178's rule E against every violation above, armed — and the attacks it is built to hold.
 mod rule_e;
-/// RFC09: the remote client's rule E + Gate C choice from op 203 v2 is the full node's.
-mod rule_e_remote_v2;

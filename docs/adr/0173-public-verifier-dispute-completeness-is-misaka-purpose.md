@@ -1,7 +1,5 @@
 # ADR-0173 — MISAKA's purpose: public-verifier dispute completeness
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -15,7 +13,7 @@
 * **Purpose:** 正しい固定modelを保有/取得できたPanel外のpublic bondが、producer秘密状態なしにclaim固有の認証証拠から不正をlocalizeし客観的convictionへ到達する。モデル入手自体はchainが管理・保証しない（ADR177）。
 * **Design path:** [RFC-0014](../rfc/0014-panel-independent-fraud-prosecution.md) specifies the implementation work and completion gates. [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) specifies a separately gated, deferred Panel=0 mode.
 * **Complements:** [ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md)'s useful local-inference purpose, [ADR-0171](0171-probabilistic-constraint-checks-and-court-on-dispute.md)'s verification direction and [ADR-0172](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)'s kernel-only extension boundary.
-* **Audit:** [All-RFC/ADR alignment report](../evidence/adr/0173-mission-alignment-audit-2026-10-07.md). The report records document versions, dispositions and the limits of this documentation change.
+* **Audit:** [All-RFC/ADR alignment report](evidence/0173-mission-alignment-audit-2026-10-07.md). The report records document versions, dispositions and the limits of this documentation change.
 * **Amendment, 2026-10-10:** 旧Seeder/TRDC/FPR可用性方針は、後続の[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)で撤回した。従来の整合チェックは履歴で、新配分の経済/実装証拠ではない。
 * **Further amendment, 2026-10-10:** 旧Seeder/TRDC/FPR可用性方針は、後続の[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)で撤回した。従来の整合チェックは履歴で、新配分の経済/実装証拠ではない。
 * **Amendment, 2026-10-14 (user decision, [PRINCIPLES §0](../PRINCIPLES.md)):** MISAKAの**最終Goal**は「モデルを非公開にしておくことが経済的に不利になる仕組み」であり、不正の完全排除ではない。本ADRの公開検証者による不正追及の完結は、その下の制度要件として維持する: **登録モデルが1人にでも共有され、正しいPanel（正直な検証者）を建てられれば、claim固有の公開・認証済み証拠から不正を局所化し、客観的なcourtで立証してslashできる。** 誰にも共有されない閉鎖モデル（`p = 0`）の不正は排除を保証せず、ADR-0176のbond単位の上限で被害を有界化する残余リスクとする。検出確率の下限と期待利益が負であることは有効化gateではなく評価指標である。
@@ -214,19 +212,6 @@ RFC-0014のgatesを、少なくとも次の条件で満たすまで本目標を�
 
 ## 改定 — 2026-10-12（Panel=1でもnon-seatの公開訴追を維持：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
 
 通常のreward-bearing modeを1 claim 1 seat（Panel=1）とする場合でも、non-seatの証拠取得・裁定権限を制限しない。Panel署名を計算の真実の最終根拠にしない。producerと唯一のseatが共謀した場合、必要なモデルを保有したnon-seatが公開証拠から反証でき、Panel署名で妨害されないこと（受入試験P04）を要求する。外部の実検査が一切ない場合の未検出リスクは残余リスクとして明示し、`p = 1` と報告しない（P05）。
-
-## ユーザー方針 2026-10-15 による改定
-
-* 中核目標(非Panelの公開bondによる客観的conviction)は維持する。これに加え、**合意creditは公開告発の機会が経過した`SecurityCertified`のclaimだけが持つ**。G14の公開告発window(異議・convictionなしの経過)は認証の必要条件である。
-* `p = 0`(閉鎖モデル)の残余リスクは経済的な損失に限られ、合意finalityにはならない。
-
-**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
-
-* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
-* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
-* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
-* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
-* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。

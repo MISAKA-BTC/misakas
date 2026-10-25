@@ -265,9 +265,8 @@ impl PrivateKernelPaidWorkSpecV4 {
         Ok(spec)
     }
     pub fn prepare(self, ctx: &PalwNativeCustodyContextV3) -> Result<PreparedKernelPaidWorkV4, String> {
-        // The paid-v4 private profile is PAV3 + material release recovery V2; the retired compact V4 fence is never armed.
-        if ctx.config.params.palw_material_release_recovery_v2.is_none() || ctx.config.params.palw_claim_compact_v4.is_some() {
-            return Err("explicit paid-v4/recovery configuration required (compact V4 is retired)".into());
+        if ctx.config.params.palw_claim_compact_v4.is_none() || ctx.config.params.palw_material_release_recovery_v2.is_none() {
+            return Err("explicit paid-v4/recovery configuration required".into());
         }
         let producer = PalwBondKeyV2(crate::palw_producer::parse_outpoint(
             ctx.producer_bond.as_deref().ok_or("kernel paid producer bond absent")?,
@@ -375,7 +374,7 @@ impl PreparedKernelPaidWorkV4 {
             palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2, palw_producer_v2::PalwObjectRehearsalV1,
         };
         let (work_bytes, _file_lease) = read_bounded(&self.spec.work_path, self.spec.max_input_bytes)?;
-        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(&work_bytes[..], work_bytes.len() as u64)
+        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(work_bytes.as_slice(), work_bytes.len() as u64)
             .map_err(|e| e.to_string())?;
         if shape.logical_requests_v1() > self.spec.max_workspace_bytes {
             return Err("kernel paid decoded input exceeds explicit workspace".into());
@@ -397,7 +396,7 @@ impl PreparedKernelPaidWorkV4 {
         let checkpoint = hash(&self.spec.checkpoint)?;
         let mut object: Option<NativeRetainedV1<PalwConsensusObjectV2>> = if object_path.exists() {
             let (bytes, _raw_lease) = read_bounded(&object_path, self.spec.max_input_bytes)?;
-            preflight_native_value_v1::<PalwConsensusObjectV2>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
+            preflight_native_value_v1::<PalwConsensusObjectV2>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
             Some(retain_native_value_decode_v1(&bytes, || borsh::from_slice(&bytes)).map_err(|e| e.to_string())?)
         } else {
             None
@@ -421,21 +420,6 @@ impl PreparedKernelPaidWorkV4 {
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
-        // A native read that races a tip/import/clock change (or an incomplete IBD/import) is retried on the next tick: these
-        // reads bracket their own native point and refuse rather than mix two. Only the signed expiry turns waiting into a
-        // terminal refusal; a draft, an upload, a queued carrier or a mempool entry is never treated as native acceptance.
-        macro_rules! retry {
-            ($what:expr, $e:expr) => {
-                match $e {
-                    Ok(v) => v,
-                    Err(error) => {
-                        kaspa_core::debug!("private kernel paid producer retries {}: {}", $what, error);
-                        continue;
-                    }
-                }
-            };
-        }
-
         // Explicitly configuring V6 chooses the namespace for NEW unsigned
         // work. Wait for its real native activation instead of silently making
         // a legacy commit because a declared earliest DAA predates the fence.
@@ -496,11 +480,6 @@ impl PreparedKernelPaidWorkV4 {
                 continue;
             }
             observed_enrollment = false;
-
-            // The producer signed this deadline; past it no carrier of this work can be admitted, so stop rather than spend.
-            if api.get_virtual_daa_score() > self.spec.expires_daa {
-                return Err("signed kernel work expired before native acceptance; durable outbox retained".into());
-            }
             if object.is_none() {
                 if source_fence.is_some_and(|f| !f.activation.is_active(api.get_virtual_daa_score())) {
                     continue;
@@ -528,17 +507,14 @@ impl PreparedKernelPaidWorkV4 {
                     }
                 }
                 if handoff.is_none() {
-                    let candidate = retry!(
-                        "own producer candidate",
-                        api.palw_kernel_producer_candidate_v4(
-                            checkpoint,
-                            self.producer,
-                            &work.commit,
-                            &salt,
-                            self.spec.commit_daa,
-                            self.spec.expires_daa,
-                        )
-                    );
+                    let candidate = api.palw_kernel_producer_candidate_v4(
+                        checkpoint,
+                        self.producer,
+                        &work.commit,
+                        &salt,
+                        self.spec.commit_daa,
+                        self.spec.expires_daa,
+                    )?;
                     let copy = NativeRetainedV1::try_from_clone_v1(&work.commit).map_err(|e| e.to_string())?;
                     let (commit, _copy_lease) = copy.into_parts_v1();
                     handoff = Some(
@@ -560,28 +536,15 @@ impl PreparedKernelPaidWorkV4 {
                 }
                 let request = handoff.as_ref().ok_or("kernel handoff absent")?.request();
                 if ingress.is_none() {
-                    let grant = retry!("own native ingress grant", api.palw_kernel_material_ingress_v4(checkpoint, request));
-                    // Every named provider must durably hold the material and sign; a partial or failed exchange is retried
-                    // with a fresh grant (provider publication is idempotent per consent).
-                    retry!("authenticated provider exchange", exchange.0.ingest_kernel_material_v4(request, &grant));
-                    // Keep the sponsor's own copy of the signed work and its intrinsic context beside the outbox: a later
-                    // bounded provider replacement (--private-probe-kernel-replace) replays exactly these, never a
-                    // provider-supplied copy. Written once; an existing record is left untouched.
-                    let request_path = path.join("request.borsh");
-                    if !request_path.exists() {
-                        publish_borsh(&request_path, request, self.spec.max_input_bytes)?;
-                    }
-                    let context_path = path.join("context.borsh");
-                    if !context_path.exists() {
-                        publish_borsh(&context_path, &*grant.context, self.spec.max_input_bytes)?;
-                    }
+                    let grant = api.palw_kernel_material_ingress_v4(checkpoint, request)?;
+                    exchange.0.ingest_kernel_material_v4(request, &grant)?;
                     ingress = Some(grant);
                 }
                 let grant = ingress.as_ref().ok_or("kernel ingress absent")?;
                 // Own accepted prior funded enrollment. Requiring useful-work
                 // finality here would create a first-work bootstrap cycle.
                 // Reorgs are rechecked below and journal dependent claims.
-                if !retry!("own accepted funded enrollment", api.palw_kernel_material_admission_accepted_v4(request, &grant.enrollment)) {
+                if !api.palw_kernel_material_admission_accepted_v4(request, &grant.enrollment)? {
                     continue;
                 }
                 let PalwMaterialRecoveryActionV2::FundedEnroll { monetary, .. } = &*grant.enrollment else {
@@ -915,7 +878,7 @@ pub(super) async fn drive_paid_source_lock_v6(
     let object = if object_path.exists() {
         let cap = ctx.maximum_input_bytes.min(ctx.maximum_workspace_bytes.saturating_sub(signing_quote) / 4);
         let (raw, _raw) = read_bounded(&object_path, cap)?;
-        let shape = preflight_native_value_v1::<PalwConsensusObjectV2>(&raw[..], raw.len() as u64).map_err(|e| e.to_string())?;
+        let shape = preflight_native_value_v1::<PalwConsensusObjectV2>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
         source_lock_workspace_v6(ctx.maximum_workspace_bytes, signing_quote, raw.len() as u64, shape.logical_requests_v1())?;
         retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwConsensusObjectV2>(&raw)).map_err(|e| e.to_string())?
     } else {

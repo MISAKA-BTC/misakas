@@ -326,7 +326,7 @@ pub(super) fn apply_hard_case_v1(
     builder.write_improvement_case(
         (case.line_id, case.case_id),
         Some(PalwHardCaseRecordV1 { case: case.clone(), submitter: *submitter, admitted_daa: daa, epoch, holdout, revealed: None }),
-    )?;
+    );
     Ok(())
 }
 
@@ -366,7 +366,7 @@ pub(super) fn apply_data_use_opt_in_v1(
             opted_in_daa: daa,
             expires_daa: claim.trace_retention_daa,
         }),
-    )?;
+    );
     Ok(())
 }
 
@@ -400,7 +400,7 @@ pub(super) fn apply_setter_set_committed_v1(
             prompts: None,
             keys: None,
         }),
-    )?;
+    );
     Ok(())
 }
 
@@ -437,7 +437,7 @@ pub(super) fn apply_setter_set_revealed_v1(
         builder.material_ids_in_bound_v1(&header.parent, prompt)?;
     }
     row.prompts = Some(reveal.prompts.clone());
-    builder.write_improvement_setter_set(key, Some(row))?;
+    builder.write_improvement_setter_set(key, Some(row));
     Ok(())
 }
 
@@ -496,7 +496,7 @@ pub(super) fn apply_setter_keys_revealed_v1(
         return Err(refused("a key past the policy's ExactMatch key_cap"));
     }
     row.keys = Some(reveal.keys.clone());
-    builder.write_improvement_setter_set(key, Some(row))?;
+    builder.write_improvement_setter_set(key, Some(row));
     for (item, index) in drawn {
         let exact = &reveal.keys[index as usize];
         if exact.is_empty() {
@@ -566,7 +566,7 @@ pub(super) fn apply_dataset_registered_v1(
             bond: policy.fees.dataset_bond,
             epoch,
         }),
-    )?;
+    );
     Ok(())
 }
 
@@ -600,7 +600,7 @@ pub(super) fn apply_artifact_committed_v1(
             revealed_daa: 0,
             epoch: 0,
         }),
-    )?;
+    );
     Ok(())
 }
 
@@ -651,8 +651,8 @@ pub(super) fn apply_artifact_revealed_v1(
     let governed = builder.state.improvement_governed_at(&artifact.line_id, daa);
     let policy = builder.state.improvement_policies.get(&artifact.line_id).map(|r| r.policy.clone());
     let (true, Some(policy)) = (governed, policy) else {
-        builder.release_improvement_hold_v1(&artifact.line_id, &row.teacher, row.bond, (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_ARTIFACT_V1, key.1.as_bytes()), daa)?;
-        builder.write_improvement_artifact(key, None)?;
+        builder.release_improvement_hold_v1(&artifact.line_id, &row.teacher, row.bond)?;
+        builder.write_improvement_artifact(key, None);
         return Ok(());
     };
     let spam = palw_teaching_artifact_form_v1(artifact).is_err() || !artifact_admissible_v1(builder, &policy, artifact, daa);
@@ -665,7 +665,7 @@ pub(super) fn apply_artifact_revealed_v1(
     };
     if spam || original.as_ref().is_some_and(earlier) {
         builder.forfeit_improvement_hold_v1(&artifact.line_id, row.bond)?;
-        builder.write_improvement_artifact(key, None)?;
+        builder.write_improvement_artifact(key, None);
         return Ok(());
     }
     // Later commitments that revealed this output first are the duplicates now.
@@ -681,7 +681,7 @@ pub(super) fn apply_artifact_revealed_v1(
     for other in later {
         if let Some(dup) = builder.state.improvement_artifact(&artifact.line_id, &other).cloned() {
             builder.forfeit_improvement_hold_v1(&artifact.line_id, dup.bond)?;
-            builder.write_improvement_artifact((artifact.line_id, other), None)?;
+            builder.write_improvement_artifact((artifact.line_id, other), None);
         }
     }
     let placement = builder.note_improvement_material_v1(
@@ -698,7 +698,7 @@ pub(super) fn apply_artifact_revealed_v1(
     };
     row.revealed = Some(artifact.clone());
     row.revealed_daa = daa;
-    builder.write_improvement_artifact(key, Some(row))?;
+    builder.write_improvement_artifact(key, Some(row));
     Ok(())
 }
 
@@ -730,7 +730,7 @@ pub(super) fn apply_teacher_licence_v1(
     builder.write_improvement_licence(
         licence.licence_id,
         Some(PalwTeacherLicenceRecordV1 { licence: licence.clone(), registered_daa: daa }),
-    )?;
+    );
     Ok(())
 }
 
@@ -800,7 +800,7 @@ pub(super) fn apply_candidate_submitted_v1(
     if let Some(reference) = candidate.artifact.composite()
         && builder.state.improvement_composite_class(&candidate.class_id).is_none()
     {
-        builder.write_improvement_composite_class(candidate.class_id, Some(reference))?;
+        builder.write_improvement_composite_class(candidate.class_id, Some(reference));
     }
     Ok(())
 }
@@ -867,14 +867,14 @@ pub(super) fn apply_case_key_revealed_v1(
     }
     row.revealed = Some(reveal.key.clone());
     let (holdout, epoch) = (row.holdout, row.epoch);
-    builder.write_improvement_case(key, Some(row.clone()))?;
+    builder.write_improvement_case(key, Some(row.clone()));
     if !exact {
         return Ok(());
     }
     if holdout {
         for item in drawn {
             palw_improve_exact_match_on_reveal_hook_v1(builder, &reveal.line_id, epoch, item, &reveal.key)?;
-            pay_s1_setter_v1(builder, &reveal.line_id, epoch, item, &row.case, daa)?;
+            pay_s1_setter_v1(builder, &reveal.line_id, epoch, item, &row.case)?;
         }
     }
     pay_s1_bounty_v1(builder, &reveal.line_id, &reveal.case_id, &reveal.key, daa)?;
@@ -903,12 +903,7 @@ fn pay_s1_bounty_v1(
         (row.revealed.as_ref()?.answer_span.as_slice() == key).then_some(row.teacher)
     });
     if let Some(teacher) = winner {
-        let credit = super::palw_improve_fold_v1::PalwImproveCreditV1::S1Bounty {
-            line: *line_id,
-            task: *task,
-            key: super::palw_improve_fold_v1::palw_improve_s1_key_digest_v1(key),
-        };
-        builder.grant_improvement_s1_v1(line_id, &teacher, PalwRewardStageV1::S1Bounty, credit, daa)?;
+        builder.grant_improvement_s1_v1(line_id, &teacher, PalwRewardStageV1::S1Bounty)?;
     }
     Ok(())
 }
@@ -923,7 +918,6 @@ fn pay_s1_setter_v1(
     epoch: u64,
     item: u32,
     case: &PalwHardCaseV1,
-    daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     let PalwCaseSourceV1::Artifact { artifact_id } = case.source else { return Ok(()) };
     let failed = builder
@@ -936,8 +930,7 @@ fn pay_s1_setter_v1(
             .then_some(r.teacher)
     });
     if let (true, Some(teacher)) = (failed, teacher) {
-        let credit = super::palw_improve_fold_v1::PalwImproveCreditV1::S1Setter { line: *line_id, artifact: artifact_id };
-        builder.grant_improvement_s1_v1(line_id, &teacher, PalwRewardStageV1::S1Setter, credit, daa)?;
+        builder.grant_improvement_s1_v1(line_id, &teacher, PalwRewardStageV1::S1Setter)?;
     }
     Ok(())
 }
@@ -1021,7 +1014,7 @@ pub(super) fn palw_improve_material_before_scoring_v1(
     for set_id in forfeiting {
         if let Some(set) = builder.state.improvement_setter_set(line_id, &set_id).cloned() {
             builder.forfeit_improvement_hold_v1(line_id, set.bond)?;
-            builder.write_improvement_setter_set((*line_id, set_id), None)?;
+            builder.write_improvement_setter_set((*line_id, set_id), None);
         }
     }
     Ok(())
@@ -1064,9 +1057,9 @@ pub(super) fn settle_improvement_material_v1(
         if builder.state.improvement_governed_at(&line_id, daa) {
             builder.forfeit_improvement_hold_v1(&line_id, row.bond)?;
         } else {
-            builder.release_improvement_hold_v1(&line_id, &row.teacher, row.bond, (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_ARTIFACT_V1, commit.as_bytes()), daa)?;
+            builder.release_improvement_hold_v1(&line_id, &row.teacher, row.bond)?;
         }
-        builder.write_improvement_artifact((line_id, commit), None)?;
+        builder.write_improvement_artifact((line_id, commit), None);
         budget -= 1;
     }
     while budget > 0 {
@@ -1074,7 +1067,7 @@ pub(super) fn settle_improvement_material_v1(
         if due > daa {
             break;
         }
-        builder.write_improvement_opt_in(pin, None)?;
+        builder.write_improvement_opt_in(pin, None);
         budget -= 1;
     }
     while budget > 0 {
@@ -1082,7 +1075,7 @@ pub(super) fn settle_improvement_material_v1(
         if due > daa {
             break;
         }
-        builder.write_improvement_licence(id, None)?;
+        builder.write_improvement_licence(id, None);
         budget -= 1;
     }
     let lines: Vec<PalwImprovementLineV1> = builder.state.improvement_lines.values().cloned().collect();
@@ -1102,7 +1095,7 @@ pub(super) fn settle_improvement_material_v1(
             .copied()
             .collect();
         for (line_id, _, table, id) in retiring {
-            retire_material_row_v1(builder, &line_id, table, &id, daa)?;
+            retire_material_row_v1(builder, &line_id, table, &id)?;
             budget -= 1;
         }
         if closing && budget > 0 {
@@ -1115,8 +1108,8 @@ pub(super) fn settle_improvement_material_v1(
                 .map(|((_, c), row)| (*c, row.clone()))
                 .collect();
             for (commit, row) in unrevealed {
-                builder.release_improvement_hold_v1(&line.line_id, &row.teacher, row.bond, (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_ARTIFACT_V1, commit.as_bytes()), daa)?;
-                builder.write_improvement_artifact((line.line_id, commit), None)?;
+                builder.release_improvement_hold_v1(&line.line_id, &row.teacher, row.bond)?;
+                builder.write_improvement_artifact((line.line_id, commit), None);
                 budget -= 1;
             }
             let datasets: Vec<(Hash64, PalwDatasetRecordV1)> = builder
@@ -1127,14 +1120,8 @@ pub(super) fn settle_improvement_material_v1(
                 .map(|((_, id), row)| (*id, row.clone()))
                 .collect();
             for (dataset_id, row) in datasets {
-                builder.release_improvement_hold_v1(
-                    &line.line_id,
-                    &row.registrant,
-                    row.bond,
-                    (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_DATASET_V1, dataset_id.as_bytes()),
-                    daa,
-                )?;
-                builder.write_improvement_dataset((line.line_id, dataset_id), None)?;
+                builder.release_improvement_hold_v1(&line.line_id, &row.registrant, row.bond)?;
+                builder.write_improvement_dataset((line.line_id, dataset_id), None);
                 budget -= 1;
             }
         }
@@ -1149,27 +1136,20 @@ fn retire_material_row_v1(
     line_id: &Hash64,
     table: u8,
     id: &Hash64,
-    daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     match table {
-        MATERIAL_CASE => builder.write_improvement_case((*line_id, *id), None)?,
+        MATERIAL_CASE => builder.write_improvement_case((*line_id, *id), None),
         MATERIAL_SETTER_SET => {
             if let Some(set) = builder.state.improvement_setter_set(line_id, id).cloned() {
-                builder.release_improvement_hold_v1(
-                    line_id,
-                    &set.setter,
-                    set.bond,
-                    (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_SETTER_SET_V1, id.as_bytes()),
-                    daa,
-                )?;
+                builder.release_improvement_hold_v1(line_id, &set.setter, set.bond)?;
             }
-            builder.write_improvement_setter_set((*line_id, *id), None)?;
+            builder.write_improvement_setter_set((*line_id, *id), None);
         }
         MATERIAL_ARTIFACT => {
             if let Some(row) = builder.state.improvement_artifact(line_id, id).cloned() {
-                builder.release_improvement_hold_v1(line_id, &row.teacher, row.bond, (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_ARTIFACT_V1, id.as_bytes()), daa)?;
+                builder.release_improvement_hold_v1(line_id, &row.teacher, row.bond)?;
             }
-            builder.write_improvement_artifact((*line_id, *id), None)?;
+            builder.write_improvement_artifact((*line_id, *id), None);
         }
         _ => unreachable!("the retirement index names only the three tables"),
     }
@@ -1192,16 +1172,13 @@ pub(super) fn composite_openings_admitted_v1(
 
 impl TransitionBuilder<'_> {
     /// **The one writer of `improvement_cases`**, journaled `ImprovementCase` (93).
-    pub(crate) fn write_improvement_case(&mut self, key: (Hash64, Hash64), new: Option<PalwHardCaseRecordV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.improvement_cases, false, "native improvement_cases writer")?;
-        self.reserve_boxes_v1::<PalwHardCaseRecordV1>(u64::from(self.state.improvement_cases.contains_key(&key)) + u64::from(new.is_some()), "native improvement_cases journal boxes")?;
-        self.reserve_index_members_v1::<(Hash64, u64, u8, Hash64), ()>(u64::from(new.is_some()), "native improvement_material_epochs index")?;
+    pub(crate) fn write_improvement_case(&mut self, key: (Hash64, Hash64), new: Option<PalwHardCaseRecordV1>) {
         let old = match new.clone() {
             Some(row) => self.state.improvement_cases.insert(key, row),
             None => self.state.improvement_cases.remove(&key),
         };
         if old == new {
-            return Ok(());
+            return;
         }
         if let Some(old) = &old {
             self.state.improvement_material_epochs.remove(&material_epoch_of_case_v1(&key, old));
@@ -1210,20 +1187,16 @@ impl TransitionBuilder<'_> {
             self.state.improvement_material_epochs.insert(material_epoch_of_case_v1(&key, new));
         }
         self.entries.push(PalwDeltaEntryV2::ImprovementCase { key, old: old.map(Box::new), new: new.map(Box::new) });
-        Ok(())
     }
 
     /// **The one writer of `improvement_opt_ins`**, journaled `ImprovementOptIn` (94).
-    pub(crate) fn write_improvement_opt_in(&mut self, key: Hash64, new: Option<PalwDataUseOptInRecordV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.improvement_opt_ins, false, "native improvement_opt_ins writer")?;
-        self.reserve_boxes_v1::<PalwDataUseOptInRecordV1>(u64::from(self.state.improvement_opt_ins.contains_key(&key)) + u64::from(new.is_some()), "native improvement_opt_ins journal boxes")?;
-        self.reserve_index_members_v1::<(u64, Hash64), ()>(u64::from(new.is_some()), "native improvement_opt_in_expiries index")?;
+    pub(crate) fn write_improvement_opt_in(&mut self, key: Hash64, new: Option<PalwDataUseOptInRecordV1>) {
         let old = match new.clone() {
             Some(row) => self.state.improvement_opt_ins.insert(key, row),
             None => self.state.improvement_opt_ins.remove(&key),
         };
         if old == new {
-            return Ok(());
+            return;
         }
         if let Some(old) = &old {
             self.state.improvement_opt_in_expiries.remove(&(old.expires_daa, key));
@@ -1232,20 +1205,16 @@ impl TransitionBuilder<'_> {
             self.state.improvement_opt_in_expiries.insert((new.expires_daa, key));
         }
         self.entries.push(PalwDeltaEntryV2::ImprovementOptIn { key, old: old.map(Box::new), new: new.map(Box::new) });
-        Ok(())
     }
 
     /// **The one writer of `improvement_setter_sets`**, journaled `ImprovementSetterSet` (95).
-    pub(crate) fn write_improvement_setter_set(&mut self, key: (Hash64, Hash64), new: Option<PalwSetterSetRecordV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.improvement_setter_sets, false, "native improvement_setter_sets writer")?;
-        self.reserve_boxes_v1::<PalwSetterSetRecordV1>(u64::from(self.state.improvement_setter_sets.contains_key(&key)) + u64::from(new.is_some()), "native improvement_setter_sets journal boxes")?;
-        self.reserve_index_members_v1::<(Hash64, u64, u8, Hash64), ()>(u64::from(new.is_some()), "native improvement_material_epochs index")?;
+    pub(crate) fn write_improvement_setter_set(&mut self, key: (Hash64, Hash64), new: Option<PalwSetterSetRecordV1>) {
         let old = match new.clone() {
             Some(row) => self.state.improvement_setter_sets.insert(key, row),
             None => self.state.improvement_setter_sets.remove(&key),
         };
         if old == new {
-            return Ok(());
+            return;
         }
         if let Some(old) = &old {
             self.state.improvement_material_epochs.remove(&material_epoch_of_set_v1(&key, old));
@@ -1254,13 +1223,10 @@ impl TransitionBuilder<'_> {
             self.state.improvement_material_epochs.insert(material_epoch_of_set_v1(&key, new));
         }
         self.entries.push(PalwDeltaEntryV2::ImprovementSetterSet { key, old: old.map(Box::new), new: new.map(Box::new) });
-        Ok(())
     }
 
     /// **The one writer of `improvement_datasets`**, journaled `ImprovementDataset` (96).
-    pub(crate) fn write_improvement_dataset(&mut self, key: (Hash64, Hash64), new: Option<PalwDatasetRecordV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.improvement_datasets, false, "native improvement_datasets writer")?;
-        self.reserve_boxes_v1::<PalwDatasetRecordV1>(u64::from(self.state.improvement_datasets.contains_key(&key)) + u64::from(new.is_some()), "native improvement_datasets journal boxes")?;
+    pub(crate) fn write_improvement_dataset(&mut self, key: (Hash64, Hash64), new: Option<PalwDatasetRecordV1>) {
         let old = match new.clone() {
             Some(row) => self.state.improvement_datasets.insert(key, row),
             None => self.state.improvement_datasets.remove(&key),
@@ -1268,23 +1234,17 @@ impl TransitionBuilder<'_> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ImprovementDataset { key, old: old.map(Box::new), new: new.map(Box::new) });
         }
-        Ok(())
     }
 
     /// **The one writer of `improvement_artifacts`**, journaled `ImprovementArtifact` (97). Keeps the
     /// output, answer, deadline and retirement indices in step with the row.
-    pub(crate) fn write_improvement_artifact(&mut self, key: (Hash64, Hash64), new: Option<PalwTeachingArtifactRecordV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.improvement_artifacts, false, "native improvement_artifacts writer")?;
-        self.reserve_boxes_v1::<PalwTeachingArtifactRecordV1>(u64::from(self.state.improvement_artifacts.contains_key(&key)) + u64::from(new.is_some()), "native improvement_artifacts journal boxes")?;
-        self.reserve_index_members_v1::<(Hash64, Hash64, u64, Hash64), ()>(2 * u64::from(new.is_some()), "native improvement artifact output/answer index")?;
-        self.reserve_index_members_v1::<(u64, Hash64, Hash64), ()>(u64::from(new.is_some()), "native improvement_artifact_deadlines index")?;
-        self.reserve_index_members_v1::<(Hash64, u64, u8, Hash64), ()>(u64::from(new.is_some()), "native improvement_material_epochs index")?;
+    pub(crate) fn write_improvement_artifact(&mut self, key: (Hash64, Hash64), new: Option<PalwTeachingArtifactRecordV1>) {
         let old = match new.clone() {
             Some(row) => self.state.improvement_artifacts.insert(key, row),
             None => self.state.improvement_artifacts.remove(&key),
         };
         if old == new {
-            return Ok(());
+            return;
         }
         let s = &mut self.state;
         if let Some(old) = &old {
@@ -1318,20 +1278,16 @@ impl TransitionBuilder<'_> {
             }
         }
         self.entries.push(PalwDeltaEntryV2::ImprovementArtifact { key, old: old.map(Box::new), new: new.map(Box::new) });
-        Ok(())
     }
 
     /// **The one writer of `improvement_licences`**, journaled `ImprovementLicence` (98).
-    pub(crate) fn write_improvement_licence(&mut self, key: Hash64, new: Option<PalwTeacherLicenceRecordV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.improvement_licences, false, "native improvement_licences writer")?;
-        self.reserve_boxes_v1::<PalwTeacherLicenceRecordV1>(u64::from(self.state.improvement_licences.contains_key(&key)) + u64::from(new.is_some()), "native improvement_licences journal boxes")?;
-        self.reserve_index_members_v1::<(u64, Hash64), ()>(u64::from(new.is_some()), "native improvement_licence_expiries index")?;
+    pub(crate) fn write_improvement_licence(&mut self, key: Hash64, new: Option<PalwTeacherLicenceRecordV1>) {
         let old = match new.clone() {
             Some(row) => self.state.improvement_licences.insert(key, row),
             None => self.state.improvement_licences.remove(&key),
         };
         if old == new {
-            return Ok(());
+            return;
         }
         if let Some(old) = &old {
             self.state.improvement_licence_expiries.remove(&(old.licence.expiry_daa, key));
@@ -1340,12 +1296,10 @@ impl TransitionBuilder<'_> {
             self.state.improvement_licence_expiries.insert((new.licence.expiry_daa, key));
         }
         self.entries.push(PalwDeltaEntryV2::ImprovementLicence { key, old: old.map(Box::new), new: new.map(Box::new) });
-        Ok(())
     }
 
     /// **The one writer of `improvement_composite_classes`**, journaled `ImprovementCompositeClass` (99).
-    pub(crate) fn write_improvement_composite_class(&mut self, key: Hash64, new: Option<PalwTirCompositeRefV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.improvement_composite_classes, false, "native improvement_composite_classes writer")?;
+    pub(crate) fn write_improvement_composite_class(&mut self, key: Hash64, new: Option<PalwTirCompositeRefV1>) {
         let old = match new {
             Some(row) => self.state.improvement_composite_classes.insert(key, row),
             None => self.state.improvement_composite_classes.remove(&key),
@@ -1353,7 +1307,6 @@ impl TransitionBuilder<'_> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ImprovementCompositeClass { key, old, new });
         }
-        Ok(())
     }
 }
 
@@ -1974,7 +1927,7 @@ mod tests {
         builder.write_improvement_composite_class(
             h(CAND_B),
             Some(PalwTirCompositeRefV1 { parent_class: h(LINE), parent_root: h(1), adapter_root: h(2), p: 3 }),
-        ).unwrap();
+        );
         let (child, _) = builder.checkpoint();
         let delta = PalwStateDeltaV2 { point: x, entries: builder.entries.clone() };
         let names: BTreeSet<&str> = delta

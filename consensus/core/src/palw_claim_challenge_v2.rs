@@ -76,13 +76,6 @@ pub struct PalwClaimChallengePolicyV2 {
     pub lifetime_review_scope: Digest,
     pub source_independence_evidence: Digest,
     pub economic_evidence: Digest,
-    /// **The bootstrap checker-draw seed** (user decision 2026-10-17; dormant with this fence, `None` in the probe): pinned per
-    /// network in params at genesis or by an annual fork. While NO approved paid Final exists, a non-interactive paid claim's
-    /// lock draws its checkers from `paid_claim_bootstrap_seed_v2(seed, context, statement)` instead of a locked work beacon —
-    /// the beacon cannot start without an approved Final (every event source is one). The draw is predictable; such a claim earns
-    /// no EXEC credit ([`crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1`]'s `credit` reading). The first approved
-    /// paid Final closes the window for every later lock. `None`: locks need the beacon (the behaviour before this field).
-    pub bootstrap_seed: Option<Digest>,
 }
 impl PalwClaimChallengePolicyV2 {
     pub fn id(&self) -> Digest {
@@ -103,7 +96,6 @@ impl PalwClaimChallengePolicyV2 {
             || self.maximum_live_claims > 65_536
             || self.maximum_enrollments_per_job > 1024
             || u64::from(self.maximum_jobs) * u64::from(self.maximum_enrollments_per_job) > 1_000_000
-            || self.bootstrap_seed == Some([0; 64])
         {
             return Err("paid claim policy has unsupported checker or unbounded resource/lifetime limits".into());
         }
@@ -133,7 +125,6 @@ impl PalwClaimChallengeFenceV2 {
                 lifetime_review_scope: [0; 64],
                 source_independence_evidence: [0; 64],
                 economic_evidence: [0; 64],
-                bootstrap_seed: None,
             },
         }
     }
@@ -143,36 +134,7 @@ impl Params {
         if let Some(f) = self.palw_claim_challenge_v2 {
             f.policy.validate().map_err(PalwModeV2Error::InvalidOwned)?;
             if f.activation != ForkActivation::never() {
-                // A public fence carries its review scope and evidence (zero = private mechanics only).
-                if f.policy.lifetime_review_scope == [0; 64]
-                    || f.policy.source_independence_evidence == [0; 64]
-                    || f.policy.economic_evidence == [0; 64]
-                {
-                    return Err(PalwModeV2Error::InvalidOwned(
-                        "palw_claim_challenge_v2 remains dormant: independent full128/source/economic review is not evidenced".into(),
-                    ));
-                }
-                // Checkers fetch every target's material through the signed covenant and its recovery: both armed at or below.
-                let at_or_below = |a: Option<ForkActivation>| {
-                    a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score())
-                };
-                if !at_or_below(self.palw_monetary_material_v1.as_ref().map(|m| m.activation))
-                    || !at_or_below(self.palw_material_release_recovery_v2.as_ref().map(|r| r.activation))
-                {
-                    return Err(PalwModeV2Error::InvalidOwned(
-                        "palw_claim_challenge_v2 requires the monetary material covenant and release recovery V2 at or below it".into(),
-                    ));
-                }
-                // RFC07-5 (user decision 2026-10-15 §8, note §4.1 T6): a drawn checker that approves without checking must lose its
-                // fee and answer for the claim — the paid-claim trap carries that deterrence, so it is in force no later than this
-                // fence. (The trap requires this fence at or below it in turn: the two arm at one height.)
-                if !at_or_below(self.palw_paid_claim_trap_v1) {
-                    return Err(PalwModeV2Error::InvalidOwned(
-                        "palw_claim_challenge_v2 requires palw_paid_claim_trap_v1 (lazy-verifier deterrence, RFC07-5) at or below it".into(),
-                    ));
-                }
-                // Native all-target acceptance and the economics are measured: a pinned record (EMPTY: dormant).
-                self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::ClaimChallengeV2, &f.policy)?;
+                return Err(PalwModeV2Error::InvalidOwned("palw_claim_challenge_v2 remains dormant: independent full128/source/economic review and native all-target acceptance must be evidenced".into()));
             }
         }
         Ok(())
@@ -352,75 +314,21 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         Ok(Some(a))
     }
 
-    /// **The producer-signed absolute lifetime of a paid V2 claim** (RFC-0008 RFC08-2's hard-deadline source): the enrollment the
-    /// base index names, read structurally from the rows the enrollment fold validated when it wrote them — no ledger rebuild.
-    /// `None` for a claim with no paid V2 enrollment (or an index that does not name it exactly).
-    pub fn paid_claim_signed_lifetime_v2(&self, claim: &Digest) -> Option<misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2> {
-        self.paid_claim_authority_for_base_unchecked_v2(claim).map(|a| a.enrollment.lifetime)
-    }
-
-    /// **The paid V2 enrollment authority whose base claim is `claim`**, read structurally from the rows the enrollment fold
-    /// validated when it wrote them (no ledger rebuild): the base index must name exactly this claim and its target must be the
-    /// authority's own context. `None` for a claim with no paid V2 enrollment.
-    pub fn paid_claim_authority_for_base_unchecked_v2(&self, claim: &Digest) -> Option<PalwPaidClaimAuthorityV2> {
-        let key = paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, claim);
-        let index = self.aux_row::<PalwPaidClaimIndexV3>(PAID_CLAIM_ENROLLMENTS_V2, &key)?;
-        if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::BaseClaim || index.owner != *claim {
-            return None;
-        }
-        let a: PalwPaidClaimAuthorityV2 = self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(&index.target).ok()?)?;
-        (a.enrollment.base_claim == *claim && a.context.id() == index.target).then_some(a)
-    }
-
     pub fn paid_claim_check_authority_v2(
         &self,
         context: &Digest,
         now: u64,
     ) -> Result<misaka_palw_kernel::claim_paid_v2::PaidClaimCheckAuthorityV2, String> {
-        if let Ok(a6) = self.paid_claim_authority_checked_v6(context) {
-            if let Some(binding) = self.paid_bootstrap_binding_v6(&a6.enrollment.id()).map_err(|why| why.to_string())? {
-                a6.validate(&*self.ledger_checked_v1().map_err(|why| why.to_string())?)?;
-                if binding.original_context != *context || binding.enrollment != a6.enrollment.id() {
-                    return Err("paid claim context/target mismatch".into());
-                }
-                return self.paid_bootstrap_check_authority_v6(&a6, now).map_err(|why| why.to_string());
+        let a = self.paid_claim_authority_checked_v6(context).map_err(|why| why.to_string())?;
+        a.validate(&*self.ledger_checked_v1().map_err(|why| why.to_string())?)?;
+        if let Some(binding) = self.paid_bootstrap_binding_v6(&a.enrollment.id()).map_err(|why| why.to_string())? {
+            if binding.original_context != *context || binding.enrollment != a.enrollment.id() {
+                return Err("paid claim context/target mismatch".into());
             }
+            return self.paid_bootstrap_check_authority_v6(&a, now).map_err(|why| why.to_string());
         }
-        // A seeded lock needs no funded source target (an unfunded target is what the bootstrap draw locks): read the authority
-        // row and validate it against the ledger without the target check.
-        let raw: Option<PalwPaidClaimAuthorityV2> = self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap());
-        let seeded = raw.as_ref().and_then(|a| {
-            self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
-        });
-        let a = match (&raw, &seeded) {
-            (Some(a), Some(lock))
-                if lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2()
-                    || lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2() =>
-            {
-                a.validate(&*self.ledger()?)?;
-                if a.context.id() != *context {
-                    return Err("paid claim context mismatch".into());
-                }
-                a.clone()
-            }
-            _ => self.paid_claim_authority_v2(context)?,
-        };
-        // A bootstrap lock (user decision 2026-10-17, dormant): the lock row names the bootstrap anchor and holds the draw's seed;
-        // the authority is re-derived from that authenticated row, never from a beacon that cannot exist yet.
-        if let Some(lock) = self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
-            && (lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2()
-                || lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2())
-        {
-            let base = self.ledger()?.claim_challenge_subject(&a.enrollment.base_claim).ok_or("base statement missing")?;
-            return PaidClaimCheckAuthorityV2::verify_bootstrap_v2(
-                &a.class,
-                &a.enrollment,
-                &base,
-                &a.context,
-                now,
-                paid_checker_snapshot_root_v2(&a.checker_candidates),
-                lock.seed,
-            );
+        if self.beacon_source_target_v4(context)? != a.source_target {
+            return Err("paid claim context/target mismatch".into());
         }
         let (contract, sources, promises) = self.paid_beacon_material_v5(context)?.ok_or("paid claim source funding missing")?;
         let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, now)
@@ -441,47 +349,6 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     }
 }
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
-    /// **Whether any approved paid Final exists** — a canonical paid Final row with receipts and a completed round (the rows the
-    /// projection writes only for a Final the assigned quorum approved). The bootstrap window of
-    /// [`PalwClaimChallengePolicyV2::bootstrap_seed`] is open exactly while this is `false`.
-    /// **Whether the v4/v5 opt-in beacons (and the Panel v5 beacon) read their sources by seal-reveal** (user decision 2026-10-18,
-    /// ADR-0185 note): always on a chain route. Those collectors exist only past their own dormant fences
-    /// (`palw_beacon_source_opt_in_v1`, `palw_beacon_source_fee_v1`); since the RFC07 adapter the one source of a Final event is an
-    /// approved paid claim, which is never Final by a target's `final_by`, so the Final-based reading could never lock there.
-    pub fn opt_in_seal_reveal_v6(&self) -> bool {
-        true
-    }
-
-    pub fn paid_claim_approved_final_exists_v2(&self) -> bool {
-        self.aux
-            .range((PAID_CLAIM_FINALS_V2, Vec::new())..(PAID_CLAIM_FINALS_V2 + 1, Vec::new()))
-            .filter_map(|(_, bytes)| borsh::from_slice::<PalwPaidClaimFinalV2>(bytes).ok())
-            .any(|row| row.complete_receipts > 0 && row.completed_rounds > 0)
-    }
-
-    /// Whether `claim`'s paid lock was a bootstrap lock (its draw predictable): such a claim's Final may seed the beacon but earns
-    /// no EXEC credit.
-    /// Read structurally, as `palw_exec_v2_selected_approval_v1` reads the same rows: the base index, the authority's leading
-    /// enrollment, that enrollment's lock row.
-    pub fn paid_claim_bootstrap_locked_v2(&self, claim: &Digest) -> bool {
-        use borsh::BorshDeserialize;
-        let Some(raw) = self.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, claim))) else {
-            return false;
-        };
-        let Ok(index) = borsh::from_slice::<PalwPaidClaimIndexV3>(raw) else { return false };
-        if index.kind != PalwPaidClaimIndexKindV3::BaseClaim || index.owner != *claim {
-            return false;
-        }
-        let Some(raw_authority) = self.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, index.target.to_vec())) else { return false };
-        let mut reader = raw_authority.as_slice();
-        let Ok(2u16) = u16::deserialize(&mut reader) else { return false };
-        let Ok(enrollment) = misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2::deserialize(&mut reader) else {
-            return false;
-        };
-        self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&enrollment.id()).unwrap())
-            .is_some_and(|lock| lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2())
-    }
-
     /// Used by both native fold loads and fresh SDK/root readers. Consumer state
     /// cannot be omitted from a cold restart merely because V1 rows still decode.
     pub fn apply_paid_claim_consumer_inputs_v2(&self, ledger: &mut misaka_palw_kernel::ledger::KernelLedgerV1) -> Result<(), String> {
@@ -718,9 +585,23 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PAID_CLAIM_CLASSES_V2 => {
                     let c: PaidClaimClassV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     c.validate().map_err(&refuse)?;
-                    // PRINCIPLES §8: the fold refuses a V4 compact plan, so a carried class naming one is inconsistent.
-                    if c.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
-                        return Err(refuse(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into()));
+                    if let Some(plan) = c.interactive_plan.as_ref().filter(|p| p.version == 4) {
+                        route
+                            .paid_compact_contract_v4(&plan.id())
+                            .map_err(&refuse)?
+                            .registration
+                            .validate_for_class(&c, &l)
+                            .map_err(&refuse)?;
+                        let compact =
+                            params.claim_compact_v4_at(now).ok_or_else(|| refuse("compact class without active own fence".into()))?;
+                        if compact.require_independent_review {
+                            misaka_palw_challenge::approved_v2(
+                                &misaka_palw_challenge::shipped_registry_v2(),
+                                &plan.compiler,
+                                &c.source_policy,
+                            )
+                            .map_err(|e| refuse(e.to_string()))?;
+                        }
                     }
                     let target = if let Some(base) = l.classes.get(&c.base_class) {
                         if crate::palw_claim_challenge_v2::is_segmented_descriptor_v3(&base.descriptor.digest()) {

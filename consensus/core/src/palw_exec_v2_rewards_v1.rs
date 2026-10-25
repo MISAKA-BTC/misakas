@@ -253,7 +253,7 @@ pub(super) fn bond_unmatured(
 }
 
 /// Tier-freeze only still-unmatured executor funds. Other executors on this root keep their own clocks.
-pub(super) fn freeze_bond(builder: &mut TransitionBuilder<'_>, bond: PalwBondKeyV2, daa: u64, lift: u64) -> Result<(), PalwStateV2Error> {
+pub(super) fn freeze_bond(builder: &mut TransitionBuilder<'_>, bond: PalwBondKeyV2, daa: u64, lift: u64) {
     let raw = palw_settled_anchor_depth_v1(builder.extras);
     let roots: Vec<_> = builder.state.exec_v2_reward_payees.get(&bond).into_iter().flatten().copied().collect();
     for root in roots {
@@ -261,10 +261,9 @@ pub(super) fn freeze_bond(builder: &mut TransitionBuilder<'_>, bond: PalwBondKey
         let after =
             row.liability_until.saturating_add(1).max(builder.state.exec_v2_reward_holds.get(&(root, bond)).copied().unwrap_or(0));
         if lift > after && actor_unmatured(&builder.state, builder.params, &root, &bond, daa, raw) {
-            builder.write_exec_reward_hold((root, bond), Some(lift))?;
+            builder.write_exec_reward_hold((root, bond), Some(lift));
         }
     }
-    Ok(())
 }
 
 fn burn_actor(
@@ -280,7 +279,7 @@ fn burn_actor(
         .as_ref()
         .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, &bond, 0)))
         .is_some();
-    builder.cancel_native_recipient_v1(root, bond, if issuer { 0 } else { 2 })?;
+    builder.cancel_native_recipient_v1(root, bond, if issuer { 0 } else { 2 });
     let own: Vec<_> = row.legs.iter().filter(|((payee, _), _)| *payee == bond).map(|(who, leg)| (*who, *leg)).collect();
     let mut taken = 0u64;
     let mut c = builder.state.vesting_counters;
@@ -294,7 +293,7 @@ fn burn_actor(
             fund: who.1,
             action,
             payout,
-        })?;
+        });
     }
     // During Final the kernel fee is credited before the native row exists. Preserve the allocation receipt
     // so a forfeited fee cannot erase the later slice/native accounting in this same atomic settlement.
@@ -302,8 +301,8 @@ fn burn_actor(
     builder.write_exec_reward(
         root,
         if row.legs.is_empty() && !builder.state.vesting.contains_key(&root) && !final_in_progress { None } else { Some(row) },
-    )?;
-    builder.write_vesting_counters(c)?;
+    );
+    builder.write_vesting_counters(c);
     Ok(taken)
 }
 
@@ -327,7 +326,7 @@ pub(super) fn start(builder: &mut TransitionBuilder<'_>, root: Hash64, allocatio
     builder.write_exec_reward(
         root,
         Some(Row { final_daa: daa, liability_until: until, allocation_sompi: allocation, legs: BTreeMap::new() }),
-    )?;
+    );
     Ok(())
 }
 
@@ -356,17 +355,17 @@ pub(super) fn add(
     if row.total_sompi_u128() > u128::from(row.allocation_sompi) {
         return Err(PalwStateV2Error::ExecV2Refused("EXEC vesting exceeds its allocation".into()));
     }
-    builder.write_exec_reward(root, Some(row))?;
+    builder.write_exec_reward(root, Some(row));
     let mut c = builder.state.vesting_counters;
     c.created = c.created.checked_add(u128::from(amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting created"))?;
-    builder.write_vesting_counters(c)?;
+    builder.write_vesting_counters(c);
     builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecReward {
         claim_id: root,
         bond,
         fund,
         action: Action::Created,
         payout: PalwPayoutV2 { payload, amount },
-    })?;
+    });
     if let Some(freeze) = builder.state.bond_freezes.get(&bond).copied() {
         if freeze.final_ {
             let taken = burn_actor(builder, root, bond, Action::Forfeited { offence_id: freeze.offence_key })?;
@@ -376,19 +375,18 @@ pub(super) fn add(
                     forfeited_sompi: freeze.forfeited_sompi.saturating_add(taken),
                     ..freeze
                 }),
-            )?;
+            );
         } else if let Some(lift) = freeze.lifts_at_v1(builder.params.window_court()) {
-            freeze_bond(builder, bond, builder.state.exec_v2_rewards[&root].final_daa, lift)?;
+            freeze_bond(builder, bond, builder.state.exec_v2_rewards[&root].final_daa, lift);
         }
     }
     Ok(())
 }
 
-pub(super) fn finish(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<(), PalwStateV2Error> {
+pub(super) fn finish(builder: &mut TransitionBuilder<'_>, root: Hash64) {
     if builder.state.exec_v2_rewards.get(&root).is_some_and(|row| row.legs.is_empty()) && !builder.state.vesting.contains_key(&root) {
-        builder.write_exec_reward(root, None)?;
+        builder.write_exec_reward(root, None);
     }
-    Ok(())
 }
 
 pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<(), PalwStateV2Error> {
@@ -400,14 +398,14 @@ pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<
             .as_ref()
             .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, bond, 0)))
             .is_some();
-        builder.cancel_native_recipient_v1(root, *bond, if issuer { 0 } else { 2 })?;
+        builder.cancel_native_recipient_v1(root, *bond, if issuer { 0 } else { 2 });
     }
 
     let mut c = builder.state.vesting_counters;
     c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC vesting burned"))?;
     let retained = if builder.state.vesting.contains_key(&root) { Some(Row { legs: BTreeMap::new(), ..row.clone() }) } else { None };
-    builder.write_exec_reward(root, retained)?;
-    builder.write_vesting_counters(c)?;
+    builder.write_exec_reward(root, retained);
+    builder.write_vesting_counters(c);
     for ((bond, fund), payout) in row.legs {
         builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecReward {
             claim_id: root,
@@ -415,7 +413,7 @@ pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<
             fund,
             action: Action::Burned,
             payout,
-        })?;
+        });
     }
     Ok(())
 }
@@ -476,54 +474,12 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
         .map(|(id, _)| *id)
         .collect();
     for id in empty {
-        builder.write_exec_reward(id, None)?;
+        builder.write_exec_reward(id, None);
     }
     for (root, who, leg) in release_plan(&builder.state, daa, false).0 {
-        // RFC-0008 once-only settlement (dormant): one root leg `(root, bond, fund)` is paid once across every consumer. A leg
-        // another consumer already settled is retired from the row without moving value again.
-        let pays = {
-            use crate::palw_settlement_once_v1::{
-                PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
-            };
-            let fund = match who.1 {
-                Fund::NativeSlice => 0,
-                Fund::KernelFee => 1,
-            };
-            // RFC08-2: a leg held in the root's reward row past the row's own liability horizon — no new R draw.
-            let horizon = builder.state.exec_v2_rewards.get(&root).map(|row| row.liability_until);
-            let final_daa = builder.state.claims.get(&root).and_then(|c| match c.phase {
-                PalwClaimPhaseV2::Final { final_daa } => Some(final_daa),
-                _ => None,
-            });
-            builder
-                .settle_once_liable_v1(
-                    daa,
-                    PalwSettlementObligationV1::with_party(
-                        PalwSettlementLegV1::ExecLegPayment,
-                        root.as_bytes(),
-                        crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&who.0),
-                        fund,
-                    ),
-                    PalwSettlementConsumerV1::ExecLegMaturity,
-                    leg.amount,
-                    PalwSettlementDebitV1::Held { amount: leg.amount },
-                    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::V2Claim {
-                        claim: root,
-                        final_daa,
-                        horizon,
-                        draw: 0,
-                        paid_now: leg.amount,
-                        exported_before: None,
-                        vest_until: None,
-                    },
-                )?
-                .pays()
-        };
-        if pays {
-            match who.1 {
-                Fund::NativeSlice => builder.add_panel_payout(leg.payload, leg.amount)?,
-                Fund::KernelFee => builder.add_kernel_payout(leg.payload, leg.amount)?,
-            }
+        match who.1 {
+            Fund::NativeSlice => builder.add_panel_payout(leg.payload, leg.amount)?,
+            Fund::KernelFee => builder.add_kernel_payout(leg.payload, leg.amount)?,
         }
         let mut row = builder.state.exec_v2_rewards[&root].clone();
         row.legs.remove(&who);
@@ -535,31 +491,26 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
                 .as_ref()
                 .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, &who.0, 0)))
                 .is_some();
-        if pays {
-            builder.pay_native_recipient_v1(
-                root,
-                who.0,
-                if issuer { 0 } else { 2 },
-                daa,
-                leg.amount,
-                key(who.1, &leg.payload),
-                finished,
-            )?;
-        }
-        builder.write_exec_reward(root, if row.legs.is_empty() { None } else { Some(row) })?;
-        if !pays {
-            continue;
-        }
+        builder.pay_native_recipient_v1(
+            root,
+            who.0,
+            if issuer { 0 } else { 2 },
+            daa,
+            leg.amount,
+            key(who.1, &leg.payload),
+            finished,
+        )?;
+        builder.write_exec_reward(root, if row.legs.is_empty() { None } else { Some(row) });
         let mut c = builder.state.vesting_counters;
         c.moved = c.moved.checked_add(u128::from(leg.amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting moved"))?;
-        builder.write_vesting_counters(c)?;
+        builder.write_vesting_counters(c);
         builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecReward {
             claim_id: root,
             bond: who.0,
             fund: who.1,
             action: Action::Moved,
             payout: leg,
-        })?;
+        });
     }
     Ok(())
 }
@@ -577,22 +528,22 @@ pub(super) fn invalidate_final(
         return Ok(());
     }
     builder.reverse_convicted_final(ctx, root, reason)?;
-    builder.forfeit_minted_round_rights_of_claim(&root)?;
+    builder.forfeit_minted_round_rights_of_claim(&root);
     if let Some(row) = builder.state.vesting.get(&root).cloned() {
         for (bond, _) in &row.seats {
-            builder.cancel_native_recipient_v1(root, *bond, 1)?;
+            builder.cancel_native_recipient_v1(root, *bond, 1);
         }
-        builder.cancel_native_recipient_v1(root, row.producer_bond, 0)?;
+        builder.cancel_native_recipient_v1(root, row.producer_bond, 0);
         let mut c = builder.state.vesting_counters;
         c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC native vesting burned"))?;
         builder.write_vesting(root, None)?;
-        builder.write_vesting_counters(c)?;
+        builder.write_vesting_counters(c);
         builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecDependencyBurned {
             claim_id: root,
             kernel_claim_id: dependency,
             sompi: row.total_sompi(),
             legs: row.legs().collect(),
-        })?;
+        });
     }
     burn(builder, root)?;
     builder.mark_liability_convicted(root, ctx.daa_score, reason)?;
@@ -699,110 +650,4 @@ pub(super) fn consistent(state: &PalwChainStateV2, params: &PalwStateParamsV2) -
         }
     }
     Ok(())
-}
-
-// =================================================================================================================================
-// G14 r6 (item 2): the EXEC and provider dependency horizons the clock-v2 dispute extension must not outrun (RFC-0026 §3.3 F07)
-// =================================================================================================================================
-
-/// A kernel claim's stored row, or a typed refusal (a dependency that is named but missing is never zero-filled).
-fn kernel_dependency_row_v2(
-    kernel: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
-    claim: &Hash64,
-) -> Result<misaka_palw_kernel::ledger::ClaimRowV1, PalwStateV2Error> {
-    kernel
-        .rows
-        .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, borsh::to_vec(&claim.as_bytes()).expect("a digest serializes")))
-        .and_then(|bytes| borsh::from_slice(bytes).ok())
-        .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("clock v2: an EXEC dependency's kernel claim row is missing".into()))
-}
-
-/// **The provider quorum horizon of a transferred kernel claim**: the last DAA through which at least
-/// [`crate::palw_provider_court_v1::PALW_PROVIDER_MIN_PROVIDERS_V1`] distinct non-producer operators still serve it, from the leases
-/// live at `now` (each operator counted at its longest lease). `None`: the claim's DA was never transferred to leases (no provider
-/// dependency). `Some(0)`: transferred but lapsed, or fewer live operators than the quorum — a dependency that covers nothing.
-pub(super) fn provider_quorum_horizon_v2(
-    state: &PalwChainStateV2,
-    claim: &Hash64,
-    producer_operator: Option<Hash64>,
-    now: u64,
-) -> Option<u64> {
-    use crate::palw_provider_court_v1::{PALW_PROVIDER_MIN_PROVIDERS_V1, ProviderSubjectV1};
-    let route = state.kernel_route.as_ref()?;
-    let subject = ProviderSubjectV1::KernelClaim { claim: *claim };
-    let transfer = route.provider_subject_v1(&subject).filter(|t| t.transferred_daa.is_some())?;
-    if transfer.lapsed_daa.is_some() {
-        return Some(0);
-    }
-    let mut per_operator: BTreeMap<Hash64, u64> = BTreeMap::new();
-    for (provider, row) in route.provider_leases_of_v1(&subject) {
-        if !row.live_at(now) {
-            continue;
-        }
-        let Some(operator) = state.bond(&provider).map(|b| b.operator_id) else { continue };
-        if Some(operator) == producer_operator {
-            continue;
-        }
-        let until = per_operator.entry(operator).or_insert(0);
-        *until = (*until).max(row.serve_until_daa);
-    }
-    Some(crate::palw_court_clock_v2::palw_provider_quorum_horizon_of_v2(per_operator.into_values(), PALW_PROVIDER_MIN_PROVIDERS_V1))
-}
-
-/// **Every EXEC and provider dependency of `claim_id`, with its signed horizon** — what the clock-v2 dispute extension
-/// (`palw_dispute_record_hard_deadline_v2`) must see covered, beside the claim's own trace and its staged custody:
-///
-/// * `Exec`: when `claim_id` is an EXEC root — the root's signed liability floor (`expiry + window_court`, or the kernel policy's
-///   floor), and EACH kernel claim it rests on (its prefix claim and every slice's evidence root) at its own `liability_until`
-///   (F07 is per dependency: one longer-lived dependency never supplies another's material). A retired root's unpaid receipt carries
-///   its `liability_until`. A named kernel claim whose row or horizon is missing is a typed refusal.
-/// * `Provider`: for each of those kernel claims, and for `claim_id` itself as a kernel subject, whose DA moved to leases (tag 153) —
-///   the provider quorum horizon ([`provider_quorum_horizon_v2`]), excluding the producer's own operator.
-///
-/// Nothing here writes; the caller refuses the extension atomically on the first short horizon.
-pub(super) fn court_clock_v2_exec_provider_dependencies_v2(
-    state: &PalwChainStateV2,
-    params: &PalwStateParamsV2,
-    claim_id: &Hash64,
-    now: u64,
-) -> Result<Vec<crate::palw_court_clock_v2::PalwCourtDependencyV2>, PalwStateV2Error> {
-    use crate::palw_court_clock_v2::{PalwCourtDependencyKindV2 as Kind, PalwCourtDependencyV2 as Dep};
-    let mut out = Vec::new();
-    let mut kernel_claims: Vec<Hash64> = vec![*claim_id];
-    if let Some(root) = state.exec_v2.roots.get(claim_id) {
-        let floor = match &state.kernel_route {
-            Some(kernel) => {
-                super::palw_kernel_route_fold_v1::exec_liability_floor_v1(root.expiry_daa, params.window_court(), &kernel.header.policy)?
-            }
-            None => root.expiry_daa.checked_add(params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC dependency horizon"))?,
-        };
-        out.push(Dep { kind: Kind::Exec, signed_horizon_daa: floor });
-        if let Some(kernel) = &state.kernel_route {
-            let claims = std::iter::once(root.prefix_claim)
-                .chain(state.exec_v2.slices.range((*claim_id, 0)..=(*claim_id, u32::MAX)).map(|(_, row)| row.evidence_root));
-            for claim in claims {
-                let row = kernel_dependency_row_v2(kernel, &claim)?;
-                let until = row.liability_until.ok_or_else(|| {
-                    PalwStateV2Error::CarriageInconsistent("clock v2: an EXEC dependency has no liability horizon".into())
-                })?;
-                out.push(Dep { kind: Kind::Exec, signed_horizon_daa: until });
-                kernel_claims.push(claim);
-            }
-        }
-    } else if let Some(receipt) = state.exec_v2_rewards.get(claim_id) {
-        out.push(Dep { kind: Kind::Exec, signed_horizon_daa: receipt.liability_until });
-    }
-    if let Some(kernel) = &state.kernel_route {
-        for claim in kernel_claims {
-            // The producer's own operator never counts toward the quorum (as `require_exec_provider_horizon_v1`).
-            let producer_operator = kernel
-                .kernel_claim_row_v1(&claim)
-                .and_then(|row| kernel.bond_key_of(&row.producer))
-                .and_then(|bond| state.bond(&bond).map(|b| b.operator_id));
-            if let Some(until) = provider_quorum_horizon_v2(state, &claim, producer_operator, now) {
-                out.push(Dep { kind: Kind::Provider, signed_horizon_daa: until });
-            }
-        }
-    }
-    Ok(out)
 }

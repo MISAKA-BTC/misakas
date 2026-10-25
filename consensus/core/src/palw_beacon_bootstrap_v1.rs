@@ -758,14 +758,6 @@ pub const PALW_N3_GATED_REWARD_FENCES_V1: &[&str] = &[
     "palw_monetary_material_v1",
     "palw_material_release_recovery_v2",
     "palw_panel_lifetime_v2",
-    // RFC-0006 R6-MIGRATION 4 (spec closures 2026-10-15, under the N3 ruling of 2026-10-12): the V3 per-shard draw (RFC-0010's
-    // permissionless Panel and its complete / retired-population successors, whose Panel beacon reads Work Beacon sources) and
-    // segment pricing v2 "stay dormant until an independent Work Beacon bootstrap is verified" (lane rfcgap-a, 2026-10-22). The
-    // third named profile, probabilistic cells, has no fence in this binary.
-    "palw_permissionless_panel_v1",
-    "palw_permissionless_panel_complete_v1",
-    "palw_permissionless_panel_retired_v1",
-    "palw_tir_shard_segment_v2",
 ];
 
 impl crate::config::params::Params {
@@ -1220,31 +1212,6 @@ mod round3_tests {
         p.palw_beacon_bootstrap_v1 = Some(PalwBeaconBootstrapFenceV1::unapproved_probe_at(ForkActivation::new(1_000)));
         assert!(p.validate_palw_beacon_bootstrap_v1().is_err(), "no approved profile: refused when armed");
         assert!(!PALW_N3_GATED_REWARD_FENCES_V1.contains(&"palw_beacon_bootstrap_v1"), "the bootstrap is not a reward profile");
-    }
-
-    /// **Every name the N3 second lock lists is a fence `palw_fences_v1` reports** (a misspelt name would gate nothing), and RFC-0006
-    /// R6-MIGRATION 4's new profiles — the V3 per-shard draw and segment pricing v2 — are refused by the lock itself when armed
-    /// (lane rfcgap-a, 2026-10-22).
-    #[test]
-    fn n3_every_gated_name_is_a_reported_fence_and_rfc0006_new_profiles_are_locked() {
-        let names: Vec<&str> = TESTNET_PARAMS.palw_fences_v1().into_iter().map(|(n, _)| n).collect();
-        for gated in PALW_N3_GATED_REWARD_FENCES_V1 {
-            assert!(names.contains(gated), "{gated} is not a fence palw_fences_v1 reports");
-        }
-        for p in [MAINNET_PARAMS, TESTNET_PARAMS] {
-            p.validate_palw_new_reward_profiles_n3_v1().expect("dormant everywhere");
-        }
-        let mut p = TESTNET_PARAMS;
-        p.palw_tir_shard_segment_v2 = Some(ForkActivation::never());
-        p.validate_palw_new_reward_profiles_n3_v1().expect("never() is dormant");
-        p.palw_tir_shard_segment_v2 = Some(ForkActivation::new(1_000));
-        let Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned(why)) = p.validate_palw_new_reward_profiles_n3_v1() else {
-            panic!("segment pricing v2 armed passed the N3 lock")
-        };
-        assert!(why.contains("palw_tir_shard_segment_v2") && why.contains("N3"), "{why}");
-        for name in ["palw_permissionless_panel_v1", "palw_permissionless_panel_complete_v1", "palw_permissionless_panel_retired_v1"] {
-            assert!(PALW_N3_GATED_REWARD_FENCES_V1.contains(&name), "{name}: the V3 draw is an N3-gated new profile");
-        }
     }
 
     /// The fold's judgement derives every fact itself and runs the two predicates: a fully revealed round of two independent

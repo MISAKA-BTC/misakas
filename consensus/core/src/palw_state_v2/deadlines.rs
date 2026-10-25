@@ -3,41 +3,11 @@
 use super::*;
 
 pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    // audit B-04/B-05 (fix-b): a session on a service-bound claim is ended here like any other (no held-skip cursor any more), and
-    // its archive records the sweep as its cause. The cause is per session: restored before every iteration and after the sweep.
-    let outer_cause = builder.court_end_evidence.clone();
-    let result = sweep_court_deadlines_inner(builder, ctx, &outer_cause);
-    builder.court_end_evidence = outer_cause;
-    result
-}
-
-fn sweep_court_deadlines_inner(
-    builder: &mut TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    outer_cause: &Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::CourtEndEvidenceV1>>,
-) -> Result<(), PalwStateV2Error> {
-    loop {
-        builder.court_end_evidence = outer_cause.clone();
-        let next = builder.state.court_deadlines.iter().next().copied();
-        let Some((deadline, session_id)) = next else { break };
-
+    while let Some(&(deadline, session_id)) = builder.state.court_deadlines.iter().next() {
         if deadline >= ctx.daa_score {
             break;
         }
-        let record = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?;
-        // **audit B-04 (fix-b): a session on a service-bound claim ends at its own per-turn deadline / backstop too.** It used to be
-        // skipped at every height ("no semantic rung, phase, assembly or backstop default is authorized yet"), so one silent accuser
-        // held a network court slot, the claim's binding and the liable signers' collateral forever. It now takes the existing silence
-        // outcome with one F02 restriction: quota and elapsed time do not establish a delivered opportunity for the RESPONDER (a
-        // ladder turn has no F02 duty clock, so no adopted attribution exists for it), so every arm that would charge the responder
-        // (a rung no-show, a failed executor close declaration) is a NO-FAULT close on a bound claim — never a default. A silent or
-        // unsupported CHALLENGER keeps the challenger-side close (prosecution is its burden; F02 reserves no service for accusers).
-        // The archive records the sweep as the ending's cause (B-05), so the release and pruning can follow.
-        let mut session = record.clone();
-        let held = builder.state.claims.contains_key(&session.claim) && builder.state.court_service_holds_claim_v1(&session.claim);
-        if held {
-            builder.prepare_sweep_court_end_cause_v1(ctx)?;
-        }
+        let mut session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
         // **A missing claim drops the session; it does not fail the block.** `retire_claim` closes
         // a claim's sessions with it, so this should be unreachable — and it is written to be
         // survivable anyway, because the alternative failure mode is a chain that stops forever on
@@ -202,7 +172,7 @@ fn sweep_court_deadlines_inner(
                     // that cannot make it does not underwrite — `supports_dissection` is held-aware).
                     crate::palw_bisect::PalwBisectPartyV1::Responder
                         if !(owes_the_dissection_opening
-                            && palw_held_claim_is_answerable_v2(&builder.state, builder.params, builder.extras, &claim))
+                            && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id))
                             && ((no_phase && session.ladder.round() == 0 && !class_holds_weight)
                                 || (builder.extras.court_responder_coverage_active
                                     && owes_the_dissection_opening
@@ -213,7 +183,7 @@ fn sweep_court_deadlines_inner(
                                     // class can (C1, `court_root_evidence_is_buildable_v2`).
                                     && !(builder.extras.audit_2026_09_11_deep_active
                                         && builder.state.court_root_evidence_is_buildable_v2(
-                                            &claim,
+                                            &claim.class_id,
                                             builder.extras.offence_attribution_active,
                                             builder.params,
                                         )))) =>
@@ -222,11 +192,6 @@ fn sweep_court_deadlines_inner(
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
                         // challenger-side close made the accuser pay for the accused's silence,
                         // which on a class with no responder is a certainty rather than a risk.
-                        rearm_after_unanswered_opening(builder, ctx, session.claim, &claim)?;
-                    }
-                    // audit B-04 (fix-b): on a service-bound claim a responder's rung silence has no adopted F02 attribution — a
-                    // no-fault close (nobody convicted, nobody fined), the claim re-armed.
-                    crate::palw_bisect::PalwBisectPartyV1::Responder if held => {
                         rearm_after_unanswered_opening(builder, ctx, session.claim, &claim)?;
                     }
                     crate::palw_bisect::PalwBisectPartyV1::Responder => {
@@ -301,18 +266,6 @@ fn sweep_court_deadlines_inner(
         // **W10: the assembly reserve is collected, and the direction is W5's.** One spelling with
         // the completing-chunk path, so the two cannot disagree about which bond a failed
         // declaration costs — see [`convict_close_declarer_v1`].
-        // audit B-04 (fix-b): on a service-bound claim an INCOMPLETE assembly is never an assembly-timeout default
-        // (`convict_close_declarer_v1` refuses it there): the session ends and archives its groups; a failed challenger declaration
-        // keeps the challenger-side close, a failed executor declaration is a no-fault close.
-        if held && let Some(side) = failed_declarer_side {
-            builder.write_court(session_id, None)?;
-            match side {
-                PalwCourtSideV1::Challenger => rearm_after_challenger_side_close(
-                    builder, ctx, session.claim, &claim, session.challenger_bond, session.opened_daa)?,
-                PalwCourtSideV1::Executor => rearm_after_unanswered_opening(builder, ctx, session.claim, &claim)?,
-            }
-            continue;
-        }
         if let Some(side) = failed_declarer_side {
             convict_close_declarer_v1(builder, ctx, session_id, side)?;
             continue;
@@ -338,8 +291,6 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
         if !claim.phase.is_terminal() && builder.state.palw_v2_expiry_held_v1(builder.params, &claim_id, &claim) {
             continue;
         }
-        // G14 lane r6-d1-release (D1): only a terminal bound claim's retirement is held (DL-1 arms nothing else away).
-        if builder.state.court_service_holds_retirement_v1(&claim_id, &claim) { continue; }
         match claim.phase {
             PalwClaimPhaseV2::Provisional => {
                 let reason = builder.bind_timeout_reason(&claim, ctx);
@@ -373,7 +324,7 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                 if claim.rebound_daa.is_none() {
                     // ADR-0124 Decision 3: the first panel's seats leave duty with their exposure
                     // — the redraw deals different seats, who go on duty when it binds.
-                    builder.cancel_panel_recipients_v1(claim_id)?;
+                    builder.cancel_panel_recipients_v1(claim_id);
                     builder.release_seat_duties(&claim_id)?;
                     let mut revived = claim.clone();
                     revived.phase = PalwClaimPhaseV2::Provisional;
@@ -383,7 +334,7 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                         .checked_add(builder.params.window_bind)
                         .ok_or(PalwStateV2Error::Overflow("redraw bind deadline"))?;
                     builder.write_claim(claim_id, Some(revived))?;
-                    builder.arm_deadline(deadline, claim_id)?;
+                    builder.arm_deadline(deadline, claim_id);
                 } else if builder.params.panel_unavailable_expiry_active_at(ctx.daa_score) {
                     // **Lane PL part C (ADR-0166): two panels failing to conclude is verifier unavailability, not producer
                     // fraud.** The chain cannot tell a silent Sybil seat or an honest outage from a withholding producer by
@@ -544,41 +495,10 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     terminal_deadline_at_v1(&claim, builder.params, Some(ctx.daa_score))?,
                     &claim,
                 )?;
-                // G-15: an unpaid Final is not retired (`palw_unpaid_reward_retirement_floor_v1`, the same floor DL-1 derives).
-                let effective = super::palw_unpaid_reward_retirement_floor_v1(
-                    &builder.state,
-                    builder.params,
-                    &claim_id,
-                    &claim,
-                    Some(ctx.daa_score),
-                    effective,
-                    true,
-                );
                 if let Some(at) = effective.filter(|at| *at >= ctx.daa_score) {
-                    builder.arm_deadline(at, claim_id)?;
+                    builder.arm_deadline(at, claim_id);
                     continue;
                 }
-                // RFC23: retirement must not discard a certified consumer's
-                // held amount while another actual liability is still open.
-                if let Some(at) = super::palw_security_certification_fold_v1::try_release_claim_local_reward_v1(
-                    builder,
-                    ctx.daa_score,
-                    &claim_id,
-                    &claim,
-                    true,
-                )? {
-                    builder.arm_deadline(at, claim_id)?;
-                    continue;
-                }
-                // G-15 (`palw_reward_liability_horizon_v1`, dormant): a certified reward still deferred to the liability horizon is
-                // named now — a retired claim can no longer be convicted, so retirement closes its liability window too. A no-op below
-                // the fence, for a voided claim, and once the Gate C sweep has named it.
-                super::palw_security_certification_fold_v1::release_deferred_certified_reward_at_retirement_v1(
-                    builder,
-                    ctx.daa_score,
-                    &claim_id,
-                    &claim,
-                )?;
                 builder.retire_claim(claim_id, &claim)?;
             }
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {

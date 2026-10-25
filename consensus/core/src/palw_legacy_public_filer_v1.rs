@@ -1,6 +1,6 @@
 //! **Lane LG14-A (RFC-0014 §6–§8 on the legacy V2 Panel route): one fraud filer for every role, a non-seat reservation that holds a
 //! claim's ends to the claim's own hard deadline, and direct proofs no open session pre-empts** — dormant behind
-//! `Params::palw_legacy_public_filer_v1`, which no network can arm. Design: `docs/design/palw/verification/legacy-route-g14-filer.md`.
+//! `Params::palw_legacy_public_filer_v1`, which no network can arm. Design: `docs/design/palw/legacy-route-g14-filer.md`.
 //!
 //! ```text
 //! 154 DisputeReservedV1  (any Active bond at or above the floor, not the claim's executor)
@@ -18,20 +18,6 @@
 //!
 //! Direct proofs (kinds 3, 4, 7): past the fence the adjudicators no longer refuse a proof because another bond's court is open
 //! (`crate::palw_offence_attribution_v1::PalwSessionRuleV1`); the conviction's void closes every session in the same transition.
-//!
-//! **Lane g14-close-legacy (2026-10-16, audit G-06 / G-07 / G-13).**
-//! * The fence is armable behind an arm-readiness record (`crate::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyPublicFilerV1`); the
-//!   binary pins none, so every real height stays refused.
-//! * G-06: a live reserver opens a further held dissection beside a decoy court (`check_further_held_dissection_v1`), one per reserver.
-//!   `DirectProofFirst` does NOT get its own fence: it is one half of RFC-0014 §7.3's AND with the reservation's Final hold — the hold
-//!   without it lets a decoy court refuse the outsider's proof, it without the hold lets the clocks outrun the outsider — and option (b)
-//!   restores reward only with both, so a separate fence would add an armable state that is not G14 and a second record, nothing else.
-//! * G-07: a reserver's DA sessions ride its own reservation (34 sessions) and per-bond budgets (64 live / 64 retained), never DA-8's
-//!   shared budget. The NETWORK court-session cap (`palw_max_concurrent_court_sessions_v1`) is unchanged: it is the per-block court
-//!   slot times the rung window, and neither a per-bond budget nor a partition stops a multi-bond coalition from filling it (see the
-//!   audit's appendix C).
-//! * G-13: a claim accepted past the fence keeps every relied-on `Valid` lock to its liability horizon
-//!   (`PalwStateParamsV2::valid_lock_life_for_claim_v1`), and a kind-3 conviction that finds such a lock gone is refused.
 //!
 //! This module holds the TYPES, constants, the message, the fence's `Params` half and the engine's pure half (the planner every
 //! role's filer runs). The fold's arms live in `palw_legacy_public_filer_fold_v1`, a child module of `palw_state_v2`.
@@ -227,14 +213,6 @@ pub struct PalwDisputeClaimV1 {
     /// Open explicit reacquisitions. Historical `da_claims.answered` is never cleared: old accusation signatures remain refused.
     /// A fresh authenticated answer closes all reacquisitions of its unit. At most one per reserver (and one DA session per bond).
     pub reacquiring: BTreeMap<PalwBondKeyV2, crate::palw_da_rcore_v1::PalwDaUnitV1>,
-    /// **Lane g14-court-capacity (audit G-07): each live reserver's court-capacity row** — queued, holding a ticket, or running a
-    /// session — written only past `palw_court_capacity_v1` (`crate::palw_court_capacity_v1`). A row exists only beside its reserver's
-    /// live reservation and is settled (occupancy fee charged, escrow released) when that reservation or its session ends.
-    pub courts: BTreeMap<PalwBondKeyV2, crate::palw_court_capacity_v1::PalwReservedCourtV1>,
-    /// **Lane g14-court-capacity-r2: the claim's court reserve has been taken** (by its first court row, whoever filed it) — one
-    /// reserve per claim over its life, so no claim spends more than one reserve session (the bounded admission's demand is one per
-    /// claim). Written only past `palw_court_capacity_v1`.
-    pub court_reserve_used: bool,
 }
 
 impl PalwDisputeClaimV1 {
@@ -255,9 +233,7 @@ impl PalwDisputeClaimV1 {
 
     /// What `bond` holds through this record: its live deposit and its dismissed ones.
     pub fn exposure_of(&self, bond: &PalwBondKeyV2) -> u128 {
-        // The court-capacity occupancy escrow rides the same A-6 ledger (zero below `palw_court_capacity_v1`).
-        let court = self.courts.get(bond).map_or(0, |row| row.escrow);
-        let live = self.live.get(bond).map(|row| row.deposit).unwrap_or(0).saturating_add(court);
+        let live = self.live.get(bond).map(|row| row.deposit).unwrap_or(0);
         self.dismissed_held.iter().filter(|(held, _)| held == bond).fold(live, |sum, (_, amount)| sum.saturating_add(*amount))
     }
 }
@@ -306,19 +282,9 @@ impl Params {
 
     /// **The fence's refusals**, asked by [`Params::validate_palw_v2`]: a V2 bundle whose mirror is not the fence's; arming on a
     /// ruleset that is not `ConsensusV2`; arming without `palw_rcore_plus` and `palw_offence_attribution` in force at or below it (the
-    /// reservation rides R-core+'s DA court, the direct proofs are F2's adjudicators); and — until an arm-readiness record names this
-    /// network and height (`crate::palw_g14_gates_v1`, lane g14-close-legacy 2026-10-16; the binary pins none) — any arming at all.
-    /// A `Some(never())` value is dormant and passes.
+    /// reservation rides R-core+'s DA court, the direct proofs are F2's adjudicators); and — until the full-activation release names
+    /// its height — any arming at all. A `Some(never())` value is dormant and passes.
     pub fn validate_palw_legacy_public_filer_v1(&self) -> Result<(), PalwModeV2Error> {
-        self.validate_palw_legacy_public_filer_in_v1(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
-    }
-
-    /// [`Self::validate_palw_legacy_public_filer_v1`] against `records` in place of the pinned list
-    /// (`Params::validate_palw_v2_with_arming_records_v1`).
-    pub fn validate_palw_legacy_public_filer_in_v1(
-        &self,
-        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
-    ) -> Result<(), PalwModeV2Error> {
         let armed = self.palw_legacy_public_filer_v1.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
         let mirror = match &self.palw_consensus_mode {
             PalwConsensusMode::ConsensusV2(bundle) => bundle.state.legacy_public_filer_from_daa(),
@@ -343,11 +309,10 @@ impl Params {
                  rides R-core+'s data-availability court and the direct proofs are F2's adjudicators",
             ));
         }
-        // The arm-readiness record gate (lane g14-close-legacy, 2026-10-16) replaces the unconditional refusal: the filer changes
-        // when a V2 claim may end (RFC-0014 §7) and how long a Valid seat's collateral stays locked (G-13), so it is armed only where a
-        // record naming this network and height carries its evidence (`PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1`). The binary pins
-        // none. G14 from genesis (user decision 2026-10-16, test-only): an isolated G14 test genesis skips the pin inside the gate.
-        self.validate_palw_g14_fence_record_in_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyPublicFilerV1, records)
+        Err(PalwModeV2Error::Invalid(
+            "palw_legacy_public_filer_v1 cannot be armed yet: the legacy route's public filer changes when a V2 claim may end (RFC-0014 \
+             §7) and its height is the full-activation release's to name (lane LG14-A)",
+        ))
     }
 }
 
@@ -1202,9 +1167,8 @@ mod tests {
         if let PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode {
             assert!(bundle.state.legacy_public_filer_active_at(9_000_000) && !bundle.state.legacy_public_filer_active_at(8_999_999));
         }
-        // Lane g14-close-legacy: the refusal is now the arm-readiness record gate (no record is pinned in this binary).
         assert!(
-            matches!(armed.validate_palw_legacy_public_filer_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("no arm-readiness record"))
+            matches!(armed.validate_palw_legacy_public_filer_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("cannot be armed yet"))
         );
         let mut never = palw_t12_shipped_params();
         never.palw_legacy_public_filer_v1 = Some(ForkActivation::never());

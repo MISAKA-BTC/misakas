@@ -1,5 +1,5 @@
 //! **Coverage P1 — `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @`05b9e7c9`, retested on the IR route from its headers** (COV-P1P2,
-//! 2026-10-08; record `docs/evidence/palw/implementation-records/coverage-p1p2-record.md`).
+//! 2026-10-08; record `docs/design/palw/coverage-p1p2-record.md`).
 //!
 //! An ignored probe, not a regression test: it needs a header-only snapshot of the repository (`config.json`, the index, the four
 //! shard headers in sparse files of their real length, `tokenizer.json` — no weight byte), read the way the SDK preflight reads a
@@ -234,7 +234,7 @@ fn k2_route(program: &misaka_palw_tir::program::TirProgramV1, positions: u32) {
             Err(gaps) => println!("      public_prosecution_complete_v1: REFUSED — {gaps:?}"),
         }
     }
-    // Lane K2S: K2-TIR-v4 (`docs/design/palw/models/k2-real-scale.md`) — segmented commitments, element courts, per-prosecution bounds.
+    // Lane K2S: K2-TIR-v4 (`docs/design/palw/k2-real-scale.md`) — segmented commitments, element courts, per-prosecution bounds.
     let v4 = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
     let armed = KernelScheduleV1::default().with(v4.digest(), KernelStatusV1::Active { since_daa: 0 });
     match plan_for_tir_program_v1(&v4, program, root, positions) {

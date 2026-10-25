@@ -52,7 +52,7 @@ pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
 /// GAP-R7: an accuser's seal of its proof (seal, then reveal; the earliest seal of the convicting bytes is paid the bounty).
 pub const TAG_SEAL_PROOF_V1: u8 = 15;
 // 16–18: K2-TIR-v4 (lane K2S, allocated 2026-10-08).
-/// K2-TIR-v4: a segmented claim (`docs/design/palw/models/k2-real-scale.md`).
+/// K2-TIR-v4: a segmented claim (`docs/design/palw/k2-real-scale.md`).
 pub const TAG_COMMIT_SEGMENTED_CLAIM_V1: u8 = 16;
 /// K2-TIR-v4: a job whose prompt is posted in tiles.
 pub const TAG_POST_TILED_JOB_V1: u8 = 17;
@@ -139,7 +139,6 @@ pub const TAG_BOOTSTRAP_EXACT_V1: u8 = 73;
 // `palw_model_eligibility_v1`). Grepped free on `integ/rfc02-rfc06-12-g14` and `pre` before allocating; 72 stays unallocated.
 pub const TAG_COMMIT_ELIGIBILITY_EXAM_V1: u8 = 74;
 pub const TAG_ATTEST_ELIGIBILITY_EXAM_V1: u8 = 75;
-pub const TAG_ATTEST_CAPACITY_V1: u8 = 76;
 /// version, tag, verifier, claim.
 pub const MAX_ATTEST_DRAWN_CHECK_BYTES_V1: usize = 1 + 1 + 64 + 64;
 pub const MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2: usize = 288;
@@ -150,71 +149,6 @@ pub const TAG_FUNDED_EXECUTION_V11: u8 = 63;
 pub const MAX_FUNDED_EXECUTION_BYTES_V11: usize = (1 << 20) + (16 << 10);
 pub const TAG_STAGE_EXECUTION_V14: u8 = 64;
 pub const MAX_STAGE_EXECUTION_BYTES_V14: usize = 2 << 20;
-/// Only the explicitly versioned Master32 invocation actions 34..=36 use this
-/// larger envelope (bounded public upstream material plus the old typed body).
-/// The frozen stage actions 0..=33 retain their original 2MiB ceiling.
-pub const MAX_STAGE_INVOCATION_BYTES_V32: usize = (4 << 20) + (256 << 10) + 8192 + 7;
-/// Version32 compact whole Commit body is at most 9 MiB. Its paid part
-/// transport uses 143-byte metadata and at most 32 KiB of body per carrier.
-/// These are new inner64 actions; no old action acquires the larger ceiling.
-pub const MAX_STAGE_COMPACT_COMMIT_BYTES_V32: usize = (9 << 20) + 7;
-pub const MAX_STAGE_COMMIT_PART_BYTES_V32: usize = (32 << 10) + 143 + 7;
-/// Owning39 source body; large bodies travel through its separately paid source upload.
-pub const MAX_STAGE_SOURCE_BYTES_V39: usize = crate::flat_source39::SOURCE39_MAX_BYTES + 7;
-
-fn stage_action_cap(action: u8) -> usize {
-    match action {
-        34..=36 => MAX_STAGE_INVOCATION_BYTES_V32,
-        37 => 64 + 7,
-        38 => MAX_STAGE_COMPACT_COMMIT_BYTES_V32,
-        39 => MAX_STAGE_COMMIT_PART_BYTES_V32,
-        40 => 130 + 7,
-        41 => MAX_STAGE_SOURCE_BYTES_V39,
-        42 => 262 + 7,
-        71 => 67 + 7,
-        72 => 64 + 7,
-        65 => (46 << 20) + 7,
-        57 | 67 => 256 + 7,
-        // Owning39 collection53 (`39u16 ‖ job`), producer page54 (proof-part
-        // frame) and assembly55 (`39u16 ‖ job ‖ group`).
-        53 => 66 + 7,
-        54 => (32 << 10) + 143 + 7,
-        55 => 130 + 7,
-        // Owning39 mining fixed frames: register 73, seat/retire 74/76,
-        // commit 75, issue/collect 77/79; 78 is refused by name by the fold.
-        73 => 76 + 7,
-        74 | 76 | 77 | 79 => 67 + 7,
-        75 => 138 + 7,
-        78 => 74 + 7,
-        // G14 lane closure G-N2: the post-Final mining accusation (a filing, a demand, or a 32-KiB answer part).
-        80 => (32 << 10) + 256 + 7,
-        50 => (32 << 10) + 143 + 7,
-        58 | 68 => (32 << 10) + 72 + 7,
-        59 | 60 | 66 | 69 | 70 => 64 + 7,
-        _ => MAX_STAGE_EXECUTION_BYTES_V14,
-    }
-}
-
-fn stage_action_extent(action: u8, encoded: usize) -> bool {
-    encoded <= stage_action_cap(action)
-        && match action {
-            37 => encoded == 71,
-            39 => encoded >= 143 + 7,
-            40 => encoded == 130 + 7,
-            42 => encoded == 262 + 7,
-            71 => encoded == 67 + 7,
-            72 => encoded == 64 + 7,
-            50 | 54 => encoded >= 143 + 7,
-            53 => encoded == 66 + 7,
-            55 => encoded == 130 + 7,
-            73 => encoded == 76 + 7,
-            74 | 76 | 77 | 79 => encoded == 67 + 7,
-            75 => encoded == 138 + 7,
-            58 | 68 => encoded >= 72 + 7,
-            59 | 60 | 66 | 69 | 70 => encoded == 64 + 7,
-            _ => true,
-        }
-}
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -748,10 +682,6 @@ pub enum KernelRouteObjectV1 {
     AttestEligibilityExamV1 {
         attestation: crate::model_eligibility_v1::EligibilityAttestationV1,
     } = 75,
-    /// RFC-0016 V8 (`palw_capacity_attestation_v1`): one bond's signed capacity attestation for one class (consumer-owned).
-    AttestCapacityV1 {
-        attestation: crate::capacity_attestation_v1::CapacityAttestationV1,
-    } = 76,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -840,7 +770,7 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
     };
     let (cap, last) = match tag {
         TAG_FUNDED_EXECUTION_V11 => (MAX_FUNDED_EXECUTION_BYTES_V11, 46),
-        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 80),
+        TAG_STAGE_EXECUTION_V14 => (MAX_STAGE_EXECUTION_BYTES_V14, 33),
         _ => return Ok(None),
     };
     let bad = |why: &str| KernelRefusalV1::new("NativeAction", RefusalKindV1::Malformed, why);
@@ -848,9 +778,6 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
         return Err(bad("native route version/byte cap"));
     }
     let action = *bytes.get(2).ok_or_else(|| bad("native action absent"))?;
-    if tag == TAG_STAGE_EXECUTION_V14 && !stage_action_extent(action, bytes.len()) {
-        return Err(bad("Master32 action-specific bounded extent differs"));
-    }
     if tag == TAG_FUNDED_EXECUTION_V11 && matches!(action, 41..=44) && bytes.len() > (32 << 10) + 79 {
         return Err(bad("initial31 complete bounded wire packet cap"));
     }
@@ -944,7 +871,6 @@ impl KernelRouteObjectV1 {
             Self::BootstrapExactV1 { .. } => TAG_BOOTSTRAP_EXACT_V1,
             Self::CommitEligibilityExamV1 { .. } => TAG_COMMIT_ELIGIBILITY_EXAM_V1,
             Self::AttestEligibilityExamV1 { .. } => TAG_ATTEST_ELIGIBILITY_EXAM_V1,
-            Self::AttestCapacityV1 { .. } => TAG_ATTEST_CAPACITY_V1,
             Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::FundedExecutionV11 { .. } => TAG_FUNDED_EXECUTION_V11,
             Self::StageExecutionV14 { .. } => TAG_STAGE_EXECUTION_V14,
@@ -1019,7 +945,7 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_STAGE_EXECUTION_V14 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 79 || !stage_action_extent(*a, bytes.len()))
+            if rest.get(1).is_none_or(|a| *a > 33)
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "stage14 action/count differs from exact bounded carrier".into()));
@@ -1224,7 +1150,6 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_BOOTSTRAP_EXACT_V1 => "BootstrapExactV1",
         TAG_COMMIT_ELIGIBILITY_EXAM_V1 => "CommitEligibilityExamV1",
         TAG_ATTEST_ELIGIBILITY_EXAM_V1 => "AttestEligibilityExamV1",
-        TAG_ATTEST_CAPACITY_V1 => "AttestCapacityV1",
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_FUNDED_EXECUTION_V11 => "FundedExecutionV11",
         TAG_STAGE_EXECUTION_V14 => "StageExecutionV14",
@@ -1301,10 +1226,9 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_COMMIT_ELIGIBILITY_EXAM_V1 | TAG_ATTEST_ELIGIBILITY_EXAM_V1 => {
             crate::model_eligibility_v1::MAX_ELIGIBILITY_OBJECT_BYTES_V1
         }
-        TAG_ATTEST_CAPACITY_V1 => crate::capacity_attestation_v1::MAX_CAPACITY_ATTESTATION_OBJECT_BYTES_V1,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
-        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_SOURCE_BYTES_V39,
+        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_EXECUTION_BYTES_V14,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -1320,51 +1244,6 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn new_master_carriers_do_not_enlarge_frozen_stage_actions() {
-        let body = vec![0u8; MAX_STAGE_EXECUTION_BYTES_V14];
-        let old = KernelRouteObjectV1::StageExecutionV14 { action: 33, body: body.clone() }.encode();
-        assert!(borrowed_native_action_v1(&old).is_err());
-        assert!(KernelRouteObjectV1::decode(&old).is_err());
-        let new = KernelRouteObjectV1::StageExecutionV14 { action: 34, body }.encode();
-        assert!(borrowed_native_action_v1(&new).is_ok());
-        assert!(KernelRouteObjectV1::decode(&new).is_ok());
-        let mut oversized = new;
-        oversized.resize(MAX_STAGE_INVOCATION_BYTES_V32 + 1, 0);
-        let size = (oversized.len() - 7) as u32;
-        oversized[3..7].copy_from_slice(&size.to_le_bytes());
-        assert!(borrowed_native_action_v1(&oversized).is_err());
-        assert!(KernelRouteObjectV1::decode(&oversized).is_err());
-        let collect = KernelRouteObjectV1::StageExecutionV14 { action: 37, body: vec![7; 64] }.encode();
-        assert!(borrowed_native_action_v1(&collect).is_ok());
-        assert!(KernelRouteObjectV1::decode(&collect).is_ok());
-        let mut unknown = collect;
-        unknown[2] = 80;
-        assert!(borrowed_native_action_v1(&unknown).is_err());
-        assert!(KernelRouteObjectV1::decode(&unknown).is_err());
-    }
-    #[test]
-    fn compact_commit_transport_has_its_own_whole_part_and_assembly_limits() {
-        let whole = KernelRouteObjectV1::StageExecutionV14 { action: 38, body: vec![0; MAX_STAGE_INVOCATION_BYTES_V32] }.encode();
-        assert!(borrowed_native_action_v1(&whole).is_ok());
-        assert!(KernelRouteObjectV1::decode(&whole).is_ok());
-        let mut wrong_action = whole;
-        wrong_action[2] = 36;
-        assert!(borrowed_native_action_v1(&wrong_action).is_err());
-        assert!(KernelRouteObjectV1::decode(&wrong_action).is_err());
-        for (action, sizes) in [(39, vec![143, 143 + (32 << 10)]), (40, vec![130])] {
-            for size in sizes {
-                let packet = KernelRouteObjectV1::StageExecutionV14 { action, body: vec![0; size] }.encode();
-                assert!(borrowed_native_action_v1(&packet).is_ok());
-                assert!(KernelRouteObjectV1::decode(&packet).is_ok());
-            }
-        }
-        for (action, size) in [(39, 142), (39, 144 + (32 << 10)), (40, 129), (40, 131)] {
-            let packet = KernelRouteObjectV1::StageExecutionV14 { action, body: vec![0; size] }.encode();
-            assert!(borrowed_native_action_v1(&packet).is_err());
-            assert!(KernelRouteObjectV1::decode(&packet).is_err());
-        }
-    }
     #[test]
     fn native_action_borrowed_frame_has_exact_count_and_preserves_old_owned_bytes() {
         for object in [
@@ -1385,10 +1264,10 @@ mod tests {
         }
         assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
         // Funded actions run to 46: 45/46 are the typed window class v37 register/attach (RFC02 §II.14.60), as the decoder admits.
-        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 80)] {
+        for (tag, last) in [(TAG_FUNDED_EXECUTION_V11, 46), (TAG_STAGE_EXECUTION_V14, 33)] {
             let mut raw = vec![1, tag, last, 0, 0, 0, 0];
             assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
-            raw[2] = unknown;
+            raw[2] = last + 1;
             assert!(borrowed_native_action_v1(&raw).is_err());
             raw[2] = last;
             raw[0] = 2;
@@ -1511,10 +1390,9 @@ mod tests {
         // 64: RFC02 typed external stage14. 65–66: prospective Panel consent. 67–69: RFC07/RFC08 signed economic contracts
         // (2026-10-15). 70–71: native Panel authority and paid ClaimV2 (renumbered from 63/64, which the RFC02 branch owns).
         // 73: N3's BootstrapExact contribution (2026-10-15 round 3). 72 is unallocated. 74–75: RFC-0017's eligibility exam.
-        // 76: RFC-0016 V8's capacity attestation (2026-10-17, audit 16-A).
         assert!(max_encoded_bytes_of_tag(72).is_none(), "72 is not allocated");
-        assert!(max_encoded_bytes_of_tag(77).is_none(), "77 is not allocated");
-        for tag in (22..=37).chain(39..=71).chain(73..=76) {
+        assert!(max_encoded_bytes_of_tag(76).is_none(), "76 is not allocated");
+        for tag in (22..=37).chain(39..=71).chain(73..=75) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         for o in [
@@ -1564,22 +1442,6 @@ mod tests {
                     verdict: crate::model_eligibility_v1::EligibilityVerdictV1::Reproduced,
                     transcript: [4; 64],
                     claim_mismatches: (0..64).collect(),
-                },
-            },
-            KernelRouteObjectV1::AttestCapacityV1 {
-                attestation: crate::capacity_attestation_v1::CapacityAttestationV1 {
-                    version: 1,
-                    network: [1; 64],
-                    verifier: [2; 64],
-                    class_id: [3; 64],
-                    compute_ccu_per_span: u128::MAX,
-                    memory_bytes: u64::MAX,
-                    da_bytes_per_span: u64::MAX,
-                    court_permille_per_span: u64::MAX,
-                    window_from_daa: 1,
-                    window_to_daa: 2,
-                    expires_daa: 3,
-                    evidence_root: [4; 64],
                 },
             },
         ] {

@@ -962,11 +962,6 @@ const PALW_DRILL_FLAG_DAY_INT11_RHO1000_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_INT13_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_INT13_FENCES_V1, flag: "--palw-drill-int13-at" };
 
-/// **The full-activation flag day's whole list** (`--palw-drill-full-activation-at`): the int-13 list's entries plus every G14 / RFC
-/// fence of [`crate::config::params::PALW_T12_FULL_ACTIVATION_FENCES_V1`] — at one height, as the release will arm them.
-const PALW_DRILL_FLAG_DAY_FULL_ACTIVATION_V1: PalwDrillFlagDayV1 =
-    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_FULL_ACTIVATION_FENCES_V1, flag: "--palw-drill-full-activation-at" };
-
 /// The model-specific finite court window alone (`--palw-drill-model-court-at`).
 const PALW_DRILL_FLAG_DAY_MODEL_COURT_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, flag: "--palw-drill-model-court-at" };
@@ -1201,20 +1196,6 @@ pub fn palw_drill_int11_at_v1(params: &mut crate::config::params::Params, at: u6
 /// moves it first (`--palw-drill-int11-at`) — must be in force. Done on a copy: a refusal leaves `params` exactly as it came.
 pub fn palw_drill_int13_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_INT13_V1)
-}
-
-/// **A drill crosses the full-activation flag day as the release will arm it** (`--palw-drill-full-activation-at=H'`): every entry of
-/// [`crate::config::params::PALW_T12_FULL_ACTIVATION_FENCES_V1`] at `at`, on a salted drill ruleset, each through its entry's own `set`.
-/// It carries the int-13 list's entries, so it excludes `--palw-drill-int13-at` and `--palw-drill-model-court-at` (the node refuses the
-/// combination by name). Every refusal of the post-launch moves applies, named for this flag, and the result must validate: the
-/// prerequisites below `at` (`palw_gen_v1` for the range twin — `--palw-drill-int11-at` below it) must be in force, and every
-/// record-gated entry passes only where validation admits it (an isolated G14 test genesis, or a pinned record for the drill genesis
-/// and height). Done on a copy: a refusal leaves `params` exactly as it came.
-pub fn palw_drill_full_activation_at_v1(
-    params: &mut crate::config::params::Params,
-    at: u64,
-) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
-    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FULL_ACTIVATION_V1)
 }
 
 /// **A drill appends ρ = 100 straight after ρ = 10** (`--palw-drill-capacity-rho100-at`): F-L's second step with

@@ -477,12 +477,6 @@ impl PalwTokenizerJsonStreamV1 {
     pub fn pending_key(&self) -> Option<(u64, Hash64)> {
         self.pending
     }
-    /// Identity already authenticated by native seal/finish; no caller flag.
-    pub(crate) fn sealed_artifact_binding_v1(&self)->Result<(Hash64,u64),String>{
-        self.check()?;
-        if !self.sealed||self.offset!=self.length||self.pending.is_some()||self.hash.finish()!=self.tokenizer{return Err("parser artifact binding before authenticated exact EOF".into());}
-        Ok((self.tokenizer,self.length))
-    }
     pub fn key_set_root(&self) -> Hash64 {
         self.keys.root()
     }
@@ -949,15 +943,6 @@ impl PalwTokenizerJsonStreamV1 {
     }
 }
 
-/// Every uniqueness-proof event consumes two distinct raw syntax bytes: the
-/// quotes of an object key, or the colon and a numeric byte of its ID value.
-/// ID namespaces are requested only for numeric object fields. No event can
-/// reuse another event's pair. This bounds valid documents and invalid prefixes;
-/// one retained slot for tiny/empty invalid operands is conservative.
-pub fn palw_tokenizer_key_event_byte_bound_v1(raw_bytes: u64) -> u64 {
-    (raw_bytes / 2).max(1)
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1065,45 +1050,6 @@ pub(crate) mod tests {
         }
         s.finish().unwrap()
     }
-    #[test]
-    fn authenticated_byte_bound_covers_key_events_at_every_parser_pause() {
-        let cases: &[&[u8]] = &[
-            br#"{"model":{"type":"BPE","vocab":{"":0,"a":1,"b":2},"merges":[]}}"#,
-            br#"{"added_tokens":[{"id":0,"content":"x"}],"model":{"type":"BPE","vocab":{"a":0},"merges":[]}}"#,
-            br#"{"":{"":{"":0}},"model":{"type":"BPE","vocab":{"a":0},"merges":[]}}"#,
-            br#"{"model":{"type":"BPE","vocab":{"a":0,"a":1}}}"#,
-            br#"{"model":{"type":"BPE","vocab":{"a":0,"b":"#,
-            br#"{"added_tokens":[{"id":0,"content":"x"},{"id":0}],"model":{}}"#,
-            br#"{"model":{"type":"BPE","vocab":{"\\":0,"\u0061":1},"merges":[]}}"#,
-            b"", b"0", b"{\"\"", b"{\"\":0}",
-        ];
-        for raw in cases {
-            for chunk in [1, 2, 7, 65_536] {
-                let context = Hash64::from_u64_word(0xB017);
-                let mut stream = PalwTokenizerJsonStreamV1::new(
-                    context, palw_tokenizer_raw_commitment_v1(raw), raw.len() as u64, 0,
-                );
-                let mut book = Book::new();
-                loop {
-                    if stream.pending_key().is_some() {
-                        book.satisfy(&mut stream);
-                        assert!(stream.key_events() <= stream.offset() / 2,
-                            "distinct consumed syntax pairs: raw={raw:?}, chunk={chunk}");
-                        assert!(stream.key_events() <= palw_tokenizer_key_event_byte_bound_v1(raw.len() as u64));
-                    } else if stream.offset() < raw.len() as u64 {
-                        let at = stream.offset();
-                        let end = (at as usize + chunk).min(raw.len());
-                        stream.push(context, at, &raw[at as usize..end]).unwrap();
-                    } else {
-                        stream.seal().unwrap();
-                        stream.finish().unwrap();
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
     fn expected(raw: &[u8], id: u32) -> PalwTokenizerJsonVerdictV1 {
         match PalwQwenRenderingMapV1::parse(raw) {
             Err(_) => PalwTokenizerJsonVerdictV1::Invalid,
@@ -1344,16 +1290,3 @@ pub(crate) mod tests {
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_tokenizer_json_stream_v1.rs"]
 mod native_resource_inventory_v1;
-
-
-/// Owner-local parser growth bound, derived from the existing grammar, not a protocol cap.
-/// Includes one parser inline value, the bounded Frame stack, and both String Vecs.
-pub(crate) fn producer_parser_requests_v1() -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
-    use crate::palw_native_resource_v1::TirNativeRequestsV1;
-    let mut q=TirNativeRequestsV1::new();
-    q.exact_v1::<PalwTokenizerJsonStreamV1>(1)?;
-    q.vec_v1::<Frame>(MAX_DEPTH as u64)?;
-    q.vec_v1::<u8>(16)?;
-    q.vec_v1::<u8>(4)?;
-    Ok(q.bytes_v1())
-}

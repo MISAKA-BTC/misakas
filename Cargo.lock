@@ -3880,7 +3880,6 @@ dependencies = [
  "js-sys",
  "kaspa-addresses",
  "kaspa-core",
- "kaspa-database",
  "kaspa-hashes",
  "kaspa-math",
  "kaspa-merkle",
@@ -3901,7 +3900,6 @@ dependencies = [
  "serde_json",
  "sha3",
  "smallvec",
- "tempfile",
  "thiserror 1.0.64",
  "wasm-bindgen",
  "wasm-bindgen-test",
@@ -4709,7 +4707,6 @@ dependencies = [
  "kaspa-utils-tower",
  "kaspa-utxoindex",
  "log",
- "serde_json",
  "tokio",
  "triggered",
  "workflow-rpc",
@@ -5354,7 +5351,6 @@ dependencies = [
  "kaspa-utils",
  "kaspa-utils-tower",
  "kaspa-utxoindex",
- "kaspa-wrpc-client",
  "kaspa-wrpc-server",
  "libc",
  "libcrux-ml-dsa",
@@ -6101,7 +6097,6 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "sha2 0.10.8",
  "unicode-normalization",
  "unicode-properties",
 ]
@@ -6438,7 +6433,6 @@ dependencies = [
  "borsh",
  "misaka-palw-tir",
  "serde_json",
- "sha2 0.10.8",
  "thiserror 1.0.64",
 ]
 
@@ -6466,7 +6460,6 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rayon",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -7911,17 +7904,15 @@ name = "rothschild"
 version = "1.1.0"
 dependencies = [
  "async-channel 2.3.1",
- "borsh",
  "clap 4.5.51",
  "criterion",
  "faster-hex 0.10.1",
+ "itertools 0.13.0",
  "kaspa-addresses",
  "kaspa-consensus-core",
  "kaspa-core",
  "kaspa-grpc-client",
- "kaspa-mining",
  "kaspa-notify",
- "kaspa-pq-validator-core",
  "kaspa-rpc-core",
  "kaspa-txscript",
  "kaspa-utils",
@@ -7929,7 +7920,7 @@ dependencies = [
  "parking_lot",
  "rand 0.8.6",
  "rayon",
- "serde_json",
+ "secp256k1",
  "tokio",
 ]
 

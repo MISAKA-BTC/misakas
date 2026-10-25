@@ -1,7 +1,5 @@
 # ADR-0175 — 新規モデル登録は自由、登録モデルは永久不変
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -9,7 +7,7 @@
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
-**Status:** Accepted design, 2026-10-09. `pre`に独立fenceとfold/CLIを実装済み（休眠）。2026-10-10の[検証記録](../evidence/adr/0175-immutable-model-registration-2026-10-10.md)を参照。既存ネットワークの有効化高さは設定しない。
+**Status:** Accepted design, 2026-10-09. `pre`に独立fenceとfold/CLIを実装済み（休眠）。2026-10-10の[検証記録](evidence/0175-immutable-model-registration-2026-10-10.md)を参照。既存ネットワークの有効化高さは設定しない。
 
 ## 決定
 
@@ -92,12 +90,3 @@ ADR0088の同一line更新、RFC0004/spec17の自動head置換を改定する。
 [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
-
-## ユーザー方針 2026-10-15 第4回 — 年次フォークの承認リストは追加のみ
-
-> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
-
-* 年 1 回程度のソフトフォークまたはハードフォークは、`ApprovedModels`(1.0 の階層)に「モデル ID + 固定 artifact root」を**追加するだけ**である。既存モデルを上書き・置換・再 root しない。
-* 実装では、validation が同じモデル ID の再掲を拒否する。membership は、登録済み class 自身の artifact root と一致したときだけ成立する(`consensus/core/src/palw_model_tier_v1.rs`)。
-* リストへの指定は政策的決定であり、公開性・独立検証可能性の技術的証明ではない。
-* 後から登録したモデルは登録時点から 0.3 に固定し、審査で 1.0 にはならない。登録の自由と不変性(本 ADR)は変わらない。

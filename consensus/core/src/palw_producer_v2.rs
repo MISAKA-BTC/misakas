@@ -199,7 +199,7 @@ pub struct PalwProducerFactsV2 {
     /// boundary the lookup missed, `unwrap_or(0)` made the budget zero, and the producer held
     /// forever.
     pub is_base_class: bool,
-    /// How long a producer must promise to keep its trace: [`palw_min_trace_retention_daa_at_v2`].
+    /// How long a producer must promise to keep its trace: [`palw_min_trace_retention_daa_v1`].
     /// The attempt's `trace_retention_daa` MUST be the block's own DAA score plus this — admission
     /// pins it by equality (ADR-0072 Decision 8), so it is not the producer's to get right but the
     /// chain's, and this is where a producer reads it.
@@ -442,19 +442,6 @@ pub fn palw_min_trace_retention_daa_v1(state_params: &PalwStateParamsV2) -> u64 
         .saturating_add(state_params.window_court())
 }
 
-/// Canonical signed retention at the candidate's own DAA. A finite consumer's
-/// existing material obligation must fit the producer promise before admission;
-/// the old window sum remains exact below its activation fence.
-pub fn palw_min_trace_retention_daa_at_v2(state_params: &PalwStateParamsV2, daa: u64) -> u64 {
-    let legacy = palw_min_trace_retention_daa_v1(state_params);
-    if !state_params.paid_consumer_lifecycle_active_at(daa) {
-        return legacy;
-    }
-    let policy = &state_params.paid_consumer_lifecycle().expect("active consumer mirror").policy;
-    let span = policy.service_span_daa.saturating_add(policy.dispute_tail_daa).saturating_add(policy.material_tail_daa);
-    legacy.max(span)
-}
-
 pub fn palw_producer_facts_v2(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
@@ -674,9 +661,7 @@ pub fn palw_producer_facts_v4(
         is_base_class: class_id == state_params.base_class_id(),
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
             || state.fp_lane_certification(&class_id).is_some(),
-        // Lane g14-court-capacity-r2: a court-demanding (fused-attention) class past `palw_court_capacity_v1` promises the longer
-        // retention its court guarantee needs; every other class the minimum.
-        min_trace_retention_daa: crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(state, state_params, &class_id, daa_score),
+        min_trace_retention_daa: palw_min_trace_retention_daa_v1(state_params),
         witness_chunks: if state_params.witness_manifest_active_at(daa_score) {
             state.mesh_witness_profile_v1(&class_id).map_or(0, |profile| profile.chunks)
         } else {
@@ -724,47 +709,6 @@ mod tests {
 
     fn state_params() -> PalwStateParamsV2 {
         PalwStateParamsV2::new(500, 100, 100, 100, 100, 1_000, h64(1), 4, 1_000, 1_000, 100, 100).unwrap()
-    }
-
-    #[test]
-    fn finite_consumer_retention_agrees_between_producer_facts_and_the_canonical_pin() {
-        use crate::palw_bond_budget_v1::{
-            PalwBondBudgetMirrorV1, PalwBondBudgetPolicyV1, PalwPaidConsumerLifecycleMirrorV1, PalwPaidConsumerLifecyclePolicyV1,
-        };
-        let params = state_params()
-            .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
-                from_daa: 0, policy: PalwBondBudgetPolicyV1::unapproved_probe_v1(), allocation: None,
-            }))
-            .with_reporter_income_from(Some(0)).with_material_income_from(Some(0))
-            .with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 {
-                from_daa: 200,
-                policy: PalwPaidConsumerLifecyclePolicyV1 {
-                    version: 1, service_span_daa: 1_000, dispute_tail_daa: 3_000, material_tail_daa: 2_000,
-                },
-            }));
-        let legacy = palw_min_trace_retention_daa_v1(&params);
-        assert_eq!(palw_min_trace_retention_daa_at_v2(&params,199),legacy);
-        assert_eq!(palw_min_trace_retention_daa_at_v2(&params,200),6_000);
-        let state = state();
-        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
-        let facts = palw_producer_facts_v2(&state,&params,&admission,h64(1),200,h64(1),None,None).unwrap();
-        assert_eq!(facts.min_trace_retention_daa,6_000);
-        let trace = h64(31);
-        let mut attempt = PalwAttemptUnsignedV2 {
-            version: PALW_ATTEMPT_V2_VERSION, network_domain: h64(NET), challenge: h64(32),
-            class_id: h64(1), executor_bond: bond_outpoint(), executor_pubkey: vec![7;4], operator_id: h64(33),
-            artifact_root: h64(11), trace_root: trace, output_root: h64(34), execution_root: h64(35), pwu: facts.pwu,
-            trace_manifest_root: crate::palw_attempt_v2::attempt_trace_manifest_root_v1(trace,1),
-            trace_chunk_count: 1, trace_retention_daa: 200+facts.min_trace_retention_daa,
-        };
-        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,200).unwrap();
-        attempt.trace_retention_daa=200+legacy;
-        assert!(matches!(crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,200),
-            Err(crate::palw_admission_v2::PalwAdmissionV2Error::TraceRetentionNotDerived { .. })));
-        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,199)
-            .expect_err("the obligation is anchored at the header's own DAA");
-        attempt.trace_retention_daa=199+legacy;
-        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,199).unwrap();
     }
 
     fn bond_outpoint() -> TransactionOutpoint {
@@ -867,8 +811,6 @@ mod tests {
                 reserved: 0,
                 committed: Some(0),
                 reservation_split: None,
-                security_certification: "not-governed",
-                claim_local_settlement: String::new(),
                 escrowed_reward: 0,
                 payout_pending: None,
                 work_leaves: 0,
@@ -2148,12 +2090,6 @@ pub struct PalwClaimRowV1 {
     /// collectable-loss top-up / court-DA-retention, each with its hold, and the fixed earliest capacity recovery. `None` for a claim
     /// accepted below `palw_bond_formula_v2` (every claim on every shipped preset).
     pub reservation_split: Option<crate::palw_bond_formula_v2::PalwReservationSplitV2>,
-    /// **RFC-0018 Gate C**: the claim's certification state (`crate::palw_security_certification_v1::
-    /// palw_claim_certification_status_v1`): `not-governed` on every shipped network.
-    pub security_certification: &'static str,
-    /// **RFC-0023 stage 2**: the claim's own settlement state from its dependency closure (`settled`, `held:<daa>`, `held`,
-    /// `denied`, `not-retained`, `unavailable`); empty below `palw_claim_local_settlement_v1` (every shipped network).
-    pub claim_local_settlement: String,
     /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
     pub escrowed_reward: u64,
     /// The payout queued for the next coinbase, once the claim is final — the producer's leg.
@@ -2303,7 +2239,7 @@ pub fn palw_claim_rows_v1(
     include_terminal: bool,
     limit: usize,
 ) -> (Vec<PalwClaimRowV1>, bool) {
-    use crate::palw_state_v2::PalwClaimPhaseV2 as P;
+    use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
     let payouts: std::collections::BTreeMap<&Hash64, u64> = state.pending_payouts_iter().map(|(id, p)| (id, p.amount)).collect();
     let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
     let mut courts: std::collections::BTreeMap<Hash64, (usize, u64)> = std::collections::BTreeMap::new();
@@ -2325,15 +2261,41 @@ pub fn palw_claim_rows_v1(
             if !ours {
                 return None;
             }
-            Some(palw_claim_row_build_v1(
-                state,
-                state_params,
-                id,
-                claim,
-                courts.get(id).copied(),
-                |key| payouts.get(key).copied(),
-                tip_daa,
-            ))
+            let (quanta, quanta_spent, free_prompt) = match &claim.source {
+                S::FreePrompt { quanta, spent } => (*quanta, spent.len() as u32, true),
+                S::Attempt => (0, 0, false),
+            };
+            let court = courts.get(id).copied();
+            Some(PalwClaimRowV1 {
+                claim_id: *id,
+                free_prompt,
+                quanta,
+                quanta_spent,
+                class_id: claim.class_id,
+                executor_bond: claim.bond,
+                phase: claim.phase.clone(),
+                accepted_daa: claim.accepted_daa,
+                accepted_block: claim.accepted_block,
+                rebound_daa: claim.rebound_daa,
+                seats: panel.map(|p| p.seats.iter().map(|s| s.bond).collect()).unwrap_or_default(),
+                bound_daa: panel.map(|p| p.bound_daa),
+                deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
+                reserved: claim.reserved,
+                committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa),
+                reservation_split: crate::palw_bond_formula_v2::palw_bond_formula_claim_split_v2(state_params, claim),
+                escrowed_reward: claim.escrowed_reward,
+                // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
+                // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
+                payout_pending: match claim.phase {
+                    P::Final { final_daa } if state_params.rcore_plus_active_at(final_daa) => {
+                        payouts.get(&crate::palw_vesting_v1::palw_vesting_payout_key_v1(id)).copied()
+                    }
+                    _ => payouts.get(id).copied(),
+                },
+                work_leaves: claim.work_leaves,
+                open_courts: court.map(|c| c.0).unwrap_or(0),
+                exec_lane: palw_claim_exec_lane_v1(state, id),
+            })
         })
         .collect();
     rows.sort_by(|a, b| b.accepted_daa.cmp(&a.accepted_daa).then_with(|| a.claim_id.cmp(&b.claim_id)));
@@ -2342,77 +2304,6 @@ pub fn palw_claim_rows_v1(
         rows.truncate(limit);
     }
     (rows, truncated)
-}
-
-/// **One claim's operator row** — exactly the row [`palw_claim_rows_v1`] builds for it (the same builder), for a read that names the
-/// claim rather than a bond (`getPalwClaimDetail`). `None` for a claim the state does not hold.
-pub fn palw_claim_row_v1(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, claim_id: &Hash64) -> Option<PalwClaimRowV1> {
-    let claim = state.claim(claim_id)?;
-    let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
-    let mut court: Option<(usize, u64)> = None;
-    for (_, session) in state.court_sessions_iter().filter(|(_, s)| s.claim == *claim_id) {
-        let entry = court.get_or_insert((0, u64::MAX));
-        entry.0 += 1;
-        entry.1 = entry.1.min(session.deadline_daa);
-    }
-    let payout_of = |key: &Hash64| state.pending_payouts_iter().find(|(id, _)| *id == key).map(|(_, p)| p.amount);
-    Some(palw_claim_row_build_v1(state, state_params, claim_id, claim, court, payout_of, tip_daa))
-}
-
-/// The one row builder [`palw_claim_rows_v1`] and [`palw_claim_row_v1`] share: `court` is `(open sessions, earliest backstop)` on the
-/// claim, `payout_of` reads the pending payout queue by key.
-fn palw_claim_row_build_v1(
-    state: &PalwChainStateV2,
-    state_params: &PalwStateParamsV2,
-    id: &Hash64,
-    claim: &crate::palw_state_v2::PalwClaimStateV2,
-    court: Option<(usize, u64)>,
-    payout_of: impl Fn(&Hash64) -> Option<u64>,
-    tip_daa: u64,
-) -> PalwClaimRowV1 {
-    use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
-    let panel = state.panel(id);
-    let (quanta, quanta_spent, free_prompt) = match &claim.source {
-        S::FreePrompt { quanta, spent } => (*quanta, spent.len() as u32, true),
-        S::Attempt => (0, 0, false),
-    };
-    PalwClaimRowV1 {
-        claim_id: *id,
-        free_prompt,
-        quanta,
-        quanta_spent,
-        class_id: claim.class_id,
-        executor_bond: claim.bond,
-        phase: claim.phase.clone(),
-        accepted_daa: claim.accepted_daa,
-        accepted_block: claim.accepted_block,
-        rebound_daa: claim.rebound_daa,
-        seats: panel.map(|p| p.seats.iter().map(|s| s.bond).collect()).unwrap_or_default(),
-        bound_daa: panel.map(|p| p.bound_daa),
-        deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
-        reserved: claim.reserved,
-        committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa),
-        reservation_split: crate::palw_bond_formula_v2::palw_bond_formula_claim_split_v2(state_params, claim),
-        security_certification: crate::palw_security_certification_v1::palw_claim_certification_status_v1(
-            state,
-            state_params,
-            id,
-            claim,
-        ),
-        claim_local_settlement: palw_claim_local_settlement_label_v1(state, state_params, *id, tip_daa),
-        escrowed_reward: claim.escrowed_reward,
-        // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
-        // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
-        payout_pending: match claim.phase {
-            P::Final { final_daa } if state_params.rcore_plus_active_at(final_daa) => {
-                payout_of(&crate::palw_vesting_v1::palw_vesting_payout_key_v1(id))
-            }
-            _ => payout_of(id),
-        },
-        work_leaves: claim.work_leaves,
-        open_courts: court.map(|c| c.0).unwrap_or(0),
-        exec_lane: palw_claim_exec_lane_v1(state, id),
-    }
 }
 
 /// **The bond itself, read beside its claims** (ADR-0122 §6.5, `getPalwClaims`): what the registry
@@ -2711,24 +2602,4 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
         }
     }
     out
-}
-
-/// RFC-0023 stage 2: the RPC label of `palw_claim_local_settlement_v1` at `now`. Empty while dormant, so the row's
-/// wire version is unchanged below the fence; a read fault is `unavailable`, never a guessed state.
-pub fn palw_claim_local_settlement_label_v1(
-    state: &crate::palw_state_v2::PalwChainStateV2,
-    params: &crate::palw_state_v2::PalwStateParamsV2,
-    id: Hash64,
-    now: u64,
-) -> String {
-    use crate::palw_state_v2::PalwClaimLocalSettlementV1 as S;
-    match crate::palw_state_v2::palw_claim_local_settlement_v1(state, params, id, now) {
-        Ok(S::Dormant) => String::new(),
-        Ok(S::Settled) => "settled".into(),
-        Ok(S::Held { until_daa: u64::MAX }) => "held".into(),
-        Ok(S::Held { until_daa }) => format!("held:{until_daa}"),
-        Ok(S::Denied) => "denied".into(),
-        Ok(S::NotRetained) => "not-retained".into(),
-        Err(_) => "unavailable".into(),
-    }
 }

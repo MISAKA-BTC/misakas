@@ -841,42 +841,6 @@ pub fn check_court_tir_root_claim_admits_v1(
         return Err(PalwCourtV2Error::DissectionAlreadyOpen(*session_id));
     }
     let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
-    check_resolved_tir_root_for_claim_v1(state,claim,narrowed,root,arity,derived_arity,court,step_ladder,prompt_ids_form)
-}
-
-/// Check a named leaf against the actual retained claim/program/roots without
-/// inventing a challenger, ladder or court session. Read-only numerical/source
-/// validation only: no signature, notice, funding, custody or default authority.
-/// A future shared coordinator supplies actual native rules and admits clone/
-/// finalize work before calling; wire-supplied rules are not authorization.
-#[allow(clippy::too_many_arguments)]
-pub fn check_named_tir_root_for_claim_v1(
-    state:&PalwChainStateV2,
-    claim_id:&Hash64,
-    narrowed:u64,
-    root:&crate::palw_tir_dissect_v1::PalwTirRootClaimV1,
-    arity:u8,
-    derived_arity:u8,
-    court:&crate::palw_mode_v2::PalwCourtParamsV2,
-    step_ladder:u64,
-    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-)->Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1,PalwCourtV2Error>{
-    let claim=state.claim(claim_id).ok_or(PalwCourtV2Error::MissingClaim(*claim_id))?;
-    check_resolved_tir_root_for_claim_v1(state,claim,narrowed,root,arity,derived_arity,court,step_ladder,prompt_ids_form)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn check_resolved_tir_root_for_claim_v1(
-    state:&PalwChainStateV2,
-    claim:&crate::palw_state_v2::PalwClaimStateV2,
-    narrowed:u64,
-    root:&crate::palw_tir_dissect_v1::PalwTirRootClaimV1,
-    arity:u8,
-    derived_arity:u8,
-    court:&crate::palw_mode_v2::PalwCourtParamsV2,
-    step_ladder:u64,
-    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-)->Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1,PalwCourtV2Error>{
     if state.tir_class_v1(&claim.class_id).is_none() {
         return Err(PalwCourtV2Error::TirDissectionRefused(
             "the session disputes a claim of a class that is not an IR program".into(),
@@ -1432,297 +1396,12 @@ pub fn adjudicate_court_close_v4(
     // RFC-0006 R6-CELL round 4: `palw_cell_coverage_closure_v1`'s mirror — see this function's docs.
     cell_closure_from_daa: Option<u64>,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    adjudicate_court_close_v5(
-        state,
-        session_id,
-        proof,
-        court,
-        step_ladder,
-        prompt_ids_form,
-        held_regime,
-        decode_close_convicts_only,
-        fp_decode_rules_from_daa,
-        cell_closure_from_daa,
-        None,
-    )
-}
-
-/// [`adjudicate_court_close_v4`] knowing RFC-0006's memory/routing consumer v2 (`palw_memory_routing_court_v2`'s mirror,
-/// `PalwStateParamsV2::memory_routing_court_from_daa`, `None` on every shipped network): for a claim accepted past BOTH the coverage
-/// closure and that mirror, REQ-CELL-2's objective conviction reads the consumer-v2 coverage (the solo / composed recurrence maps and,
-/// with the class's covering router binding from aux 139, the routed tables are covered). `None`: byte for byte v4.
-#[allow(clippy::too_many_arguments)]
-// RFC-0024 §4 / §5 — the position terminal and the lookahead moves (DORMANT, `palw_tir_bounded_door_v1`)
-// =================================================================================================
-
-/// **RFC-0024 §4: adjudicate a `PositionCloseV2`** (tag 202) — the same session, the same narrowed
-/// leaf and the same verdict rule as a `CourtClosed` dissection bottom, but graded over ONE history
-/// position: the responder's signed position round must fold exactly to the terminal tile's claim,
-/// the challenger's signed choice names the position, and the bottom's carriage is evaluated over
-/// `[p, p+1)` against that position's claim (root totals supplied, no per-position renormalisation).
-///
-/// Order, cheapest first: the witness budget (typed-missing → refused as
-/// `PositionWitnessBudgetIncomplete`, never a slash), the close cost ceilings, then state. The
-/// signatures are the acceptance layer's ([`check_tir_position_close_signatures_v2`]). The fold then
-/// applies the verdict through the `CourtClosed` arm with `proof` (one close path).
-#[allow(clippy::too_many_arguments)]
-pub fn adjudicate_tir_position_close_v2(
-    state: &PalwChainStateV2,
-    close: &crate::palw_tir_position_terminal_v2::PalwTirPositionCloseV2,
-    court: &crate::palw_mode_v2::PalwCourtParamsV2,
-    step_ladder: u64,
-    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    witness_budget: Option<u64>,
-) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    use crate::palw_tir_position_terminal_v2 as pt;
-    if close.version != pt::PALW_TIR_POSITION_OBJECT_VERSION_V2 {
-        return Err(PalwCourtV2Error::DoesNotAdjudicate(format!("unsupported position close version {}", close.version)));
-    }
-    pt::check_tir_position_witness_budget_v2(close, witness_budget).map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?;
-    check_close_cost_v2(&close.proof, court)?;
-    let session_id = &close.session_id;
-    let (session, claim) = resolve_court_session_v2(state, session_id)?;
-    let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
-    let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
-    let named = pt::palw_tir_position_named_v2(phase, &close.dissection, &close.choice)
-        .map_err(|e| PalwCourtV2Error::TirDissectionRefused(e.to_string()))?;
-    let limits = palw_tir_court_limits_v1(court);
-    match &close.proof {
-        PalwCourtVerdictProofV2::TirDissection { bottom } => {
-            let mut bottom = bottom.as_ref().clone();
-            bottom.binding = tir_binding_filled_v1(state, claim, &bottom.binding)?;
-            check_tir_binding_is_the_claims_v1(state, claim, &bottom.binding)?;
-            let opened = bottom.output_opening.leaf_index;
-            if opened != narrowed {
-                return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed });
-            }
-            // The optional read-set multiproof: hashes only, under the binding's own step root, and it must
-            // carry the narrowed leaf as the bottom opens it. It authenticates bytes; it proves no computation.
-            if let Some(multiproof) = &close.step_multiproof {
-                multiproof
-                    .verify(&bottom.binding.step_merkle_root, bottom.binding.step_leaf_count)
-                    .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?;
-                if multiproof.leaf(narrowed) != Some(&bottom.output_opening.leaf_hash) {
-                    return Err(PalwCourtV2Error::DoesNotAdjudicate("the multiproof does not carry the narrowed leaf".into()));
-                }
-            }
-            let rules = crate::palw_tir_court_v1::PalwTirCourtRulesV1 { max_step_leaf_count: step_ladder, prompt_form: prompt_ids_form, limits };
-            map_refutation_outcome(crate::palw_tir_court_v1::check_tir_dissect_position_bottom_v1(phase, &named, &bottom, narrowed, &rules))
-        }
-        PalwCourtVerdictProofV2::GenDissection { bottom } => {
-            if close.step_multiproof.is_some() {
-                return Err(PalwCourtV2Error::DoesNotAdjudicate("a generative position close carries no step multiproof".into()));
-            }
-            let row = state.gen_class_v1(&claim.class_id).ok_or_else(|| {
-                PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not a generative class", claim.class_id))
-            })?;
-            let outcome = crate::palw_gen_close_v1::check_gen_dissect_position_bottom_v1(
-                phase,
-                &named,
-                bottom,
-                row,
-                &claim.class_id,
-                &claim.execution_root,
-                narrowed,
-                prompt_ids_form,
-                &limits,
-            );
-            match outcome {
-                Ok(Some(_)) => Ok(PalwCourtVerdictV2::ExecutorGuilty),
-                Ok(None) => Ok(PalwCourtVerdictV2::ChallengerDefeated),
-                Err(crate::palw_gen_close_v1::PalwGenCloseErrorV1::NotTheNarrowedLeaf { opened, narrowed }) => {
-                    Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed })
-                }
-                Err(e) => Err(PalwCourtV2Error::DoesNotAdjudicate(e.to_string())),
-            }
-        }
-        PalwCourtVerdictProofV2::EvalDissection { bottom } => {
-            if close.step_multiproof.is_some() {
-                return Err(PalwCourtV2Error::DoesNotAdjudicate("an evaluation position close carries no step multiproof".into()));
-            }
-            let facts = state
-                .improvement_eval_claim_facts_v1(claim, &bottom.binding)
-                .map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))?;
-            let outcome =
-                crate::palw_improve_eval_court_v1::check_eval_dissect_position_bottom_v1(phase, &named, bottom, &facts, narrowed, &limits);
-            match outcome {
-                Ok(Some(_)) => Ok(PalwCourtVerdictV2::ExecutorGuilty),
-                Ok(None) => Ok(PalwCourtVerdictV2::ChallengerDefeated),
-                Err(crate::palw_improve_eval_court_v1::PalwEvalCourtErrorV1::NotTheNarrowedLeaf { opened, narrowed }) => {
-                    Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed })
-                }
-                Err(e) => Err(PalwCourtV2Error::DoesNotAdjudicate(e.to_string())),
-            }
-        }
-        _ => Err(PalwCourtV2Error::DoesNotAdjudicate("a position close carries a TIR, generative or evaluation dissection bottom".into())),
-    }
-}
-
-/// **The two signatures a `PositionCloseV2` carries**: the claim's bond over the position round
-/// (responder context) and the session's challenger bond over the position choice (challenger
-/// context). Without the second, whoever submits the close would choose the position — the responder
-/// could pick an honest one and buy its acquittal.
-pub fn check_tir_position_close_signatures_v2<V>(
-    state: &PalwChainStateV2,
-    close: &crate::palw_tir_position_terminal_v2::PalwTirPositionCloseV2,
-    verify_mldsa87: V,
-) -> Result<(), PalwCourtV2Error>
-where
-    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
-{
-    use crate::palw_tir_position_terminal_v2 as pt;
-    if close.dissection.session_id != close.session_id || close.choice.session_id != close.session_id {
-        return Err(PalwCourtV2Error::SessionIdMismatch);
-    }
-    check_tir_position_dissected_acceptance_v2(state, &close.dissection, &close.responder_signature, &verify_mldsa87)?;
-    let (session, _claim) = resolve_court_session_v2(state, &close.session_id)?;
-    let challenger = state.bond(&session.challenger_bond).ok_or(PalwCourtV2Error::ChallengerMissing(session.challenger_bond))?;
-    let message = pt::palw_tir_position_choice_message_v2(&close.choice);
-    if !verify_mldsa87(&challenger.pubkey, &message, &close.challenger_signature, PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT) {
-        return Err(PalwCourtV2Error::RungSignatureInvalid);
-    }
-    Ok(())
-}
-
-/// **Tag 201: a position round, under the responder's key, bound to the session's terminal phase.**
-pub fn check_tir_position_dissected_acceptance_v2<V>(
-    state: &PalwChainStateV2,
-    dissection: &crate::palw_tir_position_terminal_v2::PalwTirPositionDissectionV2,
-    signature: &[u8],
-    verify_mldsa87: &V,
-) -> Result<(), PalwCourtV2Error>
-where
-    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
-{
-    use crate::palw_tir_position_terminal_v2 as pt;
-    let (_session, claim) = resolve_court_session_v2(state, &dissection.session_id)?;
-    let phase = state.tir_dissection_v1(&dissection.session_id).ok_or(PalwCourtV2Error::NoDissection(dissection.session_id))?;
-    pt::check_tir_position_dissection_v2(phase, dissection).map_err(|e| PalwCourtV2Error::TirDissectionRefused(e.to_string()))?;
-    let bond = state.bond(&claim.bond).ok_or(PalwCourtV2Error::ChallengerMissing(claim.bond))?;
-    let message = pt::palw_tir_position_dissection_message_v2(dissection);
-    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT) {
-        return Err(PalwCourtV2Error::RungSignatureInvalid);
-    }
-    Ok(())
-}
-
-/// **Tag 203: a lookahead disclosure, under the responder's key**, at the phase's round and disputed
-/// range (the bundle itself is checked by the fold against the adopted frontier bound).
-pub fn check_tir_lookahead_disclosed_acceptance_v2<V>(
-    state: &PalwChainStateV2,
-    body: &crate::palw_tir_position_terminal_v2::PalwTirLookaheadDisclosedV2,
-    verify_mldsa87: V,
-) -> Result<(), PalwCourtV2Error>
-where
-    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
-{
-    let (_session, claim) = resolve_court_session_v2(state, &body.session_id)?;
-    let phase = state.tir_dissection_v1(&body.session_id).ok_or(PalwCourtV2Error::NoDissection(body.session_id))?;
-    let bond = state.bond(&claim.bond).ok_or(PalwCourtV2Error::ChallengerMissing(claim.bond))?;
-    let (first, count) = phase.disputed_tiles_v2();
-    let message = crate::palw_tir_dissect_v1::palw_tir_lookahead_message_v2(&body.session_id, phase.round(), first, count, &body.disclosure);
-    if !verify_mldsa87(&bond.pubkey, &message, &body.signature, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT) {
-        return Err(PalwCourtV2Error::RungSignatureInvalid);
-    }
-    Ok(())
-}
-
-/// **Tag 204: a choice path, under the session's challenger key.**
-pub fn check_tir_lookahead_chosen_acceptance_v2<V>(
-    state: &PalwChainStateV2,
-    body: &crate::palw_tir_position_terminal_v2::PalwTirLookaheadChosenV2,
-    verify_mldsa87: V,
-) -> Result<(), PalwCourtV2Error>
-where
-    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
-{
-    let (session, _claim) = resolve_court_session_v2(state, &body.path.session_id)?;
-    if state.tir_dissection_v1(&body.path.session_id).is_none() {
-        return Err(PalwCourtV2Error::NoDissection(body.path.session_id));
-    }
-    let bond = state.bond(&session.challenger_bond).ok_or(PalwCourtV2Error::ChallengerMissing(session.challenger_bond))?;
-    let message = crate::palw_tir_dissect_v1::palw_tir_choice_path_message_v2(&body.path);
-    if !verify_mldsa87(&bond.pubkey, &message, &body.signature, PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT) {
-        return Err(PalwCourtV2Error::RungSignatureInvalid);
-    }
-    Ok(())
-}
-
-pub fn adjudicate_court_close_v5(
-    state: &PalwChainStateV2,
-    session_id: &Hash64,
-    proof: &PalwCourtVerdictProofV2,
-    court: &crate::palw_mode_v2::PalwCourtParamsV2,
-    step_ladder: u64,
-    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    held_regime: bool,
-    decode_close_convicts_only: bool,
-    fp_decode_rules_from_daa: Option<u64>,
-    cell_closure_from_daa: Option<u64>,
-    memory_routing_from_daa: Option<u64>,
-) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
     // hash. A close for a session that does not exist and also breaks the ceiling therefore reports
     // the ceiling, and that is the right answer — the object was inadmissible on its face.
     check_close_cost_v2(proof, court)?;
     let (session, claim) = resolve_court_session_v2(state, session_id)?;
-    let tir_phase = match proof {
-        PalwCourtVerdictProofV2::TirDissection { .. } | PalwCourtVerdictProofV2::GenDissection { .. }
-        | PalwCourtVerdictProofV2::EvalDissection { .. } => state.tir_dissection_v1(session_id),
-        _ => None,
-    };
-    adjudicate_court_close_resolved_v5(state,session_id,session,claim,tir_phase,proof,court,step_ladder,prompt_ids_form,
-        held_regime,decode_close_convicts_only,fp_decode_rules_from_daa,cell_closure_from_daa,memory_routing_from_daa)
-}
-
-/// Private retained-record entry. The caller authenticates the rooted session
-/// and its phase; this computes the same v5 kernel without cloning or modifying
-/// chain state. It does not authenticate admission, credit or financial release.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn adjudicate_court_close_borrowed_v5(
-    state:&PalwChainStateV2,
-    session_id:&Hash64,
-    session:&crate::palw_state_v2::PalwCourtSessionStateV2,
-    tir_phase:Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>,
-    proof:&PalwCourtVerdictProofV2,
-    court:&crate::palw_mode_v2::PalwCourtParamsV2,
-    step_ladder:u64,
-    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    held_regime:bool,
-    decode_close_convicts_only:bool,
-    fp_decode_rules_from_daa:Option<u64>,
-    cell_closure_from_daa:Option<u64>,
-    memory_routing_from_daa:Option<u64>,
-)->Result<PalwCourtVerdictV2,PalwCourtV2Error>{
-    check_close_cost_v2(proof,court)?;
-    if session.ladder.session_id()!=*session_id || tir_phase.is_some_and(|p|p.session_id()!=*session_id) {
-        return Err(PalwCourtV2Error::BindingInvalid("borrowed court session/phase scope mismatch".into()));
-    }
-    let claim=state.claim(&session.claim).ok_or(PalwCourtV2Error::MissingClaim(session.claim))?;
-    adjudicate_court_close_resolved_v5(state,session_id,session,claim,tir_phase,proof,court,step_ladder,prompt_ids_form,
-        held_regime,decode_close_convicts_only,fp_decode_rules_from_daa,cell_closure_from_daa,memory_routing_from_daa)
-}
-
-/// One v5 algorithm for native active sessions and authenticated retained
-/// records. The entry points run the cost gate before reading chain state.
-#[allow(clippy::too_many_arguments)]
-fn adjudicate_court_close_resolved_v5(
-    state:&PalwChainStateV2,
-    session_id:&Hash64,
-    session:&crate::palw_state_v2::PalwCourtSessionStateV2,
-    claim:&crate::palw_state_v2::PalwClaimStateV2,
-    tir_phase:Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>,
-    proof:&PalwCourtVerdictProofV2,
-    court:&crate::palw_mode_v2::PalwCourtParamsV2,
-    step_ladder:u64,
-    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    held_regime:bool,
-    decode_close_convicts_only:bool,
-    fp_decode_rules_from_daa:Option<u64>,
-    cell_closure_from_daa:Option<u64>,
-    memory_routing_from_daa:Option<u64>,
-)->Result<PalwCourtVerdictV2,PalwCourtV2Error>{
     if let PalwCourtVerdictProofV2::Arithmetic { refutation, .. } | PalwCourtVerdictProofV2::ArithmeticOpened { refutation, .. } =
         proof
     {
@@ -1758,12 +1437,10 @@ fn adjudicate_court_close_resolved_v5(
     // because the fault is the class's shape, not a step's value. Below the fence (`None`) nothing here runs.
     // A covered class (or a claim accepted before the fence) goes on below exactly as before; the pins run only before a conviction.
     if let Some(binding) = binding_of(proof)
-        && crate::palw_cell_coverage_closure_v1::palw_cell_closure_court_convicts_v2(
+        && crate::palw_cell_coverage_closure_v1::palw_cell_closure_court_convicts_v1(
             cell_closure_from_daa,
-            memory_routing_from_daa,
             claim.accepted_daa,
             &binding.shape_profile,
-            crate::palw_state_v2::palw_router_binding_row_of_v2(state, &claim.class_id).as_ref(),
         )
     {
         check_close_profile_is_the_registered_class(claim.class_id, binding)?;
@@ -1859,7 +1536,7 @@ fn adjudicate_court_close_resolved_v5(
         // phase exists only because the k-ary court was armed when its root claim was admitted, so,
         // as there, the fence is read off the session and not resolved again.
         PalwCourtVerdictProofV2::TirDissection { bottom } => {
-            let phase = tir_phase.ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
             let mut bottom = bottom.as_ref().clone();
             bottom.binding = tir_binding_filled_v1(state, claim, &bottom.binding)?;
             check_tir_binding_is_the_claims_v1(state, claim, &bottom.binding)?;
@@ -1891,7 +1568,7 @@ fn adjudicate_court_close_resolved_v5(
         }
         // **RFC-0004 A6: the evaluation dissection's bottom, graded against F7's phase**, as the generative one is.
         PalwCourtVerdictProofV2::EvalDissection { bottom } => {
-            let phase = tir_phase.ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
             let facts = state
                 .improvement_eval_claim_facts_v1(claim, &bottom.binding)
                 .map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))?;
@@ -1915,7 +1592,7 @@ fn adjudicate_court_close_resolved_v5(
         // may open, the claim it is compared with and the totals the other reductions are supplied
         // from are the phase's facts.
         PalwCourtVerdictProofV2::GenDissection { bottom } => {
-            let phase = tir_phase.ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
             let row = state.gen_class_v1(&claim.class_id).ok_or_else(|| {
                 PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not a generative class", claim.class_id))
             })?;
@@ -2036,6 +1713,7 @@ fn adjudicate_tir_close_proof_v1(
     step_ladder: u64,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    use crate::palw_tir_court_v1 as tir;
     // **The program is the registered class's** (the coordinator's decision of 2026-09-28): an IR
     // close carries its binding with the program empty, and the chain puts back the program its
     // `tir_classes` row holds before anything reads the binding — so every pin below runs on the
@@ -2053,7 +1731,23 @@ fn adjudicate_tir_close_proof_v1(
     let proof = &filled;
     let binding = proof.tir_binding_v1().expect("filled above");
     check_tir_binding_is_the_claims_v1(state, claim, binding)?;
-    crate::palw_tir_objective_v1::adjudicate_filled_v1(proof, court, step_ladder, prompt_ids_form)
+    let rules = tir::PalwTirCourtRulesV1 {
+        max_step_leaf_count: step_ladder,
+        prompt_form: prompt_ids_form,
+        limits: palw_tir_court_limits_v1(court),
+    };
+    map_refutation_outcome(match proof {
+        PalwCourtVerdictProofV2::TirCone { refutation } => tir::check_tir_cone_refutation_v1(refutation, &rules),
+        PalwCourtVerdictProofV2::TirLogits { accusation } => tir::check_tir_logits_consistency_v1(accusation, &rules),
+        PalwCourtVerdictProofV2::TirDecodeTokenTiled { binding, pin } => tir::check_tir_decode_token_tiled_v1(binding, pin, &rules),
+        PalwCourtVerdictProofV2::TirDecodeToken { binding, pin, position } => {
+            tir::check_tir_decode_token_flat_v1(binding, pin, *position)
+        }
+        // RFC-0002 F7: graded against its phase, in `adjudicate_court_close_v3` — refused here, never
+        // read as "no fault found" (which would acquit).
+        PalwCourtVerdictProofV2::TirDissection { .. } => return Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
+        _ => return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into())),
+    })
 }
 
 /// **An IR binding as the chain reads it** (the coordinator's decision of 2026-09-28): the carried

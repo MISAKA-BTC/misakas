@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! S_m(k)  = C_miner_claim(m, k) + C_verifier_claim(m, k)        deduplicated per bond (the same funds counted once), Active bonds
-//! S̄_m(d)  = (1 / n) · Σ_{k = e−n+1}^{e} S_m(k)                  n = 7 day-equivalents (2026-10-16; 30 before) / epoch length, e the current epoch
+//! S̄_m(d)  = (1 / n) · Σ_{k = e−n+1}^{e} S_m(k)                  n = 30 day-equivalents / epoch length, e the current epoch
 //! P_m     = S̄_m^1.5 / Σ_j S̄_j^1.5                               (0 for every model when the denominator is 0)
 //! block opportunity   a model's reward-bearing block units this epoch ≤ ⌊accrued_blocks · A_m / Σ A⌋ (accrued: one block per DAA)
 //! coinbase            R_m = ⌊R_PALW · A_m / Σ A⌋ (the existing reward share; applied ONCE — never multiplied per block again)
@@ -18,7 +18,7 @@
 //! model row's reservation is at most one epoch's carve, far below either) and carrying the model id in `weight` — so they are rooted,
 //! carried, reverted and replayed exactly as every other row, and no table id, encoding or version changes.
 //!
-//! **Every number is POLICY; `α = 1.5`, the 7-day average (2026-10-16) and the per-model block opportunity are the user's decision,
+//! **Every number is POLICY; `α = 1.5`, the 30-day average and the per-model block opportunity are the user's decision (2026-10-14),
 //! the epoch length and seasoning are not, and the fence stays refused.** Required before activation (user): new models are not
 //! starved under `α = 1.5`; verifier participation, liability, hold and reward rules (including bond-without-checking) are defined.
 
@@ -28,8 +28,8 @@ use super::*;
 pub const PALW_MODEL_ALLOCATION_POLICY_VERSION_V3: u16 = 3;
 /// **User decision (2026-10-14): `α = 1.5`** in half steps (RFC-0015 §8.5.5).
 pub const PALW_ALLOCATION_ALPHA_HALVES_DECIDED_V1: u8 = 3;
-/// **User decision (2026-10-16, replacing 2026-10-14's 30 days): the averaging period, in day-equivalents** (7-day-equivalent DAA).
-pub const PALW_ALLOCATION_AVERAGE_DAYS_V1: u32 = 7;
+/// **User decision (2026-10-14): the averaging period, in day-equivalents** (30-day-equivalent DAA).
+pub const PALW_ALLOCATION_AVERAGE_DAYS_V1: u32 = 30;
 /// The most epochs one average may span (bounds the history rows a model keeps).
 pub const PALW_ALLOCATION_AVERAGE_EPOCHS_MAX_V1: u64 = 1_440;
 /// Marker of an epoch-snapshot history row in the `models` table.
@@ -95,17 +95,13 @@ impl PalwModelAllocationPolicyV1 {
             return Err("the allocation curve is alpha = 1.5 (user decision 2026-10-14)");
         }
         if average.average_days != PALW_ALLOCATION_AVERAGE_DAYS_V1 || average.daa_per_day != PALW_BOND_HOLD_DAA_PER_DAY_V1 {
-            return Err("the allocation averages over 7 day-equivalents of DAA (user decision 2026-10-16)");
+            return Err("the allocation averages over 30 day-equivalents of DAA (user decision 2026-10-14)");
         }
         if !average.verifier_capital || !average.block_opportunity {
             return Err("S_m counts miner + claim-bound verifier capital, and P_m applies to block opportunity and coinbase (2026-10-14)");
         }
-        // A zero epoch is refused here, before the remainder below (`validate`'s own zero check runs after this one).
-        if self.epoch_daa == 0 {
-            return Err("the allocation epoch must be positive");
-        }
         if average.span_daa() % self.epoch_daa != 0 {
-            return Err("the allocation epoch must divide the averaging span");
+            return Err("the allocation epoch must divide the 30-day averaging span");
         }
         if average.span_daa() / self.epoch_daa > PALW_ALLOCATION_AVERAGE_EPOCHS_MAX_V1 {
             return Err("the averaging span holds too many epochs");
@@ -174,12 +170,6 @@ impl PalwBondBudgetStateV1 {
     /// **Open allocation epoch `index` under a V3 policy** (the 2026-10-14 decision): promote seasoned assignments, take the
     /// deduplicated miner + verifier snapshot `S_m(index)`, record it, drop history older than the averaging span and last epochs'
     /// block reservations, then write every model's live row from the average `S̄_m` and `A_m = ⌊S̄_m^α⌋`.
-    ///
-    /// `eligible_capital(model, capital)` is RFC-0017's hook (GAP-E1, `palw_eligibility_allocation_capital_v1`): the capital a model's
-    /// eligibility stage admits — 0 for a Registered / Lapsed model past `palw_model_eligibility_v1`, the capital unchanged below it.
-    /// It is applied to each epoch's snapshot (parked capital is never recorded) and to the average (a model that lapsed now leaves
-    /// the denominator now), so such a model has no live row: no coinbase share, no block opportunity, and no dilution of others.
-    #[allow(clippy::too_many_arguments)]
     pub fn roll_epoch_v3(
         &mut self,
         policy: &PalwModelAllocationPolicyV1,
@@ -187,40 +177,6 @@ impl PalwBondBudgetStateV1 {
         start_daa: u64,
         capital_of: impl Fn(&PalwBondKeyV2) -> (u64, bool),
         verifier: &BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>>,
-        eligible_capital: impl Fn(&Hash64, u128) -> u128,
-        j: &mut Vec<PalwBudgetWriteV1>,
-    ) {
-        self.roll_epoch_v3_tiered(
-            policy,
-            index,
-            start_daa,
-            capital_of,
-            verifier,
-            eligible_capital,
-            |_| (false, crate::palw_model_tier_v1::PALW_MODEL_TIER_APPROVED_PERMILLE_V1),
-            None,
-            j,
-        )
-    }
-
-    /// **[`Self::roll_epoch_v3`] with ADR-0179's model tiers** (user decision 2026-10-15, round 4; `palw_model_tier_v1`, dormant):
-    /// `tier(model) = (registered, c_permille)`. Each live row's weight is `A_m = c_m · S̄_m^α` — the ONE place the tier is applied;
-    /// the resulting `P_m = A_m / ΣA` feeds RFC-0016 V+ block rights and the coinbase allocation alike, and no accepted block's
-    /// reward is multiplied by the tier again. With `registered_cap_permille = Some(ρ)` the registered (0.3) models' weights are
-    /// scaled so they total at most `ρ` of `ΣA`, and `ΣA` is the sum of the SAME scaled weights (user correction 2026-10-22: the header
-    /// once kept the unscaled `ΣA`, which let registered capital dilute the approved tier whatever `ρ` was). N registrations never
-    /// multiply the tier's share; the approved tier keeps at least `1 − ρ` of the allocation.
-    #[allow(clippy::too_many_arguments)]
-    pub fn roll_epoch_v3_tiered(
-        &mut self,
-        policy: &PalwModelAllocationPolicyV1,
-        index: u64,
-        start_daa: u64,
-        capital_of: impl Fn(&PalwBondKeyV2) -> (u64, bool),
-        verifier: &BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>>,
-        eligible_capital: impl Fn(&Hash64, u128) -> u128,
-        tier: impl Fn(&Hash64) -> (bool, u32),
-        registered_cap_permille: Option<u32>,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) {
         let n = policy.average_epochs().unwrap_or(1);
@@ -247,13 +203,9 @@ impl PalwBondBudgetStateV1 {
         // 2. This epoch's snapshot, recorded.
         let snapshot = palw_allocation_snapshot_v3(&miner, verifier, &capital_of);
         for (model, capital) in &snapshot {
-            let capital = eligible_capital(model, *capital);
-            if capital == 0 {
-                continue;
-            }
             let row = PalwModelBudgetRowV1 {
                 epoch: index,
-                capital,
+                capital: *capital,
                 weight: model_as_weight(model),
                 reserved_sompi: PALW_ALLOCATION_HISTORY_MARKER_V1,
             };
@@ -278,14 +230,8 @@ impl PalwBondBudgetStateV1 {
         for row in self.models.values().filter(|row| row.reserved_sompi == PALW_ALLOCATION_HISTORY_MARKER_V1) {
             *sums.entry(weight_as_model(&row.weight)).or_default() += row.capital;
         }
-        let averages: BTreeMap<Hash64, u128> = sums
-            .into_iter()
-            .map(|(m, total)| {
-                let average = eligible_capital(&m, total / n as u128);
-                (m, average)
-            })
-            .filter(|(_, avg)| *avg > 0)
-            .collect();
+        let averages: BTreeMap<Hash64, u128> =
+            sums.into_iter().map(|(m, total)| (m, total / n as u128)).filter(|(_, avg)| *avg > 0).collect();
         // 5. Live rows: drop the models that left, write the rest.
         let stale: Vec<Hash64> = self
             .models
@@ -296,33 +242,10 @@ impl PalwBondBudgetStateV1 {
         for model in stale {
             put(&mut self.models, PALW_BUDGET_TABLE_MODELS_V1, &model, None, j);
         }
-        // ADR-0179: `A_m = c_m · S̄_m^α`, once; then the registered tier's aggregate cap.
         let mut sum_a = PalwAllocationWeightV1::ZERO;
-        let mut registered_sum = PalwAllocationWeightV1::ZERO;
-        let mut rows: Vec<(Hash64, u128, PalwAllocationWeightV1, bool)> = Vec::with_capacity(averages.len());
         for (model, average) in averages {
-            let (registered, c_permille) = tier(&model);
-            let weight = crate::palw_model_tier_v1::palw_model_tier_weight_v1(policy.curve.weight(average), c_permille);
+            let weight = policy.curve.weight(average);
             sum_a = sum_a.saturating_add(weight);
-            if registered {
-                registered_sum = registered_sum.saturating_add(weight);
-            }
-            rows.push((model, average, weight, registered));
-        }
-        let canonical_sum = sum_a.saturating_sub(registered_sum);
-        let factor = registered_cap_permille
-            .map(|cap| crate::palw_model_tier_v1::palw_model_tier_cap_factor_ppm_v1(canonical_sum, registered_sum, cap))
-            .unwrap_or(1_000_000);
-        // ADR-0179 (user correction 2026-10-22): `ΣA` is the sum of the same scaled `A_m` the rows carry. Identical to the sum above
-        // whenever the cap does not bind (factor 1,000,000: every weight unchanged), so the untiered roll is byte for byte the old one.
-        if factor < 1_000_000 {
-            sum_a = PalwAllocationWeightV1::ZERO;
-        }
-        for (model, average, weight, registered) in rows {
-            let weight = if registered { crate::palw_model_tier_v1::palw_model_tier_scale_v1(weight, factor) } else { weight };
-            if factor < 1_000_000 {
-                sum_a = sum_a.saturating_add(weight);
-            }
             put(
                 &mut self.models,
                 PALW_BUDGET_TABLE_MODELS_V1,

@@ -42,11 +42,6 @@ fn narrow(value: u128) -> Result<u64, String> {
     u64::try_from(value).map_err(|_| "rendering resource terms exceed the platform's exact u64 envelope".into())
 }
 impl PalwRenderingResourcePlanV1 {
-    /// Every independently priced dimension must fit. Geometry fields are
-    /// capacities here; the native seed/job checks separately fix their identity.
-    pub fn covers_v1(&self, execution: Self) -> bool {
-        self.cover(execution) == *self
-    }
     /// Prefix length and vocab come from the authenticated binding/profile, never a declaration.
     /// Conservative bound allows all-vocabulary work. The refutation court itself needs only
     /// nominated witness/beat lanes; this helper does not implement an all-vocabulary census.
@@ -146,30 +141,6 @@ impl PalwRenderingResourcePlanV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn allocation_coverage_checks_every_geometry_work_capital_and_memory_dimension() {
-        let plan = PalwRenderingResourcePlanV1::derive(4, 17, prices()).unwrap();
-        assert!(plan.covers_v1(plan));
-        macro_rules! reject_deficit {($($field:ident),+ $(,)?)=>{$(
-            let mut short=plan;short.$field-=1;
-            assert!(!short.covers_v1(plan),"{} is not an optional allocation dimension",stringify!($field));
-        )+};}
-        reject_deficit!(
-            prefix_tokens,
-            vocab,
-            maximum_stream_bytes,
-            maximum_stream_leaves,
-            maximum_eog_bytes,
-            maximum_moves,
-            maximum_parser_steps,
-            maximum_blake_blocks,
-            inclusion_daa,
-            rent_sompi,
-            deposit_sompi,
-            row_bytes,
-            resident_ram_bytes
-        );
-    }
     fn prices() -> PalwRenderingResourcePricesV1 {
         PalwRenderingResourcePricesV1 {
             inclusion_margin_daa: 4,
@@ -361,16 +332,8 @@ impl PalwStagedPublicCourtConfigV1 {
                 reorg_replay_moves: 64,
             },
             acquisition_daa: 4_096,
-            // V9 (decided 2026-10-22, lane P3, user delegation of value decisions; awaiting independent verification —
-            // docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md): the staged material must cover a clock-v2 dispute
-            // extension, `a + 10,000 + max(W_disclose, reorg_retention)` (`palw_court_clock_v2_dependencies_cover_v2`), or every
-            // governed staged claim's extension is refused as a short Custody dependency. With W_disclose = 1,200 (testnet-12) that is
-            // a + 11,200; acquisition + collection = 11,200 alone covers it (collect_until ≥ a + 11,200 before any inclusion term), and
-            // the reorg term adds 360 more. Was 4,096 (material a + 8,448 + inclusion: short).
-            collection_daa: 7_104,
-            // V9: testnet-12's finality depth, FINALITY_DURATION 43,200 s / 120 s per block = 360 (`new_two_minute_bps`): a reorg
-            // can never un-record a court object deeper than this. Was 256 (below the finality depth).
-            reorg_retention_daa: 360,
+            collection_daa: 4_096,
+            reorg_retention_daa: 256,
             maximum_owned_rows_per_reserver: 1,
         }
     }

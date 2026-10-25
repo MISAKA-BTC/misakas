@@ -105,7 +105,7 @@ pub(super) fn accept(
         physical_service22: service.root(),
         slot_cooldown_terms: NativeExecutionConsentV23::cooldown_terms(),
     };
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, id)), Some(key(&(c.root(), c))))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, id)), Some(key(&(c.root(), c))));
     Ok(())
 }
 pub(super) struct NativeCapacityAdmissionV23 {
@@ -205,19 +205,18 @@ pub(super) fn plan_fund(
     };
     Ok(NativeCapacityAdmissionV23 { global, lease, plan, pursuit, consent: c, queue })
 }
-pub(super) fn write(builder: &mut TransitionBuilder<'_>, admission: NativeCapacityAdmissionV23, job: Digest) -> Result<(), PalwStateV2Error> {
+pub(super) fn write(builder: &mut TransitionBuilder<'_>, admission: NativeCapacityAdmissionV23, job: Digest) {
     if let Some((global, lease)) = admission.queue {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))))?;
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, job, 1u8)), Some(key(&(lease.root(), lease))))?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, job, 1u8)), Some(key(&(lease.root(), lease))));
     }
     let slots = NativePhysicalSlotsV22::empty(job, admission.consent.root());
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))))?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, global_key(), Some(key(&(admission.global.root(), admission.global))))?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, lease_key(job), Some(key(&(admission.lease.root(), admission.lease))))?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, plan_key(job), Some(key(&admission.plan)))?;
-    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, key(&(19u8, job)), Some(key(&admission.pursuit)))?;
-    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, key(&(23u8, job)), Some(key(&admission.consent)))?;
-    Ok(())
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, global_key(), Some(key(&(admission.global.root(), admission.global))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, lease_key(job), Some(key(&(admission.lease.root(), admission.lease))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, plan_key(job), Some(key(&admission.plan)));
+    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, key(&(19u8, job)), Some(key(&admission.pursuit)));
+    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, key(&(23u8, job)), Some(key(&admission.consent)));
 }
 
 fn slots(builder: &TransitionBuilder<'_>, job: Digest) -> Result<Option<NativePhysicalSlotsV22>, PalwStateV2Error> {
@@ -242,11 +241,10 @@ fn slots(builder: &TransitionBuilder<'_>, job: Digest) -> Result<Option<NativePh
     }
     Ok(Some(s))
 }
-fn write_slots(builder: &mut TransitionBuilder<'_>, job: Digest, slots: Option<NativePhysicalSlotsV22>) -> Result<(), PalwStateV2Error> {
+fn write_slots(builder: &mut TransitionBuilder<'_>, job: Digest, slots: Option<NativePhysicalSlotsV22>) {
     if let Some(s) = slots {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(s.root(), s))))?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(s.root(), s))));
     }
-    Ok(())
 }
 pub(super) fn plan_owner(
     builder: &TransitionBuilder<'_>,
@@ -289,14 +287,13 @@ pub(super) fn request(
         s.reserve_request(lane, owner, slot, kind, pending, now, deadline).map_err(refused)?;
     }
     if slots.is_some() && kind == 1 {
-        builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending)), Some(vec![0]))?;
+        builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending)), Some(vec![0]));
     }
-    write_slots(builder, job, slots)?;
+    write_slots(builder, job, slots);
     Ok(())
 }
-pub(super) fn commit_owner(builder: &mut TransitionBuilder<'_>, job: Digest, slots: Option<NativePhysicalSlotsV22>) -> Result<(), PalwStateV2Error> {
-    write_slots(builder, job, slots)?;
-    Ok(())
+pub(super) fn commit_owner(builder: &mut TransitionBuilder<'_>, job: Digest, slots: Option<NativePhysicalSlotsV22>) {
+    write_slots(builder, job, slots);
 }
 pub(super) fn debit_trace_attempt(builder: &mut TransitionBuilder<'_>, job: Digest, pending: Digest) -> Result<(), PalwStateV2Error> {
     if slots(builder, job)?.is_none() {
@@ -314,7 +311,7 @@ pub(super) fn debit_trace_attempt(builder: &mut TransitionBuilder<'_>, job: Dige
         return Err(refused("native23 original trace answer attempts exhausted"));
     }
     let next = raw[0] + 1;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending)), Some(vec![next]))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending)), Some(vec![next]));
     Ok(())
 }
 pub(super) fn check_fresh_start(builder: &TransitionBuilder<'_>, job: Digest, now: u64, horizon: u64) -> Result<(), PalwStateV2Error> {
@@ -340,18 +337,6 @@ pub(super) fn check_fresh_start(builder: &TransitionBuilder<'_>, job: Digest, no
     Ok(())
 }
 
-/// G14 lane closure G-N1: the physical place of a lapsed owner that compelled nothing ([`NativePhysicalSlotsV22::release_lapsed_owner_v41`]).
-pub(super) fn plan_release_lapsed_owner(
-    builder: &TransitionBuilder<'_>,
-    job: Digest,
-    owner: Digest,
-) -> Result<Option<NativePhysicalSlotsV22>, PalwStateV2Error> {
-    let mut slots = slots(builder, job)?;
-    if let Some(s) = &mut slots {
-        s.release_lapsed_owner_v41(owner).map_err(refused)?;
-    }
-    Ok(slots)
-}
 pub(super) fn plan_retire_owner(
     builder: &TransitionBuilder<'_>,
     job: Digest,

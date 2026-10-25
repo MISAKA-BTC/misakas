@@ -30,8 +30,23 @@ pub struct PrivatePaidProgramRequestV3 {
     pub producer_card: u32,
     pub parameters: BTreeMap<(u16, Option<u16>), TensorWireV1>,
 }
-/// The existing V4 request bytes are shared with the live first-party generator.
-pub use misaka_palw_sdk::claim_paid_v2::all_target_bootstrap::NativePaidRequestV4 as PrivatePaidNativeRequestV4;
+/// All-target request. The original V3 Program request layout remains readable.
+#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PrivatePaidNativeRequestV4 {
+    pub version: u16,
+    pub header: Vec<u8>,
+    pub rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    pub ledger_root: Hash64,
+    pub aux_root: Hash64,
+    pub base_job: Digest,
+    pub paid_class: Digest,
+    pub paid_job: Digest,
+    pub material_consent: Digest,
+    pub not_before_daa: u64,
+    pub salt: Digest,
+    pub producer_card: u32,
+    pub inputs: NativePaidProducerInputsV3,
+}
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = OpenOptions::new();
@@ -109,12 +124,23 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     let paid_class: misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2 = route
         .aux_row(kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_CLASSES_V2, &request.paid_class.to_vec())
         .ok_or("requested paid class is not in the pinned native snapshot")?;
-    if paid_class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
-        return Err(kaspa_consensus_core::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into());
-    }
     if config.params.palw_paid_bootstrap_source_v6.is_some() && !paid_class.supports_approved_bootstrap_source_v6() {
         return Err("explicit V6 exporter supports only noninteractive consumers; no compact/staged namespace fallback".into());
     }
+    let compact = if let Some(plan) = paid_class.interactive_plan.as_ref().filter(|p| p.version == 4) {
+        let fence = config
+            .params
+            .palw_claim_compact_v4
+            .filter(|f| f.activation.is_active(request.not_before_daa))
+            .ok_or("compact exporter requires the explicit private V4 configuration, never a V3 relabel")?;
+        fence.policy.validate()?;
+        let registration = route.paid_compact_contract_v4(&plan.id())?.registration;
+        let ledger = route.ledger()?;
+        registration.validate_for_class(&paid_class, &ledger)?;
+        Some(registration)
+    } else {
+        None
+    };
     let work = produce_native_work_with_resident_v3(&route, request.base_job, producer, request.inputs, resident)
         .map_err(|e| e.to_string())?;
     let unsigned = work
@@ -157,6 +183,17 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
         manifest["schema"] = serde_json::json!("misaka.private-paid-native-work.v6");
         manifest["sourceNamespace"] = serde_json::json!("approved-bootstrap-v6");
         manifest["sourcePolicyId"] = serde_json::json!(faster_hex::hex_string(&fence.policy.id()));
+    }
+    if let Some(registration) = compact {
+        manifest["proofPlanVersion"] = serde_json::json!(4);
+        manifest["proofPlan"] = serde_json::json!(faster_hex::hex_string(&registration.plan.id()));
+        manifest["compactContract"] = serde_json::json!(faster_hex::hex_string(&registration.contract.id()));
+        manifest["compactCoverage"] = serde_json::json!(faster_hex::hex_string(&registration.coverage.root()));
+        manifest["compactProofGeneration"] = serde_json::json!(
+            "after signed material message and native source lock; COMPACT-PROVE then producer COMPACT-BIND then assigned COMPACT-VERIFY"
+        );
+        manifest["compactProofIncluded"] = serde_json::json!(false);
+        write_new(&output.join("compact-registration-v4.borsh"), &borsh::to_vec(&registration).map_err(|e| e.to_string())?)?;
     }
     write_new(&output.join("manifest.json"), &serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?)?;
     std::fs::File::open(output).and_then(|d| d.sync_all()).map_err(|e| format!("paid work directory sync: {e}"))?;
@@ -225,39 +262,6 @@ fn preflight_request_v4(bytes: &[u8]) -> Result<u128, String> {
         }
     }
     take(&mut r, 7 * 64 + 8 + 4)?; // roots, job/class/enrollment terms, anchor, card
-    preflight_producer_inputs(r, version, heap)
-}
-
-/// Allocation preflight for the separate live-generator producer-input file.
-pub(super) fn preflight_paid_inputs_v4(bytes: &[u8]) -> Result<u128, String> {
-    preflight_producer_inputs(bytes, 4, bytes.len() as u128)
-}
-
-fn preflight_producer_inputs(bytes: &[u8], version: u16, mut heap: u128) -> Result<u128, String> {
-    use std::io::Read;
-    fn blob<'a>(r: &mut &'a [u8], cap: usize) -> Result<&'a [u8], String> {
-        let mut word = [0; 4];
-        r.read_exact(&mut word).map_err(|e| e.to_string())?;
-        let n = u32::from_le_bytes(word) as usize;
-        if n > cap || n > r.len() {
-            return Err("private request field exceeds exact frame/cap".into());
-        }
-        let (value, tail) = r.split_at(n);
-        *r = tail;
-        Ok(value)
-    }
-    fn take<'a>(r: &mut &'a [u8], n: usize) -> Result<&'a [u8], String> {
-        if n > r.len() {
-            return Err("truncated private request".into());
-        }
-        let (value, tail) = r.split_at(n);
-        *r = tail;
-        Ok(value)
-    }
-    fn word(r: &mut &[u8]) -> Result<usize, String> {
-        Ok(u32::from_le_bytes(take(r, 4)?.try_into().unwrap()) as usize)
-    }
-    let mut r = bytes;
     let tensors = word(&mut r)?;
     if tensors > 16_384 {
         return Err("private artifact map exceeds 16384 instances".into());
@@ -349,23 +353,6 @@ fn preflight_producer_inputs(bytes: &[u8], version: u16, mut heap: u128) -> Resu
 #[cfg(test)]
 mod request_preflight_tests {
     use super::*;
-    #[test]
-    fn standalone_live_inputs_are_preflighted_before_collection_allocation() {
-        let empty = borsh::to_vec(&NativePaidProducerInputsV3::default()).unwrap();
-        preflight_paid_inputs_v4(&empty).unwrap();
-        for offset in [0, 4, 8] {
-            let mut bad = empty.clone();
-            bad[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
-            assert!(preflight_paid_inputs_v4(&bad).is_err());
-        }
-        for end in 0..empty.len() {
-            assert!(preflight_paid_inputs_v4(&empty[..end]).is_err());
-        }
-        let mut trailing = empty;
-        trailing.push(0);
-        assert!(preflight_paid_inputs_v4(&trailing).is_err());
-    }
-
     #[test]
     fn a_tiny_request_cannot_allocate_an_attacker_declared_header() {
         for version in [3u16, 4] {

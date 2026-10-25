@@ -20,11 +20,11 @@
 Authoritative design & spec live under [`docs/`](..):
 
 - [ADR-0019 — ML-DSA-87 migration](../adr/0019-mldsa87-migration.md) (rev 1.2 is the current governing record)
-- [Design doc — `docs/kaspa-pq-design-mldsa87.md`](../design/pq/kaspa-pq-design-mldsa87.md)
-- [Spec — `docs/kaspa-pq-spec.md`](../spec/pq/kaspa-pq-spec.md)
-- [Verification runbook — `docs/kaspa-pq-mldsa87-verification-runbook.md`](../testing/pq/kaspa-pq-mldsa87-verification-runbook.md)
-- [Validator runbook — `docs/validator-runbook.md`](../history/operations/dns-validator/validator-runbook.md)
-- [PALW provenance map — `docs/palw-registry-map.md`](../reference/palw/palw-registry-map.md) — **where the model registry, the artifact hash, the runtime registry, the receipt, the output root, the verification, the metering and the capability profile already are**, field by field, plus the layers that are refused and why (ADR-0079 §7 / R-09). Read it before proposing a provenance layer.
+- [Design doc — `docs/kaspa-pq-design-mldsa87.md`](../kaspa-pq-design-mldsa87.md)
+- [Spec — `docs/kaspa-pq-spec.md`](../kaspa-pq-spec.md)
+- [Verification runbook — `docs/kaspa-pq-mldsa87-verification-runbook.md`](../kaspa-pq-mldsa87-verification-runbook.md)
+- [Validator runbook — `docs/validator-runbook.md`](../validator-runbook.md)
+- [PALW provenance map — `docs/palw-registry-map.md`](../palw-registry-map.md) — **where the model registry, the artifact hash, the runtime registry, the receipt, the output root, the verification, the metering and the capability profile already are**, field by field, plus the layers that are refused and why (ADR-0079 §7 / R-09). Read it before proposing a provenance layer.
 - [ADR index — `docs/adr/README.md`](../adr/README.md) (what governs, and what was reversed)
 
 **Scope of PQ claims** (per the design doc): "tx authorization uses ML-DSA-87", "secp256k1 signing disabled in PQ consensus mode", "64-byte BLAKE2b-512 consensus identity". Transport-layer (network) traffic is **not** PQ unless an ML-KEM hybrid is enabled.

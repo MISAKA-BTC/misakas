@@ -270,7 +270,7 @@ impl MaterialRecoveryAckOutboxV2 {
         // allocation; dynamic signature/vector and enum owners are separate.
         let mut frame = [0u8; 4 + 64 + 64 + 64 + 68 + 4 + 64 + 64 + 8 + 4 + 1];
         frame[..4].copy_from_slice(&1u32.to_le_bytes());
-        let node = preflight_native_value_v1::<BTreeMap<Hash64, MaterialRecoveryAckRowV2>>(&frame[..], frame.len() as u64)
+        let node = preflight_native_value_v1::<BTreeMap<Hash64, MaterialRecoveryAckRowV2>>(frame.as_slice(), frame.len() as u64)
             .map_err(|e| e.to_string())?
             .logical_requests_v1();
         let n = u32::try_from(receipt.contract.generations.len()).map_err(|_| "ACK generation count overflow")?;

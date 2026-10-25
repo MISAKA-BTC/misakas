@@ -12,7 +12,6 @@ use super::*;
 /// built registration waiting for its funding holds the rest of the tick.
 #[test]
 fn a_dropped_class_registration_is_resubmitted_and_a_registrant_keeps_its_duties() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     use PalwClassRegistrationRetryV1::{LeftThePoolWithoutTheClass, StillQueuedPastTheHorizon};
     use PalwClassRegistrationStepV1::{Landed, Retry, Wait};
     let step = palw_class_registration_step_v1;
@@ -47,22 +46,19 @@ fn a_dropped_class_registration_is_resubmitted_and_a_registrant_keeps_its_duties
 
     // The loop asks the mempool, applies the step, treats a class already on the chain as done,
     // matches the IR object's own class id, and holds the tick by the rule.
-    let production = crate::palw_panel::source_support::former_parent_production_source_v1();
-    let worker = &production[production.find_code("    pub async fn worker(").expect("the worker")..];
-    let actor = include_str!("registration.rs");
-    assert!(actor.contains("if let Some((txid, sent_daa)) = self.inflight {"));
-    assert!(actor.contains(".has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)"));
-    assert!(actor.contains("palw_class_registration_step_v1("));
-    assert!(actor.contains("Some(PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. })"));
-    assert!(actor.contains("self.known_id.get_or_insert_with(|| service.class_registration_id())"));
-    assert!(actor.contains("if palw_class_registration_holds_the_tick_v1("));
-    assert!(actor.contains("return true;"));
-    assert!(worker.contains_code("if registration.advance_v1(self, &session, current_daa, &mut carrier_chain).await { continue; }"));
-    assert_eq!(actor.matches("self.inflight = Some((txid, current_daa));").count(), 2, "bootstrap and late submit state");
-    assert_eq!(actor.matches("self.left_pool = None;").count(), 4, "reset on submit (x2), in pool, retry");
-    let collector = include_str!("collector.rs");
-    assert!(collector.contains("registration.record_submission(txid, current_daa);"));
-
+    let whole = include_str!("../palw_panel.rs");
+    let production = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the tests")];
+    let worker = &production[production.find("    pub async fn worker(").expect("the worker")..];
+    let flight = &worker[worker.find("if let Some((txid, sent_daa)) = class_registration_inflight {").expect("the in-flight read")..];
+    let flight = &flight[..flight.find("\n            }\n").expect("its end")];
+    assert!(flight.contains(".has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)"));
+    assert!(flight.contains("palw_class_registration_step_v1("));
+    assert!(flight.contains("Some(PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, .. })"));
+    assert!(worker.contains("class_registration_known_id.get_or_insert_with(|| self.class_registration_id())"));
+    assert!(!worker.contains("if self.config.register_class.is_some() && !class_registration_done {\n                continue;"));
+    assert!(worker.contains("if palw_class_registration_holds_the_tick_v1("));
+    assert_eq!(worker.matches("class_registration_inflight = Some((txid, current_daa));").count(), 2, "both submit sites");
+    assert_eq!(worker.matches("class_registration_left_pool = None;").count(), 4, "reset on submit (x2), in pool, retry");
 }
 
 /// The two-output bond carrier this node builds: one collateral output to the payee, one
@@ -477,7 +473,8 @@ fn a_node_built_bond_registration_carries_the_operator_possession_proof_past_the
 /// reported what the seat would not do.
 #[test]
 fn every_panel_duty_resolves_a_class_through_the_one_door() {
-    let production = crate::palw_panel::source_support::former_parent_production_source_v1();
+    let whole = include_str!("../palw_panel.rs");
+    let production = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")];
     for table_only in ["backends.resolve(", "backends().resolve("] {
         assert!(!production.contains(table_only), "`{table_only}` skips the chain's registrations — use `resolve_backend`");
     }
@@ -504,8 +501,8 @@ fn every_panel_duty_resolves_a_class_through_the_one_door() {
 /// production path clears a process-wide memo, because there is none.
 #[test]
 fn a_seat_judges_on_its_own_instance_and_the_executor_keeps_one() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
-    let production = crate::palw_panel::source_support::former_parent_production_source_v1();
+    let whole = include_str!("../palw_panel.rs");
+    let production = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")];
     let body = |signature: &str| -> &str {
         let rest = &production[production.find(signature).unwrap_or_else(|| panic!("no `{signature}` in production"))..];
         &rest[..rest.find("\n    }\n").expect("its end")]
@@ -514,27 +511,27 @@ fn a_seat_judges_on_its_own_instance_and_the_executor_keeps_one() {
     for fresh in ["self.resolve_backend(", "self.backend_for_raw_capture_v1("] {
         assert!(!executor.contains(fresh), "the executor's openings resolve a fresh instance through `{fresh}` and walk from zero");
     }
-    assert!(executor.contains_code("self.executor_backend_v1("), "the free-prompt arm reaches the kept instance");
-    assert!(executor.contains_code("self.executor_backend_for_raw_capture_v1("), "and so does the raw-capture arm");
+    assert!(executor.contains("self.executor_backend_v1("), "the free-prompt arm reaches the kept instance");
+    assert!(executor.contains("self.executor_backend_for_raw_capture_v1("), "and so does the raw-capture arm");
     let retained = body("    fn retained_fp_capture_v1(");
-    assert!(retained.contains_code("self.executor_backend_v1("), "leaf evidence and the held answers reach the kept instance");
+    assert!(retained.contains("self.executor_backend_v1("), "leaf evidence and the held answers reach the kept instance");
     let seat = body("    async fn interval_seat_outcome_v1(");
-    assert!(seat.contains_code("backend.fp_forget_seat_state_v1();"), "the seat drops its own instance's state at the claim boundary");
+    assert!(seat.contains("backend.fp_forget_seat_state_v1();"), "the seat drops its own instance's state at the claim boundary");
     for kept in ["self.executor_backend_v1(", "self.executor_backend_for_raw_capture_v1(", "self.keep_executor_backend_v1("] {
         assert!(!seat.contains(kept), "a seat must not judge on the executor's instance (`{kept}`)");
     }
-    let released = seat.find_code("self.release_executor_backend_v1();").expect("the seat releases the executor's walk");
-    let reserved = seat.find_code("self.reserve_replay_at_widest_run_v1(\"interval-seat\"").expect("the seat reserves");
+    let released = seat.find("self.release_executor_backend_v1();").expect("the seat releases the executor's walk");
+    let reserved = seat.find("self.reserve_replay_at_widest_run_v1(\"interval-seat\"").expect("the seat reserves");
     assert!(released < reserved, "the executor's idle walk is released before the seat reserves");
     // And before a court's close reserves: its walk from served intervals is on its own instance.
-    let court = production.find_code("self.reserve_replay_at_widest_run_v1(\"court\"").expect("the court reserves its close");
+    let court = production.find("self.reserve_replay_at_widest_run_v1(\"court\"").expect("the court reserves its close");
     let released = production[..court].rfind("self.release_executor_backend_v1();").expect("the court releases the executor's walk");
     let between = &production[released..court];
     assert!(
-        !between.contains("\n    fn ") && !between.contains("\n    async fn ") && !between.contains_code("reserve_replay_"),
+        !between.contains("\n    fn ") && !between.contains("\n    async fn ") && !between.contains("reserve_replay_"),
         "the release is the court arm's own, just before its reservation"
     );
-    assert!(!production.contains_code("base0_fp_seat_state_forget_v1("), "no production path clears another instance's memo");
+    assert!(!production.contains("base0_fp_seat_state_forget_v1("), "no production path clears another instance's memo");
 }
 
 /// **ADR-0152 §4-ter (the shard-court addendum): a seat shapes its one-move accusation at the
@@ -546,52 +543,21 @@ fn a_seat_judges_on_its_own_instance_and_the_executor_keeps_one() {
 /// so the live fleet files exactly what it did.
 #[test]
 fn every_one_move_filing_site_reads_the_class_ladder_past_the_fence() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
-    let production = crate::palw_panel::source_support::former_parent_production_source_v1();
+    let whole = include_str!("../palw_panel.rs");
+    let production = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")];
     let caps: Vec<usize> = production.match_indices("palw_court_v2::palw_refutation_leaf_cap_v2(").map(|(at, _)| at).collect();
     assert_eq!(caps.len(), 2, "the two one-move filing sites");
     for at in caps {
         let after = &production[at..at + 900.min(production.len() - at)];
         assert!(
-            after.contains_code("let ladder = self.seat_refutation_ladder_v1(duty.class_id, ladder, current_daa);"),
+            after.contains("let ladder = self.seat_refutation_ladder_v1(duty.class_id, ladder, current_daa);"),
             "a filing site shapes at the network cap alone: {}",
             &after[..200]
         );
     }
-    let helper = &production[production.find_code("    fn seat_refutation_ladder_v1(").expect("the helper")..];
+    let helper = &production[production.find("    fn seat_refutation_ladder_v1(").expect("the helper")..];
     let helper = &helper[..helper.find("\n    }\n").expect("its end")];
-    assert!(helper.contains_code("palw_offence_attribution_active_at(current_daa)"), "fenced on the attribution fence");
-    assert!(helper.contains_code("return refutation_cap;"), "below it, the network's cap unchanged");
-    assert!(helper.contains_code("self.class_step_ladder(class_id)"), "past it, the class's own ladder");
-}
-
-/// **Audit C-04: a seat judges a claim under the class semantics consensus binds to it** — a statement applies only from its
-/// `bound_from_daa` (the claim accepted earlier keeps the facts it was produced under), and only over its own artifact; the
-/// tip read (no claim) is unchanged.
-#[test]
-fn audit_fixcd_c04_semantics_bind_a_claim_only_from_their_bound_daa() {
-    let semantics = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1 {
-        version: 1,
-        class_id: Hash64::from_u64_word(1),
-        artifact_root: Hash64::from_u64_word(2),
-        bound_from_daa: 500,
-        model_profile_id: Hash64::from_u64_word(3),
-        runtime_manifest_hash: Hash64::from_u64_word(4),
-        runtime_class_id: Hash64::from_u64_word(5),
-        tokenizer_id: Hash64::from_u64_word(6),
-        cu_ruleset_id: Hash64::from_u64_word(7),
-        token_table_root: None,
-        rendering_rule: None,
-        raw_tokenizer_bytes: None,
-        tokenizer_key_events: None,
-        prefix_state_relation: None,
-    };
-    let root = Hash64::from_u64_word(2);
-    assert!(!palw_semantics_bind_claim_v1(&semantics, root, Some(499)), "accepted before the declaration: not bound");
-    assert!(palw_semantics_bind_claim_v1(&semantics, root, Some(500)), "accepted at the declaration's DAA: bound");
-    assert!(palw_semantics_bind_claim_v1(&semantics, root, Some(501)));
-    assert!(palw_semantics_bind_claim_v1(&semantics, root, None), "the tip read is unchanged");
-    assert!(!palw_semantics_bind_claim_v1(&semantics, Hash64::from_u64_word(9), None), "another artifact never binds");
-    let source = include_str!("../palw_panel.rs");
-    assert!(source.contains("kept.facts == facts"), "the executor's kept instance is reused only under the same semantics");
+    assert!(helper.contains("palw_offence_attribution_active_at(current_daa)"), "fenced on the attribution fence");
+    assert!(helper.contains("return refutation_cap;"), "below it, the network's cap unchanged");
+    assert!(helper.contains("self.class_step_ladder(class_id)"), "past it, the class's own ladder");
 }

@@ -41,16 +41,6 @@ use crate::BlockHash;
 
 pub use self::stats::{BlockCount, ConsensusStats};
 
-/// Bounded RFC12 observations from one locked virtual state. Missing historical
-/// balances and spent/unknown outpoints are explicit; storage failures are errors.
-#[derive(Clone, Debug)]
-pub struct PalwAcceptanceReadsV1 {
-    pub sink: BlockHash,
-    pub virtual_daa: u64,
-    pub reserve_balances: Vec<(BlockHash, Option<u64>)>,
-    pub outpoints: Vec<(TransactionOutpoint, Option<UtxoEntry>)>,
-}
-
 /// Versioned own-node result for V2-stamped routed material. The old V3 tuple
 /// retains its meaning and cannot authorize this separate journal family.
 /// This runtime authority has no network deserializer.
@@ -714,11 +704,6 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<(), String> {
         Err("current native kernel material authority unavailable".into())
     }
-    /// RFC-0006 read-only census of the eligible historical headers the EXEC origin migration needs, from this node's own
-    /// store at its tip (`listed` caps the returned claim lists). Authorizes nothing.
-    fn palw_exec_origin_coverage_v1(&self, _listed: usize) -> Result<crate::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
-        Err("historical header coverage census unavailable".into())
-    }
     fn palw_material_generation_authority_v4(
         &self,
         _root: Hash64,
@@ -1092,23 +1077,6 @@ pub trait ConsensusApi: Send + Sync {
     /// the outpoint is unspent-absent (never existed or already spent).
     fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
         unimplemented!()
-    }
-
-    /// **RFC-0012 acceptance (op 246)**: the DNS security reserve balance `block`'s post-state holds (`reserve_balance_store`);
-    /// `None` where this node holds no reserve row for the block. Read-only.
-    fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
-        let _ = block;
-        None
-    }
-
-    /// At most 64 blocks and 64 outpoints, with one virtual state/UTXO lock and
-    /// pruning protection. Implementations must not assemble separate snapshots.
-    fn get_palw_acceptance_reads_v1(
-        &self,
-        _blocks: Vec<BlockHash>,
-        _outpoints: Vec<TransactionOutpoint>,
-    ) -> ConsensusResult<PalwAcceptanceReadsV1> {
-        Err(ConsensusError::General("atomic PALW acceptance reads are unsupported"))
     }
 
     fn get_tips(&self) -> Vec<BlockHash> {
@@ -1589,49 +1557,6 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged TIR prefix reader unavailable".into())
     }
 
-    /// G14 R4: an ORIGINAL TIR frame as one public verifier reads it to file a conviction (accepted snapshot; `None` below
-    /// `palw_tir_public_conviction_v1` or for a claim with no frame).
-    fn palw_tir_public_frame_v1(
-        &self,
-        _claim: crate::Hash64,
-    ) -> Result<Option<crate::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
-        Err("TIR public frame reader unavailable".into())
-    }
-
-    /// **G14 R3/R4: the node workers' read of the accepted native snapshot of ORIGINAL TIR frames.** Runs `read` once against
-    /// the same accepted state every PALW reader uses, iff `palw_tir_public_conviction_v1` is active there; `Ok(false)` below it
-    /// (the closure is not run). Read-only. The seat preparation worker and the filer scheduler need it because the frame's
-    /// preparation/acquisition snapshots and the work book's debit preparation and permit confirmation
-    /// (`palw_tir_public_state_v1`) all take the accepted state — a work permit is minted only by confirming against it.
-    fn palw_tir_public_read_v1(
-        &self,
-        _read: &mut dyn FnMut(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
-    ) -> Result<bool, String> {
-        Err("TIR public accepted-state reader unavailable".into())
-    }
-
-    /// **G14 R4: the filer scheduler's preflight** — whether the fold would accept `filer`'s public conviction of `claim` with
-    /// `evidence` at the next DAA on the accepted snapshot (a discarded dry run of the native path). `Ok(None)` below
-    /// `palw_tir_public_conviction_v1`; `Ok(Some(Err(reason)))` for a filing the fold would refuse. Never a verdict.
-    fn palw_tir_public_conviction_preflight_v1(
-        &self,
-        _filer: crate::palw_state_v2::PalwBondKeyV2,
-        _claim: crate::Hash64,
-        _evidence: crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
-    ) -> Result<Option<Result<(), String>>, String> {
-        Err("TIR public conviction preflight unavailable".into())
-    }
-
-    /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame on the accepted snapshot — `(snapshot DAA, plan)`;
-    /// `None` below `palw_tir_public_conviction_v1` or for an original the frame route does not admit.
-    fn palw_tir_public_original_quote_v1(
-        &self,
-        _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
-        _header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-    ) -> Result<Option<(u64, crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
-        Err("TIR public original quote unavailable".into())
-    }
-
     fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
@@ -1802,40 +1727,6 @@ pub trait ConsensusApi: Send + Sync {
 
     /// Producer preflight from native authenticated class/inventory state. The
     /// caller cannot choose custody, ladder, admission time or resource ceilings.
-    /// **RFC-0016 (op 255): the per-model report** at the virtual tip, as JSON (targets apart from outcomes, node-local observations
-    /// labelled), with the pre-lottery quote for `class` where asked. `None` off ConsensusV2 or with no PALW tip.
-    fn palw_rfc0016_report_v1(&self, _class: Option<crate::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
-        Err("RFC-0016 report unavailable".into())
-    }
-
-    /// **Tooling lane (op 225): one claim's consolidated user view** (`palw_user_views_v1::palw_claim_detail_json_v1`) at the tip,
-    /// judged at the next block's DAA: `Ok(None)` off ConsensusV2 / with no PALW tip; `Ok(Some((now_daa, None)))` for a claim the state
-    /// does not hold; `Ok(Some((now_daa, Some(json))))` otherwise. Read-only.
-    fn palw_claim_detail_v1(&self, _claim: crate::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
-        Ok(None)
-    }
-
-    /// **Tooling lane (op 226): the court around a claim or one session**, as [`Self::palw_claim_detail_v1`] answers.
-    fn palw_court_state_v1(
-        &self,
-        _target: crate::palw_user_views_v1::PalwCourtTargetV1,
-    ) -> Result<Option<(u64, Option<String>)>, String> {
-        Ok(None)
-    }
-
-    /// **Tooling lane (op 228): one bond's consolidated user view**, as [`Self::palw_claim_detail_v1`] answers.
-    fn palw_bond_detail_v1(&self, _bond: crate::palw_state_v2::PalwBondKeyV2) -> Result<Option<(u64, Option<String>)>, String> {
-        Ok(None)
-    }
-
-    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
-    /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
-    /// off ConsensusV2 or with no PALW tip.
-    #[allow(clippy::type_complexity)]
-    fn palw_router_binding_v2(&self, _class: crate::Hash64) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
-        Err("router binding read unavailable".into())
-    }
-
     fn palw_staged_preclaim_quote_v1(
         &self,
         _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
@@ -1895,34 +1786,6 @@ pub trait ConsensusApi: Send + Sync {
     /// The public filer's objective-proof target, resolved from the tip's claim/liability/vesting rows.
     /// These are public chain facts; a caller never reconstructs the recorded job identity from served material.
     fn palw_fraud_filer_target_v1(&self, _claim: crate::Hash64) -> Option<crate::palw_offence_attribution_v1::PalwOffenceTargetV1> {
-        None
-    }
-
-    /// **G14 ③ (lane gdn-filer): a page of the claims `me` may still accuse with tag 243 at the tip** — every claim inside the fold's
-    /// accusation window (`palw_gdn_step_candidate_v1`), in `(accepted_daa, claim_id)` order after `after`, at most `limit`. Empty off
-    /// `ConsensusV2`. Node policy only.
-    fn palw_gdn_step_candidates_v1(
-        &self,
-        _me: crate::palw_state_v2::PalwBondKeyV2,
-        _after: Option<(u64, crate::Hash64)>,
-        _limit: usize,
-    ) -> Vec<crate::palw_state_v2::PalwGdnStepCandidateV1> {
-        Vec::new()
-    }
-
-    /// **G14 ③: one claim's tag-243 window facts for `me` at the tip** (`None`: outside the window, or not held).
-    fn palw_gdn_step_candidate_v1(
-        &self,
-        _me: crate::palw_state_v2::PalwBondKeyV2,
-        _claim: crate::Hash64,
-    ) -> Option<crate::palw_state_v2::PalwGdnStepCandidateV1> {
-        None
-    }
-
-    /// **G14 ③: the limits the fold judges a `GdnStepAccusedV2` of `class_id` by at the tip** — exactly the fold's sources: the ladder
-    /// `class_step_ladder_v1(class_id, palw_court_step_ladder_at(daa))` and the court's `max_close_bytes`. `None` while
-    /// `palw_memory_routing_court_v2` is not in force (the fold refuses tag 243 then).
-    fn palw_gdn_court_limits_v2(&self, _class_id: crate::Hash64) -> Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2> {
         None
     }
 
@@ -2550,18 +2413,6 @@ pub trait ConsensusApi: Send + Sync {
         blocks: &[BlockHash],
     ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
         let _ = blocks;
-        Err("this consensus serves no fork-choice opening".to_string())
-    }
-
-    /// **RFC09: op 203 v2** — [`Self::palw_fork_choice_openings_v1`] with each entry's committed leaf in its own form, and (as asked)
-    /// its v3 rule-E window above a blue score and its v3 registry openings of some bonds: the inputs the full node's rule-E comparator
-    /// reads, for a remote client to evaluate with the node's own functions. Untrusted as served.
-    fn palw_fork_choice_openings_v2(
-        &self,
-        blocks: &[BlockHash],
-        extras: &crate::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2,
-    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
-        let _ = (blocks, extras);
         Err("this consensus serves no fork-choice opening".to_string())
     }
 

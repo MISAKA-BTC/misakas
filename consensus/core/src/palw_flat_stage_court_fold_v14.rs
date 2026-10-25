@@ -91,7 +91,7 @@ pub(super) fn seal(
     let restore = derive_stage_restore_metadata_v14(0, 0, h.book_bytes_len, h.input_raw_bytes, 1024).map_err(refused)?;
     let mut metadata = native::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), id)?;
     metadata.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
-    native::write_shard(builder, &metadata, id)?;
+    native::write_shard(builder, &metadata, id);
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let original = builder
         .state
@@ -234,11 +234,11 @@ pub(super) fn seal(
     *slot = key.root();
     state.retained_seals += 1;
     state.required_until = state.required_until.max(horizon);
-    native::write_shard(builder, &shard, id)?;
-    native::write_trace(builder, &trace, 1, key.root())?;
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &key.root()), Some(bytes(&row)))?;
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &id), Some(bytes(&state)))?;
-    builder.note_kernel_bond(signer)?;
+    native::write_shard(builder, &shard, id);
+    native::write_trace(builder, &trace, 1, key.root());
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &key.root()), Some(bytes(&row)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &id), Some(bytes(&state)));
+    builder.note_kernel_bond(signer);
     Ok(())
 }
 
@@ -306,7 +306,7 @@ pub(super) fn apply_chunk(
             512,
         )
         .map_err(refused)?;
-    native::write_shard(builder, &shard, h.id)?;
+    native::write_shard(builder, &shard, h.id);
     let group_key = bytes(&(20u8, seal));
     let part_key = bytes(&(23u8, seal, chunk.index));
     let r = builder.state.kernel_route.as_ref().unwrap();
@@ -342,14 +342,14 @@ pub(super) fn apply_chunk(
     }
     shard.accept_protected_fragment(&p.execution.quota, &epoch, cached.plan(), &paid).map_err(refused)?;
     let complete = shard.seal_row().is_some_and(|s| s.fragments.complete());
-    builder.write_kernel_row(STAGE_TABLE_V14, group_key.clone(), Some(bytes(&group)))?;
-    builder.write_kernel_row(STAGE_TABLE_V14, part_key, Some(chunk.bytes.clone()))?;
-    native::write_shard(builder, &shard, h.id)?;
+    builder.write_kernel_row(STAGE_TABLE_V14, group_key.clone(), Some(bytes(&group)));
+    builder.write_kernel_row(STAGE_TABLE_V14, part_key, Some(chunk.bytes.clone()));
+    native::write_shard(builder, &shard, h.id);
     if !complete {
         return Ok(());
     }
     shard.debit_protected(&p.execution.quota, &epoch, cached.plan(), ProtectedActionKindV11::WholeChunk, &[]).map_err(refused)?;
-    native::write_shard(builder, &shard, h.id)?;
+    native::write_shard(builder, &shard, h.id);
     let cap = derive_protected_seal_plan_v11(cached.plan()).map_err(refused)?.assembly_cap as usize;
     let r = builder.state.kernel_route.as_ref().unwrap();
     let mut total = 0usize;
@@ -379,9 +379,9 @@ pub(super) fn apply_chunk(
     {
         return Err(refused("stage own signed proof inner actor/seal/domain differs"));
     }
-    builder.write_kernel_row(STAGE_TABLE_V14, group_key, None)?;
+    builder.write_kernel_row(STAGE_TABLE_V14, group_key, None);
     for i in 0..group.count {
-        builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(23u8, seal, i)), None)?;
+        builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(23u8, seal, i)), None);
     }
     super::super::apply_object(builder, ctx, &inner)
 }
@@ -453,11 +453,11 @@ pub(super) fn reveal(
     let epoch = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut trace = native::trace_shard(builder, &p.execution, &trace_plan, own.actor, own.job, 1, seal)?;
     trace.debit_reserved(&p.execution.quota, &epoch, &trace_plan, &seal, 1).map_err(refused)?;
-    native::write_trace(builder, &trace, 1, seal)?;
+    native::write_trace(builder, &trace, 1, seal);
     let mut paid = native::quota_shard_seal(builder, &p.execution, &epoch, own.actor, own.job, Some(seal))?;
     let verdict =
         paid.debit_stage_protected_verdict_v14(&p.execution.quota, &epoch, &cached, &own.paid_root, &body[132..]).map_err(refused)?;
-    native::write_shard(builder, &paid, own.job)?;
+    native::write_shard(builder, &paid, own.job);
     let filing = &body[132..];
     if stage_proof_root_v14(filing) != own.proof_root
         || stage_proof_seal_v14(own.proof_root, salt, own.actor, own.job, own.claim) != own.seal
@@ -563,7 +563,7 @@ pub(super) fn reveal(
         };
         // A theorem denies future aliases. Every existing job still needs its
         // own paid original court/default and actual conserved money below.
-        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(14, &fact.relation), Some(bytes(&fact)))?;
+        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(14, &fact.relation), Some(bytes(&fact)));
     }
     if builder.state.bonds.get(&h.producer).is_none_or(|b| b.collateral < reserve) {
         return Err(refused("stage owncourt original liability not fully collectible"));
@@ -644,7 +644,7 @@ pub(super) fn reveal(
     if collected != outcome.collected_original_slash {
         return Err(refused("stage owncourt actual collected slash differs"));
     }
-    builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: outcome.requester_refund }))?;
+    builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: outcome.requester_refund }));
     if outcome.finder_credit > 0 {
         if builder.params.reporter_income_active_at(ctx.daa_score) {
             let award = Hash64::from_bytes(misaka_palw_kernel::hash::object_id(
@@ -656,22 +656,22 @@ pub(super) fn reveal(
             builder.add_kernel_payout(payout, outcome.finder_credit)?;
         }
     }
-    builder.cancel_native_recipient_v1(Hash64::from_bytes(own.job), h.producer, 14)?;
-    builder.cancel_native_recipient_v1(Hash64::from_bytes(own.job), h.producer, 19)?;
+    builder.cancel_native_recipient_v1(Hash64::from_bytes(own.job), h.producer, 14);
+    builder.cancel_native_recipient_v1(Hash64::from_bytes(own.job), h.producer, 19);
     builder.bond_budget_close_v1(
         &Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/stage-original-fixed-budget/v20", &own.job)),
         ctx.daa_score,
-    )?;
+    );
     original.header.book_root = book.root();
     original.header.terminal = book.terminal();
     original.header.producer_reserved = 0;
     original.book_bytes = bytes(&book);
     original.header.book_bytes_len = original.book_bytes.len() as u32;
     own.spent = true;
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &own.job), Some(bytes(&original)))?;
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(13, &own.job), Some(bytes(&outcome)))?;
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), Some(bytes(&own)))?;
-    native::write_shard(builder, &paid, own.job)?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &own.job), Some(bytes(&original)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(13, &own.job), Some(bytes(&outcome)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), Some(bytes(&own)));
+    native::write_shard(builder, &paid, own.job);
     builder.write_kernel_row(
         STAGE_TABLE_V14,
         stage_key_v14(11, &own.job),
@@ -687,7 +687,7 @@ pub(super) fn reveal(
             amount: outcome.requester_refund,
             established_daa: ctx.daa_score,
         })),
-    )?;
+    );
     Ok(())
 }
 
@@ -735,7 +735,7 @@ pub(super) fn retire(
     .map_err(refused)?;
     let mut caller = native::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), own.job)?;
     caller.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
-    native::write_shard(builder, &caller, own.job)?;
+    native::write_shard(builder, &caller, own.job);
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let original = builder
         .state
@@ -848,22 +848,22 @@ pub(super) fn retire(
     state.seal_keys[slot] = [0; 64];
     state.retained_seals =
         state.retained_seals.checked_sub(1).ok_or_else(|| refused("stage proof retirement owner counter underflow"))?;
-    native::write_shard(builder, &caller, own.job)?;
+    native::write_shard(builder, &caller, own.job);
     if let Some(owner) = returned_owner {
         builder.write_kernel_row(
             crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,
             bytes(&(1u8, owner.actor)),
             Some(bytes(&(owner.root(), owner))),
-        )?;
+        );
     }
     for key in [bytes(&(3u8, seal)), bytes(&(17u8, 1u8, seal))] {
-        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11, key, None)?;
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11, key, None);
     }
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), None)?;
-    builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(20u8, seal)), None)?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), None);
+    builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(20u8, seal)), None);
     for index in 0u8..64 {
-        builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(23u8, seal, index)), None)?;
+        builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(23u8, seal, index)), None);
     }
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &own.job), Some(bytes(&state)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &own.job), Some(bytes(&state)));
     Ok(())
 }

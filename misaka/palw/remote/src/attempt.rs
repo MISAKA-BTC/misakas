@@ -42,23 +42,6 @@ pub struct ExecutedAttempt {
 /// verifiers do. Runs on the miner's machine.
 pub trait AttemptExecutor {
     fn execute(&mut self, anchor: Hash64) -> Result<ExecutedAttempt, String>;
-    /// **Audit C-05: the capture must exist and commit the roots the attempt will claim**, checked before the bond key is
-    /// touched. The default refuses an absent capture (a signed claim whose roots nobody can serve). An executor that links a
-    /// backend overrides this to decode the capture's step binding and compare its committed execution root (and the trace
-    /// roots it derives) with `executed.execution`; an executor without one cannot decode a capture, and in the PAV3 custody
-    /// form every roster provider rebuilds the bundle from the capture against the attempt's roots before it signs anything.
-    fn check_capture(&self, anchor: Hash64, executed: &ExecutedAttempt) -> Result<(), String> {
-        let _ = anchor;
-        check_capture_present_v1(executed)
-    }
-}
-
-/// The backend-free half of [`AttemptExecutor::check_capture`]: a capture is present.
-pub fn check_capture_present_v1(executed: &ExecutedAttempt) -> Result<(), String> {
-    if executed.material.is_empty() {
-        return Err("the executor returned no capture: an attempt whose roots nobody can serve is never signed".into());
-    }
-    Ok(())
 }
 
 /// The miner's bond key. Called at most once per mounted attempt, and only after both lotteries are won.
@@ -139,7 +122,6 @@ pub fn mount_attempt(
     let anchor = palw_job_anchor_v1(params.network_domain, pre_pow, class_id, &params.bond, nonce_bucket);
 
     let executed = executor.execute(anchor).map_err(AttemptError::Executor)?;
-    executor.check_capture(anchor, &executed).map_err(AttemptError::Executor)?;
     let facts = PalwAttemptChainFactsV1 {
         class_id,
         artifact_root,
@@ -184,39 +166,35 @@ pub fn mount_attempt(
 
 /// **RFC-0008 PAV3: what a remote miner supplies past `palw_monetary_material_v1`.** Every answer must come from an AUTHENTICATED
 /// view (op 242 pages finished by `MonetaryMaterialProofPagerV1` plus the proven bond table); a forecast or an unauthenticated RPC row
-/// cannot select a session, because the fold re-selects with the same canonical rule and refuses a substitute. The provider wire is
-/// the provider service's (`native_custody_exchange_v3::PalwNativeReadyRequestV3`, audit C-03).
+/// cannot select a session, because the fold re-selects with the same canonical rule and refuses a substitute.
 pub trait NativeCustodyV3 {
-    /// The canonical session for `attempt` at `daa` (consensus's rule over the authenticated rows), or `None` (hold).
+    /// The canonical session for `attempt` at `daa` (`select_native_session_v3` over the authenticated rows/bonds), or `None`.
     fn session(
         &self,
         attempt: &PalwAttemptUnsignedV2,
         daa: u64,
     ) -> Option<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>;
-    /// The complete one-scope manifest of this capture's typed bundle and the prompt its anchor implies, as every roster provider
-    /// rebuilt them under its own node's authority from `request` (the DRAW envelope: the placeholder manifest the ticket is priced
-    /// with). Called only after both draws are won and the attempt is signed (the authority read verifies that signature).
+    /// The complete one-scope manifest of this capture's typed bundle (the exact bytes/units/content each provider will rebuild).
     fn manifest(
         &mut self,
         session: &kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
-        request: &crate::native_custody_exchange_v3::PalwNativeReadyRequestV3,
-    ) -> Result<(kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1, Vec<u32>), String>;
-    /// Every roster provider's signature over `Ready::id` of `request.envelope.ready`, each given only after that provider rebuilt
-    /// the bundle from the capture, found the manifest identical and durably published it.
+        attempt: &PalwAttemptUnsignedV2,
+        material: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1, String>;
+    /// Every roster provider's signature over `Ready::id`, each given only after that provider durably published the bundle it rebuilt
+    /// from `material` (`native_ready_v3::provider_sign_native_ready_v3`). Called only after both draws are won.
     fn collect(
         &mut self,
-        request: &crate::native_custody_exchange_v3::PalwNativeReadyRequestV3,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialReadyV3,
+        material: &[u8],
     ) -> Result<std::collections::BTreeMap<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, Vec<u8>>, String>;
     /// The executor's seal (same key as the attempt signature) over `message` under `context`.
     fn seal(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String>;
 }
 
 /// [`mount_attempt`] in the owned PAV3 custody form. The class and network draws price `priced_execution` (session, consent and roster,
-/// never the manifest or a signature) on the DRAW envelope (`palw_native_draw_manifest_v3`, the in-node producer's), so they are
-/// decided BEFORE any provider is asked; the attempt is signed, then the providers rebuild the manifest and sign the exact Ready,
-/// and the sealed carriage is re-checked to price exactly what won. The pre-entropy checkpoint the providers' authority reads is the
-/// template's chain point, which must be a direct parent of the header. A missing session, manifest or roster signature mounts
-/// nothing — never a PAV2 fallback the chain refuses past the fence.
+/// never signatures), so they are decided BEFORE any provider is asked; providers and the seal are requested only after both are won.
+/// A missing session, manifest or roster signature mounts nothing — never a PAV2 fallback the chain refuses past the fence.
 #[allow(clippy::too_many_arguments)]
 pub fn mount_native_attempt_v3(
     template: &AcceptedTemplate,
@@ -232,16 +210,9 @@ pub fn mount_native_attempt_v3(
     custody: &mut dyn NativeCustodyV3,
     network_draw: &dyn Fn(&Header, u64, bool) -> bool,
 ) -> Result<Option<MountedAttempt>, AttemptError> {
-    use crate::native_custody_exchange_v3::{PALW_NATIVE_READY_EXCHANGE_VERSION_V3, PalwNativeReadyRequestV3};
-    use kaspa_consensus_core::palw_attempt_material_v3::{
-        PalwAttemptMaterialEnvelopeV3, draft_native_ready_v3, palw_native_draw_manifest_v3,
-    };
+    use kaspa_consensus_core::palw_attempt_material_v3::{PalwAttemptMaterialEnvelopeV3, draft_native_ready_v3};
     if !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(template_header.pow_algo_id) {
         return Err(AttemptError::NotAnAttemptLane(template_header.pow_algo_id));
-    }
-    let checkpoint = template.observation.facts.chain_point;
-    if !template_header.direct_parents().contains(&checkpoint) {
-        return Err(AttemptError::Executor("the template's chain point is not a direct parent of its header: no provider checkpoint".into()));
     }
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(template_header);
     let nonce_bucket = match *cursor {
@@ -252,7 +223,6 @@ pub fn mount_native_attempt_v3(
     let nonce = nonce_bucket << PALW_TICKET_NONCE_BUCKET_LOG2;
     let anchor = palw_job_anchor_v1(params.network_domain, pre_pow, class_id, &params.bond, nonce_bucket);
     let executed = executor.execute(anchor).map_err(AttemptError::Executor)?;
-    executor.check_capture(anchor, &executed).map_err(AttemptError::Executor)?;
     let facts = PalwAttemptChainFactsV1 {
         class_id,
         artifact_root,
@@ -275,54 +245,38 @@ pub fn mount_native_attempt_v3(
     let session = custody
         .session(&attempt, template_header.daa_score)
         .ok_or_else(|| AttemptError::Executor("no eligible prior signed native custody session".into()))?;
-    let draw_manifest = palw_native_draw_manifest_v3(&session, &attempt).map_err(AttemptError::Executor)?;
-    let draw_ready = draft_native_ready_v3(&session, &attempt, anchor, draw_manifest).map_err(AttemptError::Executor)?;
-    let dummy = vec![0u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
-    let provisional = |base: PalwAttemptEnvelopeV2, ready| PalwAttemptMaterialEnvelopeV3 {
+    let manifest = custody.manifest(&session, &attempt, &executed.material).map_err(AttemptError::Executor)?;
+    let ready = draft_native_ready_v3(&session, &attempt, anchor, manifest).map_err(AttemptError::Executor)?;
+    let dummy = vec![0u8; params.signature_len];
+    let provisional = PalwAttemptMaterialEnvelopeV3 {
         version: 3,
-        base,
-        ready,
-        provider_signatures: vec![dummy.clone(); session.providers.iter().filter(|p| !p.charged).count()],
-        seal: dummy.clone(),
+        base: PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: dummy.clone() },
+        ready: ready.clone(),
+        provider_signatures: vec![dummy.clone(); ready.providers.len()],
+        seal: dummy,
     };
-    let draw = provisional(PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: dummy.clone() }, draw_ready.clone());
-    if draw.class_ticket(anchor) > params.class_target {
+    if provisional.class_ticket(anchor) > params.class_target {
         return Ok(None);
     }
     let mut probe = template_header.clone();
     probe.nonce = nonce;
-    probe.palw_commitment = draw.encode_wire();
+    probe.palw_commitment = provisional.encode_wire();
     if !network_draw(&probe, nonce, params.single_lottery) {
         return Ok(None);
     }
     let attempt_id = attempt_id_v2(&attempt);
     let signature = signer.sign_attempt(&attempt, &attempt_id).map_err(AttemptError::Signer)?;
+    let signatures = custody.collect(&ready, &executed.material).map_err(AttemptError::Executor)?;
     let base = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature };
-    let mut request = PalwNativeReadyRequestV3 {
-        version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3,
-        checkpoint,
-        header: probe,
-        envelope: provisional(base.clone(), draw_ready.clone()),
-        capture: executed.material.clone(),
-        prompt: Vec::new(),
-    };
-    let (manifest, prompt) = custody.manifest(&session, &request).map_err(AttemptError::Executor)?;
-    let ready = draft_native_ready_v3(&session, &attempt, anchor, manifest).map_err(AttemptError::Executor)?;
-    request.envelope = provisional(base.clone(), ready.clone());
-    request.prompt = prompt;
-    let signatures = custody.collect(&request).map_err(AttemptError::Executor)?;
     let envelope = crate::native_ready_v3::producer_assemble_native_ready_v3(base, ready, &signatures, |message, context| {
         custody.seal(message, context)
     })
     .map_err(AttemptError::Signer)?;
-    // The sealed carriage prices exactly what won (the manifest and every signature are outside the priced bytes).
-    if envelope.priced_execution(anchor) != draw.priced_execution(anchor) {
-        return Err(AttemptError::Executor("the sealed native carriage prices another execution than the draw".into()));
-    }
     let mut header = template_header.clone();
     header.nonce = nonce;
     header.palw_commitment = envelope.encode_wire();
     header.finalize();
+    let _ = template;
     Ok(Some(MountedAttempt { header, attempt_id, attempt, material: executed.material, nonce_bucket }))
 }
 
@@ -508,85 +462,6 @@ mod tests {
         assert_eq!(anchors.len(), 2);
         assert_ne!(anchors[0], anchors[1]);
         assert_eq!(cursor.map(|(_, next)| next), Some(2));
-    }
-
-    /// **audit(verify-3) C-05**: an executor that returns NO capture (the CLI's `material_file` omitted ⇒ `Vec::new()`) must be refused
-    /// before the bond key is touched — the signed claim names roots nobody can serve. Today the attempt is signed and mounted.
-    #[test]
-    fn audit_v3_c05_an_attempt_without_a_capture_is_never_signed() {
-        struct EmptyCapture;
-        impl AttemptExecutor for EmptyCapture {
-            fn execute(&mut self, _anchor: Hash64) -> Result<ExecutedAttempt, String> {
-                Ok(ExecutedAttempt {
-                    execution: PalwAttemptExecutionV1 {
-                        trace_root: h(10),
-                        output_root: h(11),
-                        execution_root: h(12),
-                        trace_manifest_root: h(13),
-                        trace_chunk_count: 1,
-                    },
-                    material: Vec::new(),
-                })
-            }
-        }
-        let t = accepted();
-        let signer = Signer { signed: Cell::new(0) };
-        let r = mount_attempt(
-            &t,
-            &header(100),
-            &params(u128::MAX),
-            7_708,
-            3_000,
-            h(31),
-            h(30),
-            &mut None,
-            &mut EmptyCapture,
-            &signer,
-            &|_, _, _| true,
-        );
-        let mounted = matches!(r, Ok(Some(_)));
-        assert!(
-            matches!(r, Err(AttemptError::Executor(_))) && signer.signed.get() == 0,
-            "C-05: expected Executor refusal with 0 signatures for an empty capture; got mounted={mounted} signatures={}",
-            signer.signed.get()
-        );
-    }
-
-    /// Audit C-05 boundary: an executor whose capture check finds the capture committing other roots (a backend-linked check)
-    /// is refused before the key is touched, on the PAV2 path as on the empty capture.
-    #[test]
-    fn audit_fixcd_c05_a_capture_that_commits_other_roots_is_never_signed() {
-        struct Mismatch(Exec);
-        impl AttemptExecutor for Mismatch {
-            fn execute(&mut self, anchor: Hash64) -> Result<ExecutedAttempt, String> {
-                self.0.execute(anchor)
-            }
-            fn check_capture(&self, _anchor: Hash64, executed: &ExecutedAttempt) -> Result<(), String> {
-                check_capture_present_v1(executed)?;
-                // A backend would decode the step binding; this double says it commits h(99), not the reported root.
-                if executed.execution.execution_root != h(99) {
-                    return Err("the capture commits another execution root than the executor reported".into());
-                }
-                Ok(())
-            }
-        }
-        let signer = Signer { signed: Cell::new(0) };
-        let mut exec = Mismatch(Exec { calls: Cell::new(0), anchors: Default::default() });
-        let r = mount_attempt(
-            &accepted(),
-            &header(100),
-            &params(u128::MAX),
-            7_708,
-            3_000,
-            h(31),
-            h(30),
-            &mut None,
-            &mut exec,
-            &signer,
-            &|_, _, _| true,
-        );
-        assert!(matches!(r, Err(AttemptError::Executor(ref why)) if why.contains("another execution root")), "{r:?}");
-        assert_eq!(signer.signed.get(), 0);
     }
 
     #[test]

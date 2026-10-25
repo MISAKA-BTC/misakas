@@ -434,7 +434,7 @@ impl TestConsensus {
                     bundle.base_class_id,
                     target,
                     per_inference,
-                    kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_at_v2(&bundle.state, header.daa_score),
+                    kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_v1(&bundle.state),
                 )
             }
             _ => unreachable!("only called on a ConsensusV2 network"),
@@ -641,25 +641,6 @@ impl TestConsensus {
         self.consensus.headers_store.clone()
     }
 
-    /// **Fixture-only stand-in for IBD's UTXO step**: mark the pruning UTXO set stable again. `import_pruning_point_palw_state`
-    /// clears the marker because production installs the PALW sidecar BEFORE the UTXO set replaces the node's own and completes
-    /// with `complete_pruning_point_import`. A fixture that installs only the sidecar on a node that already validated the whole
-    /// prefix (so its UTXO set is the canonical one) has no UTXO step to run; without this its node stays in the transitional IBD
-    /// state and every service loop that asks `is_consensus_in_transitional_ibd_state` idles.
-    pub fn mark_pruning_utxoset_stable_for_tests(&self) {
-        let mut batch = rocksdb::WriteBatch::default();
-        self.consensus.storage.pruning_meta_stores.write().set_pruning_utxoset_stable_flag(&mut batch, true).unwrap();
-        self.consensus.db.write(batch).unwrap();
-    }
-
-    /// The pruning sample this node recorded from `hash`'s point of view (`None` where it recorded none) — so a fixture can name the
-    /// pruning-point history the node already derived when it establishes a sidecar import target (`import_pruning_points`).
-    pub fn pruning_sample_from_pov_for_tests(&self, hash: BlockHash) -> Option<BlockHash> {
-        use crate::model::stores::pruning_samples::PruningSamplesStoreReader;
-        use kaspa_database::prelude::StoreResultExt;
-        self.consensus.storage.pruning_samples_store.pruning_sample_from_pov(hash).optional().unwrap()
-    }
-
     pub fn virtual_stores(&self) -> Arc<RwLock<VirtualStores>> {
         self.consensus.virtual_stores.clone()
     }
@@ -670,20 +651,6 @@ impl TestConsensus {
 
     pub fn block_body_processor(&self) -> &Arc<BlockBodyProcessor> {
         &self.consensus.body_processor
-    }
-
-    /// Opt this node into an instance-local wall clock for header validation and
-    /// template/virtual policy. No tolerance or consensus rule is changed.
-    #[cfg(test)]
-    pub(crate) fn set_validation_time_for_test(&self, now: u64) {
-        let previous = self.consensus.header_processor.validation_clock.fetch_max(now, std::sync::atomic::Ordering::Relaxed);
-        let now = now.max(previous);
-        self.consensus.virtual_processor.set_template_time_for_test(now);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_validation_time_for_test(&self) -> bool {
-        self.consensus.header_processor.validation_clock.load(std::sync::atomic::Ordering::Relaxed) != 0
     }
 
     pub fn virtual_processor(&self) -> &Arc<VirtualStateProcessor> {

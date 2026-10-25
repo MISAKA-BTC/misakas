@@ -279,10 +279,8 @@ impl DurableMonetaryMaterialProviderV1 {
         }) {
             return Err("V2 routed material requires its fresh native authority and explicit V2 response API".into());
         }
-        // Every retained generation is examined, not only the first candidate: any kernel-codec generation of this
-        // root/dependency must go through the current native-positive replay path (`answer_material_current_v4`).
         if self.contexts.is_some()
-            && self.store.material_generation_scopes_v4(consent, root, dependency).any(|(_, scope)| {
+            && self.store.material_generation_scope_v4(consent, root, dependency).is_some_and(|(_, scope)| {
                 scope.codec != kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldComplete
             })
         {

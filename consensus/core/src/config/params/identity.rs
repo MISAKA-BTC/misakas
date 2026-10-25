@@ -371,32 +371,6 @@ impl Params {
         if self.palw_staged_tir_route_v1 == Some(ForkActivation::never()) {
             self.palw_staged_tir_route_v1 = None;
         }
-        if self.palw_tir_public_conviction_v1 == Some(ForkActivation::never()) {
-            self.palw_tir_public_conviction_v1 = None;
-        }
-        if self.palw_tir_container_identity_v1 == Some(ForkActivation::never()) {
-            self.palw_tir_container_identity_v1 = None;
-        }
-        // These six are hashed Some-only. A future height has to collapse to absent, or a build that
-        // schedules one and a build that does not refuse each other before either has reached it.
-        if self.palw_tir_bounded_door_v1 == Some(ForkActivation::never()) {
-            self.palw_tir_bounded_door_v1 = None;
-        }
-        if self.palw_tir_designated_answers_v1 == Some(ForkActivation::never()) {
-            self.palw_tir_designated_answers_v1 = None;
-        }
-        if self.palw_court_outsider_lane_v1 == Some(ForkActivation::never()) {
-            self.palw_court_outsider_lane_v1 = None;
-        }
-        if self.palw_state_row_map_v1 == Some(ForkActivation::never()) {
-            self.palw_state_row_map_v1 = None;
-        }
-        if self.palw_kernel_route_panel_one_v1 == Some(ForkActivation::never()) {
-            self.palw_kernel_route_panel_one_v1 = None;
-        }
-        if self.palw_court_clock_v2 == Some(ForkActivation::never()) {
-            self.palw_court_clock_v2 = None;
-        }
         if self.palw_staged_float_constraint_v1 == Some(ForkActivation::never()) {
             self.palw_staged_float_constraint_v1 = None;
         }
@@ -499,14 +473,14 @@ impl Params {
         if self.palw_memory_routing_court_v2 == Some(ForkActivation::never()) {
             self.palw_memory_routing_court_v2 = None;
         }
-        if self.palw_class_registration_origin_v1 == Some(ForkActivation::never()) {
-            self.palw_class_registration_origin_v1 = None;
-        }
         if self.palw_selected_source_bootstrap_v1.is_some_and(|f| f.at == ForkActivation::never()) {
             self.palw_selected_source_bootstrap_v1 = None;
         }
         if self.palw_paid_bootstrap_source_v6.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_paid_bootstrap_source_v6 = None;
+        }
+        if self.palw_source_economics_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_source_economics_v1 = None;
         }
         // ADR-0100 Decision 4, likewise.
         if self.palw_shard_licensing == Some(ForkActivation::never()) {
@@ -543,12 +517,6 @@ impl Params {
         }
         if self.palw_stage_execution_v28.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_stage_execution_v28 = None;
-        }
-        if self.palw_native_execution_v39.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
-            self.palw_native_execution_v39 = None;
-        }
-        if self.palw_native_mining_v39.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
-            self.palw_native_mining_v39 = None;
         }
         if self.palw_native_final_v27.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_native_final_v27 = None;
@@ -649,15 +617,6 @@ impl Params {
         if self.palw_material_income_v3 == Some(ForkActivation::never()) {
             self.palw_material_income_v3 = None;
         }
-        if self.palw_settlement_once_v1 == Some(ForkActivation::never()) {
-            self.palw_settlement_once_v1 = None;
-        }
-        if self.palw_paid_claim_trap_v1 == Some(ForkActivation::never()) {
-            self.palw_paid_claim_trap_v1 = None;
-        }
-        if self.palw_native_liability_horizon_v1 == Some(ForkActivation::never()) {
-            self.palw_native_liability_horizon_v1 = None;
-        }
         if self.palw_bond_budget_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_bond_budget_v1 = None;
         }
@@ -683,10 +642,6 @@ impl Params {
         if self.palw_public_evidence_reward_v1 == Some(ForkActivation::never()) {
             self.palw_public_evidence_reward_v1 = None;
         }
-        // Compute-claim audit CX-01/CX-02's answer accounting, likewise.
-        if self.palw_fp_answer_accounting_v1 == Some(ForkActivation::never()) {
-            self.palw_fp_answer_accounting_v1 = None;
-        }
         if self.palw_claim_hard_deadline_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_claim_hard_deadline_v1 = None;
         }
@@ -694,74 +649,9 @@ impl Params {
         if self.palw_cell_coverage_closure_v1 == Some(ForkActivation::never()) {
             self.palw_cell_coverage_closure_v1 = None;
         }
-        // The cross-lane G14 gates (`crate::palw_g14_gates_v1`), likewise.
-        if self.palw_g14_route_required_v1 == Some(ForkActivation::never()) {
-            self.palw_g14_route_required_v1 = None;
-        }
-        if self.palw_reward_liability_horizon_v1 == Some(ForkActivation::never()) {
-            self.palw_reward_liability_horizon_v1 = None;
-        }
-        // The court-capacity fence (`crate::palw_court_capacity_v1`), likewise.
-        if self.palw_court_capacity_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
-            self.palw_court_capacity_v1 = None;
-        }
-        if self.palw_court_transport_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
-            self.palw_court_transport_v1 = None;
-        }
-        // RFC-0023 stage 1 (`crate::palw_unresolved_bound_v1`), likewise.
-        if self.palw_unresolved_bound_v1 == Some(ForkActivation::never()) {
-            self.palw_unresolved_bound_v1 = None;
-        }
-        if self.palw_claim_local_settlement_v1 == Some(ForkActivation::never()) {
-            self.palw_claim_local_settlement_v1 = None;
-        }
-        // RFC-0016's two dormant fences, likewise.
-        if self.palw_model_block_rights_v1 == Some(ForkActivation::never()) {
-            self.palw_model_block_rights_v1 = None;
-        }
-        if self.palw_elastic_final_capacity_v1 == Some(ForkActivation::never()) {
-            self.palw_elastic_final_capacity_v1 = None;
-        }
         // RFC-0017's model eligibility, likewise.
         if self.palw_model_eligibility_v1 == Some(ForkActivation::never()) {
             self.palw_model_eligibility_v1 = None;
-        }
-        // ADR-0179's model tiers, likewise.
-        if self.palw_model_tier_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
-            self.palw_model_tier_v1 = None;
-        }
-        // G14's per-class detection policy, likewise.
-        if self.palw_detection_policy_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
-            self.palw_detection_policy_v1 = None;
-        }
-        // **RFC-0019 §7.2: an annual catalog edition not yet in force leaves the identity WITH ITS CONTENTS.** `for_each_fence` has
-        // rewritten every edition's height to `u64::MAX` unless it is genesis-active; left in place, the edition's number, height and
-        // root would be hashed by `write_value_into`, a build carrying the NEXT edition would differ from every build that does not,
-        // and the handshake would refuse it at deploy — the rolling upgrade RFC-0019 exists for would be a deploy-day partition.
-        // Dropped here, old and new builds share the identity until the edition activates; from its height the fork id (which gates
-        // on every edition's height) refuses the build that lacks it. Edition 0 (DAA 0, the genesis catalog) stays.
-        if let Some(fence) = self.palw_model_tier_v1.as_mut() {
-            fence.catalogs.drop_unscheduled_for_identity();
-        }
-        // RFC-0018's five dormant fences, likewise.
-        if self.palw_dag_sibling_attribution_v1 == Some(ForkActivation::never()) {
-            self.palw_dag_sibling_attribution_v1 = None;
-        }
-        if self.palw_panel_anchor_permissionless_v1 == Some(ForkActivation::never()) {
-            self.palw_panel_anchor_permissionless_v1 = None;
-        }
-        // The liveness fix L-COURT-01's fence, likewise.
-        if self.palw_court_completion_attempt_v1 == Some(ForkActivation::never()) {
-            self.palw_court_completion_attempt_v1 = None;
-        }
-        if self.palw_rule_e_participation_v2 == Some(ForkActivation::never()) {
-            self.palw_rule_e_participation_v2 = None;
-        }
-        if self.palw_independently_work_certified_v1 == Some(ForkActivation::never()) {
-            self.palw_independently_work_certified_v1 = None;
-        }
-        if self.palw_dag_width_schedule_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
-            self.palw_dag_width_schedule_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -1151,15 +1041,6 @@ impl Params {
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
-            palw_tir_public_conviction_v1,
-            palw_tir_container_identity_v1,
-            palw_tir_frame_cost_v1: _,
-            palw_tir_bounded_door_v1,
-            palw_tir_designated_answers_v1,
-            palw_court_outsider_lane_v1,
-            palw_state_row_map_v1,
-            palw_kernel_route_panel_one_v1,
-            palw_court_clock_v2,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -1191,9 +1072,9 @@ impl Params {
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_memory_routing_court_v2,
-            palw_class_registration_origin_v1,
             palw_selected_source_bootstrap_v1,
             palw_paid_bootstrap_source_v6,
+            palw_source_economics_v1,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -1207,8 +1088,6 @@ impl Params {
             palw_stage_execution_v14,
             palw_native_final_v27,
             palw_stage_execution_v28,
-            palw_native_execution_v39,
-            palw_native_mining_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -1225,9 +1104,6 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
-            palw_settlement_once_v1,
-            palw_paid_claim_trap_v1,
-            palw_native_liability_horizon_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -1244,26 +1120,9 @@ impl Params {
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
-            palw_fp_answer_accounting_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
-            palw_g14_route_required_v1,
-            palw_reward_liability_horizon_v1,
-            palw_court_capacity_v1,
-            palw_court_transport_v1,
-            palw_unresolved_bound_v1,
-            palw_claim_local_settlement_v1,
-            palw_model_block_rights_v1,
-            palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
-            palw_model_tier_v1,
-            palw_detection_policy_v1,
-            palw_dag_sibling_attribution_v1,
-            palw_panel_anchor_permissionless_v1,
-            palw_court_completion_attempt_v1,
-            palw_rule_e_participation_v2,
-            palw_independently_work_certified_v1,
-            palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -1502,8 +1361,6 @@ impl Params {
             ("palw_court_commitment_scope_v1", *palw_court_commitment_scope_v1),
             ("palw_staged_public_court_v1", *palw_staged_public_court_v1),
             ("palw_staged_tir_route_v1", *palw_staged_tir_route_v1),
-            ("palw_tir_public_conviction_v1", *palw_tir_public_conviction_v1),
-            ("palw_tir_container_identity_v1", *palw_tir_container_identity_v1),
             ("palw_staged_float_constraint_v1", *palw_staged_float_constraint_v1),
             ("palw_model_benefits", *palw_model_benefits),
             ("palw_model_leg_v2", *palw_model_leg_v2),
@@ -1536,9 +1393,9 @@ impl Params {
             ("palw_fp_decode_constraint", *palw_fp_decode_constraint),
             ("palw_shard_court", *palw_shard_court),
             ("palw_memory_routing_court_v2", *palw_memory_routing_court_v2),
-            ("palw_class_registration_origin_v1", *palw_class_registration_origin_v1),
             ("palw_selected_source_bootstrap_v1", palw_selected_source_bootstrap_v1.map(|f| f.at)),
             ("palw_paid_bootstrap_source_v6", palw_paid_bootstrap_source_v6.map(|f| f.activation)),
+            ("palw_source_economics_v1", palw_source_economics_v1.map(|f| f.activation)),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
@@ -1552,8 +1409,6 @@ impl Params {
             ("palw_stage_execution_v14", palw_stage_execution_v14.as_ref().map(|f| f.activation)),
             ("palw_native_final_v27", palw_native_final_v27.as_ref().map(|f| f.activation)),
             ("palw_stage_execution_v28", palw_stage_execution_v28.as_ref().map(|f| f.activation)),
-            ("palw_native_execution_v39", palw_native_execution_v39.as_ref().map(|f| f.activation)),
-            ("palw_native_mining_v39", palw_native_mining_v39.as_ref().map(|f| f.activation)),
             ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
@@ -1570,9 +1425,6 @@ impl Params {
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_income_v2", *palw_reporter_income_v2),
             ("palw_material_income_v3", *palw_material_income_v3),
-            ("palw_settlement_once_v1", *palw_settlement_once_v1),
-            ("palw_paid_claim_trap_v1", *palw_paid_claim_trap_v1),
-            ("palw_native_liability_horizon_v1", *palw_native_liability_horizon_v1),
             ("palw_panel_lifetime_v2", palw_panel_lifetime_v2.as_ref().map(|f| f.activation)),
             ("palw_claim_challenge_v2", palw_claim_challenge_v2.as_ref().map(|f| f.activation)),
             ("palw_claim_compact_v4", palw_claim_compact_v4.as_ref().map(|f| f.activation)),
@@ -1589,34 +1441,9 @@ impl Params {
             ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
             ("palw_court_model_scope_v1", *palw_court_model_scope_v1),
             ("palw_public_evidence_reward_v1", *palw_public_evidence_reward_v1),
-            ("palw_fp_answer_accounting_v1", *palw_fp_answer_accounting_v1),
             ("palw_claim_hard_deadline_v1", palw_claim_hard_deadline_v1.as_ref().map(|f| f.activation)),
             ("palw_cell_coverage_closure_v1", *palw_cell_coverage_closure_v1),
-            ("palw_g14_route_required_v1", *palw_g14_route_required_v1),
-            ("palw_reward_liability_horizon_v1", *palw_reward_liability_horizon_v1),
-            ("palw_court_capacity_v1", palw_court_capacity_v1.as_ref().map(|f| f.activation)),
-            ("palw_court_transport_v1", palw_court_transport_v1.as_ref().map(|f| f.activation)),
-            ("palw_unresolved_bound_v1", *palw_unresolved_bound_v1),
-            ("palw_claim_local_settlement_v1", *palw_claim_local_settlement_v1),
-            ("palw_model_block_rights_v1", *palw_model_block_rights_v1),
-            ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
             ("palw_model_eligibility_v1", *palw_model_eligibility_v1),
-            ("palw_model_tier_v1", palw_model_tier_v1.as_ref().map(|fence| fence.activation)),
-            ("palw_detection_policy_v1", palw_detection_policy_v1.as_ref().map(|fence| fence.activation)),
-            ("palw_dag_sibling_attribution_v1", *palw_dag_sibling_attribution_v1),
-            ("palw_panel_anchor_permissionless_v1", *palw_panel_anchor_permissionless_v1),
-            ("palw_court_completion_attempt_v1", *palw_court_completion_attempt_v1),
-            ("palw_rule_e_participation_v2", *palw_rule_e_participation_v2),
-            ("palw_independently_work_certified_v1", *palw_independently_work_certified_v1),
-            ("palw_dag_width_schedule_v1", palw_dag_width_schedule_v1.as_ref().map(|f| f.activation)),
-            // lane g14p/r7-fence-16000: five hashed G14 fences that were missing from this list (so from the fork-id schedule): a
-            // height they took would have been invisible to the fork id. With every preset at `None` nothing moves.
-            ("palw_tir_bounded_door_v1", *palw_tir_bounded_door_v1),
-            ("palw_tir_designated_answers_v1", *palw_tir_designated_answers_v1),
-            ("palw_court_outsider_lane_v1", *palw_court_outsider_lane_v1),
-            ("palw_state_row_map_v1", *palw_state_row_map_v1),
-            ("palw_kernel_route_panel_one_v1", *palw_kernel_route_panel_one_v1),
-            ("palw_court_clock_v2", *palw_court_clock_v2),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -1835,10 +1662,6 @@ impl Params {
             h.write(b"palw_memory_routing_court_v2");
             h.write(court.daa_score().to_le_bytes());
         }
-        if let Some(at) = self.palw_class_registration_origin_v1 {
-            h.write(b"palw_class_registration_origin_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
         if let Some(fence) = self.palw_selected_source_bootstrap_v1 {
             h.write(b"palw_selected_source_bootstrap_v1");
             h.write(fence.at.daa_score().to_le_bytes());
@@ -1848,6 +1671,19 @@ impl Params {
             h.write(b"palw_paid_bootstrap_source_v6");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.id().as_slice());
+        }
+        if let Some(fence) = self.palw_source_economics_v1 {
+            h.write(b"palw_source_economics_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.version.to_le_bytes());
+            h.write(fence.policy.enrollment);
+            h.write(fence.policy.actor);
+            h.write(fence.policy.payer);
+            h.write(fence.policy.prepaid_sompi.to_le_bytes());
+            h.write(fence.policy.reserved_sompi.to_le_bytes());
+            h.write(fence.policy.r_cap_sompi.to_le_bytes());
+            h.write(fence.policy.budget_reservation_sompi.to_le_bytes());
+            h.write(fence.policy.inclusive_until_daa.to_le_bytes());
         }
         // ADR-0100 Decision 4's fence, NAMED likewise: it changes what licenses a claim.
         if let Some(licensing) = self.palw_shard_licensing {
@@ -1906,16 +1742,6 @@ impl Params {
             h.write(b"palw_stage_execution_v28");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policies.root());
-        }
-        if let Some(fence) = &self.palw_native_execution_v39 {
-            h.write(b"palw_native_execution_v39");
-            h.write(fence.activation.daa_score().to_le_bytes());
-            h.write(fence.policies.root());
-        }
-        if let Some(fence) = &self.palw_native_mining_v39 {
-            h.write(b"palw_native_mining_v39");
-            h.write(fence.activation.daa_score().to_le_bytes());
-            h.write(fence.policy.root());
         }
         if let Some(fence) = &self.palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");
@@ -2002,42 +1828,6 @@ impl Params {
             h.write(b"palw_staged_tir_route_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        if let Some(at) = self.palw_tir_public_conviction_v1 {
-            h.write(b"palw_tir_public_conviction_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_tir_container_identity_v1 {
-            h.write(b"palw_tir_container_identity_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(cost) = self.palw_tir_frame_cost_v1.as_ref() {
-            h.write(b"palw_tir_frame_cost_v1");
-            h.write(borsh::to_vec(cost).expect("PalwTirFrameCostV1 is borsh-serializable"));
-        }
-        if let Some(at) = self.palw_tir_bounded_door_v1 {
-            h.write(b"palw_tir_bounded_door_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_tir_designated_answers_v1 {
-            h.write(b"palw_tir_designated_answers_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_court_outsider_lane_v1 {
-            h.write(b"palw_court_outsider_lane_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_state_row_map_v1 {
-            h.write(b"palw_state_row_map_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_kernel_route_panel_one_v1 {
-            h.write(b"palw_kernel_route_panel_one_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_court_clock_v2.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_court_clock_v2");
-            h.write(at.daa_score().to_le_bytes());
-        }
         if let Some(at) = self.palw_staged_float_constraint_v1 {
             h.write(b"palw_staged_float_constraint_v1");
             h.write(at.daa_score().to_le_bytes());
@@ -2111,18 +1901,6 @@ impl Params {
             h.write(b"palw_material_income_v3");
             h.write(at.daa_score().to_le_bytes());
         }
-        if let Some(at) = self.palw_settlement_once_v1 {
-            h.write(b"palw_settlement_once_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_paid_claim_trap_v1 {
-            h.write(b"palw_paid_claim_trap_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_native_liability_horizon_v1 {
-            h.write(b"palw_native_liability_horizon_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
         if let Some(fence) = &self.palw_bond_budget_v1 {
             h.write(b"palw_bond_budget_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -2160,11 +1938,6 @@ impl Params {
             h.write(b"palw_public_evidence_reward_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        // Compute-claim audit CX-01/CX-02's answer accounting, NAMED likewise. Some-only.
-        if let Some(at) = self.palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_fp_answer_accounting_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
         if let Some(f) = self.palw_claim_hard_deadline_v1.filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_claim_hard_deadline_v1");
             h.write(f.activation.daa_score().to_le_bytes());
@@ -2175,89 +1948,10 @@ impl Params {
             h.write(b"palw_cell_coverage_closure_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        // The cross-lane G14 gates (`crate::palw_g14_gates_v1`), NAMED likewise. Some-only.
-        if let Some(at) = self.palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_g14_route_required_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_reward_liability_horizon_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_reward_liability_horizon_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        // The court-capacity fence, NAMED likewise, with its policy. Some-only.
-        if let Some(f) = self.palw_court_capacity_v1.filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_court_capacity_v1");
-            h.write(f.activation.daa_score().to_le_bytes());
-            h.write(f.policy.id().as_bytes());
-        }
-        if let Some(f) = self.palw_court_transport_v1.filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_court_transport_v1");
-            h.write(f.activation.daa_score().to_le_bytes());
-            h.write(f.policy.id().as_bytes());
-        }
-        // RFC-0023 stage 1, NAMED, Some-only.
-        if let Some(at) = self.palw_unresolved_bound_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_unresolved_bound_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_claim_local_settlement_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_claim_local_settlement_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        // RFC-0016's two dormant fences, NAMED likewise. Some-only.
-        if let Some(at) = self.palw_model_block_rights_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_model_block_rights_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_elastic_final_capacity_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_elastic_final_capacity_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
         // RFC-0017's model eligibility, NAMED likewise. Some-only.
         if let Some(at) = self.palw_model_eligibility_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_model_eligibility_v1");
             h.write(at.daa_score().to_le_bytes());
-        }
-        // ADR-0179's model tiers, NAMED with their values and RFC-0019's catalog chain — EVERY edition's number, height and root, the
-        // scheduled ones included: this id is a report, not a gate, so two builds that carry different next editions (or one carries
-        // none) read as different schedules in the handshake's warning before the edition activates. Some-only.
-        if let Some(fence) = self.palw_model_tier_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_model_tier_v1");
-            h.write(fence.activation.daa_score().to_le_bytes());
-            fence.write_value_into(&mut h);
-        }
-        // G14's per-class detection policy, NAMED with every policy's id. Some-only.
-        if let Some(fence) = self.palw_detection_policy_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_detection_policy_v1");
-            h.write(fence.activation.daa_score().to_le_bytes());
-            fence.write_value_into(&mut h);
-        }
-        // RFC-0018's five fences, NAMED likewise. Some-only (the schedule's id beside its height).
-        if let Some(at) = self.palw_dag_sibling_attribution_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_dag_sibling_attribution_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_panel_anchor_permissionless_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_panel_anchor_permissionless_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        // The liveness fix L-COURT-01's fence: Some-only, named.
-        if let Some(at) = self.palw_court_completion_attempt_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_court_completion_attempt_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_rule_e_participation_v2.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_rule_e_participation_v2");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = self.palw_independently_work_certified_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_independently_work_certified_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(f) = self.palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_dag_width_schedule_v1");
-            h.write(f.activation.daa_score().to_le_bytes());
-            h.write(f.schedule.id().as_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
@@ -2915,15 +2609,6 @@ impl Params {
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
-            palw_tir_public_conviction_v1,
-            palw_tir_container_identity_v1,
-            palw_tir_frame_cost_v1: _,
-            palw_tir_bounded_door_v1,
-            palw_tir_designated_answers_v1,
-            palw_court_outsider_lane_v1,
-            palw_state_row_map_v1,
-            palw_kernel_route_panel_one_v1,
-            palw_court_clock_v2,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -2955,9 +2640,9 @@ impl Params {
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_memory_routing_court_v2,
-            palw_class_registration_origin_v1,
             palw_selected_source_bootstrap_v1,
             palw_paid_bootstrap_source_v6,
+            palw_source_economics_v1,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -2971,8 +2656,6 @@ impl Params {
             palw_stage_execution_v14,
             palw_native_final_v27,
             palw_stage_execution_v28,
-            palw_native_execution_v39,
-            palw_native_mining_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -2989,9 +2672,6 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
-            palw_settlement_once_v1,
-            palw_paid_claim_trap_v1,
-            palw_native_liability_horizon_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -3008,26 +2688,9 @@ impl Params {
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
-            palw_fp_answer_accounting_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
-            palw_g14_route_required_v1,
-            palw_reward_liability_horizon_v1,
-            palw_court_capacity_v1,
-            palw_court_transport_v1,
-            palw_unresolved_bound_v1,
-            palw_claim_local_settlement_v1,
-            palw_model_block_rights_v1,
-            palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
-            palw_model_tier_v1,
-            palw_detection_policy_v1,
-            palw_dag_sibling_attribution_v1,
-            palw_panel_anchor_permissionless_v1,
-            palw_court_completion_attempt_v1,
-            palw_rule_e_participation_v2,
-            palw_independently_work_certified_v1,
-            palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -3572,32 +3235,6 @@ impl Params {
         if let Some(activation) = palw_staged_tir_route_v1.as_mut() {
             fork(activation, visit);
         }
-        if let Some(activation) = palw_tir_public_conviction_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_tir_container_identity_v1.as_mut() {
-            fork(activation, visit);
-        }
-        // Some-only. Absent stays absent, so an unarmed preset's schedule id does not move. A future
-        // height becomes `never()` and the identity collapse drops it.
-        if let Some(activation) = palw_tir_bounded_door_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_tir_designated_answers_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_court_outsider_lane_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_state_row_map_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_kernel_route_panel_one_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_court_clock_v2.as_mut() {
-            fork(activation, visit);
-        }
         if let Some(activation) = palw_staged_float_constraint_v1.as_mut() {
             fork(activation, visit);
         }
@@ -3795,13 +3432,13 @@ impl Params {
         if let Some(activation) = palw_memory_routing_court_v2.as_mut() {
             fork(activation, visit);
         }
-        if let Some(at) = palw_class_registration_origin_v1.as_mut() {
-            fork(at, visit);
-        }
         if let Some(fence) = palw_selected_source_bootstrap_v1.as_mut() {
             fork(&mut fence.at, visit);
         }
         if let Some(fence) = palw_paid_bootstrap_source_v6.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_source_economics_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
         // ADR-0100 Decision 4. Some-only, likewise.
@@ -3844,12 +3481,6 @@ impl Params {
             fork(&mut fence.activation, visit);
         }
         if let Some(fence) = palw_stage_execution_v28.as_mut() {
-            fork(&mut fence.activation, visit);
-        }
-        if let Some(fence) = palw_native_execution_v39.as_mut() {
-            fork(&mut fence.activation, visit);
-        }
-        if let Some(fence) = palw_native_mining_v39.as_mut() {
             fork(&mut fence.activation, visit);
         }
         if let Some(fence) = palw_funded_execution_v11.as_mut() {
@@ -3944,15 +3575,6 @@ impl Params {
         if let Some(at) = palw_material_income_v3.as_mut() {
             fork(at, visit);
         }
-        if let Some(at) = palw_settlement_once_v1.as_mut() {
-            fork(at, visit);
-        }
-        if let Some(at) = palw_paid_claim_trap_v1.as_mut() {
-            fork(at, visit);
-        }
-        if let Some(at) = palw_native_liability_horizon_v1.as_mut() {
-            fork(at, visit);
-        }
         if let Some(fence) = palw_bond_budget_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -3978,9 +3600,6 @@ impl Params {
         if let Some(activation) = palw_public_evidence_reward_v1.as_mut() {
             fork(activation, visit);
         }
-        if let Some(activation) = palw_fp_answer_accounting_v1.as_mut() {
-            fork(activation, visit);
-        }
         if let Some(f) = palw_claim_hard_deadline_v1.as_mut() {
             fork(&mut f.activation, visit);
         }
@@ -3988,69 +3607,9 @@ impl Params {
         if let Some(activation) = palw_cell_coverage_closure_v1.as_mut() {
             fork(activation, visit);
         }
-        // The cross-lane G14 gates. Some-only.
-        if let Some(activation) = palw_g14_route_required_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_reward_liability_horizon_v1.as_mut() {
-            fork(activation, visit);
-        }
-        // The court-capacity fence. Some-only.
-        if let Some(f) = palw_court_capacity_v1.as_mut() {
-            fork(&mut f.activation, visit);
-        }
-        if let Some(f) = palw_court_transport_v1.as_mut().filter(|f| f.activation != ForkActivation::never()) {
-            fork(&mut f.activation, visit);
-        }
-        // RFC-0023 stage 1. Some-only.
-        if let Some(activation) = palw_unresolved_bound_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_claim_local_settlement_v1.as_mut() {
-            fork(activation, visit);
-        }
-        // RFC-0016's two dormant fences. Some-only.
-        if let Some(activation) = palw_model_block_rights_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_elastic_final_capacity_v1.as_mut() {
-            fork(activation, visit);
-        }
         // RFC-0017's model eligibility. Some-only.
         if let Some(activation) = palw_model_eligibility_v1.as_mut() {
             fork(activation, visit);
-        }
-        // ADR-0179's model tiers: the fence and every RFC-0019 annual catalog edition's activation (edition 1 onward — edition 0 is
-        // the genesis catalog at DAA 0, not a fence). Some-only.
-        if let Some(fence) = palw_model_tier_v1.as_mut() {
-            fork(&mut fence.activation, visit);
-            for catalog in fence.catalogs.editions.iter_mut().skip(1) {
-                visit(&mut catalog.activation_daa);
-            }
-        }
-        // G14's per-class detection policy. Some-only.
-        if let Some(fence) = palw_detection_policy_v1.as_mut() {
-            fork(&mut fence.activation, visit);
-        }
-        // RFC-0018's five fences. Some-only.
-        if let Some(activation) = palw_dag_sibling_attribution_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_panel_anchor_permissionless_v1.as_mut() {
-            fork(activation, visit);
-        }
-        // The liveness fix L-COURT-01's fence. Some-only.
-        if let Some(activation) = palw_court_completion_attempt_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_rule_e_participation_v2.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(activation) = palw_independently_work_certified_v1.as_mut() {
-            fork(activation, visit);
-        }
-        if let Some(f) = palw_dag_width_schedule_v1.as_mut() {
-            fork(&mut f.activation, visit);
         }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
@@ -4509,15 +4068,6 @@ impl Params {
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
-            palw_tir_public_conviction_v1,
-            palw_tir_container_identity_v1,
-            palw_tir_frame_cost_v1,
-            palw_tir_bounded_door_v1,
-            palw_tir_designated_answers_v1,
-            palw_court_outsider_lane_v1,
-            palw_state_row_map_v1,
-            palw_kernel_route_panel_one_v1,
-            palw_court_clock_v2,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -4549,9 +4099,9 @@ impl Params {
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_memory_routing_court_v2,
-            palw_class_registration_origin_v1,
             palw_selected_source_bootstrap_v1,
             palw_paid_bootstrap_source_v6,
+            palw_source_economics_v1,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -4565,8 +4115,6 @@ impl Params {
             palw_stage_execution_v14,
             palw_native_final_v27,
             palw_stage_execution_v28,
-            palw_native_execution_v39,
-            palw_native_mining_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -4583,9 +4131,6 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
-            palw_settlement_once_v1,
-            palw_paid_claim_trap_v1,
-            palw_native_liability_horizon_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -4602,26 +4147,9 @@ impl Params {
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
-            palw_fp_answer_accounting_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
-            palw_g14_route_required_v1,
-            palw_reward_liability_horizon_v1,
-            palw_court_capacity_v1,
-            palw_court_transport_v1,
-            palw_unresolved_bound_v1,
-            palw_claim_local_settlement_v1,
-            palw_model_block_rights_v1,
-            palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
-            palw_model_tier_v1,
-            palw_detection_policy_v1,
-            palw_dag_sibling_attribution_v1,
-            palw_panel_anchor_permissionless_v1,
-            palw_court_completion_attempt_v1,
-            palw_rule_e_participation_v2,
-            palw_independently_work_certified_v1,
-            palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -5238,44 +4766,6 @@ impl Params {
             h.write(b"palw_staged_tir_route_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
-        if let Some(activation) = palw_tir_public_conviction_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_tir_public_conviction_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        if let Some(activation) = palw_tir_container_identity_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_tir_container_identity_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        // The TIR frame's measured cost model (audit §10): it fixes every frame's prices and doors, so it is a rule about blocks.
-        // Some-only: `None` on every shipped preset, whose identity is unchanged.
-        if let Some(cost) = palw_tir_frame_cost_v1 {
-            h.write(b"palw_tir_frame_cost_v1");
-            h.write(borsh::to_vec(cost).expect("PalwTirFrameCostV1 is borsh-serializable"));
-        }
-        if let Some(at) = palw_tir_bounded_door_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_tir_bounded_door_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = palw_tir_designated_answers_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_tir_designated_answers_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = palw_court_outsider_lane_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_court_outsider_lane_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = palw_state_row_map_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_state_row_map_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = palw_kernel_route_panel_one_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_kernel_route_panel_one_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = palw_court_clock_v2.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_court_clock_v2");
-            h.write(at.daa_score().to_le_bytes());
-        }
         if let Some(activation) = palw_staged_float_constraint_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_staged_float_constraint_v1");
             h.write(activation.daa_score().to_le_bytes());
@@ -5438,10 +4928,6 @@ impl Params {
             h.write(b"palw_memory_routing_court_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
-        if let Some(at) = palw_class_registration_origin_v1 {
-            h.write(b"palw_class_registration_origin_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
         if let Some(fence) = palw_selected_source_bootstrap_v1 {
             h.write(b"palw_selected_source_bootstrap_v1");
             h.write(fence.at.daa_score().to_le_bytes());
@@ -5451,6 +4937,19 @@ impl Params {
             h.write(b"palw_paid_bootstrap_source_v6");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.id().as_slice());
+        }
+        if let Some(fence) = palw_source_economics_v1 {
+            h.write(b"palw_source_economics_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.version.to_le_bytes());
+            h.write(fence.policy.enrollment);
+            h.write(fence.policy.actor);
+            h.write(fence.policy.payer);
+            h.write(fence.policy.prepaid_sompi.to_le_bytes());
+            h.write(fence.policy.reserved_sompi.to_le_bytes());
+            h.write(fence.policy.r_cap_sompi.to_le_bytes());
+            h.write(fence.policy.budget_reservation_sompi.to_le_bytes());
+            h.write(fence.policy.inclusive_until_daa.to_le_bytes());
         }
         // ADR-0100 Decision 4, Some-only for the same reason: every shipped preset leaves it
         // `None` and fingerprints byte-identically to a build without the field.
@@ -5519,16 +5018,6 @@ impl Params {
             h.write(b"palw_stage_execution_v28");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policies.root());
-        }
-        if let Some(fence) = palw_native_execution_v39 {
-            h.write(b"palw_native_execution_v39");
-            h.write(fence.activation.daa_score().to_le_bytes());
-            h.write(fence.policies.root());
-        }
-        if let Some(fence) = palw_native_mining_v39 {
-            h.write(b"palw_native_mining_v39");
-            h.write(fence.activation.daa_score().to_le_bytes());
-            h.write(fence.policy.root());
         }
         if let Some(fence) = palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");
@@ -5653,18 +5142,6 @@ impl Params {
             h.write(b"palw_material_income_v3");
             h.write(at.daa_score().to_le_bytes());
         }
-        if let Some(at) = palw_settlement_once_v1 {
-            h.write(b"palw_settlement_once_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = palw_paid_claim_trap_v1 {
-            h.write(b"palw_paid_claim_trap_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = palw_native_liability_horizon_v1 {
-            h.write(b"palw_native_liability_horizon_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
         if let Some(fence) = &palw_bond_budget_v1 {
             h.write(b"palw_bond_budget_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -5711,10 +5188,6 @@ impl Params {
             h.write(b"palw_public_evidence_reward_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
-        if let Some(activation) = palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_fp_answer_accounting_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
         if let Some(f) = palw_claim_hard_deadline_v1.filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_claim_hard_deadline_v1");
             h.write(f.activation.daa_score().to_le_bytes());
@@ -5725,87 +5198,10 @@ impl Params {
             h.write(b"palw_cell_coverage_closure_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
-        // The cross-lane G14 gates, Some-only for the same reason.
-        if let Some(activation) = palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_g14_route_required_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        if let Some(activation) = palw_reward_liability_horizon_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_reward_liability_horizon_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        // The court-capacity fence, Some-only for the same reason, with its policy.
-        if let Some(f) = palw_court_capacity_v1.filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_court_capacity_v1");
-            h.write(f.activation.daa_score().to_le_bytes());
-            h.write(f.policy.id().as_bytes());
-        }
-        if let Some(f) = palw_court_transport_v1.filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_court_transport_v1");
-            h.write(f.activation.daa_score().to_le_bytes());
-            h.write(f.policy.id().as_bytes());
-        }
-        // RFC-0023 stage 1, Some-only.
-        if let Some(at) = palw_unresolved_bound_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_unresolved_bound_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        if let Some(at) = palw_claim_local_settlement_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_claim_local_settlement_v1");
-            h.write(at.daa_score().to_le_bytes());
-        }
-        // RFC-0016's two dormant fences, Some-only for the same reason.
-        if let Some(activation) = palw_model_block_rights_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_model_block_rights_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        if let Some(activation) = palw_elastic_final_capacity_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_elastic_final_capacity_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
         // RFC-0017's model eligibility, Some-only for the same reason.
         if let Some(activation) = palw_model_eligibility_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_model_eligibility_v1");
             h.write(activation.daa_score().to_le_bytes());
-        }
-        // ADR-0179's model tiers, Some-only for the same reason (lists and values beside the height).
-        if let Some(fence) = palw_model_tier_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_model_tier_v1");
-            h.write(fence.activation.daa_score().to_le_bytes());
-            fence.write_value_into(&mut h);
-        }
-        // G14's per-class detection policy, Some-only for the same reason (each policy id beside the height).
-        if let Some(fence) = palw_detection_policy_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_detection_policy_v1");
-            h.write(fence.activation.daa_score().to_le_bytes());
-            fence.write_value_into(&mut h);
-        }
-        // RFC-0018's five fences, Some-only for the same reason.
-        if let Some(activation) = palw_dag_sibling_attribution_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_dag_sibling_attribution_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        if let Some(activation) = palw_panel_anchor_permissionless_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_panel_anchor_permissionless_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        // The liveness fix L-COURT-01's fence, Some-only for the same reason.
-        if let Some(activation) = palw_court_completion_attempt_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_court_completion_attempt_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        if let Some(activation) = palw_rule_e_participation_v2.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_rule_e_participation_v2");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        if let Some(activation) = palw_independently_work_certified_v1.filter(|f| *f != ForkActivation::never()) {
-            h.write(b"palw_independently_work_certified_v1");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        if let Some(f) = palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()) {
-            h.write(b"palw_dag_width_schedule_v1");
-            h.write(f.activation.daa_score().to_le_bytes());
-            h.write(f.schedule.id().as_bytes());
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {

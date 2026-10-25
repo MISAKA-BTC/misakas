@@ -1,7 +1,5 @@
 # ADR-0178 — The fork choice heals a partition on bonded participation: one search over every tip, economic keys counted over each branch's exclusive past, and participation first past `W_p`
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 > **INTERNAL (user decision 2026-10-08).** Finding V6 is kept out of every public text — docs, commit messages, explorer text, issues.
 > This draft and its record live on the unpushed branch `fin/palw-finality-consistency`. V6 is named here only as "the stale-incumbent
 > comparison"; its mechanics are in the internal record, §3.
@@ -13,7 +11,7 @@ immutable". Code, tests and the record say ADR-0178.
 (lane FINX successor, 2026-10-09; §9), refused when armed in this binary; it ships armed only in the single full-activation release,
 which assigns its height. User decisions already taken (2026-10-08): no public advisory; no early dedicated fence; **the fix ships in
 the single full-activation release**; `palw_dns_retirement_v1` may be armed only with rule E at or below it. Record:
-[`docs/design/palw/finality-palw-consistency.md`](../design/palw/consensus/finality-palw-consistency.md).
+[`docs/design/palw/finality-palw-consistency.md`](../design/palw/finality-palw-consistency.md).
 
 **Builds on / amends (if accepted):** ADR-0042 Decision 9 (one comparator), the strict-win reorg rule (`palw_reorg_strict_economic_win`,
 lane rcore/f1-strictwin-tie), the pruning-proof strict-economic commit (rcore/hf-pptake2), ADR-0065 D2 (frontier provenance — its "bonds
@@ -269,16 +267,3 @@ to the common sink at the first arriving block. It is a non-deterministic stall 
 comparator is consulted where there is one tip, and rule E (armed) changes nothing there — pinned by
 `finx_e_drill_1010_a_lagging_sink_on_one_chain_is_no_fork_choice_state`. Evidence and the next step (a stack of the stuck
 virtual-processor thread): design record §10.5. Rule E's scope is unchanged — the comparator split of 10-08 (two branches).
-
-## ユーザー方針 2026-10-15 による改定
-
-* §10/§11の二つの未解決問題を[RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §6のrule E v2(fence `palw_rule_e_participation_v2`、休眠)で閉じる: participationは`F`での資本で数え(分割で増えない)、voidされた・未認証のattemptを数えない(bondはVoided/未認証の判定の後でだけ集合に入る)。rule E v1の意味は変えない。
-* DNS退役後の収束は**Gate Cとrule E v2の組**で行う。fork choiceの全keyは認証済みclaimだけから作る。両側が認証済みcreditを一切持たない区間はGHOSTDAG順で決める(PALWのfinalityがどちらにも報告されていないため、報告済みのfinalityは覆らない)。
-
-**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
-
-* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
-* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
-* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
-* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
-* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。

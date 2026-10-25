@@ -8,7 +8,7 @@
 //! review's second pass is pinned as `f1_*`–`f6_*`. Below SEAT-R every path, form and deadline is
 //! what it was.
 use super::{
-    PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1, PALW_SEAT_RETENTION_LIABILITIES_MAX_V1,
+    MARKER_SEAT_S, PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1, PALW_SEAT_RETENTION_LIABILITIES_MAX_V1,
     PALW_SEAT_S4_AUTHENTICATION_REFUSALS_V1, PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1, PalwReplayAnswerV1, PalwSeatArmV1,
     PalwSeatClassReadV1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1, PalwSeatReplayPollV1, PalwSeatReplayStepV1, PalwSeatReplaysV1,
     PalwSeatResumeClaimV1, PalwSeatResumeStepV1, PalwSeatResumesV1, PalwSeatSegmentPollV1, PalwSeatSegmentRefusalV1, PalwSeatTailV1,
@@ -44,7 +44,8 @@ pub(super) fn floor_backend() -> misaka_palw_base0::backend::Base0Backend {
 
 /// The source before the first test module: what the pins read.
 fn source() -> &'static str {
-    crate::palw_panel::source_support::former_parent_production_source_v1()
+    let whole = include_str!("../palw_panel.rs");
+    &whole[..whole.find(MARKER_SEAT_S).expect("the production code ends before the tests")]
 }
 
 fn body_of<'a>(source: &'a str, head: &str) -> &'a str {
@@ -354,7 +355,6 @@ async fn h2_the_held_partial_replay_runs_off_the_loop() {
 /// again and the seat holds nothing to try.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn h3_the_attempt_partial_resume_uses_an_opening_that_arrives_after_the_first_tick() {
-        use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let (claim, _segment, request) = partial_claim(100);
     let (mut resumes, mut replays) = (PalwSeatResumesV1::default(), PalwSeatReplaysV1::default());
     let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -396,10 +396,10 @@ async fn h3_the_attempt_partial_resume_uses_an_opening_that_arrives_after_the_fi
     // The old per-duty resume (`replayed.insert`) is below SEAT-R only: past it the attempt lane's
     // C7 partial seat takes the SEAT-S4 route every tick.
     let source = source();
-    let block = &source[source.find_code("let verdict = 'verdict: {").unwrap()..];
-    let fence = block.find_code("let resolved = if seat_r {").expect("the attempt lane's fence");
-    let resumed = fence + block[fence..].find_code(".seat_s4_resume_v1(").expect("the S4 route");
-    let old = fence + block[fence..].find_code("&& replayed.insert(seat_duty_panel_key_v1(duty))").expect("the old path");
+    let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+    let fence = block.find("let resolved = if seat_r {").expect("the attempt lane's fence");
+    let resumed = fence + block[fence..].find(".seat_s4_resume_v1(").expect("the S4 route");
+    let old = fence + block[fence..].find("&& replayed.insert(seat_duty_panel_key_v1(duty))").expect("the old path");
     assert!(resumed < old, "the S4 route is the fence's branch; the once-per-duty resume its else");
 }
 
@@ -538,7 +538,6 @@ fn l1_a_full_mask_partial_seat_takes_the_full_replay() {
 /// a held job the answer did not bind is anybody's).
 #[test]
 fn l2_an_fp_seat_without_the_output_ids_derives_no_context_and_asks() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let backend = floor_backend();
     let (job, _ids) = floor_fp_job(&backend);
     let ceiling = backend.fp_job_context_for_executed_v1(&job, 7).expect("the ceiling's context");
@@ -546,22 +545,22 @@ fn l2_an_fp_seat_without_the_output_ids_derives_no_context_and_asks() {
     assert_ne!(early, ceiling, "an early stop's context is not the ceiling's");
     let source = source();
     let context = body_of(source, "    fn fp_seat_job_v1(");
-    assert!(context.contains_code("let (material, ids) = self.fp_committed_answer_v1(backend, duty, held)?;"), "the answer's job only");
-    assert!(context.contains_code("backend.fp_job_context_for_executed_v1(&material.job, ids.len()"), "at the answer's length");
-    assert!(!context.contains_code("fp_job_context_v1(&material.job)"), "never the ceiling");
-    assert!(!context.contains_code("fp_job_material_for_claim("), "never a held job the answer did not bind");
+    assert!(context.contains("let (material, ids) = self.fp_committed_answer_v1(backend, duty, held)?;"), "the answer's job only");
+    assert!(context.contains("backend.fp_job_context_for_executed_v1(&material.job, ids.len()"), "at the answer's length");
+    assert!(!context.contains("fp_job_context_v1(&material.job)"), "never the ceiling");
+    assert!(!context.contains("fp_job_material_for_claim("), "never a held job the answer did not bind");
     // The M2 Phase 3 review's H-2: the context must reproduce the pin the claim recorded, or a
     // same-shaped job J′ whose answer authenticates is resumed under J′ and convicted by J1-FP.
-    assert!(context.contains_code("if let Some(pin) = duty.fp_job_pin_v1()"), "H-2: the recorded pin is read off the duty");
+    assert!(context.contains("if let Some(pin) = duty.fp_job_pin_v1()"), "H-2: the recorded pin is read off the duty");
     assert!(
-        context.contains_code("palw_fp_job_pin_of_context_v1(&ctx) != pin") && context.contains_code("return None;"),
+        context.contains("palw_fp_job_pin_of_context_v1(&ctx) != pin") && context.contains("return None;"),
         "H-2: a context whose pin is not the claim's resumes nothing"
     );
-    let block = &source[source.find_code("let verdict = 'verdict: {").unwrap()..];
-    let unanswered = block.find_code("// No job the answer authenticated, so no context to authenticate an").expect("the route's None arm");
+    let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+    let unanswered = block.find("// No job the answer authenticated, so no context to authenticate an").expect("the route's None arm");
     let arm = &block
-        [unanswered..unanswered + block[unanswered..].find_code("PalwSeatResumeStepV1::Starved { missing: Vec::new(), served }").unwrap()];
-    assert!(arm.contains_code("self.request_material_signed(network_domain, duty.claim_id, current_daa).await;"), "it asks");
+        [unanswered..unanswered + block[unanswered..].find("PalwSeatResumeStepV1::Starved { missing: Vec::new(), served }").unwrap()];
+    assert!(arm.contains("self.request_material_signed(network_domain, duty.claim_id, current_daa).await;"), "it asks");
 }
 
 /// **F1: a stranger's free-prompt job at the claim's price refuses the producer's honest opening**
@@ -735,7 +734,6 @@ async fn f1_a_local_failure_is_never_unserved_and_is_retried_within_the_bound() 
 /// SEAT-R the wait runs as it always did.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn f2_a_full_seat_whose_replay_did_not_run_never_reaches_unavailable() {
-        use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
     let class = h(0x2E);
     let mut replays = PalwSeatReplaysV1::default();
@@ -777,16 +775,16 @@ async fn f2_a_full_seat_whose_replay_did_not_run_never_reaches_unavailable() {
     // Where it is read: after the pull, before the one tail wait and its note — and `Silent` ends
     // the verdict with nothing filed.
     let source = source();
-    let block = &source[source.find_code("let verdict = 'verdict: {").unwrap()..];
-    let block = &block[..block.find_code("let Some(verdict) = verdict else { continue };").unwrap()];
-    let gate = block.find_code("match palw_seat_tail_v1(seat_r, duty.free_prompt, refuted_here, || {").expect("the tail's gate");
+    let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+    let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
+    let gate = block.find("match palw_seat_tail_v1(seat_r, duty.free_prompt, refuted_here, || {").expect("the tail's gate");
     let wait = block.rfind("palw_seat_material_wait_ends_v1(").expect("the tail's wait");
     assert!(block[..gate].rfind("self.request_material_signed(").is_some(), "the pull still runs");
     let silent = "PalwSeatTailV1::Silent => {\n                            service.note_served(duty.claim_id);\n                            break 'verdict None;";
-    assert!(gate < wait && block[gate..wait].contains_code(silent), "Silent: served, and nothing filed");
+    assert!(gate < wait && block[gate..wait].contains(silent), "Silent: served, and nothing filed");
     let note = "PalwSeatTailV1::Waits { unserved: true } => service.note_unserved(duty.claim_id, current_daa),";
     assert!(block[gate..wait].contains(note), "noted only when served no job");
-    assert!(!block.contains_code("if seat_r && !refuted {\n                        unserved.entry("), "the old unconditional note is gone");
+    assert!(!block.contains("if seat_r && !refuted {\n                        unserved.entry("), "the old unconditional note is gone");
 }
 
 /// **F4: a resuming partial seat is not held to a whole replay's memory.** The duty loop's
@@ -794,21 +792,20 @@ async fn f2_a_full_seat_whose_replay_did_not_run_never_reaches_unavailable() {
 /// SEAT-S4 route reserves the partial seat's streamed need a segment at a time.
 #[test]
 fn f4_the_pre_check_does_not_price_a_resuming_partial_seat_as_a_full_seat() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let source = source();
-    let block = &source[source.find_code("for index in order {").expect("the duty loop")..];
-    let check = block.find_code("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("the check");
+    let block = &source[source.find("for index in order {").expect("the duty loop")..];
+    let check = block.find("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("the check");
     let guard = &block[..check];
     let guard = &guard[guard.rfind("if !(seat_r").expect("its guard")..];
     let squeezed: String = guard.chars().filter(|c| !c.is_whitespace()).collect();
     assert!(
         squeezed
-            .contains_code("if!(seat_r&&(seat_replays.holds_claim(&duty.claim_id)||seat_r_duty.role==PalwSeatRRoleV1::PartialResumes))"),
+            .contains("if!(seat_r&&(seat_replays.holds_claim(&duty.claim_id)||seat_r_duty.role==PalwSeatRRoleV1::PartialResumes))"),
         "past SEAT-R only: below it the check prices every duty as it did"
     );
     let route = body_of(source, "    async fn seat_s4_resume_v1(");
     assert!(
-        route.contains_code("self.reserve_replay_at_widest_run_v1(\"partial-seat\", backend.as_mut(), duty.class_id, duty.claim_id"),
+        route.contains("self.reserve_replay_at_widest_run_v1(\"partial-seat\", backend.as_mut(), duty.class_id, duty.claim_id"),
         "its own reservation"
     );
 }
@@ -818,7 +815,6 @@ fn f4_the_pre_check_does_not_price_a_resuming_partial_seat_as_a_full_seat() {
 /// once the registry answers; and a claim read under a read class is never read again.
 #[test]
 fn f5_a_long_d_claim_first_seen_unread_gets_r_eff_once_its_class_reads() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let (mut liabilities, mut unread) = (HashMap::new(), HashSet::new());
     let claim = h(0x51);
     let horizon = |spans: Option<u32>| Some(if spans.is_some_and(|s| s > 100) { 40_000 } else { 6_400 });
@@ -839,22 +835,21 @@ fn f5_a_long_d_claim_first_seen_unread_gets_r_eff_once_its_class_reads() {
     palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, recordless, long_d, horizon);
     assert_eq!(liabilities.get(&recordless), Some(&40_000));
     // The sweep keeps the unread set inside the liabilities.
-    let sweep = &source()[source().find_code("// R2: past SEAT-R also every claim this seat held a duty on").expect("the sweep")..];
-    assert!(sweep.contains_code("liabilities_unread.retain(|claim| retention_liabilities.contains_key(claim));"));
+    let sweep = &source()[source().find("// R2: past SEAT-R also every claim this seat held a duty on").expect("the sweep")..];
+    assert!(sweep.contains("liabilities_unread.retain(|claim| retention_liabilities.contains_key(claim));"));
 }
 
 /// **F6: the asks' pacing leaves with the claim.** Past SEAT-R `requested_intervals` is swept with
 /// the served openings, to the claims a duty, court or dispute still names; below it, as it was.
 #[test]
 fn f6_requested_intervals_is_swept_past_seat_r() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let source = source();
     let sweep = source
-        .find_code("if seat_r {\n                pool_books.intervals.resume_mut().retain(|(claim, _), _| live.contains(claim));")
+        .find("if seat_r {\n                interval_openings.retain(|(claim, _), _| live.contains(claim));")
         .expect("H1's sweep");
     let rest = &source[sweep..];
-    let rest = &rest[..rest.find("\n        }\n").expect("its end")];
-    assert!(rest.contains_code("requested_intervals.retain(|(claim, _), _| live.contains(claim));"));
+    let rest = &rest[..rest.find("\n            }\n").expect("its end")];
+    assert!(rest.contains("requested_intervals.retain(|(claim, _), _| live.contains(claim));"));
     assert_eq!(source.matches("requested_intervals.retain(").count(), 1, "past the fence only");
 }
 
@@ -864,7 +859,6 @@ fn f6_requested_intervals_is_swept_past_seat_r() {
 /// wait is read.
 #[test]
 fn n5_the_material_wait_is_capped_past_seat_r_and_never_fires_while_replaying() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     assert_eq!(PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1, 60);
     assert_eq!(palw_seat_material_wait_until_v1(true, 1_000, 1_600), 1_060, "the floor: min(300, 60)");
     assert_eq!(palw_seat_material_wait_until_v1(true, 1_000, 3_799), 1_060, "the 2M row: min(1,399, 60)");
@@ -878,8 +872,8 @@ fn n5_the_material_wait_is_capped_past_seat_r_and_never_fires_while_replaying() 
     // Never while replaying: in the verdict block every wait is read after the replay's and the
     // resume's `Waiting` arms, which end the verdict with nothing filed.
     let source = source();
-    let block = &source[source.find_code("let verdict = 'verdict: {").unwrap()..];
-    let block = &block[..block.find_code("let Some(verdict) = verdict else { continue };").unwrap()];
+    let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+    let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
     let waits: Vec<usize> = block.match_indices("palw_seat_material_wait_ends_v1(").map(|(i, _)| i).collect();
     assert_eq!(
         waits.len(),
@@ -891,7 +885,7 @@ fn n5_the_material_wait_is_capped_past_seat_r_and_never_fires_while_replaying() 
         let resume_wait = before.rfind("PalwSeatResumeStepV1::Waiting => break 'verdict None,");
         let replay_wait = before.rfind("(PalwSeatReplayStepV1::Waiting, _) => break 'verdict None,");
         // The tensor claim's pass (RFC-0003) matches on its one step alone, not on a `(step, bytes)` pair.
-        let tensor_wait = before.rfind_code("PalwSeatReplayStepV1::Waiting => break 'verdict None,");
+        let tensor_wait = before.rfind("                                PalwSeatReplayStepV1::Waiting => break 'verdict None,");
         assert!(resume_wait.or(replay_wait).or(tensor_wait).is_some(), "wait {n}: a Waiting arm precedes it");
     }
     assert_eq!(block.matches("PalwSeatResumeStepV1::Waiting => break 'verdict None,").count(), 2);
@@ -951,7 +945,6 @@ async fn n5_a_resuming_seat_is_never_starved_while_its_replay_runs() {
 /// soonest horizon out first; and a long-D class's horizon reaches past its own retention.
 #[test]
 fn r2_the_prune_keeps_a_live_liability_claims_files() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let dir = std::env::temp_dir().join(format!("seat-s-r2-{}-{:?}", std::process::id(), std::thread::current().id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -1011,10 +1004,10 @@ fn r2_the_prune_keeps_a_live_liability_claims_files() {
     assert!(palw_seat_retention_horizon_v1(&params, &claim, 1_010, Some(&lifecycle_row(25))) > 6_400, "D 125: long-D");
     assert_eq!(palw_seat_retention_horizon_v1(&params, &claim, 1_010, Some(&lifecycle_row(24))), 6_400, "D 120: not long-D");
     // Past SEAT-R the pins are the liabilities' too; below it, the live claims as always.
-    let sweep = &source()[source().find_code("// R2: past SEAT-R also every claim this seat held a duty on").expect("the sweep")..];
+    let sweep = &source()[source().find("// R2: past SEAT-R also every claim this seat held a duty on").expect("the sweep")..];
     assert!(
-        sweep.contains_code("if seat_r {")
-            && sweep.contains_code("} else {\n                *self.foreign_pinned.lock().unwrap() = live.clone();")
+        sweep.contains("if seat_r {")
+            && sweep.contains("} else {\n                *self.foreign_pinned.lock().unwrap() = live.clone();")
     );
 }
 
@@ -1023,7 +1016,6 @@ fn r2_the_prune_keeps_a_live_liability_claims_files() {
 /// deadline display.
 #[test]
 fn below_seat_r_the_seat_s_paths_are_what_they_were() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let mask = PalwSegmentMaskV2::single(1);
     for arm in PalwSeatArmV1::ALL {
         assert!(palw_seat_arm_licenses_v1(false, arm), "{arm:?}");
@@ -1041,23 +1033,23 @@ fn below_seat_r_the_seat_s_paths_are_what_they_were() {
         assert_eq!(palw_seat_material_wait_until_v1(false, 500, 500 + window), 500 + window / 2);
     }
     let source = source();
-    let block = &source[source.find_code("let verdict = 'verdict: {").unwrap()..];
-    let block = &block[..block.find_code("let Some(verdict) = verdict else { continue };").unwrap()];
+    let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+    let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
     let squeezed: String = block.chars().filter(|c| !c.is_whitespace()).collect();
-    assert!(squeezed.contains_code("ifseat_r&&seat_r_duty.role==PalwSeatRRoleV1::PartialResumes{"), "the FP route: past the fence");
-    let fence = block.find_code("let resolved = if seat_r {").unwrap();
-    let old = fence + block[fence..].find_code("&& replayed.insert(seat_duty_panel_key_v1(duty))").unwrap();
+    assert!(squeezed.contains("ifseat_r&&seat_r_duty.role==PalwSeatRRoleV1::PartialResumes{"), "the FP route: past the fence");
+    let fence = block.find("let resolved = if seat_r {").unwrap();
+    let old = fence + block[fence..].find("&& replayed.insert(seat_duty_panel_key_v1(duty))").unwrap();
     let attempt_route = block.rfind(".seat_s4_resume_v1(").unwrap();
     assert!(fence < attempt_route && attempt_route < old, "the attempt route: the fence's branch");
     let unasked = || -> bool { panic!("below SEAT-R the tail asks nothing") };
     assert_eq!(palw_seat_tail_v1(false, true, false, unasked), PalwSeatTailV1::Waits { unserved: false });
-    assert!(block.contains_code("match palw_seat_tail_v1(seat_r, duty.free_prompt, refuted_here, || {"));
+    assert!(block.contains("match palw_seat_tail_v1(seat_r, duty.free_prompt, refuted_here, || {"));
     assert!(
-        source.contains_code("if seat_r {\n                pool_books.intervals.resume_mut().retain(|(claim, _), _| live.contains(claim));"),
+        source.contains("if seat_r {\n                interval_openings.retain(|(claim, _), _| live.contains(claim));"),
         "H1's sweep"
     );
     let events = body_of(source, "    pub async fn worker(");
-    assert!(events.contains_code("let per_claim = palw_seat_r_in_force_v1(&self.consensus_config.params, current_daa)"), "the display");
+    assert!(events.contains("let per_claim = palw_seat_r_in_force_v1(&self.consensus_config.params, current_daa)"), "the display");
     let key = palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 1, b"x");
     assert_ne!(key, palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 2, b"x"), "a segment's own task");
     assert_ne!(key.1, h(2), "never a whole-job replay's key");

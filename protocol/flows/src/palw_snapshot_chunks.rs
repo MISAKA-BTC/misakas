@@ -152,9 +152,6 @@ pub(crate) struct SnapshotSpill {
     _permit: OwnedSemaphorePermit,
     created: Instant,
     native_resource_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
-    /// G14 capacity lane: the spill's disk reservation (the policy maximum, 384 MiB) under
-    /// `--storage-cap-bytes`; released with the session. `None` on an uncapped node.
-    _storage: Option<kaspa_utils::storage_budget::StorageReservation>,
 }
 impl SnapshotSpill {
     pub(crate) fn new() -> io::Result<Self> {
@@ -170,17 +167,7 @@ impl SnapshotSpill {
         let permit = budget
             .try_acquire_owned()
             .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "PALW snapshot session budget is busy"))?;
-        // Reserve the disk before the file exists (after reclaiming obsolete temp/log data), so two
-        // sessions never count the same free bytes. A refusal is local capacity, not a peer fault.
-        let storage = kaspa_utils::storage_budget::reserve_global_after_reclaim(
-            kaspa_utils::storage_budget::StorageCategory::IbdSpill,
-            crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64,
-        )
-        .map_err(|refusal| io::Error::new(io::ErrorKind::WouldBlock, refusal.to_string()))?;
-        // Under a storage budget the spill lives in the managed root's temp dir (counted, reclaimed);
-        // otherwise in the OS temp dir as before.
-        let path =
-            kaspa_utils::storage_budget::managed_temp_dir().join(format!("misaka-palw-snapshot-{}.spill", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("misaka-palw-snapshot-{}.spill", uuid::Uuid::new_v4()));
         let mut options = OpenOptions::new();
         options.read(true).write(true).create_new(true);
         #[cfg(unix)]
@@ -197,7 +184,7 @@ impl SnapshotSpill {
         let file = options.open(&path)?;
         #[cfg(unix)]
         std::fs::remove_file(&path)?; // Keep only the FD: process death cannot orphan a 384 MiB spill.
-        Ok(Self { file, path, _permit: permit, created: Instant::now(), native_resource_lease: None, _storage: storage })
+        Ok(Self { file, path, _permit: permit, created: Instant::now(), native_resource_lease: None })
     }
     pub(crate) fn expired(&self) -> bool {
         self.created.elapsed() >= SESSION_TTL
@@ -917,9 +904,7 @@ mod tests {
         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
         let budget = Arc::new(Semaphore::new(1));
         let carriage = native_carriage();
-        // No class declaration: the native preflight parses each one as its real admission carriage (16 junk bytes are an
-        // encoding error, not a capacity refusal), and this test is about the capacity cause.
-        let declarations = Vec::new();
+        let declarations = vec![(h(7), vec![0x31; 16])];
         let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
         let profile = SnapshotCompressionV1 { nonce: [7; 32], decoded: raw.len() as u64 };
         let failure = NativeCoverageV1::unsupported::<SnapshotReceiver>("actual local request", "quota exhausted");
@@ -927,7 +912,7 @@ mod tests {
             assert_eq!(point, h(1));
             Err(failure.clone())
         });
-        assert!(matches!(result, Err(NativeSnapshotDecodeErrorV1::Capacity(ref actual)) if actual == &failure), "{:?}", result.as_ref().err());
+        assert!(matches!(result, Err(NativeSnapshotDecodeErrorV1::Capacity(ref actual)) if actual == &failure));
         assert_eq!(budget.available_permits(), 1, "refusal returns this receiver's global spill permit");
 
         // Authenticated frames can still encode invalid Borsh. It fails before

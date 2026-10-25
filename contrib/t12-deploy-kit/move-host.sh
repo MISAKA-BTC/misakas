@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy-t12/move-host.sh — run as root ON A HOST, from $REL_ROOT/kit, to move one seat between hosts (2026-10-01, the
-# panel backlog: docs/design/palw/verification/t12-panel-backlog-1001.md §7). move-seat.sh (the Mac) drives it; every command here is
+# panel backlog: docs/design/palw/t12-panel-backlog-1001.md §7). move-seat.sh (the Mac) drives it; every command here is
 # also safe to run by hand. Uses the kit's lib.sh (the live one: RID, Phase H) — it changes none of its files.
 #
 #   ./move-host.sh preflight retire <id>   read-only, on the SOURCE: unit, release, other hosts up, the 8k class's margin

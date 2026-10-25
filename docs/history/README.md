@@ -1,16 +1,28 @@
-# 履歴・旧版・判断経緯
+# History
 
-本文のcurrent / today / live / PASS、コマンド、数値は記録時の対象に限定します。履歴への移動は、当時の決定を自動撤回することでも、現在の運用として再承認することでもありません。
+Retained records of earlier networks and the pre-2026-10-12 root README. Their hashes, peers, DAA scores, class IDs and commands describe that historical run and are **not** current operator defaults; use the [current documents](../README.md) and verify against `--help` and chain RPC.
 
-| 保存対象 | 場所 |
-| --- | --- |
-| 旧network記録 | [networks](networks/README.md) |
-| 版依存の運用・validator | [operations](operations/README.md) |
-| 撤回理由 | [withdrawn-designs](withdrawn-designs/README.md) |
-| ユーザー判断 | [decisions](decisions/README.md) |
-| RFC-0017旧モデル審査 | [rfc](rfc/README.md) |
-| 旧Wiki | [wiki-snapshot](wiki-snapshot/README.md) |
-| 整理前の入口・原文ZIP | [documentation](documentation/README.md) |
-| 旧設計・upstream手順 | [design](design/README.md) / [upstream](upstream/README.md) |
-
-延期した画像・動画・改善の過去の成功記録も、今後の有効化承認ではありません。[現在の入口](../README.md)。
+- [README-2026-10-12](README-2026-10-12.md)
+- [palw-model-fit-testnet11-2026-09-10](palw-model-fit-testnet11-2026-09-10.md)
+- [palw-rc-testnet11-launch-record](palw-rc-testnet11-launch-record.md)
+- [palw-rc-testnet11-launch-runbook](palw-rc-testnet11-launch-runbook.md)
+- [palw-testnet11-soak-2026-08-16](palw-testnet11-soak-2026-08-16.md)
+- [palw-testnet11-two-lane-design](palw-testnet11-two-lane-design.md)
+- [testnet-11](testnet-11.md)
+- [testnet10-palw-rollout-runbook](testnet10-palw-rollout-runbook.md)
+- [testnet10-shadow-release-DEPLOY](testnet10-shadow-release-DEPLOY.md)
+- [testnet10-transition](testnet10-transition.md)
+- [testnet11-7101-upgrade-announcement](testnet11-7101-upgrade-announcement.md)
+- [testnet11-ask-for-a-file](testnet11-ask-for-a-file.md)
+- [testnet11-free-prompt-mining](testnet11-free-prompt-mining.md)
+- [testnet11-join-mining](testnet11-join-mining.md)
+- [testnet11-node-operator](testnet11-node-operator.md)
+- [testnet11-regenesis-2026-08-30](testnet11-regenesis-2026-08-30.md)
+- [testnet11-relaunch-5f-announcement-draft](testnet11-relaunch-5f-announcement-draft.md)
+- [testnet11-relaunch-5f-announcement](testnet11-relaunch-5f-announcement.md)
+- [testnet11-relaunch-5f-genesis-card](testnet11-relaunch-5f-genesis-card.md)
+- [testnet11-relaunch2-genesis](testnet11-relaunch2-genesis.md)
+- [testnet11-relaunch5-runbook](testnet11-relaunch5-runbook.md)
+- [testnet11-relaunch5e-runbook](testnet11-relaunch5e-runbook.md)
+- [testnet11-remint-2026-08-29](testnet11-remint-2026-08-29.md)
+- [testnet11-verification-participation-ja](testnet11-verification-participation-ja.md)

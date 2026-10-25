@@ -301,15 +301,6 @@ impl RecoveryRun {
         self.pruned_numbered_before = Some((reservation.sessions_opened, reservation.reserved_daa));
     }
 
-    /// After the body is actually pruned, let both restarted production workers
-    /// consume the ordinary block stream. The generic harness's 50-block bursts
-    /// can expire the original reservation while a two-second worker is draining
-    /// its sixteen carriers. This changes only test-clock pacing, never a chain
-    /// deadline, fee, session/lane limit or the native acceptance path.
-    pub(super) fn recovering_pruned_round(&self) -> bool {
-        self.mode == RecoveryMode::PrunedRound && self.pruned_round.is_some()
-    }
-
     pub(super) fn verifier_paused(&self) -> bool {
         self.mode == RecoveryMode::PrunedRound && self.paused_input && self.pruned_round.is_none()
     }
@@ -597,27 +588,9 @@ impl RecoveryRun {
                         _ => None,
                     })
                     .collect();
-                // The existing sixteen-lane StepNode round, drained before the input retry. A lane the filer saw no landing for
-                // within `PALW_FRAUD_FILER_RESEND_DAA_V1` is sent again, so the accepted demands may repeat a lane (validation
-                // 2026-10-17: 17 accepted demands, lane (9, 6) twice) — the round is the DISTINCT set: sixteen StepNodes of one
-                // level with contiguous indices.
-                let distinct: BTreeSet<_> = ordinary.iter().copied().collect();
-                assert_eq!(distinct.len(), 16, "only the existing sixteen-lane round is drained before input retry: {ordinary:?}");
-                let mut nodes: Vec<(u8, u64)> = distinct
-                    .iter()
-                    .map(|unit| match unit {
-                        PalwLegacyHeldUnitV2::StepNode { level, index } => (*level, *index),
-                        other => panic!("only the existing StepNode round is drained before input retry: {other:?}"),
-                    })
-                    .collect();
-                nodes.sort();
-                assert!(nodes.iter().all(|(l, _)| *l == nodes[0].0), "one round is one level: {nodes:?}");
-                assert!(nodes.windows(2).all(|w| w[1].1 == w[0].1 + 1), "one round's lanes are contiguous: {nodes:?}");
-                eprintln!(
-                    "[service-recovery] the existing {}-lane StepNode round drained before input retry ({} accepted demands)",
-                    distinct.len(),
-                    ordinary.len()
-                );
+                assert_eq!(ordinary.len(), 16, "only the existing sixteen-lane round is drained before input retry");
+                assert_eq!(ordinary.iter().copied().collect::<BTreeSet<_>>().len(), 16);
+                assert!(ordinary.iter().all(|unit| matches!(unit, PalwLegacyHeldUnitV2::StepNode { .. })));
                 assert!(
                     before >= opened && usize::from(before - opened) <= ordinary.len(),
                     "every additional ordinary session is accounted by its accepted round demand"

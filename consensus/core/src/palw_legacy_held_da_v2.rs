@@ -1,6 +1,6 @@
 //! **Lane LG14-B (RFC-0014 §4–§5; user decision GAP-80, 2026-10-10): the legacy V2 Panel route's public descent and its held/fused
 //! DA units** — behind the dormant fence `Params::palw_legacy_held_da_v2` (object tags 157–159). Design:
-//! `docs/design/palw/verification/legacy-route-g14-held-da.md`.
+//! `docs/design/palw/legacy-route-g14-held-da.md`.
 //!
 //! **What is missing on the V2 route, and what this adds.** Every terminal a lie on the V2 route needs already exists and is armed on
 //! testnet-12 (the one-move court, `ExecutorRefuted`'s contradictions, `CheckpointAccused`, the held dissection). What a public
@@ -96,34 +96,16 @@ impl Params {
         self.palw_legacy_held_da_v2.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa_score))
     }
 
-    /// **The fence's refusals**: the route it opens is one half of RFC-0014 on the V2 route — LG14-A's filer, reservation and Final
-    /// hold are the other — so it is a `ConsensusV2` rule that needs `palw_legacy_public_filer_v1` in force at or below it (a
-    /// descent session that no reservation holds is outrun by the claim's own clocks), and it is armed only where an arm-readiness
-    /// record names this network and height (`crate::palw_g14_gates_v1`, lane g14-close-legacy 2026-10-16, replacing the
-    /// unconditional refusal; the binary pins none). `None` and `Some(never())` pass.
+    /// **The fence's refusal**: the route it opens is one half of RFC-0014 on the V2 route (LG14-A's filer, reservation and Final
+    /// hold are the other), economics, review and activation are not in place, so any armed height is refused.
     pub fn validate_palw_legacy_held_da_v2(&self) -> Result<(), PalwModeV2Error> {
-        self.validate_palw_legacy_held_da_v2_in(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
-    }
-
-    /// [`Self::validate_palw_legacy_held_da_v2`] against `records` in place of the pinned list
-    /// (`Params::validate_palw_v2_with_arming_records_v1`).
-    pub fn validate_palw_legacy_held_da_v2_in(
-        &self,
-        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
-    ) -> Result<(), PalwModeV2Error> {
-        let Some(at) = self.palw_legacy_held_da_v2.filter(|f| *f != ForkActivation::never()) else {
-            return Ok(());
-        };
-        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
-            return Err(PalwModeV2Error::Invalid("palw_legacy_held_da_v2 is a ConsensusV2 rule: this ruleset has no V2 bundle"));
+        match self.palw_legacy_held_da_v2 {
+            Some(f) if f != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
+                "palw_legacy_held_da_v2 cannot be armed: the legacy route's public descent and held DA units ship only with RFC-0014's \
+                 non-seat reservation and Final hold (LG14-A), reviewed economics and the full-activation release",
+            )),
+            _ => Ok(()),
         }
-        if !self.palw_legacy_public_filer_v1.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at.daa_score()) {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_legacy_held_da_v2 needs palw_legacy_public_filer_v1 in force at or below it: the public descent's sessions ride \
-                 the non-seat reservation, its budget and its Final hold (LG14-A)",
-            ));
-        }
-        self.validate_palw_g14_fence_record_in_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyHeldDaV2, records)
     }
 }
 

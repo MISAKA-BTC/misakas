@@ -1,4 +1,4 @@
-//! The soundness review dossier's worked numbers (`docs/audit/palw/soundness-review-dossier/05-composition.md` §5.5), pinned:
+//! The soundness review dossier's worked numbers (`docs/design/palw/soundness-review-dossier/05-composition.md` §5.5), pinned:
 //! any change to the calculator, or to a number the dossier quotes, fails here first. Plus a toy-field experiment that the
 //! single-modulus error model and the multi-modulus (CRT) alias argument hold with this crate's own sampler.
 

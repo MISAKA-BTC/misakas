@@ -47,7 +47,7 @@ PostgreSQL 16（127.0.0.1:5432、所有者 `kaspa`）:
 
 既存のバックアップ（別 session が作成）: `app.js.bak-before-t12p-20260923T150853`、`index.html.bak-before-t12p-20260923T150853`、`/root/misakascan.nginx.bak-before-t12p-20260923T144704`、`/root/patch_app_t12p.py`。
 
-前回（旧 t12 `a8cabac4`）の再 genesis では explorer に何もしていない — `docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md` に explorer の記述は無く、filler は `kaspa_t11` にそのまま t12 を書き足した。DB の回し方の前例は t11 5f（`docs/history/networks/testnet-11/testnet11-relaunch-5f-genesis-card.md` の Explorer 節: 旧 DB を退避 → 新 DB → `vars.vspc_last_start_hash` に genesis を入れて block 0 から索引）。
+前回（旧 t12 `a8cabac4`）の再 genesis では explorer に何もしていない — `docs/testnet-12-regenesis-2026-09-23.md` に explorer の記述は無く、filler は `kaspa_t11` にそのまま t12 を書き足した。DB の回し方の前例は t11 5f（`docs/history/testnet11-relaunch-5f-genesis-card.md` の Explorer 節: 旧 DB を退避 → 新 DB → `vars.vspc_last_start_hash` に genesis を入れて block 0 から索引）。
 
 ## 2. app.js の中身（`app.js.orig` → scratch の `app.js`）
 
@@ -120,7 +120,7 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
 | 場所 | 内容 | 扱い |
 |---|---|---|
 | `index.html` 告知 | t11 の 2026-09-19 リリース、fp `c3a5e91d…`、フェンス列、"genesis did not move" | `deploy.sh` が外す（既定） |
-| Faucet ページ（478, 497, 524 行） | "(testnet-11 — coins with no value)"、`docs/history/networks/testnet-11/testnet11-node-operator.md`、"That is not a testnet-11 address" | **backend も t11**（ibm の `misaka-faucet`、`/opt/misaka-faucet.py`、RPC 26313 は ibm に存在しない、未入金）。t12 用の鍵と入金は運用者判断 |
+| Faucet ページ（478, 497, 524 行） | "(testnet-11 — coins with no value)"、`docs/history/testnet11-node-operator.md`、"That is not a testnet-11 address" | **backend も t11**（ibm の `misaka-faucet`、`/opt/misaka-faucet.py`、RPC 26313 は ibm に存在しない、未入金）。t12 用の鍵と入金は運用者判断 |
 | LLM ページの replay 手順（3212–3226 行） | `--network testnet-11`、QWEN36 の root `f4aad4fd…`、A16 v5 の変換 hash | 文面の更新が要る（今回は触っていない） |
 | MTP ページ（4325–4343, 4479 行）と `/mtp/` | `misaka key gen --network testnet-11`、"Point a miner at testnet-11"… 台帳自体が t11 | MTP を t12 で続けるかは未決。collector の pin（GENESIS / DB_ANCHOR）と crontab の `MTP_DB=kaspa_t11` を新 chain に合わせない限り、fence が拒否し続ける（安全側） |
 | `/info/stake-bonds` | `SEED_BOND_OUTPOINTS` に t11 の validator bond `e9e3ebba…:0` を固定 | 画面側が `getStakeBond` で確認して落とすので実害なし。REST のコードは今回触らない |
@@ -146,8 +146,8 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
 ## 9. R-core+ での変更と未決（2026-09-25）
 
 - **genesis と fp は deploy kit の `fleet.env` から読む**（`EXPECT_GENESIS` / `EXPECT_FP`、出荷 commit の probe で固定。
-  `docs/history/networks/testnet-12/t12-rcore-launch-checklist.md` §4）。`deploy.sh` の既定 genesis（`f6cc9576…`）は削除し、`FORBIDDEN_GENESIS` と
-  `DRILL_GENESES` にある genesis は拒否する。**出荷 commit（42452229 ＋ 再 pin）の値**: genesis `a27f8f44…`、fp `5ee7fd8e…`（`scripts/release/t12-repin.sh` が値と表示を書き換える）。
+  `docs/t12-rcore-launch-checklist.md` §4）。`deploy.sh` の既定 genesis（`f6cc9576…`）は削除し、`FORBIDDEN_GENESIS` と
+  `DRILL_GENESES` にある genesis は拒否する。**出荷 commit（6549f9be ＋ 再 pin）の値**: genesis `a27f8f44…`、fp `ef379378…`（`scripts/release/t12-repin.sh` が値と表示を書き換える）。
 - **`app.js` の `PANEL_BOND_TX`** を t12 固有の premine txid `5e0d5f1b…` にした（旧値は共有 sentinel `6d697361…` で、t12 の bond
   outpoint と一致しないため座席表の bond 列と receipt の突合が外れていた）。出荷 commit の probe の `PREMINE_TXID` と照合してから stage する。
 - 2M は公開時点で閉じる（ADR-0152 §8.3 item 7、O-11）。`LLM_CLASSES` の 2M 行の説明にそう書いた。class id 3 本は a0af3c92 でも同じ
@@ -195,10 +195,9 @@ Built on the live files of 10-03 (snapshot commits eaaf35c6b, 1eaacc626), so the
 
 **RPC it needs.** Nothing new: it runs on today's nodes with `getPalwRoundLane`, `getPalwClaims`, `getPalwModel`, `getPalwPanelSeats`,
 `getPalwPanelAssignments`, `getPalwModelRegistry` (every one is read through `palwRead`, which falls back with a note when a node lacks the op).
-The PXR1 header supplies round, permit and producing bond. A bond's claim ticket range is only a candidate:
-lottery permits and other claims can share the round. The page now treats `verboseData.exec.claimId/classId`
-from the node's judged lineage as the exact attribution; without it the row shows its envelope and an
-unverified candidate count. Lane STALE today = no round block in this page's window for 10 min while the lane is open (the card says so).
+How the join works today: a round block's header carries the PXR1 envelope (round, permit, producing bond). The page reads `getPalwClaims(bond, executor)`
+and assigns the block to the claim whose ticket range `[execFirstRound, execLastRound]` holds its round; two claims of one bond with overlapping ranges are shown
+under the bond ("2 claims (overlap)"). Lane STALE today = no round block in this page's window for 10 min while the lane is open (the card says so).
 
 **Lights up with the next node release** (branch scan/exec-views, node-only, fingerprint unchanged): `getBlock.verboseData.laneClass` (BLUE/EXEC/RED/ROUND) and
 `.exec {round, permitIndex, bond, claimId, classId, quantumIndex, verdict, refusal}` (exact claim join and "Round 001/120" labels);
@@ -232,21 +231,3 @@ over JSON and the updated gRPC schema. Older nodes, missing headers and wRPC bin
 the view: show unknown, never infer ordinary RED counts from the raw red array.
 
 Local regression: node --test test/classification.test.mjs. No public-site deployment is performed.
-### 10e. Live model and panel inventory (2026-10-04, staged)
-`#/llm` enumerates every class from `getPalwModelRegistry`, then reads `getPalwPanelSeats` for bonded
-seats, fresh proofs, eligibility and seat assignment counts. It merges registry readiness rows that an
-older panel view omits; those rows say eligibility *unreported*, not eligible. The optional genesis
-host labels are explicitly operator notes. Each class links to `#/models/<class id>`, which reads
-`getPalwPanelAssignments` to show each in-flight claim's drawn seats and receipt status.
-
-The node's panel view previously filtered seats solely by `bond.capable_classes`. Under the registry's
-readiness policy a new class may have a valid possession proof without that older declaration;
-the view now includes those proof-bearing seats. This makes the node's class panel status and seat list
-track permissionless registrations. Deploy the node update before expecting new classes to show
-eligible seats from `getPalwPanelSeats`.
-
-The int-12 RPC model already exposes `getBlock/getBlocks` `verboseData.exec.claimId` and `classId`
-for a judged claim-backed permit. The public node observed at DAA 4539 did not expose `exec` yet.
-A domain-lottery permit has no claim or class by design. The judgement ledger is bounded and
-in-memory, so historical round blocks after a node restart cannot be attributed exactly by this
-RPC without a persistent execution index; the explorer shows the PXR1 round, permit and bond.

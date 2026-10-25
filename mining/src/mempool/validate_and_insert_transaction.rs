@@ -29,8 +29,6 @@ impl Mempool {
         self.validate_transaction_in_isolation(&transaction)?;
         let feerate_threshold = self.get_replace_by_fee_constraint(&transaction, rbf_policy)?;
         self.populate_mempool_entries(&mut transaction);
-        // G14 r5 (RFC-0035 §7.3): a chained spend of a pending TFO1 carrier's own funding output is refused, as the merge would.
-        self.refuse_chained_escrow_spend_v1(&transaction)?;
         Ok(TransactionPreValidation { transaction, feerate_threshold })
     }
 

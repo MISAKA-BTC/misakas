@@ -1,5 +1,5 @@
 //! **COV-P1P2 — the four past refusals of `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @`05b9e7c9`, pinned** (record
-//! `docs/evidence/palw/implementation-records/coverage-p1p2-record.md` §2). Each test asserts the EXACT structured refusal (`PalwRefusalV1` and its error) and
+//! `docs/design/palw/coverage-p1p2-record.md` §2). Each test asserts the EXACT structured refusal (`PalwRefusalV1` and its error) and
 //! the commit point where it applies, and what the rules in force say instead — so a regression to the old reading fails here.
 //!
 //! The IR-route fixtures lower the 9B's TEXT decoder shape-only from its real `config.json` and safetensors HEADERS

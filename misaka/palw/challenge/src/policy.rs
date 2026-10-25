@@ -106,7 +106,7 @@ impl ImplementedV1 {
         named_id("palw-work-beacon/paid-opt-in-source/v5")
     }
     /// **No randomness: a complete check.** Every input of the subject's (small, finite) domain and every artifact leaf is checked,
-    /// so nothing is sampled and no beacon exists (the OPV bootstrap, `docs/design/palw/verification/opv-beacon-bootstrap.md` §4).
+    /// so nothing is sampled and no beacon exists (the OPV bootstrap, `docs/design/palw/opv-beacon-bootstrap.md` §4).
     pub fn randomness_none_complete() -> Digest {
         named_id("randomness/none-complete-check/v1")
     }

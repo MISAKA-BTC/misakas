@@ -22,7 +22,7 @@ fn mirror() -> PalwModelEligibilityMirrorV1 {
 }
 
 fn facts(registered_daa: u64, registry_admits: bool) -> PalwEligibilityClassFactsV1 {
-    PalwEligibilityClassFactsV1 { genesis: false, registered_daa, registry_admits, base_floor: false }
+    PalwEligibilityClassFactsV1 { genesis: false, registered_daa, registry_admits }
 }
 
 fn id(n: u8) -> EligDigestV1 {
@@ -86,64 +86,6 @@ fn req_elig_7_the_fence_is_dormant_everywhere_and_refused_when_armed() {
     assert!(!crate::palw_beacon_bootstrap_v1::PALW_N3_GATED_REWARD_FENCES_V1.contains(&"palw_model_eligibility_v1"));
 }
 
-/// **U-2 (user decision 2026-10-15): the fence needs RFC-0018 Gate C at or below it** — so a Probation claim never advances the safe
-/// frontier, settled-anchor depth or rule-E participation uncertified (its `F = 0` alone would not keep it out). The refusal names
-/// U-2 before the generic "cannot be armed".
-#[test]
-fn u2_the_fence_needs_gate_c_at_or_below_it() {
-    let mut p = t12();
-    p.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE));
-    p.sync_palw_model_eligibility_v1();
-    let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
-    assert!(why.contains("palw_independently_work_certified_v1"), "per-claim certification first: {why}");
-    p.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE));
-    let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
-    // Round 5 (user decision 2026-10-15): model-level review is abolished — the fence never arms without the tier fence that
-    // retires its review.
-    assert!(why.contains("palw_model_tier_v1") && why.contains("abolished"), "{why}");
-    p.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(ForkActivation::new(FENCE)));
-    let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
-    assert!(why.contains("cannot be armed"), "with Gate C and the tier fence only the generic refusal remains: {why}");
-    p.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE + 1));
-    let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
-    assert!(why.contains("palw_independently_work_certified_v1"), "Gate C above the fence: {why}");
-}
-
-/// **U-2: the GHOSTDAG / DAA effect of Probation REAL blocks is bounded** — whatever the number of Probation models, lineages and
-/// principals, the blocks admitted under Probation in any probation epoch never exceed the network's fixed budget (20 ‰ of the
-/// epoch's DAA slots at the design value) and one lineage's never exceed its stage cap (2 ‰). So Probation blocks are at most that
-/// share of the blocks a DAA window holds, of the mergeset blues/reds GHOSTDAG colours and of the `W_work` step's realized-block
-/// input — a bounded, not zero, effect (their WEIGHT is zero: `F = 0`, no `bounded_immature`, Gate C before any credit).
-#[test]
-fn u2_probation_real_blocks_have_a_bounded_dag_and_daa_effect() {
-    let p = policy();
-    let unit = crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1;
-    let (network_budget, model_budget) = palw_probation_budgets_v1(&p);
-    let epoch_slots = p.probation_epoch_daa;
-    let mut network = PalwEligibilityNetworkRowV1::default();
-    let mut admitted_blocks = 0u64;
-    let mut per_lineage: std::collections::BTreeMap<u8, u64> = std::collections::BTreeMap::new();
-    // 300 lineages of 50 principals hammer one block at a time, every DAA of one epoch.
-    let mut lineages: Vec<PalwEligibilityLineageRowV1> = vec![PalwEligibilityLineageRowV1::default(); 300];
-    for daa in (FENCE..FENCE + epoch_slots).step_by(100) {
-        for (i, lineage) in lineages.iter_mut().enumerate() {
-            if let Ok(units) = palw_probation_admit_v1(&p, lineage, &network, daa, unit) {
-                let mut model = probation_row(i as u8, i as u8, FENCE);
-                let mut principal = PalwEligibilityPrincipalRowV1::default();
-                palw_probation_charge_v1(&p, daa, units, &mut model, lineage, &mut principal, &mut network);
-                admitted_blocks += units / unit;
-                *per_lineage.entry(i as u8).or_default() += units / unit;
-            }
-        }
-    }
-    assert!(admitted_blocks * unit <= network_budget, "the network's fixed budget binds however many models apply");
-    assert!(per_lineage.values().all(|b| b * unit <= model_budget), "each lineage within its stage cap");
-    // The DAG share: at most 20 ‰ of the epoch's DAA slots carry a Probation REAL block (one block per DAA at most).
-    assert!(admitted_blocks * 1_000 <= epoch_slots * p.probation_network_permille as u64);
-    assert_eq!(p.probation_network_permille, 20);
-    assert_eq!(p.probation_model_permille, 2, "V3 (2026-10-15): the Probation per-model cap stays 2 ‰ (calibration)");
-}
-
 #[test]
 fn the_design_policy_is_structurally_valid_and_its_guards_refuse_bad_shapes() {
     policy().validate().unwrap();
@@ -153,8 +95,8 @@ fn the_design_policy_is_structurally_valid_and_its_guards_refuse_bad_shapes() {
         edit(&mut p);
         p.validate().is_err()
     };
-    assert!(bad(|p| p.exam_k = 23), "k must be a strict majority of m (23 of 47 is not)");
-    assert!(bad(|p| p.exam_k = 48), "k <= m");
+    assert!(bad(|p| p.exam_k = 3), "k must be a strict majority of m (3 of 7 is not)");
+    assert!(bad(|p| p.exam_k = 8), "k <= m");
     assert!(bad(|p| p.exam_anchor_delay_spans = 0), "the anchor must be strictly later than the commit");
     assert!(bad(|p| p.probation_model_permille = p.probation_network_permille + 1), "model cap within the network budget");
     assert!(bad(|p| p.attempts_network_per_epoch = 0));
@@ -165,87 +107,6 @@ fn the_design_policy_is_structurally_valid_and_its_guards_refuse_bad_shapes() {
 // =================================================================================================================================
 // §5 gate math and §2 α amplification (analysis helpers)
 // =================================================================================================================================
-
-/// U-1 (user decision 2026-10-15): the default candidate is ECON's 24-of-47; 4-of-7 survives only as a TEST-ONLY constant.
-#[test]
-fn u1_the_default_exam_is_24_of_47() {
-    let p = policy();
-    assert_eq!((p.exam_m, p.exam_k), (47, 24));
-    assert_eq!((PALW_ELIG_EXAM_M_TEST_ONLY_V1, PALW_ELIG_EXAM_K_TEST_ONLY_V1), (7, 4));
-    // Same f, much smaller single-attempt pass-alone probability below f = 1/2 — never a proof of correct computation (U-3).
-    assert!(palw_eligibility_pass_probability_f64(1.0 / 3.0, 47, 24) < palw_eligibility_pass_probability_f64(1.0 / 3.0, 7, 4));
-}
-
-/// U-3 (user decisions 2026-10-15): a pass is PREMISE-BASED certification, never a proof of computation correctness; the f threat
-/// model (1/3, 0.6, worst case f = 1) shows how far the gate stops discriminating when the premise fails — a report of impact, not a
-/// condition for changing the certification method.
-#[test]
-fn u3_a_pass_is_premise_based_certification_and_the_f_threat_model_is_reported() {
-    assert!(PALW_ELIG_CERTIFICATION_PREMISE_V1.contains("premise"));
-    assert!(PALW_ELIG_CERTIFICATION_PREMISE_V1.contains("not an unconditional proof of computation correctness"));
-    let p = policy();
-    let (m, k) = (p.exam_m as u32, p.exam_k as u32);
-    let third = palw_eligibility_pass_probability_f64(1.0 / 3.0, m, k);
-    let sixty = palw_eligibility_pass_probability_f64(0.6, m, k);
-    let worst = palw_eligibility_pass_probability_f64(1.0, m, k);
-    assert!(third > 0.0085 && third < 0.0095, "f = 1/3, 24-of-47: ≈ 0.90 % per attempt ({third})");
-    assert!(sixty > 0.91 && sixty < 0.925, "f = 0.6: ≈ 91.8 % ({sixty})");
-    assert!((worst - 1.0).abs() < 1e-12, "worst case f = 1: the gate certifies whatever the attacker wants");
-}
-
-/// U-4 (user decision 2026-10-15): the attempt cost is split into a non-refundable burn and an applicant-funded inspection escrow;
-/// both are named, unapproved PROBES (100,000 BILI is not a default); the measured-fee gate refuses them unpinned; the escrow's
-/// settlement pays the attesting positions and returns the rest (a transfer, never new issuance); the fair queue keeps part of the
-/// network budget for lineages' first attempts.
-#[test]
-fn u4_the_attempt_cost_is_split_measured_and_fairly_queued() {
-    let p = policy();
-    assert_ne!(p.attempt_fee_sompi, 100_000 * 100_000_000, "100,000 BILI is not a default");
-    assert_eq!(p.attempt_fee_sompi, PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1);
-    assert_eq!(p.inspection_fee_per_position_sompi, PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1);
-    assert_eq!(palw_eligibility_inspection_escrow_v1(&p), PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1 * p.exam_m as u64);
-    assert!(!palw_eligibility_fees_measured_v1(&p, PALW_ELIG_MEASURED_FEE_RECORDS_V1), "no measured record is pinned");
-    let rec = PalwEligibilityFeeRecordV1 {
-        burn_fee_sompi: p.attempt_fee_sompi,
-        inspection_fee_per_position_sompi: p.inspection_fee_per_position_sompi,
-        evidence_digest: [1; 32],
-        review_digest: [2; 32],
-    };
-    assert!(palw_eligibility_fees_measured_v1(&p, &[rec]));
-    assert!(!palw_eligibility_fees_measured_v1(&p, &[PalwEligibilityFeeRecordV1 { review_digest: [1; 32], ..rec }]));
-    let total = p.attempt_fee_sompi as u128 + palw_eligibility_inspection_escrow_v1(&p) as u128;
-    assert!(palw_eligibility_attempt_cost_affordable_v1(total, &p));
-    assert!(!palw_eligibility_attempt_cost_affordable_v1(total - 1, &p));
-    // Settlement: 3 of 4 positions (bond 7 twice) attested; one silent position's part returns to the applicant.
-    let mut e = drawn_exam(vec![id(7), id(8), id(7), id(9)], 1_000);
-    e.inspection_escrow_sompi = 400;
-    for v in [7u8, 8] {
-        e.attestations.push(PalwEligibilityAttestationRowV1 {
-            verifier: id(v),
-            verdict: PalwEligibilityVerdictV1::Unavailable,
-            transcript: id(0),
-            attested_daa: 900,
-        });
-    }
-    let (paid, refund) = palw_eligibility_inspection_settlement_v1(&e);
-    assert_eq!(paid, vec![(id(7), 200), (id(8), 100)], "an Unavailable attestation is inspection work too");
-    assert_eq!(refund, 100);
-    assert_eq!(paid.iter().map(|(_, a)| a).sum::<u64>() + refund, e.inspection_escrow_sompi, "a transfer: nothing created");
-    // Fair queue: a lineage's repeat attempt in the epoch is refused once the repeat share of the network budget is used.
-    let half = (p.attempts_network_per_epoch as u64 * p.repeat_attempts_network_share_permille as u64 / 1_000) as u32;
-    let now = FENCE + 1 + p.probation_min_daa.max(p.attempt_cooldown_daa) + p.attempt_cooldown_daa;
-    let epoch = now / p.attempt_epoch_daa;
-    let model = probation_row(41, 41, FENCE + 1);
-    let lineage = PalwEligibilityLineageRowV1 { attempts_total: 1, last_commit_daa: epoch * p.attempt_epoch_daa, ..Default::default() };
-    let busy = PalwEligibilityNetworkRowV1 { attempt_epoch: epoch, attempts_in_epoch: half, ..Default::default() };
-    let c = commit(41, PalwEligibilityExamPurposeV1::Promotion, p.probation_min_claims, 1);
-    let principal = PalwEligibilityPrincipalRowV1::default();
-    let verdict = palw_eligibility_commit_admits_v1(&p, &c, &model, PalwEligibilityStageV1::Probation, &lineage, &principal, &busy, now);
-    assert!(
-        matches!(verdict, Err(PalwEligibilityCommitRefusalV1::FairQueueRepeatAttempt) | Err(PalwEligibilityCommitRefusalV1::Cooldown)),
-        "{verdict:?}"
-    );
-}
 
 #[test]
 fn gate_math_4_of_7_at_three_percent_and_ten_thousand_attempts() {
@@ -280,86 +141,9 @@ fn req_elig_7_below_the_fence_and_for_genesis_every_right_is_the_old_rule() {
     let f = facts(FENCE + 5, false);
     assert_eq!(palw_eligibility_rights_v1(None, &f, None, FENCE + 10), PalwEligibilityRightsV1::OLD_RULE, "no mirror");
     assert_eq!(palw_eligibility_rights_v1(Some(&m), &f, None, FENCE - 1), PalwEligibilityRightsV1::OLD_RULE, "below the fence");
-    // U-6 (user decision 2026-10-15): only the non-reward BASE-0 liveness floor keeps the permanent exception…
-    let floor = PalwEligibilityClassFactsV1 { genesis: true, base_floor: true, registered_daa: 0, ..f };
-    assert_eq!(palw_eligibility_rights_v1(Some(&m), &floor, None, FENCE + 10), PalwEligibilityRightsV1::OLD_RULE, "BASE-0 floor");
-    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &floor, None, u64::MAX), None, "permanently");
-    // …a rewarded genesis class is a pre-fence class: Eligible through one renewal period (+ grace), then Lapsed unless renewed.
-    let rewarded = PalwEligibilityClassFactsV1 { genesis: true, base_floor: false, registered_daa: 0, ..f };
-    let p = policy();
-    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &rewarded, None, FENCE + 10), Some(PalwEligibilityStageV1::Eligible));
-    let end = FENCE + p.renewal_epoch_daa + p.lapse_grace_daa;
-    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &rewarded, None, end), Some(PalwEligibilityStageV1::Eligible));
-    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &rewarded, None, end + 1), Some(PalwEligibilityStageV1::Lapsed));
+    let genesis = PalwEligibilityClassFactsV1 { genesis: true, ..f };
+    assert_eq!(palw_eligibility_rights_v1(Some(&m), &genesis, None, FENCE + 10), PalwEligibilityRightsV1::OLD_RULE, "genesis");
     assert_eq!(palw_eligibility_status_v1(None, &f, None, FENCE).0, "not-governed");
-}
-
-/// **U-5 (user decision 2026-10-15): one renewal period of grace for a pre-fence class — never uncertified security credit.** Inside
-/// it the class keeps Eligible rights but every claim needs certification first; past it, without a renewal, `Lapsed`; a passed
-/// renewal ends the grace; the BASE-0 floor and post-fence classes have none.
-#[test]
-fn u5_the_pre_fence_grace_is_one_period_and_needs_certification() {
-    let m = mirror();
-    let p = policy();
-    let pre = facts(FENCE - 5, true);
-    let end = FENCE + p.renewal_epoch_daa + p.lapse_grace_daa;
-    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, None, FENCE - 1), "below the fence: old rule, no grace");
-    assert!(palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, None, FENCE));
-    assert!(palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, None, end));
-    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, None, end + 1), "one period, then Lapsed");
-    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &pre, None, end + 1), Some(PalwEligibilityStageV1::Lapsed));
-    assert!(palw_eligibility_security_credit_needs_certification_v1(Some(&m), &pre, None, FENCE + 1), "the grace needs certification");
-    assert!(palw_eligibility_rights_v1(Some(&m), &pre, None, FENCE + 1).final_weight, "rights kept: weight once certified");
-    // A passed renewal ends the grace (its own exam stands).
-    let mut renewed = palw_eligibility_grandfathered_row_v1(&m, id(30), id(30), id(0), FENCE - 5);
-    renewed.exams_passed = 1;
-    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, Some(&renewed), FENCE + 1));
-    // The BASE-0 floor and a post-fence class have no grace.
-    let floor = PalwEligibilityClassFactsV1 { genesis: true, base_floor: true, ..pre };
-    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &floor, None, FENCE + 1));
-    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &facts(FENCE + 5, true), None, FENCE + 6));
-    // Probation also needs certification (its Final weight is 0 regardless).
-    let probation = facts(FENCE + 5, true);
-    assert!(palw_eligibility_security_credit_needs_certification_v1(Some(&m), &probation, None, FENCE + 6));
-}
-
-/// **U-7 (user decision 2026-10-15): RFC-0017 and the ECON gate coexist** — payment is released only when every required gate holds,
-/// deferred while one is undecided, withheld when one fails; the two gates never double-count or double-bill one check.
-#[test]
-fn u7_payment_needs_every_gate_and_nothing_is_counted_twice() {
-    use crate::palw_econ_contracts_v1::PalwModelVerificationOutcomeV1 as E;
-    use PalwPaymentReleaseV1::*;
-    assert_eq!(palw_eligibility_payment_release_v1(true, None, None), Release, "no gate in force: the old rule");
-    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Attested), None), Release);
-    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::NoFinalClaim), None), Release);
-    assert_eq!(palw_eligibility_payment_release_v1(false, Some(E::Attested), None), Withhold, "RFC-0017: no subsidy right");
-    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Unattested), None), Withhold, "ECON: unattested");
-    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Pending), None), Defer);
-    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Attested), Some(None)), Defer, "certification undecided");
-    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Attested), Some(Some(false))), Withhold);
-    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Attested), Some(Some(true))), Release);
-    // No double billing: an exam's inspection is paid from the applicant's escrow once (per commit), and ECON's tally is not an exam.
-    let p = policy();
-    assert_eq!(palw_eligibility_inspection_escrow_v1(&p), p.inspection_fee_per_position_sompi * p.exam_m as u64);
-    assert_ne!(PALW_MODEL_ELIGIBILITY_TABLE_V1, crate::palw_econ_contracts_v1::PALW_MODEL_VERIFICATION_TABLE_V1, "separate ledgers");
-}
-
-/// **U-9 (user decision 2026-10-15): user-paid Kernel / Funded jobs stay open for registration and testing; the reward-bearing and
-/// evaluation lanes are gated.**
-#[test]
-fn u9_user_paid_jobs_stay_open_while_the_evaluation_lane_is_gated() {
-    for stage in [PalwEligibilityStageV1::Registered, PalwEligibilityStageV1::Lapsed] {
-        let r = palw_eligibility_rights_of_stage_v1(stage, &policy());
-        assert!(r.job_completion, "{stage:?}: user-paid jobs complete and settle");
-        assert!(!r.subsidy && !r.block_right && !r.final_weight, "{stage:?}: no reward-bearing outcome");
-    }
-    use PalwEligibilityLaneV1::*;
-    for gated in [Attempt, FreePrompt, Evaluation] {
-        assert!(palw_eligibility_lane_gated_v1(gated), "{gated:?}");
-    }
-    for open in [UserPaidKernel, NativeFunded] {
-        assert!(!palw_eligibility_lane_gated_v1(open), "{open:?} stays open to a Registered / Lapsed class");
-    }
 }
 
 #[test]
@@ -474,19 +258,13 @@ fn req_elig_4_attempts_are_counted_at_commit_and_bounded_per_lineage_principal_a
     let mut principal = PalwEligibilityPrincipalRowV1::default();
     let mut network = PalwEligibilityNetworkRowV1::default();
     let c = commit(20, PalwEligibilityExamPurposeV1::Promotion, p.probation_min_claims, 0);
-    let admit = |l: &PalwEligibilityLineageRowV1,
-                 pr: &PalwEligibilityPrincipalRowV1,
-                 n: &PalwEligibilityNetworkRowV1,
-                 c: &PalwEligibilityExamCommitV1,
-                 daa| {
+    let admit = |l: &PalwEligibilityLineageRowV1, pr: &PalwEligibilityPrincipalRowV1, n: &PalwEligibilityNetworkRowV1, c, daa| {
         palw_eligibility_commit_admits_v1(&p, c, &model, PalwEligibilityStageV1::Probation, l, pr, n, daa)
     };
     use PalwEligibilityCommitRefusalV1 as R;
     assert_eq!(admit(&lineage, &principal, &network, &c, now - 1), Err(R::ProbationTooShort));
-    assert_eq!(
-        admit(&lineage, &principal, &network, &PalwEligibilityExamCommitV1 { claims_count: p.probation_min_claims - 1, ..c }, now),
-        Err(R::TooFewClaims)
-    );
+    let few = PalwEligibilityExamCommitV1 { claims_count: p.probation_min_claims - 1, ..c };
+    assert_eq!(admit(&lineage, &principal, &network, &few, now), Err(R::TooFewClaims));
     assert_eq!(admit(&lineage, &principal, &network, &c, now), Ok(()));
     palw_eligibility_count_attempt_v1(&p, now, &mut lineage, &mut principal, &mut network);
     // Withdrawing after seeing the draw refunds nothing: the attempt is already spent, and a replay of the same index is refused.
@@ -575,14 +353,6 @@ fn req_elig_3_draws_are_stake_proportional_and_sybil_neutral() {
     assert_eq!(palw_eligibility_draw_v1(&seed, &id(5), &[], 7), None);
 }
 
-/// The 7-draw fixtures below judge under the TEST-ONLY 4-of-7 exam (U-1: the design default is 24-of-47).
-fn small_exam_policy() -> PalwModelEligibilityPolicyV1 {
-    let mut p = policy();
-    (p.exam_m, p.exam_k) = (PALW_ELIG_EXAM_M_TEST_ONLY_V1, PALW_ELIG_EXAM_K_TEST_ONLY_V1);
-    p.validate().expect("4-of-7 is a valid strict majority");
-    p
-}
-
 fn drawn_exam(draws: Vec<EligDigestV1>, deadline: u64) -> PalwEligibilityExamRowV1 {
     PalwEligibilityExamRowV1 {
         commit: commit(20, PalwEligibilityExamPurposeV1::Promotion, 16, 0),
@@ -596,8 +366,6 @@ fn drawn_exam(draws: Vec<EligDigestV1>, deadline: u64) -> PalwEligibilityExamRow
         deadline_daa: deadline,
         attestations: Vec::new(),
         outcome: None,
-        inspection_escrow_sompi: 0,
-        inspection_settled: true,
     }
 }
 
@@ -607,7 +375,7 @@ fn attest(exam: &mut PalwEligibilityExamRowV1, bond: EligDigestV1, verdict: Palw
 
 #[test]
 fn req_elig_3_k_positive_positions_pass_and_anything_else_is_not_promoted_never_slashed() {
-    let p = small_exam_policy();
+    let p = policy();
     let draws: Vec<EligDigestV1> = (1..=7u8).map(id).collect();
     let mut exam = drawn_exam(draws.clone(), FENCE + 100);
     assert_eq!(palw_eligibility_exam_verdict_v1(&p, &exam, FENCE + 50), None, "open");
@@ -636,7 +404,7 @@ fn req_elig_3_k_positive_positions_pass_and_anything_else_is_not_promoted_never_
 fn req_elig_6_a_per_claim_mismatch_never_decides_the_model_verdict() {
     // Verifiers that reproduced the model and found one Miner's claim wrong: the model is promoted on the model-level verdict; the
     // claim goes to its own court (the attestation's mismatch list is the verifier's accusation material, never counted here).
-    let p = small_exam_policy();
+    let p = policy();
     let mut exam = drawn_exam((1..=7u8).map(id).collect(), FENCE + 100);
     for b in 1..=4u8 {
         attest(&mut exam, id(b), PalwEligibilityVerdictV1::Reproduced);
@@ -745,8 +513,8 @@ fn s7_5_closed_after_promotion_lapses_at_the_next_renewal() {
     }
     let outcome = palw_eligibility_exam_verdict_v1(&p, &renewal, model.next_renewal_daa + 1).unwrap();
     assert_eq!(outcome, PalwEligibilityExamOutcomeV1::NotPromoted);
-    let closed_at = model.next_renewal_daa + 1;
-    palw_eligibility_apply_outcome_v1(&p, &mut model, PalwEligibilityExamPurposeV1::Renewal, outcome, closed_at);
+    let renewal_daa = model.next_renewal_daa + 1;
+    palw_eligibility_apply_outcome_v1(&p, &mut model, PalwEligibilityExamPurposeV1::Renewal, outcome, renewal_daa);
     let window_end = model.next_renewal_daa + p.lapse_grace_daa;
     assert!(palw_eligibility_lapse_v1(&p, &mut model, window_end + 1));
     assert_eq!(window_end - promoted, p.renewal_epoch_daa + p.lapse_grace_daa, "the post-promotion exposure window");
@@ -810,25 +578,4 @@ fn s7_8_mode_switching_re_acquires_nothing() {
         let epochs = (days * DAY).div_ceil(p.probation_epoch_daa);
         assert!(total <= model_cap * epochs, "{days} days: {total} > {model_cap} × {epochs}");
     }
-}
-
-/// **GAP-E3: the attempt fee** — non-zero by validation, due whole from free collateral, and the price of filling the network's
-/// attempt budget is `attempts_network_per_epoch × fee` per epoch (burned). The VALUE is user decision U-4.
-#[test]
-fn gap_e3_an_attempt_costs_a_burned_fee_and_griefing_the_budget_has_a_price() {
-    let p = policy();
-    assert_eq!(p.attempt_fee_sompi, PALW_ELIG_ATTEMPT_FEE_DESIGN_V1);
-    let mut free = p;
-    free.attempt_fee_sompi = 0;
-    assert!(free.validate().is_err(), "a free attempt makes the network attempt budget free to grief");
-    assert!(palw_eligibility_fee_affordable_v1(p.attempt_fee_sompi as u128, p.attempt_fee_sompi));
-    assert!(!palw_eligibility_fee_affordable_v1(p.attempt_fee_sompi as u128 - 1, p.attempt_fee_sompi));
-    let per_epoch = palw_eligibility_griefing_cost_v1(&p, 1);
-    assert_eq!(per_epoch, (p.attempts_network_per_epoch as u128) * (p.attempt_fee_sompi as u128));
-    assert_eq!(palw_eligibility_griefing_cost_v1(&p, 3), 3 * per_epoch, "90 days of 30-day epochs");
-    let (mut l, mut pr, mut n) =
-        (PalwEligibilityLineageRowV1::default(), PalwEligibilityPrincipalRowV1::default(), PalwEligibilityNetworkRowV1::default());
-    palw_eligibility_record_fee_v1(7, &mut l, &mut pr, &mut n);
-    palw_eligibility_record_fee_v1(7, &mut l, &mut pr, &mut n);
-    assert_eq!((l.fees_burned_sompi, pr.fees_burned_sompi, n.fees_burned_sompi), (14, 14, 14));
 }

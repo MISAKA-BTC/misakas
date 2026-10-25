@@ -700,7 +700,6 @@ pub(crate) fn create_core_with_runtime_inner(
     // 2026-08-13. One line here makes "is this binary the release?" answerable without a peer,
     // which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
-    info!("Consensus identity: {}", config.params.consensus_identity_id());
     // RFC-0002 native calibration34: an isolated measurement devnet says so beside its fingerprint.
     // Its receipts are measurement Finals only — never A6/A8 pass evidence (`native_final_is_qualified_v34`).
     if config.params.has_isolated_native_calibration_v34() {
@@ -863,34 +862,6 @@ do you confirm? (answer y/n or pass --yes to the Kaspad command line to confirm 
         fs::create_dir_all(utxoindex_db_dir.as_path()).unwrap();
     }
 
-    // **G14 capacity lane: the storage budget, before any database opens** (off without
-    // `--storage-cap-bytes`). Installed process-wide so the consensus factory, the IBD spill and the
-    // intake gates find it; every DB below is opened with footprint bounds when it is in force.
-    let storage_budget = match crate::storage_capacity::storage_budget_config(
-        args.storage_cap_bytes,
-        args.storage_safety_margin_bytes,
-        &args.storage_category_budgets,
-        app_dir.join(network.to_prefixed()),
-    ) {
-        Ok(Some(storage_config)) => Some(crate::storage_capacity::install_storage_budget(
-            storage_config,
-            &crate::storage_capacity::ManagedPaths {
-                db_dir: db_dir.clone(),
-                consensus_db_dir: consensus_db_dir.clone(),
-                meta_db_dir: meta_db_dir.clone(),
-                utxoindex_db_dir: utxoindex_db_dir.clone(),
-                log_dir: runtime.log_dir.as_ref().map(PathBuf::from),
-                wal_dir: wal_dir.clone(),
-            },
-        )),
-        Ok(None) => None,
-        Err(why) => {
-            println!("{why}");
-            exit(1);
-        }
-    };
-    let small_db_bounds = storage_budget.as_ref().map(|_| kaspa_database::prelude::StorageDbBounds::SMALL);
-
     if !args.archival
         && let Some(retention_period_days) = args.retention_period_days
     {
@@ -922,7 +893,6 @@ do you confirm? (answer y/n or pass --yes to the Kaspad command line to confirm 
         .with_preset(rocksdb_preset)
         .with_wal_dir(wal_dir.clone())
         .with_cache_budget(cache_budget)
-        .with_storage_bounds(small_db_bounds)
         .build()
         .unwrap();
 
@@ -1074,7 +1044,6 @@ Do you confirm? (y/n)";
             .with_preset(rocksdb_preset)
             .with_wal_dir(wal_dir.clone())
             .with_cache_budget(cache_budget)
-            .with_storage_bounds(small_db_bounds)
             .build()
             .unwrap();
     }
@@ -1160,21 +1129,6 @@ Do you confirm? (y/n)";
         wal_dir.clone(),
         cache_budget,
     ));
-    // G14 capacity lane: reclaim before use — obsolete consensus dirs, abandoned temp files, old log
-    // archives — and the meta DB's WAL fsync on entering the low-space pause.
-    if let Some(budget) = &storage_budget {
-        let factory = consensus_factory.clone();
-        budget.register_reclaimer(kaspa_utils::storage_budget::FnReclaimer::new("obsolete-consensus-dirs", move |_mode| {
-            factory.reclaim_obsolete_consensus_dirs()
-        }));
-        crate::storage_capacity::register_basic_reclaimers(budget, runtime.log_dir.as_ref().map(PathBuf::from));
-        let weak = Arc::downgrade(&meta_db);
-        budget.add_pause_hook(move || {
-            if let Some(db) = weak.upgrade() {
-                let _ = db.flush_wal(true);
-            }
-        });
-    }
     let consensus_manager = match ConsensusManager::new(consensus_factory) {
         Ok(manager) => Arc::new(manager),
         Err(unavailable) => {
@@ -1235,17 +1189,8 @@ Do you confirm? (y/n)";
             .with_preset(rocksdb_preset)
             .with_wal_dir(wal_dir.clone())
             .with_cache_budget(cache_budget)
-            .with_storage_bounds(small_db_bounds)
             .build()
             .unwrap();
-        if let Some(budget) = &storage_budget {
-            let weak = Arc::downgrade(&utxoindex_db);
-            budget.add_pause_hook(move || {
-                if let Some(db) = weak.upgrade() {
-                    let _ = db.flush_wal(true);
-                }
-            });
-        }
         let utxoindex = UtxoIndexProxy::new(UtxoIndex::new(consensus_manager.clone(), utxoindex_db).unwrap());
         let index_service = Arc::new(IndexService::new(&notify_service.notifier(), subscription_context.clone(), Some(utxoindex)));
         Some(index_service)
@@ -1585,43 +1530,6 @@ Do you confirm? (y/n)";
                         // The panel's config refuses the flag off a private drill; the producer
                         // takes it only there too.
                         drill_answer_only: args.palw_drill_answer_only && palw_private_drill,
-                        // G14 audit G-17: the private-chain rule of every drill fault (devnet/simnet or a salted testnet-12 drill).
-                        drill_fault: match args.palw_drill_fault.as_deref() {
-                            Some(spec) if !palw_private_drill => panic!(
-                                "--palw-drill-fault={spec} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
-                            ),
-                            Some(_) if args.palw_drill_tamper_leaf.is_some()
-                                || args.palw_drill_tamper_auto_leaf
-                                || args.palw_drill_tamper_boundary.is_some()
-                                || args.palw_drill_sparse_fault_seed.is_some() =>
-                            {
-                                panic!("--palw-drill-fault is one lie: not with --palw-drill-tamper-leaf/-auto-leaf/-boundary/-sparse-fault-seed")
-                            }
-                            Some(spec) => match crate::args::parse_palw_drill_fault_v1(spec) {
-                                Ok(fault) => {
-                                    warn!("PALW DRILL (G-17): this producer commits the attempt-lane lie {fault:?} on every draw. Its claims are meant to be convicted or refused.");
-                                    Some(fault)
-                                }
-                                Err(why) => panic!("--palw-drill-fault={spec}: {why}"),
-                            },
-                            None => None,
-                        },
-                        drill_sparse_fault_seed: match args.palw_drill_sparse_fault_seed {
-                            Some(seed) if !palw_private_drill => panic!(
-                                "--palw-drill-sparse-fault-seed={seed} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
-                            ),
-                            Some(_) if args.palw_drill_tamper_leaf.is_some()
-                                || args.palw_drill_tamper_auto_leaf
-                                || args.palw_drill_tamper_boundary.is_some() =>
-                            {
-                                panic!("--palw-drill-sparse-fault-seed is one lie: not with --palw-drill-tamper-leaf/-auto-leaf/-boundary")
-                            }
-                            Some(seed) => {
-                                warn!("PALW DRILL (G-17 sparse): every draw lies at ONE step leaf drawn uniformly from seed {seed}");
-                                Some(seed)
-                            }
-                            None => None,
-                        },
                         // **DRILL ONLY** (`--palw-drill-real-submit-delay-s`): `validate_args` already refused it off a
                         // salted chain; refused again here, on the chain this node RUNS, so a lost params swap cannot
                         // arm it on public testnet-12.
@@ -1669,11 +1577,7 @@ Do you confirm? (y/n)";
                             }
                             None => crate::palw_producer::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1,
                         },
-                        drill_tamper_leaf: match args
-                            .palw_drill_tamper_leaf
-                            .or(args.palw_drill_tamper_auto_leaf.then_some(crate::palw_producer::PALW_DRILL_TAMPER_AUTO_LEAF_V1))
-                            .or(args.palw_drill_tamper_boundary.as_ref().map(|_| 0))
-                        {
+                        drill_tamper_leaf: match args.palw_drill_tamper_leaf.or(args.palw_drill_tamper_boundary.as_ref().map(|_| 0)) {
                             Some(leaf) if network.is_mainnet() => {
                                 panic!("--palw-drill-tamper-leaf={leaf} is a drill fault injector and is refused on mainnet")
                             }
@@ -2065,22 +1969,9 @@ Do you confirm? (y/n)";
                             ),
                             None => None,
                         },
-                        // **The same carve the producer site makes** (feat/kv-codec 69386573b, ported in the
-                        // 2026-10-15 merge sweep). The holding is process-wide (`held_artifacts`): whichever
-                        // duty maps the file first sets its residency, so a panel in a producing process
-                        // budgets the weights around this process's attempt exactly as the producer would.
-                        // A panel-only node reserves nothing.
-                        class_residency: crate::palw_backends::palw_class_residency_beside_the_attempt_v1(
+                        class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
                             args.palw_class_resident_bytes,
                             crate::args::palw_host_share_bytes_v1(args),
-                            if args.palw_produce {
-                                crate::palw_backends::palw_producer_attempt_reserve_v1(
-                                    &court,
-                                    palw_configured_producer_class(args, &config_for_palw_panel),
-                                )
-                            } else {
-                                0
-                            },
                         ),
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
                         public_claims: crate::args::parse_palw_public_claims_v1(&args.palw_public_claim)
@@ -2097,8 +1988,6 @@ Do you confirm? (y/n)";
                         tir_shard_gpu: args.palw_tir_shard_gpu,
                         tir_shard_demand_runs: args.palw_tir_shard_demand_runs,
                         tir_shard_watch: args.palw_tir_shard_watch,
-                        gdn_step_filer: args.palw_gdn_step_filer,
-                        court_paid_ingress: args.palw_court_paid_ingress,
                         tir_shard_mirror: args.palw_tir_shard_mirror.as_ref().map(std::path::PathBuf::from),
                         tir_shard_fetch: args.palw_tir_shard_fetch,
                         tir_shard_run_leaves: args.palw_tir_shard_run_leaves.unwrap_or(0),
@@ -2141,20 +2030,6 @@ Do you confirm? (y/n)";
                                 }
                                 Err(why) => panic!("--palw-drill-tamper-eval={spec}: {why}"),
                             },
-                        },
-                        drill_tamper_tir_frame: match args.palw_drill_tamper_tir_frame.as_deref() {
-                            // The G14 frame drills (D-05/D-06/D-07/D-18): the same private-chain rule as every drill fault.
-                            Some(spec) if !palw_private_drill => panic!(
-                                "--palw-drill-tamper-tir-frame={spec} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
-                            ),
-                            Some(spec) => match crate::args::parse_palw_drill_tamper_tir_frame_v1(spec) {
-                                Ok(fault) => {
-                                    warn!("PALW DRILL: this node's canonical claims will commit the ORIGINAL TIR frame lie {fault:?}. They are meant to be convicted (or, for no-tfp1, refused).");
-                                    Some(fault)
-                                }
-                                Err(why) => panic!("--palw-drill-tamper-tir-frame={spec}: {why}"),
-                            },
-                            None => None,
                         },
                         drill_tamper_fp_leaf: match args.palw_drill_tamper_fp_leaf {
                             // Devnet, simnet, or a salted testnet-12 drill (ADR-0152 §8.2) — a
@@ -2209,79 +2084,6 @@ Do you confirm? (y/n)";
                             }
                             args.palw_drill_refuse_leaf_evidence
                         },
-                        // The G14 collusion drill: the same private-chain rule as every drill fault.
-                        drill_collude_with: match args.palw_drill_collude_with.as_deref() {
-                            Some(spec) if !palw_private_drill => panic!(
-                                "--palw-drill-collude-with={spec} is a drill and is devnet/simnet (or a salted testnet-12 drill) only"
-                            ),
-                            Some(spec) => {
-                                let bonds: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> = spec
-                                    .split(',')
-                                    .map(str::trim)
-                                    .filter(|b| !b.is_empty())
-                                    .map(|b| {
-                                        crate::palw_producer::parse_outpoint(b)
-                                            .map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)
-                                            .unwrap_or_else(|e| panic!("--palw-drill-collude-with={spec}: {e}"))
-                                    })
-                                    .collect();
-                                if bonds.is_empty() {
-                                    panic!("--palw-drill-collude-with names no producer bond");
-                                }
-                                warn!(
-                                    "PALW DRILL: this seat COLLUDES with {} producer bond(s): it signs Valid on their claims without judging \
-                                     them and files nothing (the G14 collusion drill).",
-                                    bonds.len()
-                                );
-                                bonds
-                            }
-                            None => Vec::new(),
-                        },
-                        drill_withhold_all_da: match args.palw_drill_withhold_all_da {
-                            true if !palw_private_drill => {
-                                panic!("--palw-drill-withhold-all-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
-                            }
-                            true => {
-                                warn!("PALW DRILL: this producer withholds EVERY DA unit it owes (G14 audit G-17 / D-11).");
-                                true
-                            }
-                            false => false,
-                        },
-                        drill_fp_fault: match args.palw_drill_fp_fault.as_deref() {
-                            Some(spec) if !palw_private_drill => panic!(
-                                "--palw-drill-fp-fault={spec} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
-                            ),
-                            Some(_) if args.palw_drill_tamper_fp_leaf.is_some() || args.palw_drill_tamper_tir_frame.is_some() => {
-                                panic!("--palw-drill-fp-fault is one lie: not with --palw-drill-tamper-fp-leaf / -tamper-tir-frame")
-                            }
-                            Some(spec) => match crate::args::parse_palw_drill_fp_fault_v1(spec) {
-                                Ok(fault) => {
-                                    warn!("PALW DRILL (G-17): this node's canonical claims commit the lie {fault:?}. They are meant to be convicted.");
-                                    Some(fault)
-                                }
-                                Err(why) => panic!("--palw-drill-fp-fault={spec}: {why}"),
-                            },
-                            None => None,
-                        },
-                        drill_sparse_fault_seed: match args.palw_drill_sparse_fault_seed {
-                            Some(seed) if !palw_private_drill => {
-                                panic!("--palw-drill-sparse-fault-seed={seed} is devnet/simnet (or a salted testnet-12 drill) only")
-                            }
-                            Some(_) if args.palw_drill_tamper_fp_leaf.is_some() || args.palw_drill_tamper_tir_frame.is_some() || args.palw_drill_fp_fault.is_some() => {
-                                panic!("--palw-drill-sparse-fault-seed is one lie: not with --palw-drill-tamper-fp-leaf / -tamper-tir-frame / -fp-fault")
-                            }
-                            other => other,
-                        },
-                        drill_withhold_held_da: match args.palw_drill_withhold_held_da {
-                            true if !palw_private_drill => {
-                                panic!("--palw-drill-withhold-held-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
-                            }
-                            true => {
-                                warn!("PALW DRILL: this producer withholds every legacy held DA unit (the G14 collusion drill D-11).");
-                                true
-                            }
-                            false => false,
-                        },
                         drill_challenge_all: match args.palw_drill_challenge_all {
                             true if network.is_mainnet() => {
                                 panic!("--palw-drill-challenge-all is a drill and is refused on mainnet")
@@ -2334,83 +2136,6 @@ Do you confirm? (y/n)";
             }
         }
     };
-    // **DRILL ONLY (`--palw-drill-extra-seat`, the G14 collusion drill on a small host)**: more seat identities in this process — each
-    // a Panel service of its own (key, bond, fee float, state dir) cloned from this node's, with this node's collusion flags and nothing
-    // of its own to produce, register, claim or file. Private drill chains only.
-    let palw_drill_extra_panel_services: Vec<Arc<crate::palw_panel::PalwPanelService>> = if args.palw_drill_extra_seat.is_empty() {
-        if args.palw_drill_extra_seat_collude_with.is_some() {
-            panic!("--palw-drill-extra-seat-collude-with needs --palw-drill-extra-seat")
-        }
-        Vec::new()
-    } else if !palw_private_drill {
-        panic!("--palw-drill-extra-seat is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
-    } else {
-        let Some(primary) = palw_panel_service.as_ref() else {
-            panic!("--palw-drill-extra-seat needs this node's own seat identity (--palw-producer-key and --palw-producer-bond)")
-        };
-        let extra_collude: Option<Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>> =
-            args.palw_drill_extra_seat_collude_with.as_deref().map(|spec| {
-                spec.split(',')
-                    .map(str::trim)
-                    .filter(|b| !b.is_empty())
-                    .map(|b| {
-                        crate::palw_producer::parse_outpoint(b)
-                            .map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)
-                            .unwrap_or_else(|e| panic!("--palw-drill-extra-seat-collude-with={spec}: {e}"))
-                    })
-                    .collect()
-            });
-        args.palw_drill_extra_seat
-            .iter()
-            .enumerate()
-            .map(|(i, spec)| {
-                let seat = crate::args::parse_palw_drill_extra_seat_v1(spec)
-                    .unwrap_or_else(|e| panic!("--palw-drill-extra-seat={spec}: {e}"));
-                let mut c = primary.drill_config_v1().clone();
-                c.key_path = seat.key_path;
-                c.bond = seat.bond.clone();
-                c.fee_outpoint = seat.fee_outpoint;
-                if seat.pay_address.is_some() {
-                    c.pay_address = seat.pay_address;
-                }
-                c.state_dir = c.state_dir.join(format!("drill-extra-seat-{i}"));
-                c.register_class = None;
-                c.register_bond = false;
-                c.canonical_claims = false;
-                c.challenge = false;
-                c.public_claims.clear();
-                c.drill_tamper_fp_leaf = None;
-                c.drill_tamper_tir_frame = None;
-                c.drill_challenge_all = false;
-                c.drill_answer_only = false;
-                c.drill_refuse_leaf_evidence = false;
-                c.drill_withhold_held_da = false;
-                c.drill_withhold_all_da = false;
-                c.drill_fp_fault = None;
-                c.drill_sparse_fault_seed = None;
-                c.improve_evaluate = false;
-                c.vertex_equivocate_at = None;
-                c.tir_shard_watch = false;
-                c.gdn_step_filer = false;
-                c.court_paid_ingress = false;
-                c.tir_shard_declare = None;
-                if let Some(bonds) = &extra_collude {
-                    c.drill_collude_with = bonds.clone();
-                }
-                warn!(
-                    "PALW DRILL: extra seat {i} (bond {}) runs in this process{}",
-                    seat.bond,
-                    if c.drill_collude_with.is_empty() { "" } else { ", colluding like this node's own seat" }
-                );
-                Arc::new(crate::palw_panel::PalwPanelService::new(
-                    c,
-                    consensus_manager.clone(),
-                    flow_context_for_palw_panel.clone(),
-                    config_for_palw_panel.clone(),
-                ))
-            })
-            .collect()
-    };
     // **The plan, corrected by what started** (`crate::palw_duties`): the summary line above is the plan,
     // printed before the services existed. A duty the plan put ON whose key file or bond then failed to
     // load is one WARN line here — never silence, because a bond whose duties do not run is still drawn.
@@ -2451,27 +2176,14 @@ Do you confirm? (y/n)";
         )));
     }
     if palw_consensus_v2 {
-        let janitor = Arc::new(crate::palw_retention::PalwRetentionJanitor::new(
+        async_runtime.register(Arc::new(crate::palw_retention::PalwRetentionJanitor::new(
             consensus_manager.clone(),
             app_dir.join(network.to_prefixed()).join("palw-retention"),
             std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
             // ADR-0152 DA-8 (P2-7): past it a `Final` free-prompt claim is still accused, so its
             // capture is kept to the claim's retention.
             config_for_palw_panel.params.palw_rcore_plus_fence(),
-        ));
-        // G14: the budget's under-pressure reclaim of retained material goes through the janitor's
-        // plan, which pins every capture the chain can still demand.
-        if let Some(budget) = &storage_budget {
-            let janitor = Arc::clone(&janitor);
-            budget.register_reclaimer(kaspa_utils::storage_budget::FnReclaimer::new("palw-retention-unowed", move |mode| {
-                janitor.reclaim_for_budget(mode)
-            }));
-        }
-        async_runtime.register(janitor);
-    }
-    if let Some(budget) = &storage_budget {
-        let standing = crate::storage_capacity::log_rotation_reservation(budget).into_iter().collect();
-        async_runtime.register(Arc::new(crate::storage_capacity::StorageBudgetService::new(Arc::clone(budget), standing)));
+        )));
     }
     // **ADR-0067 Decision 6: declarations this node did not watch arrive.** A pruned sync brings
     // the class table and no carriage rows, so an operator on such a node supplies them. The
@@ -2500,46 +2212,8 @@ Do you confirm? (y/n)";
             Err(why) => warn!("[palw-class-carriage] refused the declaration for {class_id} from {path}: {why}"),
         }
     }
-    let palw_panel_service_for_drill = palw_panel_service.clone();
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);
-    }
-    // The extra seats and this node's own seat share ONE gossip inbox: take it once and fan every event out to each service, and
-    // loop each service's own broadcast receipt back in so its siblings see it (they share no peer link to relay it).
-    if !palw_drill_extra_panel_services.is_empty()
-        && let Some(primary) = palw_panel_service_for_drill.as_ref()
-    {
-        use kaspa_p2p_flows::palw_gossip::PalwGossipEvent;
-        let gossip = flow_context.palw_gossip();
-        gossip.drill_enable_receipt_loopback();
-        let mut node_inbox = gossip.take_inbox().expect("no service has started: the node's gossip inbox is still here");
-        let mut senders = Vec::new();
-        for service in std::iter::once(primary).chain(palw_drill_extra_panel_services.iter()) {
-            let (tx, rx) = tokio::sync::mpsc::channel::<PalwGossipEvent>(4096);
-            service.drill_attach_inbox_v1(rx);
-            senders.push(tx);
-        }
-        std::thread::Builder::new()
-            .name("palw-drill-seat-fanout".into())
-            .spawn(move || {
-                while let Some(event) = node_inbox.blocking_recv() {
-                    for tx in &senders {
-                        let copy = match &event {
-                            PalwGossipEvent::Material { claim, bytes } => PalwGossipEvent::Material { claim: *claim, bytes: bytes.clone() },
-                            PalwGossipEvent::Receipt { bytes } => PalwGossipEvent::Receipt { bytes: bytes.clone() },
-                            PalwGossipEvent::IntervalOpening { claim, interval_index, bytes } => {
-                                PalwGossipEvent::IntervalOpening { claim: *claim, interval_index: *interval_index, bytes: bytes.clone() }
-                            }
-                        };
-                        let _ = tx.try_send(copy);
-                    }
-                }
-            })
-            .expect("the drill fan-out thread starts");
-        warn!("PALW DRILL: {} seat services share this node's gossip inbox (fan-out + receipt loopback)", palw_drill_extra_panel_services.len() + 1);
-    }
-    for extra in palw_drill_extra_panel_services {
-        async_runtime.register(extra);
     }
     if let Some(palw_exec_slice_producer_service) = palw_exec_slice_producer_service {
         async_runtime.register(palw_exec_slice_producer_service);

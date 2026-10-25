@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_court_shared_tir_builder_store_v1::constraint_terminal::tests::semantic_intent_binds_domain_scope_material_selection_and_filer ... ok
-test palw_court_shared_tir_builder_store_v1::constraint_terminal::tests::borrowed_material_replays_nonempty_native_constraint_fixture_and_rejects_corruption ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 4736 filtered out; finished in 0.07s
-

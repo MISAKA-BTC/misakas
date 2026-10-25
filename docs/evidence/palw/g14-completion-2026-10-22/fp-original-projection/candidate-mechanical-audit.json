@@ -1,8 +1,0 @@
-{
-  "source_sha256": "9c2716fdb2d96076f744b7019ad8ef442b4e054342d2cbf39f18d6ea1d1c3c16",
-  "candidate_sha256": "782682082769b777b1010a631fd50b0451d5397dfef0af3ff888d92ee4bbf6a7",
-  "projection_whitespace_normalized_tokens_identical": true,
-  "projection_normalized_sha256": "3ddc6e7da5328ed9c2cbbc26d026e6e11e7d046096648869844b3047bbb8c5c5",
-  "policy_refusals_moved": 13,
-  "cargo_executed": false
-}

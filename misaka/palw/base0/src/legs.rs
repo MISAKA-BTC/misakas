@@ -611,8 +611,6 @@ pub fn base0_state_chunk_geometry_v1(
     } else if declared == map::integer_kv_state_chunk_map_id_v2()
         || declared == map::hybrid_state_chunk_map_id_v1()
         || declared == map::hybrid_state_chunk_map_id_v2()
-        // RFC-0006 consumer v2's composed hybrid maps: the same integer-kv v2 cache half, verbatim.
-        || map::palw_map_is_hybrid_composed_v2(&declared)
     {
         map::integer_kv_state_geometry_v2(profile, positions)
     } else if declared == map::tiled_kv_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v3() {
@@ -666,13 +664,6 @@ pub enum Base0CaptureGeometryV1 {
     Flat(kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1),
     /// A class whose checkpoint is the composition, in the order its map's NAME spells.
     Hybrid(kaspa_consensus_core::palw_state_chunk_map::PalwHybridStateGeometryV1),
-    /// **RFC-0006 consumer v2**: a solo gdn v1/v2 map (`attn` empty) or a composed hybrid map (`attn` the integer-kv v2 cache half),
-    /// followed by the recurrence's own solo enumeration (`palw_gdn_state_map_v2`), one flat tree, at every per-call leaf.
-    /// `gdn` is that enumeration's entries in order — what the court's `gdn_recurrence_section_v2` offsets into.
-    Composed {
-        attn: kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1,
-        gdn: Vec<kaspa_consensus_core::palw_state_chunk_map::PalwHybridChunkEntryV1>,
-    },
 }
 
 impl Base0CaptureGeometryV1 {
@@ -681,7 +672,6 @@ impl Base0CaptureGeometryV1 {
         match self {
             Self::Flat(g) => g.chunk_count(),
             Self::Hybrid(g) => g.chunk_count(),
-            Self::Composed { attn, gdn } => attn.chunk_count() + gdn.len() as u64,
         }
     }
 
@@ -691,7 +681,6 @@ impl Base0CaptureGeometryV1 {
         match self {
             Self::Flat(g) => g,
             Self::Hybrid(g) => &g.attn,
-            Self::Composed { attn, .. } => attn,
         }
     }
 
@@ -703,14 +692,6 @@ impl Base0CaptureGeometryV1 {
         match self {
             Self::Flat(g) => map::integer_kv_state_chunk_entry_v1(g, index).map(map::PalwHybridChunkEntryV1::AttentionCache),
             Self::Hybrid(g) => map::hybrid_state_chunk_entry_v3(g, index),
-            Self::Composed { attn, gdn } => {
-                let attn_count = attn.chunk_count();
-                if index < attn_count {
-                    map::integer_kv_state_chunk_entry_v1(attn, index).map(map::PalwHybridChunkEntryV1::AttentionCache)
-                } else {
-                    gdn.get(usize::try_from(index - attn_count).ok()?).copied()
-                }
-            }
         }
     }
 }
@@ -732,44 +713,6 @@ pub fn base0_capture_geometry_v1(profile: &PalwShapeProfileV3, positions: u32) -
         return map::hybrid_state_geometry_for_covered_v1(profile, positions)
             .map(Base0CaptureGeometryV1::Hybrid)
             .map_err(LegError::CheckpointStateMap);
-    }
-    // RFC-0006 consumer v2: the solo recurrence maps and the composed hybrid maps — the exact order the court's
-    // `memory_v2::gdn_recurrence_section_v2` authenticates (attention half first, then the recurrence's solo enumeration).
-    let declared = profile.state_chunk_map_id;
-    // The court's own solo predicate (gdn v1 / v2 / v3's key-head gather), so the executor and the court serve one set.
-    let solo = kaspa_consensus_core::palw_step_refute::memory_v2::palw_gdn_solo_map_v2(&declared);
-    if solo || map::palw_map_is_hybrid_composed_v2(&declared) {
-        let attn = if solo {
-            map::PalwStateChunkGeometryV1 {
-                row_bytes: 0,
-                positions_per_chunk: 0,
-                attn_layers: Vec::new(),
-                positions,
-                chunks_per_slice: 0,
-            }
-        } else {
-            base0_state_chunk_geometry_v1(profile, positions)?
-        };
-        let geometry = kaspa_consensus_core::palw_gdn_state_map_v2::PalwGdnStateGeometryV2::of(profile)
-            .map_err(|_| LegError::CheckpointStateUnavailable { chunk_index: attn.chunk_count() })?;
-        let mut gdn = Vec::with_capacity(geometry.chunk_count() as usize);
-        for index in 0..geometry.chunk_count() {
-            let entry = geometry.entry(index).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
-            gdn.push(map::PalwHybridChunkEntryV1::RecurrenceState {
-                kind: match entry.kind {
-                    kaspa_consensus_core::palw_gdn_state_map_v2::PalwGdnStateChunkKindV2::Delta => map::PalwGdnChunkKindV1::Delta,
-                    kaspa_consensus_core::palw_gdn_state_map_v2::PalwGdnStateChunkKindV2::Conv => map::PalwGdnChunkKindV1::Conv,
-                },
-                gdn_layer: entry.layer,
-                head: u16::try_from(entry.head).map_err(|_| LegError::CheckpointStateUnavailable { chunk_index: index })?,
-                byte_len: entry.byte_len(),
-            });
-        }
-        let total = attn.chunk_count() + gdn.len() as u64;
-        if total > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
-            return Err(LegError::CheckpointStateUnavailable { chunk_index: total });
-        }
-        return Ok(Base0CaptureGeometryV1::Composed { attn, gdn });
     }
     base0_state_chunk_geometry_v1(profile, positions).map(Base0CaptureGeometryV1::Flat)
 }

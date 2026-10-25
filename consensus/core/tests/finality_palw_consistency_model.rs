@@ -1,7 +1,7 @@
 //! **FINX (2026-10-08) — P1: the finality guard and the PALW fork choice as an executable model, and
 //! the change candidates compared over the same adversaries.**
 //!
-//! Record: `docs/design/palw/consensus/finality-palw-consistency.md` (the property, the violations, the pipeline
+//! Record: `docs/design/palw/finality-palw-consistency.md` (the property, the violations, the pipeline
 //! tests that back the model's key cases, and the table [`finx_p1_model_table`] prints).
 //!
 //! # What is modelled

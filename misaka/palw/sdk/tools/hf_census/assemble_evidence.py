@@ -2,9 +2,9 @@
 """Assemble the machine-readable evidence of the dated coverage report from `coverage_report.py`'s output (no network).
 
     assemble_evidence.py --coverage DIR/p4/report/coverage.json --update2 DIR/report-v3/report.json --snapshot DIR \
-        --binary BIN --out docs/evidence/rfc/0011-hf-census-coverage-2026-10-08.json
+        --binary BIN --out docs/rfc/evidence/0011-hf-census-coverage-2026-10-08.json
 
-Writes the file `docs/evidence/rfc/0011-census-coverage-check.mjs` checks. The old evidence (`0011-existing-coverage-audit.json`) is not
+Writes the file `docs/rfc/evidence/0011-census-coverage-check.mjs` checks. The old evidence (`0011-existing-coverage-audit.json`) is not
 touched. The blocker families and the generic change that would close each are `FAMILIES` below: a code (and, where the argument
 decides it, an argument prefix) → a label and the closing feature; nothing here reads a model name.
 """

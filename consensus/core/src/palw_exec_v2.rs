@@ -36,7 +36,7 @@
 //! declared work-unit figure: the credited work of a slice is derived from its canonical range against the root's plan.
 //!
 //! Dormant: `Params::palw_exec_payload_v2` is `None` on every preset and its validator refuses any real height until the
-//! gates of `docs/design/palw/execution/rfc-0008-implementation-spec.md` §9 pass.
+//! gates of `docs/design/palw/rfc-0008-implementation-spec.md` §9 pass.
 
 use crate::Hash64;
 use crate::palw_execution_lane_v1::{
@@ -545,7 +545,7 @@ impl PalwExecV2Envelope {
 // ---------------------------------------------------------------------------------------------
 
 /// **Is the EXEC payload fence armable on any ruleset?** `false` until every gate of
-/// `docs/design/palw/execution/rfc-0008-implementation-spec.md` section 9 has passed (root lifecycle through the real pipeline, wire and
+/// `docs/design/palw/rfc-0008-implementation-spec.md` section 9 has passed (root lifecycle through the real pipeline, wire and
 /// compatibility, lane isolation, accounting, public verification, liveness and capacity, deterministic recovery) and the
 /// release owner has decided a height. While it is `false`, [`Params::validate_palw_exec_payload_v2`] refuses every real height
 /// on every ruleset, and `Some(never())` — the dormant spelling — is the only value that passes (it collapses out of the

@@ -1,7 +1,7 @@
 //! **RFC-0008 v2: the `palw_exec_payload_v2` fence** — dormant on every ruleset a node can run (testnet-12 included), fingerprinted
 //! with its value where it is set (Some-only, so every dormant ruleset's identity is the one it had before the field existed),
 //! `Some(never())` collapsing out of every id, and **refused by `validate_palw_v2` at any real height** until the section 9 gates
-//! of `docs/design/palw/execution/rfc-0008-implementation-spec.md` pass (`PALW_EXEC_PAYLOAD_V2_ARMABLE`).
+//! of `docs/design/palw/rfc-0008-implementation-spec.md` pass (`PALW_EXEC_PAYLOAD_V2_ARMABLE`).
 //!
 //! The fold's own tests (`palw_state_v2::tests::exec_v2_fold_v1`) arm the fence on the V2 bundle's state params directly, which is
 //! how a test arms what validation refuses; this file checks the field, the hashers and the validator, and adds no id pin of its

@@ -83,17 +83,16 @@ pub(super) fn load(
     .map_err(refused)?;
     Ok((quota, plan, projection))
 }
-pub(super) fn write(builder: &mut TransitionBuilder<'_>, s: &NativePagedQuotaProjectionV29) -> Result<(), PalwStateV2Error> {
+pub(super) fn write(builder: &mut TransitionBuilder<'_>, s: &NativePagedQuotaProjectionV29) {
     let g = s.global();
     let a = s.actor();
     let job = s.status().job;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, status_key(job), Some(key(&(s.status().root(), s.status()))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, status_key(job), Some(key(&(s.status().root(), s.status()))));
     if let Some(own) = s.seal() {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, owned_key(job, own.id()), Some(key(&(own.root(), own))))?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, owned_key(job, own.id()), Some(key(&(own.root(), own))));
     }
-    Ok(())
 }
 pub(super) fn part(
     builder: &mut TransitionBuilder<'_>,
@@ -111,7 +110,7 @@ pub(super) fn part(
     let (quota, plan, mut s) = load(builder, ctx, meta.job, meta.seal)?;
     let epoch = TrustedEpochV11::from_chain(&quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     s.debit(&quota, &epoch, &plan, meta.owner, NativePagedDebitV29::Part(meta.index)).map_err(refused)?;
-    write(builder, &s)?; // Original paid attempt survives EVERY later rejection.
+    write(builder, &s); // Original paid attempt survives EVERY later rejection.
     let Some(body) = borrowed_native_paged_part_v29(raw) else {
         return Ok(());
     };
@@ -119,13 +118,13 @@ pub(super) fn part(
         return Ok(());
     }
     let original = s.seal().unwrap().clone();
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key(body.job, body.seal, body.index), Some(body.bytes.to_vec()))?;
-    write(builder, &s)?;
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key(body.job, body.seal, body.index), Some(body.bytes.to_vec()));
+    write(builder, &s);
     if (0..original.count).any(|i| !original.accepted(i)) {
         return Ok(());
     }
     s.debit(&quota, &epoch, &plan, meta.owner, NativePagedDebitV29::Assembly).map_err(refused)?;
-    write(builder, &s)?; // BEFORE the full Vec or repeated fragment reads.
+    write(builder, &s); // BEFORE the full Vec or repeated fragment reads.
     let mut file = Vec::with_capacity(original.total_bytes as usize);
     for index in 0..original.count {
         let Some(bytes) =
@@ -146,7 +145,7 @@ pub(super) fn part(
     // The court price also owns its bounded nested decoder, original class
     // restoration and exact source/PC check, including malformed whole files.
     s.debit(&quota, &epoch, &plan, meta.owner, NativePagedDebitV29::Court).map_err(refused)?;
-    write(builder, &s)?;
+    write(builder, &s);
     if paged_proof_root_v29(&file) != original.proof_root || file.len() < 68 {
         return Ok(());
     }

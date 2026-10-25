@@ -3,7 +3,7 @@
 use crate::BlockHash;
 use std::sync::OnceLock;
 pub(crate) mod typed;
-pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1, btree_node_envelope_bytes_v1};
+pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1};
 pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
 mod demand;
 mod restore;
@@ -13,7 +13,7 @@ pub use restore::restore_native_carriage_v1;
 pub(crate) use retained::value_requests_v1 as native_value_requests_v1;
 mod transition;
 pub use retained::{
-    NativeDecodeErrorV1, NativeOwnerMutationErrorV1, NativeRetainedV1, NativeStateMutationErrorV1, native_delta_replay_requests_v1,
+    NativeDecodeErrorV1, NativeRetainedV1, NativeStateMutationErrorV1, native_delta_replay_requests_v1,
     retain_native_carriage_decode_classified_v1, retain_native_carriage_decode_v1, retain_native_value_decode_classified_v1,
     retain_native_value_decode_v1,
 };
@@ -33,18 +33,13 @@ pub use kernel_material::{
 };
 pub use kernel_segment_assembly::native_kernel_segment_assembly_requests_v4;
 mod ledger_expansion;
-// RFC-0006: the kernel ledger's consensus mutations, admitted from the real typed values (replaces `DerefMut`).
-mod kernel_ledger_mutation;
-pub use kernel_ledger_mutation::{PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1, PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1};
 mod tir;
 pub use demand::reserve_native_requests_v1;
-pub(crate) use ledger_expansion::{NativeTirProgramShapeV1, standalone_tir_program_shape_v1};
-pub(crate) use ledger_expansion::source_tir_program_shape_v1;
 pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};
 pub(crate) use ledger_expansion::{ledger_cache_clone_v1, reserve_ledger_expansion_v1};
 pub use tir::decode_native_tir_program_v1;
 pub(crate) use tir::{NativeTirShardWorkspaceV1, TirNativeRequestsV1, reserve_native_tir_shard_workspace_v1};
-pub(crate) use typed::BTreeNodeEnvelopeV1;
+pub use typed::BTreeNodeEnvelopeV1;
 #[cfg(test)]
 mod aux_registry_tests;
 pub(crate) mod wire;

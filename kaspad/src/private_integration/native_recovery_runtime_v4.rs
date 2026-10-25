@@ -122,7 +122,7 @@ impl LoopbackNativeProviderV3 {
         if request.body.len() as u64 > ENROLLMENT_FRAME_MAX {
             return Err("V4 enrollment body exceeds exact local cap".into());
         }
-        preflight_native_value_v1::<Request>(&request.body[..], request.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Request>(request.body.as_slice(), request.body.len() as u64).map_err(|e| e.to_string())?;
         let r =
             retain_native_value_decode_v1(&request.body, || borsh::from_slice::<Request>(&request.body)).map_err(|e| e.to_string())?;
         let q = &r.quote;
@@ -282,7 +282,7 @@ impl AuthenticatedSocketExchangeV3 {
         if !responders.iter().eq(q.provider_keys.iter().map(|(b, _)| b)) {
             return Err("incomplete authenticated recovery roster response".into());
         }
-        preflight_native_value_v1::<Response>(&response.body[..], response.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Response>(response.body.as_slice(), response.body.len() as u64).map_err(|e| e.to_string())?;
         retain_native_value_decode_v1(&response.body, || borsh::from_slice::<Response>(&response.body)).map_err(|e| e.to_string())
     }
     pub(super) fn enroll_recovery_session_v4(&self, q: &Quote) -> Result<(), String> {
@@ -573,9 +573,9 @@ mod tests {
         let mut request = 4u16.to_le_bytes().to_vec();
         request.extend([0u8; 64 + 8 + 64 + 64 + 68]);
         request.extend(u32::MAX.to_le_bytes());
-        assert!(preflight_native_value_v1::<Request>(&request[..], request.len() as u64).is_err());
+        assert!(preflight_native_value_v1::<Request>(&request, request.len() as u64).is_err());
         let mut response = vec![0];
         response.extend(u32::MAX.to_le_bytes());
-        assert!(preflight_native_value_v1::<Response>(&response[..], response.len() as u64).is_err());
+        assert!(preflight_native_value_v1::<Response>(&response, response.len() as u64).is_err());
     }
 }

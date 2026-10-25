@@ -1072,7 +1072,6 @@ fn a_lie_is_accused_from_served_annexes_without_the_capture() {
 /// annex of its own IR capture.
 #[test]
 fn a_seat_pursues_a_large_claim_through_served_annexes() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     use super::tir_court::{
         PalwTirAnnexPursuitV1, PalwTirAnnexStepV1, palw_tir_annex_request_index_v1, palw_tir_annex_step_v1,
         palw_tir_leaf_is_dissected_v1, palw_tir_one_move_accusation_to_file_v1,
@@ -1181,27 +1180,29 @@ fn a_seat_pursues_a_large_claim_through_served_annexes() {
     // request; the executor serves the annex of its own IR capture on that request.
     let court_src = include_str!("tir_court.rs");
     let court_src = &court_src[..court_src.find("\n#[cfg(test)]").unwrap_or(court_src.len())];
-    let pass = &court_src[court_src.find_code("    pub(super) async fn tir_one_move_pass_v1(").expect("the pass")..];
-    assert!(pass.contains_code("self.tir_annex_pursuit_tick_v1(session, bond_key, network_domain, current_daa, &target, due, tir, &mut books).await;"
+    let pass = &court_src[court_src.find("    pub(super) async fn tir_one_move_pass_v1(").expect("the pass")..];
+    assert!(pass.contains(
+        "self.tir_annex_pursuit_tick_v1(session, bond_key, network_domain, current_daa, &target, due, tir, &mut books).await;"
     ));
-    let tick = &court_src[court_src.find_code("    async fn tir_annex_pursuit_tick_v1(").expect("the tick")..];
+    let tick = &court_src[court_src.find("    async fn tir_annex_pursuit_tick_v1(").expect("the tick")..];
     // The first ask: leaf 0 — or, on a trace descent, decode row 0's door leaf (`with_trace`).
-    let first_ask = &tick[tick.find_code("let Some(pursuit) = pursuit else { return };").expect("the admitted pursuit")..];
-    let first_ask = &first_ask[..first_ask.find_code("            return;").expect("the first ask's end")];
-    assert!(tick.contains_code("pursuit = pursuit.with_reserved_trace(rows, row0);"));
-    assert!(first_ask.contains_code("self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(leaf), leaf, current_daa).await;"
+    let first_ask = &tick[tick.find("let Some(pursuit) = pursuit else { return };").expect("the admitted pursuit")..];
+    let first_ask = &first_ask[..first_ask.find("            return;").expect("the first ask's end")];
+    assert!(tick.contains("pursuit = pursuit.with_reserved_trace(rows, row0);"));
+    assert!(first_ask.contains(
+        "self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(leaf), leaf, current_daa).await;"
     ));
-    assert!(tick.contains_code("palw_tir_leaf_annex_verify_v1("));
-    assert!(tick.contains_code("palw_tir_annex_step_v1(&tir, &task, &annex, &binding, &rules)"));
-    let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
-    let open = &panel[panel.find_code("    fn open_retained_interval(").expect("the opener")..];
+    assert!(tick.contains("palw_tir_leaf_annex_verify_v1("));
+    assert!(tick.contains("palw_tir_annex_step_v1(&tir, &task, &annex, &binding, &rules)"));
+    let panel = include_str!("../palw_panel.rs");
+    let open = &panel[panel.find("    fn open_retained_interval(").expect("the opener")..];
     let serve =
-        open.find_code("return self.serve_tir_leaf_annex_v1(claim, &capture, leaf);").expect("an IR claim's leaf is served as its annex");
+        open.find("return self.serve_tir_leaf_annex_v1(claim, &capture, leaf);").expect("an IR claim's leaf is served as its annex");
     assert!(
-        serve < open.find_code("self.retained_leaf_evidence_v1(").expect("the legacy evidence"),
+        serve < open.find("self.retained_leaf_evidence_v1(").expect("the legacy evidence"),
         "the IR annex before the legacy evidence"
     );
-    assert!(panel.contains_code("pursuits: &mut tir_annex_pursuits,") && panel.contains_code("openings: pool_books.intervals.map(),"));
+    assert!(panel.contains("pursuits: &mut tir_annex_pursuits,") && panel.contains("openings: &interval_openings,"));
 }
 
 /// **F7's bottom from the accused's ON-CHAIN root claim** (RFC-0002's evidence transport, option D): a
@@ -2008,8 +2009,8 @@ fn a_withheld_pursuit_demands_on_chain_only_past_the_fence_and_within_its_sessio
         assert!(demand.contains(reached), "the demand tick reaches {reached}");
     }
     let file = &court_src[court_src.find("    pub(super) fn file_tir_demand_v1(").expect("the filer")..];
-    assert!(file.find("session.palw_object_rehearsal_v1(object)").unwrap() < file.find("books.court_outbox.push_pending(").unwrap());
-    let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
+    assert!(file.find("session.palw_object_rehearsal_v1(object)").unwrap() < file.find("books.court_pending.push(").unwrap());
+    let panel = include_str!("../palw_panel.rs");
     let rcore = &panel[panel.find("    async fn rcore_da_answers_v1(").expect("the answers")..];
     assert!(rcore.contains("units.iter().any(|unit| unit.is_tir_fence2_v1())") && rcore.contains("tir.as_ref(),"));
     let unit = &panel[panel.find("pub(crate) fn palw_da_unit_answer_v1(").expect("the unit answer")..];

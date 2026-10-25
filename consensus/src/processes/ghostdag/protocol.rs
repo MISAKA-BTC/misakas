@@ -25,7 +25,6 @@ use super::ordering::*;
 pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> {
     genesis_hash: BlockHash,
     pub(super) k: KType,
-    dag_width: Option<kaspa_consensus_core::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1>,
     pub(super) ghostdag_store: Arc<T>,
     pub(super) relations_store: S,
     pub(super) headers_store: Arc<V>,
@@ -171,7 +170,6 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         Self {
             genesis_hash,
             k,
-            dag_width: None,
             ghostdag_store,
             relations_store,
             reachability_service,
@@ -209,7 +207,6 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         Self {
             genesis_hash,
             k,
-            dag_width: None,
             ghostdag_store,
             relations_store,
             reachability_service,
@@ -220,16 +217,6 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             heartbeat_transparent,
             round_lane,
         }
-    }
-
-    pub fn with_dag_width(mut self, schedule: Option<kaspa_consensus_core::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1>) -> Self {
-        self.dag_width = schedule.filter(|f| f.activation != kaspa_consensus_core::config::params::ForkActivation::never());
-        self
-    }
-
-    fn width_at_parent(&self, selected_parent: BlockHash) -> Option<kaspa_consensus_core::palw_rfc0018_v1::PalwDagWidthScheduleV1> {
-        let f = self.dag_width?;
-        f.activation.is_active(self.headers_store.get_daa_score(selected_parent).unwrap()).then_some(f.schedule)
     }
 
     pub fn genesis_ghostdag_data(&self) -> GhostdagData {
@@ -323,8 +310,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             // ORIGIN is always a single parent so both blue score and work should remain zero
             return GhostdagData::new_with_selected_parent(selected_parent, 1); // k is only a capacity hint here
         }
-        let width = self.width_at_parent(selected_parent);
-        let k = width.map_or(self.k, |s| s.ghostdag_k);
+        let k = self.k;
         // Initialize new GHOSTDAG block data with the selected parent
         let mut new_block_data = GhostdagData::new_with_selected_parent(selected_parent, k);
         // Get the mergeset in consensus-agreed topological order (topological here means forward in time from blocks to children)
@@ -332,9 +318,9 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
 
         // ADR-0105: the selected parent's blue score, from which each `Weighted` candidate's walk
         // floor is derived below. Read only where the fence is configured.
-        let transparency_base = self.heartbeat_transparent.map(|transparency| {
-            (self.ghostdag_store.get_blue_score(selected_parent).unwrap(), width.map_or(transparency.merge_depth, |s| s.merge_depth))
-        });
+        let transparency_base = self
+            .heartbeat_transparent
+            .map(|transparency| (self.ghostdag_store.get_blue_score(selected_parent).unwrap(), transparency.merge_depth));
 
         // ADR-0125: which candidates are round blocks, read once. A round block is red, always, and
         // is not counted against anybody — so it is added before any coloring walk and never reaches
@@ -431,11 +417,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         } else if self.is_heartbeat_header(&header) {
             LaneColoring::Heartbeat
         } else if transparency.same_chain.is_some_and(|fence| fence.is_active(header.daa_score))
-            && !self.hangs_from_the_merging_chain(
-                candidate,
-                merging_selected_parent,
-                self.width_at_parent(merging_selected_parent).map_or(transparency.merge_depth, |s| s.merge_depth),
-            )
+            && !self.hangs_from_the_merging_chain(candidate, merging_selected_parent, transparency.merge_depth)
         {
             // F1 (ADR-0105 §11): an attempt of another branch is colored against that branch's
             // heartbeats — classic GHOSTDAG.

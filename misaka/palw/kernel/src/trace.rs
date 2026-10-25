@@ -486,7 +486,7 @@ pub fn trace_v1(program: &TirProgramV1, params: &dyn ParamSource, tokens: &[u32]
 /// **An honest producer's trace, streamed** (lane K2S, GAP-31): exactly [`trace_v1`]'s values, handed to `visit` one position at a
 /// time and then dropped. Only the previous position is held: every value a position reads is at that position or the one before
 /// (a `Fixed` state, a `Hist` window and its views), so a producer commits a long claim — every committed value of every position,
-/// derived windows included — without holding the claim (`docs/design/palw/models/k2-real-scale.md` §1.3). A source older than the previous
+/// derived windows included — without holding the claim (`docs/design/palw/k2-real-scale.md` §1.3). A source older than the previous
 /// position is refused, by name.
 pub fn trace_streaming_v1(
     program: &TirProgramV1,
@@ -646,101 +646,4 @@ pub fn trace_stage_v1(
         values.push(pos_vals);
     }
     Ok(TraceV1 { values, inputs: stage_inputs })
-}
-
-/// Explicit original V2 streaming execution with position-bound inputs and
-/// global post-write continuity. Frozen V1/pipeline wiring is unchanged.
-pub fn trace_streaming_stage_v32(
-    source: &misaka_palw_tir::program_v2::TirProgramV2,
-    params: &dyn ParamSource,
-    tokens: &[u32],
-    inputs: &dyn Fn(u16,u32)->Option<Tensor>,
-    visit: &mut dyn FnMut(u32, &[Vec<Tensor>]) -> TirResult<()>,
-) -> TirResult<()> {
-    misaka_palw_tir::validate_v2::validate_v2(source)?;
-    let view=source.v1_view();let program=&view;
-    let post=u16::try_from(source.occurrences().len()-1).map_err(|_|malformed("stage32 occurrence overflow"))?;
-    let binding=StageBindingV1{first_input:u16::try_from(source.params.len()).map_err(|_|malformed("stage32 input boundary overflow"))?,inputs:u16::try_from(source.inputs.len()).map_err(|_|malformed("stage32 input count overflow"))?,post_writers:source.post_writes().into_iter().map(|(node,state)|(state,post,node)).collect()};
-    let w = WiringV1::for_stage_v32(program,&binding)?;
-    let mut prev: Vec<Vec<Tensor>> = Vec::new();
-    // Each window's appended rows, newest last: a `HistAppend` reads the rows its appender appended at the previous
-    // `min(p, window − 1)` positions (`WiringV1::hist_prior_sources`), so those rows — not the positions — are what is kept.
-    let mut appended: BTreeMap<(u16, u16), std::collections::VecDeque<Tensor>> = BTreeMap::new();
-    for p in 0..tokens.len() as u32 {
-        let mut pos_vals: Vec<Vec<Tensor>> = Vec::with_capacity(w.occurrences.len());
-        for s in 0..w.occurrences.len() as u16 {
-            let b = w.occurrences[s as usize].0 as usize;
-            let mut occ_vals: Vec<Tensor> = Vec::with_capacity(program.blocks[b].nodes.len());
-            for n in 0..program.blocks[b].nodes.len() as u16 {
-                let resolve = |src: SourceV1, occ_vals: &Vec<Tensor>, pos_vals: &Vec<Vec<Tensor>>| -> TirResult<Tensor> {
-                    match src {
-                        SourceV1::Node { position, occurrence, node } if position == p && occurrence == s => {
-                            occ_vals.get(node as usize).cloned().ok_or_else(|| malformed("a forward node reference"))
-                        }
-                        SourceV1::Node { position, occurrence, node } if position == p => {
-                            Ok(pos_vals[occurrence as usize][node as usize].clone())
-                        }
-                        SourceV1::Node { position, occurrence, node } if position + 1 == p => prev
-                            .get(occurrence as usize)
-                            .and_then(|o| o.get(node as usize))
-                            .cloned()
-                            .ok_or_else(|| malformed("a previous-position reference")),
-                        SourceV1::Node { .. } => {
-                            Err(malformed("a source older than the previous position (a streamed trace holds one)"))
-                        }
-                        SourceV1::Param { index, layer } => parameter_tensor(program, params, index, layer),
-                        SourceV1::Const(j) => const_tensor(program, j),
-                        SourceV1::Zeros { dtype, shape } => Ok(Tensor::zeros(dtype, &shape)),
-                        SourceV1::Public(v) => Tensor::scalar(DType::Idx, v as i128),
-                        SourceV1::Input { k, position } => {
-                            if position!=p{return Err(malformed("stage32 direct input must name its current position"));}
-                            let index=binding.first_input.checked_add(k).ok_or_else(||malformed("stage32 input parameter overflow"))?;
-                            let t=inputs(k,position).ok_or_else(||TirError::new(misaka_palw_tir::TirErrorKind::Missing,format!("stage32 original input {k} at {position}")))?;
-                            typed_parameter_tensor(program,index,t)
-                        },
-                    }
-                };
-                let node = w.node(s, n);
-                let inputs = (0..node.inputs.len())
-                    .map(|i| resolve(w.input_source(tokens, p, s, n, i)?, &occ_vals, &pos_vals))
-                    .collect::<TirResult<Vec<_>>>()?;
-                let window = match node.prim {
-                    Prim::HistAppend { state } => {
-                        let StateKind::Hist { window } = program.states[state as usize].kind else {
-                            return Err(malformed("HistAppend on a Fixed state"));
-                        };
-                        if w.appenders.get(&(state, w.occurrences[s as usize].1)) != Some(&(s, n)) {
-                            return Err(malformed("a window appended by another node (a streamed trace keeps its own rows)"));
-                        }
-                        Some(window as usize)
-                    }
-                    _ => None,
-                };
-                let prior: Vec<Tensor> = match window {
-                    Some(window) => {
-                        let rows = appended.entry((s, n)).or_default();
-                        let keep = (p as usize).min(window - 1);
-                        if rows.len() < keep {
-                            return Err(malformed("a window's rows were not appended"));
-                        }
-                        rows.iter().skip(rows.len() - keep).cloned().collect()
-                    }
-                    None => Vec::new(),
-                };
-                let value = eval_node(program, node, &inputs, &prior, w.h(s, p))?;
-                if let Some(window) = window {
-                    let rows = appended.entry((s, n)).or_default();
-                    rows.push_back(inputs.first().cloned().ok_or_else(|| malformed("HistAppend without its row"))?);
-                    while rows.len() > window.saturating_sub(1) {
-                        rows.pop_front();
-                    }
-                }
-                occ_vals.push(value);
-            }
-            pos_vals.push(occ_vals);
-        }
-        visit(p, &pos_vals)?;
-        prev = pos_vals;
-    }
-    Ok(())
 }

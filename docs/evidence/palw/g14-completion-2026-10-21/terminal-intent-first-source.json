@@ -1,8 +1,0 @@
-{
-  "parent": "c0137d340842323de073cd01dda0a6238cf34d5d",
-  "source_sha256": {
-    "consensus/core/src/palw_court_shared_tir_builder_store_v1.rs": "1b649510aea2b8f4924d1e0e889fdf7d42429859f98f3ca03912a8d7fd2a9a04",
-    "consensus/core/src/palw_tir_public_fold_v1.rs": "afbfb165e31606f34e90b67818a29082dca94e4a0089f35dd9e8f129727151e8"
-  },
-  "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib shared_history_root_binds_public_original_policy_and_literal_producer_signature -- --nocapture --test-threads=1"
-}

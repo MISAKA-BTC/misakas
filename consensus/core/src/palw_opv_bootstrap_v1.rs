@@ -1,4 +1,4 @@
-//! **The OPV ↔ PALW Work Beacon startup cycle, closed** (`docs/design/palw/verification/opv-beacon-bootstrap.md`) — dormant behind
+//! **The OPV ↔ PALW Work Beacon startup cycle, closed** (`docs/design/palw/opv-beacon-bootstrap.md`) — dormant behind
 //! `palw_probabilistic_constraints_v1` and `palw_panel_free_v1` (refused at every real height); no `Params` field, no tag, no table.
 //!
 //! ```text
@@ -325,7 +325,7 @@ pub fn complete_check_post_v1(
 
 /// **The grinding choices per beacon the interim sampled policy is accounted with: unbounded (`2^128`).** Under the current source
 /// rule a LAST contributor — anyone who can post one job on an eligible class and produce its claim — grinds the job's free nonce
-/// offline before committing, so its choices are its offline work, not a count the chain caps (`docs/design/palw/verification/opv-beacon-bootstrap.md`
+/// offline before committing, so its choices are its offline work, not a count the chain caps (`docs/design/palw/opv-beacon-bootstrap.md`
 /// §6.2). Until a sealed-source beacon bounds it, a sampled scope must out-bit the adversary's whole hash budget.
 pub fn palw_onboarding_grinding_choices_v1() -> u128 {
     u128::MAX
@@ -552,7 +552,7 @@ impl PalwKernelRouteStateV1 {
             .collect()
     }
 
-    /// **Derived OPV eligibility of a single-program class at `daa`** (`docs/design/palw/verification/opv-beacon-bootstrap.md` §5, E1–E7). `ledger`
+    /// **Derived OPV eligibility of a single-program class at `daa`** (`docs/design/palw/opv-beacon-bootstrap.md` §5, E1–E7). `ledger`
     /// is this route's ledger at the block (the caller has it loaded).
     pub fn opv_eligibility_v1(
         &self,
@@ -1148,7 +1148,7 @@ const fn dep(node: PalwOpvNodeV1, requires: &'static [PalwOpvNodeV1], enforced_b
 
 use PalwOpvNodeV1 as N;
 
-/// **The graph, as the code enforces it** (`docs/design/palw/verification/opv-beacon-bootstrap.md` §3). `ApprovedPanelScheme` has no row: the
+/// **The graph, as the code enforces it** (`docs/design/palw/opv-beacon-bootstrap.md` §3). `ApprovedPanelScheme` has no row: the
 /// release approves no Panel beacon scheme (`approved_panel_beacon_policies_v1() = []`), so RFC-0010 V3 binds nothing yet.
 pub const PALW_OPV_DEPENDENCIES_V1: &[PalwOpvDependencyV1] = &[
     dep(N::KernelActive, &[N::Genesis], "KernelScheduleV1::standing_at (the route's template schedule)"),

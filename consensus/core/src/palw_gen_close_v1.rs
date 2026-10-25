@@ -896,41 +896,6 @@ pub fn check_gen_dissect_bottom_v1(
     }
 }
 
-/// **RFC-0024 A: [`check_gen_dissect_bottom_v1`] over the one position a checked position round named.**
-#[allow(clippy::too_many_arguments)]
-pub fn check_gen_dissect_position_bottom_v1(
-    phase: &crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
-    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
-    bottom: &PalwGenConeCloseV1,
-    row: &PalwGenClassRecordV1,
-    claim_class_id: &Hash64,
-    claim_execution_root: &Hash64,
-    narrowed: u64,
-    prompt_form: PalwPromptIdsFormV1,
-    limits: &DemandLimits,
-) -> PalwGenCloseOutcomeV1 {
-    if narrowed != phase.leaf_index() {
-        return Err(PalwGenCloseErrorV1::NotTheNarrowedLeaf { opened: phase.leaf_index(), narrowed });
-    }
-    let (v, close) = match open_cone_close_v1(bottom, row, claim_class_id, claim_execution_root, Some(narrowed), prompt_form)? {
-        Ok(opened) => opened,
-        Err(fault) => return Ok(Some(fault)),
-    };
-    match crate::palw_gen_court_v1::palw_gen_check_dissect_position_bottom_with_v1(
-        &v.case(row),
-        &close,
-        phase,
-        narrowing,
-        crate::palw_gen_court_v1::PalwGenParamsV1::Carried,
-        limits,
-    )
-    .map_err(PalwGenCloseErrorV1::Refused)?
-    {
-        crate::palw_gen_court_v1::PalwGenVerdictV1::Acquitted => Ok(None),
-        crate::palw_gen_court_v1::PalwGenVerdictV1::Convicted { fault, .. } => Ok(Some(fault)),
-    }
-}
-
 /// **Check a generative decode close**: generated id `t` against its committed logits row. In a
 /// session the narrowed leaf must be a tile of that row.
 pub fn check_gen_decode_close_v1(

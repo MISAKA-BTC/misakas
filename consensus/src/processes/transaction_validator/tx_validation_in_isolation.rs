@@ -38,43 +38,20 @@ impl TransactionValidator {
         check_transaction_output_value_ranges(tx)?;
         check_duplicate_transaction_inputs(tx)?;
         check_gas(tx)?;
-        let original_inner = if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-            && tx.payload.starts_with(kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAGIC_V1)
-        {
-            if self.palw_tir_public_conviction_fence.is_none() {
-                return Err(TxRuleError::InvalidPalwFpPayload(
-                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
-                ));
-            }
-            // The bounded envelope decoder is not a source-validity or payment credential.
-            // Only the original FP checks below see this transient payload view.
-            let envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
-                .map_err(|_| {
-                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
-                })?;
-            let mut inner = tx.clone();
-            inner.payload = envelope.original_payload;
-            Some(inner)
-        } else if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+        let history_inner = if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
             && tx.payload.starts_with(kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
         {
             if self.palw_staged_public_court_fence.is_none() {
-                return Err(TxRuleError::InvalidPalwFpPayload(
-                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
-                ));
+                return Err(TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable));
             }
-            let envelope =
-                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload).map_err(|_| {
-                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
-                })?;
+            let envelope = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload)
+                .map_err(|_| TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable))?;
             let mut inner = tx.clone();
             inner.payload = envelope.original_payload;
             Some(inner)
-        } else {
-            None
-        };
+        } else { None };
         check_transaction_subnetwork(
-            original_inner.as_ref().unwrap_or(tx),
+            history_inner.as_ref().unwrap_or(tx),
             self.palw_panel_da_admissible,
             self.palw_prompt_ids_form,
             self.palw_lifecycle_undecodable_tolerated,
@@ -101,7 +78,7 @@ impl TransactionValidator {
         check_transaction_version(tx)
     }
 
-    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/design/pq/kaspa-pq-design-mldsa87.md): on a
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): on a
     /// PQ-active network **every** transaction output — native spend, coinbase
     /// (miner payout *and* validator-reward), and DNS-overlay — must use the sole
     /// standard ML-DSA-87 P2PKH script class, so no non-PQ output (legacy
@@ -276,29 +253,7 @@ impl TransactionValidator {
         // which arms it on a card and leaves testnet-11's cap where it is. Past that fence the two
         // fan-outs are bounded at their reserved slots, so the wider cap and the tighter builder
         // are one change and must arm together.
-        self.check_coinbase_outputs_bound(tx, self.mergeset_size_history.map_or(self.mergeset_size_limit, |h| h.upper_bound()))?;
-
-        for (i, output) in tx.outputs.iter().enumerate() {
-            if output.script_public_key.script().len() > self.coinbase_payload_script_public_key_max_len as usize {
-                return Err(TxRuleError::CoinbaseScriptPublicKeyTooLong(i));
-            }
-        }
-        Ok(())
-    }
-
-    /// Context-free decoding uses the largest declared bound. Block validation restores the exact
-    /// historical bound at the authenticated selected parent; the expected coinbase hash is also checked.
-    pub fn check_coinbase_dag_width(&self, tx: &Transaction, selected_parent_daa: u64) -> TxResult<()> {
-        if tx.is_coinbase()
-            && let Some(history) = self.mergeset_size_history
-        {
-            self.check_coinbase_outputs_bound(tx, history.get(selected_parent_daa))?;
-        }
-        Ok(())
-    }
-
-    fn check_coinbase_outputs_bound(&self, tx: &Transaction, mergeset_size_limit: u64) -> TxResult<()> {
-        let outputs_limit = mergeset_size_limit
+        let outputs_limit = self.mergeset_size_limit
             + 1
             + if self.palw_validator_payout_bounds_declared {
                 kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED
@@ -313,11 +268,16 @@ impl TransactionValidator {
             }
             // RFC-0009: a V4 receipt block is paid as two outputs (the miner leg and the builder's), so a ruleset that declares the
             // redemption may carry one more per mergeset block.
-            + if self.palw_receipt_v4_declared { mergeset_size_limit } else { 0 };
+            + if self.palw_receipt_v4_declared { self.mergeset_size_limit } else { 0 };
         if tx.outputs.len() as u64 > outputs_limit {
             return Err(TxRuleError::CoinbaseTooManyOutputs(tx.outputs.len(), outputs_limit));
         }
 
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if output.script_public_key.script().len() > self.coinbase_payload_script_public_key_max_len as usize {
+                return Err(TxRuleError::CoinbaseScriptPublicKeyTooLong(i));
+            }
+        }
         Ok(())
     }
 
@@ -1106,7 +1066,7 @@ mod tests {
 
 #[cfg(test)]
 mod pq_output_class_enforcement_tests {
-    //! kaspa-pq PQ-only (ADR-0019 §7 / docs/design/pq/kaspa-pq-design-mldsa87.md): the
+    //! kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): the
     //! consensus output-class rule. On a PQ-active network every transaction
     //! output — native, coinbase (miner + validator-reward), and DNS-overlay —
     //! must be ML-DSA P2PKH; there are no exemptions. Drives the private
@@ -1566,113 +1526,6 @@ mod pq_output_class_enforcement_tests {
         assert!(matches!(header(&scheduled, &v3, 1_500), Err(TxRuleError::PalwFpJobVersionAtHeight(_, 1_500))));
         // No fence: the header context is inert (isolation already refused V4).
         assert!(header(&dormant, &v3, u64::MAX).is_ok() && header(&dormant, &v4, 0).is_ok());
-
-        // Transport-only TFP fixture: these synthetic roots/signatures are not an admitted
-        // class, a paid allocation, or a finding of computational correctness.
-        let wrap = |tx: &Transaction| {
-            use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
-            use kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1;
-            use kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1;
-            use kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1;
-            let mut original: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).unwrap();
-            let c = &mut original.commitment;
-            let context = palw_fp_job_context_v3(
-                &c.job,
-                &PalwFpClassFactsV3 {
-                    model_profile_id: h(20),
-                    runtime_manifest_hash: h(21),
-                    runtime_class_id: h(22),
-                    shape_profile_id: c.job.class_id,
-                    cu_ruleset_id: h(23),
-                },
-                &PalwFpRunFactsV3 {
-                    decode_tokens_executed: c.decode_tokens_executed,
-                    stop_reason: c.stop_reason,
-                    full_logits_trace_root: c.trace_root,
-                    activation_leg_root: h(24),
-                    checkpoint_leg_root: h(25),
-                    step_leg_root: h(26),
-                    step_leaf_count: c.work_leaves,
-                },
-                b"tfp-ingress-test",
-            )
-            .unwrap();
-            c.execution_root = kaspa_consensus_core::palw_tir_step_v1::palw_tir_execution_root_v1(
-                &context.context_hash(),
-                &c.trace_root,
-                &c.job.class_id,
-                c.work_leaves,
-                &h(27),
-            );
-            let header = PalwPublicTirBindingHeaderV1 {
-                version: 1,
-                job_context: context,
-                artifact_root: h(28),
-                full_logits_trace_root: c.trace_root,
-                step_leaf_count: c.work_leaves,
-                step_merkle_root: h(27),
-                committed_execution_root: c.execution_root,
-            };
-            let pledge = PalwTirPublicCustodyPledgeV1 {
-                version: 1,
-                claim: kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(c),
-                producer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(c.job.executor_bond),
-                execution_root: c.execution_root,
-                job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(c),
-                source_id: h(29),
-                resource_plan_id: h(30),
-                maximum_custodians: 2,
-                accept_until_daa: 2_000,
-                material_until_daa: 4_000,
-                signature: vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
-            };
-            let envelope = PalwTirPublicFpEnvelopeV1 {
-                version: 1,
-                original_payload: borsh::to_vec(&original).unwrap(),
-                header,
-                pledge,
-                declared_rent_sompi: 1,
-                history_pledge: None,
-            };
-            let mut outer = tx.clone();
-            outer.payload = envelope.encode_v1().unwrap();
-            outer.finalize();
-            outer
-        };
-        let wrapped_v4 = wrap(&v4);
-        let new_lane = validator(PqEnforcementMode::Disabled)
-            .with_fp_decode_rules_fence(Some(ForkActivation::new(1_500)))
-            .with_tir_public_conviction_fence(Some(ForkActivation::new(1_000)));
-        assert!(matches!(header(&new_lane, &wrapped_v4, 999), Err(TxRuleError::InvalidPalwFpPayload(_))));
-        // The original V4 door still applies after TFP's own fence.
-        assert!(matches!(header(&new_lane, &wrapped_v4, 1_499), Err(TxRuleError::PalwFpJobVersionAtHeight(_, 1_499))));
-        assert!(header(&new_lane, &wrapped_v4, 1_500).is_ok());
-        assert!(matches!(header(&scheduled, &wrapped_v4, 1_500), Err(TxRuleError::InvalidPalwFpPayload(_))));
-        let mut old_lane_only = validator(PqEnforcementMode::Disabled);
-        old_lane_only.palw_staged_public_court_fence = Some(ForkActivation::always());
-        assert!(matches!(header(&old_lane_only, &wrapped_v4, 1_500), Err(TxRuleError::InvalidPalwFpPayload(_))));
-        let mut funded = wrapped_v4.clone();
-        funded.inputs.push(kaspa_consensus_core::tx::TransactionInput {
-            previous_outpoint: kaspa_consensus_core::tx::TransactionOutpoint::new(
-                kaspa_consensus_core::tx::TransactionId::from_u64_word(31),
-                0,
-            ),
-            signature_script: vec![],
-            sequence: u64::MAX,
-            sig_op_count: 0,
-        });
-        funded.outputs.push(TransactionOutput { value: 1, script_public_key: legacy_spk() });
-        funded.finalize();
-        assert!(new_lane.validate_tx_in_isolation(&funded).is_ok());
-        assert!(matches!(old_lane_only.validate_tx_in_isolation(&funded), Err(TxRuleError::InvalidPalwFpPayload(_))));
-        let identity = wrapped_v4.id();
-        let payload = wrapped_v4.payload.clone();
-        assert!(header(&new_lane, &wrapped_v4, 1_500).is_ok());
-        assert_eq!(wrapped_v4.id(), identity);
-        assert_eq!(wrapped_v4.payload, payload, "the original-payload view must never replace the actual outer transaction");
-        let mut malformed = wrapped_v4;
-        malformed.payload.truncate(8);
-        assert!(matches!(header(&new_lane, &malformed, 1_500), Err(TxRuleError::InvalidPalwFpPayload(_))));
     }
 
     /// **RFC-0004 A6, both doors: an evaluation claim (FP job version 9) is admitted exactly from
@@ -2187,42 +2040,5 @@ mod audit_a2_isolation_tests {
         let unarmed = tv(false);
         assert_eq!(unarmed.validate_tx_in_isolation(&carrier(39)), Ok(()), "a decodable kind rides on either side of the fence");
         assert_match!(unarmed.validate_tx_in_isolation(&carrier(43)), Err(TxRuleError::InvalidPalwLifecyclePayload(_)));
-    }
-}
-
-#[cfg(test)]
-mod rfc18_width_tests {
-    use super::*;
-    use kaspa_consensus_core::config::params::{ForkActivation, ForkedParam, MAINNET_PARAMS};
-    use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutput, scriptvec};
-
-    #[test]
-    fn rfc18_width_coinbase_guard_uses_both_eras_in_isolation_and_exact_parent_in_context() {
-        let p = MAINNET_PARAMS.clone();
-        let tv = TransactionValidator::new_for_tests(
-            p.max_tx_inputs,
-            p.max_tx_outputs,
-            p.max_signature_script_len,
-            p.max_script_public_key_len,
-            p.coinbase_payload_script_public_key_max_len,
-            p.coinbase_maturity(),
-            10,
-            Default::default(),
-        )
-        .with_mergeset_size_history(ForkedParam::new(10, 30, ForkActivation::new(100)));
-        let n = 30 + 1 + kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS;
-        let tx = Transaction::new(
-            0,
-            vec![],
-            (0..n).map(|_| TransactionOutput { value: 1, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x51)) }).collect(),
-            0,
-            kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE,
-            0,
-            vec![],
-        );
-        assert!(tv.check_coinbase_in_isolation(&tx).is_ok());
-        assert!(matches!(tv.check_coinbase_dag_width(&tx, 99), Err(TxRuleError::CoinbaseTooManyOutputs(..))));
-        assert!(tv.check_coinbase_dag_width(&tx, 100).is_ok());
-        assert!(tv.check_coinbase_dag_width(&tx, 99).is_err(), "reorg restores the bound");
     }
 }

@@ -80,16 +80,7 @@ const PALW_SIGNED_REGISTRATION_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/onboardi
 /// attested); the liability is how long it stays refutable (and reserved) — it equals the kernel ledger's own liability horizon.
 pub const PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1: u64 = 100 * SOMPI_PER_KASPA;
 pub const PALW_ONBOARDING_BINDING_WINDOW_DAA_V1: u64 = 40;
-/// User decision 2026-10-18 (ADR-0185 note): derived, not picked — the binding stays refutable through the latest conformance pass
-/// its class can reach (the binding window, then the paid-source beacon's delay + collection window (≥ a paid source's lifetime,
-/// ADR-0185 §4) + depth, the evidence deadline and the challenge window), so the post-pass DA-loss eligibility rule keeps its
-/// meaning. Was 200, which ended before any paid-source conformance could pass.
-pub const PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1: u64 = PALW_ONBOARDING_BINDING_WINDOW_DAA_V1
-    + crate::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_DELAY_DAA_V1
-    + crate::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_WINDOW_DAA_V1
-    + crate::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_DEPTH_DAA_V1
-    + crate::palw_conformance_evidence_v1::PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1
-    + crate::palw_conformance_evidence_v1::PALW_CONFORMANCE_CHALLENGE_WINDOW_DAA_V1;
+pub const PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1: u64 = 200;
 /// The challenger's share of a refuted binding's slash (permille); the rest is burned (the slash's burn at release). The PALW reporter
 /// share of ADR-0032 (49 %), the route's one rate (`PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`).
 pub const PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1: u64 =
@@ -152,10 +143,14 @@ impl Params {
         self.palw_signed_registration_v1.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa_score))
     }
 
-    /// **The fence's record gate** (lane g14p/kernel-route, U03/U04): needs `palw_probabilistic_constraints_v1` at or below it and a
-    /// pinned arm-readiness record (`crate::palw_kernel_route_arming_v1`; the pinned list is empty, so every armed height is refused).
+    /// **The fence's refusal**: it ships beside the kernel route, which no network can arm, so any armed height is refused.
     pub fn validate_palw_signed_registration_v1(&self) -> Result<(), PalwModeV2Error> {
-        self.validate_palw_kernel_route_fence_record_v1(crate::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1::SignedRegistrationV1)
+        match self.palw_signed_registration_v1 {
+            Some(f) if f != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
+                "palw_signed_registration_v1 cannot be armed: it is part of the kernel route's onboarding surface (G14, RFC-0014 §16), which no network can arm",
+            )),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -474,7 +469,7 @@ impl PalwKernelRouteStateV1 {
     /// **The onboarding gate's IDENTITY part** — everything [`Self::onboarding_gate_v1`] asks except DA16's artifact-lapse hold: kernel
     /// bound, the kernel class standing, the binding past its refutation horizon and unrefuted (a clock and proofs, never whether the
     /// bytes are served — the historical code `AVAILABILITY_REQUIRED` of a binding inside its horizon means only that), and the
-    /// conformance record. What the G14-for-rewards gate reads (ADR-0177; `docs/design/palw/verification/opv-beacon-bootstrap.md` §14.1).
+    /// conformance record. What the G14-for-rewards gate reads (ADR-0177; `docs/design/palw/opv-beacon-bootstrap.md` §14.1).
     pub fn onboarding_identity_gate_v1(&self, class: &Hash64, artifact_root: &Hash64, daa: u64) -> PalwOnboardingGateV1 {
         let Some(binding) = self.kernel_binding_v1(class) else {
             // A class with an artifact binding (live or refuted) has begun onboarding: it is held until it is kernel-bound. Only a class
@@ -735,17 +730,7 @@ impl PalwKernelRouteStateV1 {
                         AttemptBeaconV1::Unavailable { have: 0, need: policy.work_count_k }
                     });
                 };
-                if self.opt_in_seal_reveal_v6() {
-                    misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(
-                        &ctx,
-                        &contract.source,
-                        &sources,
-                        Some((&contract, &promises)),
-                        daa,
-                    )
-                } else {
-                    misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, daa)
-                }
+                misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, daa)
             } else if attempt.is_opt_in_source() {
                 let target = self.beacon_source_target_v4(&ctx.id())?;
                 let contract = misaka_palw_challenge::OptInContractV4 {
@@ -753,12 +738,7 @@ impl PalwKernelRouteStateV1 {
                     terms_id: target.terms.id(),
                     source_final_by: target.terms.final_by,
                 };
-                let sources = self.beacon_opt_in_sources_v4(&ctx.id())?;
-                if self.opt_in_seal_reveal_v6() {
-                    misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(&ctx, &contract, &sources, None, daa)
-                } else {
-                    misaka_palw_challenge::collect_opt_in_work_beacon_v4(&ctx, &contract, &sources, daa)
-                }
+                misaka_palw_challenge::collect_opt_in_work_beacon_v4(&ctx, &contract, &self.beacon_opt_in_sources_v4(&ctx.id())?, daa)
             } else {
                 misaka_palw_challenge::collect_sealed_work_beacon_v3(&ctx, &self.beacon_sealed_sources_v1()?, daa)
             };

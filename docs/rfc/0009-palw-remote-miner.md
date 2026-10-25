@@ -1,7 +1,5 @@
 # RFC-0009: PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -42,7 +40,7 @@ miner は chain の必要情報を取得・検証し、計算と署名が終わ�
 
 ## 1. 現行実装と解くべき結合
 
-`main` の公開ネットワークは `testnet-12`。旧 `testnet-11` の [free-prompt 運用文書](../history/networks/testnet-11/testnet11-free-prompt-mining.md)は、障害の具体例として有用だが、現在のパラメータ表として使わない。
+`main` の公開ネットワークは `testnet-12`。旧 `testnet-11` の [free-prompt 運用文書](../history/testnet11-free-prompt-mining.md)は、障害の具体例として有用だが、現在のパラメータ表として使わない。
 
 | 現行経路 | node-less 化に必要な変更 |
 | --- | --- |
@@ -90,7 +88,7 @@ attempt は claim を載せる**block 自体が work**である。外部 node �
 
 これらの prepare/build/quote/sign/submit/status 境界は SDK/CLI に分離し、Web UI も同じ実装を利用する。新しい API 名・wire field を既存 RPC に実装済みと扱わず、追加が必要なら schema/version と適合性 test を仕様化する。登録者の bond と carrier の fee payer は区別するが、**現行で Active registrant bond が必要な条件は維持**する。bond の設定も remote wallet の署名・提出で行え、ローカル Panel の稼働とは別である。
 
-[RFC04](0004-palw-model-improvement.md)、[Kernel design](../design/palw/models/versioned-kernels.md)、[RFC11](0011-permissionless-model-and-long-context-onboarding.md) の対象 profile と [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) の versioned Kernel 境界を守る。node-less 登録を admission の迂回路や Universal VM の導入理由にしない。未対応 Kernel、審査上限、未有効 fence は理由を返して停止する。
+[RFC04](0004-palw-model-improvement.md)、[Kernel design](../design/palw/versioned-kernels.md)、[RFC11](0011-permissionless-model-and-long-context-onboarding.md) の対象 profile と [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) の versioned Kernel 境界を守る。node-less 登録を admission の迂回路や Universal VM の導入理由にしない。未対応 Kernel、審査上限、未有効 fence は理由を返して停止する。
 
 ### 3.4 GAS は登録者が用意する: 固定登録費・carrier fee・担保を区別
 
@@ -165,7 +163,7 @@ storage receipt は**保管の約束**であり、将来の全 Panel からの�
 
 この客観的 court を用意できないなら「miner は送信後に必ず PC を切れて、配信事故の slash リスクもない」とは約束しない。その場合は miner 自身が provider を手配して責任を持つ段階で止める。
 
-**実装（lane DA16、2026-10-10 に ADR-0177 で再範囲化）:** provider court は claim 固有 material だけを対象にする（tags 150–153、休眠 fence `palw_provider_court_v1`、kernel route aux table 43–45）。lease の subject は kernel claim のみで、challenge unit は claim の committed position のみ。モデル／artifact bytes の可用性 lease（旧 `Artifact` subject）、READY/LAPSED、tag 104 の可用性 gate、モデル bytes 不提供への charge は合意から撤回した（bytes は decode 可能なまま fence 以下で従来どおり無判定で通り、fence 以上では常に拒否）。provider の charge のうち Final 前は challenger／demander に PALW reporter share（ADR-0032 の 49%、kernel route の accuser・demander と同率）を払い残りを burn、Final 後は全額 burn（自作自演の lapse でも損失は自己申告の有罪と同じ 51% 以上）。共通障害は claim を失効させ有罪にしない。偽 root・不正計算は miner の責任に残る。どの court も compel できる unit は claim 固有のものだけで、累積 scope（モデル bytes 開示 0、unit ごとに 1 回、(claim, 要求 operator) ごとに 16）を `palw_court_scope_v1` が一元判定する。設計・試験は [DA16 design](../design/palw/verification/da16-transport-and-provider-court.md) §2・§7。状態は implemented（armable ではない）。
+**実装（lane DA16、2026-10-10 に ADR-0177 で再範囲化）:** provider court は claim 固有 material だけを対象にする（tags 150–153、休眠 fence `palw_provider_court_v1`、kernel route aux table 43–45）。lease の subject は kernel claim のみで、challenge unit は claim の committed position のみ。モデル／artifact bytes の可用性 lease（旧 `Artifact` subject）、READY/LAPSED、tag 104 の可用性 gate、モデル bytes 不提供への charge は合意から撤回した（bytes は decode 可能なまま fence 以下で従来どおり無判定で通り、fence 以上では常に拒否）。provider の charge のうち Final 前は challenger／demander に PALW reporter share（ADR-0032 の 49%、kernel route の accuser・demander と同率）を払い残りを burn、Final 後は全額 burn（自作自演の lapse でも損失は自己申告の有罪と同じ 51% 以上）。共通障害は claim を失効させ有罪にしない。偽 root・不正計算は miner の責任に残る。どの court も compel できる unit は claim 固有のものだけで、累積 scope（モデル bytes 開示 0、unit ごとに 1 回、(claim, 要求 operator) ごとに 16）を `palw_court_scope_v1` が一元判定する。設計・試験は [DA16 design](../design/palw/da16-transport-and-provider-court.md) §2・§7。状態は implemented（armable ではない）。
 
 ## 5. executor と receipt block builder の分離
 
@@ -324,7 +322,3 @@ readiness/RPCは予算残高、共通reuse_not_before、残存責任headroomとr
 [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
-
-## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
-
-- 「計算と署名が終われば PC を止められる」は、既存の TIR court で root claim と各 round に Miner の claim bond の鍵の署名が要ることと、そのままでは両立しない。provider は bytes を持っていても Miner の署名を作れず、第三者 relay は作成済みの署名しか運べない。profile ごとに、資料を保持する者・新しい応答を署名する者・投稿を中継する者・不履行の責任者を明記し、現行の署名方式を保つなら court の義務が終わるまで利用可能な court signer を残す。PC の完全停止を保つなら、限定された応答権限の委任か、追加署名なしで提出できる認証済みの終了証拠の経路を別仕様として採択・検証する([RFC-0026](0026-court-policy-master-contract.md) §6、F04)。資金移動用の鍵を provider に渡すことを解決策にしない。

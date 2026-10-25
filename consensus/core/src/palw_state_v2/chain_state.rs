@@ -138,9 +138,6 @@ impl PalwChainStateV2 {
             improvement_eval_jobs: BTreeMap::new(),
             panel_v3: None,
             legacy_disputes: BTreeMap::new(),
-            tir_designated: Default::default(),
-            funded_escrows: BTreeMap::new(),
-            d2_readiness: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
             class_semantics: BTreeMap::new(),
             claim_semantics: BTreeMap::new(),
@@ -151,12 +148,6 @@ impl PalwChainStateV2 {
             staged_due: BTreeSet::new(),
             staged_by_owner: BTreeSet::new(),
             staged_inventory_by_owner: BTreeSet::new(),
-            staged_tir_by_owner: BTreeSet::new(),
-            staged_tir_by_claim: BTreeMap::new(),
-            staged_court_service_by_claim: BTreeMap::new(),
-            staged_tir_claims_by_producer: BTreeSet::new(),
-            staged_tir_responders: BTreeSet::new(),
-            staged_tir_preparers: BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
             staged_selected_responders: BTreeSet::new(),
             staged_flat_responders: BTreeSet::new(),
@@ -256,28 +247,12 @@ impl PalwChainStateV2 {
     /// bundle lists as unanswerable (the 2M row) keeps the mercy, and below the fence this is v1.
     pub(crate) fn court_root_evidence_is_buildable_v2(
         &self,
-        claim: &PalwClaimStateV2,
+        class_id: &Hash64,
         offence_attribution_active: bool,
         params: &PalwStateParamsV2,
     ) -> bool {
-        self.court_root_evidence_is_buildable_v1(&claim.class_id)
-            || (offence_attribution_active && !self.held_claim_is_unanswerable_v2(params, claim))
-    }
-
-    /// Keep pre-fence claims on their original mercy reading. Only a claim
-    /// accepted under the memory/routing court reads the new held route from its
-    /// immutable registered profile. Missing held profile data fails closed.
-    pub fn held_claim_is_unanswerable_v2(&self, params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
-        if !params.memory_routing_court_from_daa().is_some_and(|at| claim.accepted_daa >= at) {
-            return params.held_class_is_unanswerable_v1(&claim.class_id);
-        }
-        match self.fp_work_profile_of(&claim.class_id) {
-            Some(profile) if profile.shape_profile_id() == claim.class_id => {
-                crate::palw_class_admission_v2::palw_held_class_unanswerable_v2(profile, true).is_some()
-            }
-            Some(_) => true,
-            None => params.held_class_is_unanswerable_v1(&claim.class_id) || self.class_is_held_v1(&claim.class_id),
-        }
+        self.court_root_evidence_is_buildable_v1(class_id)
+            || (offence_attribution_active && !params.held_class_is_unanswerable_v1(class_id))
     }
 
     /// ADR-0071 SA-3: the production fact recorded under `key`, if the chain holds one.
@@ -656,35 +631,6 @@ impl PalwChainStateV2 {
 
     pub fn model_versions_of(&self, line_id: &Hash64) -> Vec<(u32, &crate::palw_model_lines_v1::PalwModelVersionV1)> {
         self.model_versions.range((*line_id, 0)..=(*line_id, u32::MAX)).map(|((_, n), v)| (*n, v)).collect()
-    }
-
-    /// ADR-0191 step B: the designated-custodian record of `key`, written only by a tag-245 event once its fence is in force.
-    pub fn tir_designated_record(
-        &self,
-        key: &crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1,
-    ) -> Option<&crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1> {
-        self.tir_designated.records.get(key)
-    }
-
-    /// **G14 lane escrow-rfc08 (RFC-0035 A): the rooted funded-escrow rows**, by contract id — what the UTXO spend filter locks
-    /// (the unsettled rows' outpoints, `crate::palw_funded_escrow_v1::palw_escrow_rows_by_outpoint_v1`). Empty on every network.
-    pub fn funded_escrows_v1(&self) -> &BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1> {
-        &self.funded_escrows
-    }
-
-    /// G14 item 6 (ADR-0200 C1): the D2 readiness registry (recorded tag-230 roots and their disclosure cases). Empty on every network.
-    pub fn d2_readiness_v1(&self) -> &crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1 {
-        &self.d2_readiness
-    }
-
-    /// ADR-0191 step B: every designated-custodian record in the registry (empty below the fence).
-    pub fn tir_designated_records(
-        &self,
-    ) -> &std::collections::BTreeMap<
-        crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1,
-        crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1,
-    > {
-        &self.tir_designated.records
     }
 
     pub fn model_proposals_of(&self, line_id: &Hash64) -> Vec<(&Hash64, &crate::palw_model_lines_v1::PalwModelProposalV1)> {
@@ -1333,25 +1279,6 @@ impl PalwChainStateV2 {
             .collect()
     }
 
-    /// **Every sequence this CLASS has been paid to compute** (compute-claim audit CX-01/CX-02): the ids and the prompt length of
-    /// every unexpired `fp_claim_prompts` row — prompt rows and, past `palw_fp_answer_accounting_v1`, `prompt ‖ answer` rows —
-    /// for [`crate::palw_fp_answer_accounting_v1::palw_fp_answer_covered_positions_v1`].
-    pub fn fp_paid_sequences_of_v1(&self, class_id: &Hash64, now_daa: u64) -> Vec<(&[u32], u32)> {
-        self.fp_claim_prompts
-            .range((*class_id, PALW_BOND_KEY_V2_MIN, Hash64::default())..)
-            .take_while(|((class, _, _), _)| class == class_id)
-            .filter(|(_, row)| row.expires_daa > now_daa)
-            .map(|(_, row)| (row.prompt_token_ids.as_slice(), row.prompt_tokens))
-            .collect()
-    }
-
-    /// **G14 R4 (node replay input): the prompt ids `claim` was accepted with**, when its acceptance kept them (the ADR-0145 row,
-    /// written for compute-priced claims and swept at its retention). `None` otherwise: the caller then has no public input to
-    /// replay, never a guessed one.
-    pub fn fp_claim_prompt_ids_v1(&self, class_id: &Hash64, bond: &PalwBondKeyV2, claim: &Hash64) -> Option<Vec<u32>> {
-        self.fp_claim_prompts.get(&(*class_id, *bond, *claim)).map(|row| row.prompt_token_ids.clone())
-    }
-
     pub fn work_target(&self) -> Option<&crate::palw_work_target_v1::PalwWorkTargetV2> {
         self.work_target.as_ref()
     }
@@ -1510,7 +1437,7 @@ impl PalwChainStateV2 {
         })
     }
 
-    /// **RFC-0010 × G14 — is an accusation pending on this claim?** (agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §2.) A
+    /// **RFC-0010 × G14 — is an accusation pending on this claim?** (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §2.) A
     /// data-availability session (a seat's or a non-seat's) is open on it, a court session (bisection or dissection) is open on
     /// it, or it is `DefaultDisputed`. THE one predicate every V3 non-fraud end reads: while it holds, no expiry, redraw or
     /// seal/beacon absence closes the claim — the engine's receipt clock pauses, the engine's own end is deferred (the V2 void
@@ -1519,14 +1446,10 @@ impl PalwChainStateV2 {
     /// four per seat, each at most `W_disclose`; court sessions by the court's own capacity and backstop.
     pub fn palw_accusation_pending_v1(&self, claim_id: &Hash64) -> bool {
         // Lane LG14-A: a live dispute reservation is a pending accusation (empty below `palw_legacy_public_filer_v1`).
-        // G14 lane r6-d1-release (D1): a court service binding is not an accusation — it must not pause or defer the claim's Final
-        // (open courts and shared demands on the claim still count through their own rows below).
         self.palw_legacy_dispute_holds_v1(claim_id)
             || self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
             || self.open_courts_by_claim.get(claim_id).is_some_and(|open| *open > 0)
             || matches!(self.claims.get(claim_id).map(|claim| &claim.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
-            // G14 R5/R6: an outside owner's open demand on an ORIGINAL TIR frame (empty below `palw_tir_public_conviction_v1`).
-            || self.staged_tir_public_demand_open_v1(claim_id)
     }
 
     /// **A V3 claim's S2 licence held by a pending accusation** (DL-1's G14 row): the engine bound it (its record exists, released
@@ -1915,17 +1838,6 @@ impl PalwChainStateV2 {
     /// at [`PALW_RECEIPT_TARGET_SEED_V1`] and only the receipt retarget moves it, so a test that
     /// needs a generous or a stingy receipt target sets it here rather than through a registration
     /// field that no longer reaches this slot.
-    /// Tests only: mark `open` court sessions on `claim_id` (0 removes the entry) — what
-    /// [`Self::palw_accusation_pending_v1`] reads.
-    #[cfg(test)]
-    pub(crate) fn set_open_courts_for_tests(&mut self, claim_id: Hash64, open: u32) {
-        if open == 0 {
-            self.open_courts_by_claim.remove(&claim_id);
-        } else {
-            self.open_courts_by_claim.insert(claim_id, open);
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn set_receipt_target_for_tests(&mut self, class_id: Hash64, target: u128) {
         self.receipt_targets.insert(class_id, PalwClassTargetV2 { target });
@@ -1942,15 +1854,6 @@ impl PalwChainStateV2 {
         self.model_lifecycles.insert(class_id, row);
     }
 
-    /// RFC-0023 tests: put a claim into / take it out of the unresolved index (the fold keeps it in lockstep with every claim write).
-    #[cfg(test)]
-    pub(crate) fn set_unresolved_for_tests(&mut self, blue_score: u64, claim_id: Hash64, open: bool) {
-        if open {
-            self.unresolved.insert((blue_score, claim_id));
-        } else {
-            self.unresolved.remove(&(blue_score, claim_id));
-        }
-    }
     /// Tests only: the rows ADR-0152 v2's adjudicator resolves a false-Valid target from — a
     /// claim, its bound panel, its liability row — and the session indices that make it wait, for
     /// `palw_offence_attribution_v1`'s tests, which judge evidence against state without folding a
@@ -1988,12 +1891,6 @@ impl PalwChainStateV2 {
     #[cfg(test)]
     pub(crate) fn set_class_for_tests(&mut self, class_id: Hash64, class: PalwClassStateV2) {
         self.classes.insert(class_id, class);
-    }
-
-    /// Tests only (G14 r6): replace a claim row in place (e.g. voided by a conviction the test does not fold).
-    #[cfg(test)]
-    pub(crate) fn set_claim_for_tests(&mut self, claim_id: Hash64, claim: PalwClaimStateV2) {
-        self.claims.insert(claim_id, claim);
     }
 
     /// **What `bond` can still lock for a `Valid` signature at `now_daa`**: its posted collateral
@@ -2459,125 +2356,6 @@ impl PalwChainStateV2 {
         self.staged_courts.get(key)
     }
 
-    /// **G14 lane court-f02: every native duty clock of `claim`** (RFC-0028 history read by the F02 attribution). A scan of the
-    /// staged rows: duty clocks are keyed by duty id, not claim.
-    /// G14 lane r5-f02-wire: read through the per-claim index (`staged_court_service_by_claim`, kind 1), O(clocks of this claim).
-    pub fn court_duty_clocks_for_claim_v1(&self, claim: Hash64) -> Vec<&crate::palw_court_duty_clock_v1::CourtDutyClockV1> {
-        let Some(rows) = self.staged_court_service_by_claim.get(&claim) else { return Vec::new() };
-        rows.iter()
-            .filter(|(kind, _, _)| *kind == crate::palw_staged_court_state_v1::COURT_INDEX_DUTY_CLOCK_V1)
-            .filter_map(|(_, _, key)| match self.staged_courts.get(key) {
-                Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock)) if clock.claim == claim => {
-                    Some(clock.as_ref())
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// The full-scan reading of [`Self::court_duty_clocks_for_claim_v1`] and [`Self::court_shared_initial_notice_daa_v1`] — the
-    /// index's specification; tests assert the index agrees with it.
-    pub fn court_service_claim_scan_v1(&self, claim: Hash64) -> (usize, Option<u64>) {
-        use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as R;
-        let clocks = self.staged_courts.values().filter(|r| matches!(r, R::CourtDutyClock(c) if c.claim == claim)).count();
-        let notice = self
-            .staged_courts
-            .values()
-            .filter_map(|r| match r {
-                R::CourtSharedQuery(q) if q.claim == claim => Some(q.opened_daa),
-                _ => None,
-            })
-            .min();
-        (clocks, notice)
-    }
-
-    /// **G14 lane court-f02 (RFC-0031): the DAA of `claim`'s initial shared notice** — the earliest native shared request row
-    /// (`CourtSharedQuery`) recorded for it, if any. Rooted: the rows come and go with the staged-court delta on reorg.
-    /// G14 lane r5-f02-wire: the index's first kind-0 entry is the earliest notice (entries sort by `(kind, daa, key)`).
-    pub fn court_shared_initial_notice_daa_v1(&self, claim: Hash64) -> Option<u64> {
-        self.staged_court_service_by_claim
-            .get(&claim)?
-            .iter()
-            .find(|(kind, _, _)| *kind == crate::palw_staged_court_state_v1::COURT_INDEX_SHARED_NOTICE_V1)
-            .map(|(_, daa, _)| *daa)
-    }
-
-    /// Ordered read of staged rows in `[from, to]` (RFC-0032 A material intake).
-    pub fn staged_court_range_v1<'a>(
-        &'a self,
-        from: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
-        to: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
-    ) -> impl Iterator<Item = (&'a crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, &'a crate::palw_staged_court_state_v1::PalwStagedCourtRowV1)> + 'a {
-        self.staged_courts.range(*from..=*to)
-    }
-
-    /// Derived lifecycle consistency only, not proof of a new paid acquisition
-    /// or raw-source grant. Admission remains disabled until the full native
-    /// allocation and distinct custody pledge/grants are wired.
-    pub(super) fn assert_tir_acquisition_indices_v1(&self) -> Result<(), PalwStateV2Error> {
-        use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
-        let mut owners = BTreeSet::new();
-        let mut claims = BTreeMap::<Hash64, BTreeSet<(u64, Key)>>::new();
-        let mut responders = BTreeSet::new();
-        let mut preparers = BTreeSet::new();
-        let mut producers = BTreeSet::new();
-        let mut due = BTreeSet::new();
-        let mut holds = BTreeSet::new();
-        let now = self.last_point().map(|p| p.daa_score).unwrap_or(0);
-        for (key, row) in &self.staged_courts {
-            if matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..)) {
-                let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
-                due.insert((at, *key));
-                holds.extend(row_holds);
-            }
-            if let Some((owner, claim, allocation, _)) = palw_staged_court_fold_v1::tir_index_metadata_v1(*key, row) {
-                owners.insert((owner, claim, allocation));
-                responders.extend(palw_staged_court_fold_v1::tir_response_index_rows_v1(*key, row));
-            }
-            preparers.extend(palw_staged_court_fold_v1::tir_preparation_index_rows_v1(*key, row));
-            producers.extend(palw_staged_court_fold_v1::tir_claim_producer_index_v1(*key, row));
-            if let Some((claim, until)) = palw_staged_court_fold_v1::tir_source_index_metadata_v1(*key, row) {
-                claims.entry(claim).or_default().insert((until, *key));
-                let retained_until = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, claim)
-                    .map(|frame| frame.plan_v1().terms.material_until_daa)
-                    .or_else(|| self.staged_claim_contract_v1(&claim).map(|contract| contract.terms.material_until_daa));
-                if now < until && retained_until.is_none_or(|retained_until| retained_until < until) {
-                    return Err(PalwStateV2Error::CarriageInconsistent(
-                        "live TIR acquisition lost its original claim/public-source retention hold".into(),
-                    ));
-                }
-            }
-            let material = match row {
-                Row::TirRawChunk(row) => Some((row.acquisition, row.source_id, row.material_until_daa)),
-                Row::TirAcceptedBody(row) => Some((row.acquisition, row.source_id, row.material_until_daa)),
-                _ => None,
-            };
-            if let Some((acquisition, source, until)) = material.filter(|(_, _, until)| now < *until) {
-                let Some(Row::TirAcquisition(owner)) = self.staged_courts.get(&acquisition) else {
-                    return Err(PalwStateV2Error::CarriageInconsistent("live TIR public material lost its acquisition scope".into()));
-                };
-                let c = owner.owned.contract_v1();
-                if c.source_id != source || c.terms.material_until_daa != until {
-                    return Err(PalwStateV2Error::CarriageInconsistent("TIR public material changed original source/TTL".into()));
-                }
-            }
-        }
-        let actual_due: BTreeSet<_> = self.staged_due.iter().filter(|(_, key)| {
-            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..))
-        }).copied().collect();
-        let actual_holds: BTreeSet<_> = self.staged_holds.iter().filter(|(_, _, key)| {
-            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..))
-        }).copied().collect();
-        if owners != self.staged_tir_by_owner || claims != self.staged_tir_by_claim || responders != self.staged_tir_responders
-            || preparers != self.staged_tir_preparers
-            || producers != self.staged_tir_claims_by_producer
-            || due != actual_due || holds != actual_holds
-        {
-            return Err(PalwStateV2Error::CarriageInconsistent("TIR acquisition lifecycle indexes differ from rooted rows".into()));
-        }
-        Ok(())
-    }
-
     /// **RFC-0002 F7: a court session's IR history dissection**, if its root claim was admitted.
     pub fn tir_dissection_v1(&self, session_id: &Hash64) -> Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1> {
         self.tir_dissections.get(session_id).map(|phase| phase.as_ref())
@@ -2708,57 +2486,6 @@ impl PalwChainStateV2 {
 
     pub fn safe_frontier(&self) -> (u64, BlockHash) {
         (self.safe_frontier_blue_score, self.safe_frontier)
-    }
-
-    /// **RFC-0018, tests only**: set the state's point (the fold's last chain block), as a committed post-state carries it.
-    #[cfg(test)]
-    pub(crate) fn set_last_point_for_tests(&mut self, point: Option<PalwBlockContextV2>) {
-        self.last_point = point;
-    }
-
-    /// **RFC-0018, tests only**: set or remove one bond row (the attack acceptance fixtures' registries).
-    #[cfg(test)]
-    pub(crate) fn set_bond_for_tests(&mut self, key: PalwBondKeyV2, bond: Option<PalwBondStateV2>) {
-        match bond {
-            Some(bond) => self.bonds.insert(key, bond),
-            None => self.bonds.remove(&key),
-        };
-    }
-
-    /// **RFC-0018, tests only**: write one kernel-route aux row (creating an interim-policy route when there is none).
-    #[cfg(test)]
-    pub(crate) fn set_kernel_aux_row_for_tests(&mut self, table: u8, key: Vec<u8>, bytes: Option<Vec<u8>>) {
-        let route = self.kernel_route.get_or_insert_with(|| {
-            crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new_typed(
-                crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
-                None,
-                None,
-                misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 0, burned: 0 },
-            )
-        });
-        match bytes {
-            Some(bytes) => {
-                route.aux.insert((table, key), bytes);
-            }
-            None => {
-                route.aux.remove(&(table, key));
-            }
-        }
-    }
-
-    /// **RFC-0018**: the kernel route, for the security certification's aux-table reads (`crate::palw_security_certification_v1`).
-    pub fn kernel_route_state_v1(&self) -> Option<&crate::palw_kernel_route_v1::PalwKernelRouteStateV1> {
-        self.kernel_route.as_ref()
-    }
-
-    /// **RFC-0018 §7.7**: the accepted blue score of the oldest unresolved claim (`None`: nothing unresolved) — the pruning-progress
-    /// rule's first bound.
-    /// The open claims in acceptance order (`(accepted blue score, claim)`), for RFC-0023 stage 1's resolved prefix.
-    pub fn unresolved_iter(&self) -> impl Iterator<Item = (u64, &Hash64)> + '_ {
-        self.unresolved.iter().map(|(blue_score, id)| (*blue_score, id))
-    }
-    pub fn unresolved_first_blue_score_v1(&self) -> Option<u64> {
-        self.unresolved.iter().next().map(|(blue_score, _)| *blue_score)
     }
 
     pub fn last_point(&self) -> Option<&PalwBlockContextV2> {
@@ -2951,21 +2678,6 @@ impl PalwChainStateV2 {
         if !self.legacy_disputes.is_empty() {
             state.update(b"legacy_disputes/v1");
             state.update(collection_root(b"legacy_disputes", &self.legacy_disputes).as_byte_slice());
-        }
-        // **ADR-0191 step B.** Its own block: empty until a designated event is folded past its fence, which nothing below it can do.
-        if !self.tir_designated.records.is_empty() {
-            state.update(b"tir_designated/v1");
-            state.update(collection_root(b"tir_designated", &self.tir_designated.records).as_byte_slice());
-        }
-        // **G14 lane escrow-rfc08 (RFC-0035 A).** Its own block: empty until a funded original installs a row, which nothing can yet.
-        if !self.funded_escrows.is_empty() {
-            state.update(b"funded_escrow/v1");
-            state.update(collection_root(b"funded_escrow", &self.funded_escrows).as_byte_slice());
-        }
-        // **G14 item 6 (ADR-0200 C1).** Its own block: empty until a root is recorded with an adopted draw cap, which nothing can yet.
-        if !self.d2_readiness.is_empty() {
-            state.update(b"d2_readiness/v1");
-            state.update(collection_root(b"d2_readiness", &self.d2_readiness).as_byte_slice());
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
@@ -3401,7 +3113,6 @@ impl PalwChainStateV2 {
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;
-        self.assert_claim_local_context_v1(params)?;
         self.assert_material_release_recovery_consistency_v2(params)?;
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
@@ -3565,8 +3276,6 @@ impl PalwChainStateV2 {
                         let final_safe = |c: u128| crate::palw_weight_cap_v1::palw_weight_final_safe_v1(params, claim, c);
                         // Lane BUDGET: a budgeted claim weighs what its Final was granted, in both sums.
                         let credited = self.bond_budget_weight_or(id, final_safe(contribution));
-                        // RFC-0018 Gate C's final-weight site, re-derived through the same predicate (identity below its fence).
-                        let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, self, id, claim, credited);
                         let ceiling = self.bond_budget_weight_or(id, final_safe(canonical.unwrap_or(claim.pwu as u128)));
                         safe = safe.checked_add(credited).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                         safe_ceiling = safe_ceiling.checked_add(ceiling).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
@@ -3581,8 +3290,6 @@ impl PalwChainStateV2 {
                             .ok_or(PalwStateV2Error::Overflow("consistency spent weight"))?;
                         // Lane BUDGET: a budgeted claim's spends added what they were granted.
                         let spent_weight = self.bond_budget_weight_or(id, spent_weight);
-                        // RFC-0018 Gate C's receipt-spend site, re-derived (identity below its fence).
-                        let spent_weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, self, id, claim, spent_weight);
                         // **The free-prompt lane is NOT priced by Decision 7** — see the open
                         // question recorded at `apply_receipt_spend`. It contributes identically to
                         // both sums, so the bound below neither tightens nor loosens around it.
@@ -3612,10 +3319,9 @@ impl PalwChainStateV2 {
                 }
                 _ => {
                     // ADR-0160 F-W: a new-rule claim weighs through its bond's capped term, summed below.
-                    // RFC-0018 Gate C's provisional site, re-derived (identity below its fence).
                     if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(params, claim) {
                         immature = immature
-                            .checked_add(crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(params, claim))
+                            .checked_add(claim.immature_contribution)
                             .ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
                     }
                     let entry = exposure.entry(claim.bond).or_insert(0);
@@ -4015,41 +3721,6 @@ impl PalwChainStateV2 {
         if inventory != self.staged_inventory_by_owner {
             return Err(PalwStateV2Error::CarriageInconsistent("artifact inventory owner index differs from paid attempts".into()));
         }
-        self.assert_tir_acquisition_indices_v1()?;
-        if let Some(service) = self.court_service_state_v1() {
-            service.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        }
-        // G14 lane r6-d1-release: the released form's strict ownership/record/edge check (also run by the row codec check).
-        if let Some(row) = self.court_service_row_v3_v1() {
-            row.check().map_err(PalwStateV2Error::CarriageInconsistent)?;
-        }
-        for row in self.staged_courts.values() {
-            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
-                clock.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-            use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as R;
-            if let R::CourtArchiveProgress(r)=row {
-                // Preserve local construction refusal instead of converting it
-                // into a malformed state/offence while loading accepted bytes.
-                r.check_loaded_context(self)?;
-                continue;
-            }
-            match row {
-                R::CourtSharedContext(c)=>c.check_context(self),
-                R::CourtSharedQuery(q)=>q.check_context(self),
-                R::CourtSharedIds(ids)=>ids.check_context(self),
-                R::CourtSharedResponse(r)=>r.check_context(self),
-                R::CourtEndArchive(r)=>r.check_loaded_context(self),
-                R::CourtCloseReceipt(r)=>r.check_loaded_context(self),
-                R::CourtSharedRoot(r)=>r.check_loaded_context(self),
-                R::CourtSharedRound(r)=>r.check_loaded_context(self),
-                R::CourtSharedBottom(r)=>r.check_loaded_context(self),
-                R::CourtSharedStream(s)=>s.check_context(self),
-                R::CourtSharedChunk(c)=>c.check_context(self),
-                R::CourtMaterialDraft(d)=>d.check_context(self),
-                R::CourtMaterial(m)=>m.check_context(self),_=>Ok(()),
-            }.map_err(PalwStateV2Error::CarriageInconsistent)?;
-        }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
@@ -4069,7 +3740,7 @@ impl PalwChainStateV2 {
                 continue;
             }
             // Lane LG14-A: a claim a live dispute reservation holds owes none (DL-1's reservation row; empty below the fence).
-            if self.palw_legacy_dispute_holds_v1(id) || self.court_service_holds_retirement_v1(id, claim) {
+            if self.palw_legacy_dispute_holds_v1(id) {
                 continue;
             }
             // RFC-0010: the engine clocks a claim it tracks until the claim is licensed (it owes no V2 deadline).
@@ -4538,7 +4209,6 @@ impl PalwChainStateV2 {
         }
         let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
-            if self.court_service_holds_retirement_v1(id, claim) { continue; }
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {

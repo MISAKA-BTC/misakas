@@ -1,6 +1,0 @@
-{
-  "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-refactor-complete-slwbq7ek/panel-tests",
-  "sha256": "2a0e289782bd2e6efb6fab22f74adbb34ff6657233cf1b0d4750ef4a67648eef",
-  "source_pins": "worker-fifth-build-source-hashes.json",
-  "build_and_tests": "worker-panel-tests-final.log"
-}

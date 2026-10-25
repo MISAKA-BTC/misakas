@@ -125,50 +125,6 @@ impl PruningProcessor {
         }
     }
 
-    /// G14 capacity lane: delete the RPC-only EVM index rows of a block being pruned (see
-    /// [`crate::model::stores::evm::gc_pruned_block_rpc_indexes_batch`]). A read failure skips the
-    /// GC for this block (the rows stay, as they did before this lane) — it never fails the prune.
-    fn gc_pruned_block_evm_rpc_indexes(&self, batch: &mut WriteBatch, current: BlockHash) {
-        use crate::model::stores::evm::{
-            EvmHeaderStoreReader, EvmPayloadStoreReader, EvmReceiptsStoreReader, EvmRpcIndexStoresRef,
-            gc_pruned_block_rpc_indexes_batch,
-        };
-        use kaspa_database::prelude::StoreResultExt;
-        let payload = self.evm_payload_store.get(current).optional().ok().flatten();
-        let receipts = self.evm_receipts_store.get(current).optional().ok().flatten();
-        let evm_number = self.evm_header_store.get(current).optional().ok().flatten().map(|h| h.evm_number);
-        if payload.is_none() && receipts.is_none() && evm_number.is_none() {
-            return; // no EVM rows for this block (every non-EVM network / pre-activation block)
-        }
-        #[cfg(feature = "evm")]
-        let payload_tx_hashes: Vec<kaspa_hashes::EvmH256> =
-            payload.as_ref().map(|p| p.transactions.iter().map(|raw| kaspa_evm::tx::tx_hash(raw)).collect()).unwrap_or_default();
-        #[cfg(not(feature = "evm"))]
-        let payload_tx_hashes: Vec<kaspa_hashes::EvmH256> = {
-            let _ = &payload; // raw-tx rows are written only by an `evm` build
-            Vec::new()
-        };
-        let stores = EvmRpcIndexStoresRef {
-            raw_tx: &self.evm_raw_tx_store,
-            tx_lookup: &self.evm_tx_index_store,
-            block_hash_map: &self.evm_block_hash_map_store,
-            numbers: &self.evm_number_store,
-            logs: &self.evm_log_index_store,
-        };
-        if let Err(e) = gc_pruned_block_rpc_indexes_batch(
-            batch,
-            current,
-            &payload_tx_hashes,
-            receipts.as_ref(),
-            evm_number,
-            &stores,
-            |b| self.evm_payload_store.has(b).unwrap_or(true),
-            |b| self.evm_receipts_store.has(b).unwrap_or(true),
-        ) {
-            warn!("G14: EVM RPC index GC skipped for pruned block {current}: {e}");
-        }
-    }
-
     pub fn worker(self: &Arc<Self>) {
         // On start-up, check if any pruning workflows require recovery. We wait for the first processing message to arrive
         // in order to make sure the node is already connected and receiving blocks before we start background recovery operations
@@ -722,13 +678,6 @@ impl PruningProcessor {
                 // The content-addressed code store (222) is NEVER per-block pruned:
                 // a `code_hash` is shared by every block that references that code,
                 // so deleting it on one block's pruning would corrupt others.
-                // G14 capacity lane (`--storage-gc-pruned-evm-indexes`, implied by
-                // `--storage-cap-bytes`): the RPC-only indexes derived from this block's payload
-                // and receipts go with them, read BEFORE those rows are deleted below. Off by
-                // default and in archive history mode; never a commitment or validation input.
-                if self.config.storage_gc_pruned_evm_indexes && !self.config.evm_history_mode.retains_state_history_past_pruning() {
-                    self.gc_pruned_block_evm_rpc_indexes(&mut batch, current);
-                }
                 self.evm_state_store.delete_batch(&mut batch, current).unwrap();
                 self.evm_payload_store.delete_batch(&mut batch, current).unwrap();
                 self.evm_receipts_store.delete_batch(&mut batch, current).unwrap();

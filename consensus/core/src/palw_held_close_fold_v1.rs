@@ -117,11 +117,7 @@ pub(super) fn apply_held_leaf_challenge_v1(
         ladder,
         turn,
         crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
-        false,
     )?;
-    // Lane g14-court-capacity: past `palw_court_capacity_v1` a prosecution may be queued instead of opened; its close group is
-    // declared again with its ticket.
-    let Some(opened) = opened else { return Ok(()) };
     debug_assert_eq!(opened, session_id, "the session the court opened is the one the challenge names");
     builder.write_court_close_group(
         (opened, PalwCourtSideV1::Challenger),
@@ -139,6 +135,6 @@ pub(super) fn apply_held_leaf_challenge_v1(
             deposit: palw_close_assembly_deposit_v1(c.count),
             chunks: BTreeMap::new(),
         }),
-    )?;
+    );
     Ok(())
 }

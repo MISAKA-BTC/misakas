@@ -82,42 +82,6 @@ fn opv_test_eligible(classes: &[Hash64]) {
     }
 }
 
-/// **Lane g14-court-capacity-r2: `parts` with `palw_detection_policy_v1` armed at genesis carrying `policies`** — armed WITHOUT its
-/// validation (which refuses every height), its mirror synced by the Params' own sync and the bundle re-read from the Params.
-pub(super) fn with_detection_policies(
-    parts: (Config, PalwConsensusParamsV2, Premine, Premine),
-    policies: Vec<kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1>,
-) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
-    let (config, _, premine, floats) = parts;
-    let mut params = config.params.clone();
-    params.palw_detection_policy_v1 =
-        Some(kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyFenceV1 { activation: ForkActivation::new(0), policies });
-    params.sync_palw_detection_policy_v1();
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
-        unreachable!("testnet-12 is ConsensusV2")
-    };
-    let bundle = bundle.clone();
-    assert!(bundle.state.detection_policy_v1().is_some(), "the fold reads the mirror");
-    (Config::new(params), bundle, premine, floats)
-}
-
-/// **A kernel-route detection policy for `class`** (full re-execution over the claim's evaluated positions, one position an interval),
-/// its honest cost per position `cost`, its declared resources wide enough that only the deterrence bound and the plan's own checks
-/// decide.
-pub(super) fn kernel_detection_policy(class: Hash64, cost: u64) -> kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1 {
-    use kaspa_consensus_core::palw_detection_policy_v1::*;
-    let mut p = palw_detection_genesis_design_v1(class, PalwDetectionRouteV1::Kernel, PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval: 1 });
-    p.economics.cost_per_interval_sompi = cost;
-    p.economics.collateral_per_interval_sompi = cost.saturating_mul(2);
-    p.resources.retention_pairs_cap = u32::MAX;
-    p.resources.max_claim_fetch_bytes = u64::MAX / 4;
-    p.resources.max_claim_replay_units = u64::MAX / 4;
-    p.resources.court_openings_per_claim = u32::MAX;
-    p.resources.da_bytes_per_claim = u64::MAX / 4;
-    p.deadlines.inspection_deadline_daa = u64::MAX / 4;
-    p
-}
-
 fn kernel_config_with(opv: Option<PalwPanelFreeFenceV1>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     kernel_config_with_budget(opv, true)
 }
@@ -365,22 +329,8 @@ impl Net {
 
     async fn beat_to(&mut self, daa: u64) {
         let ttpb = self.ttpb();
-        let start = self.daa();
-        let began = std::time::Instant::now();
-        let mut beats = 0u64;
-        let long = daa.saturating_sub(start) >= 1_000;
-        if long {
-            eprintln!("g14/node: heartbeat advance {start} -> {daa}");
-        }
         while self.daa() < daa {
             self.chain.heartbeat(ttpb, Vec::new()).await;
-            beats += 1;
-            if beats % 1_000 == 0 {
-                eprintln!("g14/node: heartbeat advance {start} -> {daa}: now {}, {beats} blocks, {:.1}s", self.daa(), began.elapsed().as_secs_f64());
-            }
-        }
-        if long || beats >= 1_000 {
-            eprintln!("g14/node: heartbeat target {daa} reached at {}, {beats} blocks, {:.1}s", self.daa(), began.elapsed().as_secs_f64());
         }
     }
 
@@ -3508,7 +3458,7 @@ mod c4r3;
 // Onboarding P0 (OB-P0): conformance evidence on chain (tag 109) — the beacon from FUTURE Panel-independent Finals, the evidence judged
 // in the fold, an optimistic window with outsider refutations, the lifecycle to ACTIVE_REWARDABLE: `g14_kernel_route_e2e/conformance.rs`.
 mod conformance;
-// Lane K2S (K2-TIR-v4, `docs/design/palw/models/k2-real-scale.md`): segmented claims, element courts, per-position DA, prompt tiles, the
+// Lane K2S (K2-TIR-v4, `docs/design/palw/k2-real-scale.md`): segmented claims, element courts, per-position DA, prompt tiles, the
 // mempool's acceptance gate (GAP 10) and the cached ledger (GAP 8): `g14_kernel_route_e2e/real_scale.rs`.
 mod artifact_tile;
 mod model_artifact;
@@ -3526,8 +3476,6 @@ mod canonical;
 // OPV-BOOT: the OPV ↔ beacon startup cycle closed — the complete-check bootstrap from zero Finals, derived eligibility, its loss,
 // hostile complete checks, the deny-list and the test seam's pin: `g14_kernel_route_e2e/opv_bootstrap.rs`.
 mod opv_bootstrap;
-// ADR-0185: approved paid claims as beacon sources on any harness network (the `Net`-level twin of `conformance::paid_sources`).
-mod paid_path;
 // Lane G14-R: the public prosecution RESUMES — verifier restart, node restart, reorg, full IBD, pruned import and the deadline bound,
 // planned from public rows alone (`misaka_palw_remote::pursuit`): `g14_kernel_route_e2e/recovery.rs`; over a real socket RPC:
 // `g14_kernel_route_e2e/socket_rpc.rs`.
@@ -3536,19 +3484,3 @@ mod socket_rpc;
 // RFC-0015 §13.2 (2026-10-15, test source): old Panel claims across the fence, the §8.3 budget on the OPV door (gate record present),
 // a direct proof over another bond's open demand: `g14_kernel_route_e2e/rfc15_panel_free.rs`.
 mod rfc15_panel_free;
-// RFC-0017 (2026-10-15, test source): model eligibility at the door and past the fence on the real node — A-2 refusal of inner 74,
-// genesis classes ungoverned byte for byte against an unarmed twin, a genesis exam refused: `g14_kernel_route_e2e/rfc17_eligibility.rs`.
-mod rfc17_eligibility;
-// G14 lane closure (2026-10-16): the kernel route's Valid signers answer for a conviction (G-K1, T-N11), over the production
-// onboarding path (no attestation hook): `g14_kernel_route_e2e/g14_lane_closure.rs`.
-mod g14_lane_closure;
-// G14 detection policy (2026-10-17): a checker under an armed policy finds a single-position lie at its hypergeometric rate with the
-// v2 draw, and its filing convicts on the real node: `g14_kernel_route_e2e/detection_policy.rs`.
-mod detection_policy;
-// RFC-0023 stage 1 (2026-10-18): restart and genesis replay agree on the resolved prefix across the fence.
-mod rfc23_stage1_node;
-// RFC-0026 §10 T01–T15 node-level campaign (lane r5-t-campaign, 2026-10-22): one module, one file per T group, on THIS harness (real
-// mempool -> template -> fold, Full UTXO, real ML-DSA signatures). Items whose objects live on parallel lanes are `#[ignore]`d and
-// compile their bodies only with `--features g14-t-campaign-merged`: `g14_t_campaign/mod.rs`.
-#[path = "g14_t_campaign/mod.rs"]
-mod g14_t_campaign;

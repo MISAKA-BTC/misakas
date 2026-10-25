@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""summarize.py — the machine-readable table of the OPV fresh-verifier measurements (docs/evidence/palw/measurements/opv-measurements.json).
+"""summarize.py — the machine-readable table of the OPV fresh-verifier measurements (docs/design/palw/opv-measurements.json).
 
 Reads the harness's JSON-lines results and writes ONE JSON file. Every number in the output is a leaf object
 

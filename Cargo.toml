@@ -556,7 +556,15 @@ workflow-wasm = { version = "0.18.0" }
 # nw-sys = { path = "../nw-sys" }
 
 [profile.release]
-lto = "thin"
+# Thin LTO made every fleet binary re-codegen kaspa-consensus-core (about 680k lines,
+# 890 files) inside its own rustc. Measured on the DAA 15400 release build: `rustc
+# --crate-name kaspad` spent more than two hours in one thread writing
+# `kaspa_consensus_core` codegen-unit objects, and misaka did the same for about
+# two hours and forty minutes. palw-class and misaka-dnsseeder each repeat that
+# work. Crate-local optimization stays at the release default. Overflow checks stay
+# on: they are part of consensus execution, not a compile-time switch.
+lto = false
+codegen-units = 16
 strip = true
 overflow-checks = true
 

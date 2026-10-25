@@ -1,4 +1,4 @@
-//! **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §3).
+//! **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, agent SHARD, `docs/design/palw/shard-rfc6-10.md` §3).
 //!
 //! G14 for a sharded claim: one bonded verifier OUTSIDE the seats, with public material only, reaches a conviction or a correctly
 //! classified default. Consensus already admits it — `TirShardCourtAccused` takes any Active bond at the floor; a `TirStepRun` unit
@@ -179,7 +179,7 @@ impl super::super::PalwPanelService {
             {
                 continue;
             }
-            let tir = self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)).and_then(Result::ok).map(std::sync::Arc::new);
+            let tir = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root).and_then(Result::ok).map(std::sync::Arc::new);
             let material = materials
                 .get(&duty.claim_id)
                 .and_then(|pool| {

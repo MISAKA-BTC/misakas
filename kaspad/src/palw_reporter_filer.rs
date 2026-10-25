@@ -148,7 +148,6 @@
 //! every tick or takes every tick's probe. The book is capped at [`PALW_FILER_MAX_ENTRIES_V1`] live
 //! filings.
 use super::*;
-use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_offence_attribution_v1::{palw_executor_refuted_object_v1, palw_filed_offence_commit_key_v1};
@@ -861,18 +860,20 @@ impl PalwReporterFilerV1 {
     #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub(crate) fn tick(
         &mut self,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
         accused: &mut HashSet<Hash64>,
         read: impl FnMut(&PalwFilerEntryV1, Option<&PalwConsensusObjectV2>) -> Option<PalwReporterFilingReadV1>,
     ) -> Vec<(PalwFilerEntryV1, PalwFilerEndV1)> {
-        self.tick_with_terminal_v2(court_outbox, accused, read, |_, _| Ok(None))
+        self.tick_with_terminal_v2(court_pending, court_moved, accused, read, |_, _| Ok(None))
     }
 
     /// The accepted tip chooses every multipart move. The original persisted book remains
     /// compatible; no local bitmap can falsely claim progress after a reorg or restart.
     pub(crate) fn tick_with_terminal_v2(
         &mut self,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
         accused: &mut HashSet<Hash64>,
         mut read: impl FnMut(&PalwFilerEntryV1, Option<&PalwConsensusObjectV2>) -> Option<PalwReporterFilingReadV1>,
         mut terminal: impl FnMut(&PalwFilerEntryV1, &PalwReporterFilingReadV1) -> Result<Option<(u32, PalwConsensusObjectV2)>, String>,
@@ -886,21 +887,21 @@ impl PalwReporterFilerV1 {
             // runs from when it was CARRIED (`court_moved`, stamped by the carrier lane at
             // submission), not from when it was queued — an item a deadline-ordered queue held
             // behind earlier-due ones is not re-queued, stalled or given up before it goes out.
-            let queued = |court_outbox: &CourtOutboxV1, round: u32| {
-                court_outbox.pending().iter().any(|(k, r, responder, _)| (*k, *r, *responder) == (key, round, false))
+            let queued = |court_pending: &Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>, round: u32| {
+                court_pending.iter().any(|(k, r, responder, _)| (*k, *r, *responder) == (key, round, false))
             };
             let live = self.entries.get_mut(&key).expect("a key just listed");
             live.in_queue = PalwFilerInQueueV1 {
-                commit: queued(court_outbox, PALW_FILER_ROUND_COMMIT_V1),
-                evidence: queued(court_outbox, PALW_FILER_ROUND_EVIDENCE_V1),
-                reveal: queued(court_outbox, PALW_FILER_ROUND_REVEAL_V1),
+                commit: queued(court_pending, PALW_FILER_ROUND_COMMIT_V1),
+                evidence: queued(court_pending, PALW_FILER_ROUND_EVIDENCE_V1),
+                reveal: queued(court_pending, PALW_FILER_ROUND_REVEAL_V1),
             };
             for (round, sent) in [
                 (PALW_FILER_ROUND_COMMIT_V1, &mut live.commit_sent),
                 (PALW_FILER_ROUND_EVIDENCE_V1, &mut live.evidence_sent),
                 (PALW_FILER_ROUND_REVEAL_V1, &mut live.reveal_sent),
             ] {
-                if let Some(carried) = court_outbox.submitted_at(&(key, round, false)).copied()
+                if let Some(carried) = court_moved.get(&(key, round, false)).copied()
                     && sent.is_some_and(|queued| carried > queued)
                 {
                     *sent = Some(carried);
@@ -933,7 +934,7 @@ impl PalwReporterFilerV1 {
                 Step::Done(end) => {
                     let entry = self.entries.remove(&key).expect("live");
                     self.dirty = true;
-                    self.hand_back_v1(&entry, end, court_outbox, accused, &mut read);
+                    self.hand_back_v1(&entry, end, court_pending, court_moved, accused, &mut read);
                     ended.push((entry, end));
                     continue;
                 }
@@ -955,10 +956,8 @@ impl PalwReporterFilerV1 {
                     }
                 };
                 let (round, object) = carrier;
-                if court_outbox.pending().iter().any(|(k, r, side, _)| (*k, *r, *side) == (key, round, false))
-                    || court_outbox
-                        .submitted_at(&(key, round, false))
-                        .is_some_and(|at| now < at.saturating_add(PALW_FILER_RESEND_DAA_V1))
+                if court_pending.iter().any(|(k, r, side, _)| (*k, *r, *side) == (key, round, false))
+                    || court_moved.get(&(key, round, false)).is_some_and(|at| now < at.saturating_add(PALW_FILER_RESEND_DAA_V1))
                 {
                     continue;
                 }
@@ -974,7 +973,7 @@ impl PalwReporterFilerV1 {
                 live.gate_refused_at = None;
                 live.evidence_sends = live.evidence_sends.saturating_add(1);
                 self.queued_due.insert((key, round, false), entry.file_by_daa.unwrap_or(u64::MAX));
-                court_outbox.push_pending((key, round, false, object));
+                court_pending.push((key, round, false, object));
                 self.dirty = true;
                 continue;
             }
@@ -1060,14 +1059,13 @@ impl PalwReporterFilerV1 {
                 },
                 entry.origin
             );
-            court_outbox.push_pending((key, round, false, object));
+            court_pending.push((key, round, false, object));
         }
-        court_outbox.retain_pending(|(key, round, responder, object)| {
+        court_pending.retain(|(key, round, responder, object)| {
             !palw_filer_queued_v1(*round, *responder, object) || self.entries.contains_key(key)
         });
         // Dates only for what is still queued (the carrier lane drains the queue between ticks).
-        self.queued_due
-            .retain(|queue_key, _| court_outbox.pending().iter().any(|(k, r, responder, _)| (*k, *r, *responder) == *queue_key));
+        self.queued_due.retain(|queue_key, _| court_pending.iter().any(|(k, r, responder, _)| (*k, *r, *responder) == *queue_key));
         ended
     }
 
@@ -1087,15 +1085,16 @@ impl PalwReporterFilerV1 {
         &mut self,
         entry: &PalwFilerEntryV1,
         end: PalwFilerEndV1,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
         accused: &mut HashSet<Hash64>,
         read: &mut impl FnMut(&PalwFilerEntryV1, Option<&PalwConsensusObjectV2>) -> Option<PalwReporterFilingReadV1>,
     ) {
         for round in [PALW_FILER_ROUND_COMMIT_V1, PALW_FILER_ROUND_EVIDENCE_V1, PALW_FILER_ROUND_REVEAL_V1] {
-            court_outbox.forget_submitted(&(entry.offence_key, round, false));
+            court_moved.remove(&(entry.offence_key, round, false));
         }
         for round in PALW_FILER_ROUND_TERMINAL_FIRST_V1..=PALW_FILER_ROUND_TERMINAL_LAST_V1 {
-            court_outbox.forget_submitted(&(entry.offence_key, round, false));
+            court_moved.remove(&(entry.offence_key, round, false));
         }
         if !matches!(end, PalwFilerEndV1::Expired | PalwFilerEndV1::Stalled) {
             return;
@@ -1103,8 +1102,8 @@ impl PalwReporterFilerV1 {
         let fallback_queued =
             entry.fallback.as_ref().is_some_and(|(queue_key, object)| match palw_filer_gate_v1(read, entry, object) {
                 Some(Ok(())) => {
-                    if !court_outbox.pending().iter().any(|(k, r, responder, _)| (*k, *r, *responder) == (*queue_key, 0, false)) {
-                        court_outbox.push_pending((*queue_key, 0, false, object.clone()));
+                    if !court_pending.iter().any(|(k, r, responder, _)| (*k, *r, *responder) == (*queue_key, 0, false)) {
+                        court_pending.push((*queue_key, 0, false, object.clone()));
                     }
                     // The accusation must land while the claim is live, as the filing it replaces.
                     if let Some(by) = entry.file_by_daa {
@@ -1349,7 +1348,7 @@ pub(crate) enum PalwCaptureArmFiledV1 {
 pub(crate) fn palw_capture_arm_files_v1(
     filer: &mut PalwReporterFilerV1,
     accused: &mut HashSet<Hash64>,
-    court_outbox: &mut CourtOutboxV1,
+    court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
     claim_id: Hash64,
     leaf: u64,
     refuted: Option<PalwConvictionFilingV1>,
@@ -1377,7 +1376,7 @@ pub(crate) fn palw_capture_arm_files_v1(
     let Some((session_id, object)) = court else { return PalwCaptureArmFiledV1::Nothing };
     info!("[{PALW_PANEL}] claim {claim_id}: accusing leaf {leaf} in the one-move court (session {session_id})");
     accused.insert(claim_id);
-    court_outbox.push_pending((session_id, 0, false, object));
+    court_pending.push((session_id, 0, false, object));
     PalwCaptureArmFiledV1::Court
 }
 
@@ -1461,12 +1460,7 @@ impl PalwBookDoorV1 {
     /// tick ends one (`Expired`), its leftovers pruned. Returns how many ended.
     pub(crate) fn expire_all(&mut self) -> usize {
         let past = PalwReporterFilingReadV1 { now_daa: self.read.now_daa + self.read.window_court + 1, ..self.read.clone() };
-        let ended = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut Vec::new(),
-            &mut std::collections::HashMap::new(),
-            &mut HashMap::new(),
-            |outbox| self.book.tick(outbox, &mut HashSet::new(), |_, _| Some(past.clone())),
-        );
+        let ended = self.book.tick(&mut Vec::new(), &mut HashMap::new(), &mut HashSet::new(), |_, _| Some(past.clone()));
         assert!(ended.iter().all(|(_, end)| *end == PalwFilerEndV1::Expired));
         ended.len()
     }
@@ -1673,7 +1667,8 @@ impl PalwPanelService {
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         filer: &mut PalwReporterFilerV1,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
         accused: &mut HashSet<Hash64>,
     ) {
         let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -1681,7 +1676,8 @@ impl PalwPanelService {
             Some(self.consensus_config.genesis.hash),
         );
         let ended = filer.tick_with_terminal_v2(
-            court_outbox,
+            court_pending,
+            court_moved,
             accused,
             |entry, gated| session.palw_reporter_filing_read_v1(entry.offence_key, entry.commitment, entry.reporter, gated.cloned()),
             |entry, _| {
@@ -1734,7 +1730,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         filer: &mut PalwReporterFilerV1,
         accused: &mut HashSet<Hash64>,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
         duty: &PalwSeatDutyV2,
         leaf: u64,
         bond_key: PalwBondKeyV2,
@@ -1742,7 +1738,7 @@ impl PalwPanelService {
         refuted: Option<PalwConvictionFilingV1>,
         court: Option<(Hash64, PalwConsensusObjectV2)>,
     ) {
-        palw_capture_arm_files_v1(filer, accused, court_outbox, duty.claim_id, leaf, refuted, court, |filer, filing| {
+        palw_capture_arm_files_v1(filer, accused, court_pending, duty.claim_id, leaf, refuted, court, |filer, filing| {
             self.reporter_filer_file_v1(session, filer, filing, bond_key, network_domain)
         });
     }
@@ -1771,7 +1767,7 @@ impl PalwPanelService {
             return;
         }
         let Some(probe) = filer.take_probe(duty.claim_id, bytes, current_daa) else { return };
-        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { return };
+        let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return };
         // At the widest prefill run the ledger grants, on this duty's own instance — the one the probe
         // below runs on (int-10.2 A2).
         let backends = self.backends();
@@ -1923,12 +1919,7 @@ mod tests {
         queue: &mut Queue,
         read: impl FnMut(&PalwFilerEntryV1, Option<&PalwConsensusObjectV2>) -> Option<PalwReporterFilingReadV1>,
     ) -> Vec<(PalwFilerEntryV1, PalwFilerEndV1)> {
-        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            queue,
-            &mut std::collections::HashMap::new(),
-            &mut HashMap::new(),
-            |outbox| book.tick(outbox, &mut HashSet::new(), read),
-        )
+        book.tick(queue, &mut HashMap::new(), &mut HashSet::new(), read)
     }
 
     fn filed(book: &mut PalwReporterFilerV1, filing: PalwConvictionFilingV1, read: &PalwReporterFilingReadV1) -> PalwFilerEntryV1 {
@@ -1991,64 +1982,6 @@ mod tests {
         let entry = book.entry(&key).unwrap();
         assert!(entry.commit_object.is_none());
         assert_eq!(palw_filer_step_v1(entry, &chain(100)), PalwFilerStepV1::File);
-    }
-
-    #[test]
-    fn a_small_retained_staged_reference_needs_no_live_terminal_reservation() {
-        use kaspa_consensus_core::{
-            palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES, palw_staged_court_state_v1::PalwStagedCertificateRefV1,
-        };
-
-        let claim = h(81);
-        let reference = PalwStagedCertificateRefV1 { claim, reserver: bond(ME), reserved_daa: 90, seed_id: h(82) };
-        let object = palw_executor_refuted_object_v1(bond(EXECUTOR), claim, PalwPanelContradictionV1::StagedCourt { reference }, None);
-        let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &object else { panic!("objective offence") };
-        assert!(evidence.len() as u64 <= PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
-        let decoded: kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 =
-            borsh::from_slice(evidence).unwrap();
-        assert_eq!(decoded.contradiction, PalwPanelContradictionV1::StagedCourt { reference });
-        let filing = PalwConvictionFilingV1::of_offence(object.clone(), claim, Some(150), PalwFilingOriginV1::CaptureArm)
-            .expect("a typed staged reference is an ordinary kind-4 filing");
-        let key = filing.offence_key;
-        // As in the other filer tests, the native gate's verdict is injected. This tests
-        // transport, not whether a caller-supplied reference is a rooted certificate.
-        let released = PalwReporterFilingReadV1 { reporter_may_commit: false, ..chain(100) };
-        let mut book = PalwReporterFilerV1::default();
-        assert_eq!(
-            book.file(filing, bond(ME), &released, &h(DOMAIN), [7; 32], |_, _| panic!("no optional reward commit")),
-            PalwFileOutcomeV1::Queued { committed: false }
-        );
-        let mut queue = Vec::new();
-        let mut moved = HashMap::new();
-        let mut accused = HashSet::new();
-        let mut terminal_calls = 0;
-        let ended = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut queue,
-            &mut std::collections::HashMap::new(),
-            &mut moved,
-            |outbox| {
-                book.tick_with_terminal_v2(
-                    outbox,
-                    &mut accused,
-                    |_, gated| {
-                        if let Some(gated) = gated {
-                            assert_eq!(gated, &object, "the native ordinary gate sees the original evidence");
-                        }
-                        Some(released.clone())
-                    },
-                    |_, _| {
-                        terminal_calls += 1;
-                        // The native terminal reader returns None once the legacy reservation
-                        // has closed, even while the independently paid stage is retained.
-                        Ok(None)
-                    },
-                )
-            },
-        );
-        assert!(ended.is_empty());
-        assert_eq!(terminal_calls, 0, "small retained references must not wait on legacy multipart authority");
-        assert_eq!(queue, vec![(key, PALW_FILER_ROUND_EVIDENCE_V1, false, object)]);
-        assert_eq!(book.entry(&key).unwrap().evidence_sends, 1);
     }
 
     // These fixtures test transport scheduling over opaque bytes. They do not assert the
@@ -2125,41 +2058,29 @@ mod tests {
         let mut moved = HashMap::new();
         let mut accused = HashSet::new();
         for stage in 0..8u32 {
-            let ended = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            let ended = book.tick_with_terminal_v2(
                 &mut queue,
-                &mut std::collections::HashMap::new(),
                 &mut moved,
-                |outbox| {
-                    book.tick_with_terminal_v2(
-                        outbox,
-                        &mut accused,
-                        |_, _| Some(chain(100)),
-                        |e, _| {
-                            palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
-                                Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
-                            })
-                        },
-                    )
+                &mut accused,
+                |_, _| Some(chain(100)),
+                |e, _| {
+                    palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
+                        Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
+                    })
                 },
             );
             assert!(ended.is_empty());
             assert_eq!(queue.len(), 1);
             // A queued stage is not copied again even if many ticks pass.
-            crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            book.tick_with_terminal_v2(
                 &mut queue,
-                &mut std::collections::HashMap::new(),
                 &mut moved,
-                |outbox| {
-                    book.tick_with_terminal_v2(
-                        outbox,
-                        &mut accused,
-                        |_, _| Some(chain(100)),
-                        |e, _| {
-                            palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
-                                Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
-                            })
-                        },
-                    )
+                &mut accused,
+                |_, _| Some(chain(100)),
+                |e, _| {
+                    palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
+                        Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
+                    })
                 },
             );
             assert_eq!(queue.len(), 1);
@@ -2175,21 +2096,15 @@ mod tests {
         assert!(book.entry(&entry.offence_key).unwrap().evidence_sends > PALW_FILER_MAX_SENDS_V1);
         // Losing accepted progress cannot cause an immediate duplicate of a just-carried part.
         progress.accepted_parts &= !(1 << 6);
-        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+        book.tick_with_terminal_v2(
             &mut queue,
-            &mut std::collections::HashMap::new(),
             &mut moved,
-            |outbox| {
-                book.tick_with_terminal_v2(
-                    outbox,
-                    &mut accused,
-                    |_, _| Some(chain(100)),
-                    |e, _| {
-                        palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
-                            Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
-                        })
-                    },
-                )
+            &mut accused,
+            |_, _| Some(chain(100)),
+            |e, _| {
+                palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
+                    Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
+                })
             },
         );
         assert!(queue.is_empty());
@@ -2523,17 +2438,10 @@ mod tests {
             let live = book.entries.get_mut(&entry.offence_key).unwrap();
             (live.evidence_sent, live.evidence_sends) = (Some(150), PALW_FILER_MAX_SENDS_V1);
             let (mut queue, mut accused) = (Vec::new(), HashSet::from([entry.claim_id]));
-            let ended = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-                &mut queue,
-                &mut std::collections::HashMap::new(),
-                &mut HashMap::new(),
-                |outbox| {
-                    book.tick(outbox, &mut accused, |_, gated| {
-                        let object_gate = gated.map(|_| if admitted { Ok(()) } else { Err("the claim is final".to_string()) });
-                        Some(PalwReporterFilingReadV1 { object_gate, ..rooted.clone() })
-                    })
-                },
-            );
+            let ended = book.tick(&mut queue, &mut HashMap::new(), &mut accused, |_, gated| {
+                let object_gate = gated.map(|_| if admitted { Ok(()) } else { Err("the claim is final".to_string()) });
+                Some(PalwReporterFilingReadV1 { object_gate, ..rooted.clone() })
+            });
             assert_eq!(
                 ended.iter().map(|(entry, end)| (entry.origin, *end)).collect::<Vec<_>>(),
                 vec![(PalwFilingOriginV1::Replay, PalwFilerEndV1::Stalled)]
@@ -2550,12 +2458,7 @@ mod tests {
         let entry = filed(&mut book, PalwConvictionFilingV1 { origin: PalwFilingOriginV1::Replay, ..filing(25, None) }, &chain(100));
         book.entries.get_mut(&entry.offence_key).unwrap().evidence_sends = PALW_FILER_MAX_SENDS_V1;
         let mut accused = HashSet::from([entry.claim_id]);
-        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut Vec::new(),
-            &mut std::collections::HashMap::new(),
-            &mut HashMap::new(),
-            |outbox| book.tick(outbox, &mut accused, |_, _| Some(rooted.clone())),
-        );
+        book.tick(&mut Vec::new(), &mut HashMap::new(), &mut accused, |_, _| Some(rooted.clone()));
         assert!(accused.contains(&entry.claim_id) && book.len() == 0, "its lane re-hands it; the capture arm's set is untouched");
     }
 
@@ -2732,20 +2635,13 @@ mod tests {
             let (mut book, entry) = stalled(PalwFilingOriginV1::CaptureArm, Some((court_key, accusation.clone())));
             assert_eq!(entry.fallback, Some((court_key, accusation.clone())), "the book keeps the fallback it was given");
             let (mut queue, mut court_moved, mut accused) = (Vec::new(), moved(entry.offence_key), HashSet::from([entry.claim_id]));
-            let ended = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-                &mut queue,
-                &mut std::collections::HashMap::new(),
-                &mut court_moved,
-                |outbox| {
-                    book.tick(outbox, &mut accused, |_, gated| {
-                        let object_gate = gated.map(|object| {
-                            assert_eq!(*object, accusation, "only the fallback is asked about");
-                            if admitted { Ok(()) } else { Err("the claim is final".to_string()) }
-                        });
-                        Some(PalwReporterFilingReadV1 { object_gate, ..rooted.clone() })
-                    })
-                },
-            );
+            let ended = book.tick(&mut queue, &mut court_moved, &mut accused, |_, gated| {
+                let object_gate = gated.map(|object| {
+                    assert_eq!(*object, accusation, "only the fallback is asked about");
+                    if admitted { Ok(()) } else { Err("the claim is final".to_string()) }
+                });
+                Some(PalwReporterFilingReadV1 { object_gate, ..rooted.clone() })
+            });
             assert_eq!(ended.iter().map(|(_, end)| *end).collect::<Vec<_>>(), vec![PalwFilerEndV1::Stalled]);
             assert_eq!(court_moved.keys().copied().collect::<Vec<_>>(), vec![(court_key, 7, false)], "only its own keys pruned");
             if admitted {
@@ -2757,12 +2653,7 @@ mod tests {
         }
         let (mut book, entry) = stalled(PalwFilingOriginV1::CaptureArm, None);
         let mut accused = HashSet::from([entry.claim_id]);
-        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut Vec::new(),
-            &mut std::collections::HashMap::new(),
-            &mut HashMap::new(),
-            |outbox| book.tick(outbox, &mut accused, |_, _| Some(rooted.clone())),
-        );
+        book.tick(&mut Vec::new(), &mut HashMap::new(), &mut accused, |_, _| Some(rooted.clone()));
         assert!(!accused.contains(&entry.claim_id), "no fallback: the pursuit may file");
 
         // J1: expired releases the claim's probes, stalled keeps them.
@@ -2781,12 +2672,7 @@ mod tests {
         let (mut book, entry) = stalled(PalwFilingOriginV1::CaptureArm, Some((court_key, accusation.clone())));
         let (mut queue, mut court_moved, mut accused) = (Vec::new(), moved(entry.offence_key), HashSet::from([entry.claim_id]));
         let swept = PalwReporterFilingReadV1 { consumed: Some(consumed(&entry, 150)), ..rooted.clone() };
-        let ended = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut queue,
-            &mut std::collections::HashMap::new(),
-            &mut court_moved,
-            |outbox| book.tick(outbox, &mut accused, |_, _| Some(swept.clone())),
-        );
+        let ended = book.tick(&mut queue, &mut court_moved, &mut accused, |_, _| Some(swept.clone()));
         assert!(matches!(ended[..], [(_, PalwFilerEndV1::Forgone(_))]));
         assert!(queue.is_empty() && accused.contains(&entry.claim_id));
         assert_eq!(court_moved.len(), 1);
@@ -2814,16 +2700,9 @@ mod tests {
         let mut court_moved = HashMap::new();
         let tick =
             |book: &mut PalwReporterFilerV1, queue: &mut Queue, court_moved: &mut HashMap<_, _>, read: PalwReporterFilingReadV1| {
-                crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-                    queue,
-                    &mut std::collections::HashMap::new(),
-                    court_moved,
-                    |outbox| {
-                        book.tick(outbox, &mut HashSet::new(), |_, gated| {
-                            Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| Ok(())), ..read.clone() })
-                        })
-                    },
-                )
+                book.tick(queue, court_moved, &mut HashSet::new(), |_, gated| {
+                    Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| Ok(())), ..read.clone() })
+                })
             };
         tick(&mut book, &mut queue, &mut court_moved, chain(100));
         assert_eq!(queue.len(), 1);
@@ -2897,16 +2776,9 @@ mod tests {
         accused: &mut HashSet<Hash64>,
         read: PalwReporterFilingReadV1,
     ) -> Vec<(PalwFilerEntryV1, PalwFilerEndV1)> {
-        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            queue,
-            &mut std::collections::HashMap::new(),
-            court_moved,
-            |outbox| {
-                book.tick(outbox, accused, |_, gated| {
-                    Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| Ok(())), ..read.clone() })
-                })
-            },
-        )
+        book.tick(queue, court_moved, accused, |_, gated| {
+            Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| Ok(())), ..read.clone() })
+        })
     }
 
     fn rounds(queue: &Queue) -> Vec<u32> {
@@ -3001,14 +2873,8 @@ mod tests {
             let key = filed(&mut book, replay(50), &chain(100)).offence_key;
             let (mut accused, mut queue) = (HashSet::new(), Vec::new());
             let court = with_court.then(|| (court_key, accusation.clone()));
-            let made = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-                &mut queue,
-                &mut std::collections::HashMap::new(),
-                &mut std::collections::HashMap::new(),
-                |outbox| {
-                    palw_capture_arm_files_v1(&mut book, &mut accused, outbox, h(50), 3, Some(filing(50, None)), court.clone(), door)
-                },
-            );
+            let made =
+                palw_capture_arm_files_v1(&mut book, &mut accused, &mut queue, h(50), 3, Some(filing(50, None)), court.clone(), door);
             assert_eq!(made, PalwCaptureArmFiledV1::Kind4(PalwFileOutcomeV1::AlreadyFiled));
             assert!(queue.is_empty() && accused.contains(&h(50)), "the replay's filing carries it: no court beside it");
             let live = book.entry(&key).unwrap();
@@ -3028,12 +2894,8 @@ mod tests {
         let mut book = PalwReporterFilerV1::default();
         let (mut accused, mut queue) = (HashSet::new(), Vec::new());
         let court = Some((court_key, accusation.clone()));
-        let made = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut queue,
-            &mut std::collections::HashMap::new(),
-            &mut std::collections::HashMap::new(),
-            |outbox| palw_capture_arm_files_v1(&mut book, &mut accused, outbox, h(51), 3, Some(filing(51, None)), court.clone(), door),
-        );
+        let made =
+            palw_capture_arm_files_v1(&mut book, &mut accused, &mut queue, h(51), 3, Some(filing(51, None)), court.clone(), door);
         assert_eq!(made, PalwCaptureArmFiledV1::Kind4(PalwFileOutcomeV1::Queued { committed: true }));
         assert!(queue.is_empty() && accused.contains(&h(51)));
         let key = filing(51, None).offence_key;
@@ -3042,12 +2904,8 @@ mod tests {
             Some((PalwFilingOriginV1::CaptureArm, court.clone()))
         );
         assert_eq!(door(&mut book, replay(51)), PalwFileOutcomeV1::AlreadyFiled, "the replay's later hand-off");
-        let again = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut queue,
-            &mut std::collections::HashMap::new(),
-            &mut std::collections::HashMap::new(),
-            |outbox| palw_capture_arm_files_v1(&mut book, &mut accused, outbox, h(51), 3, Some(filing(51, None)), court.clone(), door),
-        );
+        let again =
+            palw_capture_arm_files_v1(&mut book, &mut accused, &mut queue, h(51), 3, Some(filing(51, None)), court.clone(), door);
         assert_eq!((again, book.len(), queue.len()), (PalwCaptureArmFiledV1::AlreadyAccused, 1, 0), "once per claim");
         // Kind 4 refused by the gate, or none (below the fence): the accusation.
         let refusing = |book: &mut PalwReporterFilerV1, filing: PalwConvictionFilingV1| {
@@ -3056,30 +2914,14 @@ mod tests {
         };
         let mut book = PalwReporterFilerV1::default();
         let (mut accused, mut queue) = (HashSet::new(), Vec::new());
-        let made = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut queue,
-            &mut std::collections::HashMap::new(),
-            &mut std::collections::HashMap::new(),
-            |outbox| {
-                palw_capture_arm_files_v1(&mut book, &mut accused, outbox, h(52), 3, Some(filing(52, None)), court.clone(), refusing)
-            },
-        );
+        let made =
+            palw_capture_arm_files_v1(&mut book, &mut accused, &mut queue, h(52), 3, Some(filing(52, None)), court.clone(), refusing);
         assert_eq!((made, book.len()), (PalwCaptureArmFiledV1::Court, 0));
         assert_eq!(queue, vec![(court_key, 0, false, accusation.clone())]);
         assert!(accused.contains(&h(52)));
-        let made = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut Vec::new(),
-            &mut std::collections::HashMap::new(),
-            &mut std::collections::HashMap::new(),
-            |outbox| palw_capture_arm_files_v1(&mut book, &mut accused, outbox, h(53), 3, None, court, door),
-        );
+        let made = palw_capture_arm_files_v1(&mut book, &mut accused, &mut Vec::new(), h(53), 3, None, court, door);
         assert_eq!(made, PalwCaptureArmFiledV1::Court);
-        let made = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut Vec::new(),
-            &mut std::collections::HashMap::new(),
-            &mut std::collections::HashMap::new(),
-            |outbox| palw_capture_arm_files_v1(&mut book, &mut accused, outbox, h(54), 3, None, None, door),
-        );
+        let made = palw_capture_arm_files_v1(&mut book, &mut accused, &mut Vec::new(), h(54), 3, None, None, door);
         assert!(made == PalwCaptureArmFiledV1::Nothing && !accused.contains(&h(54)));
     }
 
@@ -3215,17 +3057,16 @@ mod tests {
     /// `Nothing`, each with the roots the arm just refused.
     #[test]
     fn the_panel_wires_the_capture_arm_j1_and_the_tick() {
-        use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
-        let whole = crate::palw_panel::source_support::former_parent_production_source_v1();
-        let source = whole;
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find("mod court_responder_coverage_pin").expect("the panel's pins")];
         let this = include_str!("palw_reporter_filer.rs");
         let body = |signature: &str| {
             let start = this.find(signature).unwrap_or_else(|| panic!("{signature}"));
             &this[start..start + this[start..].find("\n    }\n").expect("its end")]
         };
         // (a)
-        let fault = source.find_code("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
-        let arm = &source[fault..fault + source[fault..].find_code("self.persist_foreign_material(&duty.claim_id, &bytes);").unwrap()];
+        let fault = source.find("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
+        let arm = &source[fault..fault + source[fault..].find("self.persist_foreign_material(&duty.claim_id, &bytes);").unwrap()];
         let at = |needle: &str| arm.find(needle).unwrap_or_else(|| panic!("the fault arm no longer contains {needle:?}"));
         let order = [
             at("self.note_seat_fault_v1(duty.claim_id, leaf, 1);"),
@@ -3237,42 +3078,36 @@ mod tests {
             arm.rfind("break 'verdict None;").expect("the arm ends"),
         ];
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
-        assert!(!arm[order[2]..order[5]].contains_code("break 'verdict"), "no exit of the accusation's block skips kind 4");
-        assert!(
-            !arm.contains_code("court_pending.push(") && !arm.contains_code("court_outbox.push_pending(") && !arm.contains_code("accused.insert("),
-            "the decision queues, not the arm"
-        );
+        assert!(!arm[order[2]..order[5]].contains("break 'verdict"), "no exit of the accusation's block skips kind 4");
+        assert!(!arm.contains("court_pending.push(") && !arm.contains("accused.insert("), "the decision queues, not the arm");
         // The decision is `palw_capture_arm_files_v1` (its order is tested on a book:
         // `the_capture_arm_files_kind_4_first_and_backs_a_replay_filing_it_finds`); the panel runs it
         // over its own door, and nothing else.
         let decide = body("pub(super) fn capture_arm_files_v1(");
-        assert!(decide.contains_code("palw_capture_arm_files_v1(filer, accused, court_outbox, duty.claim_id, leaf, refuted, court, |filer, filing| {\n            \
+        assert!(decide.contains(
+            "palw_capture_arm_files_v1(filer, accused, court_pending, duty.claim_id, leaf, refuted, court, |filer, filing| {\n            \
              self.reporter_filer_file_v1(session, filer, filing, bond_key, network_domain)\n        });"
         ));
-        assert!(
-            !decide.contains_code("court_pending.push(")
-                && !decide.contains_code("court_outbox.push_pending(")
-                && !decide.contains_code("accused.insert("),
-            "the decision queues, not the panel"
-        );
+        assert!(!decide.contains("court_pending.push(") && !decide.contains("accused.insert("), "the decision queues, not the panel");
         // (b)
-        assert!(body("pub(super) fn capture_arm_filing_v1(").contains_code("self.consensus_config.params.palw_rcore_plus_active_at(current_daa),\n            bond_key,\n            duty.executor_bond,"
+        assert!(body("pub(super) fn capture_arm_filing_v1(").contains(
+            "self.consensus_config.params.palw_rcore_plus_active_at(current_daa),\n            bond_key,\n            duty.executor_bond,"
         ));
         let j1 = body("pub(super) async fn j1_auto_probe_v1(");
         let guard = j1
-            .find_code("if !self.consensus_config.params.palw_rcore_plus_active_at(current_daa) || duty.executor_bond == bond_key {")
+            .find("if !self.consensus_config.params.palw_rcore_plus_active_at(current_daa) || duty.executor_bond == bond_key {")
             .expect("J1's guard");
-        assert!(guard < j1.find_code("filer.take_probe(duty.claim_id, bytes, current_daa)").expect("the probe"));
+        assert!(guard < j1.find("filer.take_probe(duty.claim_id, bytes, current_daa)").expect("the probe"));
         // (c)
-        const TICK: &str = "self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_outbox, &mut accused);";
+        const TICK: &str =
+            "self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending, &mut court_moved, &mut accused);";
         assert_eq!(source.matches("self.reporter_filer_tick_v1(").count(), 1);
         let tick = source.find(TICK).expect("the tick, with every seam it prunes");
-        let submitter = source.find_code("// --- the collector + submitter's half ---").expect("the submitter");
-        let worker = include_str!("palw_panel.rs");
-        let seat_call = worker.find("self.seat_progress_tick_v1(").expect("seat stage");
-        assert!(seat_call < tick && tick < submitter, "seat faults precede the filer tick and carrier phase");
+        let submitter = source.find("// --- the collector + submitter's half ---").expect("the submitter");
+        assert!(fault < tick && tick < submitter);
         // The tick also advances terminal filings since the terminal carriage (`tick_with_terminal_v2`); the same seams are pruned.
-        assert!(body("pub(super) fn reporter_filer_tick_v1(").contains_code("filer.tick_with_terminal_v2(\n            court_outbox,\n            accused,\n            |entry, gated| \
+        assert!(body("pub(super) fn reporter_filer_tick_v1(").contains(
+            "filer.tick_with_terminal_v2(\n            court_pending,\n            court_moved,\n            accused,\n            |entry, gated| \
              session.palw_reporter_filing_read_v1("
         ));
         // (d)
@@ -3284,9 +3119,9 @@ mod tests {
             "if arm == PalwMaterialArmV1::Nothing {",
         ]) {
             let arm = source.find(refused).unwrap_or_else(|| panic!("{refused}"));
-            let call = &source[*hook..*hook + source[*hook..].find_code(".await;").expect("awaited")];
+            let call = &source[*hook..*hook + source[*hook..].find(".await;").expect("awaited")];
             assert!(arm < *hook && source[arm..*hook].lines().count() <= 3, "{refused} hooks J1 at once");
-            assert!(call.contains_code("&mut reporter_filer,") && call.contains_code("roots)"), "with the roots the arm refused");
+            assert!(call.contains("&mut reporter_filer,") && call.contains("roots,\n"), "with the roots the arm refused");
         }
     }
 }

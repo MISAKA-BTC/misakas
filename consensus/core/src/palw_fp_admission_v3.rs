@@ -89,9 +89,6 @@ pub enum PalwFpAdmissionV3Error {
     ClassMissing(Hash64),
     #[error("class {0} is frozen and admits no new blocks")]
     ClassFrozen(Hash64),
-    /// RFC-0018 18-A (Gate C): the claim is `Final` but not `SecurityCertified` — no receipt block before certification.
-    #[error("{0}")]
-    Uncertified(#[from] crate::palw_rfc0018_v1::PalwFpReceiptUncertifiedV1),
     /// RFC-0009 (`palw_receipt_spend_v4`): a refusal specific to a V4 spend — see [`crate::palw_receipt_v4::PalwReceiptV4Error`].
     #[error("receipt spend V4: {0}")]
     ReceiptV4(#[from] crate::palw_receipt_v4::PalwReceiptV4Error),
@@ -115,7 +112,7 @@ pub fn check_palw_receipt_spend_admission_v3(
     beacon: &PalwBeaconFactV3,
     envelope: &PalwReceiptSpendEnvelopeV3,
 ) -> Result<Hash64, PalwFpAdmissionV3Error> {
-    check_palw_receipt_spend_admission_v4(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope, None, None)
+    check_palw_receipt_spend_admission_v4(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope, None)
 }
 
 /// [`check_palw_receipt_spend_admission_v3`] with **ADR-0148's pricing**: `pricing` is the chain's
@@ -131,7 +128,6 @@ pub fn check_palw_receipt_spend_admission_v4(
     beacon: &PalwBeaconFactV3,
     envelope: &PalwReceiptSpendEnvelopeV3,
     pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
-    gate_c: Option<&crate::palw_state_v2::PalwStateParamsV2>,
 ) -> Result<Hash64, PalwFpAdmissionV3Error> {
     let spend = &envelope.spend;
     let facts = ReceiptSpendFacts {
@@ -141,7 +137,7 @@ pub fn check_palw_receipt_spend_admission_v4(
         beacon_block: spend.beacon_block,
     };
     // Items 1-5 are shared with the V4 (RFC-0009) admission; the order is unchanged.
-    let claim = receipt_items_1_to_5(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, &facts, pricing, gate_c)?;
+    let claim = receipt_items_1_to_5(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, &facts, pricing)?;
 
     // 6. Receipts do not transfer: the producer IS the executor, and the bond still stands.
     let producer_key = PalwBondKeyV2(spend.producer_bond);
@@ -181,7 +177,6 @@ pub(crate) fn receipt_items_1_to_5<'a>(
     beacon: &PalwBeaconFactV3,
     spend: &ReceiptSpendFacts,
     pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
-    gate_c: Option<&crate::palw_state_v2::PalwStateParamsV2>,
 ) -> Result<&'a crate::palw_state_v2::PalwClaimStateV2, PalwFpAdmissionV3Error> {
     // 1. The claim: exists, free-prompt, certified.
     let claim = state.claim(&spend.claim_id).ok_or(PalwFpAdmissionV3Error::ClaimMissing(spend.claim_id))?;
@@ -190,12 +185,6 @@ pub(crate) fn receipt_items_1_to_5<'a>(
     };
     let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
         return Err(PalwFpAdmissionV3Error::NotCertified(spend.claim_id));
-    };
-    // 1'. RFC-0018 18-A (Gate C): a governed claim licenses receipts only once `SecurityCertified`, and its lane's clock starts at
-    //     certification (`None` — the stateless callers and every claim below Gate C's fence — is the released rule: the clock is Final).
-    let final_daa = match gate_c {
-        Some(params) => crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2(params, state, &spend.claim_id, claim, final_daa)?,
-        None => final_daa,
     };
 
     // 2. The quantum: exists, unspent on this chain.
@@ -285,7 +274,6 @@ where
         envelope,
         verify_mldsa87,
         None,
-        None,
     )
 }
 
@@ -305,14 +293,13 @@ pub fn check_palw_receipt_spend_admission_full_v4<V>(
     envelope: &PalwReceiptSpendEnvelopeV3,
     verify_mldsa87: V,
     pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
-    gate_c: Option<&crate::palw_state_v2::PalwStateParamsV2>,
 ) -> Result<Hash64, PalwFpAdmissionV3Error>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
     envelope.validate_stateless_v3(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v3(verify_mldsa87)?;
-    check_palw_receipt_spend_admission_v4(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope, pricing, gate_c)
+    check_palw_receipt_spend_admission_v4(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope, pricing)
 }
 
 #[cfg(test)]
@@ -768,7 +755,7 @@ mod tests {
         c: &PalwBlockContextV2,
         env: &PalwReceiptSpendEnvelopeV4,
     ) -> Result<Hash64, PalwFpAdmissionV3Error> {
-        check_palw_receipt_spend_admission_v5(state, c, MATURITY, USE_WINDOW, &beacon(), env, None, None)
+        check_palw_receipt_spend_admission_v5(state, c, MATURITY, USE_WINDOW, &beacon(), env, None)
     }
 
     fn v4_refusal(e: PalwFpAdmissionV3Error) -> PalwReceiptV4Error {
@@ -907,7 +894,6 @@ mod tests {
             &env,
             |_, _, _, _| true,
             None,
-            None,
         );
         assert!(
             matches!(short_keys.unwrap_err(), PalwFpAdmissionV3Error::ReceiptV4(PalwReceiptV4Error::PublicKeyLength { .. })),
@@ -988,414 +974,5 @@ mod tests {
         assert!(matches!(verify_class_v1(&bonds, root, &h64(1)), Err(PalwProofErrorV1::WrongCollection { .. })));
         let other = certified_state(u128::MAX);
         assert!(matches!(verify_bond_v1(&bonds, other.state_root(), &b1), Err(PalwProofErrorV1::OpeningDoesNotMatchRoot(_))));
-    }
-
-    // ---- RFC-0018 18-A: Gate C governs the receipt lane ------------------------------------------------------------------------
-
-    /// Gate C's mirror over the fixture params: the claim (accepted at DAA 101) is governed.
-    fn gate_c_params() -> PalwStateParamsV2 {
-        use crate::palw_rfc0018_v1::{PalwGateCRuleV1, PalwRfc0018MirrorV1};
-        params().with_rfc0018_v1(Some(PalwRfc0018MirrorV1 {
-            gate_c_from_daa: Some(100),
-            gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
-            certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720),
-            ..Default::default()
-        }))
-    }
-
-    /// The fixture claim's certification row, decided `outcome` at `decided_daa` (`None`: committed, undecided).
-    fn with_certification(
-        state: &PalwChainStateV2,
-        outcome: Option<crate::palw_security_certification_v1::PalwCertificationOutcomeV1>,
-        decided_daa: u64,
-    ) -> PalwChainStateV2 {
-        use crate::palw_security_certification_v1::*;
-        let row = PalwClaimCertificationRowV1 {
-            claim: h64(0xFC).as_bytes(),
-            class_id: h64(1).as_bytes(),
-            producer_bond: [1; 64],
-            producer_principal: [2; 64],
-            attempt: false,
-            final_daa: 124,
-            committed_daa: 124,
-            committed_span: 0,
-            anchor: None,
-            draws: Vec::new(),
-            drawn_daa: 0,
-            deadline_daa: 10_000,
-            attestations: Vec::new(),
-            held_reward: 0,
-            payout_payload: [3; 64],
-            outcome: outcome.map(|o| (o, decided_daa)),
-        };
-        let mut out = state.clone();
-        out.set_kernel_aux_row_for_tests(
-            PALW_SECURITY_CERTIFICATION_TABLE_V1,
-            certification_claim_key_v1(&palw_certification_id_v1(&h64(0xFC))),
-            Some(borsh::to_vec(&row).unwrap()),
-        );
-        out
-    }
-
-    fn admit_gc(
-        state: &PalwChainStateV2,
-        c: &PalwBlockContextV2,
-        b: &PalwBeaconFactV3,
-        env: &PalwReceiptSpendEnvelopeV3,
-    ) -> Result<Hash64, PalwFpAdmissionV3Error> {
-        check_palw_receipt_spend_admission_v4(state, c, MATURITY, USE_WINDOW, b, env, None, Some(&gate_c_params()))
-    }
-
-    /// **18-A**: a `Final` free-prompt claim that is not `SecurityCertified` — pending, no population, not certified, vetoed, expired,
-    /// withdrawn — licenses no receipt block even with a winning ticket and a valid spend: the admission (the processor's own-block
-    /// pre-check and merged entitlement, so the coinbase worker share) and the fold both refuse it. Certified, the lane opens at the
-    /// certification DAA (draw slot `certified + maturity`) and the spend is folded and weighed normally. Below Gate C (no mirror) the
-    /// released rule holds. Two siblings that differ only in the certification row answer differently (each reads its own chain).
-    #[test]
-    fn rfc18_a_receipts_wait_for_security_certification_and_count_from_it() {
-        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v1;
-        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
-        use crate::palw_state_v2::{PalwBlockWorkV3, PalwClaimPhaseV2, PalwStateV2Error, apply_palw_transition_v3};
-        let p = params();
-        let gc = gate_c_params();
-        let state = certified_state(u128::MAX);
-        let env = spend(0);
-        // Below Gate C: the released rule (Final at 124 → slot 129 → beacon 130).
-        assert!(admit(&state, &ctx(6, 135, 6), &beacon(), &env).is_ok(), "no mirror: Final alone licenses, as released");
-        assert!(apply_palw_transition_v3(&state, &p, &ctx(6, 135, 6), &[], PalwBlockWorkV3::ReceiptSpend(&env.spend)).is_ok());
-        let claim = state.claim(&h64(0xFC)).unwrap().clone();
-        assert_eq!(palw_fp_receipt_clock_v1(&p, &state, &h64(0xFC), &claim, 124), Ok(124));
-
-        // Final but pending (no row), and every decided non-certifying outcome: refused at admission AND in the fold.
-        let refusals: Vec<(PalwChainStateV2, &str)> = vec![
-            (state.clone(), "pending"),
-            (with_certification(&state, None, 0), "pending"),
-            (with_certification(&state, Some(O::NoPopulation), 126), "no-population"),
-            (with_certification(&state, Some(O::NotCertified), 126), "not-certified"),
-            (with_certification(&state, Some(O::Vetoed), 126), "vetoed"),
-            (with_certification(&state, Some(O::Expired), 126), "expired"),
-            (with_certification(&state, Some(O::Withdrawn), 126), "withdrawn"),
-        ];
-        for (s, status) in &refusals {
-            match admit_gc(s, &ctx(6, 135, 6), &beacon(), &env) {
-                Err(PalwFpAdmissionV3Error::Uncertified(u)) => assert_eq!(u.status, *status),
-                other => panic!("{status}: the admission must refuse an uncertified claim, got {other:?}"),
-            }
-            match apply_palw_transition_v3(s, &gc, &ctx(6, 135, 6), &[], PalwBlockWorkV3::ReceiptSpend(&env.spend)) {
-                Err(PalwStateV2Error::ReceiptUncertified(u)) => assert_eq!(u.status, *status),
-                other => panic!("{status}: the fold must refuse (not weigh 0 and pay), got {:?}", other.map(|_| ())),
-            }
-        }
-
-        // Certified at DAA 140: the lane's clock is the certification, so the slot is 145 and the old beacon (130) is stale.
-        let certified = with_certification(&state, Some(O::Certified), 140);
-        assert_eq!(palw_fp_receipt_clock_v1(&gc, &certified, &h64(0xFC), &claim, 124), Ok(140));
-        assert!(matches!(
-            admit_gc(&certified, &ctx(6, 135, 6), &beacon(), &env),
-            Err(PalwFpAdmissionV3Error::BeaconFactInvalid(PalwFpV3Error::BeaconBeforeSlot { slot: 145, .. }))
-        ));
-        let late = PalwBeaconFactV3 { beacon_block: h64(0xBEAC), beacon_daa: 146, prev_attempt_daa: 120 };
-        assert!(admit_gc(&certified, &ctx(6, 150, 6), &late, &env).is_ok(), "certified: the honest spend admits");
-        // (The certification row lives in the kernel route's aux table, so the fold runs with the route in force, as Gate C requires.)
-        let route = crate::palw_state_v2::PalwTransitionExtrasV1 {
-            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1::default()),
-            ..Default::default()
-        };
-        let (paid, _, _) = crate::palw_state_v2::apply_palw_transition_v7(
-            &certified,
-            &gc,
-            None,
-            &ctx(6, 150, 6),
-            &[],
-            PalwBlockWorkV3::ReceiptSpend(&env.spend),
-            &[],
-            Hash64::default(),
-            false,
-            false,
-            false,
-            false,
-            &route,
-        )
-        .expect("certified: the fold takes the spend");
-        assert!(paid.safe_weight() > certified.safe_weight(), "and weighs it (Gate C's weight site passes a certified claim)");
-        // A public-check certification licenses the same way.
-        let public = with_certification(&state, Some(O::PublicCheckCertified), 140);
-        assert!(admit_gc(&public, &ctx(6, 150, 6), &late, &env).is_ok());
-
-        // Siblings: one parent, two chains that differ only in the certification row. Each reads its own.
-        assert!(admit_gc(&certified, &ctx(6, 150, 6), &late, &env).is_ok());
-        assert!(matches!(admit_gc(&state, &ctx(6, 150, 6), &late, &env), Err(PalwFpAdmissionV3Error::Uncertified(_))));
-
-        // Late conviction: a voided claim is refused whatever its row says (the RPC names it `revoked`).
-        let mut voided = claim.clone();
-        voided.phase = PalwClaimPhaseV2::Voided { reason: crate::palw_state_v2::PalwVoidReasonV2::CourtFraud, voided_daa: 160 };
-        assert_eq!(palw_fp_receipt_clock_v1(&gc, &certified, &h64(0xFC), &voided, 124).map_err(|e| e.status), Err("revoked"));
-    }
-
-    /// **G14 gatec-capacity: Gate C = Final ∧ SecurityCertified ∧ ¬accusation-pending.** A certified claim with an accusation opened
-    /// after its certification licenses no receipt (admission and fold both refuse, status `accusation-pending`); once the accusation
-    /// closes without conviction the lane re-opens. Below Gate C (no mirror) an open court does not touch the released rule.
-    #[test]
-    fn gatec_an_accusation_pending_after_certification_suspends_receipts() {
-        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v1;
-        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
-        use crate::palw_state_v2::{PalwBlockWorkV3, PalwStateV2Error, apply_palw_transition_v3};
-        let p = params();
-        let gc = gate_c_params();
-        let state = certified_state(u128::MAX);
-        let claim = state.claim(&h64(0xFC)).unwrap().clone();
-        let certified = with_certification(&state, Some(O::Certified), 140);
-        let late = PalwBeaconFactV3 { beacon_block: h64(0xBEAC), beacon_daa: 146, prev_attempt_daa: 120 };
-        let env = spend(0);
-        assert!(admit_gc(&certified, &ctx(6, 150, 6), &late, &env).is_ok());
-
-        let mut accused = certified.clone();
-        accused.set_open_courts_for_tests(h64(0xFC), 1);
-        assert_eq!(
-            palw_fp_receipt_clock_v1(&gc, &accused, &h64(0xFC), &claim, 124).map_err(|e| e.status),
-            Err("accusation-pending")
-        );
-        match admit_gc(&accused, &ctx(6, 150, 6), &late, &env) {
-            Err(PalwFpAdmissionV3Error::Uncertified(u)) => assert_eq!(u.status, "accusation-pending"),
-            other => panic!("admission must refuse while an accusation is pending, got {other:?}"),
-        }
-        match apply_palw_transition_v3(&accused, &gc, &ctx(6, 150, 6), &[], PalwBlockWorkV3::ReceiptSpend(&env.spend)) {
-            Err(PalwStateV2Error::ReceiptUncertified(u)) => assert_eq!(u.status, "accusation-pending"),
-            other => panic!("the fold must refuse (no quantum consumed), got {:?}", other.map(|_| ())),
-        }
-        // Closed without conviction: the lane re-opens.
-        let mut acquitted = accused.clone();
-        acquitted.set_open_courts_for_tests(h64(0xFC), 0);
-        assert!(admit_gc(&acquitted, &ctx(6, 150, 6), &late, &env).is_ok());
-        // Below Gate C an open court changes nothing in the receipt clock (released rule).
-        let mut below = state.clone();
-        below.set_open_courts_for_tests(h64(0xFC), 1);
-        assert_eq!(palw_fp_receipt_clock_v1(&p, &below, &h64(0xFC), &claim, 124), Ok(124));
-    }
-
-    /// One empty block folded with the kernel route in force (Gate C's rows live there), returning the child and its delta.
-    fn fold_empty_r6(
-        parent: &PalwChainStateV2,
-        p: &PalwStateParamsV2,
-        c: &PalwBlockContextV2,
-    ) -> (PalwChainStateV2, crate::palw_state_v2::PalwStateDeltaV2) {
-        let route = crate::palw_state_v2::PalwTransitionExtrasV1 {
-            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1::default()),
-            ..Default::default()
-        };
-        let (child, delta, _) = crate::palw_state_v2::apply_palw_transition_v7(
-            parent,
-            p,
-            None,
-            c,
-            &[],
-            crate::palw_state_v2::PalwBlockWorkV3::None,
-            &[],
-            Hash64::default(),
-            false,
-            false,
-            false,
-            false,
-            &route,
-        )
-        .expect("an empty block folds");
-        (child, delta)
-    }
-
-    /// **G14 r6 (user decision 2026-10-22): the receipt use-window clock pauses while an accusation is pending and resumes on
-    /// dismissal — from a ROOTED, journaled row.** Certified at 140 (clock 140). An accusation is seen pending in the block at DAA 150:
-    /// the fold opens the pause row there (receipts refused, `accusation-pending`). It closes without conviction; the block at DAA 170
-    /// closes the pause and credits 20 DAA: the clock reads `140 + 20 = 160` (the remaining window resumes instead of having lapsed).
-    /// A second accusation 180..185 adds 5 more (165). Below Gate C nothing is written and the clock is the released one.
-    #[test]
-    fn r6_receipt_pause_row_opens_on_accusation_and_dismissal_resumes_the_remaining_window() {
-        use crate::palw_receipt_pause_v2::{palw_receipt_pause_account_v2, palw_receipt_pause_row_v2};
-        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2;
-        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
-        let p = params();
-        let gc = gate_c_params();
-        let state = certified_state(u128::MAX);
-        let claim = state.claim(&h64(0xFC)).unwrap().clone();
-        let certified = with_certification(&state, Some(O::Certified), 140);
-        assert_eq!(palw_fp_receipt_clock_v2(&gc, &certified, &h64(0xFC), &claim, 124), Ok(140));
-
-        // The accusation is pending in the block at DAA 150: the pause opens there.
-        let mut accused = certified.clone();
-        accused.set_open_courts_for_tests(h64(0xFC), 1);
-        let (b150, d150) = fold_empty_r6(&accused, &gc, &ctx(7, 150, 7));
-        let row = palw_receipt_pause_row_v2(&b150, &h64(0xFC)).unwrap().expect("the pause row is written");
-        assert_eq!(row.account().open_since_daa, Some(150));
-        assert_eq!(
-            palw_fp_receipt_clock_v2(&gc, &b150, &h64(0xFC), &claim, 124).map_err(|e| e.status),
-            Err("accusation-pending")
-        );
-        assert!(
-            d150.entries.iter().any(|e| matches!(e, crate::palw_state_v2::PalwDeltaEntryV2::KernelRouteRow { table, .. }
-                if *table == crate::palw_receipt_pause_v2::PALW_RECEIPT_PAUSE_TABLE_V2)),
-            "the row is journaled (a reorg reverts it)"
-        );
-        // A block while still pending: nothing moves (one suspension, opened once).
-        let (b160, _) = fold_empty_r6(&b150, &gc, &ctx(8, 160, 8));
-        assert_eq!(palw_receipt_pause_account_v2(&b160, &h64(0xFC)).unwrap().open_since_daa, Some(150));
-
-        // Dismissed (the court closes without conviction): the block at 170 closes the pause, crediting 20 DAA.
-        let mut dismissed = b160.clone();
-        dismissed.set_open_courts_for_tests(h64(0xFC), 0);
-        let (b170, _) = fold_empty_r6(&dismissed, &gc, &ctx(9, 170, 9));
-        let account = palw_receipt_pause_account_v2(&b170, &h64(0xFC)).unwrap();
-        assert_eq!((account.open_since_daa, account.paused_total_daa), (None, 20));
-        assert_eq!(palw_fp_receipt_clock_v2(&gc, &b170, &h64(0xFC), &claim, 124), Ok(160), "the remaining window resumes");
-        // v1 (unpaused) would have answered 140 — the window consumed during the suspension.
-        assert_eq!(crate::palw_rfc0018_v1::palw_fp_receipt_clock_v1(&gc, &b170, &h64(0xFC), &claim, 124), Ok(140));
-
-        // A second accusation 180..185 accumulates.
-        let mut again = b170.clone();
-        again.set_open_courts_for_tests(h64(0xFC), 2);
-        let (b180, _) = fold_empty_r6(&again, &gc, &ctx(10, 180, 10));
-        let mut cleared = b180.clone();
-        cleared.set_open_courts_for_tests(h64(0xFC), 0);
-        let (b185, _) = fold_empty_r6(&cleared, &gc, &ctx(11, 185, 11));
-        assert_eq!(palw_fp_receipt_clock_v2(&gc, &b185, &h64(0xFC), &claim, 124), Ok(165));
-
-        // Below Gate C: no row, the released clock.
-        let mut below = state.clone();
-        below.set_open_courts_for_tests(h64(0xFC), 1);
-        assert_eq!(palw_fp_receipt_clock_v2(&p, &below, &h64(0xFC), &claim, 124), Ok(124));
-        assert_eq!(palw_receipt_pause_row_v2(&below, &h64(0xFC)), Ok(None));
-    }
-
-    /// **G14 r6: the pause across a reorg.** The block that opened the pause is reverted (its delta undone): the row is gone and the
-    /// sibling chain — which never saw the accusation — reads the unpaused clock. The block that closed it is reverted: the pause is
-    /// open again (receipts refused), exactly as the chain before it held. A sibling that reads the same parent but sees no accusation
-    /// writes nothing.
-    #[test]
-    fn r6_receipt_pause_row_follows_a_reorg() {
-        use crate::palw_receipt_pause_v2::{palw_receipt_pause_account_v2, palw_receipt_pause_row_v2};
-        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2;
-        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
-        use crate::palw_state_v2::revert_delta_v2;
-        let gc = gate_c_params();
-        let state = certified_state(u128::MAX);
-        let claim = state.claim(&h64(0xFC)).unwrap().clone();
-        let certified = with_certification(&state, Some(O::Certified), 140);
-        let mut accused = certified.clone();
-        accused.set_open_courts_for_tests(h64(0xFC), 1);
-        let (b150, d150) = fold_empty_r6(&accused, &gc, &ctx(7, 150, 7));
-        assert!(palw_receipt_pause_row_v2(&b150, &h64(0xFC)).unwrap().is_some());
-        // Reorg out the opening block.
-        let back = revert_delta_v2(&b150, &d150, &gc).expect("the delta reverts");
-        assert_eq!(palw_receipt_pause_row_v2(&back, &h64(0xFC)), Ok(None), "the pause row leaves with its block");
-        assert_eq!(back.state_root(), accused.state_root(), "the parent's root, exactly");
-        // The sibling without the accusation writes nothing and reads the unpaused clock.
-        let (sibling, _) = fold_empty_r6(&certified, &gc, &ctx(12, 150, 7));
-        assert_eq!(palw_receipt_pause_row_v2(&sibling, &h64(0xFC)), Ok(None));
-        assert_eq!(palw_fp_receipt_clock_v2(&gc, &sibling, &h64(0xFC), &claim, 124), Ok(140));
-
-        // Reorg out the closing block: the pause is open again.
-        let mut dismissed = b150.clone();
-        dismissed.set_open_courts_for_tests(h64(0xFC), 0);
-        let (b170, d170) = fold_empty_r6(&dismissed, &gc, &ctx(9, 170, 9));
-        assert_eq!(palw_receipt_pause_account_v2(&b170, &h64(0xFC)).unwrap().paused_total_daa, 20);
-        let reopened = revert_delta_v2(&b170, &d170, &gc).expect("the delta reverts");
-        assert_eq!(palw_receipt_pause_account_v2(&reopened, &h64(0xFC)).unwrap().open_since_daa, Some(150));
-        assert_eq!(palw_receipt_pause_account_v2(&reopened, &h64(0xFC)).unwrap().paused_total_daa, 0);
-    }
-
-    /// **G14 r6: a conviction drops the row** (the claim is `revoked`, there is no window to resume), and a malformed carried row is a
-    /// typed refusal, never "no pause".
-    #[test]
-    fn r6_receipt_pause_row_is_dropped_on_conviction_and_a_malformed_row_refuses() {
-        use crate::palw_receipt_pause_v2::*;
-        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2;
-        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
-        use crate::palw_state_v2::PalwClaimPhaseV2;
-        let gc = gate_c_params();
-        let state = certified_state(u128::MAX);
-        let claim = state.claim(&h64(0xFC)).unwrap().clone();
-        let certified = with_certification(&state, Some(O::Certified), 140);
-        let mut accused = certified.clone();
-        accused.set_open_courts_for_tests(h64(0xFC), 1);
-        let (b150, _) = fold_empty_r6(&accused, &gc, &ctx(7, 150, 7));
-        let mut convicted = b150.clone();
-        let mut voided = claim.clone();
-        voided.phase = PalwClaimPhaseV2::Voided { reason: crate::palw_state_v2::PalwVoidReasonV2::CourtFraud, voided_daa: 160 };
-        convicted.set_claim_for_tests(h64(0xFC), voided.clone());
-        convicted.set_open_courts_for_tests(h64(0xFC), 0);
-        let (b170, _) = fold_empty_r6(&convicted, &gc, &ctx(9, 170, 9));
-        assert_eq!(palw_receipt_pause_row_v2(&b170, &h64(0xFC)), Ok(None), "a convicted claim keeps no pause row");
-        assert_eq!(palw_fp_receipt_clock_v2(&gc, &b170, &h64(0xFC), &voided, 124).map_err(|e| e.status), Err("revoked"));
-
-        let mut bad = certified.clone();
-        bad.set_kernel_aux_row_for_tests(PALW_RECEIPT_PAUSE_TABLE_V2, palw_receipt_pause_key_v2(&h64(0xFC)), Some(vec![9, 9, 9]));
-        assert_eq!(
-            palw_fp_receipt_clock_v2(&gc, &bad, &h64(0xFC), &claim, 124).map_err(|e| e.status),
-            Err("pause-row-malformed")
-        );
-    }
-
-    /// **User decision 2026-10-17 (Gate C retirement)**: a governed Final free-prompt claim is not retired before its certification can
-    /// be decided and its receipt lane run: the deadline the sweep reads is at least `final + certification lifetime + receipt tail`, so
-    /// an honest claim certified at the latest possible DAA is still present for its whole use window. Below Gate C: unchanged.
-    #[test]
-    fn rfc18_a_an_honest_claim_is_certified_and_receipted_before_it_retires() {
-        use crate::palw_rfc0018_v1::{PalwGateCRuleV1, PalwRfc0018MirrorV1};
-        let tail = MATURITY + USE_WINDOW;
-        let policy = crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720);
-        let base = params().with_claim_retirement_daa(3_000).unwrap();
-        let gc = base.clone().with_rfc0018_v1(Some(PalwRfc0018MirrorV1 {
-            gate_c_from_daa: Some(100),
-            gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
-            certification: policy,
-            fp_receipt_tail_daa: tail,
-            ..Default::default()
-        }));
-        let state = certified_state(u128::MAX);
-        let claim = state.claim(&h64(0xFC)).unwrap().clone();
-        let final_daa = 124;
-        let old = crate::palw_state_v2::palw_rcore_deadline_v1(&state, &base, &h64(0xFC), &claim, Some(final_daa)).unwrap().unwrap();
-        let new = crate::palw_state_v2::palw_rcore_deadline_v1(&state, &gc, &h64(0xFC), &claim, Some(final_daa)).unwrap().unwrap();
-        assert_eq!(old, final_daa + 3_000, "below Gate C: the released retirement");
-        assert!(policy.lifetime_daa() >= policy.prosecution_window_daa && policy.prosecution_window_daa == 5_040);
-        assert_eq!(new, final_daa + policy.lifetime_daa() + tail, "governed: kept past the latest certification and its receipt lane");
-        // The latest certification decision, then the draw slot, the beacon and the whole use window, all before retirement.
-        let latest_certified = final_daa + policy.lifetime_daa();
-        let last_spend = latest_certified + MATURITY + USE_WINDOW;
-        assert!(last_spend <= new, "{last_spend} <= {new}");
-    }
-
-    /// **User decision 2026-10-17 (Gate C retention)**: past Gate C a claim promises its trace through the latest certification and its
-    /// receipt lane — the producer's retention (the facts the kaspad producer and FP worker read) and both canonical pins carry the
-    /// extension, so the material is still fetchable at the latest certification point and to the end of the use window; below Gate C
-    /// the released value, byte for byte.
-    #[test]
-    fn rfc18_a_material_is_fetchable_at_the_latest_certification_point() {
-        use crate::palw_rfc0018_v1::{PalwGateCRuleV1, PalwRfc0018MirrorV1, palw_gate_c_retention_extension_daa_v1};
-        let tail = MATURITY + USE_WINDOW;
-        let policy = crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720);
-        let base = params().with_claim_retirement_daa(3_000).unwrap();
-        let gc = base.clone().with_rfc0018_v1(Some(PalwRfc0018MirrorV1 {
-            gate_c_from_daa: Some(100),
-            gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
-            certification: policy,
-            fp_receipt_tail_daa: tail,
-            ..Default::default()
-        }));
-        let state = certified_state(u128::MAX);
-        let accepted = 101;
-        assert_eq!(palw_gate_c_retention_extension_daa_v1(&base, accepted), 0, "below Gate C: nothing added");
-        assert_eq!(palw_gate_c_retention_extension_daa_v1(&gc, accepted), policy.lifetime_daa() + tail);
-        let min = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&gc);
-        let promised =
-            accepted + crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(&state, &gc, &h64(1), accepted);
-        assert_eq!(promised, accepted + min + policy.lifetime_daa() + tail, "the producer's retention carries the extension");
-        // The fixture's Final (124) is within the released minimum of its acceptance, so the material outlives the latest
-        // certification decision and the whole receipt lane, and the claim's retirement.
-        let final_daa = 124;
-        assert!(final_daa <= accepted + min);
-        let latest_certification = final_daa + policy.lifetime_daa();
-        assert!(promised >= latest_certification + tail, "{promised} >= {}", latest_certification + tail);
-        let claim = state.claim(&h64(0xFC)).unwrap().clone();
-        let retire = crate::palw_state_v2::palw_rcore_deadline_v1(&state, &gc, &h64(0xFC), &claim, Some(final_daa)).unwrap().unwrap();
-        assert!(promised >= retire, "material is kept at least as long as the claim: {promised} >= {retire}");
     }
 }

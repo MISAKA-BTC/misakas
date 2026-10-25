@@ -127,8 +127,6 @@ def native_receipt(stage: str, e: dict, base: Path) -> str | None:
             or doc.get("pinned_headers_and_original_rows_verified") is not True
             or not isinstance(doc.get("job"), str) or len(doc["job"]) != 128):
         return "UNAUTHENTICATED_NATIVE_RECEIPT"
-    if doc.get("local_qualified_validation_network") is True:
-        return "LOCAL_QUALIFIED_VALIDATION_ONLY"
     if (doc.get("qualified_native_profile") is not True or doc.get("final_receipt_class") != "qualified-final"
             or doc.get("calibration_receipts_are_not_A6_or_A8_evidence") is not False):
         return "MEASUREMENT_FINAL_ONLY"
@@ -143,9 +141,7 @@ def native_receipt(stage: str, e: dict, base: Path) -> str | None:
     return None
 
 
-def panel_ok(panel: dict, base: Path, *, allow_local_validation: bool = False) -> bool:
-    if (panel.get("local_qualified_validation_network") is True or panel.get("local_qualified_validation_only") is True) and not allow_local_validation:
-        return False
+def panel_ok(panel: dict, base: Path) -> bool:
     windows = panel.get("windows")
     rule = panel.get("minimum_independent_operators")
     if type(rule) is not int or rule < 2 or not isinstance(windows, list) or len(windows) < 2:
@@ -171,9 +167,6 @@ def outcome(member: dict, row: dict | None, base: Path, cohort_sha: str) -> dict
     result = {"id": key, "registration_ready": False, "final_capable": False, "first_blocker": "NOT_RUN", "stages": {}}
     if row is None:
         return result
-    if row.get("local_qualified_validation_network") is True:
-        result["first_blocker"] = "LOCAL_QUALIFIED_VALIDATION_ONLY"
-        return result
     scope = row.get("scope", {})
     if (row.get("cohort_sha256") != cohort_sha or any(scope.get(k) in (None, "", False) for k in SCOPE)
             or scope["repository"] != member["repository"] or scope["revision"] != member["revision"]
@@ -191,7 +184,7 @@ def outcome(member: dict, row: dict | None, base: Path, cohort_sha: str) -> dict
     for stage in STAGES:
         e = row.get("stages", {}).get(stage, {})
         status = e.get("status", "NOT_RUN")
-        if status not in ("PASS", "FAIL", "NOT_RUN", "LOCAL_VALIDATION"):
+        if status not in ("PASS", "FAIL", "NOT_RUN"):
             raise ValueError(f"unknown stage status for {key}/{stage}")
         if status == "PASS" and (e.get("scope") != scope or not evidence_ok(e.get("evidence", {}), base)):
             status = "FAIL"

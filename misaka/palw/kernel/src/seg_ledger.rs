@@ -1,4 +1,4 @@
-//! **The ledger's K2-TIR-v4 rules** (`docs/design/palw/models/k2-real-scale.md` §§1.3, 4, 5): tiled jobs and their tiles, segmented claims,
+//! **The ledger's K2-TIR-v4 rules** (`docs/design/palw/k2-real-scale.md` §§1.3, 4, 5): tiled jobs and their tiles, segmented claims,
 //! per-position demands served in parts, and the segmented court — beside the historical rules of [`crate::ledger`], which dispatches
 //! here (inner tags 16–18, `ProsecutionV1::Segmented`, a demand or response on a segmented claim).
 //!
@@ -557,7 +557,7 @@ impl KernelLedgerV1 {
 
     /// **The fate of a served position's demand bonds once its proof grace has ended** (and the claim was not convicted in it). Today:
     /// returned. The rule is G14-R4's (proposed: burned, so demanding an honest claim's positions costs the demander what serving
-    /// costs the producer — `docs/design/palw/models/k2-real-scale.md` §4).
+    /// costs the producer — `docs/design/palw/k2-real-scale.md` §4).
     pub fn settle_served_demand_bonds_v4(&mut self, claim: &Digest, held: &[(Digest, u64)], out: &mut Vec<LedgerEventV1>) {
         for (bond, amount) in held {
             if let Some(b) = self.bonds.get_mut(bond) {

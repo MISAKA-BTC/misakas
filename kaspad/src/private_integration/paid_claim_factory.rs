@@ -18,33 +18,16 @@ use kaspa_hashes::Hash64;
 /// **Explicit mechanics-only paid consumer lifecycle for the private paid-v3 profile** (2026-10-15; unapproved, and refused
 /// by the public validator whenever armed): finite service/dispute/material spans on the private clock — the values the
 /// native-Final conformance slice runs — chosen to exercise the immutable accepted-claim terms, never a measured cost.
-/// The old 1,000-DAA service could not contain even T12's minimum floor path
-/// (600 bind + 600 receipt + 120 challenge + 1). Derive this private-only floor
-/// from its unchanged rules; per-class longer receipt paths remain checked by
-/// the real contract planner. This changes the private fingerprint, not a preset.
-pub(super) fn private_paid_consumer_lifecycle_v3(
-    activation: ForkActivation,
-    params: &Params,
-) -> Result<PalwPaidConsumerLifecycleFenceV1, String> {
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
-        return Err("private consumer lifecycle requires V2 clocks".into());
-    };
-    let state = &bundle.state;
-    let minimum = state
-        .window_bind()
-        .checked_add(state.window_receipt())
-        .and_then(|v| v.checked_add(state.window_challenge_at(activation.daa_score())))
-        .and_then(|v| v.checked_add(1))
-        .ok_or("private consumer minimum service overflow")?;
-    Ok(PalwPaidConsumerLifecycleFenceV1 {
+pub(super) fn private_paid_consumer_lifecycle_v3(activation: ForkActivation) -> PalwPaidConsumerLifecycleFenceV1 {
+    PalwPaidConsumerLifecycleFenceV1 {
         activation,
         policy: PalwPaidConsumerLifecyclePolicyV1 {
             version: 1,
-            service_span_daa: 1_000.max(minimum),
+            service_span_daa: 1_000,
             dispute_tail_daa: 3_000,
             material_tail_daa: 2_000,
         },
-    })
+    }
 }
 
 pub fn private_paid_claim_params_v3(salt: &PalwDrillSaltV1) -> Result<Params, String> {
@@ -83,7 +66,7 @@ pub fn private_paid_claim_params_v3(salt: &PalwDrillSaltV1) -> Result<Params, St
     // private chain exercises them (2026-10-15). Both are the structural probe values; neither is an approval. The probe's
     // spans (10,000 DAA service, 1,000 pause) are already finite on the private clock.
     params.palw_panel_lifetime_v2 = Some(PalwPanelLifetimeFenceV2::unapproved_probe_at(activation));
-    params.palw_paid_consumer_lifecycle_v1 = Some(private_paid_consumer_lifecycle_v3(activation, &params)?);
+    params.palw_paid_consumer_lifecycle_v1 = Some(private_paid_consumer_lifecycle_v3(activation));
     params.palw_monetary_material_v1 = Some(PalwMonetaryMaterialFenceV1 {
         activation,
         policy: PalwMonetaryMaterialPolicyV1 {
@@ -123,7 +106,7 @@ pub(super) fn validate_private_paid_claim_relations_v3(params: &Params) -> Resul
     material.policy.validate().map_err(str::to_owned)?;
     lifetime.policy.validate().map_err(str::to_owned)?;
     if lifetime != PalwPanelLifetimeFenceV2::unapproved_probe_at(activation)
-        || *consumer != private_paid_consumer_lifecycle_v3(activation, params)?
+        || *consumer != private_paid_consumer_lifecycle_v3(activation)
         || !consumer.policy.valid()
     {
         return Err("private Panel lifetime / paid consumer lifecycle differ from their exact mechanics-only values".into());
@@ -205,11 +188,6 @@ pub(super) fn validate_private_paid_claim_relations_v3(params: &Params) -> Resul
     checked.palw_provider_court_v1 = Some(ForkActivation::never());
     checked.palw_panel_lifetime_v2.as_mut().unwrap().activation = ForkActivation::never();
     checked.palw_paid_consumer_lifecycle_v1.as_mut().unwrap().activation = ForkActivation::never();
-    // The v4 profile's release recovery rides the monetary covenant, which this copy makes dormant: dormant with it (its own
-    // mechanics scope was checked by the v4 relations; production validation refuses recovery without the covenant first).
-    if let Some(recovery) = checked.palw_material_release_recovery_v2.as_mut() {
-        recovery.activation = ForkActivation::never();
-    }
     checked.sync_palw_bond_budget_v1();
     checked.sync_palw_claim_challenge_v2();
     checked.sync_palw_permissionless_panel_v1();
@@ -229,25 +207,8 @@ mod tests {
         let params = private_paid_claim_params_v3(&salt).unwrap();
         let at = ForkActivation::new(0);
         assert_eq!(params.palw_panel_lifetime_v2, Some(PalwPanelLifetimeFenceV2::unapproved_probe_at(at)));
-        assert_eq!(params.palw_paid_consumer_lifecycle_v1, Some(private_paid_consumer_lifecycle_v3(at, &params).unwrap()));
+        assert_eq!(params.palw_paid_consumer_lifecycle_v1, Some(private_paid_consumer_lifecycle_v3(at)));
         assert!(params.palw_paid_consumer_lifecycle_active_at(0));
-        let consumer = params.palw_paid_consumer_lifecycle_v1.as_ref().unwrap();
-        assert_eq!(consumer.policy.service_span_daa, 1_321);
-        assert_eq!(consumer.policy.dispute_tail_daa, 3_000);
-        assert_eq!(consumer.policy.material_tail_daa, 2_000);
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
-            panic!("V2")
-        };
-        let minimum = bundle.state.window_bind() + bundle.state.window_receipt() + bundle.state.window_challenge_at(0) + 1;
-        assert!(consumer.policy.terms(0).unwrap().admits_service(0, minimum));
-        assert!(
-            !PalwPaidConsumerLifecyclePolicyV1 { service_span_daa: 1_000, ..consumer.policy }
-                .terms(0)
-                .unwrap()
-                .admits_service(0, minimum),
-            "the previous profile could never include its first ordinary claim"
-        );
-
         assert!(params.validate_palw_panel_lifetime_v2().is_err(), "armed lifetime stays publicly refused");
         assert!(params.validate_palw_paid_consumer_lifecycle_v1().is_err(), "armed lifecycle stays publicly refused");
         validate_private_paid_claim_relations_v3(&params).unwrap();

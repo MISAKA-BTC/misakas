@@ -497,30 +497,12 @@ impl SourceShardV16 {
         plan: &SourcePlanV16,
         original_job: &Digest,
     ) -> Result<(), String> {
-        let horizon = self.row.as_ref().ok_or("source obligation absent")?.deadline_daa;
-        self.admit_valid_request_until(quota, epoch, plan, original_job, horizon)
-    }
-    /// Native-only service through a held Final's authenticated liability
-    /// horizon. The caller must validate the held row and derive `horizon` from
-    /// the original producer-signed funding terms before using this method.
-    /// It consumes the same prepaid units, keeps the original stored deadline,
-    /// and refuses to cross the admitted quota interval.
-    pub fn admit_valid_request_until(
-        &mut self,
-        quota: &QuotaPolicyV11,
-        epoch: &TrustedEpochV11,
-        plan: &SourcePlanV16,
-        original_job: &Digest,
-        horizon: u64,
-    ) -> Result<(), String> {
         self.context(quota, epoch, plan)?;
         let row = self.row.as_mut().ok_or("source obligation absent")?;
         if self.subject.closed
             || row.retired
             || row.job_id != *original_job
-            || horizon < row.deadline_daa
-            || horizon >= epoch.interval_end(quota)?
-            || epoch.block_daa > horizon
+            || epoch.block_daa > row.deadline_daa
             || row.requests_admitted >= plan.requests
         {
             return Err("source valid request exceeds original producer obligation".into());
@@ -539,30 +521,12 @@ impl SourceShardV16 {
         producer: &Digest,
         carrier_bytes: u64,
     ) -> Result<(), String> {
-        let horizon = self.row.as_ref().ok_or("source obligation absent")?.deadline_daa;
-        self.debit_answer_until(quota, epoch, plan, producer, carrier_bytes, horizon)
-    }
-    /// Native-only answer debit for a request admitted under an authenticated
-    /// held-Final horizon. As with request admission, no allowance is minted,
-    /// moved to another interval, or returned; every attempt still consumes
-    /// the original producer's prepaid guarantee before decoding the answer.
-    pub fn debit_answer_until(
-        &mut self,
-        quota: &QuotaPolicyV11,
-        epoch: &TrustedEpochV11,
-        plan: &SourcePlanV16,
-        producer: &Digest,
-        carrier_bytes: u64,
-        horizon: u64,
-    ) -> Result<(), String> {
         self.context(quota, epoch, plan)?;
         let mut row = self.row.clone().ok_or("source obligation absent")?;
         if self.subject.closed
             || row.retired
             || row.producer != *producer
-            || horizon < row.deadline_daa
-            || horizon >= epoch.interval_end(quota)?
-            || epoch.block_daa > horizon
+            || epoch.block_daa > row.deadline_daa
             || carrier_bytes > SOURCE_ANSWER_MAX_BYTES_V16
             || row.answers_used >= row.requests_admitted.checked_mul(ANSWER_ATTEMPTS_PER_UNIT_V16).ok_or("source attempts overflow")?
         {
@@ -647,81 +611,4 @@ pub fn retire_expired_source_v16(
     // interval's physical consumption or subtract it from current reservations.
     retired.retired=true;retired.consumed=retired.committed.clone();retired.guarantee_remaining=QuotaQuantitiesV11::default();
     Ok(retired)
-}
-
-#[cfg(test)]
-mod liability_service_tests {
-    use super::*;
-
-    fn fixture() -> (QuotaPolicyV11, SourcePlanV16, SourceShardV16) {
-        let cap = QuotaQuantitiesV11([1_000; 21]);
-        let policy = QuotaPolicyV11 {
-            version: 11,
-            enabled: true,
-            network_domain: [1; 64],
-            ruleset_digest: quota_ruleset_id_v11(),
-            interval_daa: 100,
-            plan: cap.clone(),
-            block: cap.clone(),
-            actor: cap.clone(),
-            network: cap,
-            max_subjects: 8,
-            max_actors: 8,
-            future_attempts: [2, 2, 2, 2, 2, 1],
-        };
-        let answer = QuotaQuantitiesV11([1; 21]);
-        let admission = QuotaQuantitiesV11([2; 21]);
-        let guarantee = answer.checked_mul(2).unwrap();
-        let committed = admission.checked_add(&guarantee).unwrap();
-        let plan = SourcePlanV16 {
-            class: [2; 64], parameter: [3; 64], inventory: [4; 64], quota: policy.root(),
-            job_plan: [5; 64], requests: 1, admission: admission.clone(), answer: answer.clone(), guarantee: guarantee.clone(),
-        };
-        let binding = SubjectBindingV11 {
-            version: 11, policy_root: policy.root(), class_id: plan.class, class_scope9_root: [6; 64], program_root: [7; 64],
-            parameter_root: plan.parameter, job_id: [8; 64], job_input_root: [9; 64], resource10_root: [10; 64],
-            quota_plan_root: plan.job_plan, actual_positions: 1, requester: [11; 64], producer: [12; 64],
-            admitted_interval: 0, deadline_daa: 20,
-        };
-        let subject = QuotaSubjectSummaryV11 {
-            binding: binding.clone(), committed: committed.clone(), consumed: admission.clone(),
-            guarantee_remaining: guarantee.clone(), future_attempts_used: [0; FUTURE_ACTION_KINDS_V11],
-            closed: false, retained_protected_seals: 0,
-        };
-        let epoch = TrustedEpochV11::from_chain(&policy, [13; 64], 10).unwrap();
-        let global = QuotaGlobalRowV11 {
-            policy_root: policy.root(), epoch,
-            block: QuotaIntervalSummaryV11 { consumed: QuotaQuantitiesV11::default(), reserved: committed.clone() },
-            network: QuotaIntervalSummaryV11 { consumed: QuotaQuantitiesV11::default(), reserved: committed.clone() },
-            actor_count: 1, subject_count: 1, protected_seal_count: 0,
-        };
-        let producer = QuotaActorRowV11 {
-            actor: binding.producer, network_interval: 0, active: true, interval: global.network.clone(), retained_protected_seals: 0,
-        };
-        let row = SourceObligationV16 {
-            version: SOURCE_VERSION_V16, job_id: binding.job_id, subject_root: binding.root(), plan_root: plan.root(),
-            class: plan.class, parameter: plan.parameter, inventory: plan.inventory, producer: binding.producer,
-            producer_operator: [14; 64], original_consent_root: [15; 64], quota_plan_root: plan.job_plan,
-            admitted_interval: 0, deadline_daa: 20, requests_cap: plan.requests, requests_admitted: 0, answers_used: 0,
-            retired: false, committed, consumed: admission, guarantee_remaining: guarantee,
-        };
-        (policy, plan, SourceShardV16 { global, producer, subject, row: Some(row) })
-    }
-
-    #[test]
-    fn native_text_service_uses_the_original_reservation_only_through_an_authenticated_horizon() {
-        let (policy, plan, mut shard) = fixture();
-        let job = [8; 64];
-        let now = TrustedEpochV11::from_chain(&policy, [16; 64], 21).unwrap();
-        let (_, _, mut legacy) = fixture();
-        assert!(legacy.admit_valid_request(&policy, &now, &plan, &job).is_err(), "legacy API keeps the signed deadline");
-        shard.admit_valid_request_until(&policy, &now, &plan, &job, 30).unwrap();
-        let producer = [12; 64];
-        assert!(shard.debit_answer(&policy, &now, &plan, &producer, 64).is_err(), "legacy answer API keeps the signed deadline");
-        shard.debit_answer_until(&policy, &now, &plan, &producer, 64, 30).unwrap();
-        let row = shard.source_row().unwrap();
-        assert_eq!((row.deadline_daa, row.requests_admitted, row.answers_used), (20, 1, 1));
-        assert_eq!(row.guarantee_remaining, plan.guarantee.checked_sub(&plan.answer).unwrap());
-        assert!(shard.admit_valid_request_until(&policy, &now, &plan, &job, 100).is_err(), "service cannot cross the interval");
-    }
 }

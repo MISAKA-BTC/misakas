@@ -53,9 +53,6 @@
 //! **The check order is normative** (the verdict and its evidence id must be the same on every
 //! implementation): see [`check_tir_cone_refutation_v1`].
 
-pub mod parameter_cover;
-mod source_geometry;
-
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
@@ -312,78 +309,6 @@ pub trait PalwTirEvidenceStoreV1 {
     }
 }
 
-
-/// Test-only observation of unchanged builder store calls; never a custody certificate.
-#[cfg(test)]
-pub(crate) struct ObservedEvidenceStoreV1<'a> {
-    pub inner: &'a dyn PalwTirEvidenceStoreV1,
-    pub calls: std::cell::RefCell<std::collections::BTreeSet<String>>,
-    pub deny: Option<&'static str>,
-}
-#[cfg(test)]
-impl PalwTirEvidenceStoreV1 for ObservedEvidenceStoreV1<'_> {
-    fn begin_builder_move_v1(&self) { self.inner.begin_builder_move_v1(); }
-    fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
-        self.calls.borrow_mut().insert(format!("step_leaf({:?})" ,index));
-        if self.deny == Some("step_leaf") { return None; }
-        self.inner.step_leaf(index)
-    }
-    fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
-        self.calls.borrow_mut().insert(format!("step_opening({:?})" ,index));
-        if self.deny == Some("step_opening") { return None; }
-        self.inner.step_opening(index)
-    }
-    fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
-        self.calls.borrow_mut().insert(format!("step_range_siblings({:?},{:?})" ,first,count));
-        if self.deny == Some("step_range_siblings") { return None; }
-        self.inner.step_range_siblings(first,count)
-    }
-    fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
-        self.calls.borrow_mut().insert(format!("param_opening({:?})" ,leaf));
-        if self.deny == Some("param_opening") { return None; }
-        self.inner.param_opening(leaf)
-    }
-    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1>  {
-        self.calls.borrow_mut().insert(format!("param_multiproof({:?})" ,leaves));
-        if self.deny == Some("param_multiproof") { return None; }
-        self.inner.param_multiproof(leaves)
-    }
-    fn param_carriage(&self, leaves: &[u32]) -> Option<PalwTirParamOpeningV1>  {
-        self.calls.borrow_mut().insert(format!("param_carriage({:?})" ,leaves));
-        if self.deny == Some("param_carriage") { return None; }
-        self.inner.param_carriage(leaves)
-    }
-    fn prompt_token_ids(&self) -> Option<Vec<u32>> {
-        self.calls.borrow_mut().insert(format!("prompt_token_ids()"));
-        if self.deny == Some("prompt_token_ids") { return None; }
-        self.inner.prompt_token_ids()
-    }
-    fn prompt_ids_opening(&self, tile: u32) -> Option<PalwPromptIdsOpeningV1> {
-        self.calls.borrow_mut().insert(format!("prompt_ids_opening({:?})" ,tile));
-        if self.deny == Some("prompt_ids_opening") { return None; }
-        self.inner.prompt_ids_opening(tile)
-    }
-    fn decode_pin(&self) -> Option<PalwDecodeTokenPinV1> {
-        self.calls.borrow_mut().insert(format!("decode_pin()"));
-        if self.deny == Some("decode_pin") { return None; }
-        self.inner.decode_pin()
-    }
-    fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1>  {
-        self.calls.borrow_mut().insert(format!("row_pin({:?},{:?})" ,row,lane));
-        if self.deny == Some("row_pin") { return None; }
-        self.inner.row_pin(row,lane)
-    }
-    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)>  {
-        self.calls.borrow_mut().insert(format!("step_node({:?},{:?})" ,level,index));
-        if self.deny == Some("step_node") { return None; }
-        self.inner.step_node(level,index)
-    }
-    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)>  {
-        self.calls.borrow_mut().insert(format!("row_node({:?},{:?})" ,level,index));
-        if self.deny == Some("row_node") { return None; }
-        self.inner.row_node(level,index)
-    }
-}
 /// Why a builder could not build a refutation.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwTirEvidenceErrorV1 {
@@ -780,7 +705,15 @@ impl TirSource<'_, '_> {
         if let Some(i) = self.leaf_cache.get(&(ctx, node, tile)) {
             return Ok(*i);
         }
-        let coord=source_geometry::commit(self.space,self.job,ctx,node,tile)?;
+        let Some(block) = occurrence_block(self.space, ctx.occurrence) else {
+            return tir_err(TirErrorKind::Malformed, "no such occurrence");
+        };
+        let slot = self.space.node_slot(ctx.occurrence as usize, node);
+        let (Some(slot), Some(_)) = (slot, self.space.commit_tile_len(block, node)) else {
+            return tir_err(TirErrorKind::Malformed, format!("node {node} of block {block} is not a commit point"));
+        };
+        let (call_index, position) = self.job.call_position(ctx.pos);
+        let coord = PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: tile as u32 };
         let Some(index) = self.space.leaf_index(self.ctx, &coord) else {
             return tir_err(TirErrorKind::Malformed, format!("{coord:?} is no leaf of this job"));
         };
@@ -789,7 +722,8 @@ impl TirSource<'_, '_> {
     }
 
     fn reserved_coord(&self, pos: u32, reserved: u32, tile: u64) -> PalwStepCoordinateV1 {
-        source_geometry::reserved(self.space,self.job,pos,reserved,tile)
+        let (call_index, position) = self.job.call_position(pos);
+        PalwStepCoordinateV1 { call_index, node_slot: self.space.program_slots() + reserved, position, tile_index: tile as u32 }
     }
 }
 
@@ -840,37 +774,55 @@ impl DemandSource for TirSource<'_, '_> {
 
     fn state(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> TirResult<StateSupply> {
         self.source_read()?;
-        match source_geometry::fixed(self.space,self.job,pos,state,layer,index)? {
-            source_geometry::SupplyGeometryV1::Zero=>Ok(StateSupply::Value(0)),
-            source_geometry::SupplyGeometryV1::Replay=>Ok(StateSupply::Replay),
-            source_geometry::SupplyGeometryV1::Step{coord,dtype,lane}=>self.step_lane(coord,dtype,lane).map(StateSupply::Value),
-            source_geometry::SupplyGeometryV1::Node{..}=>unreachable!(),
+        if pos == 0 {
+            return Ok(StateSupply::Value(0));
         }
+        if !pos.is_multiple_of(self.space.layout.checkpoint_interval) {
+            return Ok(StateSupply::Replay);
+        }
+        let Some(k) = self.space.fixed_instance_index(state, layer) else {
+            return tir_err(TirErrorKind::Malformed, format!("state {state} layer {layer:?} has no checkpoint"));
+        };
+        let inst = self.space.fixed_instances()[k];
+        let tile = index as u64 / inst.tile_lanes as u64;
+        let coord = self.reserved_coord(pos - 1, k as u32, tile);
+        self.step_lane(coord, inst.dtype, index % inst.tile_lanes as usize).map(StateSupply::Value)
     }
 
-    fn hist_row(&mut self,pos:u32,state:u16,layer:Option<u16>,row_pos:u32,index:usize)->TirResult<i128> {
+    fn hist_row(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> TirResult<i128> {
         self.source_read()?;
-        match source_geometry::history(self.space,self.job,pos,state,layer,row_pos,index)? {
-            source_geometry::SupplyGeometryV1::Step{coord,dtype,lane}=>self.step_lane(coord,dtype,lane),
-            source_geometry::SupplyGeometryV1::Node{ctx,node,index}=>self.node(ctx,node,index),
-            _=>unreachable!(),
+        let h_tile = self.space.layout.h_tile;
+        let tile_start = row_pos - row_pos % h_tile;
+        let tile_end = tile_start + (h_tile - 1);
+        if tile_end < pos {
+            let Some(k) = self.space.hist_instance_index(state, layer) else {
+                return tir_err(TirErrorKind::Malformed, format!("history {state} layer {layer:?} has no tiles"));
+            };
+            let inst = self.space.hist_instances()[k];
+            let sub = index as u64 / inst.tile_lanes as u64;
+            let first_lane = sub * inst.tile_lanes as u64;
+            let row_lanes = (inst.elements - first_lane).min(inst.tile_lanes as u64);
+            let coord = self.reserved_coord(tile_end, (self.space.fixed_instances().len() + k) as u32, sub);
+            let lane_index = (row_pos - tile_start) as u64 * row_lanes + (index as u64 - first_lane);
+            self.step_lane(coord, inst.dtype, lane_index as usize)
+        } else {
+            let Some((ctx, node)) = hist_row_node_v1(&self.space.program, state, layer, row_pos) else {
+                return tir_err(TirErrorKind::Malformed, format!("history {state} layer {layer:?} appends nothing"));
+            };
+            self.node(ctx, node, index)
         }
     }
 
     fn token(&mut self, pos: u32) -> TirResult<u32> {
         self.source_read()?;
-        if let crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(prompt)=self.job.token_source_v1(pos) {
-            let Some(id) = self.units.prompt_id(prompt) else {
+        if pos < self.job.prefill {
+            let Some(id) = self.units.prompt_id(pos) else {
                 return tir_err(TirErrorKind::Missing, format!("the prompt id at {pos}"));
             };
             self.used.prompt.insert(pos);
             Ok(id)
         } else {
-            let generated=match self.job.token_source_v1(pos) {
-                crate::palw_tir_step_v1::PalwTirTokenSourceV1::Generated(index)=>index,
-                crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(_)=>unreachable!(),
-            };
-            let Some(id) = self.units.generated_id(generated) else {
+            let Some(id) = self.units.generated_id(pos - self.job.prefill) else {
                 return tir_err(TirErrorKind::Missing, format!("the generated id read at {pos}"));
             };
             self.used.decode = true;
@@ -1069,95 +1021,14 @@ fn check_opened_leaves(
         if *index >= count {
             return Err(bad("the artifact multiproof names no leaf"));
         }
-        check_inventory_operand_v1(&v.space.program, inventory, base + *index, operand)?;
+        let (param, layer, start, len) = inventory.piece_of(base + *index).ok_or(bad("the artifact multiproof names no leaf"))?;
+        let d = v.space.program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
+        if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize
+        {
+            return Err(bad("an opened operand is not its leaf's canonical piece"));
+        }
     }
     Ok(())
-}
-
-/// One canonical piece predicate shared by legacy multiproofs and prospective material input.
-fn check_inventory_operand_v1(
-    program: &TirProgramV1,
-    inventory: &PalwTirInventoryIndexV1,
-    leaf: u32,
-    operand: &crate::palw_artifact::PalwArtifactOperandV1,
-) -> Result<(), PalwStepRefuteError> {
-    let (param, layer, start, len) = inventory.piece_of(leaf).ok_or(bad("the artifact multiproof names no leaf"))?;
-    let d = program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
-    if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize {
-        return Err(bad("an opened operand is not its leaf's canonical piece"));
-    }
-    Ok(())
-}
-
-/// Read-only single-root inventory verifier, not an admission or custody capability.
-/// The caller must resolve the validated registered program/root from the actual original.
-/// Construction allocates the existing inventory index; its native resource admission is separate.
-/// No peer decoder, state writer, fallback store, new composite/media path or credit is introduced.
-/// Successful checks authenticate data identity and canonical geometry only, never computation.
-pub(crate) struct TirInventoryOpeningVerifierV1<'a> {
-    program: &'a TirProgramV1,
-    inventory: PalwTirInventoryIndexV1,
-    root: Hash64,
-}
-impl<'a> TirInventoryOpeningVerifierV1<'a> {
-    /// Concrete allocation envelope for both existing param-instance analysis passes
-    /// and the retained index. Derived from actual program readers/layers, not codec size.
-    pub(crate) fn index_requests(program: &TirProgramV1) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
-        use crate::palw_native_resource_v1::{TirNativeRequestsV1, btree_node_envelope_bytes_v1};
-        let mut q = TirNativeRequestsV1::new();
-        let count = program.params.len() as u64;
-        q.exact_v1::<ParamIndexV1>(count)?;
-        // leaf_count_prefix and index construction each call param_instances.
-        for _ in 0..2 {
-            q.exact_v1::<BTreeSet<u8>>(count)?;
-            q.vec_v1::<Vec<Option<u16>>>(count)?;
-            for (j, param) in program.params.iter().enumerate() {
-                let reads = |block: usize| program.blocks[block].nodes.iter().any(|n|
-                    n.inputs.iter().any(|r| matches!(r, misaka_palw_tir::Ref::Param(k) if usize::from(*k) == j)));
-                let readers = (0..program.blocks.len()).filter(|b| reads(*b)).count() as u64;
-                q.add_v1(TirNativeRequestsV1::product_v1(readers, btree_node_envelope_bytes_v1::<u8, ()>() as u64)?)?;
-                if param.per_layer {
-                    let layers = program.schedule.layers.iter().filter(|k| program.blocks.get(usize::from(**k)).is_some() && reads(usize::from(**k))).count();
-                    q.vec_v1::<Option<u16>>(layers as u64)?;
-                } else { q.exact_v1::<Option<u16>>(1)?; }
-            }
-        }
-        Ok(q.bytes_v1())
-    }
-    pub(crate) fn new(program: &'a TirProgramV1, root: Hash64) -> Option<Self> {
-        Some(Self { program, inventory: PalwTirInventoryIndexV1::new(program)?, root })
-    }
-    /// Exact existing Borsh width for one requested native inventory coordinate.
-    fn opening_bytes(&self, leaf: u32) -> Result<u64, String> {
-        let (param, layer, _, len) = self.inventory.piece_of(leaf).ok_or("parameter coordinate outside inventory")?;
-        let name = &self.program.params.get(usize::from(param)).ok_or("parameter declaration absent")?.name;
-        let path = palw_artifact_opening_path_len_v1(self.inventory.leaf_count(), leaf).ok_or("parameter path not derivable")?;
-        palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize)
-            .checked_add(12).and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
-            .ok_or_else(|| "parameter opening byte count overflow".into())
-    }
-    /// Native bounded read: always preflight and reserve nested ownership before Borsh allocation.
-    /// The returned owner is authenticated data only, not a paid/custody/availability certificate.
-    pub(crate) fn decode(&self, leaf: u32, bytes: &[u8])
-        -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>, String> {
-        use crate::palw_native_resource_v1::{preflight_native_value_v1, reserve_native_requests_v1, NativeRetainedV1};
-        if bytes.len() as u64 != self.opening_bytes(leaf)? { return Err("parameter opening exceeds exact coordinate width".into()); }
-        let shape = preflight_native_value_v1::<PalwArtifactOpeningV1>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
-        let lease = reserve_native_requests_v1(shape.logical_requests_v1()).map_err(|e| e.to_string())?;
-        let opening: PalwArtifactOpeningV1 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
-        if opening.leaf_index != leaf { return Err("parameter opening substitutes requested coordinate".into()); }
-        self.check(&opening).map_err(|e| e.to_string())?;
-        Ok(NativeRetainedV1::from_owner_reserved_v1(opening, lease))
-    }
-    /// Checks borrowed material without cloning its payload, paths or program.
-    pub(crate) fn check(&self, opening: &PalwArtifactOpeningV1) -> Result<(), PalwStepRefuteError> {
-        if opening.leaf_count != self.inventory.leaf_count() {
-            return Err(bad("the artifact opening is of another inventory"));
-        }
-        check_inventory_operand_v1(self.program, &self.inventory, opening.leaf_index, &opening.operand)?;
-        crate::palw_artifact::verify_artifact_opening_v1(opening, self.root)
-            .map_err(|_| bad("the artifact opening does not reach the class's root"))
-    }
 }
 
 /// **How an IR close carries its parameter openings** — the parameter of
@@ -1865,45 +1736,7 @@ pub fn check_tir_dissect_bottom_v1(
     narrowed: u64,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    let range = phase.whole_tile_terminal_range_v2().ok_or(bad("the dissection has not narrowed to one tile"))?;
-    check_tir_dissect_bottom_range_v1(phase, range, phase.claim(), bottom, narrowed, rules)
-}
-
-/// **RFC-0024 A: the bottom over ONE history position** (DORMANT; selected by
-/// [`tir_dissect_terminal_narrows_to_position_v1`]). The same adjudication as
-/// [`check_tir_dissect_bottom_v1`], but every reduction is evaluated over the narrowed position
-/// `[p, p+1)` only, against the named position's claim; the carriage's canonical-read check then
-/// admits exactly that position's read set (a carriage carrying any other position's units is
-/// refused as non-canonical, not silently ignored).
-pub fn check_tir_dissect_position_bottom_v1(
-    phase: &PalwTirDissectPhaseV1,
-    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
-    bottom: &PalwTirConeRefutationV1,
-    narrowed: u64,
-    rules: &PalwTirCourtRulesV1,
-) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    if narrowing.tile() != phase || phase.terminal_range() != Some(narrowing.tile_range()) {
-        return Err(bad("the position narrowing is not this phase's terminal tile"));
-    }
-    let range = narrowing.terminal_position_range().ok_or(bad("the terminal tile has not narrowed to one position"))?;
-    check_tir_dissect_bottom_range_v1(phase, range, narrowing.claim(), bottom, narrowed, rules)
-}
-
-/// **Which terminal a TIR dissection closes with at `daa`.** Below the ADR-0190 / RFC-0024 door
-/// fence (`palw_tir_bounded_door_v1`, dormant on every preset) the bottom is the whole tile, exactly
-/// as before; from it, the tile is first narrowed to one position. Pure selector.
-pub fn tir_dissect_terminal_narrows_to_position_v1(bounded_door: Option<crate::config::params::ForkActivation>, daa: u64) -> bool {
-    bounded_door.is_some_and(|fence| fence != crate::config::params::ForkActivation::never() && fence.is_active(daa))
-}
-
-fn check_tir_dissect_bottom_range_v1(
-    phase: &PalwTirDissectPhaseV1,
-    range: (usize, usize),
-    claim: &PalwTirRangeClaimV1,
-    bottom: &PalwTirConeRefutationV1,
-    narrowed: u64,
-    rules: &PalwTirCourtRulesV1,
-) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let range = phase.terminal_range().ok_or(bad("the dissection has not narrowed to one tile"))?;
     let c = match check_carriage(bottom, rules)? {
         CarriageStage::Convicted(verdict) => return Ok(verdict),
         CarriageStage::Checked(c) => c,
@@ -1929,7 +1762,7 @@ fn check_tir_dissect_bottom_range_v1(
         partials.extend(values);
     }
     c.check_canonical(&source.used, rules)?;
-    let claimed: Vec<i128> = claim.partials.iter().flatten().copied().collect();
+    let claimed: Vec<i128> = phase.claim().partials.iter().flatten().copied().collect();
     match partials.iter().zip(claimed.iter()).position(|(a, b)| a != b).or((partials.len() != claimed.len()).then_some(0)) {
         Some(i) => {
             let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
@@ -2272,38 +2105,6 @@ fn build_tir_dissect_bottom_with_budget(
     }
 }
 
-/// **RFC-0024 A: build the responder's position round** — one child per history position of the
-/// terminal tile, each the reductions' partials over that one position against the root totals.
-pub fn build_tir_dissect_position_round_v1(
-    binding: &PalwTirStepBindingV1,
-    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
-    store: &dyn PalwTirEvidenceStoreV1,
-    rules: &PalwTirCourtRulesV1,
-) -> Result<PalwTirDissectRoundV1, PalwTirEvidenceErrorV1> {
-    let mut children = Vec::new();
-    for p in narrowing.positions() {
-        children.push(builder_partials(binding, narrowing.tile(), (p, p + 1), store, rules, None)?.0);
-    }
-    Ok(PalwTirDissectRoundV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, children })
-}
-
-/// **RFC-0024 A: build the one-position bottom's carriage**: exactly the units the evaluation over
-/// `[p, p+1)` reads.
-pub fn build_tir_dissect_position_bottom_v1(
-    binding: &PalwTirStepBindingV1,
-    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
-    store: &dyn PalwTirEvidenceStoreV1,
-    rules: &PalwTirCourtRulesV1,
-) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
-    let range = narrowing
-        .terminal_position_range()
-        .ok_or_else(|| PalwTirEvidenceErrorV1::Binding("the terminal tile has not narrowed to one position".into()))?;
-    let phase = narrowing.tile();
-    let (_, used) = builder_partials(binding, phase, range, store, rules, None)?;
-    let (v, _, _) = builder_prelude(binding, phase.leaf_index())?;
-    assemble_carriage(&v, binding, phase.leaf_index(), &used, store, rules)
-}
-
 // ---------------------------------------------------------------------------------------------
 // Logits consistency (fault 20) and the decode-token door
 // ---------------------------------------------------------------------------------------------
@@ -2507,130 +2308,6 @@ pub fn check_tir_decode_token_tiled_v1(
         greedy.lane_key(v_committed, pin.position, committed),
         committed,
     ) {
-        return Ok(verdict());
-    }
-    Err(PalwStepRefuteError::NoFaultFound)
-}
-
-/// **G14 R4: the selection rule an ORIGINAL job's committed tokens obey**, mirrored exactly from
-/// [`crate::palw_freeprompt_v3::PalwFreePromptJobV3::decoder_v1`] (the decoder every engine, seat and replay drives). Both
-/// rules are an argmax of a per-lane key — no top-k/top-p reads the whole row — so ONE beating lane refutes a committed token.
-/// A constrained job's selection is its constraint's mask (the semantic court's door, never this one), and a job carrying a
-/// tail (an evaluation or generation job) has another meaning: [`Self::of_job_v1`] answers `None` for both.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PalwTirSelectionRuleV1 {
-    /// ADR-0082 Decision 11's key over the raw row (the V3 rule). `GREEDY` is the plain argmax, ties to the lower index.
-    Keyed { sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2 },
-    /// RFC-0001 §A.3: the V4 value corrections over the committed prefix (repeat, frequency/presence, bias, saturation), the
-    /// `logit_bias` bans, then Decision 11's key ([`crate::palw_decode_pipeline_v4::decode_lane_key_v4`]).
-    V4 { config: crate::palw_decode_pipeline_v4::DecodeConfigV4, sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2 },
-}
-impl PalwTirSelectionRuleV1 {
-    /// The rule of `job`, exactly as `decoder_v1` picks it; `None` for a constrained job or a job with a tail.
-    pub fn of_job_v1(job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<Self> {
-        if job.tail.is_some() || job.is_constraint() {
-            return None;
-        }
-        match (&job.decode, job.is_v4() || job.is_v5() || job.is_eval() || job.is_prefix_state()) {
-            (Some(config), true) => Some(Self::V4 { config: config.clone(), sampling: job.sampling_v2() }),
-            _ => Some(Self::Keyed { sampling: job.sampling_v2() }),
-        }
-    }
-    /// Plain greedy selection (the live attempt court's rule).
-    pub fn is_greedy_v1(&self) -> bool {
-        matches!(self, Self::Keyed { sampling } if sampling.is_greedy())
-    }
-    /// **The lane this rule commits from `row` after the committed prefix `before`** — the best key among the lanes it does not
-    /// ban, ties to the lower index ([`crate::palw_decode_select_v2::decode_lane_beats_v2`]), exactly what the decode-token door
-    /// compares a committed token against. `exclude`: the best lane OTHER than that one (a drill's selection lie). `None` when no
-    /// lane is admissible. RFC-0002 Phase H: what an IR producer's run selects with, so the producer and the door are one rule.
-    pub fn select_v1(&self, before: &[u32], row: &[i32], exclude: Option<u32>) -> Option<u32> {
-        row.iter()
-            .enumerate()
-            .filter(|(lane, _)| Some(*lane as u32) != exclude)
-            .filter_map(|(lane, value)| self.key_v1(before, *value, lane).map(|key| (lane, key)))
-            .reduce(|a, b| if crate::palw_decode_select_v2::decode_lane_beats_v2(b.1, b.0, a.1, a.0) { b } else { a })
-            .map(|(lane, _)| lane as u32)
-    }
-    /// The lane's key at `position = before.len()` after the committed prefix `before`; `None` for a lane the rule bans (it can
-    /// never be committed).
-    fn key_v1(&self, before: &[u32], value: i32, lane: usize) -> Option<i64> {
-        match self {
-            Self::Keyed { sampling } => Some(sampling.lane_key(value, before.len() as u32, lane)),
-            Self::V4 { config, sampling } => {
-                crate::palw_decode_pipeline_v4::decode_lane_key_v4(config, sampling, before, value, u32::try_from(lane).ok()?)
-            }
-        }
-    }
-}
-
-/// **G14 R4: the decode-token door of an ORIGINAL job under its OWN selection rule** (tiled scheme). Authentication is exactly
-/// [`check_tir_decode_token_tiled_v1`]'s — the pin's IDs and challenged row reproduce the claim's own tiled trace root, both
-/// lanes are read from tiles opened against that row — and the comparison is the job's rule ([`PalwTirSelectionRuleV1`]) over the
-/// AUTHENTICATED committed prefix `ids[..position]`: the committed token is refuted when it is outside the vocabulary, when the
-/// rule bans it, or when the beating lane (not banned) has the greater key (ties to the lower index). The live greedy door is
-/// unchanged; under `Keyed { GREEDY }` this door decides exactly what it decides.
-pub fn check_tir_decode_token_tiled_rule_v1(
-    binding: &PalwTirStepBindingV1,
-    pin: &PalwTiledDecodePinV1,
-    rules: &PalwTirCourtRulesV1,
-    rule: &PalwTirSelectionRuleV1,
-) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    let v = match check_binding(binding)? {
-        BindingOutcome::Convicted(verdict) => return Ok(verdict),
-        BindingOutcome::Verified(v) => v,
-    };
-    let (vocab, scheme) = logits_shape(&v.space);
-    if scheme != tiled_logits_scheme_id_v1() {
-        return Err(bad("this class does not commit tiled logits"));
-    }
-    let ctx = &binding.job_context;
-    let decode = ctx.exact_decode_tokens as u64;
-    if pin.generated_token_ids.len() as u64 != decode || pin.position as u64 >= decode {
-        return Err(bad("the ids or the challenged position are not the context's decode count"));
-    }
-    let rows_root = step_opening_root_capped_v1(decode, &pin.row_opening, rules.max_step_leaf_count)
-        .map_err(|_| bad("the row opening does not walk"))?;
-    if pin.row_opening.leaf_index != pin.position as u64 || pin.row_opening.leaf_hash != pin.row_root {
-        return Err(bad("the row opening does not open the challenged row's root"));
-    }
-    if tiled_logits_outer_root_v1(ctx, decode, &rows_root, &pin.generated_token_ids) != binding.full_logits_trace_root {
-        return Err(bad("the carried material does not reproduce the claim's own tiled trace root"));
-    }
-    let fault = PalwStepFaultV1::DecodeTokenMismatch { position: pin.position };
-    let verdict = || convict(&binding.committed_execution_root, PALW_DECODE_TOKEN_EVIDENCE_KIND, pin.position as u64, fault);
-    let committed = pin.generated_token_ids[pin.position as usize] as usize;
-    if committed >= vocab {
-        return Ok(verdict());
-    }
-    let beat = pin.beat_lane as usize;
-    if beat >= vocab {
-        return Err(bad("the beating lane is past the vocabulary"));
-    }
-    let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
-    let read = |lanes: &[i32], opening: &PalwStepOpeningV1, lane: usize| -> Result<i32, PalwStepRefuteError> {
-        let tile = (lane / PALW_LOGITS_TILE_LANES) as u64;
-        tiled_tile_authenticate_v1(
-            &v.context_hash,
-            pin.position,
-            vocab,
-            tiles,
-            &pin.row_root,
-            tile,
-            lanes,
-            opening,
-            rules.max_step_leaf_count,
-        )?;
-        Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
-    };
-    let before = &pin.generated_token_ids[..pin.position as usize];
-    let v_committed = read(&pin.committed_tile_lanes, &pin.committed_opening, committed)?;
-    let v_beat = read(&pin.beat_tile_lanes, &pin.beat_opening, beat)?;
-    // A banned lane is never committable: committing one is itself the fault (A(t) is never empty for an admitted job — a
-    // `logit_bias` covering the whole vocabulary is refused before anything runs).
-    let Some(key_committed) = rule.key_v1(before, v_committed, committed) else { return Ok(verdict()) };
-    let Some(key_beat) = rule.key_v1(before, v_beat, beat) else { return Err(PalwStepRefuteError::NoFaultFound) };
-    if crate::palw_decode_select_v2::decode_lane_beats_v2(key_beat, beat, key_committed, committed) {
         return Ok(verdict());
     }
     Err(PalwStepRefuteError::NoFaultFound)
@@ -3738,15 +3415,10 @@ pub(crate) mod test_support {
     }
 
     fn program_and_params() -> (TirProgramV1, MapParams) {
-        program_and_params_with_vocab(8)
-    }
-
-    /// [`program_and_params`] over a `vocab`-word vocabulary (the logits node's leaf holds `min(vocab, 4096)` lanes).
-    fn program_and_params_with_vocab(vocab: usize) -> (TirProgramV1, MapParams) {
-        let mut pb = ProgramBuilder::new(vocab as u32, HISTORY_BOUND_V1_SMALL);
-        let embed = pb.param("embed", DType::I8, &[vocab as u32, 4], false);
+        let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
+        let embed = pb.param("embed", DType::I8, &[8, 4], false);
         let w = pb.param("w", DType::I8, &[4, 4], true);
-        let head = pb.param("head", DType::I8, &[vocab as u32, 4], false);
+        let head = pb.param("head", DType::I8, &[8, 4], false);
         let sum = pb.fixed_state("sum", DType::I32, &[4], -1000, 1000, true);
         let carry = vec![TensorType::fixed(DType::I32, &[4])];
         let pre = {
@@ -3769,7 +3441,7 @@ pub(crate) mod test_support {
             let x = b.reshape_fixed(Ref::CarryIn(0), &[4, 1]);
             let l = b.matmul(head, x, DType::I64);
             let l = b.clamp(l, i32::MIN as i64, i32::MAX as i64, DType::I32);
-            let l = b.reshape_fixed(l, &[vocab as u32]);
+            let l = b.reshape_fixed(l, &[8]);
             let l = b.commit(l);
             let Ref::Node(i) = l else { unreachable!() };
             (b.finish(&[]), i)
@@ -3778,9 +3450,9 @@ pub(crate) mod test_support {
         program.logits_scheme_id.copy_from_slice(crate::palw_step_refute::tiled_logits_scheme_id_v1().as_byte_slice());
         let mut params = MapParams::default();
         let fill = |n: usize, k: i128| (0..n as i128).map(|i| ((i * 37 + k) % 255) - 127).collect::<Vec<_>>();
-        params.tensors.insert((0, None), Tensor::new(DType::I8, vec![vocab, 4], fill(vocab * 4, 5)).unwrap());
+        params.tensors.insert((0, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 5)).unwrap());
         params.tensors.insert((1, Some(0)), Tensor::new(DType::I8, vec![4, 4], fill(16, 11)).unwrap());
-        params.tensors.insert((2, None), Tensor::new(DType::I8, vec![vocab, 4], fill(vocab * 4, 17)).unwrap());
+        params.tensors.insert((2, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 17)).unwrap());
         (program, params)
     }
 
@@ -3821,80 +3493,7 @@ pub(crate) mod test_support {
         ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
         forge: Option<(usize, usize)>,
     ) -> TinyExecution {
-        tiny_execution_selecting_in(ctx_of, forge, &|_, row, _| base0_decode_token_select_v1(row) as u32)
-    }
-
-    /// **G14 G-T2 test support: the honest choice of `rule` over `row` after `before`** (argmax of the rule's lane key, ties to
-    /// the lower index, banned lanes never chosen) — or, with `wrong`, the best lane the rule does NOT choose: a committed token
-    /// the selection door must refute, over arithmetic that is otherwise honest.
-    pub(crate) fn select_by_rule(rule: &PalwTirSelectionRuleV1, row: &[i32], before: &[u32], wrong: bool) -> u32 {
-        let keyed: Vec<(usize, i64)> =
-            row.iter().enumerate().filter_map(|(lane, value)| rule.key_v1(before, *value, lane).map(|key| (lane, key))).collect();
-        let best = |exclude: Option<usize>| {
-            keyed
-                .iter()
-                .filter(|(lane, _)| Some(*lane) != exclude)
-                .copied()
-                .reduce(|a, b| if crate::palw_decode_select_v2::decode_lane_beats_v2(b.1, b.0, a.1, a.0) { b } else { a })
-                .map(|(lane, _)| lane)
-                .expect("an admitted job leaves a lane")
-        };
-        let honest = best(None);
-        (if wrong { best(Some(honest)) } else { honest }) as u32
-    }
-
-    /// [`tiny_execution_in`] whose decode token at each position is `select(position, row, before)` — the honest rule of a
-    /// sampled or V4 job, or a selection violated at one position (the arithmetic of every leaf stays honest: the next position
-    /// consumes the committed token).
-    pub(crate) fn tiny_execution_selecting_in(
-        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
-        forge: Option<(usize, usize)>,
-        select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
-    ) -> TinyExecution {
-        tiny_execution_selecting_in_vocab(ctx_of, forge, select, 8)
-    }
-
-    /// **The tiny class over a 4,096-word vocabulary** — the same program, its logits leaf a full 4,096-lane (16 KiB) tile: a
-    /// genuinely computed wide leaf for the acquisition's multi-part fixtures (G14 audit §11 (a) bounds every answer by the
-    /// job's ACTUAL leaves, so a part-spanning leaf has to be a real one). Returns the execution and that leaf's index.
-    /// Test-only wider class through the same execution/commitment builder.
-    pub(crate) fn tiny_execution_selecting_wide_in(
-        ctx_of: impl FnOnce(&PalwTirClassV1,Hash64,&[u32])->PalwJobContextV2,
-        forge:Option<(usize,usize)>,select:&dyn Fn(u32,&[i32],&[u32])->u32,
-    )->TinyExecution {tiny_execution_selecting_in_vocab(ctx_of,forge,select,4096)}
-    pub(crate) fn tiny_execution_wide() -> (TinyExecution, u64) {
-        let x = tiny_execution_selecting_in_vocab(
-            |class, class_id, prompt| {
-                let mut ctx = tiny_execution(None).binding.job_context;
-                ctx.shape_profile_id = class_id;
-                ctx.tokenizer_id = class.tokenizer_id;
-                ctx.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
-                ctx
-            },
-            None,
-            &|_, row, _| base0_decode_token_select_v1(row) as u32,
-            4096,
-        );
-        let wide = (0..x.preimages.len()).max_by_key(|i| (x.preimages[*i].values_le.len(), usize::MAX - *i)).unwrap() as u64;
-        assert_eq!(x.preimages[wide as usize].values_le.len(), 4 * 4096, "the logits leaf is a full tile");
-        (x, wide)
-    }
-
-    pub(crate) fn tiny_execution_selecting_in_vocab(
-        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
-        forge: Option<(usize, usize)>,
-        select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
-        vocab: usize,
-    ) -> TinyExecution {
-        tiny_execution_selecting_in_vocab_with_tokenizer(ctx_of,forge,select,vocab,Hash64::from_bytes([3;64]))
-    }
-    /// Test-only real program/class whose tokenizer is bound to actual raw material.
-    pub(crate) fn tiny_execution_selecting_in_vocab_with_tokenizer(
-        ctx_of:impl FnOnce(&PalwTirClassV1,Hash64,&[u32])->PalwJobContextV2,
-        forge:Option<(usize,usize)>,select:&dyn Fn(u32,&[i32],&[u32])->u32,
-        vocab:usize,tokenizer_id:Hash64,
-    )->TinyExecution {
-        let (program, params) = program_and_params_with_vocab(vocab);
+        let (program, params) = program_and_params();
         let bytes = program.encode();
         let class = PalwTirClassV1 {
             version: PALW_TIR_CLASS_VERSION_V1,
@@ -3907,7 +3506,7 @@ pub(crate) mod test_support {
                 commit_tiles: vec![4, 4, 4096],
                 state_tiles: vec![4],
             },
-            tokenizer_id,
+            tokenizer_id: Hash64::from_bytes([3; 64]),
         };
         let ops = palw_tir_inventory_operands_v1(&program, &Src(&params)).expect("inventory");
         let artifact_root = artifact_root_v1(&ops.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).expect("root");
@@ -3924,8 +3523,7 @@ pub(crate) mod test_support {
             after.push(state.clone());
             if a + 1 >= PREFILL {
                 let row: Vec<i32> = step.logits.data.iter().map(|v| *v as i32).collect();
-                let token = select(generated.len() as u32, &row, &generated);
-                generated.push(token);
+                generated.push(base0_decode_token_select_v1(&row) as u32);
                 rows.push(row);
             }
         }
@@ -4542,83 +4140,5 @@ mod da_tests {
             &narrow.step_merkle_root,
         );
         assert_eq!(fault(&narrow, &target_of(&narrow, anchor)), Err(PalwOffenceVerifyError::IdentityNotDerivable));
-    }
-}
-
-#[cfg(test)]
-mod inventory_material_tests {
-    use super::*;
-    use crate::palw_artifact::{artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1, verify_artifact_opening_v1};
-
-    #[test]
-    fn single_openings_match_existing_native_multiproof_canonical_checks() {
-        let x = test_support::tiny_execution(None);
-        let program = x.binding.class.decode_program().unwrap();
-        let verifier = TirInventoryOpeningVerifierV1::new(&program, x.binding.artifact_root).unwrap();
-        let BindingOutcome::Verified(v) = check_binding(&x.binding).unwrap() else { panic!("honest fixture") };
-        let inventory = PalwTirInventoryIndexV1::new(&program).unwrap();
-        let retained_index_bytes = inventory.params.capacity() * std::mem::size_of::<ParamIndexV1>()
-            + inventory.params.iter().map(|p| p.layers.capacity() * std::mem::size_of::<Option<u16>>()).sum::<usize>();
-        assert!(TirInventoryOpeningVerifierV1::index_requests(&program).unwrap() >= retained_index_bytes as u64);
-        for leaf in 0..inventory.leaf_count() {
-            let opening = x.param_opening(leaf).unwrap();
-            verifier.check(&opening).unwrap();
-            let wire = borsh::to_vec(&opening).unwrap();
-            assert_eq!(verifier.opening_bytes(leaf).unwrap(), wire.len() as u64);
-            assert_eq!(*verifier.decode(leaf, &wire).unwrap(), opening);
-            for cut in [0, wire.len()/2, wire.len()-1] { assert!(verifier.decode(leaf, &wire[..cut]).is_err()); }
-            let mut extra = wire.clone(); extra.push(0); assert!(verifier.decode(leaf, &extra).is_err());
-            let mut huge_name = wire.clone(); huge_name[..4].copy_from_slice(&u32::MAX.to_le_bytes());
-            assert!(verifier.decode(leaf, &huge_name).is_err());
-            let body_prefix = 4 + opening.operand.tensor_name.len() + if opening.operand.layer.is_some() { 3 } else { 1 } + 4;
-            let mut huge_body = wire.clone(); huge_body[body_prefix..body_prefix+4].copy_from_slice(&u32::MAX.to_le_bytes());
-            assert!(verifier.decode(leaf, &huge_body).is_err());
-            let path_prefix = wire.len() - 64 * opening.path.len() - 4;
-            let mut huge_path = wire.clone(); huge_path[path_prefix..path_prefix+4].copy_from_slice(&u32::MAX.to_le_bytes());
-            assert!(verifier.decode(leaf, &huge_path).is_err());
-            assert!(verifier.decode(inventory.leaf_count(), &wire).is_err());
-            let next = (leaf + 1) % inventory.leaf_count();
-            assert!(verifier.decode(next, &wire).is_err());
-            let proof = palw_artifact_multiproof_from_openings_v1(&[opening.clone()]).unwrap();
-            let native = authenticate_params(&x.binding, &v, &inventory, &PalwTirParamOpeningV1::Single(proof)).unwrap();
-            assert_eq!(native.get(&leaf), Some(&(opening.operand.row_start, opening.operand.bytes.clone())));
-            let mut bad_path = opening.clone(); bad_path.path.push(Hash64::from_bytes([0; 64]));
-            assert!(verifier.check(&bad_path).is_err());
-            let mut bad_index = opening; bad_index.leaf_index = inventory.leaf_count();
-            assert!(verifier.check(&bad_index).is_err());
-        }
-        assert!(inventory.leaf_count() > 1);
-        let mut other_root = [0u8; 64];
-        other_root.copy_from_slice(x.binding.artifact_root.as_byte_slice()); other_root[0] ^= 1;
-        let other_root = Hash64::from_bytes(other_root);
-        let other = TirInventoryOpeningVerifierV1::new(&program, other_root).unwrap();
-        assert!(other.check(&x.param_opening(0).unwrap()).is_err());
-    }
-
-    #[test]
-    fn root_membership_cannot_replace_registered_inventory_geometry() {
-        let x = test_support::tiny_execution(None);
-        let program = x.binding.class.decode_program().unwrap();
-        for mutation in 0..5 {
-            let mut ops = x.ops.clone();
-            match mutation {
-                0 => ops[0].tensor_name.push('!'),
-                1 => ops[0].layer = Some(u16::MAX),
-                2 => ops[0].row_start += 1,
-                3 => { ops[0].bytes.pop().unwrap(); },
-                4 => ops.push(ops[0].clone()),
-                _ => unreachable!(),
-            }
-            let root = artifact_root_v1(&ops.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).unwrap();
-            let opening = open_artifact_leaf_v1(&ops, 0).unwrap();
-            // The hostile inventory really authenticates to its supplied root.
-            verify_artifact_opening_v1(&opening, root).unwrap();
-            let verifier = TirInventoryOpeningVerifierV1::new(&program, root).unwrap();
-            assert!(verifier.check(&opening).is_err(), "geometry mutation {mutation}");
-        }
-        let opening = x.param_opening(0).unwrap();
-        let mut other_program = program.clone(); other_program.params[0].name.push('!');
-        let other = TirInventoryOpeningVerifierV1::new(&other_program, x.binding.artifact_root).unwrap();
-        assert!(other.check(&opening).is_err());
     }
 }

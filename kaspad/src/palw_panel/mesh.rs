@@ -173,7 +173,7 @@ impl super::PalwPanelService {
                 }
                 continue;
             }
-            let Ok(backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { continue };
+            let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { continue };
             let Some((job, prompt)) = self.attempt_job_for_claim(
                 session,
                 backend.as_ref(),

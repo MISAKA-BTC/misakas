@@ -325,12 +325,6 @@ pub struct Program {
 
 impl Program {
     pub fn compile(self) -> Result<TirProgramV1> {
-        let p = self.compile_fields()?;
-        TirProgramV1::decode_canonical(&p.encode()).map_err(|e| LowerError::not_lowerable(format!("TIR_ADMISSION: {e}")))
-    }
-
-    /// Shared field expansion only. New V2 callers must run canonical V2 validation.
-    pub(super) fn compile_fields(self) -> Result<TirProgramV1> {
         use misaka_palw_tir::program::*;
         let constant_bytes = self.consts.iter().try_fold(0usize, |n, c| n.checked_add(c.data.len().div_ceil(2)));
         let names_ok = self.params.iter().all(|p| p.name.len() <= MAX_NAME_BYTES && p.shape.len() <= 4)
@@ -415,17 +409,7 @@ impl Program {
         if p.prim_set_id != misaka_palw_tir::prim::PRIM_SET_ID_V1 {
             return Err(LowerError::not_lowerable("KERNEL_EXTENSION_REQUIRED: primitive set"));
         }
-        Ok(p)
-    }
-
-    /// Off-chain V2 field view keeps original Input references and post StateWrite nodes.
-    /// This is distinct from V2::v1_view(), which appends virtual input parameters.
-    pub fn of_v2(p: &misaka_palw_tir::program_v2::TirProgramV2) -> Self {
-        let mut raw = p.v1_view();
-        raw.version = 2;
-        raw.params = p.params.clone();
-        raw.blocks = p.blocks.clone();
-        Self::of(&raw)
+        TirProgramV1::decode_canonical(&p.encode()).map_err(|e| LowerError::not_lowerable(format!("TIR_ADMISSION: {e}")))
     }
 
     /// Allows an independent compiler to publish the same bytes through a declarative template.

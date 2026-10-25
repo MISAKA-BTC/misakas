@@ -2,7 +2,7 @@
 //! filer, gated by the operator's own replay** (node policy; a child module of `palw_panel`, whose
 //! loop holds its one book and calls [`PalwPanelService::operator_da_tick_v1`] once a tick).
 //!
-//! **Why.** The panel-seed CRITICAL (`docs/history/networks/testnet-12/t12-panel-seed-2026-09-25.md`): while audit P0-10 is
+//! **Why.** The panel-seed CRITICAL (`docs/t12-panel-seed-2026-09-25.md`): while audit P0-10 is
 //! open a lottery win costs ~279 junk BLAKE2b draws, so an attacker re-rolls a claim's panel until
 //! its own Sybil seats cover it, and a coverage lie reaches `Final` with 0 slash. The user's decision
 //! of 2026-09-26 01:00 pairs fence F1 and the operator-anchor fence (lane A) with this node duty:
@@ -92,7 +92,6 @@
 //! rule, an id or a fingerprint.
 
 use super::*;
-use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::palw_da_rcore_v1::{PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1, PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1};
 use kaspa_consensus_core::palw_operator_da_v1::{PalwOperatorDaCandidateV1, PalwOperatorDaJobV1, PalwOperatorDaStandingV1};
 use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1;
@@ -795,13 +794,15 @@ impl PalwPanelService {
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
         seat_replay_room: bool,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
     ) {
         // What the priority lane carried of this lane's items since the last tick (`carry_priority_v1`
         // marks each sent key in `court_moved`), said here. This lane keeps its own spacing (`sent`),
         // never `court_moved`'s debounce, so its entries leave here and nothing grows there on its
         // account.
-        court_outbox.retain_submitted(|(claim, round, responder), at| {
+        court_moved.retain(|(claim, round, responder), at| {
             if (*round, *responder) != (PALW_OPERATOR_DA_QUEUE_ROUND_V1, false) {
                 return true;
             }
@@ -814,7 +815,7 @@ impl PalwPanelService {
             book.operators().contains(&bond_key),
         ) {
             book.clear();
-            court_outbox.retain_pending(|(_, round, responder, object)| !palw_operator_da_queued_v1(*round, *responder, object));
+            court_pending.retain(|(_, round, responder, object)| !palw_operator_da_queued_v1(*round, *responder, object));
             return;
         }
         if book.stale(current_daa) {
@@ -826,7 +827,7 @@ impl PalwPanelService {
             book.refresh(candidates, standing, current_daa);
             // A queued item that is no longer this node's to file now (its turn passed, an operator
             // accuses, the claim left the candidates) leaves the queue unsent.
-            court_outbox.retain_pending(|(claim, round, responder, object)| {
+            court_pending.retain(|(claim, round, responder, object)| {
                 !palw_operator_da_queued_v1(*round, *responder, object) || book.still_files(claim, &bond_key, current_daa)
             });
             // A claim shielded by DA-8's lifetime cap is said once, loudly: it may be a Sybil shield.
@@ -878,8 +879,7 @@ impl PalwPanelService {
         if book.idle_at == Some(current_daa) {
             return;
         }
-        let queued =
-            court_outbox.pending().iter().any(|(_, round, responder, object)| palw_operator_da_queued_v1(*round, *responder, object));
+        let queued = court_pending.iter().any(|(_, round, responder, object)| palw_operator_da_queued_v1(*round, *responder, object));
         let may_replay = seat_replay_room && book.may_start_replay(current_daa);
         let Some((claim, action)) = book.next(&bond_key, current_daa, queued, may_replay) else {
             book.idle_at = Some(current_daa);
@@ -957,8 +957,8 @@ impl PalwPanelService {
                             admission.deadline_daa
                         );
                         let key = palw_operator_da_queue_key_v1(claim);
-                        court_outbox.set_due(key, due.max(current_daa));
-                        court_outbox.push_pending((key.0, key.1, key.2, object));
+                        court_due.insert(key, due.max(current_daa));
+                        court_pending.push((key.0, key.1, key.2, object));
                         book.queued(claim, admission.exposure, current_daa);
                     }
                     Err(why) => {
@@ -1773,7 +1773,7 @@ mod tests {
     /// params name, hands it the seat slots' room, and no CLI option reaches it.
     #[test]
     fn the_tick_wires_the_lane_before_the_carriers_and_behind_no_flag() {
-        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
+        let panel = include_str!("palw_panel.rs");
         let tick = panel.find("self.operator_da_tick_v1(").expect("the tick calls the lane");
         let reporter = panel.find("// --- P2-8: the reporter's commit–reveal filer").expect("the reporter filer");
         let carriers = panel.find("// --- the collector + submitter's half ---").expect("the carriers");

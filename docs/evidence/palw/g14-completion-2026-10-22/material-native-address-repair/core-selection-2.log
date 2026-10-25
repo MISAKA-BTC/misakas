@@ -1,9 +1,0 @@
-
-running 4 tests
-test palw_tir_funded_original_envelope_v1::tests::bounded_decoding_rejects_lengths_versions_tails_and_identity_substitution ... ok
-test palw_tir_funded_original_envelope_v1::tests::roundtrip_preserves_literal_legacy_original_claim_and_signatures ... ok
-test palw_tir_funded_original_envelope_v1::tests::new_framing_never_downgrades_to_legacy_even_when_malformed_or_truncated ... ok
-test palw_tir_funded_original_envelope_v1::tests::actual_own_output_and_once_only_fee_are_bound_to_the_identical_carrier ... ok
-
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4735 filtered out; finished in 0.05s
-

@@ -361,7 +361,7 @@ pub(crate) async fn gen_claim_files(ctx: &Ctx, key: &crate::keys::KeySource, a: 
         .first()
         .cloned()
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded, unspent UTXO at {addr} to fund the claim")))?;
-    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
+    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
     let calc = MassCalculator::new(
         nv.params.mass_per_tx_byte,
         nv.params.mass_per_script_pub_key_byte,

@@ -1017,72 +1017,6 @@ pub trait RpcApi: Sync + Send + AnySync {
     /// The node's native required-family preclaim quote for one original FP commitment and its
     /// public binding header (op 244). Read-only and advisory: admission recomputes it with the
     /// same planner at the accepting block, so a caller pins nothing on this answer's word.
-    /// **RFC-0016 (op 255): the per-model report** — targets apart from outcomes, node-local observations labelled — and the
-    /// pre-lottery quote for one class where asked. Read-only; an improvement is never to be read from a target alone.
-    async fn get_palw_rfc_0016_report(&self, request: GetPalwRfc0016ReportRequest) -> RpcResult<GetPalwRfc0016ReportResponse> {
-        self.get_palw_rfc_0016_report_call(None, request).await
-    }
-    async fn get_palw_rfc_0016_report_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetPalwRfc0016ReportRequest,
-    ) -> RpcResult<GetPalwRfc0016ReportResponse> {
-        let _ = (connection, request);
-        Ok(GetPalwRfc0016ReportResponse::default())
-    }
-
-    /// **Tooling lane: one claim's whole standing (op 225)** — a versioned JSON document. Read-only; the default answers `available: false`.
-    async fn get_palw_claim_detail(&self, request: GetPalwClaimDetailRequest) -> RpcResult<GetPalwClaimDetailResponse> {
-        self.get_palw_claim_detail_call(None, request).await
-    }
-    async fn get_palw_claim_detail_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetPalwClaimDetailRequest,
-    ) -> RpcResult<GetPalwClaimDetailResponse> {
-        let _ = (connection, request);
-        Ok(GetPalwClaimDetailResponse::default())
-    }
-
-    /// **Tooling lane: the court around a claim or session (op 226)** — a versioned JSON document. Read-only; the default answers `available: false`.
-    async fn get_palw_court_state(&self, request: GetPalwCourtStateRequest) -> RpcResult<GetPalwCourtStateResponse> {
-        self.get_palw_court_state_call(None, request).await
-    }
-    async fn get_palw_court_state_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetPalwCourtStateRequest,
-    ) -> RpcResult<GetPalwCourtStateResponse> {
-        let _ = (connection, request);
-        Ok(GetPalwCourtStateResponse::default())
-    }
-
-    /// **Tooling lane: every PALW fence, its height and whether armed (op 227)** — a versioned JSON document. Read-only; the default answers `available: false`.
-    async fn get_palw_fence_schedule(&self, request: GetPalwFenceScheduleRequest) -> RpcResult<GetPalwFenceScheduleResponse> {
-        self.get_palw_fence_schedule_call(None, request).await
-    }
-    async fn get_palw_fence_schedule_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetPalwFenceScheduleRequest,
-    ) -> RpcResult<GetPalwFenceScheduleResponse> {
-        let _ = (connection, request);
-        Ok(GetPalwFenceScheduleResponse::default())
-    }
-
-    /// **Tooling lane: one bond's registry row, exposure and locks (op 228)** — a versioned JSON document. Read-only; the default answers `available: false`.
-    async fn get_palw_bond_detail(&self, request: GetPalwBondDetailRequest) -> RpcResult<GetPalwBondDetailResponse> {
-        self.get_palw_bond_detail_call(None, request).await
-    }
-    async fn get_palw_bond_detail_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetPalwBondDetailRequest,
-    ) -> RpcResult<GetPalwBondDetailResponse> {
-        let _ = (connection, request);
-        Ok(GetPalwBondDetailResponse::default())
-    }
-
     async fn get_palw_staged_preclaim_quote(
         &self,
         request: GetPalwStagedPreclaimQuoteRequest,
@@ -1096,48 +1030,6 @@ pub trait RpcApi: Sync + Send + AnySync {
     ) -> RpcResult<GetPalwStagedPreclaimQuoteResponse> {
         let _ = (connection, request);
         Ok(GetPalwStagedPreclaimQuoteResponse::default())
-    }
-
-    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding.** A node built before op 245 answers the
-    /// default (nothing found).
-    async fn get_palw_router_binding_v2(&self, request: GetPalwRouterBindingV2Request) -> RpcResult<GetPalwRouterBindingV2Response> {
-        self.get_palw_router_binding_v2_call(None, request).await
-    }
-    async fn get_palw_router_binding_v2_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetPalwRouterBindingV2Request,
-    ) -> RpcResult<GetPalwRouterBindingV2Response> {
-        let _ = (connection, request);
-        Ok(GetPalwRouterBindingV2Response::default())
-    }
-
-    /// **RFC-0012 acceptance (op 247): one paid claim at the tip** — enrollment, the round's seats/quorum/receipts and Final.
-    /// Read-only and never an approval. A node built before op 247 answers the default (`available` false).
-    async fn get_palw_paid_claim(&self, request: GetPalwPaidClaimRequest) -> RpcResult<GetPalwPaidClaimResponse> {
-        self.get_palw_paid_claim_call(None, request).await
-    }
-    async fn get_palw_paid_claim_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetPalwPaidClaimRequest,
-    ) -> RpcResult<GetPalwPaidClaimResponse> {
-        let _ = (connection, request);
-        Ok(GetPalwPaidClaimResponse::default())
-    }
-
-    /// **RFC-0012 acceptance (op 246): the DNS security reserve balance per block and virtual UTXO reads by outpoint.** Read-only.
-    /// A node built before op 246 answers the default (`available` false).
-    async fn get_palw_acceptance_reads(&self, request: GetPalwAcceptanceReadsRequest) -> RpcResult<GetPalwAcceptanceReadsResponse> {
-        self.get_palw_acceptance_reads_call(None, request).await
-    }
-    async fn get_palw_acceptance_reads_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetPalwAcceptanceReadsRequest,
-    ) -> RpcResult<GetPalwAcceptanceReadsResponse> {
-        let _ = (connection, request);
-        Ok(GetPalwAcceptanceReadsResponse::default())
     }
 
     /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its

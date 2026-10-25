@@ -40,32 +40,6 @@ pub struct Ceilings {
     pub max_cone_work: u64,
 }
 
-/// §10.3's `TopK` row of the box demand: the release's `⌈d / k⌉ · x.shape[ax]`, or — past
-/// `palw_tir_fence2` (ref2's H7) — the TopK rows a run of `d` consecutive elements can touch:
-/// `min(R, d)` along an axis that is not the innermost, `min(R, ⌈d / k⌉ + 1)` along the innermost,
-/// `R = E(x) / x.shape[ax]`, times `x.shape[ax]`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TopkRow {
-    #[default]
-    Release,
-    Fence2,
-}
-
-/// The demand a `TopK` along `axis` with `k` passes to its operand of extents `x`, before the cap at
-/// `E(x)`.
-pub fn topk_demand(row: TopkRow, d: u64, k: u64, axis: usize, x: &[u64]) -> u64 {
-    let n = x[axis];
-    let rows = match row {
-        TopkRow::Release => d.div_ceil(k),
-        TopkRow::Fence2 => {
-            let e = x.iter().fold(1u64, |a, &v| a.saturating_mul(v));
-            let r = e / n.max(1);
-            if axis + 1 == x.len() { r.min(d.div_ceil(k) + 1) } else { r.min(d) }
-        }
-    };
-    rows.saturating_mul(n)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdmitInputs {
     pub tile_len: u32,
@@ -663,12 +637,6 @@ fn leaf_of(r: &Ref) -> Option<Leaf> {
 
 /// §10.3 box demand of one tile of `root` at `H = h`: the demanded cost and the opened bytes.
 pub fn box_demand(p: &Program, b: usize, root: usize, nodes: &[u16], h: u64, tile_len: u64) -> (Cost, u64) {
-    box_demand_with(p, b, root, nodes, h, tile_len, TopkRow::Release)
-}
-
-/// [`box_demand`] under a given `TopK` row.
-#[allow(clippy::too_many_arguments)]
-pub fn box_demand_with(p: &Program, b: usize, root: usize, nodes: &[u16], h: u64, tile_len: u64, row: TopkRow) -> (Cost, u64) {
     let block = &p.blocks[b];
     let in_cone: BTreeSet<usize> = nodes.iter().map(|&i| i as usize).collect();
     let mut d: BTreeMap<usize, u64> = BTreeMap::new();
@@ -690,7 +658,7 @@ pub fn box_demand_with(p: &Program, b: usize, root: usize, nodes: &[u16], h: u64
                 let raw = match &node.prim {
                     Prim::MatMul => di.saturating_mul(*tys[0].extents(h).last().unwrap()),
                     Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => di.saturating_mul(t.extents(h)[*axis as usize]),
-                    Prim::TopK { axis, k } => topk_demand(row, di, *k as u64, *axis as usize, &t.extents(h)),
+                    Prim::TopK { axis, k } => di.div_ceil(*k as u64).saturating_mul(t.extents(h)[*axis as usize]),
                     _ => di,
                 };
                 raw.min(elems(t, h))
@@ -759,7 +727,7 @@ fn h_reductions(p: &Program, b: usize, nodes: &[u16]) -> Vec<u16> {
         .collect()
 }
 
-fn build_cone(p: &Program, b: usize, root: usize, inputs: &AdmitInputs, row: TopkRow) -> Cone {
+fn build_cone(p: &Program, b: usize, root: usize, inputs: &AdmitInputs) -> Cone {
     let (nodes, leaves) = cone(p, b, root);
     let wh = worst_h(p, b);
     let tl = inputs.tile_len as u64;
@@ -767,13 +735,13 @@ fn build_cone(p: &Program, b: usize, root: usize, inputs: &AdmitInputs, row: Top
     for &i in &nodes {
         whole.add(&node_cost(p, b, i as usize, wh));
     }
-    let (tile, tile_opened) = box_demand_with(p, b, root, &nodes, wh, tl, row);
+    let (tile, tile_opened) = box_demand(p, b, root, &nodes, wh, tl);
     let hr = h_reductions(p, b, &nodes);
     let (chunk, chunk_opened) = if hr.is_empty() {
         (None, None)
     } else {
         let hc = (inputs.h_chunk as u64).min(wh);
-        let (c, o) = box_demand_with(p, b, root, &nodes, hc, tl, row);
+        let (c, o) = box_demand(p, b, root, &nodes, hc, tl);
         (Some(c), Some(o))
     };
     Cone {
@@ -961,11 +929,6 @@ fn check_inputs(inputs: &AdmitInputs) -> Result<(), AdmitError> {
 /// first cone (in this crate's order) that passes it. Programs must already be in normal form and
 /// pass §7.
 pub fn broken_ceilings(p: &Program, inputs: &AdmitInputs) -> Vec<(&'static str, u64)> {
-    broken_ceilings_with(p, inputs, TopkRow::Release)
-}
-
-/// [`broken_ceilings`] under a given `TopK` row.
-pub fn broken_ceilings_with(p: &Program, inputs: &AdmitInputs, row: TopkRow) -> Vec<(&'static str, u64)> {
     let c = &inputs.ceilings;
     let mut v = Vec::new();
     let node_costs: Vec<Vec<Cost>> =
@@ -995,7 +958,7 @@ pub fn broken_ceilings_with(p: &Program, inputs: &AdmitInputs, row: TopkRow) -> 
     for b in 0..p.blocks.len() {
         for i in 0..p.blocks[b].nodes.len() {
             if p.blocks[b].nodes[i].commit {
-                let cn = build_cone(p, b, i, inputs, row);
+                let cn = build_cone(p, b, i, inputs);
                 count(cone_work_of(p, b, &cn.nodes), &mut v);
                 tile_ceilings(&cn, c, &mut v);
             }
@@ -1059,24 +1022,19 @@ fn c_j(per: &Cost, c: &Ceilings) -> u64 {
 
 /// `tir_admit_v1`: the canonical bytes and the network inputs → the admission or a refusal.
 pub fn admit(bytes: &[u8], inputs: &AdmitInputs) -> Result<Admission, AdmitError> {
-    admit_with_rules(bytes, inputs, TopkRow::Release)
-}
-
-/// [`admit`] under a given `TopK` row (`Fence2`: past `palw_tir_fence2`).
-pub fn admit_with_rules(bytes: &[u8], inputs: &AdmitInputs, row: TopkRow) -> Result<Admission, AdmitError> {
     check_inputs(inputs)?;
     let p = decode_canonical(bytes).map_err(AdmitError::Program)?;
-    admit_decoded(p, inputs, row)
+    admit_decoded(p, inputs)
 }
 
 /// Admission of a program already decoded (its normal form is checked again).
 pub fn admit_program(p: &Program, inputs: &AdmitInputs) -> Result<Admission, AdmitError> {
     check_inputs(inputs)?;
     crate::normal_form::check(p).map_err(AdmitError::Program)?;
-    admit_decoded(p.clone(), inputs, TopkRow::Release)
+    admit_decoded(p.clone(), inputs)
 }
 
-fn admit_decoded(p: Program, inputs: &AdmitInputs, row: TopkRow) -> Result<Admission, AdmitError> {
+fn admit_decoded(p: Program, inputs: &AdmitInputs) -> Result<Admission, AdmitError> {
     let c = inputs.ceilings;
     // 2. ranges
     let intervals = ranges(&p).map_err(AdmitError::Program)?;
@@ -1114,7 +1072,7 @@ fn admit_decoded(p: Program, inputs: &AdmitInputs, row: TopkRow) -> Result<Admis
             if work > c.max_cone_work {
                 return Err(exceeds("max_cone_work", format!("block {b} node {i}"), work, c.max_cone_work));
             }
-            let cn = build_cone(&p, b, i, inputs, row);
+            let cn = build_cone(&p, b, i, inputs);
             let mut broken = Vec::new();
             tile_ceilings(&cn, &c, &mut broken);
             if let Some(&(limit, value)) = broken.first() {

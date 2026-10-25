@@ -30,8 +30,6 @@ pub mod bundle;
 pub mod checkpoint;
 pub mod evidence;
 pub mod l2;
-/// RFC09: the fork choice under rule E + Gate C from op 203 v2 committed leaves (the full node's own readers).
-pub mod l2_rule_e;
 pub mod miner;
 pub mod proof;
 /// Lane DA16: the public material transport — artifacts (both roots of a binding) and claim material (kernel positions, V2 held units).
@@ -77,9 +75,6 @@ pub mod native_ready_v3;
 
 /// RFC-0008 PAV3 (2026-10-15 round 3): the integrity-authenticated producer↔provider envelope between hosts.
 pub mod provider_transport_v1;
-
-/// RFC-0009 × RFC-0008 PAV3: the producer's provider exchange (session open, manifest fetch+verify, signature exchange).
-pub mod native_custody_exchange_v3;
 
 // Real typed kernel execution fixtures reused by the provider GC consumer tests.
 // They do not establish a native finality witness or independent remote hosts.

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Emit the NEW tag243 source pin; never refresh old pins or run Rust tests.
+"""Emit a NEW RFC06 source pin; never refresh old pins or run Rust tests.
 
 The source walk follows the existing A2U declaration manifest grammar. Its output
 is an unexecuted source-generation input, not a codec/compatibility acceptance.
 """
 from pathlib import Path
 import re
+import argparse
 
 ROOT = Path(__file__).resolve().parents[2]
 DIRS = [
@@ -146,15 +147,29 @@ def source_types():
             insert("impl BorshDeserialize for " + match[1], text[start:group_end(text, opening)])
     return types
 
-def main(variant="GdnStepAccusedV2", tag=243, label="RFC06 GDN data-membership/real-recompute carrier v2; source only"):
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    kind = parser.add_mutually_exclusive_group()
+    kind.add_argument('--reader-router', action='store_true', help='emit only the additive tag244 declaration pin')
+    kind.add_argument('--routed-step', action='store_true', help='emit only the additive tag245 direct-routing court pin')
+    kind.add_argument('--source-bootstrap', action='store_true', help='emit only the additive tag246 selected-source bootstrap pin')
+    kind.add_argument('--routed-material', action='store_true', help='emit only the additive tag247 routed material response pin')
+    args = parser.parse_args()
+    name, tag = ('ReaderRouterDeclaredV2', 244) if args.reader_router else ('GdnStepAccusedV2', 243)
+    if args.routed_step:
+        name, tag = 'RoutedStepAccusedV2', 245
+    if args.source_bootstrap:
+        name, tag = 'SourceBootstrapV1', 246
+    if args.routed_material:
+        name, tag = 'RoutedMaterialAnsweredV2', 247
     types = source_types()
     key = "consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2"
     declaration = types.pop(key)[1]
-    start = declaration.index(variant + "{")
-    end = group_end(declaration, start + len(variant))
+    start = declaration.index(name + "{")
+    end = group_end(declaration, start + len(name))
     comma = declaration.find(",", end)
     segment = declaration[start:comma]
-    if not segment.endswith("=" + str(tag)): raise RuntimeError(f"tag{tag} declaration not frozen")
+    if not segment.endswith(f"={tag}"): raise RuntimeError(f"tag{tag} declaration not frozen")
     by_name = {}
     for key, (_, value) in sorted(types.items()):
         name = key.rsplit("::", 1)[-1].removeprefix("impl BorshDeserialize for ").split("#")[0]
@@ -168,12 +183,6 @@ def main(variant="GdnStepAccusedV2", tag=243, label="RFC06 GDN data-membership/r
     pin = segment
     for name in sorted(seen):
         for key, _ in by_name.get(name, []): pin += f"|{key}={types[key][0]:016x}"
-    print(f"({tag}, 0x{fnv(pin):016x}), // {label}")
+    print(f"({tag}, 0x{fnv(pin):016x}), // additive RFC06 carrier v2; source only")
 
-if __name__ == "__main__":
-    import sys
-    # `gen_rfc06_gdn_wire_pin_v2.py [VARIANT TAG]`: tag 243 by default; `MemoryRoutingV2 244` for the RFC06 GDN/router lane's carrier.
-    if len(sys.argv) == 3:
-        main(sys.argv[1], int(sys.argv[2]), "RFC06 router binding and checkpoint/routed accusations (consumer v2); source only")
-    else:
-        main()
+if __name__ == "__main__": main()

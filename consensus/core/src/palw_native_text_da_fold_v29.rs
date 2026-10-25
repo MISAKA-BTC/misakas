@@ -151,7 +151,7 @@ pub(super) fn request(
         let shard = quota_shard(builder, p, &epoch, own.actor, job)?;
         let mut caller = caller(r, p, &plan, &own, &shard.global_row(), &shard.actor_row())?;
         caller.debit_request(&p.quota, &epoch, &plan, owner, own.operator).map_err(refused)?;
-        write_caller(builder, &caller)?;
+        write_caller(builder, &caller);
         Some((plan, caller))
     } else {
         if !paid_restore(builder, ctx, signer, p, Some(h.class), raw.len() + h.book_bytes as usize)? {
@@ -357,9 +357,9 @@ pub(super) fn request(
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original request fee changed after preflight".into()));
     }
     if let Some((_, caller)) = &paid_caller {
-        write_caller(builder, caller)?;
+        write_caller(builder, caller);
     }
-    write_source_shard(builder, &source_shard, job)?;
+    write_source_shard(builder, &source_shard, job);
     c.open += 1;
     if owner == [0; 64] {
         c.open_ordinary += 1;
@@ -375,9 +375,9 @@ pub(super) fn request(
         (EXECUTION_DEMAND_COUNT_TABLE_V11, k(0, &job), key(&c)),
         (EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), key(&(slots.root(), slots))),
     ] {
-        builder.write_kernel_row(table, kk, Some(raw))?;
+        builder.write_kernel_row(table, kk, Some(raw));
     }
-    builder.note_kernel_bond(signer)?;
+    builder.note_kernel_bond(signer);
     Ok(())
 }
 fn progress(r: &PalwKernelRouteStateV1, id: Digest) -> Option<NativeReplyProgressV29> {
@@ -505,13 +505,12 @@ impl PalwKernelRouteStateV1 {
         })
     }
 }
-fn burn_progress(builder: &mut TransitionBuilder<'_>, p: &mut NativeReplyProgressV29) -> Result<(), PalwStateV2Error> {
+fn burn_progress(builder: &mut TransitionBuilder<'_>, p: &mut NativeReplyProgressV29) {
     p.burned = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &p.pending), Some(key(&(p.root(), &*p))))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &p.pending), Some(key(&(p.root(), &*p))));
     for index in 0..p.count {
-        builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(p.pending, p.attempt, index)), None)?;
+        builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(p.pending, p.attempt, index)), None);
     }
-    Ok(())
 }
 fn close(builder: &mut TransitionBuilder<'_>, mut d: Demand) -> Result<(), PalwStateV2Error> {
     let r = builder.state.kernel_route.as_ref().unwrap();
@@ -521,9 +520,9 @@ fn close(builder: &mut TransitionBuilder<'_>, mut d: Demand) -> Result<(), PalwS
         c.open_ordinary = c.open_ordinary.checked_sub(1).ok_or_else(|| refused("text29 original ordinary count underflow"))?;
     }
     d.settled = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(0, &d.id), Some(key(&d)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, k(0, &d.request.job), Some(key(&c)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, k(0, &(d.requester, d.request.slot)), None)?;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(0, &d.id), Some(key(&d)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, k(0, &d.request.job), Some(key(&c)));
+    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, k(0, &(d.requester, d.request.slot)), None);
     Ok(())
 }
 pub(super) fn answer(
@@ -566,19 +565,19 @@ pub(super) fn answer(
                 completed: false,
             };
             a.check().map_err(refused)?;
-            write_source_shard(builder, &shard, d.request.job)?;
-            builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(0, &d.id), Some(key(&d)))?;
-            builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &d.id), Some(key(&(a.root(), &a))))?;
+            write_source_shard(builder, &shard, d.request.job);
+            builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(0, &d.id), Some(key(&d)));
+            builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &d.id), Some(key(&(a.root(), &a))));
             a
         }
     }; // Full4-fragment+assembly price persisted BEFORE ANY nested body decode/allocation.
     let Some(part) = borrowed_native_reply_part_v29(raw) else {
-        burn_progress(builder, &mut a)?;
+        burn_progress(builder, &mut a);
         return Ok(());
     };
     a.accepted |= 1 << part.index;
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(d.id, a.attempt, part.index)), Some(part.bytes.to_vec()))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &d.id), Some(key(&(a.root(), &a))))?;
+    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(d.id, a.attempt, part.index)), Some(part.bytes.to_vec()));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &d.id), Some(key(&(a.root(), &a))));
     if a.accepted != (1u8 << a.count) - 1 {
         return Ok(());
     }
@@ -587,18 +586,18 @@ pub(super) fn answer(
         let Some(part) =
             builder.state.kernel_route.as_ref().unwrap().aux.get(&(EXECUTION_SERVED_TABLE_V11, k(3, &(d.id, a.attempt, index))))
         else {
-            burn_progress(builder, &mut a)?;
+            burn_progress(builder, &mut a);
             return Ok(());
         };
         let expected = if index + 1 == a.count { a.total as usize - index as usize * (32 << 10) } else { 32 << 10 };
         if part.len() != expected {
-            burn_progress(builder, &mut a)?;
+            burn_progress(builder, &mut a);
             return Ok(());
         }
         bytes.extend_from_slice(part);
     }
     if bytes.len() != a.total as usize || native_reply_group_v29(d.id, &bytes) != a.group {
-        burn_progress(builder, &mut a)?;
+        burn_progress(builder, &mut a);
         return Ok(());
     }
     let valid = match &d.request.unit {
@@ -621,7 +620,7 @@ pub(super) fn answer(
         },
     };
     if !valid {
-        burn_progress(builder, &mut a)?;
+        burn_progress(builder, &mut a);
         return Ok(());
     } // malformed proof retains original full answer expenditure.
     // No unsolicited producer income: exact initial29 consent burns delivery
@@ -633,10 +632,10 @@ pub(super) fn answer(
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original requester debit changed after valid reply".into()));
     }
     a.completed = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &d.id), Some(key(&(a.root(), &a))))?;
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(0, &d.request.unit_id()), Some(bytes))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &d.id), Some(key(&(a.root(), &a))));
+    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(0, &d.request.unit_id()), Some(bytes));
     for index in 0..a.count {
-        builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(d.id, a.attempt, index)), None)?;
+        builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(d.id, a.attempt, index)), None);
     }
     close(builder, d)
 }
@@ -673,13 +672,14 @@ pub(super) fn default(
         b"misaka-palw/native/text-objective-original-response-default/v29",
         &(d.id, d.claim, d.source, d.lease, d.deadline, d.proof_until, ctx.block.as_bytes(), ctx.daa_score),
     );
-    // G14 lane closure G-14: the default collects what the producer's bond still holds of the reserve, never refused for less.
-    let collectible = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
-        builder.state.bonds.get(&h.producer).map(|v| v.collateral),
-        b.funding().maximum.producer_reserve,
-    );
     let s = b
-        .convict(proof, palw_kernel_bond_id_v1(signer), finder.operator_id.as_bytes(), collectible, ctx.daa_score)
+        .convict(
+            proof,
+            palw_kernel_bond_id_v1(signer),
+            finder.operator_id.as_bytes(),
+            b.funding().maximum.producer_reserve,
+            ctx.daa_score,
+        )
         .map_err(refused)?;
     settle(builder, ctx, p, &mut h, &b, &s, Some(signer))?;
     close(builder, d)
@@ -707,6 +707,6 @@ pub(super) fn owner_open(r: &PalwKernelRouteStateV1, job: Digest, owner: Digest)
 pub(super) fn collect_step(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeExecutionPoliciesV11,job:Digest)->Result<(),PalwStateV2Error>{let r=builder.state.kernel_route.as_ref().unwrap();let h=original_header(r,job)?;let mut c=counts(r,job)?;if c.collected==c.next{return Err(refused("text29 original indexed public cache already collected"));}let(id,unit):(Digest,Digest)=read(r,EXECUTION_DEMAND_TABLE_V11,2,&(job,c.collected),128).ok_or_else(||refused("text29 original indexed pending row absent"))?;let mut d=demand(r,id)?;if d.request.job!=job||d.ordinal!=c.collected||d.request.unit_id()!=unit||ctx.daa_score<=d.proof_until{return Err(refused("text29 original indexed answer/default cache retained"));}
     let mut bytes=4096usize;for attempt in 1u8..=2{for index in 0u16..4{if let Some(row)=r.aux.get(&(EXECUTION_SERVED_TABLE_V11,k(3,&(id,attempt,index)))){if row.len()>32<<10{return Err(refused("text29 original reply cache extent differs"));}bytes=bytes.checked_add(row.len()).ok_or_else(||refused("text29 original reply cache journal overflow"))?;}}}if let Some(row)=r.aux.get(&(EXECUTION_SERVED_TABLE_V11,k(0,&unit))){if row.len()>128<<10{return Err(refused("text29 original served response extent differs"));}bytes=bytes.checked_add(row.len()).ok_or_else(||refused("text29 original response cache journal overflow"))?;}
     if !paid_restore(builder,ctx,signer,p,Some(h.class),bytes)?{return Ok(());} // current actual restore/journal, no prior resource refund.
-    if !d.settled {let r=builder.state.kernel_route.as_ref().unwrap();let b=original_book(r,&h)?;if b.terminal()==NativeTextTerminalV29::Challengeable{return Err(refused("text29 unresolved original default must adjudicate before collection"));}d.settled=true;c.open=c.open.checked_sub(1).ok_or_else(||refused("text29 original open collection count underflow"))?;if d.request.paid_owner==[0;64]{c.open_ordinary=c.open_ordinary.checked_sub(1).ok_or_else(||refused("text29 original ordinary collection count underflow"))?;}builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11,k(0,&(d.requester,d.request.slot)),None)?;}
-    c.collected+=1;builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11,k(0,&job),Some(key(&c)))?;for(table,kk)in[(EXECUTION_DEMAND_TABLE_V11,k(0,&id)),(EXECUTION_DEMAND_TABLE_V11,k(1,&unit)),(EXECUTION_DEMAND_TABLE_V11,k(2,&(job,d.ordinal))),(EXECUTION_DEMAND_TABLE_V11,k(3,&id)),(EXECUTION_SERVED_TABLE_V11,k(0,&unit))]{builder.write_kernel_row(table,kk,None)?;}for attempt in 1u8..=2{for index in 0u16..4{builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11,k(3,&(id,attempt,index)),None)?;}}Ok(())}
+    if !d.settled {let r=builder.state.kernel_route.as_ref().unwrap();let b=original_book(r,&h)?;if b.terminal()==NativeTextTerminalV29::Challengeable{return Err(refused("text29 unresolved original default must adjudicate before collection"));}d.settled=true;c.open=c.open.checked_sub(1).ok_or_else(||refused("text29 original open collection count underflow"))?;if d.request.paid_owner==[0;64]{c.open_ordinary=c.open_ordinary.checked_sub(1).ok_or_else(||refused("text29 original ordinary collection count underflow"))?;}builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11,k(0,&(d.requester,d.request.slot)),None);}
+    c.collected+=1;builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11,k(0,&job),Some(key(&c)));for(table,kk)in[(EXECUTION_DEMAND_TABLE_V11,k(0,&id)),(EXECUTION_DEMAND_TABLE_V11,k(1,&unit)),(EXECUTION_DEMAND_TABLE_V11,k(2,&(job,d.ordinal))),(EXECUTION_DEMAND_TABLE_V11,k(3,&id)),(EXECUTION_SERVED_TABLE_V11,k(0,&unit))]{builder.write_kernel_row(table,kk,None);}for attempt in 1u8..=2{for index in 0u16..4{builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11,k(3,&(id,attempt,index)),None);}}Ok(())}
 pub(super) fn all_collected(r:&PalwKernelRouteStateV1,job:Digest)->Result<bool,PalwStateV2Error>{let c=counts(r,job)?;Ok(c.open==0&&c.collected==c.next)}

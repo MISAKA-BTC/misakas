@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy-t12/move-seat.sh — run on the operator's Mac: move ONE seat from one host to another, end to end
-# (2026-10-01, the panel backlog: docs/design/palw/verification/t12-panel-backlog-1001.md §7). The hosts have no keys to each
+# (2026-10-01, the panel backlog: docs/design/palw/t12-panel-backlog-1001.md §7). The hosts have no keys to each
 # other, so data and the key travel through the Mac; each host-side step is move-host.sh (which uses the live kit's
 # lib.sh and changes none of its files). ONE SEAT AT A TIME, after the previous one is synced and its readiness proof
 # is back.

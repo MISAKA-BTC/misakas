@@ -23,13 +23,7 @@ impl NativeCarrierCandidateV22 {
     /// unit in a block, never many variants against an immutable old counter.
     pub fn key(&self) -> (u8, u8, [u8; 64], u16) {
         let (kind, id, part) = match self.request {
-            NativePaidCarrierRequestV22::ProofPartV39 {seal,index,mode,..}=>(if mode==0 {7} else if mode==1 {8} else {12},seal,index),
-            NativePaidCarrierRequestV22::AnswerPartV39 {pending,index,..}=>(9,pending,index),
-            NativePaidCarrierRequestV22::CommitPartV39 {job,index,..}=>(10,job,index),
-            NativePaidCarrierRequestV22::CommitAssembleV39 {job,..}=>(11,job,0),
             NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,index,..}=>(4,pending,index),
-            NativePaidCarrierRequestV22::FundedCommitPartV32 {job,index,..}=>(5,job,index),
-            NativePaidCarrierRequestV22::FundedCommitAssembleV32 {job,..}=>(6,job,0),
             NativePaidCarrierRequestV22::SourceAnswer { pending } => (0, pending, 0),
             NativePaidCarrierRequestV22::TraceAnswer { pending } => (1, pending, 0),
             NativePaidCarrierRequestV22::OwnProofPart { seal, index, .. } => (2, seal, index as u16),
@@ -77,54 +71,6 @@ pub fn native_carrier_candidate_v22(tx: &Transaction) -> Option<NativeCarrierCan
                         index: part.index,
                         count: part.count,
                     }
-                }
-                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,39)=>{
-                    let p=crate::palw_flat_stage_v28::borrowed_invocation_commit_metadata_v32(a.body)?;
-                    NativePaidCarrierRequestV22::FundedCommitPartV32{job:p.job,group:p.group,index:p.index,count:p.count,total:p.total}
-                }
-                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,40)=>{
-                    if a.body.len()!=130||a.body[..2]!=32u16.to_le_bytes(){return None;}
-                    NativePaidCarrierRequestV22::FundedCommitAssembleV32{job:a.body[2..66].try_into().ok()?,group:a.body[66..130].try_into().ok()?}
-                }
-                // Owning39 paid lanes: proof/discovery pages (50), producer
-                // answers (48, the same fixed frame naming pending/group),
-                // producer compact-post pages (54) and assembly (55). Only the
-                // fixed prefix is read; the paid fold re-checks every field.
-                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 50) => {
-                    let p = crate::palw_native_job_v39::borrowed_native_proof_part_v39(a.body)?;
-                    NativePaidCarrierRequestV22::ProofPartV39 {
-                        job: p.job,
-                        seal: p.seal,
-                        index: p.index,
-                        count: p.count,
-                        total: p.total,
-                        mode: p.mode,
-                    }
-                }
-                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 48) => {
-                    let p = crate::palw_native_job_v39::borrowed_native_proof_part_v39(a.body)
-                        .filter(|p| p.mode == 0 && p.count <= 4 && p.total <= 128 << 10)?;
-                    NativePaidCarrierRequestV22::AnswerPartV39 {
-                        pending: p.job,
-                        group: p.seal,
-                        index: p.index,
-                        count: p.count,
-                        total: p.total,
-                    }
-                }
-                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 54) => {
-                    let p = crate::palw_native_job_v39::borrowed_native_commit_metadata_v39(a.body)?;
-                    NativePaidCarrierRequestV22::CommitPartV39 {
-                        job: p.job,
-                        group: p.group,
-                        index: p.index,
-                        count: p.count,
-                        total: p.total,
-                    }
-                }
-                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 55) => {
-                    let (job, group) = crate::palw_native_job_v39::borrowed_native_commit_assembly_v39(a.body)?;
-                    NativePaidCarrierRequestV22::CommitAssembleV39 { job, group }
                 }
                 (misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11,37)
                 |(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,32)=>{
@@ -222,17 +168,6 @@ impl NativeCarriageSnapshotV22 {
                     route.stage_paid_answer_eligibility_v28(*pending,self.now,&self.mass,&self.service)?,
                 NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,group,index,count,total}=>
                     route.stage_paid_reply_eligibility_v28(*pending,*group,*index,*count,*total,self.now,&self.mass,&self.service)?,
-                NativePaidCarrierRequestV22::FundedCommitPartV32 {job,group,index,count,total}=>
-                    route.native_paid_invocation_commit_eligibility_v32(*job,*group,*index,*count,*total,self.now,&self.mass,&self.service)?,
-                NativePaidCarrierRequestV22::FundedCommitAssembleV32 {job,group}=>
-                    route.native_paid_invocation_assemble_eligibility_v32(*job,*group,self.now,&self.mass,&self.service)?,
-                // Owning39 lanes resolve through the shared route reader,
-                // which reads only bounded original rows.
-                NativePaidCarrierRequestV22::ProofPartV39 { .. }
-                | NativePaidCarrierRequestV22::AnswerPartV39 { .. }
-                | NativePaidCarrierRequestV22::CommitPartV39 { .. }
-                | NativePaidCarrierRequestV22::CommitAssembleV39 { .. } =>
-                    route.native_paid_carrier_eligibility_v22(&c.request,self.now,&self.mass,&self.service)?,
                 _=>return None,
             },
             _=>return None,
@@ -248,13 +183,7 @@ impl NativeCarriageSnapshotV22 {
                 return None;
             }
         } else if matches!(c.request, NativePaidCarrierRequestV22::OwnProofPartV29 { .. }
-            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }
-            |NativePaidCarrierRequestV22::FundedCommitPartV32 { .. }
-            |NativePaidCarrierRequestV22::FundedCommitAssembleV32 { .. }
-            |NativePaidCarrierRequestV22::ProofPartV39 { .. }
-            |NativePaidCarrierRequestV22::AnswerPartV39 { .. }
-            |NativePaidCarrierRequestV22::CommitPartV39 { .. }
-            |NativePaidCarrierRequestV22::CommitAssembleV39 { .. }) {
+            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }) {
             return None;
         }
         Some(e)
@@ -283,69 +212,6 @@ mod tests {
             0,
             borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
         )
-    }
-    #[test]
-    fn compact_commit32_metadata_keeps_one_original_part_identity(){
-        let mut body=Vec::new();body.extend_from_slice(&32u16.to_le_bytes());body.push(0);body.extend_from_slice(&[21;64]);body.extend_from_slice(&[22;64]);body.extend_from_slice(&0u16.to_le_bytes());body.extend_from_slice(&1u16.to_le_bytes());body.extend_from_slice(&3u32.to_le_bytes());body.extend_from_slice(&u32::MAX.to_le_bytes());body.extend_from_slice(&[1,2,3]);
-        let frame=|b:Vec<u8>|{let mut x=vec![1,misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,39];x.extend_from_slice(&(b.len() as u32).to_le_bytes());x.extend(b);x};
-        let candidate=|b:Vec<u8>|native_carrier_candidate_v22(&tx(PalwConsensusObjectV2::KernelRouteV1{bytes:frame(b),signer:owner(),signature:vec![1]})).unwrap();
-        let a=candidate(body.clone());assert_eq!(a.key(),(64,5,[21;64],0));
-        // Hostile nested part length is left for original paid predebit.
-        body[67..131].fill(23);let b=candidate(body);assert_eq!(a.key(),b.key());
-        let assembly=NativeCarrierCandidateV22{namespace:64,owner:owner(),request:NativePaidCarrierRequestV22::FundedCommitAssembleV32{job:[21;64],group:[22;64]}};
-        assert_ne!(a.key(),assembly.key());
-    }
-    /// Owning39 producer pages (54), assembly (55), proof pages (50) and
-    /// answers (48) yield distinct original units; a hostile nested length or a
-    /// changed group never changes the scheduling identity of a part index.
-    #[test]
-    fn owning39_lanes_parse_fixed_prefix_and_keep_distinct_units() {
-        let frame = |action: u8, b: Vec<u8>| {
-            let mut x = vec![1, misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, action];
-            x.extend_from_slice(&(b.len() as u32).to_le_bytes());
-            x.extend(b);
-            x
-        };
-        let page = |mode: u8, a: [u8; 64], b: [u8; 64], index: u16, count: u16, total: u32, n: u32| {
-            let mut body = 39u16.to_le_bytes().to_vec();
-            body.push(mode);
-            body.extend_from_slice(&a);
-            body.extend_from_slice(&b);
-            body.extend_from_slice(&index.to_le_bytes());
-            body.extend_from_slice(&count.to_le_bytes());
-            body.extend_from_slice(&total.to_le_bytes());
-            body.extend_from_slice(&n.to_le_bytes());
-            body.extend_from_slice(&[7; 3]);
-            body
-        };
-        let candidate = |action: u8, b: Vec<u8>| {
-            native_carrier_candidate_v22(&tx(PalwConsensusObjectV2::KernelRouteV1 {
-                bytes: frame(action, b),
-                signer: owner(),
-                signature: vec![1],
-            }))
-        };
-        let commit = candidate(54, page(0, [21; 64], [22; 64], 0, 1, 3, 3)).unwrap();
-        assert_eq!(commit.key(), (64, 10, [21; 64], 0));
-        assert_eq!(
-            commit.key(),
-            candidate(54, page(0, [21; 64], [23; 64], 0, 1, 3, u32::MAX)).unwrap().key(),
-            "a hostile nested length is left for the original paid fold"
-        );
-        assert!(candidate(54, page(1, [21; 64], [22; 64], 0, 1, 3, 3)).is_none(), "commit pages are mode 0 only");
-        assert!(candidate(54, page(0, [21; 64], [22; 64], 1, 1, 3, 3)).is_none(), "index within count");
-        let mut assembly = 39u16.to_le_bytes().to_vec();
-        assembly.extend_from_slice(&[21; 64]);
-        assembly.extend_from_slice(&[22; 64]);
-        let assemble = candidate(55, assembly.clone()).unwrap();
-        assert_eq!(assemble.key(), (64, 11, [21; 64], 0));
-        assembly.push(0);
-        assert!(candidate(55, assembly).is_none(), "assembly is exactly 130 bytes");
-        let proof = candidate(50, page(0, [21; 64], [24; 64], 0, 1, 3, 3)).unwrap();
-        assert_eq!(proof.key(), (64, 7, [24; 64], 0));
-        let answer = candidate(48, page(0, [25; 64], [26; 64], 0, 1, 3, 3)).unwrap();
-        assert_eq!(answer.key(), (64, 9, [25; 64], 0));
-        assert!(candidate(48, page(0, [25; 64], [26; 64], 0, 5, 5 * 32768, 3)).is_none(), "answers stay within four pages");
     }
     #[test]
     fn native_source_metadata_is_versioned_exact_and_cannot_decode_unrelated_objects() {

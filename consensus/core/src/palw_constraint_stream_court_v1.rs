@@ -184,52 +184,6 @@ impl PalwConstraintStreamCourtV1 {
             signed_context,
         )
     }
-    /// Private TIR terminal predicate from actual source-authenticated FullIds.
-    /// No synthetic logits row or token-selection position is introduced.
-    /// Caller admits source/context/hash/clone/stream/replay scratch separately.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_from_tiled_ids_with_original_stop_context_v1(
-        claim_id:Hash64,owner:PalwBondKeyV2,reserved_daa:u64,
-        view:&crate::palw_decode_view_v1::PalwDecodeViewV1,view_identity:&[u8],
-        source:&crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
-        ids:&crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
-        original:&PalwFreePromptCommitmentV3,eog_count:u32,eog_opening:&PalwStepOpeningV1,
-        signed_context:Hash64,
-    )->Result<Self,String> {
-        let header=source.header_v1();
-        if !view.is_tiled_v1()||!source.supports_tiled_trace_v1()
-            ||view.lane!=crate::palw_step::PalwStepLaneV1::Int32
-            ||view.job_context!=header.job_context||view.class_id!=header.job_context.shape_profile_id
-            ||view.vocab_size!=source.vocab_v1()||view.full_logits_trace_root!=header.full_logits_trace_root
-            ||view.committed_execution_root!=header.committed_execution_root||view.step_leaf_count!=header.step_leaf_count
-            ||ids.source_id_v1()!=source.source_id_v1()||ids.ids_v1().len() as u64!=u64::from(source.decode_count_v1()) {
-            return Err("terminal TIR predicate changes actual source/view/FullIds".into());
-        }
-        let job=&original.job;
-        if fp_claim_id_v3(original)!=claim_id||!job.is_constraint()
-            ||original.execution_root!=view.committed_execution_root
-            ||original.trace_root!=view.full_logits_trace_root
-            ||original.decode_tokens_executed!=view.job_context.exact_decode_tokens
-            ||original.decode_tokens_executed==0||original.decode_tokens_executed>job.decode_token_limit
-            ||crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original)
-                !=crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&view.job_context)
-            ||match original.stop_reason {
-                PalwFpStopReasonV3::ExactBudgetReached=>original.decode_tokens_executed!=job.decode_token_limit,
-                PalwFpStopReasonV3::EndOfGeneration=>original.decode_tokens_executed>=job.decode_token_limit,
-            } {
-            return Err("terminal TIR predicate changes native original claim/count/stop facts".into());
-        }
-        if ids.ids_v1().iter().any(|id|*id>=view.vocab_size) {
-            // This separate objective fault already has the native Output door.
-            return Err("terminal TIR predicate delegates out-of-vocabulary IDs to native Output".into());
-        }
-        let position=u32::try_from(ids.ids_v1().len()).map_err(|_|"terminal TIR position overflow")?;
-        let canonical=borsh::to_vec(&(source.source_id_v1(),ids.rows_root_v1(),ids.ids_v1()))
-            .map_err(|e|e.to_string())?;
-        Self::from_authenticated_selection_view_v1(claim_id,owner,reserved_daa,original.execution_root,
-            view,view_identity,job,ids.ids_v1(),position,None,None,false,eog_count,eog_opening,
-            Some(signed_context),&canonical,Some(original.stop_reason))
-    }
     /// The tiled seed over a decode view. The caller derives `view` natively (a verified legacy
     /// binding, or a TIR claim's admitted header and registered record) and passes the exact
     /// bytes that identified it at admission as `view_identity` (the legacy binding's borsh, or
@@ -439,87 +393,7 @@ impl PalwConstraintStreamCourtV1 {
         signed_context: Option<Hash64>,
         original_stop: Option<PalwFpStopReasonV3>,
     ) -> Result<Self, String> {
-        verify_binding_v1(binding).map_err(|e| e.to_string())?;
-        Self::flat_selection_view_v1(
-            claim_id,
-            owner,
-            reserved_daa,
-            expected_root,
-            &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding),
-            &borsh::to_vec(binding).map_err(|e| e.to_string())?,
-            job,
-            pin,
-            witness,
-            eog_count,
-            eog_opening,
-            signed_context,
-            original_stop,
-        )
-    }
-    /// A native original TIR header supplies the view and seed identity. The Flat
-    /// pin must come from the accepted EOF stream; no legacy root is synthesized.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_from_flat_view_with_original_stop_context_v1(
-        claim_id: Hash64,
-        owner: PalwBondKeyV2,
-        reserved_daa: u64,
-        expected_root: Hash64,
-        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
-        view_identity: &[u8],
-        job: &PalwFreePromptJobV3,
-        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
-        witness: Option<u32>,
-        eog_count: u32,
-        eog_opening: &PalwStepOpeningV1,
-        original: &PalwFreePromptCommitmentV3,
-        signed_context: Option<Hash64>,
-    ) -> Result<Self, String> {
-        if fp_claim_id_v3(original) != claim_id
-            || original.job != *job
-            || original.execution_root != expected_root
-            || original.decode_tokens_executed != view.job_context.exact_decode_tokens
-            || original.decode_tokens_executed == 0
-            || original.decode_tokens_executed > job.decode_token_limit
-            || match original.stop_reason {
-                PalwFpStopReasonV3::ExactBudgetReached => original.decode_tokens_executed != job.decode_token_limit,
-                PalwFpStopReasonV3::EndOfGeneration => original.decode_tokens_executed >= job.decode_token_limit,
-            }
-        {
-            return Err("terminal Flat predicate changes native original claim/count/stop facts".into());
-        }
-        Self::flat_selection_view_v1(
-            claim_id,
-            owner,
-            reserved_daa,
-            expected_root,
-            view,
-            view_identity,
-            job,
-            pin,
-            witness,
-            eog_count,
-            eog_opening,
-            signed_context,
-            Some(original.stop_reason),
-        )
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn flat_selection_view_v1(
-        claim_id: Hash64,
-        owner: PalwBondKeyV2,
-        reserved_daa: u64,
-        expected_root: Hash64,
-        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
-        view_identity: &[u8],
-        job: &PalwFreePromptJobV3,
-        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
-        witness: Option<u32>,
-        eog_count: u32,
-        eog_opening: &PalwStepOpeningV1,
-        signed_context: Option<Hash64>,
-        original_stop: Option<PalwFpStopReasonV3>,
-    ) -> Result<Self, String> {
-        if !pin.matches_view_v1(view) {
+        if !pin.matches_binding_v1(binding) {
             return Err("flat semantic pin does not preserve the original claim/job/scheme".into());
         }
         let terminal = pin.position_v1() as usize == pin.generated_ids_v1().len();
@@ -528,7 +402,7 @@ impl PalwConstraintStreamCourtV1 {
         }
         let committed = pin.committed_id_v1();
         let value = pin.committed_value_v1();
-        if committed.is_some_and(|id| id < view.vocab_size) && value.is_none() {
+        if committed.is_some_and(|id| id < binding.shape_profile.vocab_size) && value.is_none() {
             return Err("in-vocabulary Flat selection lacks its authenticated scalar".into());
         }
         let beat = pin.beat_v1();
@@ -541,13 +415,12 @@ impl PalwConstraintStreamCourtV1 {
                 committed as usize,
             )
         });
-        Self::from_authenticated_selection_view_v1(
+        Self::from_authenticated_selection_v1(
             claim_id,
             owner,
             reserved_daa,
             expected_root,
-            view,
-            view_identity,
+            binding,
             job,
             pin.generated_ids_v1(),
             pin.position_v1(),
@@ -929,9 +802,6 @@ impl PalwConstraintStreamCourtV1 {
         }))
     }
 }
-#[path = "palw_constraint_canonical_replay_v1.rs"]
-pub(crate) mod canonical_replay;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,146 +907,6 @@ mod tests {
             .is_err()
         );
     }
-    // Only deterministic primitive adjudication/material authentication is
-    // compared; old move accounting, signatures, retention and DAA are excluded.
-    fn replay_partition(
-        row: &mut PalwConstraintStreamCourtV1,
-        a: &crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1,
-        small: bool,
-        corrupt: bool,
-    ) -> Result<usize, String> {
-        let context = row.seed_id();
-        let mut parts = 0;
-        let limit = if small {
-            1
-        } else {
-            crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1
-        };
-        for ids in a.eog.ids.chunks(limit) {
-            row.push_eog(
-                context,
-                row.eog_offset_v1().ok_or("EOG cursor absent")?,
-                ids,
-            )?;
-            parts += 1;
-        }
-        row.finish_eog()?;
-        let mut corrupted = false;
-        while row.phase() != PalwConstraintStreamPhaseV1::Complete {
-            let id = row.next_rendering_id()?;
-            if row.is_eog(id) {
-                row.finish_eog_token(context)?;
-                continue;
-            }
-            let o = a
-                .renderings
-                .iter()
-                .find(|o| o.id == id)
-                .ok_or("fixture rendering absent")?;
-            row.begin_rendering(
-                context,
-                id,
-                o.rendering.is_some(),
-                o.rendering.as_ref().map_or(0, |b| b.len()) as u32,
-                &o.opening,
-            )?;
-            if let Some(bytes) = &o.rendering {
-                let mut material = bytes.clone();
-                if corrupt && !corrupted && !material.is_empty() {
-                    material[0] ^= 1;
-                    corrupted = true;
-                }
-                let chunk = if small {
-                    1
-                } else {
-                    crate::palw_rendering_stream_v1::PALW_RENDERING_STREAM_PART_BYTES_V1
-                };
-                let mut offset = 0;
-                for part in material.chunks(chunk) {
-                    row.push_rendering(context, offset, part)?;
-                    offset += part.len() as u32;
-                    parts += 1;
-                }
-            }
-            row.finish_rendering()?;
-        }
-        if corrupt && !corrupted {
-            return Err("nonempty corrupt fixture material was not exercised".into());
-        }
-        Ok(parts)
-    }
-    #[test]
-    fn canonical_constraint_material_replay_matches_distinct_legal_partitions() {
-        for fault in [false, true] {
-            let (base, a) = court(fault);
-            assert!(
-                a.eog.ids.len() > 1,
-                "the fixture must exercise different EOG packet counts"
-            );
-            assert!(
-                a.renderings
-                    .iter()
-                    .any(|o| o.rendering.as_ref().is_some_and(|b| !b.is_empty()))
-            );
-            let identity = (
-                base.seed_id(),
-                base.execution_root_v1(),
-                base.table_root,
-                base.job_id,
-            );
-            let mut canonical = base.clone();
-            let mut alternative = base.clone();
-            let ca = replay_partition(&mut canonical, &a, false, false).unwrap();
-            let cb = replay_partition(&mut alternative, &a, true, false).unwrap();
-            assert!(cb > ca);
-            assert_eq!(canonical.fault().unwrap(), alternative.fault().unwrap());
-            assert_eq!(canonical.fault().unwrap().is_some(), fault);
-            assert_eq!(
-                identity,
-                (
-                    canonical.seed_id(),
-                    canonical.execution_root_v1(),
-                    canonical.table_root,
-                    canonical.job_id
-                )
-            );
-            assert_eq!(
-                identity,
-                (
-                    alternative.seed_id(),
-                    alternative.execution_root_v1(),
-                    alternative.table_root,
-                    alternative.job_id
-                )
-            );
-            for small in [false, true] {
-                let mut bad = base.clone();
-                assert!(replay_partition(&mut bad, &a, small, true).is_err());
-                assert!(bad.fault().is_err());
-                let mut altered = a.clone();
-                altered.eog.opening.leaf_index += 1;
-                // An altered opening cannot instantiate the original primitive.
-                let (binding, _) = public_constrained_case_for_tests_v1(fault);
-                assert!(
-                    PalwConstraintStreamCourtV1::new(
-                        Hash64::from_u64_word(1),
-                        owner(),
-                        100,
-                        binding.committed_execution_root,
-                        &binding,
-                        &altered.job,
-                        &altered.pin,
-                        altered.witness,
-                        altered.eog.ids.len() as u32,
-                        &altered.eog.opening,
-                        1 << 25
-                    )
-                    .is_err()
-                );
-            }
-        }
-    }
-
 }
 
 // Read-only native allocation inventory; no state/root/codec field is added.

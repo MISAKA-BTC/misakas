@@ -462,8 +462,6 @@ pub struct PalwAdmissionShapeV1 {
     /// (the derived GDN key-head count), and must a V1/V2 class's key and value head counts agree on a
     /// recurrence map. Carried so every preflight asks what the acceptance path asks.
     pub gdn_key_heads: bool,
-    /// Effective memory/routing court fence at this exact registration height.
-    pub memory_routing_court: bool,
 }
 
 /// **ADR-0103: what the held regime's gate reads at the height** — the caller's reading of two
@@ -517,7 +515,6 @@ pub fn palw_admission_shape_at_v1(
         offence_attribution: params.palw_offence_attribution_active_at(daa_score),
         prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
         gdn_key_heads: params.palw_gdn_key_heads_active_at(daa_score),
-        memory_routing_court: params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(daa_score)),
     })
 }
 
@@ -721,20 +718,7 @@ pub fn derive_court_cost_shaped_v1(
     profile: &PalwShapeProfileV3,
     shape: PalwCourtCostShapeV1,
 ) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
-    derive_court_cost_walk_v1(profile, shape, &mut None, None)
-}
-
-/// **RFC-0006 consumer v2: [`derive_court_cost_shaped_v1`] under a class's router binding** (aux 139). The one difference is the
-/// routing appendix: each routed reader of a layer table is priced at the row of the router `binding` names for it — that router's
-/// own width and tile — instead of the table's first q36 router (the legacy rule, which a two-router or Kimi table does not even
-/// have). Everything else is the same walk. Read only past `palw_memory_routing_court_v2`, where a binding can exist; without one
-/// the shipped derivation is unchanged.
-pub fn derive_court_cost_bound_v2(
-    profile: &PalwShapeProfileV3,
-    shape: PalwCourtCostShapeV1,
-    binding: &crate::palw_router_binding_v2::PalwRouterBindingRowV2,
-) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
-    derive_court_cost_walk_v1(profile, shape, &mut None, Some(binding))
+    derive_court_cost_walk_v1(profile, shape, &mut None)
 }
 
 /// **One node's row of the derivation** — which node bound the class, and at what.
@@ -767,19 +751,16 @@ pub fn derive_court_cost_rows_v1(
     shape: PalwCourtCostShapeV1,
 ) -> Result<Vec<PalwCourtCostRowV1>, PalwClassAdmissionError> {
     let mut sink = Some(Vec::new());
-    derive_court_cost_walk_v1(profile, shape, &mut sink, None)?;
+    derive_court_cost_walk_v1(profile, shape, &mut sink)?;
     let mut rows = sink.expect("the sink was supplied");
     rows.sort_by(|a, b| b.close_bytes.cmp(&a.close_bytes));
     Ok(rows)
 }
 
-/// `binding`: `None` is the shipped walk (the routing appendix priced at the table's first q36 router); `Some` is
-/// [`derive_court_cost_bound_v2`]'s.
 fn derive_court_cost_walk_v1(
     profile: &PalwShapeProfileV3,
     shape: PalwCourtCostShapeV1,
     sink: &mut Option<Vec<PalwCourtCostRowV1>>,
-    binding: Option<&crate::palw_router_binding_v2::PalwRouterBindingRowV2>,
 ) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
     use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepOpKindV1 as Op};
     let over = || PalwClassAdmissionError::Profile("the class's court cost overflows a u64".to_string());
@@ -1088,26 +1069,7 @@ fn derive_court_cost_walk_v1(
             // exactly as the leaf derivation opens it.
             if crate::palw_step_refute::qwen36_reads_routing_v1(node) {
                 let topk = crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_ROUTER_TOPK);
-                // RFC-0006 consumer v2: under a binding, the router the court will read for THIS reader
-                // (`palw_bound_router_slot_v2` → `qwen36_router_slot_for_reader_v2`), at its own width and
-                // tile. A reader the binding does not name falls to the legacy rule, exactly as the court
-                // does; pre/post tables carry no binding.
-                let bound_tag = match table_name {
-                    "gdn" => Some(crate::palw_router_binding_v2::PALW_ROUTER_BINDING_TABLE_GDN_V2),
-                    "attn" => Some(crate::palw_router_binding_v2::PALW_ROUTER_BINDING_TABLE_ATTN_V2),
-                    _ => None,
-                };
-                let bound = match (binding, bound_tag, u16::try_from(node_index)) {
-                    (Some(row), Some(tag), Ok(reader)) => crate::palw_router_binding_v2::palw_bound_router_index_v2(row, tag, reader)
-                        .map(|router| {
-                            table.get(router as usize).ok_or_else(|| {
-                                PalwClassAdmissionError::Profile("a router binding names a router outside its table".to_string())
-                            })
-                        }),
-                    _ => None,
-                }
-                .transpose()?;
-                if let Some(router) = bound.or_else(|| table.iter().find(|n| n.kernel_semantics_id == topk)) {
+                if let Some(router) = table.iter().find(|n| n.kernel_semantics_id == topk) {
                     let lanes = node_out_width_v1(router, profile).ok_or_else(over)?;
                     let tiles = lanes.div_ceil((router.tile_len as u64).max(1));
                     let run_path = step_path_bytes
@@ -2390,42 +2352,6 @@ pub fn palw_held_class_unanswerable_v1(profile: &PalwShapeProfileV3) -> Option<P
         .then_some(PalwHeldUnanswerableV1::ComputeTurnPastCap { turn, cap: PALW_HELD_COMPUTE_TURN_CAP_DAA_V1 })
 }
 
-/// Structural coverage of the versioned hybrid held route. This is not a
-/// registration credential: the ordinary profile/kernel/admission checks still
-/// apply, and callers must also qualify and activate the memory/routing court.
-/// Old maps do not silently acquire the meaning of the key-head-aware v5 map.
-pub fn palw_held_hybrid_route_covered_v2(profile: &PalwShapeProfileV3) -> bool {
-    profile.version == crate::palw_step::PALW_STEP_OBJECT_VERSION_V3
-        && profile.lane == crate::palw_step::PalwStepLaneV1::Int32
-        && profile.state_chunk_map_id == crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v5()
-        && profile.validate_shape().is_ok()
-        && crate::palw_step::palw_gdn_key_heads_v1(profile).is_ok()
-        && palw_fused_sites_are_dissectable_v1(profile)
-}
-
-/// Candidate held-answerability reading for the memory/routing court's V2
-/// route. With the route dormant this is EXACTLY V1. The versioned full-cache
-/// replay path removes only the old blanket recurrent-layer refusal for its
-/// covered map; context, reference cost, replay factor and turn cap are unchanged.
-/// No shipped caller activates this reading until consolidated qualification.
-pub fn palw_held_class_unanswerable_v2(
-    profile: &PalwShapeProfileV3,
-    memory_routing_court: bool,
-) -> Option<PalwHeldUnanswerableV1> {
-    let legacy = palw_held_class_unanswerable_v1(profile);
-    if !memory_routing_court
-        || !matches!(legacy, Some(PalwHeldUnanswerableV1::Recurrent { .. }))
-        || !palw_held_hybrid_route_covered_v2(profile)
-    {
-        return legacy;
-    }
-    let Some(turn) = palw_held_compute_turn_daa_v1(profile) else {
-        return Some(PalwHeldUnanswerableV1::Unpriced);
-    };
-    (turn > PALW_HELD_COMPUTE_TURN_CAP_DAA_V1)
-        .then_some(PalwHeldUnanswerableV1::ComputeTurnPastCap { turn, cap: PALW_HELD_COMPUTE_TURN_CAP_DAA_V1 })
-}
-
 /// **ADR-0152 §4-ter C5: is a held class's attention lie attributable?** Past
 /// `palw_offence_attribution` (`attribution`), a registration whose held profile no honest party can
 /// dissect ([`palw_held_class_unanswerable_v1`]) is refused — [`PalwClassAdmissionError::HeldClassUnattributable`]
@@ -2446,121 +2372,6 @@ pub fn palw_held_class_is_attributable_v1(profile: &PalwShapeProfileV3, attribut
         }
         Some(why) => Err(PalwClassAdmissionError::HeldClassUnanswerable { why }),
     }
-}
-
-/// C5 at the registration's effective memory/routing fence. All ordinary
-/// attribution checks beside C5 remain mandatory and are shared by preflight.
-pub fn palw_held_class_is_attributable_v2(
-    profile: &PalwShapeProfileV3,
-    attribution: bool,
-    memory_routing_court: bool,
-) -> Result<(), PalwClassAdmissionError> {
-    if !attribution {
-        return Ok(());
-    }
-    match palw_held_class_unanswerable_v2(profile, memory_routing_court) {
-        None => Ok(()),
-        Some(PalwHeldUnanswerableV1::ContextPastBound { n_ctx, bound }) => {
-            Err(PalwClassAdmissionError::HeldClassUnattributable { n_ctx, bound })
-        }
-        Some(why) => Err(PalwClassAdmissionError::HeldClassUnanswerable { why }),
-    }
-}
-
-/// **The court-cost shape the admission gate prices a class at** (Decision C), shared by
-/// [`verify_class_admission_v9`] and [`palw_router_binding_admission_v2`].
-///
-/// **A fused class under an armed court is priced for THAT court, whether or not the context-ladder
-/// fence is armed** — by the same rules the genesis assembly prices the row with
-/// (`qwen25_a16_graph_v5_registration_v1` calls `palw_class_ladder_rules_for_court_v1`
-/// unconditionally). The court is what makes the dissection price exist; the `palw_context_ladder`
-/// fence is about Decision 12's enumerations, and a ruleset that arms the court while leaving that
-/// fence dormant (testnet-11) handed a fused profile the genesis-anchored shape here — dissection
-/// `None` — so the check below refused EVERY post-genesis fused registration on the network that
-/// ships the court (`PricedForADifferentCourt { priced: None, court: 2 }`), while its own genesis
-/// admitted the same row priced for the court. Non-fused profiles are untouched: no court prices
-/// them, and the genesis-anchored shape is theirs as before.
-///
-/// **One court, priced once — and ONE spelling of which court it is** (audit D H-1). The arity a
-/// fused site is priced at must be the arity the ruleset's court will PLAY:
-/// `PalwKaryCourtV1::dissection_arity`, the caller's reading of `palw_court_params_at_v2`, never the
-/// frozen `bundle.court.dissection_arity()` (a caller passing the stored 2 would admit a class priced
-/// for a 2-child move against a court that deals `k` children every round).
-///
-/// ADR-0103 Decision 4: under the held regime the generated-token pin is priced at the trace cap —
-/// the most decode calls a job can file — rather than at the whole context.
-fn palw_admission_cost_shape_v1(
-    profile: &PalwShapeProfileV3,
-    bundle_ladder: u64,
-    ladder: Option<PalwClassLadderRulesV1>,
-    court: Option<PalwKaryCourtV1>,
-    held: PalwHeldAdmissionV1,
-) -> Result<PalwCourtCostShapeV1, PalwClassAdmissionError> {
-    let fused = palw_profile_has_fused_attention_v1(profile);
-    let shape = match ladder {
-        Some(rules) => rules.cost_shape,
-        None if fused && court.is_some() => {
-            crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle_ladder)
-                .map_or_else(|| PalwCourtCostShapeV1::genesis_anchored_v1(profile, bundle_ladder), |r| r.cost_shape)
-        }
-        None => PalwCourtCostShapeV1::genesis_anchored_v1(profile, bundle_ladder),
-    };
-    if fused
-        && let Some(k) = court
-        && shape.dissection != Some(k.dissection_arity)
-    {
-        return Err(PalwClassAdmissionError::PricedForADifferentCourt { priced: shape.dissection, court: k.dissection_arity });
-    }
-    Ok(if held.armed { shape.with_decode_bound_v1(crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS as u64) } else { shape })
-}
-
-/// **In chunks AND in bytes** (ADR-0080 design A; ADR-0049 Decision C). A close rides an
-/// `ObjectChunk` group, so what a ruleset pays to RELAY is a count of carriers and half a chunk is a
-/// whole transaction; what a validating node will HASH is `max_close_bytes`, and that is the unit
-/// `check_close_cost_v2` refuses a real close in. The two are one refusal only on a ruleset whose
-/// byte ceiling sits on the chunk grid — the RC's does, the devnet's (81,920 against a carrier of
-/// 83,333) does not, and comparing chunks alone admitted a class the close gate would refuse at its
-/// widest dispute. `palw_close_fits_court_v1` is the one predicate; `PalwConsensusParamsV2::validate`
-/// asks it too, so a class cannot be admitted at registration and refused at boot, nor admitted
-/// anywhere and refused at its first close.
-fn palw_court_cost_within_ceilings_v1(
-    cost: &PalwCourtCostV1,
-    court: &crate::palw_mode_v2::PalwCourtParamsV2,
-) -> Result<(), PalwClassAdmissionError> {
-    for (what, got, ceiling) in [
-        ("court close chunks", crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes), court.max_close_chunks()),
-        ("court close bytes", cost.max_close_bytes, court.max_close_bytes()),
-        ("terminal multiply-accumulates", cost.max_terminal_macs, court.max_terminal_macs()),
-        ("operand count", cost.max_operand_count as u64, court.max_operand_count() as u64),
-    ] {
-        if got > ceiling {
-            return Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling });
-        }
-    }
-    Ok(())
-}
-
-/// **RFC-0006 consumer v2 (RFC06-4): re-derive a class's admission price under the router binding being declared.**
-///
-/// A class is admitted with its routing appendix priced at the table's first q36 router; once its registrant binds each routed
-/// reader to a router (aux 139), the court opens THAT router's row, which can be wider or tiled differently (a second router, a
-/// Kimi router). This re-runs Decision C — the same shape ([`palw_admission_cost_shape_v1`], under the court and ladder in force at
-/// the declaring block) and the same ceilings ([`palw_court_cost_within_ceilings_v1`]) — with [`derive_court_cost_bound_v2`], and
-/// refuses a binding under which some routed close would not fit the ruleset's carrier. Reached only through a tag-244 binding
-/// declaration, i.e. only past `palw_memory_routing_court_v2`; every class without a binding keeps its admitted price.
-pub fn palw_router_binding_admission_v2(
-    bundle: &PalwConsensusParamsV2,
-    profile: &PalwShapeProfileV3,
-    ladder: Option<PalwClassLadderRulesV1>,
-    court: Option<PalwKaryCourtV1>,
-    held: PalwHeldAdmissionV1,
-    binding: &crate::palw_router_binding_v2::PalwRouterBindingRowV2,
-) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
-    let bundle_ladder = crate::palw_state_chunk_map::palw_class_step_ladder_v1(bundle.court.max_step_leaf_count(), profile);
-    let shape = palw_admission_cost_shape_v1(profile, bundle_ladder, ladder, court, held)?;
-    let cost = derive_court_cost_bound_v2(profile, shape, binding)?;
-    palw_court_cost_within_ceilings_v1(&cost, &bundle.court)?;
-    Ok(cost)
 }
 
 /// [`verify_class_admission_v8`] with the Kimi family fence as an argument.
@@ -2910,11 +2721,76 @@ pub fn verify_class_admission_v9(
     // Ordered after the ladder because the two answer different halves of one question — the ladder
     // bounds how many rounds a dispute takes, these bound what a round costs — and a class that
     // fails both should be told about the deeper problem first.
-    // The shape and the ceilings are one spelling shared with the router-binding re-derivation
-    // (`palw_router_binding_admission_v2`), so the two can never price one class two ways.
-    let shape = palw_admission_cost_shape_v1(profile, bundle_ladder, ladder, court, held)?;
+    let shape = match ladder {
+        Some(rules) => rules.cost_shape,
+        // **A fused class under an armed court is priced for THAT court, whether or not the
+        // context-ladder fence is armed** — by the same rules the genesis assembly prices the row
+        // with (`qwen25_a16_graph_v5_registration_v1` calls `palw_class_ladder_rules_for_court_v1`
+        // unconditionally). The court is what makes the dissection price exist; the
+        // `palw_context_ladder` fence is about Decision 12's enumerations, and a ruleset that arms
+        // the court while leaving that fence dormant (testnet-11) handed a fused profile the
+        // genesis-anchored shape here — dissection `None` — so the check below refused EVERY
+        // post-genesis fused registration on the network that ships the court
+        // (`PricedForADifferentCourt { priced: None, court: 2 }`), while its own genesis admitted
+        // the same row priced for the court. Found by the SDK test written for the freeze
+        // question "is the drill's network the chain we cut?" — it was not. Non-fused profiles
+        // are untouched: no court prices them, and the genesis-anchored shape is theirs as before.
+        None if fused && court.is_some() => {
+            crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle_ladder)
+                .map_or_else(|| PalwCourtCostShapeV1::genesis_anchored_v1(profile, bundle_ladder), |r| r.cost_shape)
+        }
+        None => PalwCourtCostShapeV1::genesis_anchored_v1(profile, bundle_ladder),
+    };
+    // **One court, priced once — and ONE spelling of which court it is** (audit D H-1).
+    //
+    // The shape arrives from the caller (it is the ladder rule's, built from the same
+    // `PalwKaryCourtV1` this gate holds), so the arity it prices a fused site at must be the arity
+    // the ruleset's court will PLAY. That value is `PalwKaryCourtV1::dissection_arity` — the
+    // caller's reading of `palw_court_params_at_v2`, which under an armed fence OVERWRITES
+    // `bundle.court.dissection_arity()` with `palw_court_arity_v1`'s derived value.
+    //
+    // This read `bundle.court.dissection_arity()`, the value the ruleset FROZE (2 on every preset
+    // and on every bundle any shipped builder can produce). The two are the same rule with two
+    // spellings, and they disagree exactly where it matters: a caller following this function's
+    // documented contract prices at the derived arity and every fused row is refused
+    // `PricedForADifferentCourt`, while a caller passing the stored 2 admits a class priced for a
+    // 2-child move against a court that deals `k` children every round — under-priced disclosure
+    // on a close ceiling the class was admitted under. `Params::validate_palw_v2` refuses a bundle
+    // whose stored arity is not the derived one, so past an armed fence the two cannot differ;
+    // this reads the one the court plays so that the gate is right even before that refusal runs.
+    if fused
+        && let Some(k) = court
+        && shape.dissection != Some(k.dissection_arity)
+    {
+        return Err(PalwClassAdmissionError::PricedForADifferentCourt { priced: shape.dissection, court: k.dissection_arity });
+    }
+    // ADR-0103 Decision 4: under the held regime the generated-token pin is priced at the trace
+    // cap — the most decode calls a job can file — rather than at the whole context.
+    let shape = if held.armed { shape.with_decode_bound_v1(crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS as u64) } else { shape };
     let cost = derive_court_cost_shaped_v1(profile, shape)?;
-    palw_court_cost_within_ceilings_v1(&cost, &bundle.court)?;
+    // **In chunks AND in bytes** (ADR-0080 design A; ADR-0049 Decision C). A close rides an
+    // `ObjectChunk` group, so what a ruleset pays to RELAY is a count of carriers and half a chunk
+    // is a whole transaction; what a validating node will HASH is `max_close_bytes`, and that is
+    // the unit `check_close_cost_v2` refuses a real close in. The two are one refusal only on a
+    // ruleset whose byte ceiling sits on the chunk grid — the RC's does, the devnet's (81,920
+    // against a carrier of 83,333) does not, and comparing chunks alone here admitted a class the
+    // close gate would refuse at its widest dispute. `palw_close_fits_court_v1` is the one
+    // predicate; `PalwConsensusParamsV2::validate` asks it too, so a class cannot be admitted at
+    // registration and refused at boot, nor admitted anywhere and refused at its first close.
+    for (what, got, ceiling) in [
+        (
+            "court close chunks",
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes),
+            bundle.court.max_close_chunks(),
+        ),
+        ("court close bytes", cost.max_close_bytes, bundle.court.max_close_bytes()),
+        ("terminal multiply-accumulates", cost.max_terminal_macs, bundle.court.max_terminal_macs()),
+        ("operand count", cost.max_operand_count as u64, bundle.court.max_operand_count() as u64),
+    ] {
+        if got > ceiling {
+            return Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling });
+        }
+    }
 
     // **The third bound: the whole dispute inside `window_court`** (ADR-0082 Decision 3, Z4/Z11).
     //

@@ -67,20 +67,20 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
 /// The re-pin (`scripts/release/t12_repin.py`, `maturity.*`) moves it with every other twin.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was edde9c06…, bb8d0d4d…)
+// re-pin 2026-10-25 @6549f9be22d4: testnet-12 arms the int-13 list at DAA 15500 (was 199d11f3…, 47f346f0…)
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
-    "199d11f3b8d97d5029e2a7e94b4578891fb1058a20eb9ec8a3da8de1e3593ad9",
+    "4a98d10572f723e03ed2449ac77dc423f7d9bac542695b387eea78a5add24a4f",
     "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
-    "47f346f0b9fa801432f65925cee09518409b9e52d931e376969a02eacc79b4d3",
+    "1fa8691d4761aca3e28b3769475c216c6ff3ec0412132ebeccf5ed85f6f2c40c",
 );
 
 /// testnet-12 with the 120-DAA maturity: the shipped preset's full ids (= `palw_readiness_horizon_is_t12_only`'s
 /// `T12_WITH_THE_HORIZON`). Taken from this test's own output.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
+// re-pin 2026-10-25 @6549f9be22d4: testnet-12 arms the int-13 list at DAA 15500 (was 5ee7fd8e…, 1678e073…)
 const T12_WITH_THE_MATURITY: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
+    "ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5",
 );
 
 fn shipped(name: &str) -> Params {

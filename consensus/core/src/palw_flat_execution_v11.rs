@@ -1012,11 +1012,6 @@ impl NativeExecutionPoliciesV11 {
     pub fn check(&self, network_domain: Digest) -> Result<(), String> {
         self.execution.check(&self.quota)?;
         self.discovery.check(&self.quota)?;
-        // G14 lane closure G-N3: a finder (possibly the producer's own Sybil) is paid at most ADR-0032's reporter share (49 %) of a
-        // collected slash, so a self-conviction never recovers the whole slash: at least 51 % always burns.
-        if !crate::palw_g14_lane_closure_v1::palw_native_finder_share_within_cap_v1(self.execution.finder_permille) {
-            return Err("native finder share exceeds ADR-0032's 49% reporter share (G14 G-N3)".into());
-        }
         if self.execution.network_domain != network_domain || self.quota.network_domain != network_domain {
             return Err("funded native execution policy belongs to another network".into());
         }
@@ -1037,15 +1032,6 @@ pub const EXECUTION_ACTION_ANSWER_V11: u8 = 9;
 pub const EXECUTION_ACTION_SETTLE_DEMAND_V11: u8 = 10;
 pub const EXECUTION_ACTION_DISCOVER_V11: u8 = 11;
 pub const EXECUTION_ACTION_CONVERT_V11: u8 = 12;
-/// **G14 lane closure G-N1:** a self-contained public filing against a Challengeable job — no seal, no retained ticket, no
-/// producer obligation (`job ‖ u32 n ‖ filing`). In force where `palw_funded_execution_v11` is (dormant on every preset).
-pub const EXECUTION_ACTION_PUBLIC_FILING_V11: u8 = 19;
-/// **G14 lane closure G-N1:** a lapsed (unrevealed, past `reveal_until`, no protected answer compelled) seal gives its retained
-/// job ticket back before the job is terminal (`job ‖ seal`). Same fence as [`EXECUTION_ACTION_PUBLIC_FILING_V11`].
-pub const EXECUTION_ACTION_RELEASE_LAPSED_SEAL_V11: u8 = 20;
-/// **G14 lane closure G-N1 (text29):** a self-contained public filing against a Challengeable text29 job (`job ‖ u32 n ‖ filing`),
-/// no paid owner. In force where the text29 actions are (the funded fence and Final27, both dormant on every preset).
-pub const EXECUTION_ACTION_TEXT_PUBLIC_FILING_V29: u8 = 21;
 
 /// Native close state, derived from authenticated rows. Counters distinguish
 /// paid discovery from ordinary requests and preserve lifetime answer bounds.

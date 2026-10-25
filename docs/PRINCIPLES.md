@@ -1,7 +1,5 @@
 # MISAKAの設計前提 — 不可侵原則
 
-> **現在の変更管理:** [§11 設計凍結](#design-freeze)。**初期 mainnet の対象範囲:** [§12 画像・動画・改善の延期](#post-mainnet-scope)。既存技術の再採択・有効化を意味しない。
-
 **確率的検証・経済的抑止・公開証拠による独立客観裁定**
 *Probabilistic Verification, Economic Deterrence, and Independent Objective Adjudication*
 
@@ -10,7 +8,7 @@
 - この文書は MISAKA の**設計前提**であり、すべての ADR・RFC・Spec・設計文書・実装レーン・有効化判断の**上位**に置く。
   - ADR・RFC・Spec はこの前提の下で書かれ、判断される。
   - 下位の文書がこの前提と衝突する場合は、前提が優先する。衝突する記述は改定対象になる。
-- この前提を含む採用済み設計は原則凍結する。重大問題時の変更は [§11](#design-freeze) に従い、新規 RFC と新規 ADR の両方の採択、および設計責任者（現行のユーザー承認主体）の明示的承認を必要とする。
+- この前提そのものは ADR や RFC では変更できない。変更はユーザーの明示的な決定だけで行う。
 - この前提は wire id、合意 fingerprint、有効化の高さ、パラメータ値のいずれも割り当てない。
 - 現在のコードがすべての条件を満たしたと宣言するものでもない。§6 は、報酬と consensus work weight を与える前に満たすべき条件である。
 
@@ -21,7 +19,7 @@
 - [ADR-0172](adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md): versioned kernel。
 - [RFC-0007 Part VI](rfc/0007-palw-verification-certificates-and-algebraic-checks.md): commit 後 challenge。
 - [RFC-0014](rfc/0014-panel-independent-fraud-prosecution.md) と [RFC-0015](rfc/0015-panel-free-permissionless-verification.md): Panel 非依存の訴追と Panel=0。
-- 有効化判断の照合先: [全面有効化の readiness matrix](design/palw/integration/activation-readiness-matrix.md)。
+- 有効化判断の照合先: [全面有効化の readiness matrix](design/palw/activation-readiness-matrix.md)。
 
 > **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
 > *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
@@ -29,11 +27,6 @@
 > 2026-10-14改定前の標語は「…決定論的に裁き、経済的に不正を抑止する。」（*Economic Deterrence*）であった。§0の改定で置き換える。
 
 ---
-
-
-> **恒久決定(2026-10-15):** LLM・モデル計算の正しさを暗号学的に証明する仕組み(ZK、zk-SNARK/STARK、zkVM・zkML、PCS ベースの succinct proof など)は一切使用せず、今後も使用しない。詳細は [§8](#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定)。
-
-> **凍結前提(2026-10-15):** genesis と年次フォークで指定されたモデルは 1.0。後から登録したモデルは登録時点から審査なしで 0.3 に固定(昇格・更新・失効・試行手数料なし、1.0 への経路は年次フォーク指定のみ)。モデル単位の検証は「何を信頼するか」の問題が解決しないため不採用。claim 単位の検証は全モデルで維持。詳細は [§9](#9-モデルの二階層とモデル単位の検証の不採用--2026-10-15-ユーザー決定凍結前提)。
 
 ## 0. 最終Goal — 2026-10-14改定（ユーザー決定）
 
@@ -44,7 +37,7 @@
 最終条件・有効化gateとする記述は、この節に従って読む。
 
 1. **経済Goal。** モデルを共有して外部minerのbond参加を増やしたモデルが、非公開のまま自己資本だけで採掘するモデルより、
-   モデル全体として多くの配分を得る構造を実現する（モデル別のブロック生成機会とcoinbase配分、7日平均bondの`α = 1.5`（2026-10-16 ユーザー決定、2026-10-22 再確認。旧 30 日）、[ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md)）。
+   モデル全体として多くの配分を得る構造を実現する（モデル別のブロック生成機会とcoinbase配分、30日平均bondの`α = 1.5`、[ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md)）。
    chainはモデルが共有されたかを判定せず、実際に拘束されたbond資本と、検証が成立したかだけを読む。非公開は次の二つで不利になる。
    - 公開モデルへbondが集まる結果として、閉鎖モデルが相対的な配分を失う。
    - 検証attestation gate（ECON round 2、readiness §3f）により、bondから抽選された検証者が自分のモデルのコピーでclaimを検査し、
@@ -220,7 +213,6 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 > *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
 
 
-<a id="8-llm計算の暗号学的証明を使用しない--2026-10-15ユーザー決定"></a>
 ## 8. モデル計算の暗号学的証明を使用しない（2026-10-15、ユーザー恒久決定）
 
 **MISAKA は LLM・モデル計算の正しさを暗号学的に証明する仕組みを一切使用せず、今後も使用しない。**
@@ -234,21 +226,7 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 5. **実装と互換性。** 禁止した方式を新規生成・受理し、報酬や weight・credit の計算正当性の根拠にしてはならない。旧履歴の読み取りや wire ID の保存が必要な場合も、その目的に限る。旧 ID の意味を別方式へ再解釈せず、必要な移行は明示的な version/fence で行う。
 6. **評価。** 128-bit 等の数字を全計算の暗号学的健全性として保証しない。許容する検査の誤検出・見逃し、反復・grinding、正直な検証者の参加、データ取得、費用と経済条件を、それぞれの前提を明示して評価する。未測定値は UNKNOWN とし、禁止方式の実装を不足解消の条件にはしない。
 
-7. **理由。** ZK などで LLM の計算を実用的に証明することは不可能である(ユーザー判断)。
-8. **既存文書。** ZK・succinct proof・compact proof を「将来」「研究」として挙げている箇所(例: `docs/design/palw/rfc9-l2-fork-choice.md` 案 C、RFC-0015 §10、`docs/design/palw/rfc-0009-remote-record.md`)は本決定により除外する。過去の記述は履歴として残し、除外注記を付ける。
-9. **エージェント(Claude Code、Codex など)へ。** 設計・実装・レビュー・提案で上記の暗号学的計算証明を持ち出さない。既存の記述や実装を見つけたら、除外である旨の注記を付けるか撤回する。リポジトリ直下の `CLAUDE.md`・`AGENTS.md` にも同じ決定を記載している。
-
-(本節は 2026-10-15 に Codex と Claude Code がそれぞれ追記した 2 つの §8 を 1 つに統合したもの。)
-
-## 9. モデルの二階層とモデル単位の検証の不採用 — 2026-10-15 ユーザー決定(凍結前提)
-
-**本節は原則凍結した前提である。** 通常は再審・変更しない。変数・パラメーター調整と重大問題時の例外変更は [§11](#design-freeze) に従う。例外では新規 RFC と新規 ADR の両方の採択、設計責任者の明示的承認、対象節の改定を要する。今回、階層規則や数値は変更しない。
-
-1. **genesis と年次フォークで指定されたモデルは 1.0 である。** 年 1 回程度のソフトフォークまたはハードフォークで、モデル ID と固定 artifact root の組を承認リスト(ApprovedModels)に追加する。追加のみで、既存モデルは上書きしない(ADR-0175)。リストへの指定は政策的決定であり、「公開されている」「独立検証可能である」ことの技術的証明ではない。
-2. **後から登録したモデルは、登録した時点から審査なしで 0.3 に固定する。** 昇格・更新・失効・試行手数料はない。何年経っても、どれだけ使われても 0.3 のままである。**1.0 になる経路は、年次フォークでの指定だけである。**
-3. **モデル単位の検証・審査は行わない(不採用)。** 理由: モデルに対して検証を行うと、その検証において何を信頼するか(誰が・何を根拠に「正しく共有・運用されている」と判断するか)という問題が新たに発生し、それは解決しない。モデルの公開状況・保持者数・取得可能性・共有状況をチェーンが審査することはしない。
-4. **係数は配分の重みに一度だけ掛ける。** `A_m = c_m · S̄_m^1.5`(α=1.5、7 日平均の適格 bond。2026-10-16 ユーザー決定・10-22 再確認、旧 30 日)。この P_m を物理ブロック機会(RFC-0016 V+)と coinbase 配分の両方に使い、受理ブロックの報酬に重ねて掛けない。登録モデル全体に発行上限を設け、多数登録で 0.3 の枠を増やせない。
-5. **claim 単位の検証は、すべてのモデルで維持する。** モデル単位の検証を行わないことは、claim の検証を省くことではない。各 claim は階層に関係なく、確率的検出・公開証拠による局所化・決定論的裁定(court)・claim ごとの抽選検証者による認証(`SecurityCertified`、正直な割合の明示的前提)を受ける。認証されていない claim は、どの階層でも fork choice・決済深度・Rule E 参加・settled anchor・weight を進めない(§0 の 2026-10-15 改定、RFC-0018)。
+---
 
 ## 9. モデルの二階層とモデル審査の不採用（2026-10-15、ユーザー凍結前提）
 
@@ -282,67 +260,3 @@ This appendix records where the principle already decides open work. It is a poi
 - **§2's grinding resistance** is why the sealed-source beacon (v3) and the complete-check bootstrap are prerequisites for any sampled approval.
 - **§3's "no escape to economic Final"** is enforced by the bounded demand/proof/grace deadlines of the kernel route and OPV.
 - **Condition 7 of §6 (reorg consistency)** is why the fork-choice decision (ADR-0178) is a prerequisite of the full-activation release.
-
-## §0 — ユーザー方針 2026-10-15 による改定
-
-* **閉鎖モデル・`p = 0`の残余リスクは経済的なものに限る。** §0(2026-10-14改定)は、非公開モデルの`p = 0`をbond単位の上限で被害を有界化する残余リスクとした。これに次を加える: その残余リスクは**合意finalityにもsettlement finalityにも決してならない**。残余リスクが許すのは有界な経済的損失だけであり、未認証のclaimは合意creditを持たない。
-
-**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
-
-* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
-* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
-* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
-* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
-* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
-
-## 10. PALW を成り立たせる前提 — bond が時間あたりの claim を制限する(2026-10-16 ユーザー決定)
-
-MISAKA は、確率的検証と経済によって PALW を実現する。この前提に加えて、次を設計の前提とする。
-
-### 10.1 Bond が採掘速度と報酬総額の上限を決める
-- **Bond が、採掘速度と報酬総額の上限を決める。** モデル計算は、その枠を使うために必要な正当な仕事である。
-- **不正をしても枠は増えない。反証されれば担保を失う。**
-- つまり、miner bond から生じるブロックと報酬は、不正をして高速に claim しても、実際に計算して claim しても、同じ上限に当たる。bond で時間内に出せる claim の量は変わらない。
-- 時間内に出せる claim を bond で制限することで、正しい計算を促し、PALW を成り立たせる([ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)、[RFC-0016](rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)。上限は 1 日単位で計算する)。
-
-### 10.2 モデルを公開しない自作自演への対処
-想定する攻撃:悪意あるユーザーがモデルを公開せず、miner・Panel・モデル登録をすべて自分で行い、計算をしないで claim を通す。
-
-これを、次の 2 つで抑える。
-- **モデル別配分に 1.5 乗をかける。** モデルの Panel と miner の claim bond の総額(検証されて Final になるまで返ってこない担保)に 1.5 乗をかけ、ブロック生成と報酬の配分に使う(`A_m = c_m · S̄_m^1.5`、[ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md))。
-  - 利用者が集まりにくいモデルには bond も集まりにくい。そのため、そうしたモデルは配分で不利になりやすい構造にする。
-- **genesis とフォークのモデルを正規モデル、追加モデルを非正規モデルとする。**
-  - 非正規モデルの報酬とブロック生成は、正規モデルの 0.3 倍程度にとどまる([ADR-0179](adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md)、§9)。
-  - これにより、モデルが共有されない攻撃のリスクを大幅に下げる。
-
-### 10.3 G14 によって正規モデルでの「計算しない提出」を防ぐ
-- **G14 の定義。** 計算をせずに claim を出す miner がいても、Panel に正しい Panel が 1 つでもいて、計算と一致しないことを確認できれば、その不正を客観的に証明できる。そして slash、ブロック生成の拒否、報酬の拒否まで持っていける。
-- この定義が満たされていれば、genesis・フォークのモデルに正しい Panel が 1 つでも立てば、計算しないで提出する不正を防げる。
-
-### 10.4 設計が満たすべき条件(肝心な点)
-本設計は、次の 2 つを満たすことを前提とする。
-1. **不正や DoS のように claim を出しても、bond の slash による損失が、想定される利益を上回ること。**
-2. **客観的な court を悪用して、正常に計算している miner・Panel を slash させる不正ができないこと。**
-
-
-<a id="design-freeze"></a>
-## 11. 採用済み設計の原則凍結と例外変更
-
-**今回のユーザー指示を文書化（整理日 2026-10-17）。** 設計の変数・パラメーター以外は原則凍結し、通常変更禁止とする。重大な問題が確認された場合は、新規 RFC と新規 ADR の両方、レビュー、明示的採択によって変更できる。
-
-変数・パラメーターの調整も、構造と不変条件を維持し、旧新値・根拠・影響・試験・承認を [台帳](governance/parameter-register.md) に残す。数値で認証や責任を外す変更を通常調整としない。
-
-本書の「恒久」「再審しない」「変更不可」は通常の変更禁止として維持し、重大問題の例外手続きは本節に統一する。本書自体の改定にも設計責任者の明示的承認を要する。意味不変の実装・修正・最適化・試験・文書整備は継続できる。未採択 Draft の採用・技術方式の撤回・稼働有効化は今回行わない。
-
-正本: [設計凍結](governance/design-freeze.md)。[ADR-0181](adr/0181-design-freeze-and-controlled-change.md) / [RFC-0021](rfc/0021-design-freeze-and-documentation-governance.md)。
-
-<a id="post-mainnet-scope"></a>
-## 12. 初期 mainnet の対象範囲 — 画像・動画・モデル改善の延期
-
-**追加のユーザー指示を文書化（整理日 2026-10-17）。** RFC-0003 の画像・動画の経路と RFC-0004 のモデル改善は、mainnet 稼働開始後に取り組む機能として延期し、当面無効とする。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始後も自動有効化しない。
-
-必要なテキスト・TIR・固定登録・claim 認証・court・bond 予算は維持する。共有機能からの迂回的な有効化を許可せず、延期経路が閉じていることと共通経路の回帰を確認する。旧履歴・既存責任を遡及的に消さず、過去の実装・試験記録を今後の有効化承認にしない。
-
-mainnet 後に、機能別の実装・試験・影響・互換性・移行とレビューを確認し、明示的な提供・有効化承認で再開する。構造変更は §11 に従う。文書への反映と runtime の無効化実施は別である。
-
-正本: [延期・無効化方針](governance/post-mainnet-scope.md)。[ADR-0182](adr/0182-defer-media-and-model-improvement-until-post-mainnet.md) / [RFC-0022](rfc/0022-post-mainnet-media-and-model-improvement-scope.md)。

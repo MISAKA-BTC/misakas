@@ -1697,7 +1697,7 @@ mod tests {
     /// built.
     #[test]
     fn the_panel_asks_the_plan_before_todays_duty() {
-        let source = crate::palw_panel::source_support::former_parent_production_source_v1();
+        let source = include_str!("palw_panel.rs");
         let duties = &source[source.find("    fn readiness_duties(").expect("readiness_duties")..];
         let duties = &duties[..duties.find("\n    }\n").expect("its end")];
         let period = duties.find("crate::palw_candidate_proof_timing::palw_candidate_audit_period_spans_v1(").expect("the period");

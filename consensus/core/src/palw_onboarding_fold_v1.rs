@@ -113,7 +113,7 @@ pub(super) fn apply_artifact_bound_v1(
         PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1,
         key2(v2_class, kernel_param_root),
         Some(borsh::to_vec(&row).expect("a binding row serializes")),
-    )?;
+    );
     Ok(())
 }
 
@@ -190,7 +190,7 @@ pub(super) fn apply_artifact_challenged_v1(
         PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1,
         key2(v2_class, kernel_param_root),
         Some(borsh::to_vec(&refuted).expect("a binding row serializes")),
-    )?;
+    );
     Ok(())
 }
 
@@ -289,7 +289,7 @@ pub(super) fn apply_kernel_bound_v1(
         PALW_ONBOARDING_TABLE_KERNEL_BINDINGS_V1,
         borsh::to_vec(v2_class).expect("a digest serializes"),
         Some(borsh::to_vec(&row).expect("a binding row serializes")),
-    )?;
+    );
     Ok(())
 }
 
@@ -392,7 +392,7 @@ pub(super) fn apply_conformance_committed_v1(
     // The beacon's sources, frozen now (RFC-0007 §VI.3): the OPV classes ELIGIBLE at the commitment (derived — Active kernel,
     // conformance passed, G14-complete, live DA, bounded, a verified policy, not denied: `opv_eligible_set_v1`), never the candidate
     // under any mode. A complete check draws no beacon, so it freezes none. From genesis the only eligible classes are complete-check
-    // ones: they are the bootstrap of every sampled beacon (`docs/design/palw/verification/opv-beacon-bootstrap.md` §4).
+    // ones: they are the bootstrap of every sampled beacon (`docs/design/palw/opv-beacon-bootstrap.md` §4).
     let ledger = route
         .ledger_native_projection_checked_v9()
         .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
@@ -457,14 +457,14 @@ pub(super) fn apply_conformance_committed_v1(
         PALW_ONBOARDING_TABLE_CONFORMANCE_V1,
         key2(&class, &artifact_root),
         Some(borsh::to_vec(&row).expect("a conformance row serializes")),
-    )?;
-    write_attempt(builder, &class, &attempt)?;
+    );
+    write_attempt(builder, &class, &attempt);
     if let Some(target) = source_target {
         builder.write_kernel_row(
             crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4,
             borsh::to_vec(&target.terms.context).expect("context serializes"),
             Some(borsh::to_vec(&target).expect("target serializes")),
-        )?;
+        );
     }
     if let Some(target) = paid_fee_target {
         let bounds = extras
@@ -475,15 +475,15 @@ pub(super) fn apply_conformance_committed_v1(
             crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
             borsh::to_vec(&target.target.terms.context).expect("context serializes"),
             Some(borsh::to_vec(&bounds).expect("source cost bounds serialize")),
-        )?;
+        );
         builder.write_kernel_row(
             crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
             borsh::to_vec(&target.target.terms.context).expect("context serializes"),
             Some(borsh::to_vec(&target).expect("paid target serializes")),
-        )?;
+        );
     }
     // The previous attempt's material goes with it (its id stays in the record's history only as `last_end`).
-    builder.write_kernel_row(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, class_key(&class), None)?;
+    builder.write_kernel_row(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, class_key(&class), None);
     Ok(())
 }
 
@@ -491,13 +491,12 @@ fn class_key(class: &Hash64) -> Vec<u8> {
     borsh::to_vec(class).expect("a digest serializes")
 }
 
-fn write_attempt(builder: &mut TransitionBuilder<'_>, class: &Hash64, attempt: &ConformanceAttemptRowV1) -> Result<(), PalwStateV2Error> {
+fn write_attempt(builder: &mut TransitionBuilder<'_>, class: &Hash64, attempt: &ConformanceAttemptRowV1) {
     builder.write_kernel_row(
         PALW_ONBOARDING_TABLE_CONFORMANCE_ATTEMPTS_V1,
         class_key(class),
         Some(borsh::to_vec(attempt).expect("an attempt row serializes")),
-    )?;
-    Ok(())
+    );
 }
 
 /// Close an open attempt without a pass: the contract's step for `end` (counted), the reason, the DAA.
@@ -625,12 +624,12 @@ pub(super) fn apply_conformance_evidence_v1(
                 // Bound to the attempt and not a pass: the attempt fails, counted. The material stays readable (op 231).
                 end_attempt(&mut attempt, ConformanceAttemptEndV1::EvidenceFailed, ctx.daa_score);
             }
-            write_attempt(builder, v2_class, &attempt)?;
+            write_attempt(builder, v2_class, &attempt);
             builder.write_kernel_row(
                 PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1,
                 class_key(v2_class),
                 Some(borsh::to_vec(post.as_ref()).expect("a post serializes")),
-            )?;
+            );
         }
         // (Judged by `judge_refutation_v1` above.)
         ConformanceEvidenceActionV1::Refute { .. } => {}
@@ -685,7 +684,7 @@ fn judge_refutation_v1(
     } else {
         builder.slash_bond(*signer, fee)?;
     }
-    write_attempt(builder, v2_class, &attempt)?;
+    write_attempt(builder, v2_class, &attempt);
     Ok(())
 }
 
@@ -768,7 +767,7 @@ fn apply_complete_check_v1(
         }
         CompleteVerdictV1::Fail(_) => end_attempt(&mut attempt, ConformanceAttemptEndV1::EvidenceFailed, ctx.daa_score),
     }
-    write_attempt(builder, v2_class, &attempt)?;
+    write_attempt(builder, v2_class, &attempt);
     Ok(())
 }
 
@@ -798,21 +797,20 @@ fn vector_fault_proven(
 
 /// **A gated class activated** (`activate_due_classes`): its conformance record, at `G14_ELIGIBLE`, becomes `ACTIVE_REWARDABLE`
 /// (availability: the artifact binding is Final, which the gate required). A no-op for a class with no record.
-pub(super) fn note_class_activated_v1(builder: &mut TransitionBuilder<'_>, class: &Hash64) -> Result<(), PalwStateV2Error> {
-    let Some(mut attempt) = builder.state.kernel_route.as_ref().and_then(|r| r.conformance_attempt_v1(class)) else { return Ok(()) };
+pub(super) fn note_class_activated_v1(builder: &mut TransitionBuilder<'_>, class: &Hash64) {
+    let Some(mut attempt) = builder.state.kernel_route.as_ref().and_then(|r| r.conformance_attempt_v1(class)) else { return };
     if attempt.record.state == OnboardingStateV1::G14Eligible
         && attempt.record.apply(OnboardingStepV1::Activated { availability: true }).is_ok()
     {
-        write_attempt(builder, class, &attempt)?;
+        write_attempt(builder, class, &attempt);
     }
-    Ok(())
 }
 
 /// **The conformance part of the closing step**: every open attempt, in class order — a window that closed unrefuted over an unchanged
 /// beacon passes (then the public-prosecution step), a beacon that cannot lock ends the attempt `BEACON_UNAVAILABLE`, a lock with no
 /// evidence past the deadline is a default (withheld).
-fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+    let Some(route) = builder.state.kernel_route.as_ref() else { return };
     let rows: Vec<(Hash64, ConformanceAttemptRowV1)> = route
         .aux
         .range(
@@ -823,7 +821,7 @@ fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockConte
         .filter(|(_, a)| a.open() || a.record.state == OnboardingStateV1::ConformancePassed)
         .collect();
     if rows.is_empty() {
-        return Ok(());
+        return;
     }
     for (class, mut attempt) in rows {
         let route = builder.state.kernel_route.as_ref().expect("read above");
@@ -832,7 +830,7 @@ fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockConte
         if attempt.record.state == OnboardingStateV1::ConformancePassed {
             if kernel_class_stands {
                 let _ = attempt.record.apply(OnboardingStepV1::PublicProsecutionGate { complete: true });
-                write_attempt(builder, &class, &attempt)?;
+                write_attempt(builder, &class, &attempt);
             }
             continue;
         }
@@ -841,7 +839,7 @@ fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockConte
             if attempt.evidence.is_none() && ctx.daa_score >= attempt.committed_daa.saturating_add(PALW_COMPLETE_CHECK_DEADLINE_DAA_V1)
             {
                 end_attempt(&mut attempt, ConformanceAttemptEndV1::Withheld, ctx.daa_score);
-                write_attempt(builder, &class, &attempt)?;
+                write_attempt(builder, &class, &attempt);
             }
             continue;
         }
@@ -872,16 +870,15 @@ fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockConte
             }
             _ => continue,
         }
-        write_attempt(builder, &class, &attempt)?;
+        write_attempt(builder, &class, &attempt);
     }
-    Ok(())
 }
 
 /// **The closing step**: a binding whose refutation horizon has ended releases its reservation (the row stays: a Final binding is
 /// the record the activation gate reads). Deterministic, in key order.
-pub(super) fn tick_onboarding_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    tick_conformance_v1(builder, ctx)?;
-    let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+pub(super) fn tick_onboarding_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+    tick_conformance_v1(builder, ctx);
+    let Some(route) = builder.state.kernel_route.as_ref() else { return };
     let due: Vec<(Vec<u8>, ArtifactBindingRowV1)> = route
         .aux
         .range((PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1, Vec::new())..(PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1 + 1, Vec::new()))
@@ -894,7 +891,6 @@ pub(super) fn tick_onboarding_v1(builder: &mut TransitionBuilder<'_>, ctx: &Palw
             PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1,
             key,
             Some(borsh::to_vec(&released).expect("a row serializes")),
-        )?;
+        );
     }
-    Ok(())
 }

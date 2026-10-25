@@ -11,7 +11,7 @@ use crate::{
     config::params::Params,
     header::Header,
     palw_fork_choice_commitment_v1::{
-        PalwForkChoiceOpeningV1, PalwForkChoicePointV1, palw_fork_choice_committed_at_v1,
+        PalwForkChoiceOpeningV1, PalwForkChoicePointV1, palw_committed_state_root_v1, palw_fork_choice_committed_at_v1,
     },
     palw_state_proof_v1::state_root_of_pinned_header_v1,
     palw_state_v2::{PalwChainStateV2, PalwStateCarriageV2},
@@ -166,15 +166,7 @@ impl PalwStateCarriageAssemblerV1 {
             daa_score: self.parent_header.daa_score,
             blue_score: self.parent_header.blue_score,
         };
-        // RFC-0018 GAP-R4: past rule E the header commits a rule-E leaf (v2/v3), which a v1 opening cannot open. There the opening's
-        // inner root is only the restore target: the restored state's own committed root (in the form its point selects) must equal
-        // the header's below, and that envelope binds the inner root — so nothing unverified is accepted.
-        let rule_e_form = matches!(
-            crate::palw_fork_choice_rule_e_leaf_v3::palw_rule_e_commit_form_v1(params, self.parent_header.daa_score),
-            crate::palw_fork_choice_rule_e_leaf_v3::PalwCommitFormV1::RuleEV2 | crate::palw_fork_choice_rule_e_leaf_v3::PalwCommitFormV1::RuleEV3
-        );
         let inner = match &self.fork_choice {
-            Some(opening) if rule_e_form => opening.inner_root,
             Some(opening) => {
                 opening.verify(&self.committed, &point, fence).map_err(|e| e.to_string())?;
                 opening.inner_root
@@ -197,9 +189,7 @@ impl PalwStateCarriageAssemblerV1 {
         if state.last_point().map(|p| p.block) != Some(parent) {
             return Err("the restored state is not the post-state of the pinned block's selected parent".into());
         }
-        // RFC-0018 GAP-R4: the form the restored state's point selects under the reader's ruleset (equal to the v1 form wherever rule
-        // E is not in force).
-        let committed = crate::palw_fork_choice_rule_e_leaf_v3::palw_committed_state_root_v2(&state, params);
+        let committed = palw_committed_state_root_v1(&state, fence);
         if committed != self.committed {
             return Err(format!("the restored state commits {committed}, the pinned header commits {}", self.committed));
         }

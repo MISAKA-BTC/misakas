@@ -3,43 +3,11 @@
 #![cfg(test)]
 
 mod kernel_route_locator_v1;
-// Liveness audit (lane lifecycle): per-object rehearsal / per-block fold cost vs state rows.
-mod liveness_lifecycle_v1;
 mod public_filer_targeting_v1;
-mod claim_local_v1;
-mod claim_local_rewards_v1;
-// RFC-0017: model eligibility through the actual fold (claim gate, commit-then-draw, fee, promotion, lapse, renewal).
-mod model_eligibility_fold_v1;
 mod public_prefix_fold_v1;
-mod model_tier_line_root_v1;
 mod reward_gate_genesis;
 mod terminal_carriage_v1;
 mod gdn_court_v2;
-// RFC-0006: remaining shared writer admission (payout/exposure/court/index/encoded/kernel rows) and the lenient-consumer guard.
-mod native_writers_v1;
-// RFC-0008: once-only settlement across consumers (dormant fence; kernel route aux 140).
-mod settlement_once_v1;
-// RFC-0008 RFC08-2: the combined liability predicate at every leg and admission (dormant).
-mod settlement_liability_v1;
-// RFC-0007 §4.1 T6: paid-claim traps, the receipt signers' liability and held check fees (dormant; kernel route aux 142).
-mod paid_claim_trap_v1;
-// RFC08 08-B: native claim fees held from Final to the liability horizon (dormant; kernel route aux 144).
-mod native_liability_hold_v1;
-// G14 lane r5-f02-wire: tag 178 dispatch, the F02 post-Final default / hold / recovery, the per-claim court index, bottom evidence.
-mod r5_f02_wire_v1;
-// G14 r6 D4: native post-Final duty clocks (text29 / funded v11).
-mod r6_d4_post_final_duty_v1;
-mod paid_consumer_retention_v1;
-// Compute-claim audit (lane compute-exec, 2026-10-22): a decoded answer re-sold as prefill / under a second bond.
-mod audit_compute_exec_v1;
-// RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
-mod tir_fp_lane_v1;
-// ADR-0191 step B: the designated-answer registry as a state field (tag 245, dormant behind its fence).
-mod tir_designated_registry_v1;
-// RFC-0016 V8 (audit 2026-10-17, 16-A): capacity attestations through the fold and the attested capacity read.
-mod rfc0016_capacity_attestation_v1;
-// RFC-0036 (Proposed, dormant): the row access layer's full-state adapter is behaviour-identical on these fixtures.
-mod row_access_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;
@@ -3269,7 +3237,7 @@ mod adr0135 {
             // One bond fails three times, in span 14.
             let mut b = TransitionBuilder::new(&s10, &p, false, false, false, false, &armed_extras);
             for _ in 0..3 {
-                b.note_model_probe(&failing(3), false, 145).unwrap();
+                b.note_model_probe(&failing(3), false, 145);
             }
             let one = b.state.clone();
             assert_eq!(one.model_lifecycle(&kimi_id()).unwrap().probes_failed_this_span, 3, "every fault still counted");
@@ -3289,7 +3257,7 @@ mod adr0135 {
             }
             // A second, distinct bond fails (span 15): the probation resets and forgets both.
             let mut b = TransitionBuilder::new(&after_one, &p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&failing(4), false, 155).unwrap();
+            b.note_model_probe(&failing(4), false, 155);
             let two = b.state.clone();
             let mut both = vec![bond_key(4), bond_key(3)];
             both.sort();
@@ -3301,7 +3269,7 @@ mod adr0135 {
             // A failure on a class out of probation names nobody.
             let base_claim = PalwClaimStateV2 { class_id: h64(1), ..failing(5) };
             let mut b = TransitionBuilder::new(&after_two, &p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&base_claim, false, 165).unwrap();
+            b.note_model_probe(&base_claim, false, 165);
             assert!(b.state.probation_memory_of_v1(&h64(1)).is_none(), "the ACTIVE base class keeps no memory");
         }
     }
@@ -3369,7 +3337,7 @@ mod adr0135 {
             let (s10, _, _) = kimi_in_probation(p, 4);
             let kimi_claim = s10.claims.values().find(|c| c.class_id == kimi_id()).expect("Kimi's Final").clone();
             let mut b = TransitionBuilder::new(&s10, p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&PalwClaimStateV2 { bond: bond_key(3), ..kimi_claim }, false, 145).unwrap();
+            b.note_model_probe(&PalwClaimStateV2 { bond: bond_key(3), ..kimi_claim }, false, 145);
             let noted = b.state.clone();
             let (stepped, _) = step(&noted, p, &ctx(11, 150, 11), &[], None, Some(f.clone())).unwrap();
             (noted, stepped)
@@ -5088,7 +5056,7 @@ mod adr0135 {
             // A row that moves the horizon.
             let mut held = b.state.model_lifecycles[&kimi_id()].clone();
             held.state = PalwModelLifecycleV1::Held;
-            b.write_model_lifecycle(kimi_id(), Some(held)).unwrap();
+            b.write_model_lifecycle(kimi_id(), Some(held));
             assert_index_is_the_walk(&b, &fold, now, "after a row change");
             // A restore over writes the index had absorbed.
             let checkpoint = b.checkpoint();
@@ -5096,7 +5064,7 @@ mod adr0135 {
             b.write_claim(h64(0x4446), Some(fresh.clone())).unwrap();
             let mut active = b.state.model_lifecycles[&kimi_id()].clone();
             active.state = PalwModelLifecycleV1::Active;
-            b.write_model_lifecycle(kimi_id(), Some(active)).unwrap();
+            b.write_model_lifecycle(kimi_id(), Some(active));
             assert_index_is_the_walk(&b, &fold, now, "before the restore");
             b.restore(checkpoint);
             assert_index_is_the_walk(&b, &fold, now, "after the restore");
@@ -7810,180 +7778,6 @@ fn c03_a_guilty_responder_pays_for_the_time_it_kept_the_court_open() {
         700,
         "past the fence the guilty responder also pays the court-time charge (250/500 × 200 = 100): 1000 → 700"
     );
-}
-
-/// **G14 item 3, lane r5-f03-ingress — fold-level E2E: colluders occupy and refill every slot they can, and one outsider still
-/// completes disclosure → localization → verdict inside the claim's hard deadline.** The real fold (`apply`, both consistency
-/// checkers): the outsider court lane armed at genesis (`with_court_outsider_lane_from_daa(Some(0))`), the paid ingress schedule
-/// injected (test-only), the rung window 8 so the network cap is 8 and `R = 4` claims hold an outside reservation.
-///
-/// The coalition (bond 1: the producer of every claim and its only panel seat) owns three decoy claims beside the lying target and
-/// opens a court on every claim and space it can, one per block, until the fold refuses (`CourtSessionsAtCapacity`) — the
-/// non-reserved room `cap − R` is full; its further tries (another decoy, the target's inside first session) are refused. The
-/// outsider (bond 2), never a seat or producer, opens on the target's own reservation, pays the ingress fee exactly once, and the
-/// court closes `ExecutorGuilty` before the hard deadline: the lying claim is voided. Below the fence twin (lane unarmed) the
-/// outsider is refused at the same occupancy.
-#[test]
-fn r5_f03_colluders_refill_every_slot_and_one_outsider_reaches_a_verdict_in_time() {
-    use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
-    const FEE: u64 = 5;
-    for armed in [true, false] {
-        set_palw_court_ingress_test_schedule_v1(Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: FEE }));
-        let p = params()
-            .with_turn_deadline_daa(8)
-            .unwrap()
-            .with_court_outsider_lane_from_daa(armed.then_some(0));
-        let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
-        assert_eq!(cap, 8, "the fixture's cap");
-        let genesis = PalwChainStateV2::genesis();
-        let mut objects = register_class_and_bond();
-        objects.push(PalwConsensusObjectV2::BondRegistered {
-            bond: bond_key(2),
-            pubkey: vec![8; 4],
-            operator_pubkey: op_key(22),
-            collateral: 1_000,
-            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
-            capable_classes: Default::default(),
-            signature: Vec::new(),
-        });
-        let (mut s, _) = apply(&genesis, &p, &ctx(1, 100, 1), &objects, None);
-        // The lying target and three decoys: four claims of the coalition, every one licensed by its own seat.
-        let mut claims = Vec::new();
-        let mut daa = 101u64;
-        for nonce in 1..=4u64 {
-            let env = attempt(40, nonce);
-            claims.push(attempt_id_v2(&env.attempt));
-            (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &[], Some(&env));
-            daa += 1;
-        }
-        let (target, decoys) = (claims[0], &claims[1..]);
-        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
-        let binds: Vec<PalwConsensusObjectV2> = claims
-            .iter()
-            .enumerate()
-            .map(|(i, c)| PalwConsensusObjectV2::PanelBound { claim: *c, anchor: h64(77 + i as u64), seats: seats.clone() })
-            .collect();
-        (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &binds, None);
-        daa += 1;
-        let licences: Vec<PalwConsensusObjectV2> = claims
-            .iter()
-            .map(|c| PalwConsensusObjectV2::ReceiptLicensed { claim: *c, receipts: seat_says(true) })
-            .collect();
-        (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &licences, None);
-        daa += 1;
-        // The coalition opens one court a block on every decoy and space until the fold refuses: the non-reserved room
-        // (cap − R = 4 armed; the whole cap's legacy share below) is theirs.
-        let mut coalition: Vec<PalwConsensusObjectV2> = Vec::new();
-        for d in decoys {
-            coalition.push(court_open(*d, h64(31), bond_key(1), bond_key(1)));
-            coalition.push(second_court_open(*d, h64(31), bond_key(1), bond_key(1)));
-        }
-        coalition.push(court_open(target, h64(31), bond_key(1), bond_key(1)));
-        coalition.push(second_court_open(target, h64(31), bond_key(1), bond_key(1)));
-        let mut admitted = 0u64;
-        for open in &coalition {
-            match apply_palw_transition_v2(&s, &p, &ctx(daa, daa, daa), std::slice::from_ref(open), None) {
-                Ok((next, _)) => {
-                    next.assert_internal_consistency(&p).expect("consistent");
-                    s = next;
-                    admitted += 1;
-                    daa += 1;
-                }
-                Err(PalwStateV2Error::CourtSessionsAtCapacity { .. }) => {}
-                Err(other) => panic!("armed {armed}: a coalition court is refused only for capacity, got {other:?}"),
-            }
-            assert!(s.court_sessions_iter().count() as u64 <= cap, "the total never exceeds the cap");
-        }
-        let outsider_open = court_open(target, h64(31), bond_key(1), bond_key(2));
-        if !armed {
-            // Below the lane: the coalition's follow-ons fill the cap's whole legacy share it reached; whether the outsider fits
-            // depends on the int-12 rule alone (no reservation exists). Pin that no reservation is consulted: the schedule is
-            // ignored without the lane.
-            assert!(crate::palw_state_v2::palw_court_capacity_fold_v1::court_ingress_schedule_at_v1(&p, daa).is_none());
-            continue;
-        }
-        assert_eq!(admitted, cap - 4, "the coalition holds exactly the non-reserved room");
-        // The coalition's refill tries are refused; the outsider opens on the target's reservation and pays once.
-        for open in &coalition {
-            assert!(apply_palw_transition_v2(&s, &p, &ctx(daa, daa, daa), std::slice::from_ref(open), None).is_err());
-        }
-        let before = s.bond(&bond_key(2)).unwrap().collateral;
-        (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &[outsider_open], None);
-        let opened_at = daa;
-        daa += 1;
-        let after_open = s.bond(&bond_key(2)).unwrap().collateral;
-        assert_eq!(before - after_open, FEE, "the ingress fee is burned once, at admission");
-        let sid = court_session_of(target, h64(31), bond_key(1), bond_key(2));
-        assert!(s.court_session(&sid).is_some(), "the outsider's court runs");
-        assert!(s.court_sessions_iter().count() as u64 <= cap);
-        // The coalition still cannot take the room back.
-        for open in &coalition {
-            assert!(apply_palw_transition_v2(&s, &p, &ctx(daa, daa, daa), std::slice::from_ref(open), None).is_err());
-        }
-        // Localization → verdict: the court closes ExecutorGuilty inside the rung window, before the hard deadline.
-        let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(
-            &p,
-            s.claim(&target).unwrap(),
-            palw_da_disclose_window_daa_v1(&p),
-        );
-        assert!(daa < hard && daa < opened_at + p.turn_deadline_daa(), "inside the hard deadline and the rung");
-        let close = PalwConsensusObjectV2::CourtClosed {
-            session_id: sid,
-            verdict: PalwCourtVerdictV2::ExecutorGuilty,
-            proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
-                refutation: crate::palw_step_refute::tests::skeleton_refutation(),
-                operand_openings: Vec::new(),
-            },
-        };
-        (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &[close], None);
-        assert!(s.court_session(&sid).is_none(), "the outsider's court reached its verdict");
-        assert!(matches!(s.claim(&target).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the lying claim is voided");
-        assert!(s.bond(&bond_key(2)).unwrap().collateral >= after_open, "no second ingress charge on the close");
-        set_palw_court_ingress_test_schedule_v1(None);
-    }
-    set_palw_court_ingress_test_schedule_v1(None);
-}
-
-/// **rfcgap-c — RFC-0014 2026-10-19 E / RFC-0026 §3.2 (F03), the admission coordinator's call.** Past the outsider lane with an
-/// adopted (test-injected) ingress schedule, the attempt fold admits a new claim only while fewer than `R = ⌊cap / 2⌋` claims are
-/// in flight (each holds its own outside-side court reservation, ADR-0192): with the fixture's cap 8, four claims are recorded and
-/// the fifth is SKIPPED (the block still applies, no claim row). The producer's pre-check (`palw_court_claim_admission_v1`) gives
-/// the same refusal. With the schedule typed-missing, or below the lane fence, the fifth claim is recorded exactly as before.
-#[test]
-fn rfcgap_c_ingress_claim_admission_bounds_in_flight_claims_in_the_attempt_fold() {
-    use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
-    for (armed, schedule, fifth_recorded) in [
-        (true, Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), false),
-        (true, None, true),
-        (false, Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), true),
-    ] {
-        set_palw_court_ingress_test_schedule_v1(schedule);
-        let p = params().with_turn_deadline_daa(8).unwrap().with_court_outsider_lane_from_daa(armed.then_some(0));
-        let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
-        assert_eq!(crate::palw_court_paid_ingress_v1::palw_court_ingress_reserved_claims_cap_v1(cap), 4, "the fixture's R");
-        let genesis = PalwChainStateV2::genesis();
-        let (mut s, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
-        let mut daa = 101u64;
-        for nonce in 1..=4u64 {
-            let env = attempt(40, nonce);
-            (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &[], Some(&env));
-            assert!(s.claim(&attempt_id_v2(&env.attempt)).is_some(), "armed {armed}: claim {nonce} of R is recorded");
-            daa += 1;
-        }
-        let fifth = attempt(40, 5);
-        let pre = palw_court_claim_admission_v1(&s, &p, &fifth.attempt.class_id, daa, daa.saturating_add(1_000_000), 0);
-        assert_eq!(pre.is_ok(), fifth_recorded, "armed {armed}, schedule {schedule:?}: the pre-check agrees with the fold: {pre:?}");
-        let (next, _) = apply(&s, &p, &ctx(daa, daa, daa), &[], Some(&fifth));
-        assert_eq!(
-            next.claim(&attempt_id_v2(&fifth.attempt)).is_some(),
-            fifth_recorded,
-            "armed {armed}, schedule {schedule:?}: the fifth in-flight claim"
-        );
-        if !fifth_recorded {
-            assert_eq!(next.claims.len(), s.claims.len(), "a skipped attempt writes no claim");
-        }
-    }
-    set_palw_court_ingress_test_schedule_v1(None);
 }
 
 #[test]
@@ -14209,28 +14003,6 @@ mod fp_compute_pricing {
         PalwTransitionExtrasV1 { fp_derived_work_daa: Some(0), ..Default::default() }
     }
 
-    #[test]
-    fn borrowed_rule_views_keep_an_old_claims_unit_when_the_reading_block_crosses_the_fence() {
-        let (p, base, plain, _) = two_classes(&compute_era());
-        let prompt: Vec<u32> = (1..=6).collect();
-        let object = commit(plain, 0xB0, 1, &prompt, 4, honest_leaves(&derived_profile(), &prompt, 4));
-        let (state, _) = apply_derived(&base, &p, &ctx(4, 103, 4), &[object], &compute_era()).unwrap();
-        let mut claim = state.claim(&h64(0xB0)).unwrap().clone();
-        let extras = PalwTransitionExtrasV1 { canonical_work_daa: Some(100), ..Default::default() };
-        let before = state.state_root();
-        for (accepted, compute) in [(99, false), (100, true), (101, true)] {
-            claim.accepted_daa = accepted;
-            for (reading, active) in [(99, false), (100, true), (500, true)] {
-                let point = ctx(7, reading, 7);
-                assert_eq!(extras.rules_at(&point).canonical_work_active(), active);
-                assert_eq!(extras.rules_for_claim(&claim).prices_in_compute(&p), compute,
-                    "claim accepted at {accepted} must keep its unit when read at {reading}");
-            }
-        }
-        assert_eq!(state.state_root(), before, "the views cannot write chain state");
-        assert!(!PalwTransitionExtrasV1::default().rules_for_claim(&claim).prices_in_compute(&p));
-    }
-
     fn pricing() -> PalwFpPricingV1 {
         PalwFpPricingV1::of(&derived_work_chain().0, Some(0))
     }
@@ -14332,7 +14104,6 @@ mod fp_compute_pricing {
                     canonical_work_daa: extras.canonical_work_daa,
                     daa_score: 103,
                     receipt_rights: None,
-                    tir_free_prompt_active: false,
                 };
                 let quoted = palw_fp_commitment_price_v1(
                     &s3,
@@ -14368,7 +14139,6 @@ mod fp_compute_pricing {
                     canonical_work_daa: extras.canonical_work_daa,
                     daa_score: 103,
                     receipt_rights: None,
-                    tir_free_prompt_active: false,
                 },
                 &h64(0xEF),
                 &plain,
@@ -14438,7 +14208,6 @@ mod fp_compute_pricing {
                 canonical_work_daa: extras.canonical_work_daa,
                 daa_score: 103,
                 receipt_rights: Some(rights_inputs),
-                tir_free_prompt_active: false,
             },
             &h64(0xE0),
             &plain,
@@ -17299,11 +17068,6 @@ fn every_delta_entry_kind_round_trips_through_borsh() {
                 PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
                 // Lane LG14-A: its round trip is the dispute suite's.
                 PalwDeltaEntryV2::LegacyDispute { .. } => "legacy_dispute",
-                PalwDeltaEntryV2::TirDesignated { .. } => "tir_designated",
-                // G14 lane escrow-rfc08: its round trip is the funded-escrow suite's.
-                PalwDeltaEntryV2::FundedEscrow { .. } => "funded_escrow",
-                // G14 item 6: its round trip is the d2_readiness suite's.
-                PalwDeltaEntryV2::D2Readiness { .. } => "d2_readiness",
                 PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
                 PalwDeltaEntryV2::ClassSemantics { .. } => "class_semantics",
                 PalwDeltaEntryV2::ClaimSemantics { .. } => "claim_semantics",
@@ -17746,15 +17510,6 @@ fn delta_entry_discriminants_are_the_ones_on_disk() {
         (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
         // Lane LG14-A (200–204), declared explicitly.
         (200, PalwDeltaEntryV2::LegacyDispute { key, old: None, new: None }),
-        // ADR-0191 step B (215), declared explicitly.
-        (
-            215,
-            PalwDeltaEntryV2::TirDesignated {
-                key: crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1 { claim: [0; 32], root: [0; 32], coordinates: 0 },
-                old: None,
-                new: None,
-            },
-        ),
         (201, PalwDeltaEntryV2::PublicFpJob { key, old: None, new: None }),
         (
             202,
@@ -18423,11 +18178,6 @@ fn the_state_root_preimage_is_exactly_the_adr_0043_list() {
         kernel_route: _,
         // Lane LG14-A: one Some-only block, empty here.
         legacy_disputes: _,
-        tir_designated: _,
-        // G14 lane escrow-rfc08: one Some-only block (`funded_escrow/v1`), empty here.
-        funded_escrows: _,
-        // G14 item 6: one Some-only block (`d2_readiness/v1`), empty here.
-        d2_readiness: _,
         fp_public_jobs: _,
         class_semantics: _,
         claim_semantics: _,
@@ -26368,58 +26118,6 @@ mod model_market_virtual {
         );
     }
 
-    /// **ADR-0162 amendment (user decision 2026-10-16): a genesis or annual-fork model has no Model Position.** Past the tier fence
-    /// (`palw_model_tier_v1`), a model in `ApprovedModels` — here a genesis-assembly class (no registrant) — refuses a buy and a new
-    /// line; an added (registered) model still trades. Below the tier fence the same genesis class trades as before (byte-identical).
-    #[test]
-    fn genesis_and_fork_models_cannot_be_positioned_only_added_models_can() {
-        let lines = PalwTransitionExtrasV1 { model_lines_active: true, ..armed() };
-        let tiered = |mut p: PalwStateParamsV2| {
-            p.model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierMirrorV1 {
-                from_daa: 0,
-                catalogs: Default::default(),
-                registered_permille: 300,
-                registered_cap_permille: 1_000,
-            });
-            p
-        };
-        // A genesis-assembly class: the same registration with no registrant bond.
-        let genesis_class = h64(3);
-        let (p0, s1, added_class) = registered(&lines);
-        let mut genesis_reg = registration(genesis_class, 100, None);
-        if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, artifact_root, .. } = &mut genesis_reg {
-            *activation_daa = 200;
-            *slash_value_per_pwu = 5;
-            *artifact_root = h64(0xA3);
-        }
-        let s1 = fold_with(&s1, &p0, &ctx(2, 101, 2), &[genesis_reg], &lines).expect("the genesis-assembly class registers").0;
-        let s2 = fold_with(&s1, &p0, &ctx(3, 250, 3), &[], &lines).unwrap().0;
-        let p = tiered(p0.clone());
-        assert!(crate::palw_model_tier_v1::palw_model_tier_at_v1(&s2, &p, &genesis_class, 251).is_approved());
-        assert!(!crate::palw_model_tier_v1::palw_model_tier_at_v1(&s2, &p, &added_class, 251).is_approved());
-        // Past the tier fence: no buy and no new line on the genesis model.
-        assert!(matches!(
-            fold_with(&s2, &p, &ctx(4, 251, 4), &[buy(genesis_class, holder(1), 1_000 * MSK, 0)], &lines),
-            Err(PalwStateV2Error::ModelPositionOnApprovedModel(c)) if c == genesis_class
-        ));
-        let found = |class_id: Hash64| PalwConsensusObjectV2::ModelLineFounded {
-            class_id,
-            name: b"pos-line".to_vec(),
-            founder: bond_key(1),
-            root: h64(0xBEEF),
-            signature: Vec::new(),
-        };
-        assert!(matches!(
-            fold_with(&s2, &p, &ctx(4, 251, 4), &[found(genesis_class)], &lines),
-            Err(PalwStateV2Error::ModelPositionOnApprovedModel(_))
-        ));
-        // The added model still trades past the fence.
-        fold_with(&s2, &p, &ctx(4, 251, 4), &[buy(added_class, holder(1), 1_000 * MSK, 0)], &lines).expect("an added model trades");
-        // Below the tier fence nothing changes for the genesis model.
-        fold_with(&s2, &p0, &ctx(4, 251, 4), &[buy(genesis_class, holder(1), 1_000 * MSK, 0)], &lines)
-            .expect("below the tier fence the genesis model trades as before");
-    }
-
     /// **ADR-0162 Decision 3: a pledge still collecting ADR-0094's floor when the fence crosses
     /// opens on the virtual reserve, with the whole pledge as its seed** — every sompi of it was
     /// locked in the line's sink already. ADR-0120's floor is moot past the fence (the least seed
@@ -26616,12 +26314,6 @@ mod model_market_virtual {
             offenders.join("\n  ")
         );
 
-        let modules = std::fs::read_to_string(root.join("consensus/src/processes/mod.rs")).expect("process module inventory");
-        assert!(
-            modules.contains("#[cfg(test)]\npub mod palw_state_v2_sync;"),
-            "the incomplete historical walker must remain unavailable to production callers"
-        );
-
         // The other half: the extras every production fold takes are written field by field from
         // the block's own DAA, never left to a default.
         let processor = crate::palw_source_guard_v1::palw_processor_source_v1().to_string(); // the processor and its split files (2026-10-13)
@@ -26642,7 +26334,7 @@ mod model_market_virtual {
         }
         // …and the chain walk folds a block's objects, its EVM actions and its refunds with them.
         for line in [
-            "let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();",
+            "let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);",
             "extras.evm_actions = staged.result.market_actions.clone();",
             "extras.carrier_market_refunds = carrier_refunds;",
         ] {
@@ -28585,25 +28277,12 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
-            native_court_rules_v1: None,
-            claim_local_rule_context_v1: None,
             merged_reds: Default::default(),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
             producer_custody_delegations: Default::default(),
             staged_tir_route_active: false,
             staged_float_constraint_active: false,
-            memory_routing_court: None,
-            tir_public_allocation_rules_v1: None,
-            tir_public_network_domain_v1: None,
-            tir_public_originals: Default::default(),
-            tir_public_conviction_active: false,
-            tir_container_identity_active: false,
-            fp_answer_accounting_active: false,
-            fp_claim_answers: Default::default(),
-            tir_designated_answers_active: false,
-            tir_bounded_door_active: false,
-            tir_bounded_door_from_daa: None,
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,
@@ -28646,6 +28325,9 @@ mod evm_market {
             court_responder_coverage_active: false,
             fp_da_pins_active: false,
             shard_court_ladder: None,
+            memory_routing_court: None,
+            selected_source_bootstrap_fault_v1: None,
+            selected_source_bootstrap_v1: None,
             shard_licensing: None,
             attn_anchored_root_active: false,
             held_context_ladder: None,
@@ -28668,10 +28350,6 @@ mod evm_market {
             round_lane: None,
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
-            funded_escrow_settlements: Vec::new(),
-            funded_escrow_retention_daa: None,
-            tir_funded_originals: Default::default(),
-            funded_original_test_schedule_v1: None,
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: BTreeMap::new(),
             #[cfg(test)]
@@ -28872,25 +28550,12 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
-            native_court_rules_v1: None,
-            claim_local_rule_context_v1: None,
             merged_reds: Default::default(),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
             producer_custody_delegations: Default::default(),
             staged_tir_route_active: false,
             staged_float_constraint_active: false,
-            memory_routing_court: None,
-            tir_public_allocation_rules_v1: None,
-            tir_public_network_domain_v1: None,
-            tir_public_originals: Default::default(),
-            tir_public_conviction_active: false,
-            tir_container_identity_active: false,
-            fp_answer_accounting_active: false,
-            fp_claim_answers: Default::default(),
-            tir_designated_answers_active: false,
-            tir_bounded_door_active: false,
-            tir_bounded_door_from_daa: None,
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,
@@ -28931,6 +28596,9 @@ mod evm_market {
             court_responder_coverage_active: false,
             fp_da_pins_active: false,
             shard_court_ladder: None,
+            memory_routing_court: None,
+            selected_source_bootstrap_fault_v1: None,
+            selected_source_bootstrap_v1: None,
             shard_licensing: None,
             attn_anchored_root_active: false,
             held_context_ladder: None,
@@ -28953,10 +28621,6 @@ mod evm_market {
             round_lane: None,
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
-            funded_escrow_settlements: Vec::new(),
-            funded_escrow_retention_daa: None,
-            tir_funded_originals: Default::default(),
-            funded_original_test_schedule_v1: None,
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: BTreeMap::new(),
             #[cfg(test)]
@@ -30314,8 +29978,7 @@ mod rcore_s7_reporter {
                 collected,
                 claim_id: Hash64::default(),
             }),
-        )
-        .unwrap();
+        );
         let opened = b.open_reporter_reward(daa, key, extracted, basis);
         b.entries.push(PalwDeltaEntryV2::LastPoint { old: s.last_point, new: Some(point) });
         b.state.last_point = Some(point);
@@ -30904,8 +30567,6 @@ mod anchor_window_v1;
 // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget through the fold — the unarmed fold byte for byte, the engine's creation,
 // its deltas and carriage, the capital assignment, and (milestone 3) every reward path's reservation and consumption.
 mod bond_budget_fold_v1;
-// RFC-0023 stage 1: the unresolved bound through the fold's floor rows.
-mod unresolved_bound_v1;
 
 /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
 /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's
@@ -31247,9 +30908,9 @@ mod capacity_liability_v1 {
         b.aggregate_on_conviction_v1(170, h64(4), kind, &[(producer, O::Equivocation)]).unwrap();
         assert_eq!(b.state.bond_freezes[&producer].since_daa, 170);
         let wc = p.window_court();
-        sweep_bond_freezes_v1(&mut b, &ctx(10, 170 + wc - 1, 10)).unwrap();
+        sweep_bond_freezes_v1(&mut b, &ctx(10, 170 + wc - 1, 10));
         assert!(palw_bond_is_frozen_v1(&b.state, &producer), "still frozen at the lift minus one");
-        sweep_bond_freezes_v1(&mut b, &ctx(11, 170 + wc, 11)).unwrap();
+        sweep_bond_freezes_v1(&mut b, &ctx(11, 170 + wc, 11));
         assert!(!palw_bond_is_frozen_v1(&b.state, &producer), "lifted at since + window_court");
     }
 }
@@ -32466,10 +32127,10 @@ mod rcore_s1_api {
         let parent = PalwChainStateV2::genesis();
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-        b.write_reporter_commit(h64(0x71), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 10 })).unwrap();
-        b.write_reporter_commit(h64(0x72), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 12 })).unwrap();
-        b.write_reporter_commit(h64(0x73), Some(PalwReporterCommitV1 { reporter: bond_key(2), committed_daa: 11 })).unwrap();
-        b.write_reporter_commit(h64(0x72), None).unwrap();
+        b.write_reporter_commit(h64(0x71), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 10 }));
+        b.write_reporter_commit(h64(0x72), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 12 }));
+        b.write_reporter_commit(h64(0x73), Some(PalwReporterCommitV1 { reporter: bond_key(2), committed_daa: 11 }));
+        b.write_reporter_commit(h64(0x72), None);
         assert_eq!(b.state.reporter_open_commitments(&bond_key(1)), 1);
         assert_eq!(b.state.reporter_open_commitments(&bond_key(2)), 1);
         assert_eq!(b.state.commitments_by_daa.iter().copied().collect::<Vec<_>>(), vec![(10, h64(0x71)), (11, h64(0x73))]);
@@ -32509,287 +32170,6 @@ mod rcore_s1_api {
         assert_eq!(palw_bond_class_unlicensed_v1(&s, &h64(0xC1), &bond_key(1)), 3, "Provisional, PanelBound, S2");
         assert_eq!(palw_bond_class_unlicensed_v1(&s, &h64(0xC1), &bond_key(2)), 1);
         assert_eq!(palw_bond_class_unlicensed_v1(&s, &h64(0xC9), &bond_key(1)), 0);
-    }
-
-    /// **G14 F03 round 2 (lane g14p/court-owner): the outsider lane's follow-on share, on hand-made states.** The pure admission
-    /// `legacy_court_cap_admits_v1`; the overall cap is the network's, unchanged.
-    mod court_outsider_lane_round2 {
-        use super::*;
-        use crate::palw_state_v2::palw_court_capacity_fold_v1::{
-            court_outsider_lane_followons_v1, court_outsider_lane_is_followon_v1, legacy_court_cap_admits_v1,
-        };
-
-        fn lane(armed: bool) -> PalwStateParamsV2 {
-            rcore_params().with_court_outsider_lane_from_daa(armed.then_some(0))
-        }
-
-        fn session(claim_id: Hash64, challenger: PalwBondKeyV2) -> PalwCourtSessionStateV2 {
-            PalwCourtSessionStateV2 {
-                claim: claim_id,
-                challenger_bond: challenger,
-                opened_daa: 20,
-                deadline_daa: 520,
-                ladder: ladder(),
-                dissection: None,
-            }
-        }
-
-        /// A claim `id` produced by `producer` with a panel of `seats`.
-        fn claimed(s: &mut PalwChainStateV2, id: Hash64, producer: PalwBondKeyV2, seats: &[PalwBondKeyV2]) {
-            let mut c = claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 });
-            c.bond = producer;
-            s.claims.insert(id, c);
-            s.panels.insert(
-                id,
-                PalwPanelStateV2 {
-                    anchor: h64(0xA0),
-                    seats: seats.iter().enumerate().map(|(i, b)| PalwPanelSeatV2 { bond: *b, operator_id: op_id(0x22 + i as u64) }).collect(),
-                    bound_daa: 110,
-                },
-            );
-        }
-
-        /// Fill the follow-on room with outside sessions stacked on one decoy claim. Returns the state and the cap.
-        fn decoy_full(p: &PalwStateParamsV2) -> (PalwChainStateV2, u64) {
-            let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
-            let room = palw_court_outsider_lane_followon_cap_v1(cap);
-            assert!(cap >= 3 && room >= 1, "cap {cap}");
-            let mut s = PalwChainStateV2::genesis();
-            claimed(&mut s, h64(0xDEC0), bond_key(0x70), &[bond_key(0x71)]);
-            for n in 0..=room {
-                s.court_sessions.insert(h64(0x5E00 + n), session(h64(0xDEC0), bond_key(0x100 + n)));
-            }
-            assert_eq!(court_outsider_lane_followons_v1(&s), room);
-            (s, cap)
-        }
-
-        /// Requirement (round 2, item 1): a direct evidence-carrying accusation is never refused by the follow-on share — it is
-        /// admitted exactly where it was below the fence (open < cap), and refused only by the overall cap.
-        #[test]
-        fn g14_f03_r2_a_direct_evidence_accusation_is_exempt_from_the_followon_share() {
-            let armed = lane(true);
-            let (mut s, cap) = decoy_full(&armed);
-            let outsider = bond_key(0x900);
-            // A follow-on on the decoy claim (outside side already present): refused when it argues in a dissection...
-            assert!(court_outsider_lane_is_followon_v1(&s, h64(0xDEC0), outsider));
-            assert!(matches!(
-                legacy_court_cap_admits_v1(&s, &armed, h64(0xDEC0), outsider, false, 1_000),
-                Err(PalwStateV2Error::CourtSessionsAtCapacity { .. })
-            ));
-            // ...admitted when it carries its evidence, exactly as below the fence.
-            legacy_court_cap_admits_v1(&s, &armed, h64(0xDEC0), outsider, true, 1_000).expect("direct evidence: exempt");
-            legacy_court_cap_admits_v1(&s, &lane(false), h64(0xDEC0), outsider, false, 1_000).expect("below the fence: admitted");
-            // The overall cap still binds it, armed or not, exactly as before.
-            let mut n = 0u64;
-            while (s.court_sessions.len() as u64) < cap {
-                s.court_sessions.insert(h64(0x6E00 + n), session(h64(0xF000 + n), bond_key(0x300 + n)));
-                n += 1;
-            }
-            for p in [lane(true), lane(false)] {
-                assert!(matches!(
-                    legacy_court_cap_admits_v1(&s, &p, h64(0xDEC0), outsider, true, 1_000),
-                    Err(PalwStateV2Error::CourtSessionsAtCapacity { .. })
-                ));
-            }
-        }
-
-        /// Risk 2 (round 2, item 2): a colluder (the claim's producer or a panel seat) holding the target claim's first session does
-        /// not make the outsider a follow-on — the outsider's session is the outside side's first and opens while the follow-on
-        /// room is full; a second outside session on the same claim is a follow-on again.
-        #[test]
-        fn g14_f03_r2_a_colluder_first_session_does_not_make_the_outsider_a_followon() {
-            let p = lane(true);
-            let (mut s, cap) = decoy_full(&p);
-            let target = h64(0x7A60);
-            let producer = bond_key(0x80);
-            let seat = bond_key(0x81);
-            claimed(&mut s, target, producer, &[seat, bond_key(0x82)]);
-            s.court_sessions.insert(h64(0x7700), session(target, seat));
-            let outsider = bond_key(0x900);
-            assert!(!court_outsider_lane_is_followon_v1(&s, target, outsider), "a seat's session is the inside side's");
-            legacy_court_cap_admits_v1(&s, &p, target, outsider, false, 1_000).expect("the outsider counts as a first session");
-            // The producer's own session alone behaves the same.
-            let mut by_producer = s.clone();
-            by_producer.court_sessions.remove(&h64(0x7700));
-            by_producer.court_sessions.insert(h64(0x7701), session(target, producer));
-            legacy_court_cap_admits_v1(&by_producer, &p, target, outsider, false, 1_000).expect("producer-held first session");
-            // A second seat stacking on the target is a follow-on (inside side present) and is refused while the room is full.
-            assert!(court_outsider_lane_is_followon_v1(&s, target, bond_key(0x82)));
-            assert!(legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x82), false, 1_000).is_err());
-            // Once the outsider opens, a further outside session on the target is a follow-on.
-            s.court_sessions.insert(h64(0x7702), session(target, outsider));
-            assert_eq!(court_outsider_lane_followons_v1(&s), palw_court_outsider_lane_followon_cap_v1(cap), "two firsts on the target");
-            assert!(court_outsider_lane_is_followon_v1(&s, target, bond_key(0x901)));
-            assert!(legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x901), false, 1_000).is_err());
-            // Below the fence the old rule (open < cap) alone.
-            legacy_court_cap_admits_v1(&s, &lane(false), target, bond_key(0x901), false, 1_000).expect("below: old rule");
-        }
-
-        // ---- lane r5-f03-ingress (G14 item 3) --------------------------------------------------------------------------------
-
-        /// G14 item 3 (3): a HELD ATTENTION accusation (`ShardCourtAccused` → `open_held_dissection_v1`, which passes
-        /// `direct_evidence = false`: it stays subject to the follow-on share — decoy protection) by an outsider on a claim whose only
-        /// sessions are the colluders' own (its producer and a panel seat) is the outside side's FIRST session: admitted while the
-        /// follow-on room is full, under the lane rule and under the paid ingress alike. A second outside held accusation is a
-        /// follow-on and is refused while the room is full (decoy protection kept).
-        #[test]
-        fn r5_f03_held_attention_outsider_on_a_colluder_only_claim_counts_as_first_session() {
-            use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
-            use crate::palw_state_v2::palw_court_capacity_fold_v1::paid_court_cap_admits_v1;
-            let p = lane(true);
-            let (mut s, _cap) = decoy_full(&p);
-            let target = h64(0x7A61);
-            let (producer, seat) = (bond_key(0x80), bond_key(0x81));
-            claimed(&mut s, target, producer, &[seat]);
-            s.court_sessions.insert(h64(0x7710), session(target, producer));
-            s.court_sessions.insert(h64(0x7711), session(target, seat));
-            let outsider = bond_key(0x900);
-            const HELD_ATTENTION_DIRECT_EVIDENCE: bool = false; // `open_held_dissection_v1`'s argument
-            assert!(!court_outsider_lane_is_followon_v1(&s, target, outsider), "only colluder-side sessions run on the target");
-            legacy_court_cap_admits_v1(&s, &p, target, outsider, HELD_ATTENTION_DIRECT_EVIDENCE, 1_000)
-                .expect("the outsider's held attention accusation is a first session");
-            for schedule in [None, Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 })] {
-                set_palw_court_ingress_test_schedule_v1(schedule);
-                paid_court_cap_admits_v1(&s, &p, target, outsider, HELD_ATTENTION_DIRECT_EVIDENCE, 1_000)
-                    .unwrap_or_else(|e| panic!("schedule {schedule:?}: the outsider opens: {e:?}"));
-            }
-            set_palw_court_ingress_test_schedule_v1(None);
-            // Decoy protection kept: once the outsider runs, a second outside held accusation is a follow-on and is refused.
-            s.court_sessions.insert(h64(0x7712), session(target, outsider));
-            assert!(court_outsider_lane_is_followon_v1(&s, target, bond_key(0x901)));
-            assert!(matches!(
-                legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x901), HELD_ATTENTION_DIRECT_EVIDENCE, 1_000),
-                Err(PalwStateV2Error::CourtSessionsAtCapacity { .. })
-            ));
-        }
-
-        /// G14 item 3 (2), court-owner risk 1, on hand-made states: the coalition owns `R − 1` claims beside the lying target
-        /// (`R = ⌊cap / 2⌋`, every in-flight claim holds its own outside reservation), and over several rounds its producer, a seat
-        /// and fresh Sybils keep opening sessions on every claim (inside sessions, Sybil outside sessions on its own decoys, inside
-        /// sessions on the target) and refill the moment one ends. The total never exceeds the unchanged cap; every coalition try
-        /// past the non-reserved room is refused; and in every round the outsider's first session on the target still opens on
-        /// the target's own reservation. A further claim is refused at admission (`CourtClaimAdmissionFull`).
-        #[test]
-        fn r5_f03_colluders_refilling_every_slot_cannot_take_the_target_claims_reservation() {
-            use crate::palw_court_paid_ingress_v1::{
-                PalwCourtIngressScheduleV1, palw_court_ingress_reserved_claims_cap_v1, set_palw_court_ingress_test_schedule_v1,
-            };
-            use crate::palw_state_v2::palw_court_capacity_fold_v1::{
-                court_ingress_outside_running_v1, court_ingress_reserved_claims_v1, paid_court_cap_admits_v1,
-            };
-            set_palw_court_ingress_test_schedule_v1(Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }));
-            let p = lane(true);
-            let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
-            let r = palw_court_ingress_reserved_claims_cap_v1(cap);
-            assert!(r >= 2, "cap {cap}");
-            let mut s = PalwChainStateV2::genesis();
-            let (producer, seat) = (bond_key(0x80), bond_key(0x81));
-            let target = h64(0x7A60);
-            claimed(&mut s, target, producer, &[seat]);
-            let decoys: Vec<Hash64> = (0..r - 1).map(|i| h64(0xD000 + i)).collect();
-            for d in &decoys {
-                claimed(&mut s, *d, producer, &[seat]);
-            }
-            let reserved = court_ingress_reserved_claims_v1(&s, &p, 1_000);
-            assert_eq!(reserved.len() as u64, r, "every in-flight claim holds its reservation");
-            assert!(reserved.contains(&target));
-            assert!(matches!(
-                palw_court_ingress_claim_admits_v1(&s, &p, &h64(0xC1), 1_000),
-                Err(PalwStateV2Error::CourtClaimAdmissionFull { .. })
-            ), "the admission coordinator bounds the reserved claims");
-            let outsider = bond_key(0x900);
-            let mut next_id = 0u64;
-            let mut sybil = 0u64;
-            for round in 0..4u64 {
-                // The coalition tries everything it can, until a whole pass admits nothing.
-                loop {
-                    let mut tries: Vec<(Hash64, PalwBondKeyV2)> = Vec::new();
-                    for d in &decoys {
-                        tries.push((*d, producer));
-                        tries.push((*d, seat));
-                        sybil += 1;
-                        tries.push((*d, bond_key(0x2000 + sybil)));
-                    }
-                    tries.push((target, producer));
-                    tries.push((target, seat));
-                    let mut admitted = 0;
-                    for (claim_id, opener) in tries {
-                        if paid_court_cap_admits_v1(&s, &p, claim_id, opener, false, 1_000).is_ok() {
-                            next_id += 1;
-                            s.court_sessions.insert(h64(0x5_0000 + next_id), session(claim_id, opener));
-                            admitted += 1;
-                        }
-                        assert!(s.court_sessions.len() as u64 <= cap, "round {round}: the total never exceeds the cap");
-                    }
-                    if admitted == 0 {
-                        break;
-                    }
-                }
-                assert!(
-                    matches!(
-                        paid_court_cap_admits_v1(&s, &p, target, producer, false, 1_000),
-                        Err(PalwStateV2Error::CourtSessionsAtCapacity { .. })
-                    ),
-                    "round {round}: the coalition is at the end of its room"
-                );
-                if round < 3 {
-                    paid_court_cap_admits_v1(&s, &p, target, outsider, false, 1_000)
-                        .unwrap_or_else(|e| panic!("round {round}: the outsider opens on the target's reservation: {e:?}"));
-                    // One coalition session reaches its verdict; the coalition refills at once (next pass).
-                    let ended = *s.court_sessions.iter().find(|(_, x)| x.claim != target || x.challenger_bond != outsider).unwrap().0;
-                    s.court_sessions.remove(&ended);
-                } else {
-                    // The outsider opens; its session holds the target's reservation while the coalition stays full.
-                    paid_court_cap_admits_v1(&s, &p, target, outsider, false, 1_000).expect("the outsider opens");
-                    next_id += 1;
-                    s.court_sessions.insert(h64(0x5_0000 + next_id), session(target, outsider));
-                    assert!(court_ingress_outside_running_v1(&s, target));
-                    assert!(s.court_sessions.len() as u64 <= cap);
-                    // A second outside session on the target is not reserved: refused while the coalition holds the rest.
-                    assert!(paid_court_cap_admits_v1(&s, &p, target, bond_key(0x901), false, 1_000).is_err());
-                }
-            }
-            // Below the lane fence (or with the schedule missing) the reservation does not exist: the lane rule alone.
-            set_palw_court_ingress_test_schedule_v1(None);
-            assert!(crate::palw_state_v2::palw_court_capacity_fold_v1::court_ingress_schedule_at_v1(&p, 1_000).is_none());
-            palw_court_ingress_claim_admits_v1(&s, &p, &h64(0xC1), 1_000).expect("dormant without the schedule");
-        }
-
-        /// G14 item 3 (2): the ingress fee is burned ONCE, at the session's admission, from the opener — and a refused try burns
-        /// nothing. Through the fold's own `court_ingress_admission_v1` on a `TransitionBuilder` (court capacity dormant: the legacy
-        /// path). With the schedule missing nothing is burned.
-        #[test]
-        fn r5_f03_the_ingress_fee_is_charged_once_and_never_for_a_refused_try() {
-            use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
-            use crate::palw_state_v2::palw_court_capacity_fold_v1::{PalwCourtAdmissionV1, court_ingress_admission_v1};
-            let p = lane(true);
-            let extras = PalwTransitionExtrasV1::default();
-            let at = ctx(0x77, 1_000, 1_000);
-            let mut s = PalwChainStateV2::genesis();
-            let target = h64(0x7A60);
-            claimed(&mut s, target, bond_key(0x80), &[bond_key(0x81)]);
-            let outsider = bond_key(0x900);
-            s.bonds.insert(outsider, bond(10_000, PalwBondStatusV2::Active));
-            for (schedule, fee) in [(None, 0u64), (Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), 5)] {
-                set_palw_court_ingress_test_schedule_v1(schedule);
-                let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-                let admitted = court_ingress_admission_v1(&mut b, &at, target, outsider, false, 20).expect("admitted");
-                assert_eq!(admitted, PalwCourtAdmissionV1::Legacy);
-                assert_eq!(b.state.bonds[&outsider].collateral, 10_000 - fee, "{schedule:?}: charged once at admission");
-                assert_eq!(b.state.bonds[&outsider].slashed, fee);
-            }
-            // A refused try (the cap is full) burns nothing.
-            set_palw_court_ingress_test_schedule_v1(Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }));
-            let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
-            let mut full = s.clone();
-            for n in 0..cap {
-                full.court_sessions.insert(h64(0x6_0000 + n), session(h64(0xF_0000 + n), bond_key(0x3000 + n)));
-            }
-            let mut b = TransitionBuilder::new(&full, &p, false, false, false, false, &extras);
-            assert!(court_ingress_admission_v1(&mut b, &at, target, outsider, false, 20).is_err());
-            assert_eq!(b.state.bonds[&outsider].collateral, 10_000, "a refused try is not charged");
-            set_palw_court_ingress_test_schedule_v1(None);
-        }
     }
 }
 
@@ -34588,7 +33968,7 @@ mod class_verify_deadline {
             let p = t12_like(armed);
             let s = state(d, PalwClaimPhaseV2::PanelBound { bound_daa: b }, b);
             let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l).unwrap();
+            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l);
             assert_eq!(builder.state.slashable_locks[&(bond_key(2), id)].expiry_daa, anchor + 3_000, "D {d}, armed {armed}");
         }
     }
@@ -34807,65 +34187,4 @@ fn native_claim_cascade_refusal_keeps_dependent_rows_and_journal_unchanged() {
     assert!(builder.entries.is_empty());
     assert!(matches!(builder.reserve_mutation_sequence_v1(0, usize::MAX), Err(PalwStateV2Error::NativeResource(_))));
     assert_eq!(checker.outstanding(), (0, 0));
-}
-
-/// The route is selected by the claim's acceptance cohort, including after tip advancement.
-#[test]
-fn memory_routing_held_claim_mercy_preserves_acceptance_cohort_and_fails_closed() {
-    use crate::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v8};
-    let (_, params, mut state, claim_id, _) = held_fused_claim(1, 12);
-    let mut claim = state.claim(&claim_id).unwrap().clone();
-    let mut geometry = QWEN36_35B_A3B;
-    geometry.n_ctx = 32;
-    geometry.tile_len = geometry.attn_head_dim;
-    let profile = qwen36_profile_v8(geometry).unwrap();
-    let class_id = profile.shape_profile_id();
-    let ladder = *state.class_step_ladders.get(&claim.class_id).unwrap();
-    state.class_step_ladders.insert(class_id, ladder);
-    state.fp_work_profiles.insert(class_id, Box::new(profile.clone()));
-    claim.class_id = class_id;
-    let params = params.with_held_unanswerable_classes(vec![class_id]).with_memory_routing_court_from_daa(Some(100));
-    claim.accepted_daa = 99;
-    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
-    claim.accepted_daa = 100;
-    assert!(!state.held_claim_is_unanswerable_v2(&params, &claim));
-    let dormant = params.clone().with_memory_routing_court_from_daa(None);
-    assert!(state.held_claim_is_unanswerable_v2(&dormant, &claim));
-    state.fp_work_profiles.remove(&class_id);
-    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
-    let mut foreign = profile;
-    foreign.n_ctx += 1;
-    state.fp_work_profiles.insert(class_id, Box::new(foreign));
-    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
-}
-
-/// **G14 lane court-f02: the F02 / RFC-0028 / RFC-0029 fold pieces are dormant below their fences.** No service binding is
-/// installed, no supply is observed, and the shared lifecycle dispatcher refuses as dormant — the builder journals nothing. Past the
-/// conviction fence F02 still waits on a pinned service profile; the shared lifecycle also needs the outsider lane at or below.
-#[test]
-fn court_f02_lifecycle_is_dormant_below_its_fences() {
-    use super::palw_court_service_lifecycle_fold_v1 as lifecycle;
-    let p = params();
-    let state = PalwChainStateV2::genesis();
-    let extras = PalwTransitionExtrasV1::default();
-    let at = ctx(1, 100, 1);
-    let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
-    assert!(!lifecycle::court_service_f02_active_v1(&b));
-    assert!(!lifecycle::shared_court_lifecycle_active_v1(&b, 100));
-    assert!(!lifecycle::install_court_service_binding_v1(&mut b, &at, h64(1)).unwrap());
-    lifecycle::observe_court_service_block_v1(&mut b, &at).unwrap();
-    let ids = [1u32];
-    let op = lifecycle::SharedCourtOpV1::Ids { claim: h64(1), rows_root: h64(2), ids: &ids };
-    assert!(matches!(lifecycle::apply_shared_court_op_v1(&mut b, &at, op), Err(PalwStateV2Error::ObjectiveOffenceDormant)));
-    assert!(b.entries.is_empty());
-
-    let mut armed = extras.clone();
-    armed.tir_public_conviction_active = true;
-    let b = TransitionBuilder::new(&state, &p, false, false, false, false, &armed);
-    assert!(!lifecycle::court_service_f02_active_v1(&b), "no court service profile is pinned");
-    assert!(!lifecycle::shared_court_lifecycle_active_v1(&b, 100), "outsider lane not armed");
-    let lane = p.clone().with_court_outsider_lane_from_daa(Some(50));
-    let b = TransitionBuilder::new(&state, &lane, false, false, false, false, &armed);
-    assert!(lifecycle::shared_court_lifecycle_active_v1(&b, 50));
-    assert!(!lifecycle::shared_court_lifecycle_active_v1(&b, 49));
 }

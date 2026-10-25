@@ -1,5 +1,5 @@
 //! **The composed false-accept bound** — the executable half of the external soundness review dossier
-//! (`docs/audit/palw/soundness-review-dossier/05-composition.md`).
+//! (`docs/design/palw/soundness-review-dossier/05-composition.md`).
 //!
 //! A pure, integer, conservative calculator. It reads no chain state, decides nothing, and **no consensus or policy code calls it**:
 //! it exists so that an external reviewer can recompute every number the dossier states, and so that `tests/composition.rs` pins

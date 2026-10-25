@@ -4,7 +4,7 @@
 ADR-0096 Decision 10: every component a person needs — the node, the CLI, the family workers,
 the gateway, the rail, the class artifacts — comes from ONE manifest (`components.json`, schema
 `misaka/components/v1`) that both repositories publish and both check. This script is the node
-repository's writer of its half and the checker of any manifest; `docs/reference/manifests/components-manifest.md`
+repository's writer of its half and the checker of any manifest; `docs/components-manifest.md`
 is the schema it enforces. It is standard-library Python 3 only, because it runs inside the
 release workflow on three runners and on an operator's machine, and a dependency it had to fetch
 would be one more thing nobody verified.
@@ -152,7 +152,7 @@ def sha256_of_member(zf, member):
 
 
 # --------------------------------------------------------------------------------------------
-# validation — the schema in docs/reference/manifests/components-manifest.md, checked by hand, one message per fault
+# validation — the schema in docs/components-manifest.md, checked by hand, one message per fault
 # --------------------------------------------------------------------------------------------
 
 
@@ -638,7 +638,7 @@ def self_test():
 def main(argv):
     ap = argparse.ArgumentParser(
         prog="misaka-components-manifest.py",
-        description="write, validate or check a misaka/components/v1 manifest (docs/reference/manifests/components-manifest.md)",
+        description="write, validate or check a misaka/components/v1 manifest (docs/components-manifest.md)",
     )
     ap.add_argument("--release", help="release tag; becomes every binary row's version")
     ap.add_argument("--network", help="the network this release is cut for, e.g. testnet-11")

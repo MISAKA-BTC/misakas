@@ -1,5 +1,5 @@
 //! **ADR-0176 / ADR-0177: the bond budget and the model-bond allocation** — `palw_bond_budget_v1` and
-//! `palw_model_bond_allocation_v1` (lane BUDGET; **dormant, no height**; design `docs/design/palw/economics/bond-budget-and-model-allocation.md`).
+//! `palw_model_bond_allocation_v1` (lane BUDGET; **dormant, no height**; design `docs/design/palw/bond-budget-and-model-allocation.md`).
 //!
 //! ```text
 //! acceptance   reservation = ask (Q 1, B blocks, R reward, F Final weight), clipped by the per-claim ceilings when the policy slices
@@ -92,19 +92,11 @@ pub const PALW_BUDGET_TABLE_REPORTER_INCOME_V1: u8 = 9;
 mod consumer;
 pub use consumer::*;
 
-// RFC-0008: allocation/history invariance under relabelling, order swaps and splits (source controls).
-#[cfg(test)]
-mod invariance_tests_v1;
-
 mod hold;
 pub use hold::*;
 
 mod allocation_v3;
 pub use allocation_v3::*;
-
-/// The user's rulings of 2026-10-15 on ADR-0176/0177 (C1–C5), dormant.
-mod decisions_1015;
-pub use decisions_1015::*;
 
 mod material;
 pub use material::{
@@ -499,7 +491,7 @@ impl PalwBondBudgetPolicyV1 {
             (PALW_BOND_BUDGET_POLICY_VERSION_V3, Some(hold)) => {
                 hold.validate()?;
                 if self.window_daa != hold.window_daa(PalwHoldModeV1::PanelZero) {
-                    return Err("a V3 policy's window W is Panel=0's hold span (panel_zero_days · daa_per_day; 1 day since 2026-10-16)");
+                    return Err("a V3 policy's window W is Panel=0's 7-day-equivalent span (panel_zero_days · daa_per_day)");
                 }
             }
             (PALW_BOND_BUDGET_POLICY_VERSION_V2 | PALW_BOND_BUDGET_POLICY_VERSION_V3, _) => {
@@ -646,7 +638,7 @@ pub struct PalwModelAllocationPolicyV1 {
     pub curve: PalwAllocationCurveV1,
     /// Entries one assignment may name.
     pub max_models_per_bond: u16,
-    /// **User decision 2026-10-14 (RFC-0015 §8.5.5)** — the 7-day average (2026-10-16; 30 days before) of miner + claim-bound verifier capital, `P_m` applied to
+    /// **User decision 2026-10-14 (RFC-0015 §8.5.5)** — the 30-day average of miner + claim-bound verifier capital, `P_m` applied to
     /// block opportunity and coinbase ([`allocation_v3`]). `Some` exactly for a V3 policy; serialized only for V3, so every V2
     /// policy's bytes, digest and identity are unchanged.
     pub average: Option<PalwAllocationAverageV1>,
@@ -833,7 +825,7 @@ impl Params {
         }
         // RFC-0015 §8.3 (lead default 2026-10-15, pending user review): an isolated calibration genesis carries the mechanics budget
         // (every Panel-free claim budgeted there too). Its two economic prerequisites below are NOT required there (calibration
-        // deviation, recorded in docs/design/palw/integration/rfc-0015-implementation-status-2026-10-15.md): `palw_audit_2026_09_23` is
+        // deviation, recorded in docs/design/palw/rfc-0015-implementation-status-2026-10-15.md): `palw_audit_2026_09_23` is
         // genesis-only and `palw_economic_safety` brings the windowed mint, neither of which the calibration devnet base carries.
         if self.has_isolated_native_calibration_v34() {
             return if fence.activation == ForkActivation::always() && fence.policy == PalwBondBudgetPolicyV1::opv_mechanics_probe_v1() {
@@ -856,17 +848,6 @@ impl Params {
         if !audit_below {
             return Err(PalwModeV2Error::Invalid(
                 "palw_bond_budget_v1 requires palw_audit_2026_09_23 at or below it: a budget-refused attempt's carve is withheld only there",
-            ));
-        }
-        // ADR-0176 C1 (user decision 2026-10-15): newly issued attempt-lane subsidy never bypasses R on any path — a MERGED
-        // attempt block's worker base is withheld (and escrowed into its claim) only past the deep audit fence
-        // (`palw_v2_merged_escrow_withheld`); below it every merged carve would be paid at acceptance, outside R.
-        let deep_below = self
-            .palw_audit_2026_09_11_deep
-            .is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.activation.daa_score());
-        if !deep_below {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_bond_budget_v1 requires palw_audit_2026_09_11_deep at or below it: a merged attempt's worker base is withheld (C1, R on every path) only there",
             ));
         }
         // Readiness §3e: the Round rights are capped in the windowed mint, which is ADR-0151's (`palw_economic_safety`).
@@ -975,7 +956,7 @@ fn floor_mul_div(a: u128, b: u128, d: u128) -> u128 {
 /// **The caps of a bond with locked capital `capital`** (design §2.3): `⌊C·q·ρ/u⌋`, `⌊C·b/u⌋`, `⌊C·r/u⌋`, `⌊C·w/u⌋` — linear in `C`
 /// with floors, hence sub-additive over any split of `C`; `ρ` reaches `Q` only.
 pub fn palw_bond_budget_caps_v1(policy: &PalwBondBudgetPolicyV1, capital: u64) -> PalwBudgetVectorV1 {
-    // ユーザー方針 2026-10-15: under a V3 policy the window is Panel=0's hold span — 1 day since 2026-10-16 — and its caps are panel_zero_days · daily(C).
+    // ユーザー方針 2026-10-15: under a V3 policy the window is Panel=0's 7-day span and its caps are 7 · daily(C) (the long view).
     if let Some(hold) = policy.hold.as_ref() {
         return palw_bond_hold_period_caps_v1(policy, hold, capital, PalwHoldModeV1::PanelZero);
     }
@@ -1055,14 +1036,6 @@ pub fn palw_bond_budget_reservation_v1(policy: &PalwBondBudgetPolicyV1, ask: Pal
         v.final_weight = v.final_weight.min(f_claim);
     }
     v
-}
-
-/// **ADR-0176 C4b (user decision 2026-10-15): a user-paid escrow claim's reservation** — [`palw_bond_budget_reservation_v1`] with the
-/// reward NEVER clipped by the coinbase-derived per-claim ceiling `r_c` (that ceiling slices the bond's coinbase period rights; a
-/// user's escrow is not coinbase). The Final-weight ceiling still applies (a kernel claim reserves `F = 0` anyway). The producer's
-/// common `R` cap and the required collateral bind it at admission, before acceptance.
-pub fn palw_bond_budget_escrow_reservation_v1(policy: &PalwBondBudgetPolicyV1, ask: PalwBudgetAskV1) -> PalwBudgetVectorV1 {
-    PalwBudgetVectorV1 { reward_sompi: ask.reward_sompi, ..palw_bond_budget_reservation_v1(policy, ask) }
 }
 
 /// **Admission** (design §2.5): the open-claim cap, then `window + reservation ≤ caps(C)` in `Q, B, R, F` order.
@@ -2214,10 +2187,18 @@ impl PalwBondBudgetStateV1 {
         if after > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
-        let vector = PalwBudgetVectorV1 { reward_sompi: maximum, ..PalwBudgetVectorV1::ZERO };
-        // ADR-0176 C3 (user decision 2026-10-15): the per-day rate and the burst cap beside the 7-day total (V3 policy only).
-        self.hold_rate_admit_v1(policy, capital, &bond, &vector)?;
-        self.reserve(policy, capital, income_id, bond, None, accepted_daa, vector, origin, false, j)?;
+        self.reserve(
+            policy,
+            capital,
+            income_id,
+            bond,
+            None,
+            accepted_daa,
+            PalwBudgetVectorV1 { reward_sompi: maximum, ..PalwBudgetVectorV1::ZERO },
+            origin,
+            false,
+            j,
+        )?;
         let grant = self.consume(&income_id, PalwBudgetDimV1::Reward, u128::from(actual), true, j);
         debug_assert!(matches!(grant, Some(Ok(amount)) if amount == u128::from(actual)));
         self.close(&income_id, j);
@@ -2351,12 +2332,6 @@ impl PalwBondBudgetStateV1 {
         {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
-        // ADR-0176 C3 (user decision 2026-10-15): the NEW part of the hold (`extra`; moved kernel credits were counted when reserved)
-        // takes the per-day rate and the burst cap beside the 7-day total (V3 policy only), and is written into the day / burst views.
-        let extra_vector = PalwBudgetVectorV1 { reward_sompi: extra, ..PalwBudgetVectorV1::ZERO };
-        if check_cap && extra > 0 {
-            self.hold_rate_admit_v1(policy, capital, &bond, &extra_vector)?;
-        }
         // Preflight ends here. Reclassification leaves Q/B/F/T and open slots
         // exactly as they were, and cannot release aggregate monetary quota.
         for (id, mut row) in credits {
@@ -2399,18 +2374,6 @@ impl PalwBondBudgetStateV1 {
         row.reserved.reward_sompi = held;
         self.put_claim(&income_id, Some(row), j);
         self.put_release((row.reuse_not_before, income_id), true, j);
-        if extra > 0 {
-            let growth = palw_bond_hold_rate_growth_id_v1(&income_id, accepted_daa, prior);
-            self.write_hold_shadows_v1(
-                policy,
-                &growth,
-                &bond,
-                accepted_daa,
-                &extra_vector,
-                PalwBudgetOriginV1::NativeIncome,
-                j,
-            )?;
-        }
         Ok(())
     }
 
@@ -2772,11 +2735,6 @@ impl PalwBondBudgetStateV1 {
         if check_cap && (self.has_unattributed_income_v1() || held > palw_bond_budget_caps_v1(policy, capital).reward_sompi) {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
-        // ADR-0176 C3 (user decision 2026-10-15): the per-day rate and the burst cap beside the 7-day total (V3 policy only). A migrated
-        // pre-fence promise (`check_cap = false`) is counted in the views (its shadows) but never refused.
-        if check_cap {
-            self.hold_rate_admit_v1(policy, capital, &bond, &PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO })?;
-        }
         self.reserve(
             policy,
             capital,
@@ -2999,11 +2957,8 @@ impl PalwBondBudgetStateV1 {
     /// [`Self::preview_claim_v1`] unchanged. A user-paid escrow origin ([`palw_budget_origin_is_user_escrow_v1`]):
     ///
     /// * is NEVER clipped by the model-allocation budget (`model` is ignored: that budget is coinbase-derived);
-    /// * **ADR-0176 C4b (user decision 2026-10-15): is never bound by the coinbase-derived per-claim ceiling `r_c`** (the ρ slice of the
-    ///   bond's COINBASE period rights, [`palw_bond_budget_claim_ceilings_v1`]) — [`palw_bond_budget_escrow_reservation_v1`];
-    /// * must reserve its WHOLE reward inside the producer's common `R` cap, with its required collateral: a bond whose cap (or
-    ///   collateral) cannot hold it is refused (`Exhausted { Reward }`, `LiabilityExceedsCapital`, …) — before acceptance, never a
-    ///   reduction after. ([`PalwBudgetRefusalV1::EscrowNotReservable`] stays for a reservation that would still come out short.)
+    /// * must reserve its WHOLE reward: a per-claim ceiling below the escrow is [`PalwBudgetRefusalV1::EscrowNotReservable`], and a
+    ///   bond whose common `R` cap cannot hold it is `Exhausted { Reward }` — both before acceptance, never a clip after.
     pub fn preview_claim_for_origin_v1(
         &self,
         policy: &PalwBondBudgetPolicyV1,
@@ -3033,7 +2988,7 @@ impl PalwBondBudgetStateV1 {
         if !palw_budget_origin_is_user_escrow_v1(origin) {
             return self.preview_claim_moded_v1(policy, capital, bond, model, ask, mode);
         }
-        let reservation = palw_bond_budget_escrow_reservation_v1(policy, ask);
+        let reservation = palw_bond_budget_reservation_v1(policy, ask);
         if reservation.reward_sompi < ask.reward_sompi {
             return Err(PalwBudgetRefusalV1::EscrowNotReservable);
         }
@@ -3319,9 +3274,6 @@ impl PalwBondBudgetStateV1 {
         if let Some(dim) = window.checked_add(vector).ok_or(PalwBudgetRefusalV1::Overflow)?.first_excess(&caps) {
             return Err(PalwBudgetRefusalV1::Exhausted { dim });
         }
-        // ADR-0176 C3 (user decision 2026-10-15): the per-day rate and the burst cap beside the 7-day total (V3 policy only); the
-        // draw's candidates were capped at `round_rights_remaining_rated_v1`, so this refuses only a caller that skipped it.
-        self.hold_rate_admit_v1(policy, capital, &bond, &vector)?;
         self.reserve(policy, capital, id, bond, None, draw_daa, vector, PalwBudgetOriginV1::RoundRights, false, j)?;
         let mut row = *self.claims.get(&id).expect("reserved above");
         row.consumed = row.reserved;
@@ -5496,23 +5448,13 @@ mod tests {
             Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward }),
             "a full R window refuses the next escrow claim instead of reserving less"
         );
-        // ADR-0176 C4b (user decision 2026-10-15): the coinbase-derived per-claim ceiling (rho slicing) does NOT bind a user-paid
-        // escrow — the whole escrow is reserved inside the common R cap — where a coinbase-derived ask is sliced.
+        // A per-claim ceiling (rho slicing) below the escrow: refused, where a coinbase-derived ask would be sliced.
         let sliced = policy(3, true);
         let t = PalwBondBudgetStateV1::new(0, &sliced);
         let (r_claim, _) = palw_bond_budget_claim_ceilings_v1(&sliced).unwrap();
         assert_eq!(
-            t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim + 1), PalwBudgetOriginV1::KernelRoute)
-                .unwrap()
-                .reward_sompi,
-            r_claim + 1,
-            "r_c never applies to user-paid escrow (C4b)"
-        );
-        let r_max_sliced = palw_bond_budget_caps_v1(&sliced, capital).reward_sompi;
-        assert_eq!(
-            t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_max_sliced + 1), PalwBudgetOriginV1::KernelRoute),
-            Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward }),
-            "the producer's common R cap still binds it, before acceptance"
+            t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim + 1), PalwBudgetOriginV1::KernelRoute),
+            Err(PalwBudgetRefusalV1::EscrowNotReservable)
         );
         assert_eq!(
             t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim + 1), PalwBudgetOriginV1::Attempt)

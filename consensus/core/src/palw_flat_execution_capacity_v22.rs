@@ -132,17 +132,6 @@ impl NativePhysicalSlotsV22 {
         self.kinds[i] = kind;
         Ok(())
     }
-    /// **G14 lane closure G-N1:** a lapsed owner that compelled nothing (both of its streams never carried a unit) gives its
-    /// physical owner place back before its horizon; the streams' cooldowns are kept.
-    pub fn release_lapsed_owner_v41(&mut self, owner: Digest) -> Result<(), String> {
-        let i = self.owners.iter().position(|v| *v == owner).ok_or("native physical lapsed owner absent")?;
-        if self.units[3 + i * 2..5 + i * 2].iter().any(|u| *u != [0; 64]) {
-            return Err("native physical owner that carried a unit keeps its place".into());
-        }
-        self.owners[i] = [0; 64];
-        self.owner_horizons[i] = 0;
-        Ok(())
-    }
     pub fn retire_owner(&mut self, owner: Digest, now: u64) -> Result<(), String> {
         let i = self.owners.iter().position(|v| *v == owner).ok_or("native physical owner absent/already retired")?;
         if now <= self.owner_horizons[i] || self.not_before[3 + i * 2..5 + i * 2].iter().any(|d| now < *d) {
@@ -182,17 +171,11 @@ impl NativeCarriageServiceV22 {
     /// original queue30. Readiness of reference/detection/delivery measurements
     /// remains a separate trusted Final27 condition. This is not an upgrade of
     /// an old consent23: its producer must sign the NEW complete contract.
-    pub fn reserved_scheduler_v30(
-        mass: &NativeCarriageMassParamsV22,
-        queue: &crate::palw_native_queue_v30::NativeQueuePolicyV30,
-    ) -> Result<Self, String> {
+    pub fn reserved_scheduler_v30(mass: &NativeCarriageMassParamsV22,
+        queue: &crate::palw_native_queue_v30::NativeQueuePolicyV30) -> Result<Self, String> {
         queue.check(queue.network_domain)?;
         let mut service = Self::probe(mass);
         service.implemented = true;
-        // User decision 2026-10-18 (ADR-0187): the reserved Final27 scheduler serves one slot every DAA (was 2), doubling the
-        // physical service; seal_ttl, deadlines and liability are unchanged. Only reached where Final27 is in force (dormant on
-        // every preset); the probe service below it keeps period 2.
-        service.period_daa = 1;
         service.check(mass)?;
         Ok(service)
     }
@@ -465,74 +448,14 @@ impl NativeCarriageGlobalV22 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NativePaidCarrierRequestV22 {
-    /// Owning39 uses its own 2048-part/local-court and original preclaim lanes.
-    ProofPartV39 {
-        job: Digest,
-        seal: Digest,
-        index: u16,
-        count: u16,
-        total: u32,
-        mode: u8,
-    },
-    AnswerPartV39 {
-        pending: Digest,
-        group: Digest,
-        index: u16,
-        count: u16,
-        total: u32,
-    },
-    CommitPartV39 {
-        job: Digest,
-        group: Digest,
-        index: u16,
-        count: u16,
-        total: u32,
-    },
-    CommitAssembleV39 {
-        job: Digest,
-        group: Digest,
-    },
-
-    /// Original32 producer phase, authorized only before its actual Commit.
-    FundedCommitPartV32 {
-        job: Digest,
-        group: Digest,
-        index: u16,
-        count: u16,
-        total: u32,
-    },
-    FundedCommitAssembleV32 {
-        job: Digest,
-        group: Digest,
-    },
     /// New full source/trace reply pages; not an old singleton answer.
-    ProducerAnswerPartV29 {
-        pending: Digest,
-        group: Digest,
-        index: u16,
-        count: u16,
-        total: u32,
-    },
-    SourceAnswer {
-        pending: Digest,
-    },
-    TraceAnswer {
-        pending: Digest,
-    },
-    OwnProofPart {
-        seal: Digest,
-        index: u8,
-        count: u8,
-    },
+    ProducerAnswerPartV29 {pending:Digest,group:Digest,index:u16,count:u16,total:u32},
+    SourceAnswer { pending: Digest },
+    TraceAnswer { pending: Digest },
+    OwnProofPart { seal: Digest, index: u8, count: u8 },
     /// Nonwire scheduling request for the independent paid 29 transport.
     /// Does not reinterpret a v11 seal or outer113's byte-sized counts.
-    OwnProofPartV29 {
-        job: Digest,
-        seal: Digest,
-        owner: Digest,
-        index: u16,
-        count: u16,
-    },
+    OwnProofPartV29 { job: Digest, seal: Digest, owner: Digest, index: u16, count: u16 },
 }
 /// Read-only scheduling evidence, not an execution, court or monetary grant.
 /// The caller additionally verifies the COMPLETE populated transaction against
@@ -565,23 +488,8 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         if !service.implemented || service.check(mass).is_err() {
             return None;
         }
-        match request {
-            NativePaidCarrierRequestV22::ProofPartV39 { job, seal, index, count, total, mode } => {
-                return self.native_paid_proof_eligibility_v39(*job, *seal, *index, *count, *total, *mode, now, mass, service);
-            }
-            NativePaidCarrierRequestV22::AnswerPartV39 { pending, group, index, count, total } => {
-                return self.native_paid_answer_eligibility_v39(*pending, *group, *index, *count, *total, now, mass, service);
-            }
-            NativePaidCarrierRequestV22::CommitPartV39 { job, group, index, count, total } => {
-                return self.native_paid_commit_eligibility_v39(*job, *group, Some((*index, *count, *total)), now, mass, service);
-            }
-            NativePaidCarrierRequestV22::CommitAssembleV39 { job, group } => {
-                return self.native_paid_commit_eligibility_v39(*job, *group, None, now, mass, service);
-            }
-            _ => {}
-        }
-        if let NativePaidCarrierRequestV22::ProducerAnswerPartV29 { pending, group, index, count, total } = request {
-            return self.native_paid_text_reply_eligibility_v29(*pending, *index, *count, *total, *group, now, mass, service);
+        if let NativePaidCarrierRequestV22::ProducerAnswerPartV29{pending,group,index,count,total}=request {
+            return self.native_paid_text_reply_eligibility_v29(*pending,*index,*count,*total,*group,now,mass,service);
         }
         if let NativePaidCarrierRequestV22::OwnProofPartV29 { job, seal, owner, index, count } = request {
             return self.native_paid_paged_carrier_eligibility_v29(*job, *seal, *owner, *index, *count, now, mass, service);
@@ -630,14 +538,8 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                 }
                 (s.job_id, *seal, s.bond, s.reveal_until, 2u8)
             }
-            NativePaidCarrierRequestV22::ProofPartV39 { .. }
-            | NativePaidCarrierRequestV22::AnswerPartV39 { .. }
-            | NativePaidCarrierRequestV22::CommitPartV39 { .. }
-            | NativePaidCarrierRequestV22::CommitAssembleV39 { .. }
-            | NativePaidCarrierRequestV22::OwnProofPartV29 { .. }
-            | NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }
-            | NativePaidCarrierRequestV22::FundedCommitPartV32 { .. }
-            | NativePaidCarrierRequestV22::FundedCommitAssembleV32 { .. } => return None,
+            NativePaidCarrierRequestV22::OwnProofPartV29 { .. }
+            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. } => return None,
         };
         let h = self.execution_job_header_v11(&job)?;
         if h.terminal != ExecutionTerminalV11::Challengeable || kind != 2 && h.producer != owner {

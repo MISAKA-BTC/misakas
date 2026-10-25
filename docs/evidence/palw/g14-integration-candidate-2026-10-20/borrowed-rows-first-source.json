@@ -1,5 +1,0 @@
-{
-  "consensus/core/src/palw_court_shared_tir_state_v1.rs": "6b5079ca3e00c0ec26bceedb6166808bfb1880457ed5ab14afc98419c6407b15",
-  "consensus/core/src/palw_tir_public_fold_v1.rs": "8ba3b2dc88149df81f2e545bfa053339579a1204f09d414c010e176f4a701bd4",
-  "consensus/core/src/palw_tir_public_source_v1.rs": "5d5459666b35385bce57bb9ab74ea47413a67f02548a17cf747648d4d9cbd7d9"
-}

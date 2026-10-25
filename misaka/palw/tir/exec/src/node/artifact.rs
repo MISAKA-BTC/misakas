@@ -441,21 +441,6 @@ impl TirArtifactV1 {
         &self.plan
     }
 
-    /// **The weights this artifact verified at load are still the bytes on disk** (audit C-07): every mapping (and the resident
-    /// store's descriptor) refuses an in-place rewrite of its file since open. Called before any computation a claim, a seat or
-    /// a court answer rests on; a refusal means reload the artifact (replace artifact files by rename, never in place).
-    pub fn check_weights_unmodified(&self) -> Result<(), String> {
-        let path = self.container.path.display().to_string();
-        match &self.weights {
-            TirWeightsV1::Mapped(map) => map.check_unmodified().map_err(|e| format!("{path}: {e}"))?,
-            TirWeightsV1::Resident(store) => store.check_unmodified()?,
-        }
-        if let Some(TirAdapterV1::Mapped(map)) = self.composite.as_ref().map(|c| &c.adapter) {
-            map.check_unmodified().map_err(|e| format!("{path} (adapter section): {e}"))?;
-        }
-        Ok(())
-    }
-
     pub fn params(&self) -> &TirParams<'_> {
         &self.params
     }

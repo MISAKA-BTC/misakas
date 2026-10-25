@@ -250,12 +250,10 @@ pub fn palw_fp_commitment_from_context_v3(
     let context_hash = context.context_hash();
     let (schedule_root, _calls) =
         crate::palw_v2::expected_schedule_commitment_v2(&context_hash, job.prompt_tokens, run.facts.decode_tokens_executed);
-    // A legacy family's root over its four legs, or an IR class's (RFC-0002 Phase H) over its trace, class, leaf count and step
-    // root — the root `TFP1` re-derives from the header. Either way it is recomputed from the context the run was performed under.
-    let execution_root = [palw_fp_execution_root_v3(context, &run.facts), palw_fp_tir_execution_root_v1(context, &run.facts)]
-        .into_iter()
-        .find(|root| *root == run.outcome.execution_root)
-        .ok_or(PalwFpExecutionV3Error::ContextDoesNotReproduceTheRoot)?;
+    let execution_root = palw_fp_execution_root_v3(context, &run.facts);
+    if execution_root != run.outcome.execution_root {
+        return Err(PalwFpExecutionV3Error::ContextDoesNotReproduceTheRoot);
+    }
     Ok(crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
         job: job.clone(),
         trace_root: run.outcome.trace_root,
@@ -400,19 +398,6 @@ pub fn palw_fp_job_pin_of_context_v1(ctx: &PalwJobContextV2) -> Hash64 {
 /// roots — the same function `verify_binding` recomputes, called with the same arguments. It is a
 /// one-line wrapper on purpose: the value's definition must have ONE source, and a second
 /// derivation "for the free-prompt lane" is how two lanes come to disagree about one root.
-/// **An IR class's free-prompt execution root** (RFC-0002 Phase H): `palw_tir_execution_root_v1` over the context, the run's
-/// trace root, the class (`shape_profile_id`), its step-leaf count and its step root (`step_leg_root` carries the IR step tree's
-/// root; an IR class has no activation or checkpoint leg). The root the TIR public frame's `TFP1` re-derives from its header.
-pub fn palw_fp_tir_execution_root_v1(context: &PalwJobContextV2, facts: &PalwFpRunFactsV3) -> Hash64 {
-    crate::palw_tir_step_v1::palw_tir_execution_root_v1(
-        &context.context_hash(),
-        &facts.full_logits_trace_root,
-        &context.shape_profile_id,
-        facts.step_leaf_count,
-        &facts.step_leg_root,
-    )
-}
-
 pub fn palw_fp_execution_root_v3(context: &PalwJobContextV2, facts: &PalwFpRunFactsV3) -> Hash64 {
     crate::palw_step_leg::execution_commitment_root_v2(
         &context.context_hash(),

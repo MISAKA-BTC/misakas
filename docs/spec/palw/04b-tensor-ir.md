@@ -1,7 +1,5 @@
 # PALW spec — 04b. PALW Canonical Tensor IR v1 (PALW-TIR)
 
-> **適用時期の現行方針（2026-10-17 文書化）:** 本書が参照する画像・動画生成および RFC-0004 の改善に限り **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
-
 > **Normative.** This chapter defines PALW-TIR v1 completely: the types, the program and its
 > canonical byte encoding, the twenty-five primitives and their exact integer semantics, the
 > reference evaluator, and the rules admission and the court will apply. An engineer who reads only

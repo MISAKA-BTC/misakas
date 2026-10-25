@@ -1722,8 +1722,6 @@ mod mockery {
                 depth_is_lower_bound: mock(),
                 safe_frontier_blue_score: mock(),
                 safe_frontier_daa: mock(),
-                uncertified_final_anchors: 0,
-                security_certification_premise: None,
             }
         }
     }
@@ -2681,11 +2679,7 @@ mod mockery {
     // RFC-0009 L2: op 203 and its parts round-trip.
     impl Mock for GetPalwForkChoiceOpeningRequest {
         fn mock() -> Self {
-            GetPalwForkChoiceOpeningRequest {
-                block_hashes: vec![mock_hex(), mock_hex()],
-                rule_e_window_above_blue: Some(77),
-                registry_bonds: vec!["ab".repeat(68)],
-            }
+            GetPalwForkChoiceOpeningRequest { block_hashes: vec![mock_hex(), mock_hex()] }
         }
     }
     test!(GetPalwForkChoiceOpeningRequest);
@@ -2701,9 +2695,6 @@ mod mockery {
                 inner_root: mock_hex(),
                 committed_root: mock_hex(),
                 committed_form: mock(),
-                committed_leaf: vec![3; 300],
-                rule_e_window: vec![4; 20],
-                registry_openings: vec![vec![5; 9], vec![6; 2]],
             }
         }
     }
@@ -2725,85 +2716,6 @@ mod mockery {
         }
     }
     test!(GetPalwForkChoiceOpeningResponse);
-
-    // Tooling lane: ops 225-228 round-trip.
-    impl Mock for GetPalwClaimDetailRequest {
-        fn mock() -> Self {
-            GetPalwClaimDetailRequest { claim_hex: "ab".repeat(64) }
-        }
-    }
-    test!(GetPalwClaimDetailRequest);
-    impl Mock for GetPalwCourtStateRequest {
-        fn mock() -> Self {
-            GetPalwCourtStateRequest { claim_hex: String::new(), session_hex: "cd".repeat(64) }
-        }
-    }
-    test!(GetPalwCourtStateRequest);
-    impl Mock for GetPalwFenceScheduleRequest {
-        fn mock() -> Self {
-            GetPalwFenceScheduleRequest {}
-        }
-    }
-    test!(GetPalwFenceScheduleRequest);
-    impl Mock for GetPalwBondDetailRequest {
-        fn mock() -> Self {
-            GetPalwBondDetailRequest { bond: "ab:1".into() }
-        }
-    }
-    test!(GetPalwBondDetailRequest);
-    impl Mock for GetPalwClaimDetailResponse {
-        fn mock() -> Self {
-            GetPalwClaimDetailResponse { available: true, found: true, now_daa: 11, view_json: "{\"version\":1}".into() }
-        }
-    }
-    test!(GetPalwClaimDetailResponse);
-    impl Mock for GetPalwCourtStateResponse {
-        fn mock() -> Self {
-            GetPalwCourtStateResponse { available: true, found: true, now_daa: 11, view_json: "{\"version\":1}".into() }
-        }
-    }
-    test!(GetPalwCourtStateResponse);
-    impl Mock for GetPalwFenceScheduleResponse {
-        fn mock() -> Self {
-            GetPalwFenceScheduleResponse { available: true, found: true, now_daa: 11, view_json: "{\"version\":1}".into() }
-        }
-    }
-    test!(GetPalwFenceScheduleResponse);
-    impl Mock for GetPalwBondDetailResponse {
-        fn mock() -> Self {
-            GetPalwBondDetailResponse { available: true, found: true, now_daa: 11, view_json: "{\"version\":1}".into() }
-        }
-    }
-    test!(GetPalwBondDetailResponse);
-
-    // RFC-0012 acceptance: op 246 round-trips.
-    impl Mock for GetPalwAcceptanceReadsRequest {
-        fn mock() -> Self {
-            GetPalwAcceptanceReadsRequest { reserve_blocks: vec![mock_hex()], outpoints: vec!["ab:1".to_string()] }
-        }
-    }
-    test!(GetPalwAcceptanceReadsRequest);
-
-    impl Mock for GetPalwAcceptanceReadsResponse {
-        fn mock() -> Self {
-            GetPalwAcceptanceReadsResponse {
-                available: true,
-                sink: mock_hex(),
-                virtual_daa: 9,
-                reserve_balances: vec![RpcPalwReserveBalance { block_hash: mock_hex(), known: true, balance_sompi: 7 }],
-                outpoints: vec![RpcPalwOutpointEntry {
-                    outpoint: "ab:1".into(),
-                    present: true,
-                    amount: 5,
-                    script_version: 0,
-                    script_hex: "ab".into(),
-                    block_daa_score: 3,
-                    is_coinbase: false,
-                }],
-            }
-        }
-    }
-    test!(GetPalwAcceptanceReadsResponse);
 
     // RFC-0010 (lane C2): op 220 round-trips.
     // RFC-0008 v2 (lane X8R): op 240 round-trips.
@@ -3416,15 +3328,13 @@ mod mockery {
                 required_ready_seats: mock(),
                 registration_bond_sompi: mock(),
                 recommended_pool_sompi: mock(),
-                eligibility_stage: "Probation".to_string(),
+                eligibility_stage: mock(),
                 eligibility_next_renewal_daa: mock(),
                 eligibility_subsidy: mock(),
                 eligibility_block_right: mock(),
                 eligibility_final_weight: mock(),
                 eligibility_exams_passed: mock(),
                 eligibility_lineage_attempts: mock(),
-                model_tier: "registered".to_string(),
-                model_tier_permille: mock(),
                 admission_claims_per_span_milli: mock(),
                 probes_passed: mock(),
                 probes_failed: mock(),
@@ -3512,28 +3422,6 @@ mod mockery {
                 final_work_epochs: mock(),
                 blocking: mock(),
                 seating: mock(),
-                // RFC-0019 (wire version 4): a scheduled catalog with one SCHEDULED edition, so the round trip covers every field.
-                annual_catalog: RpcPalwAnnualCatalogStatus {
-                    scheduled: true,
-                    fence_daa: 1_000,
-                    active: true,
-                    current_edition: 0,
-                    current_root: "ab".repeat(64),
-                    has_next: true,
-                    next_edition: 1,
-                    next_activation_daa: 5_000,
-                    next_root: "cd".repeat(64),
-                    editions: vec![RpcPalwAnnualCatalogEdition {
-                        edition: 1,
-                        activation_daa: 5_000,
-                        previous_root: "ab".repeat(64),
-                        root: "cd".repeat(64),
-                        models: 2,
-                        state: "SCHEDULED".to_string(),
-                    }],
-                    kernel_version_max: 1,
-                    readiness: "off-chain".to_string(),
-                },
             }
         }
     }

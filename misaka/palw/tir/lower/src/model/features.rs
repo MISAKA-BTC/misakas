@@ -2752,9 +2752,7 @@ pub fn vision_features(s: &crate::lower::vision::VisionSpec) -> Vec<FeatureUse> 
             u.add("OUTPUT_CLASSIFY_V1", None, format!("{labels} labels (the class row, then the classifier)"))
         }
         VisionOut::SiglipHead => u.add("HEAD_POOL_ATTENTION_V1", None, ""),
-        VisionOut::Merger { .. } | VisionOut::Projector { .. } | VisionOut::PixtralProjectorV38 { .. } => {
-            u.add("OUTPUT_EMBEDDING_V1", None, "rows")
-        }
+        VisionOut::Merger { .. } | VisionOut::Projector { .. } => u.add("OUTPUT_EMBEDDING_V1", None, "rows"),
     }
     u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
 }

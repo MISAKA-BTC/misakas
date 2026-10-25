@@ -62,7 +62,6 @@ mod palw_service;
 mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
-mod palw_user;
 mod palw_verify_context;
 /// ADR-0152 P2-11: `palw vesting` — where a vested reward stands (op 199).
 mod palw_vesting;
@@ -1421,82 +1420,6 @@ enum PalwCmd {
     /// claims, seat capacity, licence queue, attribution). Node-only, no rule reads it. Read-only
     /// (`getPalwCapacityShadow`, op 201: a node built before it drops the connection).
     CapacityShadow(palw_capacity_shadow::CapacityShadowArgs),
-    /// **One claim, everything a user follows it by** (`getPalwClaimDetail`, op 225): phase and the DAA it ends by itself, Gate C
-    /// certification (Final is not SecurityCertified), accusation pending, receipt pause, court clocks (notice 3,120 / hard 10,000 /
-    /// per-turn), dispute record, DA and court sessions. Read-only; a node built before op 225 drops the connection (exit 36).
-    ClaimDetail {
-        /// 128-hex claim id.
-        #[arg(value_name = "CLAIM_ID")]
-        claim: String,
-        /// JSON output (`--output json` does the same).
-        #[arg(long)]
-        json: bool,
-    },
-    /// **The court around a claim or one session** (`getPalwCourtState`, op 226): each session's ladder turn, per-turn deadline and
-    /// backstop, the DA sessions, the dispute record and the claim's court clocks. Read-only.
-    #[command(group(clap::ArgGroup::new("court_target").required(true).args(["claim", "session"])))]
-    CourtState {
-        /// 128-hex claim id: every court session on it.
-        #[arg(long)]
-        claim: Option<String>,
-        /// 128-hex court session id.
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// **One bond** (`getPalwBondDetail`, op 228): collateral net of slashes, status, reserved exposure, live slashable locks (what
-    /// `bond retire` waits for), live claims as executor and seat, dispute reservations, court sessions it prosecutes. Read-only.
-    BondDetail {
-        /// The bond outpoint, `<txid>:<index>`.
-        #[arg(value_name = "TXID:INDEX")]
-        bond: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// **Every PALW fence on the node's ruleset** (`getPalwFenceSchedule`, op 227): its height, whether it is armed at the virtual
-    /// DAA, and the release lists (full activation, int-13, post-launch …) with their adopted heights ("not adopted" = dormant).
-    Fences {
-        /// Only the fences armed now.
-        #[arg(long)]
-        armed_only: bool,
-        /// Only one release list's members (`fullActivation`, `int13`, `postLaunchV1` …).
-        #[arg(long, value_name = "LIST")]
-        list: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// **PALW at a glance**: fences armed, the full-activation state, the values consensus holds typed-missing, and with `--bond`
-    /// that bond's standing. Read-only.
-    Status {
-        /// Also show this bond, `<txid>:<index>`.
-        #[arg(long, value_name = "TXID:INDEX")]
-        bond: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// **The values consensus holds typed-missing** (fee schedules, budgets): which interactions cannot proceed until a reviewed
-    /// change adopts them. Read from this build's consensus code; no node is contacted.
-    NotAdopted {
-        #[arg(long)]
-        json: bool,
-    },
-    /// **Decode an object file offline**: tag, variant, owning fence, whether it may ride a carrier, and whether its kind is in force
-    /// on `--network`'s ruleset at `--at-daa`. Stateless checks only; nothing is contacted or signed.
-    ObjectShow {
-        /// The borsh `PalwConsensusObjectV2` file.
-        #[arg(long)]
-        object: std::path::PathBuf,
-        /// The DAA the fence check is made at (default: far future — "will it ever be read on this ruleset").
-        #[arg(long)]
-        at_daa: Option<u64>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// **Build and sign a PALW object** (writes a file; nothing is submitted). File it with `misaka palw submit-object --object <f>`
-    /// (dry-run unless `--submit`). Builders whose interaction needs a typed-missing value refuse (exit 10) and name the value.
-    #[command(subcommand)]
-    Build(palw_user::BuildCmd),
     /// **RFC-0010: the permissionless Panel's observation** — a V3-rule claim's seal, snapshot, certified-beacon state,
     /// assignment, retries and terminal reason, and the engine's overview. Read-only (`getPalwPanelV3Status`, op 220: a node
     /// built before it drops the connection). On today's chain no beacon source is approved: `BEACON_UNAVAILABLE`.
@@ -1641,8 +1564,8 @@ enum PalwCmd {
         /// carrier, funded from the previous carrier's change.
         #[arg(long = "object", required = true, num_args = 1..)]
         object: Vec<std::path::PathBuf>,
-        /// Actually broadcast (otherwise a dry-run preview). `--submit` is the same flag.
-        #[arg(long, alias = "submit")]
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
         yes: bool,
         /// Send a class registration (`ClassRegistered`, `ClassRegisteredTirV1`) even when the node's class rows already hold the class
         /// (`DUPLICATE_CLASS`) or hold it in conflict (`CLASS_CONFLICT`), or cannot be read. Without it those are refused before any fee.
@@ -2845,21 +2768,6 @@ enum EvmCmd {
         #[arg(long)]
         outpoint: String,
     },
-    /// Refund an unclaimed deposit lock to this key once its refund timeout has passed (dry-run unless --yes). The lock entry is
-    /// read by outpoint (`getPalwAcceptanceReads`, op 246); the spend is signed by this key's ML-DSA-87 funding key.
-    Refund {
-        /// The lock outpoint `deposit-lock` printed, `txid_hex:index`.
-        #[arg(long)]
-        outpoint: String,
-        /// Fee in sompi.
-        #[arg(long, default_value_t = 100_000)]
-        fee: u64,
-        /// Actually broadcast (otherwise a dry-run preview).
-        #[arg(long)]
-        yes: bool,
-        #[command(flatten)]
-        key: KeyArgs,
-    },
     /// EVM transaction lifecycle (`misaka_getEvmTxStatus`).
     /// A read-only eth_call at latest (ADR-0089's doors answer any caller): --to <addr> --data <hex>.
     View {
@@ -3024,21 +2932,10 @@ enum EvmTxCmd {
     },
 }
 
-fn main() -> std::process::ExitCode {
-    // Even boxed command futures have construction/poll temporaries in debug builds.
-    // Run the dispatcher on a bounded stack of its own so normal CLI invocations do
-    // not depend on an operator changing the process stack limit (including --help).
-    match std::thread::Builder::new().name("misaka-cli".into()).stack_size(64 * 1024 * 1024).spawn(cli_main) {
-        Ok(worker) => worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
-        Err(error) => {
-            eprintln!("error: cannot start CLI dispatcher: {error}");
-            std::process::ExitCode::FAILURE
-        }
-    }
-}
-
 #[tokio::main(flavor = "current_thread")]
-async fn cli_main() -> std::process::ExitCode {
+async fn main() -> std::process::ExitCode {
+    // The command dispatcher contains large branch futures. Keep it on the heap so its
+    // storage is not duplicated on the process stack by the runtime's main wrapper.
     Box::pin(run_cli()).await
 }
 
@@ -3525,9 +3422,6 @@ async fn run_cli() -> std::process::ExitCode {
             })
         }
         Command::Evm(EvmCmd::Claim { outpoint }) => Box::pin(async move { evm_deposit::claim(ctx, &outpoint).await }),
-        Command::Evm(EvmCmd::Refund { outpoint, fee, yes, key }) => {
-            Box::pin(async move { evm_deposit::refund(ctx, &key.source(), &outpoint, fee, yes).await })
-        }
         Command::Evm(EvmCmd::Balance { address }) => Box::pin(async move { eth::balance(ctx, &address) }),
         Command::Evm(EvmCmd::Nonce { address }) => Box::pin(async move { eth::nonce(ctx, &address) }),
         Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {
@@ -3545,22 +3439,6 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move { palw_vesting::run(ctx, bond, address, claim, limit, after, exec_after, json).await })
         }
         Command::Palw(PalwCmd::CapacityShadow(args)) => Box::pin(async move { palw_capacity_shadow::run(ctx, args).await }),
-        Command::Palw(PalwCmd::ClaimDetail { claim, json }) => {
-            Box::pin(async move { palw_user::claim_detail(ctx, &claim, json).await })
-        }
-        Command::Palw(PalwCmd::CourtState { claim, session, json }) => {
-            Box::pin(async move { palw_user::court_state(ctx, claim.as_deref(), session.as_deref(), json).await })
-        }
-        Command::Palw(PalwCmd::BondDetail { bond, json }) => Box::pin(async move { palw_user::bond_detail(ctx, &bond, json).await }),
-        Command::Palw(PalwCmd::Fences { armed_only, list, json }) => {
-            Box::pin(async move { palw_user::fences(ctx, armed_only, list.as_deref(), json).await })
-        }
-        Command::Palw(PalwCmd::Status { bond, json }) => Box::pin(async move { palw_user::status(ctx, bond.as_deref(), json).await }),
-        Command::Palw(PalwCmd::NotAdopted { json }) => Box::pin(async move { palw_user::not_adopted(ctx, json) }),
-        Command::Palw(PalwCmd::ObjectShow { object, at_daa, json }) => {
-            Box::pin(async move { palw_user::object_show(ctx, &object, at_daa, json) })
-        }
-        Command::Palw(PalwCmd::Build(cmd)) => Box::pin(async move { palw_user::build(ctx, cmd).await }),
         Command::Palw(PalwCmd::PanelV3(args)) => Box::pin(async move { palw_panel_v3::run(ctx, args).await }),
         Command::Palw(PalwCmd::Economics {}) => Box::pin(async move { palw_economics::run(ctx).await }),
         Command::Palw(PalwCmd::Registry {}) => Box::pin(async move { palw_registry::run(ctx).await }),
@@ -4319,7 +4197,7 @@ mod cli_surface_tests {
     }
 
     /// **Every command defaults to testnet-12 through the one default the operator commands use,
-    /// and a named network still wins** (docs/operations/mining/testnet12-join-mining.md: `misaka bond`, `wallet` and
+    /// and a named network still wins** (docs/testnet12-join-mining.md: `misaka bond`, `wallet` and
     /// `key` used to fall back to testnet-10 while `misaka mining` fell back to testnet-12).
     #[test]
     fn every_command_defaults_to_the_one_network_and_a_named_one_wins() {

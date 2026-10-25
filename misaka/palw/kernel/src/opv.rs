@@ -31,7 +31,7 @@
 //!   something a kernel can establish.
 //! * **Not armed.** Every default is dormant; the parameters here are *relations with validation*, not numbers chosen for a
 //!   network. Choosing them, measuring the budgets on real hardware and the monitoring economics are external gates
-//!   (`docs/evidence/palw/implementation-records/rfc-0015-panel-free-record.md`).
+//!   (`docs/design/palw/rfc-0015-panel-free-record.md`).
 //! * **Not a replacement for the Panel route.** Panel-licensed classes keep their ids, their lifecycle and (while no OPV policy is
 //!   set) their state root byte for byte.
 

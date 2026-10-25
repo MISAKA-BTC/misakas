@@ -357,124 +357,6 @@ impl ConsensusSessionOwned {
         self.consensus.palw_staged_tir_prefix_v1(key)
     }
 
-    /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame.
-    pub fn palw_tir_public_original_quote_v1(
-        &self,
-        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
-        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-    ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
-        self.consensus.palw_tir_public_original_quote_v1(original, header)
-    }
-
-    /// G14 R4: the filer scheduler's preflight of a public conviction (`Ok(None)` below `palw_tir_public_conviction_v1`).
-    pub fn palw_tir_public_conviction_preflight_v1(
-        &self,
-        filer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        claim: kaspa_consensus_core::Hash64,
-        evidence: kaspa_consensus_core::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
-    ) -> Result<Option<Result<(), String>>, String> {
-        self.consensus.palw_tir_public_conviction_preflight_v1(filer, claim, evidence)
-    }
-
-    /// G14 R3/R4: a node worker's read of the accepted native snapshot (`Ok(false)` below `palw_tir_public_conviction_v1`).
-    pub fn palw_tir_public_read_v1(
-        &self,
-        read: &mut dyn FnMut(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
-    ) -> Result<bool, String> {
-        self.consensus.palw_tir_public_read_v1(read)
-    }
-
-    // ---- RFC06/RFC08 own-node kernel material (private producer/checker/replacement helpers): same store-tip reads ----
-
-    /// The kernel route state (`ConsensusApi::palw_kernel_route_v1`): `None` before the fence's first kernel move.
-    pub fn palw_kernel_route_v1(&self) -> Option<kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1> {
-        self.consensus.palw_kernel_route_v1()
-    }
-
-    pub fn palw_kernel_producer_candidate_v4(
-        &self,
-        checkpoint: kaspa_consensus_core::BlockHash,
-        producer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        commit: &kaspa_consensus_core::palw_kernel_producer_candidate_v4::SaltedCommitV1,
-        salt: &[u8; 64],
-        commit_daa: u64,
-        expires_daa: u64,
-    ) -> Result<kaspa_consensus_core::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4, String> {
-        self.consensus.palw_kernel_producer_candidate_v4(checkpoint, producer, commit, salt, commit_daa, expires_daa)
-    }
-
-    pub fn palw_kernel_material_consent_accepted_v4(
-        &self,
-        root: kaspa_consensus_core::Hash64,
-        consent: kaspa_consensus_core::Hash64,
-    ) -> Result<bool, String> {
-        self.consensus.palw_kernel_material_consent_accepted_v4(root, consent)
-    }
-
-    pub fn palw_kernel_material_admission_accepted_v4(
-        &self,
-        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
-        draft: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
-    ) -> Result<bool, String> {
-        self.consensus.palw_kernel_material_admission_accepted_v4(request, draft)
-    }
-
-    pub fn palw_kernel_material_ingress_v4(
-        &self,
-        checkpoint: kaspa_consensus_core::BlockHash,
-        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
-    ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
-        self.consensus.palw_kernel_material_ingress_v4(checkpoint, request)
-    }
-
-    /// RFC-0006 read-only census of the historical headers the EXEC origin migration needs (authorizes nothing).
-    pub fn palw_exec_origin_coverage_v1(&self, listed: usize) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
-        self.consensus.palw_exec_origin_coverage_v1(listed)
-    }
-
-    pub fn palw_kernel_material_replacement_v4(
-        &self,
-        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
-        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
-        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
-    ) -> Result<kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
-        self.consensus.palw_kernel_material_replacement_v4(context, bundle, intent)
-    }
-
-    pub fn palw_kernel_material_query_authority_v4(
-        &self,
-        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
-        requester: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        pubkey: &[u8],
-    ) -> Result<
-        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4>,
-        String,
-    > {
-        self.consensus.palw_kernel_material_query_authority_v4(query, requester, pubkey)
-    }
-
-    pub fn palw_native_recovery_session_quote_v4(
-        &self,
-        checkpoint: Option<kaspa_consensus_core::BlockHash>,
-        daa: u64,
-        class: kaspa_consensus_core::Hash64,
-        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
-    ) -> Result<
-        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4>,
-        String,
-    > {
-        self.consensus.palw_native_recovery_session_quote_v4(checkpoint, daa, class, executor, providers)
-    }
-
-    /// G14 R4: the accepted ORIGINAL TIR frame a public verifier files against.
-    pub fn palw_tir_public_frame_v1(
-        &self,
-        claim: kaspa_consensus_core::Hash64,
-    ) -> Result<Option<kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
-        self.consensus.palw_tir_public_frame_v1(claim)
-    }
-
     pub fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
@@ -860,6 +742,21 @@ impl ConsensusSessionOwned {
         job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
     ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>, String> {
         self.consensus.palw_native_routing_claim_authority_v2(claim, job)
+    }
+    pub fn palw_native_recovery_session_quote_v4(
+        &self,
+        checkpoint: Option<BlockHash>,
+        daa: u64,
+        class: Hash64,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4,
+        >,
+        String,
+    > {
+        self.consensus.palw_native_recovery_session_quote_v4(checkpoint, daa, class, executor, providers)
     }
     pub fn palw_monetary_material_covenants_v1(
         &self,

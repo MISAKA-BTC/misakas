@@ -30,8 +30,7 @@ impl PalwChainStateV2 {
     }
 }
 impl TransitionBuilder<'_> {
-    fn write_terminal_v1(&mut self, key: PalwTerminalKeyV1, new: Option<PalwPendingTerminalV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.terminal_evidence, false, "native terminal_evidence writer")?;
+    fn write_terminal_v1(&mut self, key: PalwTerminalKeyV1, new: Option<PalwPendingTerminalV1>) {
         let old = match &new {
             Some(r) => self.state.terminal_evidence.insert(key, r.clone()),
             None => self.state.terminal_evidence.remove(&key),
@@ -39,7 +38,6 @@ impl TransitionBuilder<'_> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::TerminalEvidence { key, old, new });
         }
-        Ok(())
     }
 }
 fn budget(b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<u64, PalwStateV2Error> {
@@ -67,7 +65,7 @@ pub(super) fn declare(
     b.write_terminal_v1(
         d.key(),
         Some(PalwPendingTerminalV1 { declaration: d.clone(), deadline_daa: deadline, parts: BTreeMap::new() }),
-    )?;
+    );
     Ok(())
 }
 pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &PalwTerminalPartV1) -> Result<(), PalwStateV2Error> {
@@ -104,8 +102,7 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
         {
             return Err(refusal(p.evidence_id, "constrained terminal proof below its decode-constraint fence"));
         }
-        // RFC06-4: the block's two closure mirrors (both `None` on every shipped network: the V1 call byte for byte).
-        crate::palw_terminal_carriage_v1::palw_terminal_adjudicate_v2(
+        crate::palw_terminal_carriage_v1::palw_terminal_adjudicate_v1(
             &b.state,
             &d,
             &evidence,
@@ -114,7 +111,6 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
             b.identity_rules_v1(ctx.daa_score),
             b.session_rule_v1(ctx.daa_score),
             None,
-            crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(b.params),
         )
         .map_err(|e| refusal(p.evidence_id, e))?;
         b.consume_objective_offence_with_budget_v1(
@@ -125,8 +121,8 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
             &evidence,
             crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::ReservedTerminal { court_maximum: maximum },
         )?;
-        b.write_terminal_v1(key, None)?;
-        sweep(b, ctx)?;
+        b.write_terminal_v1(key, None);
+        sweep(b, ctx);
     } else {
         let bytes = p.bytes.clone();
         b.state.terminal_evidence.get_mut(&key).expect("validated owner").parts.insert(p.index, bytes.clone());
@@ -134,7 +130,7 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
     }
     Ok(())
 }
-pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     let expired: Vec<_> = b
         .state
         .terminal_evidence
@@ -146,7 +142,6 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
         .map(|(k, _)| *k)
         .collect();
     for key in expired {
-        b.write_terminal_v1(key, None)?;
+        b.write_terminal_v1(key, None);
     }
-    Ok(())
 }

@@ -38,7 +38,7 @@ pub const PALW_PANEL_FREE_GATE_RECORD_VERSION_V1: u16 = 1;
 /// **The record digests this binary accepts** (BLAKE2b-512 keyed by the record domain, [`PalwPanelFreeGateRecordV1::digest`]).
 /// **Empty**: RFC-0015 is deferred (2026-10-12 amendment, user ruling N5) and no conjunct of §13.3 is evidenced. Adding a digest here
 /// is the activation decision itself and needs every conjunct's evidence, its independent review and the user's ruling — see
-/// `docs/history/decisions/2026-10/rfc-0006-0012-user-decisions-2026-10-15.md` §RFC15.
+/// `docs/design/palw/rfc-0006-0012-user-decisions-2026-10-15.md` §RFC15.
 pub const PALW_PANEL_FREE_GATE_PINNED_RECORDS_V1: &[[u8; 64]] = &[];
 
 const PALW_PANEL_FREE_GATE_RECORD_DOMAIN_V1: &[u8] = b"misaka-palw/panel-free/activation-gate-record/v1";
@@ -71,7 +71,7 @@ pub enum PalwPanelFreeConjunctV1 {
     /// `separately coordinated network schedule` (§11.1).
     SeparatelyCoordinatedNetworkSchedule = 9,
     /// 2026-10-10 user instruction: the PALW probabilistic / economic security gate (four conditions, T1–T6, A–F, three
-    /// counterexamples, damage bounding) is PASS (`docs/design/palw/economics/probabilistic-economic-security-gate.md`).
+    /// counterexamples, damage bounding) is PASS (`docs/design/palw/probabilistic-economic-security-gate.md`).
     ProbabilisticEconomicSecurityGate = 10,
     /// 2026-10-12 amendment (N5): Panel=0 is deferred; a new user ruling must lift the deferral after the separate safety
     /// demonstration (watcher exit, Panel collusion, verification cost, maximum claim load, cold model fetch, fraud-to-court time).

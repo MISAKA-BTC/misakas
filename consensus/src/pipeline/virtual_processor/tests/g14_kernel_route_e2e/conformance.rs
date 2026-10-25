@@ -67,9 +67,6 @@ fn conformance_config(eligible: Vec<Hash64>, floor: u16) -> (Config, PalwConsens
     fence.sampled_conformance_gates_reward = floor == 0;
     params.palw_panel_free_v1 = Some(fence);
     let bundle = with_opv_budget(&mut params, bundle);
-    // RFC07 (validation 2026-10-17): the paid-source path (`paid_sources::arm_paid_sources`) is armed only by the worlds that
-    // drive it (the `PALW_PAID_SOURCES` probe of this round), so the existing worlds keep their fences.
-    paid_sources::arm_paid_sources(&mut params);
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
 }
@@ -112,21 +109,6 @@ struct Cw {
     ops: Vec<PalwArtifactOperandV1>,
     jobs: u8,
     turn: usize,
-    /// The paid verification class over the source class (RFC07 sources), once registered.
-    paid_class: Option<Digest>,
-    /// x8: the drawn seats of a lying prefix/slice claim sign it Clean too (a colluding quorum), so the lie reaches its paid Final
-    /// unrefuted and only a public proof can revoke it afterwards. Off by default: a lying claim is then never locked.
-    collude_lies: bool,
-    /// x8: session jobs (0 = prefix, 1..=3 the slices) whose paid claims are locked but get no receipts — the claim's OPV lifecycle
-    /// runs on, its paid authority is never approved (the "OPV settlement never substitutes" control).
-    unapproved: Vec<usize>,
-    /// x8: the extra jobs of a session are paid and approved like the session's own (a test whose extra claim must reach the slice
-    /// admission's own checks — the scope or the job nonce — rather than stop at the paid-approval gate).
-    paid_extras: bool,
-    /// RFC08 08-C: open the EXEC session WITHOUT the processor's `cfg(test)` admission seam — the class is admitted by the
-    /// registry's own rules (signed capability declarations and readiness proofs of the real inventory, the lifecycle and room
-    /// read from the chain).
-    no_seam: bool,
 }
 
 impl Cw {
@@ -205,15 +187,13 @@ impl Cw {
         let Obj::ClassRegisteredTirV1 { class_id: v2_class, .. } = &class_obj else { unreachable!() };
         let v2_class = *v2_class;
         let now = net.daa();
-        let inner_rehearsal = net.chain.ctx.consensus.palw_object_rehearsal_v1(&class_obj);
         let request = SignedRegistrationRequestV1::for_network(class_obj, net.bond(REGISTRANT), now, now + 200, &net.config.params)
             .expect("a registration");
         let envelope = request.sign(&net.signer(REGISTRANT)).expect("the SDK signs the envelope");
-        let rehearsal = net.chain.ctx.consensus.palw_object_rehearsal_v1(&envelope);
         net.send(vec![(REGISTRANT, envelope)]).await;
         assert!(
             matches!(net.chain.tip_state().1.class(&v2_class).map(|c| &c.status), Some(PalwClassStatusV2::Registered { .. })),
-            "the node accepted the SDK-signed envelope and registered the class it wraps (the fold's rehearsal: {rehearsal:?}; of the class it wraps: {inner_rehearsal:?})"
+            "the node accepted the SDK-signed envelope and registered the class it wraps"
         );
         // ---- bind (104), mature, the candidate's OPV kernel class, kernel-bind (106) ----
         let kernel_root = Hash64::from_bytes(f.pc.root());
@@ -245,7 +225,7 @@ impl Cw {
         let tensors = f.params.tensors.iter().map(|(k, t)| (*k, t.to_le_bytes())).collect();
         let ops = palw_tir_inventory_operands_v1(&f.program, &Tensors(tensors)).expect("the inventory");
         let cand = Fixture { program: f.program.clone(), params: f.params.clone(), plan: f.plan.clone(), pc: f.pc.clone() };
-        Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs: 0, turn: 0, paid_class: None, collude_lies: false, unapproved: Vec::new(), paid_extras: false, no_seam: false }
+        Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs: 0, turn: 0 }
     }
 
     fn producer(&mut self) -> usize {
@@ -299,14 +279,6 @@ impl Cw {
     /// consumers and sealed/revealed by rotating producers. The DISTINCT beacon authenticates both identities from ledger rows.
     /// They reach Final with no Panel when their window closes.
     async fn source_claims(&mut self, n: usize) -> Vec<Digest> {
-        // RFC07 adapter (74921a40a): an OPV timeout Final exports no event; the sources are approved paid claims on the real path
-        // (`paid_sources`, ADR-0185).
-        self.paid_source_claims(n).await
-    }
-
-    /// The pre-adapter sources: OPV claims reaching Final by timeout (they export no beacon event since the adapter).
-    #[allow(dead_code)]
-    async fn opv_source_claims(&mut self, n: usize) -> Vec<Digest> {
         let mut jobs = Vec::new();
         for _ in 0..n {
             self.jobs += 1;
@@ -341,17 +313,11 @@ impl Cw {
             let id = produced.claim.id();
             let (seal, reveal) = seal_and_reveal(&ledger, self.net.kid(producer), &produced.object);
             seals.push((producer, self.net.route(producer, &seal)));
-            reveals.push((producer, reveal, produced.trace));
+            reveals.push((producer, reveal));
             ids.push(id);
         }
         self.net.send(seals).await;
-        // RFC08 F3: past `palw_monetary_material_v1` a kernel claim commits only under its producer's signed covenant.
-        if self.net.config.params.palw_monetary_material_v1.is_some() {
-            for ((p, reveal, trace), id) in reveals.iter().zip(&ids) {
-                self.kernel_covenant(*p, *id, trace, reveal).await;
-            }
-        }
-        let reveals: Vec<(usize, Obj)> = reveals.into_iter().map(|(p, o, _)| (p, self.net.route(p, &o))).collect();
+        let reveals: Vec<(usize, Obj)> = reveals.into_iter().map(|(p, o)| (p, self.net.route(p, &o))).collect();
         self.net.send(reveals).await;
         let ledger = self.net.ledger();
         for id in &ids {
@@ -363,8 +329,7 @@ impl Cw {
     /// Beat until the attempt's beacon locks (k = 2 future Panel-independent Finals, then depth D).
     async fn until_locked(&mut self) -> u64 {
         let ttpb = self.net.ttpb();
-        // Paid sources reach Final only after their signed lifetime (≈ 444 DAA, ADR-0185): bounded by the widened window.
-        for _ in 0..(kaspa_consensus_core::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_WINDOW_DAA_V1 * 2) {
+        for _ in 0..400 {
             let read = self.read();
             // Locked at the sink (what the next block's fold sees), not only at the virtual's DAA the read is taken at.
             let policy = palw_onboarding_challenge_policy_v1();
@@ -659,14 +624,7 @@ async fn g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_
     assert_eq!(state(&cw).0, S::ChallengePending, "nothing passes before the window closes");
     cw.net.beat_to(posted.window_end_daa + 1).await;
     let a = cw.attempt();
-    // With paid sources the beacon locks after their signed lifetime (ADR-0185), by which time the artifact binding may already be
-    // Final: the pass then goes straight on to ACTIVE_REWARDABLE.
-    let binding_final = cw.net.api().unwrap().artifact_binding_v1(&cw.v2_class, &cw.kernel_root).unwrap().final_daa;
-    assert!(
-        a.record.state == S::G14Eligible || (cw.net.daa() >= binding_final && a.record.state == S::ActiveRewardable),
-        "CONFORMANCE_PASSED, then the kernel class's public-prosecution step: {:?}",
-        a.record.state
-    );
+    assert_eq!(a.record.state, S::G14Eligible, "CONFORMANCE_PASSED, then the kernel class's public-prosecution step");
     assert_eq!(a.record.conformance_evidence_id, Some(evidence_id.as_bytes()));
     let (fresh, agrees) = cw.fresh();
     assert_eq!(fresh.posted, Some(Ok(())));
@@ -944,13 +902,7 @@ async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_a
     }
     assert!(blue > 0);
     cw.net.beat_to(posted.evidence.unwrap().window_end_daa + 1).await;
-    // As in the pass flow: past the artifact binding's horizon the pass goes straight on to ACTIVE_REWARDABLE (ADR-0185 lifetimes).
-    let binding_final = cw.net.api().unwrap().artifact_binding_v1(&cw.v2_class, &cw.kernel_root).unwrap().final_daa;
-    let passed = state(&cw).0;
-    assert!(
-        passed == S::G14Eligible || (cw.net.daa() >= binding_final && passed == S::ActiveRewardable),
-        "the honest evidence passed through the junk: {passed:?}"
-    );
+    assert_eq!(state(&cw).0, S::G14Eligible, "the honest evidence passed through the junk");
     let z = cw.net.replay().await;
     cw.net.assert_same(&z, "replay");
 }
@@ -1091,19 +1043,13 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
 
     // ---- a real restart, then the window closes on the restarted node and on the importer alike ----
     let (sink, root) = (cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root());
-    let Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class, collude_lies, unapproved, paid_extras, no_seam } = cw;
+    let Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn } = cw;
     let net = net.restart(db.clone());
-    let mut cw = Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class, collude_lies, unapproved, paid_extras, no_seam };
+    let mut cw = Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn };
     assert_eq!((cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root()), (sink, root), "the same tip off disk");
     assert_eq!(cw.attempt().evidence, Some(posted), "the attempt row off disk");
     cw.net.beat_to(posted.window_end_daa + 1).await;
-    // As in the pass flow: past the artifact binding's horizon the pass goes straight on to ACTIVE_REWARDABLE (ADR-0185 lifetimes).
-    let binding_final = cw.net.api().unwrap().artifact_binding_v1(&cw.v2_class, &cw.kernel_root).unwrap().final_daa;
-    let passed = cw.attempt().record.state;
-    assert!(
-        passed == S::G14Eligible || (cw.net.daa() >= binding_final && passed == S::ActiveRewardable),
-        "the restarted node passes the window: {passed:?}"
-    );
+    assert_eq!(cw.attempt().record.state, S::G14Eligible, "the restarted node passes the window");
     let all = chain_blocks(&cw.net.chain, cw.net.chain.sink());
     for blk in &all[k + 1..] {
         arrive(&importer, blk.clone(), "A's block after P").await;
@@ -1116,7 +1062,6 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
 
 // RFC-0008 v2 (X8R): the composed run — a REAL root on this world's kernel-bound class, its slices verified through the route.
 mod exec_slices;
-pub(super) mod paid_sources;
 /// **G14C (GAP-03): ops 231 and 212, served by a node started after the evidence was posted, carry everything the SDK's fresh
 /// verifier needs.** The attempt row, the evidence row and the program arrive as op 231 serves them, the Final facts as op 212 serves
 /// them — each op's own builder over a node that synced by IBD, through the RPC's JSON wire form (`canonical.rs`'s [`Rpc`]) — and

@@ -1,6 +1,5 @@
 //! Pre-claim original tokenizer EOF inventory. A submission is never an acknowledgement;
 //! every restart resumes the native accepted byte offset, not a local saved hash checkpoint.
-use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::{
     Hash64,
     palw_class_semantics_v1::PalwClassSemanticsV1,
@@ -14,6 +13,7 @@ use kaspa_consensus_core::{
     },
 };
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
@@ -34,14 +34,9 @@ pub(super) struct InventorySnapshotV1<'a> {
 pub(super) enum InventoryDecisionV1 {
     // Read by the restart regression; the service only needs readiness itself.
     #[cfg_attr(not(test), allow(dead_code))]
-    Ready {
-        actual_bytes: u64,
-    },
+    Ready { actual_bytes: u64 },
     Wait,
-    Move {
-        movement: PalwConstraintStreamMoveV1,
-        until_daa: u64,
-    },
+    Move { movement: PalwConstraintStreamMoveV1, until_daa: u64 },
 }
 pub(super) struct ArtifactInventoryActorV1 {
     pub class_id: Hash64,
@@ -215,7 +210,9 @@ impl super::PalwPanelService {
         class: Hash64,
         artifact_root: Hash64,
         book: &mut ArtifactInventoryBookV1,
-        court_outbox: &mut CourtOutboxV1,
+        pending: &mut Vec<(Hash64, u32, bool, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2)>,
+        due: &mut HashMap<(Hash64, u32, bool), u64>,
+        moved: &mut HashMap<(Hash64, u32, bool), u64>,
     ) -> Result<bool, String> {
         use kaspa_consensus_core::{
             palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1, palw_state_v2::PalwConsensusObjectV2,
@@ -245,9 +242,9 @@ impl super::PalwPanelService {
         let Some(progress) = session.palw_tokenizer_artifact_inventory_v1(read_class, opener)? else {
             if let Some(scope) = book.scope.take() {
                 let key = (scope.actor.tokenizer, INVENTORY_ROUND_V1, false);
-                court_outbox.retain_pending(|(a, b, c, _)| (*a, *b, *c) != key);
-                court_outbox.forget_due(&key);
-                court_outbox.forget_submitted(&key);
+                pending.retain(|(a, b, c, _)| (*a, *b, *c) != key);
+                due.remove(&key);
+                moved.remove(&key);
             }
             return Ok(read_class == class);
         };
@@ -260,9 +257,9 @@ impl super::PalwPanelService {
                 return Err("inventory native EOF differs from original registered tokenizer".into());
             }
             let key = (progress.semantics.tokenizer_id, INVENTORY_ROUND_V1, false);
-            court_outbox.retain_pending(|(a, b, c, _)| (*a, *b, *c) != key);
-            court_outbox.forget_due(&key);
-            court_outbox.forget_submitted(&key);
+            pending.retain(|(a, b, c, _)| (*a, *b, *c) != key);
+            due.remove(&key);
+            moved.remove(&key);
             book.scope = None;
             return Ok(read_class == class && progress.semantics.artifact_root == artifact_root);
         }
@@ -333,9 +330,9 @@ impl super::PalwPanelService {
         let (returned, result) = match result {
             Ok(value) => value,
             Err(error) => {
-                court_outbox.retain_pending(|(a, b, c, _)| (*a, *b, *c) != key);
-                court_outbox.forget_due(&key);
-                court_outbox.forget_submitted(&key);
+                pending.retain(|(a, b, c, _)| (*a, *b, *c) != key);
+                due.remove(&key);
+                moved.remove(&key);
                 return Err(error.to_string());
             }
         };
@@ -349,20 +346,20 @@ impl super::PalwPanelService {
         };
         if let Some((object, until_daa, body)) = result {
             if scope.body != Some(body) || now < scope.last_daa {
-                court_outbox.forget_submitted(&key);
+                moved.remove(&key);
             }
-            court_outbox.retain_pending(|(a, b, c, old)| (*a, *b, *c) != key || *old == object);
-            if !court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
-                && court_outbox.submitted_at(&key).is_none_or(|at| now >= at.saturating_add(super::COURT_MOVE_REPLAN_DAA))
+            pending.retain(|(a, b, c, old)| (*a, *b, *c) != key || *old == object);
+            if !pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                && moved.get(&key).is_none_or(|at| now >= at.saturating_add(super::COURT_MOVE_REPLAN_DAA))
             {
-                court_outbox.push_pending((key.0, key.1, key.2, object));
-                court_outbox.set_due(key, until_daa);
+                pending.push((key.0, key.1, key.2, object));
+                due.insert(key, until_daa);
             }
             scope.body = Some(body);
             scope.last_daa = now;
         } else {
-            court_outbox.retain_pending(|(a, b, c, _)| (*a, *b, *c) != key);
-            court_outbox.forget_due(&key);
+            pending.retain(|(a, b, c, _)| (*a, *b, *c) != key);
+            due.remove(&key);
         }
         book.scope = Some(scope);
         Ok(false)

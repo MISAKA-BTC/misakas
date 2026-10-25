@@ -29,8 +29,6 @@
 //! convicts its declarer — this node's accuser bond — and leaves the claim alone, which is why the planner is
 //! strict and the tick is patient only for what the chain has not yet seen.
 
-use crate::palw_panel::court_outbox::CourtOutboxV1;
-#[cfg(test)]
 use std::collections::HashMap;
 
 use kaspa_consensus_core::Hash64;
@@ -190,7 +188,8 @@ impl super::PalwPanelService {
         due: u64,
         current_daa: u64,
         held: &mut Vec<PalwHeldChunksV1>,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
     ) {
         let params = &self.consensus_config.params;
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
@@ -281,7 +280,7 @@ impl super::PalwPanelService {
             }
         }
         let key = held_queue_key_v1(plan.session_id, 0);
-        if court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
+        if court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
             return;
         }
         info!(
@@ -291,8 +290,8 @@ impl super::PalwPanelService {
             plan.chunks.len(),
             plan.session_id
         );
-        court_outbox.set_due(key, due);
-        court_outbox.push_pending((plan.session_id, 0, false, plan.declaration));
+        court_due.insert(key, due);
+        court_pending.push((plan.session_id, 0, false, plan.declaration));
         held.push(PalwHeldChunksV1 {
             claim: target.claim_id,
             session_id: plan.session_id,
@@ -311,7 +310,9 @@ impl super::PalwPanelService {
         bond_key: PalwBondKeyV2,
         current_daa: u64,
         held: &mut Vec<PalwHeldChunksV1>,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_moved: &HashMap<(Hash64, u32, bool), u64>,
     ) {
         let mut kept: Vec<PalwHeldChunksV1> = Vec::with_capacity(held.len());
         let mut done: Vec<PalwHeldChunksV1> = Vec::new();
@@ -324,20 +325,14 @@ impl super::PalwPanelService {
                             continue;
                         }
                         let key = held_queue_key_v1(entry.session_id, 1 + index as u32);
-                        if court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
+                        if court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
                             continue;
                         }
-                        if court_outbox.submitted_at(&key).is_some_and(|sent| current_daa < sent.saturating_add(COURT_MOVE_REPLAN_DAA))
-                        {
+                        if court_moved.get(&key).is_some_and(|sent| current_daa < sent.saturating_add(COURT_MOVE_REPLAN_DAA)) {
                             continue;
                         }
-                        court_outbox.set_due(key, group.assembly_deadline_daa);
-                        court_outbox.push_pending((
-                            entry.session_id,
-                            key.1,
-                            false,
-                            held_chunk_object_v1(entry.session_id, index, bytes),
-                        ));
+                        court_due.insert(key, group.assembly_deadline_daa);
+                        court_pending.push((entry.session_id, key.1, false, held_chunk_object_v1(entry.session_id, index, bytes)));
                     }
                     true
                 }
@@ -348,8 +343,7 @@ impl super::PalwPanelService {
                 // the mempool or in a block not yet accepted; wait for it, within the patience.
                 None if entry.group_seen => false,
                 None => {
-                    let declaration_queued = court_outbox
-                        .pending()
+                    let declaration_queued = court_pending
                         .iter()
                         .any(|(sid, round, responder, _)| (*sid, *round, *responder) == held_queue_key_v1(entry.session_id, 0));
                     declaration_queued || current_daa <= entry.queued_daa.saturating_add(PALW_HELD_DECLARATION_PATIENCE_DAA_V1)
@@ -361,9 +355,8 @@ impl super::PalwPanelService {
         // A chunk still queued whose challenge is done would be refused by the fold (no session, no group): it
         // leaves the queue unsent, rather than paying a carrier. Only chunks that are byte for byte a done
         // challenge's own go — the queue holds other lanes' chunk objects too, which this never touches.
-        court_outbox.retain_pending(|(_, _, _, object)| {
-            !done.iter().any(|entry| is_held_challenge_chunk_v1(object, std::slice::from_ref(entry)))
-        });
+        court_pending
+            .retain(|(_, _, _, object)| !done.iter().any(|entry| is_held_challenge_chunk_v1(object, std::slice::from_ref(entry))));
     }
 }
 

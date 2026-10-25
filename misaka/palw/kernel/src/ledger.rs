@@ -1424,10 +1424,6 @@ impl KernelLedgerV1 {
             KernelRouteObjectV1::CommitEligibilityExamV1 { .. } | KernelRouteObjectV1::AttestEligibilityExamV1 { .. } => {
                 return Err(KernelRefusalV1::rule(name, "eligibility exams must be interpreted by the authenticated native consumer"));
             }
-            // RFC-0016 V8 (inner 76): a capacity attestation is judged only by the native consumer past `palw_capacity_attestation_v1`.
-            KernelRouteObjectV1::AttestCapacityV1 { .. } => {
-                return Err(KernelRefusalV1::rule(name, "capacity attestations must be interpreted by the authenticated native consumer"));
-            }
             // M*-49 (`palw_verifier_pay_v1`): the signer is the drawn slot holder (`authorize`); below the consumer's fence no draw
             // exists, so the attestation is refused by its own rule.
             KernelRouteObjectV1::AttestDrawnCheckV1 { verifier, claim } => {
@@ -3221,10 +3217,8 @@ impl KernelLedgerV1 {
                     // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
                     // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
                     // The per-class horizon (G14-B), never shortening one an EXEC hold or a source opt-in already extended.
-                    // A paid claim's signed lifetime sets the floor; an EXEC hold's consented extension is never shortened (the
-                    // EXEC consistency invariant: a bound dependency's liability covers its root window).
                     row.liability_until = Some(match self.paid_claim_consumers_v2.get(&claim) {
-                        Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
+                        Some(paid) => paid.lifetime.liability_until,
                         None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
                     });
                 }
@@ -3284,9 +3278,8 @@ impl KernelLedgerV1 {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
                     let liability_daa = self.claim_liability_daa_v1(&id);
                     let row = self.claims.get_mut(&id).expect("listed");
-                    // The paid lifetime's horizon, never shortening an EXEC hold's consented extension (see the default arm).
                     row.liability_until = Some(match self.paid_claim_consumers_v2.get(&id) {
-                        Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
+                        Some(paid) => paid.lifetime.liability_until,
                         None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
                     });
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook

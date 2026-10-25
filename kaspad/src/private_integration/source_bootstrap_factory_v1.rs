@@ -28,6 +28,7 @@ pub fn private_source_bootstrap_paid_params_with_consumer_v6(
     salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
     source_policy_file: &Path,
     consumer_policy_file: Option<&Path>,
+    economics_file: Option<&Path>,
 ) -> Result<Params, String> {
     let mut params = private_source_bootstrap_paid_params_v1(salt, source_policy_file)?;
     if let Some(path) = consumer_policy_file {
@@ -40,6 +41,25 @@ pub fn private_source_bootstrap_paid_params_with_consumer_v6(
                 policy,
             });
         params.sync_palw_paid_bootstrap_source_v6();
+    }
+    if let Some(path) = economics_file {
+        if params.palw_paid_bootstrap_source_v6.is_none() {
+            return Err("source economics requires the explicit V6 consumer policy".into());
+        }
+        let (raw, _owner) = kernel_paid_producer_v4::read_bounded(path, 4096)?;
+        let (activation, policy): (u64, kaspa_consensus_core::palw_paid_bootstrap_economics_v1::PalwSourceEconomicsPolicyV1) =
+            borsh::from_slice(&raw).map_err(|e| e.to_string())?;
+        policy.validate()?;
+        if activation == 0 {
+            return Err("source economics needs an explicit nonzero schedule".into());
+        }
+        params.palw_source_economics_v1 = Some(kaspa_consensus_core::palw_paid_bootstrap_economics_v1::PalwSourceEconomicsFenceV1 {
+            activation: ForkActivation::new(activation),
+            policy,
+        });
+        params.sync_palw_source_economics_v1();
+    }
+    if consumer_policy_file.is_some() || economics_file.is_some() {
         validate_private_source_bootstrap_relations_v1(&params, salt)?;
     }
     Ok(params)
@@ -83,6 +103,8 @@ pub(super) fn validate_private_source_bootstrap_relations_v1(
     stripped.sync_palw_selected_source_bootstrap_v1();
     stripped.palw_paid_bootstrap_source_v6 = None;
     stripped.sync_palw_paid_bootstrap_source_v6();
+    stripped.palw_source_economics_v1 = None;
+    stripped.sync_palw_source_economics_v1();
     if stripped.consensus_params_id() != baseline.consensus_params_id() {
         return Err("private source profile changes rules outside its explicit bootstrap policy".into());
     }
@@ -101,6 +123,20 @@ pub(super) fn validate_private_source_bootstrap_relations_v1(
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         return Err("private source needs its own native ConsensusV2 state".into());
     };
+    if let Some(economics) = params.palw_source_economics_v1 {
+        economics.policy.validate()?;
+        let public = kaspa_consensus_core::config::drill::palw_chain_params_v1(
+            kaspa_consensus_core::config::drill::palw_drill_network_v1(),
+            None,
+        )?;
+        if params.palw_paid_bootstrap_source_v6.is_none()
+            || economics.activation == ForkActivation::never()
+            || economics.activation.daa_score() == 0
+            || params.genesis.hash == public.genesis.hash
+        {
+            return Err("source economics refuses public genesis and ordinary activation".into());
+        }
+    }
     if let Some(consumer) = params.palw_paid_bootstrap_source_v6 {
         consumer.policy.validate()?;
         // Both source and consumer policies normalize out of the scheduled

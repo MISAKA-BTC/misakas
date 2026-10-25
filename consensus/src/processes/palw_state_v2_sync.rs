@@ -1,9 +1,4 @@
-//! Test-only historical PALW V2 standalone walker (ADR-0042 Decision 5, PR-08's walk shape).
-//!
-//! `processes/mod.rs` compiles this module only for unit tests. The canonical live/IBD
-//! processor resolves the complete block extras; reorg applies its stored deltas.
-//! This older walker intentionally does not supply those extras and must not be wired
-//! into production merely because it can load and advance a historical fixture.
+//! MISAKA PALW V2 chain-state sync (ADR-0042 Decision 5, PR-08's walk shape).
 //!
 //! The ordering discipline between [`DbPalwStateV2Store`] and a `ChainPath`: retreat along
 //! `removed` (which `calculate_chain_path` yields **child-first**, old sink downward), advance
@@ -12,8 +7,8 @@
 //!
 //! # Dormant, like the store under it
 //!
-//! Nothing constructs this on any preset, and the module is now test-only. It originally
-//! landed before its caller for the same reason the carriage store did: the subtle part is the DISCIPLINE — revert order, tip movement,
+//! Nothing constructs this on any preset. It lands before its caller for the same reason the
+//! carriage store did: the subtle part is the DISCIPLINE — revert order, tip movement,
 //! all-or-nothing advance — and that is unit-lockable now, while the processor seam (and the
 //! validation rule that must precede it, see below) is PR-10's.
 //!

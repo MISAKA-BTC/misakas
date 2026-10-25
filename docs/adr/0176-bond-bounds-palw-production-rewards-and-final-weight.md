@@ -1,7 +1,5 @@
 # ADR-0176 — Bond bounds PALW claim capacity, blocks, rewards and Final weight
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 * **Status:** Accepted as a design premise at the user's request, 2026-10-10. Specification details, implementation, economic measurements and activation remain pending.
 * **Scope:** All future PALW reward-bearing producer paths, including Attempt, Free Prompt, claim-backed blocks, receipt rights, slices/riders/batches, unpaid escrow and settlement readers. Applies with existing Panels and with the separately gated Panel=0 mode.
 * **Complements:** [ADR-0171](0171-probabilistic-constraint-checks-and-court-on-dispute.md), [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md), [RFC14](../rfc/0014-panel-independent-fraud-prosecution.md) and [RFC15 §8](../rfc/0015-panel-free-permissionless-verification.md).
@@ -111,7 +109,7 @@ admission数を増やしても未払の全rewardや共有担保を架空の追�
 ×1000 packageはDAA全体のemission budget、rider分配、breakerも含むが、この決定の全上限ではない。
 モデルclassの[escrow割引](../../consensus/core/src/palw_audit_door_v1.rs)には対象制限があり、
 現在の[Final weight](../../consensus/core/src/palw_weight_cap_v1.rs)はρだけで一律に縮小されない。
-[t12確認記録](../audit/palw/design-reviews/t12-bond-reuse-audit-2026-10-10.md)は現行コード観測として保持し、
+[t12確認記録](../design/palw/t12-bond-reuse-audit-2026-10-10.md)は現行コード観測として保持し、
 class/work依存の拘束期間という旧提案は本決定の共通期間へ改定する。
 これらの既存機能をD1–D6達成の証拠に流用しない。
 
@@ -153,7 +151,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 
 ## 改定 — 2026-10-12（共通原則の正本化、Bond/time台帳の具体化：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §1・§3・§3A。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §1・§3・§3A。
 
 - **§1の正本:** 本ADRの§1を共通原則の正本とし、RFC索引と関連RFC（RFC-0010/0014/0015）から参照する。同額の適格拘束元本・同一期間・同一ruleset・容量倍率に対して、正直に計算するminerと計算省略で高速にclaimを出すminerに与える上限を同一にする。計算省略、即時Valid、再提出、取消、失効、鍵・bond・modelの分割や移動で、同じ元本の枠を増加・早期回復させない（MUST NOT）。枠を確保しただけでは支払わず、正当なclaim・検証証拠・裁定・Final条件を満たした範囲でだけ報酬・確定creditを付与する。Panel人数や計算速度を増やしても同じproducer元本の絶対上限は増えない。
 - **D1/D3/D4補足:** 長さW DAAのrolling会計を基準案とする。claim受理時に、そのclaimが派生させ得るclaim枠・ブロック権・報酬・Final weightの最大権利を同一の元本・予約へ原子的に帰属させる。受理DAA `d` の消費済み枠を `d + W` より前に再利用しない（Valid、Final、PanelUnavailable、取消、court終了は早期回復理由ではない）。失効額を新claimの予算へ早期に戻さない。採掘枠の回復、資金の送金可能性、court/retention責任からの解放を別々に検査し、同じ元本を新しいbond/鍵へ移して消費履歴を消さない。rhoを増やしても総量は増えず、端数・最小支払・複数leg・root/slice/rider/batchで増幅させない。network/model/bondの三層予算を受理・ブロック権行使・支払・Finalおよび全reader/undoで共通に検査する。期間内総量capと短時間のburst capを区別する。
@@ -166,7 +164,6 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 **状態:** 方針は確定（ユーザー）。コードは休眠実装・未build・未検証（`palw_bond_budget_v1` V3 policy、全presetで`None`、有効化は拒否）。数値は本番定数ではない。
 
 - **主条件:** 同額の適格拘束元本・同じ検証mode・同じ期間で、計算を省略して高速にclaimする者が正直な計算より多いclaim枠・報酬ブロック・報酬・Final weightを得てはならない。**かつ**、参照用の正直なminerが実用的に使える上限にする。「上限が等しい」ことと「正直なminerが上限に届く」ことは別であり両方を試験する。需要・設備・検証がある間に上限不足だけでREAL生産が止まらないことも試験する。
-- **改訂(2026-10-16 ユーザー決定):** 拘束期間は Panel=0・Panel=1 とも **1 日相当 DAA に固定**する。下の「Panel=0 は 7 日」と、7 日単位の均等化は改訂前の記録である。上限の計算は 1 日単位で行い、不正で高速に claim しても正直に計算して claim しても、同じ上限に当たる。claim を 1 回不正すれば slash され、その損失が不正の利益を上回ることを条件とする([RFC-0016 冒頭の改訂](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)、[ADR-0179 追記](0179-model-tiers-genesis-annual-1-0-registered-0-3.md))。
 - **共通拘束期間（設計基準）:** Panel=1は1日相当DAA、Panel=0は7日相当DAA（1日 = 86,400 s / 120 s の時計slot = 720 DAA、名目換算。実測が遅いDAAでは実時間で1日より長くなり、短くはならない）。
 - **1日当たり最大発行の均等化:** 同じbondの1日当たり基準上限`q, b, r, f`に対し、Panel=1は1日で`(q, b, r, f)`、Panel=0は7日で`(7q, 7b, 7r, 7f)`。同じ件数を7倍速く回復させる方式は採らない。実装: V3 policyの単位当たりrateを「1日当たり」と読み、`daily(C) = ⌊C·rate/u⌋`、mode `M`の期間上限 = `daily(C) · days(M)`。
 - **一つの台帳、三つの見方:** 長期view（engineのwindow、全reservationを`d + 7日`まで保持、全claimを`7·daily`で検査）、日view（各claimのshadow行、`d + 1日`で解放、Panel=1 claimを`daily`で検査）、burst view（shadow行、`d + W_burst`で解放、全claimに追加の制限）。modeを切り替えても同じ元本の消費履歴・拘束・責任を引き継ぐ（Panel=0で消費→Panel=1で満額を再取得、またはその逆は不可）。受理済みclaimの期間・予約・責任は受理時に固定し、後のmode変更で短縮しない。
@@ -174,7 +171,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 - **burst:** 週の総量だけでは初日に全量を使い6日以上休む使い方が残るため、短期のrate/burst上限を**追加の制限としてのみ**置く（消費済み7日枠を早く返さず、短期bucketと長期台帳の両方から権利を発行しない）。burst許容量はDAG並列度と実測した提出パターンから導く名前付き定数。
 - **担保規模:** 同時に予約される元本 ≈ `λ·a·H`（1日の受理数 × 1 claimの責任額 × 実際の平均保持時間）＋余裕＋他の責任。保持が長いほど同時担保が増えるため、1 claimの権利・予約・報酬を一体で調整する（D5）。架空担保・二重予約は不可。
 - **heartbeat:** heartbeat 0を目標にせず、数値改善のためにheartbeatの時計・fallback規則を弱めない。floor状態を動かすREALは、検査を通過しclaimを書いたAttempt laneのblock（`palw_real_share_v1`）であり、riderは同じに数えない。各段（計算→抽選当選→claim受理→採用REAL block→検証/Final→清算→bond枠回復）を分けて測り、計算と提出が可能なのにbond枠不足だけでREALが止まった時間、heartbeat依存時間、回復後の採用を記録する。heartbeatだけの期間からREALへ戻る回復は独立の必須試験とする。
-- **導出手順:** [cap derivation and measurement plan](../design/palw/economics/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md)（Stage 1 実測 → Stage 2 sweep → Stage 3 敵対/境界試験）。該当範囲が無ければ数値を作らず、衝突する制約を報告する。現行コード値や「100件/7日」等の過去例を正式値にしない。
+- **導出手順:** [cap derivation and measurement plan](../design/palw/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md)（Stage 1 実測 → Stage 2 sweep → Stage 3 敵対/境界試験）。該当範囲が無ければ数値を作らず、衝突する制約を報告する。現行コード値や「100件/7日」等の過去例を正式値にしない。
 - **実装の所在:** `consensus/core/src/palw_bond_budget_v1/hold.rs`（`PalwBondHoldPolicyV1`、`PalwHoldModeV1`、日/burst view、`hold_admit_v1`）、`palw_bond_budget_fold_v1.rs`（planがmodeを運ぶ）、`palw_bond_cap_sweep_v1.rs`（Stage 2/3 simulator）、`scripts/drills/adr0176_stage1_measure.py`（Stage 1 driver）、試験source `consensus/core/tests/adr0176_mode_hold_v1.rs` / `adr0176_cap_sweep.rs`（未実行）。
 
 ## 改定 — 2026-10-15（ユーザー判断 2026-10-15: bond式の再設計）
@@ -213,16 +210,3 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 - **ρと損失:** 予約を小さくしても不正利得は小さくならない。徴収すべき損失の下限（`loss_floor_t`）はρで縮まず、PWUのslash exposureもρで割らない。報酬・weightを据え置いたまま予約だけを1/1000にすることはしない。
 - **測定・報告:** claim種別ごとに、予約をweight / escrow権利 / その他責任へ分け実際の保持時間とともに、同時担保`≈ λ·a·H`、四つの合格条件（担保会計、期間上限、実用性、REAL継続）を報告する（上記plan）。
 - **実装の所在:** `consensus/core/src/palw_bond_formula_v2.rs`、`palw_bond_budget_v1/hold.rs`（責任view）、`palw_state_v2/state_params.rs`（`claim_escrow_term_v2`）、`palw_weight_cap_v1.rs`（weight部分とG scale）、`palw_issuance_slots_v1.rs`、`palw_state_v2.rs`（licence flip）、`palw_bond_budget_fold_v1.rs`（budgetの責任額、close）、`palw_producer_v2.rs` / RPC（分解の公開）。試験source `consensus/core/tests/adr0176_bond_formula_v2.rs`（未実行）。
-
-## ユーザー方針 2026-10-15 による改定
-
-* bond当たりのQ/B/R/F上限は維持する。上限は**認証済みclaimのcreditの上限**であり、未認証claimのcreditは上限以前に0である。予約は受理時(変更なし)、合意creditの付与は認証時。
-* rule E v2のparticipationは`F`での担保`C`(bond式v2の`u·C`と予算engineの`F_max(C, W)`が読むのと同じ`C`)で数え、分割で増えない([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §6)。
-
-**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
-
-* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
-* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
-* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
-* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
-* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。

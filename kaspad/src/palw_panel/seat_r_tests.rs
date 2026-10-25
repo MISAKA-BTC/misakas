@@ -37,6 +37,7 @@ use kaspa_hashes::Hash64;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+const MARKER: &str = "mod court_responder_coverage_pin";
 const NETWORK: &[u8] = b"misaka-palw-rc";
 /// The two class ids the queue tests time replays under.
 fn floor_class() -> Hash64 {
@@ -697,11 +698,11 @@ fn the_floors_material_is_kept_past_seat_r_and_its_replay_licenses() {
         job_pin: None,
     };
     for arm in [PalwSeatArmV1::AttemptMaterial, PalwSeatArmV1::RetainedMaterial] {
-        assert_eq!(palw_attempt_material_arm_v1(false, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, roots), PalwMaterialArmV1::Licenses, "{arm:?}");
-        assert_eq!(palw_attempt_material_arm_v1(true, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, roots), PalwMaterialArmV1::Evidence, "{arm:?}");
+        assert_eq!(palw_attempt_material_arm_v1(false, arm, &backend, &claim.material, roots), PalwMaterialArmV1::Licenses, "{arm:?}");
+        assert_eq!(palw_attempt_material_arm_v1(true, arm, &backend, &claim.material, roots), PalwMaterialArmV1::Evidence, "{arm:?}");
         let other = PalwClaimRootsV1 { execution_root: h(0xBAD), ..roots };
-        assert_eq!(palw_attempt_material_arm_v1(false, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, other), PalwMaterialArmV1::Nothing);
-        assert_eq!(palw_attempt_material_arm_v1(true, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, other), PalwMaterialArmV1::Nothing);
+        assert_eq!(palw_attempt_material_arm_v1(false, arm, &backend, &claim.material, other), PalwMaterialArmV1::Nothing);
+        assert_eq!(palw_attempt_material_arm_v1(true, arm, &backend, &claim.material, other), PalwMaterialArmV1::Nothing);
     }
     let replayed = backend.execute_for_verdict(&job, &prompt).expect("the seat's replay runs");
     assert!(replay_licenses_v1(&replayed, claim.execution_root, claim.trace_root, 0), "the replay licenses the floor");
@@ -751,7 +752,7 @@ fn a_bent_held_fold_attempt_is_kept_as_evidence_and_refuted_by_the_replay_past_s
         job_pin: None,
     };
     let arm = |seat_r: bool, bytes: &[u8], roots: PalwClaimRootsV1| {
-        palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), bytes, roots)
+        palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, &backend, bytes, roots)
     };
     assert_eq!(arm(true, &honest_bytes, honest_roots), PalwMaterialArmV1::Evidence, "the honest fold is kept, and signs nothing");
     let replayed = backend.execute_for_verdict(&job, &prompt);
@@ -1220,27 +1221,9 @@ fn verdict_block(source: &str) -> &str {
 /// material it holds; and a `Valid` past SEAT-R is filed only in a role that replays.
 #[test]
 fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
-    let source = crate::palw_panel::source_support::former_parent_production_source_v1();
+    let whole = include_str!("../palw_panel.rs");
+    let source = &whole[..whole.find(MARKER).expect("the pin module is in this file")];
     let block = verdict_block(source);
-
-    // The explicit collusion drill predates this refactor and deliberately signs without replay.
-    // Attribute that branch separately, while keeping every ordinary exit under the existing pin.
-    assert!(source.contains_code("let colluding = self.config.drill_collude_with.contains(&duty.executor_bond);"));
-    let drill = block.find_code("if colluding {").expect("the explicit drill branch");
-    let after_drill = drill + block[drill..].find_code("// **Class capability").expect("the ordinary path resumes");
-    let drill_body = &block[drill..after_drill];
-    assert_eq!(drill_body.matches("break 'verdict Some(PalwReceiptVerdictV2::Valid);").count(), 1);
-    for gate in [
-        "seat_r_duty.role == PalwSeatRRoleV1::PartialResumes",
-        "licensed_by_verified_resume = true;",
-        "licensed_by_replay = true;",
-        ".mask_of(duty.seat_index as u16)",
-    ] {
-        assert!(drill_body.contains(gate), "the drill remains attributed to its explicit role: {gate}");
-    }
-    let ordinary = format!("{}{}", &block[..drill], &block[after_drill..]);
-    let block = ordinary.as_str();
 
     // Every exit, in a spelling this pin reads.
     const VALID: &str = "break 'verdict Some(PalwReceiptVerdictV2::Valid);";
@@ -1263,7 +1246,7 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
             &block[at..(at + 80).min(block.len())]
         );
     }
-    assert!(block.trim_end().ends_with("None\n            };"), "the block's own value is None");
+    assert!(block.trim_end().ends_with("None\n                };"), "the block's own value is None");
     const GATE: &str = "(!matches!(verdict, PalwReceiptVerdictV2::Valid)";
     assert_eq!(block.matches(GATE).count(), 2, "the two interval arms' gates");
     assert_eq!(
@@ -1308,20 +1291,20 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
         "the verdict block's Valid exits, in order"
     );
     let fp_pass = block
-        .find_code(".fp_seat_replay_pass_v1(&session, duty, seat_r_duty, current_daa, pooled, &mut seat_replays)")
+        .find(".fp_seat_replay_pass_v1(&session, duty, seat_r_duty, current_daa, pooled, &mut seat_replays)")
         .expect("the FP pass");
-    let attempt_pass = block.find_code(".attempt_seat_replay_v1(").expect("the attempt pass");
+    let attempt_pass = block.find(".attempt_seat_replay_v1(").expect("the attempt pass");
     let attempt_args: String = block[attempt_pass..].chars().take_while(|c| *c != ')').filter(|c| !c.is_whitespace()).collect();
     assert_eq!(
         attempt_args.trim_end_matches(','),
         ".attempt_seat_replay_v1(&session,duty,seat_r_duty,current_daa,resolved,&ctx,&prompt,&mutseat_replays",
         "the attempt pass reads the duty's SEAT-R view"
     );
-    let fpm1 = block.find_code("palw_fp_material_decode_v1(").expect("the FPM1 arm");
-    let seat_r_branch = block.find_code("let resolved = if seat_r {").expect("the attempt replay arm's fence");
+    let fpm1 = block.find("palw_fp_material_decode_v1(").expect("the FPM1 arm");
+    let seat_r_branch = block.find("let resolved = if seat_r {").expect("the attempt replay arm's fence");
     let old_replay =
-        seat_r_branch + block[seat_r_branch..].find_code("&& replayed.insert(seat_duty_panel_key_v1(duty))").expect("the old path");
-    let attempt_lane = block.find_code("if !duty.free_prompt && !kept_as_evidence {").expect("the attempt lane");
+        seat_r_branch + block[seat_r_branch..].find("&& replayed.insert(seat_duty_panel_key_v1(duty))").expect("the old path");
+    let attempt_lane = block.find("if !duty.free_prompt && !kept_as_evidence {").expect("the attempt lane");
     assert!(
         fpm1 < attempt_lane && attempt_pass < old_replay,
         "the FPM1 arm ends the free-prompt lane; the old replay follows the fence"
@@ -1335,7 +1318,7 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
         4,
         "four writers, and no other: the three off-loop replays' `Licensed` arms (the tensor pass, the FP pass, the attempt pass), and RFC-0004's evaluation replay"
     );
-    let tensor_pass = block.find_code(".gen_tensor_seat_pass_v1(").expect("the tensor pass (RFC-0003)");
+    let tensor_pass = block.find(".gen_tensor_seat_pass_v1(").expect("the tensor pass (RFC-0003)");
     assert!(tensor_pass < fp_pass, "a tensor claim's pass runs before the FP replay arm: it never reaches the FPM1 arms");
     for at in &writers {
         assert!(block[at + LICENSED.len()..].trim_start().starts_with(VALID), "a writer is its exit's last line");
@@ -1373,7 +1356,7 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
         let path = &block[named_at.saturating_sub(200)..*at];
         if palw_seat_arm_licenses_v1(true, arm) {
             assert!(
-                path.contains_code("debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::"),
+                path.contains("debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::"),
                 "exit {n} ({arm:?}) states the rule"
             );
             // A replay exit past the fence is an off-loop replay's `Licensed` (a verified resume's,
@@ -1384,123 +1367,127 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
             assert!(off_loop || below_the_fence, "exit {n} ({arm:?}) is an off-loop replay's licence, or unreachable past the fence");
         } else {
             assert!(
-                path.contains_code("palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::")
-                    || (path.contains_code("palw_attempt_material_arm_v1(") && path.contains_code("== PalwMaterialArmV1::Licenses")),
+                path.contains("palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::")
+                    || (path.contains("palw_attempt_material_arm_v1(") && path.contains("== PalwMaterialArmV1::Licenses")),
                 "exit {n} ({arm:?}): its Valid is gated by the rule, which refuses it past the fence"
             );
         }
     }
     // The guard, where the receipt is signed: before the forms, and before any signature.
-    let filing = &source[source.find_code("let Some(verdict) = verdict else { continue };").expect("the filing")..];
-    let filing = &filing[..filing.find_code("if let Some(fence) = vertex_fence {").expect("its end")];
+    let filing = &source[source.find("let Some(verdict) = verdict else { continue };").expect("the filing")..];
+    let filing = &filing[..filing.find("// --- the seat's re-send").expect("its end")];
     let guard = filing
-        .find_code("if seat_r && matches!(verdict, PalwReceiptVerdictV2::Valid) && !(licensed_by_replay || licensed_by_verified_resume) {")
+        .find("if seat_r && matches!(verdict, PalwReceiptVerdictV2::Valid) && !(licensed_by_replay || licensed_by_verified_resume) {")
         .expect("the run-time guard");
-    assert!(filing[guard..].find_code("continue;").is_some_and(|c| c < 400), "it files nothing");
-    assert!(guard < filing.find_code("let forms = palw_seat_receipt_forms_v1(").expect("the forms"));
-    assert!(guard < filing.find_code("sign(").expect("the signing"));
+    assert!(filing[guard..].find("continue;").is_some_and(|c| c < 400), "it files nothing");
+    assert!(guard < filing.find("let forms = palw_seat_receipt_forms_v1(").expect("the forms"));
+    assert!(guard < filing.find("sign(").expect("the signing"));
     for flag in ["let mut licensed_by_replay = false;", "let mut licensed_by_verified_resume = false;"] {
         let declared = source.find(flag).expect("declared false for every duty");
         assert!(
-            declared < source.find_code("let verdict = 'verdict: {").expect("the block")
-                && declared > source.find_code("for index in order {").unwrap()
+            declared < source.find("let verdict = 'verdict: {").expect("the block")
+                && declared > source.find("for index in order {").unwrap()
         );
     }
     // A verified resume files its own mask's V3 as a resuming seat, and nothing wider.
-    let own_mask = filing.find_code("if licensed_by_verified_resume\n").expect("the verified resume's guard");
-    assert!(filing[own_mask..].contains_code("seat_r_duty.role != PalwSeatRRoleV1::PartialResumes"));
-    assert!(filing[own_mask..].find_code("continue;").is_some_and(|c| c < 900), "it files nothing");
-    assert!(own_mask < filing.find_code("let forms = palw_seat_receipt_forms_v1(").expect("the forms"));
+    let own_mask = filing.find("if licensed_by_verified_resume\n").expect("the verified resume's guard");
+    assert!(filing[own_mask..].contains("seat_r_duty.role != PalwSeatRRoleV1::PartialResumes"));
+    assert!(filing[own_mask..].find("continue;").is_some_and(|c| c < 900), "it files nothing");
+    assert!(own_mask < filing.find("let forms = palw_seat_receipt_forms_v1(").expect("the forms"));
 
     // The two off-loop replays run only in a role that replays, and never again on a refuted claim.
     let squeezed: String = block[..fp_pass].chars().filter(|c| !c.is_whitespace()).collect();
     assert!(
-        squeezed.contains_code("ifseat_r&&matches!(seat_r_duty.role,PalwSeatRRoleV1::FullSeat|PalwSeatRRoleV1::PartialReplays)&&!refuted{"),
+        squeezed.contains("ifseat_r&&matches!(seat_r_duty.role,PalwSeatRRoleV1::FullSeat|PalwSeatRRoleV1::PartialReplays)&&!refuted{"),
         "the FP pass: the replaying roles only"
     );
     let abstains = block[..attempt_pass]
-        .rfind_code("if seat_r_duty.role == PalwSeatRRoleV1::PartialAbstains {\n                                break 'verdict None;");
+        .rfind("if seat_r_duty.role == PalwSeatRRoleV1::PartialAbstains {\n                                break 'verdict None;");
     assert!(abstains.is_some_and(|a| a > seat_r_branch), "the attempt pass: a partial seat on C7 files nothing");
     assert!(
-        block[seat_r_branch..attempt_pass].contains_code("if refuted {\n                                resolved\n"),
+        block[seat_r_branch..attempt_pass].contains("if refuted {\n                                resolved\n"),
         "no second replay"
     );
     assert!(
             block[attempt_pass..old_replay]
-                .contains_code("Some(backend) if seat_r_duty.role == PalwSeatRRoleV1::FullSeat => backend,\n                                            _ => break 'verdict None,"),
+                .contains("Some(backend) if seat_r_duty.role == PalwSeatRRoleV1::FullSeat => backend,\n                                            _ => break 'verdict None,"),
             "only the full seat's fault finders run on, refuted or not"
         );
     // The FPM1 replay below the fence only; the old attempt replay is the fence's `else`.
     assert!(
         block[fpm1.saturating_sub(300)..fpm1]
-            .contains_code("if seat_r {\n                                continue;\n                            }"),
+            .contains("if seat_r {\n                                continue;\n                            }"),
         "the FPM1 replay is skipped past SEAT-R"
     );
     assert!(
         block[seat_r_branch..old_replay]
-            .contains_code("} else if current_daa >= duty.bound_daa.saturating_add(PALW_ATTEMPT_REPLAY_GRACE_DAA)")
+            .contains("} else if current_daa >= duty.bound_daa.saturating_add(PALW_ATTEMPT_REPLAY_GRACE_DAA)")
     );
     // Every material and retained arm keeps its bytes before the rule is read.
     for arm in ["PalwSeatArmV1::AttemptMaterial", "PalwSeatArmV1::RetainedMaterial"] {
         let from = block.find(arm).expect("the material arm");
-        let licenses = from + block[from..].find_code("if arm == PalwMaterialArmV1::Licenses").expect("the rule");
+        let licenses = from + block[from..].find("if arm == PalwMaterialArmV1::Licenses").expect("the rule");
         let kept = &block[from..licenses];
         assert!(
-            kept.contains_code("self.persist_foreign_material(&duty.claim_id, bytes);") || kept.contains_code("pool_books.material.admit("),
+            kept.contains("self.persist_foreign_material(&duty.claim_id, bytes);") || kept.contains("pool_admit_material_v1("),
             "{arm}: kept before the rule is read"
         );
     }
     // A refuting replay is terminal for `Valid` (the review, MEDIUM): recorded by both lanes, it
     // stops a partial seat before every arm and the full seat at no arm; the full seat's fault
     // finders — the FP interval arm and capture sampler, the attempt interval arm — still run.
-    let refuted = source.find_code("let refuted = seat_r && replay_refuted.contains(&duty.claim_id);").expect("read per duty");
-    assert!(refuted < source.find_code("let verdict = 'verdict: {").unwrap());
-    let gate = block.find_code("if refuted && seat_r_duty.role != PalwSeatRRoleV1::FullSeat {").expect("the partial seat's gate");
-    assert!(gate < block.find_code("if duty.free_prompt {").expect("the first lane"), "before every arm");
+    let refuted = source.find("let refuted = seat_r && replay_refuted.contains(&duty.claim_id);").expect("read per duty");
+    assert!(refuted < source.find("let verdict = 'verdict: {").unwrap());
+    let gate = block.find("if refuted && seat_r_duty.role != PalwSeatRRoleV1::FullSeat {").expect("the partial seat's gate");
+    assert!(gate < block.find("if duty.free_prompt {").expect("the first lane"), "before every arm");
     assert!(
-        block[gate..].find_code("if refuted && seat_r_duty.role != PalwSeatRRoleV1::FullSeat { break 'verdict None;") == Some(0)
+        block[gate..].starts_with(
+            "if refuted && seat_r_duty.role != PalwSeatRRoleV1::FullSeat {\n                        break 'verdict None;"
+        )
     );
-    assert!(!block.contains_code("if seat_r && replay_refuted.contains(&duty.claim_id) {"), "no gate stops the full seat");
+    assert!(!block.contains("if seat_r && replay_refuted.contains(&duty.claim_id) {"), "no gate stops the full seat");
     assert_eq!(
         block.matches("replay_refuted.insert(duty.claim_id);\n").count(),
         3,
         "the tensor lane's, the free-prompt lane's and the attempt lane's refutations are recorded"
     );
-    let fp_refuted = block.find_code("(PalwSeatReplayStepV1::Refuted, _) => {\n").expect("the FP refutation");
+    let fp_refuted = block.find("(PalwSeatReplayStepV1::Refuted, _) => {\n").expect("the FP refutation");
     assert!(
             block[fp_refuted..]
-                .contains_code("replay_refuted.insert(duty.claim_id);\n                                    if seat_r_duty.role != PalwSeatRRoleV1::FullSeat {\n                                        break 'verdict None;\n                                    }\n                                }"),
+                .contains("replay_refuted.insert(duty.claim_id);\n                                    if seat_r_duty.role != PalwSeatRRoleV1::FullSeat {\n                                        break 'verdict None;\n                                    }\n                                }"),
             "the FP pass: the full seat falls through to its fault finders"
         );
     assert!(
-        fp_refuted < block.find_code(".interval_seat_outcome_v1(").unwrap()
-            && fp_refuted < block.find_code("palw_fp_capture_decode_v1(").unwrap()
+        fp_refuted < block.find(".interval_seat_outcome_v1(").unwrap()
+            && fp_refuted < block.find("palw_fp_capture_decode_v1(").unwrap()
     );
-    let sweep = &source[source.find_code("seat_replays.retain_live(|claim| duty_claims.contains(claim));").expect("the sweep")..];
+    let sweep = &source[source.find("seat_replays.retain_live(|claim| duty_claims.contains(claim));").expect("the sweep")..];
     assert!(
-            sweep.find_code("seat_replays.retain_live(|claim| duty_claims.contains(claim)); // A claim this seat's replay refuted goes to the challenger's half") == Some(0) && sweep.contains_code("for claim in replay_refuted.iter().filter(|claim| !duty_claims.contains(*claim)) {\n                self.note_seat_fault_v1(*claim, 0, 0);"),
+            sweep.starts_with(
+                "seat_replays.retain_live(|claim| duty_claims.contains(claim));\n            // A claim this seat's replay refuted goes to the challenger's half"
+            ) && sweep.contains("for claim in replay_refuted.iter().filter(|claim| !duty_claims.contains(*claim)) {\n                self.note_seat_fault_v1(*claim, 0, 0);"),
             "a refutation reaches the challenger's half once the duty ends"
         );
     // The free-prompt replay pass runs before the interval seat, the S1 resume and the capture arm.
-    assert!(fp_pass < block.find_code(".interval_seat_outcome_v1(").expect("the FP interval arm"));
-    assert!(fp_pass < block.find_code("palw_fp_capture_decode_v1(").expect("the capture arm"));
+    assert!(fp_pass < block.find(".interval_seat_outcome_v1(").expect("the FP interval arm"));
+    assert!(fp_pass < block.find("palw_fp_capture_decode_v1(").expect("the capture arm"));
     // The capture sampler past SEAT-R runs to an end once, never on every tick of a replay.
-    let capture = block.find_code("palw_fp_capture_decode_v1(").expect("the capture arm");
+    let capture = block.find("palw_fp_capture_decode_v1(").expect("the capture arm");
     assert!(
-        block[capture..].contains_code("if capture_sampled.contains(&duty.claim_id) {\n                                        continue;")
+        block[capture..].contains("if capture_sampled.contains(&duty.claim_id) {\n                                        continue;")
     );
     // The tail: a seat holding the claim's verified material accuses nobody of withholding it.
     let tail = block.rfind("break 'verdict Some(PalwReceiptVerdictV2::Unavailable").expect("the tail");
-    let evidence = block.find_code("if seat_r && evidence_kept.contains(&duty.claim_id) {").expect("the evidence gate");
-    assert!(evidence < tail && block[..tail].contains_code("self.request_material_signed("), "before the pull and the accusation");
-    assert!(block[..tail].contains_code("let window = deadline.saturating_sub(duty.bound_daa);"), "the tail reads the per-claim window");
+    let evidence = block.find("if seat_r && evidence_kept.contains(&duty.claim_id) {").expect("the evidence gate");
+    assert!(evidence < tail && block[..tail].contains("self.request_material_signed("), "before the pull and the accusation");
+    assert!(block[..tail].contains("let window = deadline.saturating_sub(duty.bound_daa);"), "the tail reads the per-claim window");
 
     // S3 and S1: the partial resume abstains past SEAT-R before either reads a byte.
-    let helper = &source[source.find_code("async fn palw_v2_try_partial_resume_v1(").expect("the S1 helper")..];
-    let helper = &helper[..helper.find_code("/// **Ask the network for the openings").expect("its end")];
-    let full = helper.find_code("return PalwV2SeatPathV1::FullReplay;").expect("the full seat's path");
-    let abstain = helper.find_code("return PalwV2SeatPathV1::Abstain;").expect("the partial seat abstains");
-    assert!(helper[full..abstain].contains_code("if palw_seat_r_in_force_v1(&self.consensus_config.params, current_daa) {"));
+    let helper = &source[source.find("async fn palw_v2_try_partial_resume_v1(").expect("the S1 helper")..];
+    let helper = &helper[..helper.find("/// **Ask the network for the openings").expect("its end")];
+    let full = helper.find("return PalwV2SeatPathV1::FullReplay;").expect("the full seat's path");
+    let abstain = helper.find("return PalwV2SeatPathV1::Abstain;").expect("the partial seat abstains");
+    assert!(helper[full..abstain].contains("if palw_seat_r_in_force_v1(&self.consensus_config.params, current_daa) {"));
     for read in [
         "palw_verification_s3_at(current_daa)",
         ".replay_layer_site_v3(",
@@ -1517,60 +1504,61 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
 
     // The replays' own verdicts: the whole job, both roots, the price, reserved, timed, retried
     // once, and a C7 replay in the heavy slot.
-    let attempt = &source[source.find_code("async fn attempt_seat_replay_v1(").expect("the attempt replay")..];
+    let attempt = &source[source.find("async fn attempt_seat_replay_v1(").expect("the attempt replay")..];
     let attempt = &attempt[..attempt.find("\n    }\n").expect("its end")];
-    assert!(attempt.contains_code("b.execute_for_verdict(&ctx, &prompt)"), "the whole anchor job");
+    assert!(attempt.contains("b.execute_for_verdict(&ctx, &prompt)"), "the whole anchor job");
     assert!(
-        attempt.contains_code("let backend = (step != PalwSeatReplayStepV1::Licensed).then_some(backend);"),
+        attempt.contains("let backend = (step != PalwSeatReplayStepV1::Licensed).then_some(backend);"),
         "the fault finders' backend"
     );
-    let fp = &source[source.find_code("async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
+    let fp = &source[source.find("async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
     let fp = &fp[..fp.find("\n    }\n").expect("its end")];
-    assert!(fp.contains_code("b.execute_free_prompt(&job, &prompt)"), "the whole served job");
+    assert!(fp.contains("b.execute_free_prompt(&job, &prompt)"), "the whole served job");
     for (name, body) in [("attempt", attempt), ("free prompt", fp)] {
         let squeezed: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(squeezed.contains_code("palw_seat_replay_step_v1(&"), "{name}: the one replay rule");
-        assert!(squeezed.contains_code("duty.work_leaves,duty.output_root"), "{name}: and the claim's answer (SEAT-S2)");
+        assert!(squeezed.contains("palw_seat_replay_step_v1(&"), "{name}: the one replay rule");
+        assert!(squeezed.contains("duty.work_leaves,duty.output_root"), "{name}: and the claim's answer (SEAT-S2)");
         assert!(
-            body.contains_code("self.reserve_replay_at_widest_run_v1(\"full-seat\", backend.as_mut(),"),
+            body.contains("self.reserve_replay_at_widest_run_v1(\"full-seat\", backend.as_mut(),"),
             "{name}: reserved for its life"
         );
-        assert!(body.contains_code("replays.retry_refused(&key, current_daa, seat_r_duty.deadline)"), "{name}: retried once, in time");
-        assert!(body.contains_code("replays.has_room(seat_r_duty.heavy)"), "{name}: a C7 replay takes the heavy slot");
-        assert!(body.contains_code("replays.fits(&duty.class_id, current_daa, seat_r_duty.deadline)"), "{name}: never started late");
-        let fits = body.find_code("replays.fits(").unwrap();
-        assert!(fits < body.find_code("replays.start(").unwrap() && fits < body.find_code("self.reserve_replay_at_widest_run_v1(").unwrap());
+        assert!(body.contains("replays.retry_refused(&key, current_daa, seat_r_duty.deadline)"), "{name}: retried once, in time");
+        assert!(body.contains("replays.has_room(seat_r_duty.heavy)"), "{name}: a C7 replay takes the heavy slot");
+        assert!(body.contains("replays.fits(&duty.class_id, current_daa, seat_r_duty.deadline)"), "{name}: never started late");
+        let fits = body.find("replays.fits(").unwrap();
+        assert!(fits < body.find("replays.start(").unwrap() && fits < body.find("self.reserve_replay_at_widest_run_v1(").unwrap());
     }
     // The free-prompt pass: the claim's own job first, and a stranger's never started beside it.
-    assert!(fp.contains_code("order.sort_by_key(|i| !own[*i]);"));
-    assert!(fp.contains_code("let decides = is_own || !holds_own;"));
-    assert!(fp.contains_code("PalwSeatReplayPollV1::Absent if !decides => {}"));
-    assert!(fp.find_code("PalwSeatReplayPollV1::Absent if !decides => {}").unwrap() < fp.find_code("replays.start(").unwrap());
-    let step = &source[source.find_code("pub(crate) fn palw_seat_replay_step_v1(").expect("the one replay rule")..];
+    assert!(fp.contains("order.sort_by_key(|i| !own[*i]);"));
+    assert!(fp.contains("let decides = is_own || !holds_own;"));
+    assert!(fp.contains("PalwSeatReplayPollV1::Absent if !decides => {}"));
+    assert!(fp.find("PalwSeatReplayPollV1::Absent if !decides => {}").unwrap() < fp.find("replays.start(").unwrap());
+    let step = &source[source.find("pub(crate) fn palw_seat_replay_step_v1(").expect("the one replay rule")..];
     let step = &step[..step.find("\n}\n").expect("its end")];
     assert!(
-        step.contains_code("replay_licenses_v1(roots, claimed_execution_root, claimed_trace_root, priced_work_leaves)"),
+        step.contains("replay_licenses_v1(roots, claimed_execution_root, claimed_trace_root, priced_work_leaves)"),
         "both roots, and the work where the claim prices it"
     );
 
     // The filing: the forms rule, inside the deadline the loop read.
-    assert!(filing.contains_code("let signed_daa = current_daa.clamp(duty.bound_daa, deadline);"));
-    assert!(filing.contains_code("let forms = palw_seat_receipt_forms_v1(v2_at, seat_r, valid, seat_r_duty.role, mask);"));
-    assert!(filing.contains_code("own_receipts.insert(duty.claim_id, (carried, deadline));"));
+    assert!(filing.contains("let signed_daa = current_daa.clamp(duty.bound_daa, deadline);"));
+    assert!(filing.contains("let forms = palw_seat_receipt_forms_v1(v2_at, seat_r, valid, seat_r_duty.role, mask);"));
+    assert!(filing.contains("own_receipts.insert(duty.claim_id, (carried, deadline));"));
     assert!(
-        source.contains_code("if !seat_duty_is_due_until_v1(duty, &answered, current_daa, deadline) {"),
+        source.contains("if !seat_duty_is_due_until_v1(duty, &answered, current_daa, deadline) {"),
         "due until the loop's deadline"
     );
     // The roles read the outsider; the V1 door is offered its quorum past the fence only.
-    assert!(source.contains_code("role: palw_seat_r_role_v1(full_seat, class.held_to_final(), outsider, mask_is_full),"));
+    assert!(source.contains("role: palw_seat_r_role_v1(full_seat, class.held_to_final(), outsider, mask_is_full),"));
     let collector = source
-        .find_code("let Some((object, door)) = kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(")
+        .find("let Some((object, door)) = kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(")
         .expect("the collector");
     let collector = &source[collector..collector + 1_200];
-    assert!(collector.contains_code("if seat_r {\n                                palw_v1_offer_v1(&pool, v1_sent.get(&claim).copied().unwrap_or(0), |set| {"
+    assert!(collector.contains(
+        "if seat_r {\n                                palw_v1_offer_v1(&pool, v1_sent.get(&claim).copied().unwrap_or(0), |set| {"
     ));
     assert!(
-        collector.contains_code("} else {\n                                session.palw_v2_receipt_quorum_assemble(claim, pool.clone())\n"),
+        collector.contains("} else {\n                                session.palw_v2_receipt_quorum_assemble(claim, pool.clone())\n"),
         "below it, as always"
     );
 }

@@ -38,77 +38,45 @@ use crate::palw_audit_1004_v1::PALW_AUDIT_1004_MIN_TRAP_TILES_V1;
 pub const PALW_TRAP_COMMIT_TTL_DAA_V1: u64 = 2 * (PALW_AUDIT_WINDOW_DAA_V1 + PALW_TRAP_REVEAL_WINDOW_DAA_V1);
 
 /// A bond's free collateral for a new reservation: the collateral net of everything the ledger already holds on it.
-pub(super) fn free_collateral_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, record: &PalwBondStateV2) -> u128 {
+fn free_collateral_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, record: &PalwBondStateV2) -> u128 {
     (record.collateral as u128).saturating_sub(state.reserved_exposure(bond)).saturating_sub(state.registration_exposure(bond))
 }
 
 impl TransitionBuilder<'_> {
     /// Add `amount` to a bond's `reserved_exposure` (the audit mesh's reservations).
-    pub(super) fn mesh_reserve(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
+    fn mesh_reserve(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
         if amount == 0 {
             return Ok(());
         }
         let next = self.state.reserved_exposure(&bond).checked_add(amount).ok_or(PalwStateV2Error::Overflow("mesh reservation"))?;
-        self.write_exposure(bond, Some(next))?;
+        self.write_exposure(bond, Some(next));
         Ok(())
     }
 
     /// Return `amount` of a bond's reservation.
-    pub(super) fn mesh_release(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
+    fn mesh_release(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
         if amount == 0 {
             return Ok(());
         }
         let next =
             self.state.reserved_exposure(&bond).checked_sub(amount).ok_or(PalwStateV2Error::Overflow("mesh reservation underflow"))?;
-        self.write_exposure(bond, if next == 0 { None } else { Some(next) })?;
+        self.write_exposure(bond, if next == 0 { None } else { Some(next) });
         Ok(())
     }
 
     /// Pay `amount` (clamped to the panel reserve) to `bond`'s payout payload; returns what was paid.
-    ///
-    /// **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: `leg` names the exact obligation
-    /// (`MeshAuditPay` or `MeshTrapBounty` of `(claim, auditor)`) and `liability` its combined-predicate terms. Past the fence the
-    /// marker is checked and written once the clamped amount and the payee are known and before the payout row: a repeat (or a
-    /// refusal) pays nothing and leaves the reserve untouched. `Dormant` below the fence: the historical payment, byte for byte.
-    pub(super) fn mesh_pay_from_reserve(
-        &mut self,
-        now: u64,
-        bond: &PalwBondKeyV2,
-        amount: u64,
-        leg: crate::palw_settlement_once_v1::PalwSettlementLegV1,
-        claim: &Hash64,
-        liability: super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1,
-    ) -> Result<u64, PalwStateV2Error> {
+    fn mesh_pay_from_reserve(&mut self, bond: &PalwBondKeyV2, amount: u64) -> u64 {
         let paid = amount.min(self.state.panel_reserve_sompi());
         if paid == 0 {
-            return Ok(0);
+            return 0;
         }
-        let Some(payload) = self.state.bonds.get(bond).map(|record| record.payout_payload) else { return Ok(0) };
-        let once = self.settle_once_liable_v1(
-            now,
-            crate::palw_settlement_once_v1::PalwSettlementObligationV1::with_party(
-                leg,
-                claim.as_bytes(),
-                crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(bond),
-                0,
-            ),
-            crate::palw_settlement_once_v1::PalwSettlementConsumerV1::AuditMesh,
-            paid,
-            crate::palw_settlement_once_v1::PalwSettlementDebitV1::Held { amount: paid },
-            liability,
-        )?;
-        if !once.pays() {
-            return Ok(0);
-        }
-        match self.add_panel_payout(payload, paid) {
-            Ok(()) => {}
-            // RFC-0006: a local capacity refusal is never "paid nothing" — the transition is refused locally and retried.
-            Err(local @ PalwStateV2Error::NativeResource(_)) => return Err(local),
-            Err(_) => return Ok(0),
+        let Some(payload) = self.state.bonds.get(bond).map(|record| record.payout_payload) else { return 0 };
+        if self.add_panel_payout(payload, paid).is_err() {
+            return 0;
         }
         let reserve = self.state.panel_reserve_sompi() - paid;
-        self.write_panel_reserve(reserve)?;
-        Ok(paid)
+        self.write_panel_reserve(reserve);
+        paid
     }
 }
 
@@ -125,14 +93,13 @@ pub(super) fn record_witness_profile_v1(
     class_id: &Hash64,
     program: &misaka_palw_tir::TirProgramV1,
     max_context: u32,
-) -> Result<(), PalwStateV2Error> {
+) {
     if !builder.params.witness_manifest_active_at(ctx.daa_score) {
-        return Ok(());
+        return;
     }
     if let Some(profile) = crate::palw_mesh_v1::palw_witness_profile_v1(program, max_context) {
-        builder.write_mesh_witness(*class_id, Some(profile))?;
+        builder.write_mesh_witness(*class_id, Some(profile));
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -150,9 +117,9 @@ pub(super) fn record_class_held_v1(
     first: u32,
     last: u32,
     digest: Hash64,
-) -> Result<(), PalwStateV2Error> {
+) {
     if !builder.params.capped_active_at(vertex.signed_daa) {
-        return Ok(());
+        return;
     }
     let prefetching = builder
         .state
@@ -161,13 +128,13 @@ pub(super) fn record_class_held_v1(
         .is_some_and(|row| matches!(row.state, crate::palw_model_registry_v1::PalwModelLifecycleV1::Prefetching));
     let active = builder.state.bonds.get(&vertex.seat_bond).is_some_and(|record| matches!(record.status, PalwBondStatusV2::Active));
     if !prefetching || !active {
-        return Ok(());
+        return;
     }
     let mut rows = builder.state.vertex.held.get(class_id).cloned().unwrap_or_default();
     if rows.len() >= crate::palw_vertex_v1::PALW_VERTEX_HELD_MAX_PER_CLAIM_V1
         || rows.iter().any(|row| row.seat == vertex.seat_bond && row.object == object && row.first == first && row.last == last)
     {
-        return Ok(());
+        return;
     }
     rows.push(crate::palw_vertex_v1::PalwVertexHeldRowV1 {
         seat: vertex.seat_bond,
@@ -178,8 +145,7 @@ pub(super) fn record_class_held_v1(
         signed_daa: vertex.signed_daa,
         charged: false,
     });
-    builder.write_vertex_held(*class_id, Some(rows))?;
-    Ok(())
+    builder.write_vertex_held(*class_id, Some(rows));
 }
 
 /// **Does a DA certificate stand for this class?** `q` distinct seats' equal `Held` leaves (the capture of its probe job).
@@ -267,7 +233,7 @@ pub(super) fn capped_class_admits_v1(state: &PalwChainStateV2) -> Result<(), Pal
 /// the deadline [`crate::palw_state_v2::palw_provisional_bind_deadline_v1`] reads — and its deadline is re-armed. A claim that
 /// binds a panel inside the window is the holders' to verify through the ordinary receipt path; one that does not is voided at the
 /// window's end like any claim that never bound, its escrow never minted.
-pub(super) fn capped_exit_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
+pub(super) fn capped_exit_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, class_id: &Hash64) {
     let window_end = ctx.daa_score.saturating_add(crate::palw_mesh_v1::PALW_CAPPED_REVERIFY_WINDOW_DAA_V1);
     let waiting: Vec<(Hash64, crate::palw_mesh_v1::PalwCappedClaimRowV1)> = builder
         .state
@@ -280,10 +246,9 @@ pub(super) fn capped_exit_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBloc
         .collect();
     for (claim, mut row) in waiting {
         row.window_end_daa = Some(window_end);
-        builder.write_mesh_capped(claim, Some(row))?;
-        let _ = super::native_writers::local_capacity_or_v1(builder.rearm_claim_deadline_dl1_v1(claim, ctx.daa_score))?;
+        builder.write_mesh_capped(claim, Some(row));
+        let _ = builder.rearm_claim_deadline_dl1_v1(claim, ctx.daa_score);
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -292,11 +257,11 @@ pub(super) fn capped_exit_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBloc
 
 /// **A claim has just been accepted**: past `palw_audit_mesh_v1`, an IR class's claim draws its audit row. Infallible by design (module
 /// doc): whatever cannot be done is left undone.
-pub(super) fn on_claim_accepted_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, claim_id: &Hash64) -> Result<(), PalwStateV2Error> {
+pub(super) fn on_claim_accepted_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, claim_id: &Hash64) {
     if !builder.params.audit_mesh_active_at(ctx.daa_score) {
-        return Ok(());
+        return;
     }
-    let Some(claim) = builder.state.claims.get(claim_id).cloned() else { return Ok(()) };
+    let Some(claim) = builder.state.claims.get(claim_id).cloned() else { return };
     // **RFC-0007 Part IV.2**: a claim of a `Capped` class is a capped claim — its row holds it out of the bind window's backstop
     // until the class's holders are seated (and then its re-verification window). The deadline is re-armed from the one function.
     if builder.params.capped_active_at(ctx.daa_score)
@@ -314,19 +279,19 @@ pub(super) fn on_claim_accepted_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
                 accepted_daa: claim.accepted_daa,
                 window_end_daa: None,
             }),
-        )?;
-        let _ = super::native_writers::local_capacity_or_v1(builder.rearm_claim_deadline_dl1_v1(*claim_id, ctx.daa_score))?;
+        );
+        let _ = builder.rearm_claim_deadline_dl1_v1(*claim_id, ctx.daa_score);
     }
     if !matches!(claim.source, PalwClaimSourceV2::Attempt)
         || !builder.state.tir_classes.contains_key(&claim.class_id)
         || builder.state.vertex.mesh.audits.contains_key(claim_id)
         || builder.state.vertex.mesh.audits.len() >= PALW_AUDIT_MAX_OPEN_V1
     {
-        return Ok(());
+        return;
     }
     let pay = palw_mesh_audit_pay_v1(claim.escrowed_reward);
     if pay == 0 {
-        return Ok(());
+        return;
     }
     let penalty = palw_mesh_trap_penalty_v1(pay);
     let candidates: Vec<PalwAuditCandidateV1> = builder
@@ -355,17 +320,17 @@ pub(super) fn on_claim_accepted_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     };
     let drawn = palw_mesh_audit_draw_v1(&seed, &candidates, PALW_AUDITS_PER_CLAIM_V1);
     if drawn.is_empty() {
-        return Ok(());
+        return;
     }
     let mut assignments = Vec::with_capacity(drawn.len());
     for (auditor, ticket) in &drawn {
-        if super::native_writers::local_capacity_or_v1(builder.mesh_reserve(*auditor, penalty))?.is_err() {
+        if builder.mesh_reserve(*auditor, penalty).is_err() {
             // Undo what this draw reserved: no row, no reservation.
             for done in &assignments {
                 let done: &PalwAuditAssignmentV1 = done;
-                let _ = super::native_writers::local_capacity_or_v1(builder.mesh_release(done.auditor, done.reserved))?;
+                let _ = builder.mesh_release(done.auditor, done.reserved);
             }
-            return Ok(());
+            return;
         }
         assignments.push(PalwAuditAssignmentV1 { auditor: *auditor, ticket: *ticket, reserved: penalty, outcome: None });
     }
@@ -381,8 +346,7 @@ pub(super) fn on_claim_accepted_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
             assignments,
             trap_settled: false,
         }),
-    )?;
-    Ok(())
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -469,20 +433,9 @@ pub(super) fn count_audited_leaf_v1(
     }
     assignment.outcome = Some(PalwAuditOutcomeV1 { matched, signed_daa });
     let pay = row.pay;
-    builder.write_mesh_audit(*claim_id, Some(row))?;
+    builder.write_mesh_audit(*claim_id, Some(row));
     if !deferred {
-        // RFC08-2: paid at the answer, before the row's trap window could catch it — no liability term for that is sourced, so
-        // past the settlement fence this pay is refused (it stands once `palw_audit_1004_v1` defers it to the sweep).
-        builder.mesh_pay_from_reserve(
-            ctx.daa_score,
-            seat,
-            pay,
-            crate::palw_settlement_once_v1::PalwSettlementLegV1::MeshAuditPay,
-            claim_id,
-            super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
-                "an audit answer paid before its row's trap window (palw_audit_1004_v1 off): no liability horizon is sourced",
-            ),
-        )?;
+        builder.mesh_pay_from_reserve(seat, pay);
     }
     Ok(())
 }
@@ -573,7 +526,7 @@ pub(super) fn apply_trap_committed_v1(
     builder.write_mesh_trap(
         trap.commitment,
         Some(PalwTrapRowV1 { setter, committed_daa: ctx.daa_score, deposit: PALW_TRAP_DEPOSIT_SOMPI_V1, revealed_claim: None }),
-    )?;
+    );
     Ok(())
 }
 
@@ -638,11 +591,6 @@ pub(super) fn apply_trap_revealed_v1(
     if !builder.params.audit_mesh_active_at(ctx.daa_score) {
         return Err(refused(PalwMeshErrorV1::Dormant("palw_audit_mesh_v1")));
     }
-    // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): past the fence a reveal over a paid V2 base claim is a paid-claim trap,
-    // judged and settled by its own rule. Below the fence (and for every other claim) this is `None`: the mesh rule, byte for byte.
-    if let Some(paid) = builder.state.paid_trap_target_v1(builder.params, &reveal.claim, ctx.daa_score) {
-        return super::palw_paid_claim_trap_fold_v1::apply_paid_trap_revealed_v1(builder, ctx, reveal, &paid);
-    }
     builder
         .state
         .mesh_trap_revealed_admissible_v2(reveal, ctx.daa_score, builder.params.audit_1004_active_at(ctx.daa_score))
@@ -660,7 +608,7 @@ pub(super) fn apply_trap_revealed_v1(
 
     // 1. The deposit comes back, and the commitment is spent.
     builder.mesh_release(trap.setter, trap.deposit)?;
-    builder.write_mesh_trap(commitment, None)?;
+    builder.write_mesh_trap(commitment, None);
 
     // 2. The auditors the planted tile caught (once per claim).
     if !audit.trap_settled {
@@ -679,20 +627,11 @@ pub(super) fn apply_trap_revealed_v1(
                     assignment.outcome = None;
                 }
             } else {
-                builder.mesh_pay_from_reserve(
-                    ctx.daa_score,
-                    &assignment.auditor,
-                    bounty,
-                    crate::palw_settlement_once_v1::PalwSettlementLegV1::MeshTrapBounty,
-                    &reveal.claim,
-                    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
-                        "a trap bounty is a court outcome paid from the panel reserve; it stands behind no claim",
-                    ),
-                )?;
+                builder.mesh_pay_from_reserve(&assignment.auditor, bounty);
             }
         }
         audit.trap_settled = true;
-        builder.write_mesh_audit(reveal.claim, Some(audit))?;
+        builder.write_mesh_audit(reveal.claim, Some(audit));
     }
 
     // 3. The trap claim: voided, its setter not slashed. **Lane PA, P-F1 (`palw_audit_1004_v1`): never a claim with a dispute open** — a
@@ -716,9 +655,9 @@ pub(super) fn apply_trap_revealed_v1(
 /// **The mesh's sweep** (before a block's objects, mirrored in `palw_v2_pre_object_base_v1`): audit rows past their reveal window
 /// release their reservations and leave; a trap not revealed within [`PALW_TRAP_COMMIT_TTL_DAA_V1`] forfeits its deposit. At most
 /// [`PALW_MESH_SWEEP_PER_BLOCK_V1`] rows of each table a block, in key order. A no-op on a chain with no row.
-pub(super) fn sweep_mesh_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+pub(super) fn sweep_mesh_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     if builder.state.vertex.mesh.audits.is_empty() && builder.state.vertex.mesh.traps.is_empty() {
-        return Ok(());
+        return;
     }
     let deferred = builder.params.audit_1004_active_at(ctx.daa_score);
     let dead_audits: Vec<Hash64> = builder
@@ -736,21 +675,12 @@ pub(super) fn sweep_mesh_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
             for assignment in &row.assignments {
                 // **C-F4 (`palw_audit_1004_v1`): the audit pay of an answer that stood**, paid once, from the reserve (clamped).
                 if deferred && assignment.outcome.is_some() {
-                    builder.mesh_pay_from_reserve(
-                        ctx.daa_score,
-                        &assignment.auditor,
-                        row.pay,
-                        crate::palw_settlement_once_v1::PalwSettlementLegV1::MeshAuditPay,
-                        &claim,
-                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
-                            "an audit answer that stood: paid from the panel reserve after its row's trap window",
-                        ),
-                    )?;
+                    builder.mesh_pay_from_reserve(&assignment.auditor, row.pay);
                 }
-                let _ = super::native_writers::local_capacity_or_v1(builder.mesh_release(assignment.auditor, assignment.reserved))?;
+                let _ = builder.mesh_release(assignment.auditor, assignment.reserved);
             }
         }
-        builder.write_mesh_audit(claim, None)?;
+        builder.write_mesh_audit(claim, None);
     }
     let dead_traps: Vec<Hash64> = builder
         .state
@@ -765,12 +695,11 @@ pub(super) fn sweep_mesh_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
     for commitment in dead_traps {
         if let Some(row) = builder.state.vertex.mesh.traps.get(&commitment).cloned() {
             // A trap never revealed forfeits its deposit: slashed, then the reservation returned.
-            let _ = super::native_writers::local_capacity_or_v1(builder.slash_bond(row.setter, row.deposit))?;
-            let _ = super::native_writers::local_capacity_or_v1(builder.mesh_release(row.setter, row.deposit))?;
+            let _ = builder.slash_bond(row.setter, row.deposit);
+            let _ = builder.mesh_release(row.setter, row.deposit);
         }
-        builder.write_mesh_trap(commitment, None)?;
+        builder.write_mesh_trap(commitment, None);
     }
-    Ok(())
 }
 
 impl PalwChainStateV2 {
@@ -832,13 +761,12 @@ impl PalwChainStateV2 {
 /// ways and each rider draws its own audit at its share; the lead's row still carried 4 ‰ of the whole, so the batch funded
 /// `pay(E) + Σ pay(E/(1+n))` — more than one claim's worth. The row's `pay` follows the escrow the lead keeps (its reservation, the
 /// penalty, stays: auditors reserved it at the draw). A lead with no row changes nothing.
-pub(super) fn resnapshot_audit_pay_v1(builder: &mut TransitionBuilder<'_>, lead_id: &Hash64, kept_escrow: u64) -> Result<(), PalwStateV2Error> {
-    let Some(mut row) = builder.state.vertex.mesh.audits.get(lead_id).cloned() else { return Ok(()) };
+pub(super) fn resnapshot_audit_pay_v1(builder: &mut TransitionBuilder<'_>, lead_id: &Hash64, kept_escrow: u64) {
+    let Some(mut row) = builder.state.vertex.mesh.audits.get(lead_id).cloned() else { return };
     let pay = palw_mesh_audit_pay_v1(kept_escrow);
     if pay == row.pay {
-        return Ok(());
+        return;
     }
     row.pay = pay;
-    builder.write_mesh_audit(*lead_id, Some(row))?;
-    Ok(())
+    builder.write_mesh_audit(*lead_id, Some(row));
 }

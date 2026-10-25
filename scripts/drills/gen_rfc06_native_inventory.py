@@ -58,20 +58,6 @@ for base,crate in CRATES:
 def canonical_module(crate,module):
     while (crate,module) in reexport:module=reexport[(crate,module)]
     return module
-# A private `#[path = "file.rs"] mod child;` (palw_state_v2's fold files live beside it at the crate root) whose pub items the
-# parent re-exports BY NAME (`pub use child::{A, B};`): those names are reachable only at the PARENT path, never at the path
-# the file's location suggests (G14: `crate::palw_panel_v3_fold_v1` is not a crate-level module).
-named_reexport={}
-for base,crate in CRATES:
- for file in base.rglob('*.rs'):
-    if 'tests' in file.parts or file.name=='generated.rs':continue
-    raw=clean(file.read_text()); module=module_of(base,crate,file)
-    for m in re.finditer(r'#\[path\s*=\s*"([^"]+)"\]\s*mod\s+(\w+)\s*;',raw):
-        target=(file.parent/m[1]).resolve()
-        if not target.is_file() or not target.is_relative_to(base):continue
-        for u in re.finditer(r'(?m)^\s*pub\s+use\s+'+m[2]+r'\s*::\s*\{([^}]*)\}\s*;',raw):
-            for n in split(u[1]):
-                if re.fullmatch(r'\w+',n):named_reexport[(crate,module_of(base,crate,target),n)]=module
 for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_panel'),(ROOT/'misaka/palw/kernel/src','misaka_palw_kernel'),(ROOT/'misaka/palw/gen/src','misaka_palw_gen'),(ROOT/'misaka/palw/tir/core/src','misaka_palw_tir'),(ROOT/'misaka/palw/challenge/src','misaka_palw_challenge')]:
  for file in base.rglob('*.rs'):
     if 'tests' in file.parts or file.name=='generated.rs':continue
@@ -90,8 +76,6 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
         if raw[pos]==';':body='';end=pos+1;form='unit'
         else:body,end=brace(raw,pos);form='named' if raw[pos]=='{' else 'tuple'
         path='::'.join(x for x in [crate,canonical_module(crate,module) if m.group(0).startswith('pub ') or m.group(0).startswith('pub\t') else module,name] if x)
-        if m.group(0).startswith('pub') and (crate,module,name) in named_reexport:
-            path='::'.join(x for x in [crate,named_reexport[(crate,module,name)],name] if x)
         attrs=raw[max(raw.rfind('}',0,m.start()),raw.rfind(';',0,m.start()))+1:m.start()]
         item=dict(attrs=attrs,kind=kind,name=name,path=path,body=body,form=form,module=module,type_public=m.group(0).startswith('pub'),file=str(file.relative_to(ROOT)))
         defs[path]=item;byname.setdefault(name,[]).append(item)
@@ -99,7 +83,7 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
 primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()'}
 # `PalwSharedCourtV1<T>` (G14) is a generic Arc newtype whose Borsh layout is T's: a container with hand-written visitors.
 containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1','NativeRetainedV1'}
-queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
+queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
        'crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4','crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4',
        'crate::palw_kernel_parameter_material_v4::PalwKernelSegmentedPartV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterRowV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4',
        'crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4',
@@ -115,6 +99,15 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        'misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6',
        'misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6',
        'crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceEconomicsActionV1',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceFundingRowV1',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceCourtRowV1',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceEntitlementRowV1',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceQueueRowV1',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceRefundRowV1',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceHoldRowV1',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceLiabilityRowV1',
+       'crate::palw_paid_bootstrap_economics_v1::PalwSourceEconomicsPolicyV1',
        'crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2',
        'crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2','crate::palw_step_refute::routing_v2::PalwRoutedLeafEvidenceV2',
        'misaka_palw_kernel::spec::retrieval::SliceResponseV1','misaka_palw_kernel::spec::retrieval::EntryResponseV1','misaka_palw_kernel::spec::retrieval::RetrievalItemV1',
@@ -132,28 +125,7 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        # RFC-0017 (2026-10-15): the model eligibility rows of kernel route aux 131.
        'crate::palw_model_eligibility_v1::PalwEligibilityModelRowV1','crate::palw_model_eligibility_v1::PalwEligibilityLineageRowV1',
        'crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1','crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1',
-       'crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1','crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1',
-       # RFC-0018 (2026-10-15): the SecurityCertified rows of kernel route aux 136.
-       'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
-       'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1',
-       # RFC-0006 consumer v2 (2026-10-15): the router binding rows of kernel route aux 139.
-       'crate::palw_router_binding_v2::PalwRouterBindingRowV2',
-       # RFC-0006 RFC06-8 (2026-10-15): the class registration origins of kernel route aux 141 (dormant fence).
-       'crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1',
-       # RFC-0008 (2026-10-15): the once-only settlement markers of kernel route aux 140 (dormant fence).
-       'crate::palw_settlement_once_v1::PalwSettlementOnceRowV1',
-       # RFC-0007 §4.1 T6 (2026-10-16): the paid-claim trap rows of kernel route aux 142 (dormant fence).
-       'crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1','crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1',
-       'crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1',
-       # G14 lane closure (2026-10-16): kernel route aux 143 (dormant).
-       'crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1','crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1',
-       # RFC08 08-B (2026-10-18): held native fees, kernel route aux 144 (dormant).
-       'crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1',
-       # G14 r6 (2026-10-22): receipt use-window pause rows, kernel route aux 145 (dormant behind Gate C).
-       'crate::palw_receipt_pause_v2::PalwReceiptPauseRowV2',
-       'crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalDutyRowV1',
-       # audit B-02 (fix-b): recorded post-Final material units, aux 144 prefix 0x03 (dormant; no production writer).
-       'crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalMaterialRowV1']; visited=set(); generated=[]; unresolved=[]
+       'crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1','crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1']; visited=set(); generated=[]; unresolved=[]
 
 # Resolve dependency types; concrete names, aliases/primitive containers are left
 # to Rust's existing type system, so there is no byte-size inference from codec.
@@ -176,16 +148,6 @@ def references(t, origin):
             resolved=token if '::' in token else origin['path'].rsplit('::',1)[0]+'::'+token
         if resolved=='misaka_palw_tir::program_v2::Block':resolved='misaka_palw_tir::program::Block'
         if resolved not in visited:queue.append(resolved)
-
-# A field compiled only under a `#[cfg(..)]` (palw_state_v2's `#[cfg(test)]` extras writers) keeps that attribute in the generated
-# exhaustive destructure, so both the test and the non-test build name exactly the fields that exist.
-def field_cfgs(item):
-    out={}
-    for part in split(item['body']):
-        cfgs=re.findall(r'#\[\s*cfg\s*\((?:[^()]|\([^()]*\))*\)\s*\]',part)
-        fm=re.match(r'(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:',stripattrs(part))
-        if cfgs and fm:out[fm[1]]=' '.join(cfgs)+' '
-    return out
 
 def fields(item):
     result=[]
@@ -213,7 +175,6 @@ def aux_root(value):
                 aux_root(fm[1]) if fm[1].startswith('mirror:') else references(fm[1],item)
         references(re.sub(r'mirror:[\w:]+','u8',alt),AUX_ORIGIN)
 for _n in AUX.NS:aux_root(_n['value'])
-FUNDED_MANUAL={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1'}
 while queue:
  path=queue.pop(0)
  if path in visited:continue
@@ -225,8 +186,6 @@ while queue:
     unresolved.append(path);continue
  kind=item['kind']; form=item['form']; body=item['body']
  if path=='crate::palw_kernel_route_v1::KernelLedgerCacheV1':continue
- # Funded-original pairing (holds a whole carrier Transaction) and its test-only schedule: hand-written visitors in typed.rs.
- if path in FUNDED_MANUAL:unresolved.append(path);continue
  if kind=='struct' and form=='named':
     fs=fields(item)
     if path in {'misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}:
@@ -238,8 +197,7 @@ while queue:
         # Reviewed opaque layouts have a hand-written visitor beside their owner.
         unresolved.append(path);continue
     for _,typ,_ in fs:references(typ,item)
-    cfgs=field_cfgs(item)
-    names=', '.join(cfgs.get(name,'')+name for name,_,_ in fs)
+    names=', '.join(name for name,_,_ in fs)
     generated.append((item, f'native_struct!({path}; {names});', (not item['type_public'] or any(not public for _,_,public in fs))))
  elif kind=='struct' and form=='tuple':
     ts=[stripattrs(v) for v in split(body)]
@@ -270,7 +228,7 @@ while queue:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={'misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
 private={}; public=[]
 for item,code,is_private in generated:

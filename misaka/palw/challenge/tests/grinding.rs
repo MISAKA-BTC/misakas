@@ -1,4 +1,4 @@
-//! **Grinding attacks on the PALW Work Beacon** (`docs/design/palw/verification/opv-beacon-bootstrap.md` §6), each lever exercised as an attack
+//! **Grinding attacks on the PALW Work Beacon** (`docs/design/palw/opv-beacon-bootstrap.md` §6), each lever exercised as an attack
 //! and its bound checked: output selection by a last contributor, the distinct source rules against one party filling every position,
 //! the per-class cap, withholding after the lock (a counted veto), Final timing, fork choice and precomputation.
 

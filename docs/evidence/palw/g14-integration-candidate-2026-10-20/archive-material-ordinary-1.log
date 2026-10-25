@@ -1,6 +1,0 @@
-
-running 1 test
-test palw_state_v2::tests::a_court_session_cannot_outlive_its_claim_and_stop_the_chain ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4681 filtered out; finished in 0.00s
-

@@ -40,14 +40,6 @@ pub struct PalwSettlementV1 {
     pub safe_frontier_blue_score: u64,
     /// The DAA score of the chain block that accepted the frontier's claim; 0 with no frontier.
     pub safe_frontier_daa: u64,
-    /// **RFC-0018 §7.8 (honest reporting past Gate C)**: attempt claims at or after the asked DAA score that are `Final` but NOT
-    /// SecurityCertified — the procedure completed, no consensus or settlement credit. Counted in neither `depth` nor `pending`; 0
-    /// below the fence. A chain whose claims are all uncertified reports `settled == false` and `depth == 0` however many `Final`
-    /// claims it holds: no PALW settlement finality (there is no DNS finality to fall back on — DNS-BFT is abolished, RFC-0012).
-    pub uncertified_final: u64,
-    /// **RFC-0018 §7.2**: Gate C is in force at the sink — every `depth`/`settled` above rests on SecurityCertified claims, a
-    /// PREMISE-BASED certification (the honest fraction of drawn verifier stake is at least the threshold), not an unconditional proof.
-    pub gate_c_in_force: bool,
 }
 
 /// **The settlement read** (ADR-0127 Decision 3) — `state` is the sink's, `params` the rules it was
@@ -68,8 +60,8 @@ pub fn palw_settlement_v1(
 ) -> Option<PalwSettlementV1> {
     let (safe_frontier_blue_score, frontier) = state.safe_frontier();
     let has_frontier = frontier != ZERO_HASH64;
-    let (mut depth, mut pending, mut frontier_claim_daa, mut uncertified_final) = (0u64, 0u64, None, 0u64);
-    for (claim_id, claim) in state.claims_iter() {
+    let (mut depth, mut pending, mut frontier_claim_daa) = (0u64, 0u64, None);
+    for (_, claim) in state.claims_iter() {
         let is_final = matches!(claim.phase, PalwClaimPhaseV2::Final { .. });
         // The fold sets the frontier from a `Final` claim of any source, so it is dated by one.
         if has_frontier && is_final && claim.accepted_block == frontier && claim.accepted_blue_score == safe_frontier_blue_score {
@@ -84,20 +76,6 @@ pub fn palw_settlement_v1(
             continue;
         }
         // Every phase named, so a phase added to the lattice has to be placed here to compile.
-        // RFC-0018 §7.5: past Gate C (keyed on the claim's acceptance DAA) a Final attempt is an anchor only when SecurityCertified —
-        // the same rule the frontier takes (`palw_consensus_credit_anchor_v1`). Below the fence every Final attempt, as released.
-        let governs = crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim);
-        if governs
-            && matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
-            && !crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
-                claim_id,
-                claim,
-                &crate::palw_rfc0018_v1::PalwGateCViewV1::of(params, state),
-            )
-        {
-            uncertified_final += 1;
-            continue;
-        }
         match claim.phase {
             PalwClaimPhaseV2::Final { .. } => depth += 1,
             PalwClaimPhaseV2::Voided { .. } => {}
@@ -123,8 +101,6 @@ pub fn palw_settlement_v1(
         depth_is_lower_bound,
         safe_frontier_blue_score,
         safe_frontier_daa,
-        uncertified_final,
-        gate_c_in_force: params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(sink_daa)),
     })
 }
 

@@ -205,12 +205,12 @@ pub(super) fn request(
             let binding = book.job().quota_subject(class.record()).map_err(refused)?;
             let action = job_plan.action(QuotaActionKindV11::DARequest, bytes).map_err(refused)?;
             s.debit_public_action(&p.quota, &epoch, &binding, &job_plan, &action).map_err(refused)?;
-            write_shard(builder, &s, req.job)?;
+            write_shard(builder, &s, req.job);
         }
         1 => {
             let mut s = quota_shard_seal(builder, p, &epoch, actor, req.job, Some(req.entitlement))?;
             s.debit_protected(&p.quota, &epoch, &job_plan, ProtectedActionKindV11::DARequest, bytes).map_err(refused)?;
-            write_shard(builder, &s, req.job)?;
+            write_shard(builder, &s, req.job);
         }
         2 => discovery::debit_request(builder, ctx, p, actor, req.job, req.entitlement, &job_plan, bytes)?,
         _ => unreachable!(),
@@ -290,18 +290,18 @@ pub(super) fn request(
     }
     state.latest_answer_proof_until = state.latest_answer_proof_until.max(until);
     state.required_retained_until = state.required_retained_until.max(until);
-    write_source_shard(builder, &source, req.job)?;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(pending), Some(key(&d)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, req.slot), Some(key(&pending)))?;
+    write_source_shard(builder, &source, req.job);
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(pending), Some(key(&d)));
+    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, req.slot), Some(key(&pending)));
     builder.write_kernel_row(
         EXECUTION_DEMAND_COUNT_TABLE_V11,
         key(&(14u8, req.job, counts.next_ordinal)),
         Some(key(&(16u8, pending))),
-    )?;
+    );
     counts.next_ordinal += 1;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, req.job)), Some(key(&counts)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&req.job), Some(key(&state)))?;
-    builder.note_kernel_bond(signer)?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, req.job)), Some(key(&counts)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&req.job), Some(key(&state)));
+    builder.note_kernel_bond(signer);
     Ok(())
 }
 fn close(builder: &mut TransitionBuilder<'_>, mut d: NativeSourceDemandV16) -> Result<(), PalwStateV2Error> {
@@ -312,9 +312,9 @@ fn close(builder: &mut TransitionBuilder<'_>, mut d: NativeSourceDemandV16) -> R
         c.open_ordinary = c.open_ordinary.checked_sub(1).ok_or_else(|| refused("native source ordinary count underflow"))?;
     }
     d.settled = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(key(&d)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.request.job), Some(key(&state)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.request.job)), Some(key(&c)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(key(&d)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.request.job), Some(key(&state)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.request.job)), Some(key(&c)));
     Ok(())
 }
 pub(super) fn answer(
@@ -351,8 +351,8 @@ pub(super) fn answer(
         .debit_answer(&p.quota, &epoch, &plan, &palw_kernel_bond_id_v1(signer), bytes.len().saturating_sub(68) as u64)
         .map_err(refused)?;
     d.attempts += 1;
-    write_source_shard(builder, &shard, d.request.job)?;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(id), Some(key(&d)))?;
+    write_source_shard(builder, &shard, d.request.job);
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(id), Some(key(&d)));
     // Even a hostile nested Vec count consumes this original attempt. The
     // processor borrows/authenticates only the fixed pending identity first.
     let raw = bytes.get(64..68).ok_or_else(|| refused("source answer nested count absent"))?;
@@ -392,7 +392,7 @@ pub(super) fn answer(
         return Err(refused("source original requester debit differs"));
     }
     pay_delivery_fee(builder, ctx, d.request.job, d.producer, d.producer_payout, paid, true)?;
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, pending_key(unit_key(&d.request)), Some(bytes[68..].to_vec()))?;
+    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, pending_key(unit_key(&d.request)), Some(bytes[68..].to_vec()));
     close(builder, d)
 }
 pub(super) fn settle(
@@ -442,14 +442,13 @@ pub(super) fn settle(
         finder: palw_kernel_bond_id_v1(&d.requester),
         kind: NativeAdjudicationKindV11::DataUnavailable,
     };
-    // G14 lane closure G-14: a default is never refused for short collateral; what the bond still holds of the reserve is collected.
-    let reserve = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
-        builder.state.bonds.get(&row.header.producer).map(|b| b.collateral),
-        claim.reserved_original,
-    );
+    let reserve = claim.reserved_original;
+    if builder.state.bonds.get(&row.header.producer).is_none_or(|b| b.collateral < reserve) {
+        return Err(refused("source original producer slash unavailable"));
+    }
     let settlement = book.adjudicate(class.record(), &result, reserve).map_err(refused)?;
     close_adjudicated_quota(builder, ctx, p, d.request.job, &class, &book, &plan, *signer)?;
-    let collected = if reserve == 0 { 0 } else { builder.slash_bond(row.header.producer, reserve as u128)? };
+    let collected = builder.slash_bond(row.header.producer, reserve as u128)?;
     if collected != reserve {
         return Err(refused("source original producer slash differs"));
     }

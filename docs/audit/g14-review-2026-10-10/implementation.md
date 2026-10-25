@@ -180,7 +180,7 @@ F-B1の実node回帰も1 PASS。正しいproducer署名とsalted sealを持つ1-
 
 Final待機とreorg試験も修正した。前者は実際のrearmed deadlineを待つ。後者は両branchが同じFinal workを持つpost-Final reservationでundo/restoreを試験する。未Finalのheld branchは、Final済みの別branchに対して経済的に劣るため、heartbeatを増やしても本番のstrict-economic-win規則では復帰できない。この規則を緩めてtestを通していない。
 
-追加の残条件として、claim共通のlive reservation上限64・生涯上限256がある。1つのSybil reservationを置く試験だけでは、共謀者が枠を埋めた場合にも新しいoutsiderがDA局所化を開始できるとは証明できない。proof優先は、未取得のmaterialを取得する経路の代用にはならない。詳細は[legacy設計ノート§13](../../design/palw/verification/legacy-route-g14-filer.md)に記録した。
+追加の残条件として、claim共通のlive reservation上限64・生涯上限256がある。1つのSybil reservationを置く試験だけでは、共謀者が枠を埋めた場合にも新しいoutsiderがDA局所化を開始できるとは証明できない。proof優先は、未取得のmaterialを取得する経路の代用にはならない。詳細は[legacy設計ノート§13](../../design/palw/legacy-route-g14-filer.md)に記録した。
 
 ### legacy修正の検証記録
 
@@ -386,7 +386,7 @@ coreのlifecycle/A2U回帰は **31 PASS**、既存legacy dispute foldは **7 PAS
 
 ## 回答済みDA materialの番号付き再取得
 
-前節のFP startupを`20c746436`でpushした後、permanently prunedな公開回答の追及を進めた。単に`DaUnitAlreadyAnswered`を外すと、古いaccusation署名の再送でverifierの担保・session枠を消費できるため、番号付きの明示的要求を休眠tag 156へ追加した。要求とstate/readerの仕様は[設計追記](../../design/palw/verification/legacy-route-g14-filer.md#回答済みunitの再取得codex2026-10-10)を参照。
+前節のFP startupを`20c746436`でpushした後、permanently prunedな公開回答の追及を進めた。単に`DaUnitAlreadyAnswered`を外すと、古いaccusation署名の再送でverifierの担保・session枠を消費できるため、番号付きの明示的要求を休眠tag 156へ追加した。要求とstate/readerの仕様は[設計追記](../../design/palw/legacy-route-g14-filer.md#回答済みunitの再取得codex2026-10-10)を参照。
 
 `PalwDisputeClaimV1`の末尾へpending reacquisition mapを追加した。既存のdispute writer、delta 200、tail 0xE2を使う。このrecordはnever-armedなLG14-A専用であり、live variantのwireを変更していない。従来のtest-armed carriageの保存形式は変わる。新tag 156のA2 wire pinは`0xd43488cfc9640788`とし、既存tagとint-12 variantのpinは変更していない。新tagは休眠fence 7がownerで、below-fenceのstateless skip／fold拒否、signature processor、heartbeat carriageへ配線した。有効化heightは変更していない。
 

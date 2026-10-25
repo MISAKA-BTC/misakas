@@ -1,6 +1,6 @@
 //! **ADR-0145 §8 — the reward properties, stated as things an attacker cannot do.**
 //!
-//! The 2026-09-19 audit (`docs/audit/adr/STATUS-AUDIT-2026-09-19-llm-mining-reward.md`) found nine of
+//! The 2026-09-19 audit (`docs/adr/STATUS-AUDIT-2026-09-19-llm-mining-reward.md`) found nine of
 //! eleven reward invariants violated, and built five counterexamples to prove it. Those
 //! counterexamples lived in a scratchpad crate that links this one
 //! (`docs/audit/2026-09-19-llm-mining/`). A probe outside the test suite is a probe that rots: it

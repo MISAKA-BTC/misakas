@@ -10,31 +10,32 @@
 //! `consensus_schedule_id`, collapsed whole from `Some(never())`, its activation alone visited by `for_each_fence`. Since G14 lane D
 //! the virtual processor reads it: where it is in force, kernel route objects (tags 110–119) and onboarding objects (104–108) are
 //! folded into `PalwChainStateV2` with their rows, deltas, tail 0xEC and root (`g14_kernel_route_e2e`, `g14_registration_e2e`);
-//! below it they are dropped by name and the block stands. Arming it is gated by
-//! [`Params::validate_palw_probabilistic_constraints_v1`]: the acceptance rule exists; since lane g14p/kernel-route (2026-10-22) the
-//! refusal is no longer by name but by an arm-readiness record (`crate::palw_kernel_route_arming_v1`) carrying the reviews,
-//! shadow comparison, measurements and drill above. The pinned list is empty, so no network can switch it on yet.
+//! below it they are dropped by name and the block stands. Arming it is still refused by
+//! [`Params::validate_palw_probabilistic_constraints_v1`]: the acceptance rule exists, but the gates above (and the funded reward,
+//! the shadow comparison and the measurements) do not, so no network can switch it on yet.
 
 use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::PalwModeV2Error;
 
 impl Params {
-    /// Whether the probabilistic-constraint route is in force at `daa_score` (never on a shipped preset).
+    /// Whether the probabilistic-constraint route is in force at `daa_score` — never, in this binary.
     pub fn palw_probabilistic_constraints_active_at(&self, daa_score: u64) -> bool {
         self.palw_probabilistic_constraints_v1.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa_score))
     }
 
-    /// **The fence's record gate** (lane g14p/kernel-route, U01): the kernel-route acceptance rule is built (the fold); arming is
-    /// refused until an arm-readiness record is pinned (`crate::palw_kernel_route_arming_v1`; the pinned list is empty).
+    /// **The fence's refusal**: this binary carries no acceptance rule for the kernel route, so any armed height is refused.
     pub fn validate_palw_probabilistic_constraints_v1(&self) -> Result<(), PalwModeV2Error> {
         if self.has_isolated_native_calibration_v34() {
             return self.validate_isolated_native_calibration_v34().map_err(|_| {
                 PalwModeV2Error::Invalid("native calibration34 owning isolated genesis or complete original policies are invalid")
             });
         }
-        self.validate_palw_kernel_route_fence_record_v1(
-            crate::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1::ProbabilisticConstraintsV1,
-        )
+        match self.palw_probabilistic_constraints_v1 {
+            Some(f) if f != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
+                "palw_probabilistic_constraints_v1 cannot be armed: RFC-0011 §15.7 assigns it no height and this binary has no kernel-route acceptance rule",
+            )),
+            _ => Ok(()),
+        }
     }
 }
 

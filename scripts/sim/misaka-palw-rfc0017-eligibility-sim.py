@@ -49,11 +49,8 @@ ATTACKER_BILI = 300_000_000
 ALPHA = 1.5
 
 # --- RFC-0017 §11 design values (UNAPPROVED; mirror palw_model_eligibility_v1.rs *_DESIGN_V1) ----------------------------------
-# U-1 (user decision 2026-10-15): ECON's 24-of-47 is the calibration candidate and the driver's default; 4-of-7 is a test-only
-# comparison column (TEST_M / TEST_K), never the default.
-EXAM_M = 47
-EXAM_K = 24
-TEST_M, TEST_K = 7, 4
+EXAM_M = 7
+EXAM_K = 4
 PROBATION_MIN_DAYS = 7
 PROBATION_MODEL_PERMILLE = 2
 PROBATION_NETWORK_PERMILLE = 20
@@ -215,107 +212,14 @@ def scenarios() -> list:
     ]
 
 
-# --- the verifier-stake sweep (RFC-0017 §5.1, user decision U-3) ------------------------------------------------------------
-# The attacker's share f of the DRAWN verifier stake — not of total supply — decides P_pass. These are the points the RFC tabulates;
-# 1/3 and 0.6 are the two §7 driver cases (150M attacker verifier stake vs 300M and vs 100M honest verifier stake).
-SWEEP_F = (0.03, 0.05, 0.10, 0.20, 0.25, 1 / 3, 0.40, 0.50, 0.60, 0.75)
-ECON_M, ECON_K = 47, 24                  # the ECON round-2 gate's unapproved interim (readiness §3f) — the default since U-1
-# U-4 (user decision 2026-10-15): the attempt cost is split — (a) a non-refundable spam-burn fee and (b) an applicant-funded
-# inspection escrow per drawn position, paid to the attesting verifiers (never new issuance). Both are PROBES mirroring
-# PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1 / PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1; 100,000 BILI is NOT a default.
-ATTEMPT_BURN_FEE_BILI = 1
-INSPECTION_FEE_PER_POSITION_BILI = 1
-ATTEMPT_FEE_BILI = ATTEMPT_BURN_FEE_BILI      # the griefing price counts the non-refundable burn only
-
-
-def single_exam_mc(f: float, trials: int, rng: random.Random, m: int = EXAM_M, k: int = EXAM_K) -> float:
-    """Monte-Carlo of one exam with a closed model: only attacker positions attest positively."""
-    passed = 0
-    for _ in range(trials):
-        if sum(1 for _ in range(m) if rng.random() < f) >= k:
-            passed += 1
-    return passed / trials
-
-
-def sweep(trials: int, rng: random.Random) -> None:
-    per_epoch = ATTEMPTS_NETWORK_PER_EPOCH
-    print("Pass-alone probability vs the attacker's share f of the DRAWN verifier stake (closed model; honest verifiers cannot attest)")
-    print(f"  {'f':>6} {'P_pass 24-of-47':>16} {'MC (n=' + str(trials) + ')':>14} {'any of 64':>10} {'any of 192':>11} "
-          f"{'4-of-7 (test-only)':>19}")
-    for f in SWEEP_F:
-        pp = p_pass(f)
-        mc = single_exam_mc(f, trials, rng)
-        print(
-            f"  {f:6.3f} {pp:16.3e} {mc:14.6f} {1 - (1 - pp) ** per_epoch:10.6f} {1 - (1 - pp) ** (3 * per_epoch):11.6f} "
-            f"{p_pass(f, TEST_M, TEST_K):19.6f}"
-        )
-    print(f"  (64 = one 30-day epoch of the network attempt budget; 192 = 90 days. Griefing price of filling it: "
-          f"{ATTEMPTS_NETWORK_PER_EPOCH * ATTEMPT_FEE_BILI:,} BILI burned per epoch at the PROBE burn fee, plus "
-          f"{INSPECTION_FEE_PER_POSITION_BILI * EXAM_M:,} BILI escrowed per attempt for the drawn verifiers (paid to those who "
-          f"attest, the rest returned; never new issuance). Both values are unapproved probes: U-4 derives them from the measured "
-          f"inspection cost.)")
-    print()
-
-
-# --- U-3 (user decisions 2026-10-15): the f threat model — the impact if the certification PREMISE fails ------------------------
-# The drawn-verifier m-of-k approval is the certification pillar under the explicit premise that the honest share of the drawn
-# verifier stake is at least the threshold. It is premise-based certification, never a proof of computation correctness. This
-# section REPORTS the impact at f = 1/3, f = 0.6 and the worst case (f = 1: every drawn position is the attacker's); it is not a
-# condition for changing the certification method (same-day clarification).
-THREAT_F = ((1 / 3, "f = 1/3"), (0.6, "f = 0.6"), (1.0, "worst case: f = 1 (the attacker holds every drawn position)"))
-PREMISE = ("premise-based certification: m-of-k approvals by stake-drawn verifiers, valid only while the honest share of the "
-           "drawn verifier stake is at least the threshold; not an unconditional proof of computation correctness")
-
-
-def threat_model(trials: int, rng: random.Random) -> list:
-    """Per f: the single-exam pass-alone probability at the default 24-of-47 (and the 4-of-7 test-only column), the chance of at
-    least one pass when the attacker uses its share of the network attempt budget for 30 / 90 days, and the §7 driver's impact
-    metrics (scenario 1: everything on one closed model) with the honest verifier stake set to give that f."""
-    rows = []
-    a = float(ATTACKER_BILI)
-    for f, label in THREAT_F:
-        attacker_verifier = a / 2
-        honest_verifier = 0.0 if f >= 1.0 else attacker_verifier * (1 - f) / f
-        s = Scenario(f"U-3 {label}", a / 2, attacker_verifier, 1, honest_capital_bili=10 * a, honest_models=100,
-                     honest_verifier_bili=honest_verifier)
-        pp = p_pass(f)
-        attempts = int(ATTEMPTS_NETWORK_PER_EPOCH * ATTACKER_ATTEMPT_SHARE)
-        row = {"label": label, "f": f, "p_pass_24_of_47": pp, "p_pass_4_of_7_test_only": p_pass(f, TEST_M, TEST_K),
-               "any_pass_30d": 1 - (1 - pp) ** attempts, "any_pass_90d": 1 - (1 - pp) ** (3 * attempts)}
-        for horizon in (30, 90):
-            r = run(s, horizon, trials, rng)
-            row[f"impact_{horizon}d"] = {k: r[k] for k in ("max_reward_outflow", "adopted_block_share", "final_weight_share",
-                                                          "re_review_success")}
-        rows.append(row)
-    return rows
-
-
-def print_threat_model(trials: int, rng: random.Random) -> None:
-    print("U-3 threat model — impact if the certification premise fails (a report, not a verdict; not a proof of correctness)")
-    print(f"  meaning of a pass: {PREMISE}")
-    for row in threat_model(trials, rng):
-        print(f"  {row['label']}: P_pass 24-of-47 = {row['p_pass_24_of_47']:.4e} (4-of-7 test-only {row['p_pass_4_of_7_test_only']:.4f}); "
-              f">=1 pass in 30 d {row['any_pass_30d']:.4f}, 90 d {row['any_pass_90d']:.4f}")
-        for horizon in (30, 90):
-            m = row[f"impact_{horizon}d"]
-            print(f"    {horizon:2d} d: reward outflow {m['max_reward_outflow']:.4f}, block share {m['adopted_block_share']:.4f}, "
-                  f"Final-weight share {m['final_weight_share']:.4f}, re-review success {m['re_review_success']:.4f}")
-    print("  (Probation claims carry no Final weight and no security credit before RFC-0018 Gate C certification; G14 public")
-    print("   prosecution still convicts and voids a refuted claim, certified or not.)")
-    print()
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--trials", type=int, default=2_000)
     ap.add_argument("--seed", type=int, default=17)
-    ap.add_argument("--sweep-trials", type=int, default=200_000)
     args = ap.parse_args()
     rng = random.Random(args.seed)
-    sweep(args.sweep_trials, rng)
-    print_threat_model(args.trials, rng)
 
-    print("RFC-0017 analytic gate math (illustrative targets, not payouts; not soundness, not conviction probability, never a proof)")
+    print("RFC-0017 analytic gate math (illustrative targets, not payouts; not soundness, not conviction probability)")
     pp = p_pass(0.03)
     print(f"  P_pass(f=3 %, {EXAM_K}-of-{EXAM_M}) = {pp:.6e} per attempt; 1-(1-p)^10000 = {1 - (1 - pp) ** 10_000:.4f}")
     for n in (1, 100, 1000):

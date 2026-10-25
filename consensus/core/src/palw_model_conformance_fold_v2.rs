@@ -63,7 +63,7 @@ pub(super) fn complete(
     if !charge_route_budget_v1(builder, ctx, work, false)? {
         return Ok(());
     }
-    builder.write_kernel_row(MODEL_CONFORMANCE_BLOCK_TABLE_V2, Vec::new(), Some(borsh::to_vec(&(ctx.blue_score, runs + 1)).unwrap()))?;
+    builder.write_kernel_row(MODEL_CONFORMANCE_BLOCK_TABLE_V2, Vec::new(), Some(borsh::to_vec(&(ctx.blue_score, runs + 1)).unwrap()));
     // A judged run pays on pass or failure. Returning Ok on junk preserves budget/fee.
     builder.slash_bond(*signer, fee)?;
     let checked = (|| -> Result<ModelConformanceRowV2, String> {
@@ -108,7 +108,7 @@ pub(super) fn complete(
         PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2,
         borsh::to_vec(&class).unwrap(),
         Some(borsh::to_vec(&id).unwrap()),
-    )?;
-    builder.write_kernel_row(MODEL_CONFORMANCE_TABLE_V2, borsh::to_vec(&class).unwrap(), Some(borsh::to_vec(&checked).unwrap()))?;
+    );
+    builder.write_kernel_row(MODEL_CONFORMANCE_TABLE_V2, borsh::to_vec(&class).unwrap(), Some(borsh::to_vec(&checked).unwrap()));
     Ok(())
 }

@@ -28,7 +28,6 @@ name = "kaspad_lib"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-kaspa-wrpc-client = { workspace = true, optional = true }
 kaspa-alloc.workspace = true # This changes the global allocator for all of the next dependencies so should be kept first
 
 kaspa-addresses.workspace = true
@@ -108,9 +107,7 @@ serde_with = "3.7.0"
 [features]
 # Library construction boundary used only by the unpublished private integration
 # helper. No public Args flag selects it; ordinary kaspad always uses its presets.
-private-integration-config = ["kaspa-consensus/private-integration-config", "dep:misaka-palw-tir-artifact", "dep:kaspa-wrpc-client", "misaka-palw-sdk/native-rpc"]
-# Only private acceptance artifacts opt in to environment-armed OS-kill rendezvous.
-rfc12-import-failpoints = ["private-integration-config", "kaspa-consensus/rfc12-import-failpoints"]
+private-integration-config = ["kaspa-consensus/private-integration-config", "dep:misaka-palw-tir-artifact"]
 # The EVM lane is part of the node, not a bolt-on (user decision 2026-08-21). testnet-11 and
 # testnet-12 activate the lane at DAA 0, so a binary built without it refuses to start there
 # (`EvmLaneRequiresEvmBuild`) — which turned "forgot the flag" into a fleet-wide operational trap.

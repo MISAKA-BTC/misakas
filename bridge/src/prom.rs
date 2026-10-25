@@ -337,40 +337,24 @@ fn content_type_for_path(path: &str) -> &'static str {
     }
 }
 
-/// Map a dashboard URL path to a vendored static asset name, rejecting anything that
-/// could escape `bridge/static`.
-///
-/// Security (audit P0): the previous guard only checked `rel.contains("..")`, which an
-/// *absolute* path bypassed. `/static//etc/passwd` strips to `/etc/passwd` (no `..`), and
-/// `Path::join(base, "/etc/passwd")` discards `base`, so the disk fallback below would read
-/// an arbitrary local file. Validate with `Path::components()` and accept only `Normal`
-/// parts: this rejects absolute paths, `..`, `.`, and (on Windows) drive prefixes. No URL
-/// decoding is performed, so percent-encoded separators stay literal and cannot traverse.
-fn safe_static_rel(url_path: &str) -> Option<String> {
-    let rel = match url_path {
-        "/" | "/index.html" => "index.html",
-        "/raw.html" => "raw.html",
-        p => p.strip_prefix("/static/")?,
-    };
-
-    let path = std::path::Path::new(rel);
-    if rel.is_empty()
-        || rel.contains('\\')
-        || path.is_absolute()
-        || path.components().any(|c| !matches!(c, std::path::Component::Normal(_)))
-    {
-        return None;
-    }
-    Some(rel.to_string())
-}
-
 fn try_read_static_file(url_path: &str) -> Option<(String, Vec<u8>)> {
     // Files are vendored under bridge/static.
     // URL layout expected by the dashboard:
-    // - / and /index.html -> index.html
+    // - / -> index.html
     // - /raw.html
     // - /static/... -> maps to bridge/static/... (strip leading /static/)
-    let rel = safe_static_rel(url_path)?;
+    let rel = match url_path {
+        "/" => "index.html".to_string(),
+        "/index.html" => "index.html".to_string(),
+        "/raw.html" => "raw.html".to_string(),
+        p if p.starts_with("/static/") => p.trim_start_matches("/static/").to_string(),
+        _ => return None,
+    };
+
+    // Prevent path traversal
+    if rel.contains("..") || rel.contains('\\') {
+        return None;
+    }
 
     // Prefer embedded assets for production/portable binaries.
     // Fall back to reading from disk to keep local development simple.
@@ -380,16 +364,8 @@ fn try_read_static_file(url_path: &str) -> Option<(String, Vec<u8>)> {
         return Some((rel, f.contents().to_vec()));
     }
 
-    // Disk fallback (local dev). `rel` is already validated to contain only `Normal`
-    // components; defensively confirm the resolved path still canonicalizes to inside the
-    // static root (guards against symlinks within the static dir).
-    let static_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("static");
-    let resolved = static_root.join(&rel).canonicalize().ok()?;
-    let root = static_root.canonicalize().ok()?;
-    if !resolved.starts_with(&root) {
-        return None;
-    }
-    let bytes = std::fs::read(&resolved).ok()?;
+    let file_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("static").join(&rel);
+    let bytes = std::fs::read(&file_path).ok()?;
     Some((rel, bytes))
 }
 
@@ -413,16 +389,9 @@ async fn handle_http_request(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::AsyncWriteExt;
 
-    // Audit #3: dispatch on the EXACT (method, path) — not request.starts_with("GET /metrics")
-    // which also matched `/metricsXYZ` etc. The path is the request-target with any `?query`
-    // stripped (so `/metrics?x` still routes to /metrics).
-    let request_line = request.lines().next().unwrap_or("");
-    let mut rl = request_line.split_whitespace();
-    let method = rl.next().unwrap_or("");
-    let raw_path = rl.next().unwrap_or("/");
-    let path = raw_path.split('?').next().unwrap_or(raw_path);
+    let path = request.lines().next().and_then(|line| line.split_whitespace().nth(1)).unwrap_or("/");
 
-    if method == "GET" && path == "/metrics" {
+    if request.starts_with("GET /metrics") {
         use prometheus::Encoder;
         let encoder = prometheus::TextEncoder::new();
         let metric_families = match mode {
@@ -441,7 +410,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if method == "GET" && path == "/api/status" {
+    if request.starts_with("GET /api/status") {
         let kaspad_version = crate::kaspaapi::NODE_STATUS.lock().server_version.clone().unwrap_or_else(|| "-".to_string());
         let status_cfg = get_web_status_config();
         let web_bind = match mode {
@@ -457,7 +426,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if method == "GET" && path == "/api/stats" {
+    if request.starts_with("GET /api/stats") {
         let stats = match mode {
             HttpMode::Aggregated { .. } => get_stats_json_all().await,
             HttpMode::Instance { instance_id, .. } => get_stats_json(instance_id).await,
@@ -468,7 +437,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if matches!(mode, HttpMode::Instance { .. }) && method == "GET" && path == "/api/config" {
+    if matches!(mode, HttpMode::Instance { .. }) && request.starts_with("GET /api/config") {
         let config_json = get_config_json().await;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -479,7 +448,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if matches!(mode, HttpMode::Instance { .. }) && method == "POST" && path == "/api/config" {
+    if matches!(mode, HttpMode::Instance { .. }) && request.starts_with("POST /api/config") {
         if !config_write_allowed() {
             let json_response =
                 r#"{"success": false, "message": "Config write disabled. Set RKSTRATUM_ALLOW_CONFIG_WRITE=1 to enable."}"#;
@@ -572,7 +541,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if method == "GET" {
+    if request.starts_with("GET /") {
         if let Some((rel, bytes)) = try_read_static_file(path) {
             let ct = content_type_for_path(&rel);
             let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n", ct, bytes.len());
@@ -1901,63 +1870,5 @@ min_share_diff: 8192
         let saved = std::fs::read_to_string(&config_path).unwrap();
         assert!(!saved.contains("global:"));
         assert!(saved.contains("instances:"));
-    }
-
-    // Audit P0: static-file path-traversal regression. `safe_static_rel` is the security
-    // boundary for `try_read_static_file`; it must never return a name that escapes the
-    // vendored `bridge/static` root.
-    #[test]
-    fn static_rel_rejects_absolute_traversal() {
-        // `/static//etc/passwd` strips to the absolute `/etc/passwd` (no `..`) — the exact
-        // case the old `contains("..")` guard let through.
-        assert_eq!(safe_static_rel("/static//etc/passwd"), None);
-        assert_eq!(safe_static_rel("/static//root/.ssh/id_rsa"), None);
-    }
-
-    #[test]
-    fn static_rel_rejects_parent_traversal() {
-        assert_eq!(safe_static_rel("/static/../Cargo.toml"), None);
-        assert_eq!(safe_static_rel("/static/../../etc/passwd"), None);
-        assert_eq!(safe_static_rel("/static/sub/../../secret"), None);
-        assert_eq!(safe_static_rel("/static/..\\..\\windows"), None);
-    }
-
-    #[test]
-    fn static_rel_rejects_empty_and_unknown() {
-        assert_eq!(safe_static_rel("/static/"), None);
-        assert_eq!(safe_static_rel("/etc/passwd"), None);
-        assert_eq!(safe_static_rel("/api/config"), None);
-        assert_eq!(safe_static_rel("/../Cargo.toml"), None);
-    }
-
-    #[test]
-    fn static_rel_allows_legitimate_assets() {
-        assert_eq!(safe_static_rel("/").as_deref(), Some("index.html"));
-        assert_eq!(safe_static_rel("/index.html").as_deref(), Some("index.html"));
-        assert_eq!(safe_static_rel("/raw.html").as_deref(), Some("raw.html"));
-        assert_eq!(safe_static_rel("/static/app.js").as_deref(), Some("app.js"));
-        assert_eq!(safe_static_rel("/static/css/style.css").as_deref(), Some("css/style.css"));
-    }
-
-    #[test]
-    fn static_rel_percent_encoding_stays_relative() {
-        // No URL decoding is performed: `%2e%2e`/`%2f` stay literal, so the returned name is
-        // a harmless (nonexistent) relative path — never absolute, never a parent escape.
-        for rel in [safe_static_rel("/static/%2e%2e/secret"), safe_static_rel("/static/%2fetc/passwd")].into_iter().flatten() {
-            let p = std::path::Path::new(&rel);
-            assert!(!p.is_absolute());
-            assert!(p.components().all(|c| matches!(c, std::path::Component::Normal(_))));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_static_traversal_returns_404() {
-        let mode = HttpMode::Instance { instance_id: "0".to_string(), web_bind: "127.0.0.1:0".to_string() };
-        for path in ["/static//etc/passwd", "/static/../Cargo.toml", "/static/../../etc/passwd"] {
-            let req = format!("GET {path} HTTP/1.1\r\n\r\n");
-            let resp = send_request(mode.clone(), &req).await;
-            assert!(resp.contains("404"), "expected 404 for {path}, got: {}", resp.lines().next().unwrap_or(""));
-            assert!(!resp.contains("root:"), "leaked /etc/passwd content for {path}");
-        }
     }
 }

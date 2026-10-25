@@ -6,7 +6,7 @@
 //! **Why.** The panel seed is a function of the anchor attempt (lane F1: its execution commitment and
 //! the claim). While audit P0-10 is open a lottery win costs ~279 junk BLAKE2b draws on the testnet-12
 //! floor, so whoever may produce the anchor can re-roll the panel of any claim whose slot it reaches by
-//! drawing fresh wins until it likes one (docs/history/networks/testnet-12/t12-panel-seed-2026-09-25.md). No seed rule closes that
+//! drawing fresh wins until it likes one (docs/t12-panel-seed-2026-09-25.md). No seed rule closes that
 //! (every rule has a last contributor, and under P0-10 every chain position after the claim is
 //! attacker-ownable). This rule removes the attacker from the anchor position instead: the operator's
 //! future execution commitment is not the attacker's to choose or to predict, so the claim id it fixed

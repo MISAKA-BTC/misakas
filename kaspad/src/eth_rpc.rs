@@ -1086,7 +1086,7 @@ fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse, parent_hash: 
         // `transactionsRoot` is a standard Ethereum keccak256 ordered trie.
         // `receiptsRoot` is a MISAKA-CUSTOM commitment (Borsh EvmReceipt root),
         // NOT the standard typed-receipt RLP trie — standard receipt-trie proofs
-        // will NOT verify against it. See docs/reference/evm/evm-differences-from-ethereum.md
+        // will NOT verify against it. See docs/evm-differences-from-ethereum.md
         // (audit M-02). Switching to standard RLP is a fenced consensus change.
         transactions_root: h.transactions_root.as_bytes(),
         receipts_root: h.receipts_root.as_bytes(),

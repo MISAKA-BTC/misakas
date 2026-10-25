@@ -209,7 +209,7 @@ pub fn paid_claim_commit_object_v2(
         || j.base_job != base_job
         || commit_daa > j.last_commit_daa
         || l.claims.contains_key(&base_claim)
-        // F2 (2026-10-17): whether a live source opt-in of the job blocks the paid commit is the fold's policy-dependent rule.
+        || l.beacon_sources.values().any(|source| source.job == base_job && source.outcome.is_none())
         || material_consent == [0; 64]
     {
         return Err(Refusal::new("CLAIM_ENROLLMENT_INVALID", "prospective class/job/material consent or commit deadline mismatch"));
@@ -397,8 +397,21 @@ pub fn paid_claim_commit_object_derived_v2(
         misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.id(),
     };
     let mut l = route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?;
-    // F2 (2026-10-17): a live source opt-in of the job no longer blocks a paid commit under the seal-reveal policy; the native fold
-    // applies the policy-dependent rule.
+    if l.beacon_sources.values().any(|source| {
+        source.job
+            == match &commit {
+                misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, .. }
+                | misaka_palw_kernel::route::SaltedCommitV1::Segmented { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Pipeline { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.job_id(),
+            }
+            && source.outcome.is_none()
+    }) {
+        return Err(Refusal::new(
+            "CLAIM_SOURCE_DEPENDENCY",
+            "a paid checker-dependent claim cannot consume an independent source opt-in",
+        ));
+    }
     l.try_replay_salted_claim_v4(&commit, &salt, commit.producer(), commit_daa)
         .map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e))?;
     let subject = l
@@ -421,10 +434,8 @@ pub fn sign_paid_claim_object_v2(
     };
     let actor = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
     let named = match inner {
-        // PRINCIPLES §8: the SDK never signs a retired compact V4 contract or proof binding.
-        PaidClaimObjectV2::RegisterCompactContractV4 { .. } | PaidClaimObjectV2::BindCompactProofV4 { .. } => {
-            return Err(misaka_palw_kernel::claim_paid_v2::COMPACT_V4_RETIRED_REASON.into());
-        }
+        PaidClaimObjectV2::RegisterCompactContractV4 { registration } => Some(registration.registrant),
+        PaidClaimObjectV2::BindCompactProofV4 { .. } => None, // exact enrolled producer checked by native admission.
         PaidClaimObjectV2::RegisterClass { class } => Some(class.registrant),
         PaidClaimObjectV2::EnrollJob { job } => Some(job.payer),
         PaidClaimObjectV2::Commit { enrollment, commit, .. }
@@ -444,8 +455,6 @@ pub fn sign_paid_claim_object_v2(
         PaidClaimObjectV2::LockRound { .. } => None,
         PaidClaimObjectV2::Lock { .. } | PaidClaimObjectV2::LockApprovedBootstrapV6 { .. } => None,
         PaidClaimObjectV2::StageMessage { .. } => None, // Native admission checks the enrolled producer.
-        // RFC-0007 §4.1 T6 (dormant): native admission checks the enrolled producer.
-        PaidClaimObjectV2::TrapCommitment { .. } => None,
         PaidClaimObjectV2::ReviewScope { .. }
         | PaidClaimObjectV2::EconomicEvidence { .. }
         | PaidClaimObjectV2::IndependenceEvidence { .. } => None,
@@ -476,10 +485,6 @@ pub mod private_bootstrap;
 pub mod producer_resources;
 pub mod provider_actions_v4;
 pub mod provider_handoff_v4;
-/// RFC-0007: the explicit drawn-verifier assumption report of one paid claim (reporting only; never a credit path).
-pub mod assumptions_v1;
-/// RFC-0006: every registered class's derived worst-case bounds, with time/cost left UNKNOWN until measured.
-pub mod model_bounds_v1;
 pub mod provider_reader_v4;
 
 /// Portable public material for the all-target CLI verifier. Every value is

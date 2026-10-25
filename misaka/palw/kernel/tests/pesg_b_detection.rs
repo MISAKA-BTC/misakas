@@ -1,5 +1,5 @@
 //! **PESG lane B — the worst-case placement of faults and the exact detection probability, in small geometry**
-//! (`docs/design/palw/economics/probabilistic-economic-security-gate.md` §4 B, T2; the report is `docs/design/palw/verification/pesg-b-detection-bounds.md`).
+//! (`docs/design/palw/probabilistic-economic-security-gate.md` §4 B, T2; the report is `docs/design/palw/pesg-b-detection-bounds.md`).
 //!
 //! Every fault the gate lists is placed in every position of a real five-position claim (the dense + MoE + history fixture: MatMul,
 //! quantization, the integer nonlinears, TopK routing, `Gather`, `Fixed` and `Hist` state), against every sample choice a verifier can

@@ -1,6 +1,6 @@
 //! **ECON — GAP-B12: what one vetoing seal buys, measured against the sealed-source beacon v3 collector.**
 //!
-//! Design and derivation: `docs/design/palw/economics/econ-verifier-incentive-and-allocation.md` §4; the derivation itself (stall, cost,
+//! Design and derivation: `docs/design/palw/econ-verifier-incentive-and-allocation.md` §4; the derivation itself (stall, cost,
 //! damage, the deposit) is the executable model `scripts/sim/misaka-palw-econ-verifier-model.py`. This file measures the two facts about
 //! consensus code that derivation reads:
 //!

@@ -20,9 +20,6 @@ use kaspa_consensus_core::{
 use std::{collections::VecDeque, thread::JoinHandle};
 
 mod palw_mergeset_view;
-// RFC-0018 §10 T-1/T-2: three models × three miners from the same parents; arrival-order independence (unbuilt source).
-mod rfc0018_dag_siblings;
-mod rfc18_dag_width;
 
 struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
@@ -2031,7 +2028,7 @@ async fn palw_v2_a_template_commits_the_selected_parent_root_even_when_the_tip_d
 /// different starting points on ONE chain yields the same fact, and the fact names a block the
 /// walk found rather than one anybody supplied. The end-to-end spend path additionally needs a
 /// certified free-prompt claim on chain, which needs the FP worker's legs capture (see
-/// `docs/design/palw/execution/palw-fp-wiring-atomicity.md`) — until then the pipeline's arm is exercised by the
+/// `docs/palw-fp-wiring-atomicity.md`) — until then the pipeline's arm is exercised by the
 /// derivation it calls, and by every V2 block going through it with no receipt lane in play.
 #[tokio::test]
 async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
@@ -2668,7 +2665,7 @@ async fn palw_v2_an_unbonded_merged_blue_is_not_paid() {
 
     // Honest chain: nothing is withheld. A filter that dropped an honest miner's subsidy would be
     // a worse bug than the one it closes.
-    let unentitled = vp.palw_v2_unentitled_blues_checked_v1(&parent_state, &ghostdag_data, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled = vp.palw_v2_unentitled_blues(&parent_state, &ghostdag_data, &non_daa, &point);
     assert!(unentitled.is_empty(), "every blue of an honest V2 chain is bonded and paid, got {unentitled:?}");
 
     // And the predicate really separates: the same attempt, naming a bond this chain does not hold.
@@ -3195,7 +3192,7 @@ async fn palw_v2_a_merged_blocks_carve_is_withheld_and_escrowed_past_the_deep_fe
     };
 
     // The withhold map the sink's coinbase used, recomputed from the same selected-parent state.
-    let withheld = vp.palw_v2_merged_escrow_withheld_checked_v1(&parent_state, &ghostdag_data, &non_daa, &point).expect("the merged pay set resolves");
+    let withheld = vp.palw_v2_merged_escrow_withheld(&parent_state, &ghostdag_data, &non_daa, &point);
     assert!(!withheld.is_empty(), "past the fence, a merged attempt's carve is withheld — otherwise this proves nothing");
     for (blue, carve) in &withheld {
         assert!(*carve > 0, "the withheld carve is the merged block's worker share, non-zero");
@@ -6582,11 +6579,6 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     let reserve_accrued = ctx.consensus.virtual_processor().reserve_balance_store.get(reserve_settle.header.hash).unwrap_or(0);
     assert_eq!(reserve_accrued, dist.security_reserve_sompi, "A's slash accrues its reserve share to the pool");
     assert!(reserve_accrued > 0, "the reserve must be non-zero to drip");
-    assert_eq!(
-        ctx.consensus.get_dns_reserve_balance(reserve_settle.header.hash),
-        Some(dist.security_reserve_sompi),
-        "RFC12 reads the actual positive balance, independently checked against the slashed principal's split"
-    );
 
     // ── Mine until epoch E's DAA-finalization; the drip pays B in that block's coinbase ─────────
     let target_final_daa =
@@ -6609,16 +6601,6 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     let drip_out = drip_block.transactions[0].outputs.iter().find(|o| o.script_public_key == spk_b).expect("drip pays B");
     // The sole included validator B receives the WHOLE reserve (cap is u64::MAX): accrued-in == dripped-out.
     assert_eq!(drip_out.value, reserve_accrued, "the entire accrued reserve drips to the lone included validator B");
-    assert_eq!(
-        ctx.consensus.get_dns_reserve_balance(drip_block.header.hash),
-        Some(0),
-        "RFC12 reports known zero after the independently observed coinbase drip exhausts the reserve"
-    );
-    assert_eq!(
-        ctx.consensus.get_dns_reserve_balance(reserve_settle.header.hash),
-        Some(reserve_accrued),
-        "a later drip does not change the historical block's reserve balance"
-    );
 }
 
 /// kaspa-pq ADR-0016 §D.2 — the bond-UTXO spend-gate races the slashing side-effect (audit M-01). A
@@ -13600,7 +13582,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         "evm_template_fields",
         "calculate_virtual_state",
         "palw_candidate_state_v2_checked",
-        "palw_weighing_point_v2_checked",
+        "palw_weighing_point_v2",
         "palw_pruning_point_allowed_v2",
         "capture_pruning_point_palw_state",
     ];
@@ -13617,9 +13599,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         {
             enclosing = rest.split(['(', '<']).next().unwrap_or_default().to_string();
         }
-        // `load_tip_retained_v1` is the same uncached owned materialization, returning its native allocation ticket with it
-        // (RFC-0008 retained ownership): the walk-or-write paths take it now.
-        if line.contains(".load_tip(") || line.contains(".load_tip_retained_v1(") {
+        if line.contains(".load_tip(") {
             found.push(enclosing.clone());
         }
     }
@@ -13682,36 +13662,24 @@ fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
         let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
         rest[..end].to_string()
     };
-    assert!(
-        body_of("validate_block_template_transaction").contains("self.palw_mempool_h1_carrier_refusal("),
-        "the template must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"
-    );
-    // Liveness hotfix (L-LC-02): admission asks the same gate behind the guard (memories, budget, classification).
-    assert!(
-        body_of("validate_mempool_transaction_impl").contains("self.palw_mempool_h1_admission_refusal_v1("),
-        "admission must ask the H-1 carrier gate behind its guard"
-    );
-    let admission = body_of("palw_mempool_h1_admission_refusal_v1");
-    assert!(admission.contains("self.palw_h1_gated_object_at("), "admission takes the gate's object");
-    assert!(admission.contains("self.palw_h1_gate_point_v1("), "admission judges at the gate's point");
-    assert!(admission.contains("self.palw_h1_carrier_refusal_typed_on("), "admission asks the gate's layers");
+    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
+        assert!(
+            body_of(caller).contains("self.palw_mempool_h1_carrier_refusal("),
+            "{caller} must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"
+        );
+    }
     // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block — the gate's own
     // two steps (its object, then its layers on a tip), on the one snapshot the sweep checked
-    // against the virtual (the V01 review, MEDIUM); through the verdict memory (liveness hotfix).
+    // against the virtual (the V01 review, MEDIUM).
     for asker in ["palw_mempool_h1_carrier_refusal", "palw_h1_carrier_refusals_v1_impl"] {
         let body = body_of(asker);
         assert!(body.contains("self.palw_h1_gated_object_at("), "{asker} takes the gate's object");
-        assert!(body.contains("self.palw_h1_gate_memoised_v1("), "{asker} asks the gate's layers through the verdict memory");
+        assert!(body.contains("self.palw_mempool_h1_carrier_refusal_with("), "{asker} asks the gate's layers");
     }
-    let memoised = body_of("palw_h1_gate_memoised_v1");
-    assert!(memoised.contains("self.palw_h1_gate_point_v1(") && memoised.contains("self.palw_h1_carrier_refusal_typed_on("));
-    let with = body_of("palw_mempool_h1_carrier_refusal_with");
-    assert!(with.contains("self.palw_h1_gate_point_v1(") && with.contains("self.palw_h1_carrier_refusal_on("));
-    assert!(body_of("palw_h1_carrier_refusal_on").contains("self.palw_h1_carrier_refusal_typed_on("));
-    let on = body_of("palw_h1_carrier_refusal_typed_on");
+    assert!(body_of("palw_mempool_h1_carrier_refusal_with").contains("self.palw_h1_carrier_refusal_on("));
+    let on = body_of("palw_h1_carrier_refusal_on");
     assert!(on.contains("self.palw_v2_validate_objects("), "the acceptance layer");
-    // The fold's arm returns its retained owner since RFC-0008's retained ownership (`_retained_v1`).
-    assert!(on.contains("palw_v2_apply_one_object_retained_v1("), "and the fold's own arm");
+    assert!(on.contains("palw_v2_apply_one_object_v1("), "and the fold's own arm");
 }
 
 /// **`getPalwProducerFacts` answers from one tip materialization, not two per call** (mainnet
@@ -13882,9 +13850,7 @@ async fn a_missing_delta_under_the_tip_is_recovered_from_the_pruning_snapshot() 
     let mut diff = kaspa_consensus_core::utxo::utxo_diff::UtxoDiff::default();
     let mut bond_view = vp.initial_active_bond_view();
     // Two failures are staged at once and each has its own answer, so the assertions separate them.
-    let reached = vp
-        .calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, sink)
-        .expect("the walk has the native capacity it needs");
+    let reached = vp.calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, sink);
 
     // 1. The BASE. Reverting the tip needs the delta that is gone, so the tip is not a usable base;
     //    the pruning snapshot is, and the walk got past `from` on the strength of it. Without that
@@ -13912,9 +13878,7 @@ async fn a_missing_delta_under_the_tip_is_recovered_from_the_pruning_snapshot() 
     //    the same snapshot) returns exactly that block.
     let mut diff = kaspa_consensus_core::utxo::utxo_diff::UtxoDiff::default();
     let mut bond_view = vp.initial_active_bond_view();
-    let reached = vp
-        .calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, below)
-        .expect("the walk has the native capacity it needs");
+    let reached = vp.calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, below);
     assert_eq!(reached, below, "the rebuilt base must carry the walk all the way to {below}");
     let _ = state_params;
 }
@@ -14508,7 +14472,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
     //      produces a spend the pay set accepts. If this failed, an empty result below would be
     //      "both rejected", not "both paid". ----
     let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1]), anticone());
-    let unentitled_one = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_one, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled_one = vp.palw_v2_unentitled_blues(&injected, &gd_one, &non_daa, &point);
     assert!(
         unentitled_one.is_empty(),
         "positive control: one valid receipt spend must be entitled (paid), so the fixture really produces a valid spend; \
@@ -14517,7 +14481,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
 
     // ---- The finding: TWO siblings spending ONE quantum in one mergeset. ----
     let gd = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1, r2]), anticone());
-    let unentitled = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled = vp.palw_v2_unentitled_blues(&injected, &gd, &non_daa, &point);
 
     // Concrete effect: BOTH receipt siblings are paid (neither marked unentitled).
     let both_paid = !unentitled.contains(&r1) && !unentitled.contains(&r2);
@@ -14813,7 +14777,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // Positive control: ONE valid V4 spend, as a merged red, is entitled — and the payout map names the executor bond's registered payout
     // (`0x9A11`, derived to a script) and the authorization's fee, so the coinbase splits it.
     let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a]), anticone());
-    let unentitled_one = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_one, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled_one = vp.palw_v2_unentitled_blues(&injected, &gd_one, &non_daa, &point);
     assert!(unentitled_one.is_empty(), "positive control: a valid V4 spend is entitled; got unentitled={unentitled_one:?}");
     let payouts = vp.palw_v2_receipt_v4_payouts(&injected, &gd_one, &non_daa, &unentitled_one);
     let expected_script = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_miner_script(&h64(0x9A11));
@@ -14825,7 +14789,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // Two V4 siblings of ONE quantum: exactly one is entitled, and only that one has a payout entry (B-5's dedup runs on the fold view).
     let gd_two =
         GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a, v4_b]), anticone());
-    let unentitled_two = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_two, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled_two = vp.palw_v2_unentitled_blues(&injected, &gd_two, &non_daa, &point);
     assert_eq!(unentitled_two.len(), 1, "one quantum, two V4 siblings: paid once");
     assert!(unentitled_two.contains(&v4_b) && !unentitled_two.contains(&v4_a), "the first in acceptance order wins");
     let payouts_two = vp.palw_v2_receipt_v4_payouts(&injected, &gd_two, &non_daa, &unentitled_two);
@@ -14834,7 +14798,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // A V3 and a V4 spend of the SAME quantum are the same double spend: paid once, whichever is first.
     let gd_mixed =
         GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v3_hash, v4_a]), anticone());
-    let unentitled_mixed = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_mixed, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled_mixed = vp.palw_v2_unentitled_blues(&injected, &gd_mixed, &non_daa, &point);
     assert_eq!(unentitled_mixed.len(), 1, "V3 and V4 share one spent-quantum ledger: paid once");
     assert!(unentitled_mixed.contains(&v4_a));
     let payouts_mixed = vp.palw_v2_receipt_v4_payouts(&injected, &gd_mixed, &non_daa, &unentitled_mixed);
@@ -14969,12 +14933,6 @@ struct AcSlotFixture {
 }
 
 fn ac_slot_fixture() -> AcSlotFixture {
-    ac_slot_fixture_with(false)
-}
-
-/// [`ac_slot_fixture`], with the liveness fix L-COURT-01's fence (`palw_court_completion_attempt_v1`) armed from genesis when
-/// `completion_attempt`.
-fn ac_slot_fixture_with(completion_attempt: bool) -> AcSlotFixture {
     use kaspa_consensus_core::config::params::ForkActivation;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwStateCarriageV2, PalwStateParamsV2};
@@ -15011,9 +14969,6 @@ fn ac_slot_fixture_with(completion_attempt: bool) -> AcSlotFixture {
                 p.palw_kary_court = Some(ForkActivation::always());
                 // AC-SLOT charges the court slot post-apply only past the audit flag day; arm it.
                 p.palw_audit_2026_09_11 = Some(ForkActivation::always());
-                if completion_attempt {
-                    p.palw_court_completion_attempt_v1 = Some(ForkActivation::always());
-                }
                 *p = p.clone().with_palw_v2_cadence();
             }
         })
@@ -15122,91 +15077,6 @@ async fn a_fold_failing_court_move_does_not_spend_the_block_slot() {
     );
 }
 
-/// **Liveness fix L-COURT-01 (`palw_court_completion_attempt_v1`): a refused split-close completion spends the block's court slot.**
-///
-/// A completing chunk makes the acceptance layer assemble, digest, decode and adjudicate its close; one whose close does not
-/// adjudicate is refused there and leaves its group intact. Under AC-SLOT's charge-on-apply the refusal spent nothing, so a block
-/// could carry the same refused completion in any number of carriers — one adjudication each for every validator. Here a group on
-/// the fixture's session holds chunk 0 of a close (a decode-token proof the court refuses), and the block carries the completing
-/// chunk three times and then the honest root claim, which spends the slot by itself.
-///
-/// * Below the fence (AC-SLOT, unchanged): the three refused completions spend nothing; the honest root claim is carried.
-/// * Past it: the first refused completion spends the slot; the two copies behind it are dropped BEFORE their adjudication, and so is
-///   the root claim — the block's one court adjudication was the refused completion's. The block stands either way.
-/// * A root claim the fold refuses (AC-SLOT's junk copy) still spends nothing past the fence: only completions are charged on attempt.
-#[tokio::test]
-async fn l_court_01_a_refused_split_close_completion_spends_the_slot_past_the_fence() {
-    use kaspa_consensus_core::palw_state_v2::{
-        PalwConsensusObjectV2 as Obj, PalwCourtCloseGroupV2, PalwCourtSideV1, PalwCourtVerdictV2, PalwStateCarriageV2,
-        palw_court_close_chunk_digest_v1, palw_court_close_completes_a_group_v1,
-    };
-    for armed in [false, true] {
-        let f = ac_slot_fixture_with(armed);
-        let vp = f.ctx.consensus.virtual_processor();
-        let point = ac_slot_point(f.daa);
-        let Obj::CourtAttnRootClaimed { binding, .. } = &f.honest else { unreachable!() };
-        let close = Obj::CourtClosed {
-            session_id: f.sid,
-            verdict: PalwCourtVerdictV2::ExecutorGuilty,
-            proof: kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::DecodeToken {
-                binding: (**binding).clone(),
-                pin: kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: vec![], generated_token_ids: vec![] },
-                position: 0,
-            },
-        };
-        let bytes = borsh::to_vec(&close).unwrap();
-        let (head, tail) = bytes.split_at(bytes.len() / 2);
-        let mut carriage = PalwStateCarriageV2::from_state(&f.state);
-        let declarer = carriage.claims.get(&f.claim).expect("the drill's claim").bond;
-        carriage.court_close_groups.insert(
-            (f.sid, PalwCourtSideV1::Executor),
-            PalwCourtCloseGroupV2 {
-                declarer,
-                count: 2,
-                chunk_digests: vec![palw_court_close_chunk_digest_v1(head), palw_court_close_chunk_digest_v1(tail)],
-                close_digest: palw_court_close_chunk_digest_v1(&bytes),
-                verdict: PalwCourtVerdictV2::ExecutorGuilty,
-                declared_daa: f.daa,
-                assembly_deadline_daa: f.daa + 8,
-                present: 1,
-                deposit_outpoint: Default::default(),
-                deposit: 0,
-                chunks: [(0u8, head.to_vec())].into_iter().collect(),
-            },
-        );
-        let state = carriage.into_state(&f.params, None).expect("the fixture with a half-assembled close loads");
-        let completing = Obj::CourtCloseChunk { session_id: f.sid, side: PalwCourtSideV1::Executor, index: 1, bytes: tail.to_vec() };
-        assert!(palw_court_close_completes_a_group_v1(&state, &completing), "the tail completes the group on its face");
-        let why = vp
-            .palw_v2_validate_objects(&state, &f.params, &point, std::slice::from_ref(&completing))
-            .expect_err("the assembled close does not adjudicate");
-        eprintln!("L-COURT-01 (armed = {armed}): the completion is refused by the acceptance layer: {why}");
-
-        // Control: the honest root claim alone is carried on this state.
-        let alone = vp.palw_v2_accepted_objects_for_tests(&state, &f.params, &point, vec![f.honest.clone()], point.block);
-        assert_eq!(alone, vec![f.honest.clone()], "control: the honest root claim is carried");
-
-        let carried = vp.palw_v2_accepted_objects_for_tests(
-            &state,
-            &f.params,
-            &point,
-            vec![completing.clone(), completing.clone(), completing.clone(), f.honest.clone()],
-            point.block,
-        );
-        if armed {
-            assert!(
-                carried.is_empty(),
-                "past the fence the refused completion spent the block's one court slot; its copies and the root claim are dropped"
-            );
-        } else {
-            assert_eq!(carried, vec![f.honest.clone()], "below the fence AC-SLOT is unchanged: a refused completion spends nothing");
-        }
-        // AC-SLOT's own property holds on both sides: a root claim the FOLD refuses spends nothing.
-        let carried = vp.palw_v2_accepted_objects_for_tests(&state, &f.params, &point, vec![f.junk.clone(), f.honest.clone()], point.block);
-        assert_eq!(carried, vec![f.honest.clone()], "armed = {armed}: a fold-refused root claim still spends no slot");
-    }
-}
-
 /// **AC-SLOT, to the rung deadline: a replayed signature cannot crowd the filer into a conviction.**
 ///
 /// The responder files its honest root claim in EVERY block; the attacker puts one replayed copy
@@ -15271,9 +15141,7 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
     assert!(!source.contains("adjudicate_court_close_v2("), "every close is judged by v4, which knows the held regime");
     // RFC-0006 R6-CELL round 4: the three sites moved to v4, which is v3 with `palw_cell_coverage_closure_v1`'s mirror.
     assert!(!source.contains("adjudicate_court_close_v3("), "every close also knows the coverage closure");
-    // RFC-0006 consumer v2: the three sites moved to v5, which is v4 with `palw_memory_routing_court_v2`'s mirror.
-    assert!(!source.contains("adjudicate_court_close_v4("), "every close also knows the memory/routing consumer v2");
-    assert_eq!(source.matches("adjudicate_court_close_v5(").count(), 3, "the node's verdict, a close chunk and a close");
+    assert_eq!(source.matches("adjudicate_court_close_v4(").count(), 3, "the node's verdict, a close chunk and a close");
     assert!(source.contains("palw_fp_objects_from_accepted_txs_by_class_v1("), "the walk bounds each commitment by its class");
 }
 
@@ -15305,7 +15173,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
     let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
     let end = at + source[at..].find("\n                Obj::").expect("the next arm");
     let arm = &source[at..end];
-    let refusal = arm.find("state.held_claim_is_unanswerable_v2(state_params, claim)").expect("the mirror is read");
+    let refusal = arm.find("state_params.held_class_is_unanswerable_v1(&claim.class_id)").expect("the mirror is read");
     let guard = &arm[refusal.saturating_sub(160)..refusal];
     assert!(
         guard.contains("if self.palw_offence_attribution_at(point.daa_score)") && guard.contains("NeedsDissection)"),
@@ -15318,7 +15186,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
         &fold[fold_at..fold_at + fold[fold_at..].find("PalwConsensusObjectV2::CheckpointAccused { accusation } => {").unwrap()];
     assert!(
         fold_arm
-            .contains("builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim)"),
+            .contains("builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id)"),
         "the fold refuses under the same fence and mirror"
     );
 }
@@ -15344,9 +15212,8 @@ fn the_acceptance_layer_takes_the_held_root_claim_past_the_fence_and_refuses_an_
     }
     let registration = source.find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(").expect("the gate");
     let after = &source[registration..registration + 6_000];
-    let c5 = after.find("palw_held_class_is_attributable_v2(").expect("C5 beside the gate");
+    let c5 = after.find("palw_held_class_is_attributable_v1(").expect("C5 beside the gate");
     assert!(after[c5..c5 + 200].contains("self.palw_offence_attribution_at(point.daa_score)"), "at the block's fence");
-    assert!(after[c5..c5 + 300].contains("self.palw_memory_routing_court_v2_at(point.daa_score)"), "the versioned route uses the same block height");
     assert!(source.contains("O::CourtAttnRootClaimedHeld { .. } => \"CourtAttnRootClaimedHeld\","), "and it has a name");
 }
 
@@ -16589,7 +16456,7 @@ async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
 
         // The escrows its coinbase withholds for the merged blocks it did not select, sized from the
         // record its fold escrowed from.
-        let merged_withheld = vp.palw_v2_merged_escrow_withheld_checked_v1(&state_before, &ghostdag, &non_daa, &point).expect("the merged pay set resolves");
+        let merged_withheld = vp.palw_v2_merged_escrow_withheld(&state_before, &ghostdag, &non_daa, &point);
         for (merged, carve) in &merged_withheld {
             let merged_daa = vp.headers_store.get_daa_score(*merged).unwrap();
             let subsidy = vp.coinbase_manager.calc_block_subsidy(merged_daa) as u128;
@@ -17102,9 +16969,6 @@ mod t12_permissionless_panel_e2e;
 // Lane BUDGET (ADR-0176): the bond budget through the real pipeline on testnet-12 (a bypassed, never armable fence) — equal ceilings for
 // a fast and a slow producer, ρ ×1/×100/×1000, no recovery before accepted + W, IBD, reorg and restart.
 mod budget_e2e;
-// RFC-0016 (dormant, bypassed): V+ with every right at zero — the heartbeat keeps the cadence, is not tightened and earns nothing; IBD
-// and restart reach the same state.
-mod rfc0016_e2e;
 // Lane V02 (post-launch, 2026-09-26): `palw_final_lock_full_collateral` crossed on a real chain — lock-heavy
 // seats bind from the height and void their anchor below it.
 mod t12_final_lock_full_collateral_fence;
@@ -17156,10 +17020,6 @@ mod rfc12_zero_dns_matrix;
 // RFC-0012 wave 2 (C1 a real claim to `Final` with the lane on, C2 a pruned join with EVM state): `evm` feature only, like the matrix.
 #[cfg(feature = "evm")]
 mod rfc12_c_items;
-// RFC-0012 R12-AUTHORITY item 4 (port of codex/rfc12-remove-dns-bft, 2026-10-15): every DNS authority read in the consensus crate is
-// inventoried and asks the retirement — a source scan, no feature needed.
-mod rfc12_dns_reader_inventory;
-mod rfc12_acceptance_reads;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
@@ -17813,7 +17673,3 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
 
 // Local native capacity is retryable, never a branch preference or invalidity.
 mod rfc12_native_capacity_selection;
-
-mod carrier_bond_rent_conservation;
-
-mod funded_original_native_candidate;

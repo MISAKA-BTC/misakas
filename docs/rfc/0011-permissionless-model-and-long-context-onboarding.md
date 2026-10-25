@@ -1,9 +1,5 @@
 # RFC-0011: Permissionless model onboarding with probabilistic constraint verification and court on dispute
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
-> **適用時期の現行方針（2026-10-17 文書化）:** 本書が参照する画像・動画生成および RFC-0004 の改善に限り **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
-
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -33,7 +29,7 @@ Registration checks a bounded `VerificationPlanV1`: semantic bindings, coverage 
 
 **Revision boundary.** This replaces §13.1's former requirement for a model-specific, exhaustive deterministic admission proof as the preferred route. Small existing classes may retain exact sizing/replay. The old 9B/2M failures and coverage audit remain historical evidence. Probabilistic execution acceptance does not permit probabilistic parser/memory safety: every permitted query and terminal dispute must still fit enforced bounds, established through reusable approved kernel-primitive rules and composition. An unknown dynamic access can use an authenticated-memory constraint and bounded opening; it cannot be omitted from verification. §15 defines the new route; where earlier release gates mention exact bounds they refer to resource safety and terminal semantics, not full normal-path replay.
 
-**Kernel-only revision, 2026-10-06:** [ADR-0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) and [Kernel design §§K.0–K.8](../design/palw/models/versioned-kernels.md) withdraw the BVM/GVM fallback. Model extensibility uses declarative plans within active kernels or a coordinated, versioned kernel extension when semantics/checkers/courts are missing (§16). The probabilistic, encoded-constraint acceptance policy in §15 is unchanged. This is not a claim that all finite models fit today's kernels or that a SegWit-style extension is automatically a soft fork.
+**Kernel-only revision, 2026-10-06:** [ADR-0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) and [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) withdraw the BVM/GVM fallback. Model extensibility uses declarative plans within active kernels or a coordinated, versioned kernel extension when semantics/checkers/courts are missing (§16). The probabilistic, encoded-constraint acceptance policy in §15 is unchanged. This is not a claim that all finite models fit today's kernels or that a SegWit-style extension is automatically a soft fork.
 
 **The coverage claim this RFC is intended to enable is not “90% of decoder fixtures” or “90% of local LLMs”; it is `registered_full_task / D_all ≥ 0.90` for a dated, reproducible census of all public Hugging Face model repositories (§7).** `registered_full_task` requires an accepted on-chain class registration under the target rules, or independently reproduced equivalence to an already registered class (§11.2), not a passing config parser, a draft artifact, a catalogue entry, a short-context substitute or a model-market line. This proposal does not assert that today's implementation meets that threshold; it defines the evidence that must exist before anyone may say it does.
 
@@ -162,7 +158,7 @@ The appropriate empirical sources are the official [HF Hub API](https://huggingf
 
 ### 8.1 Recount of the checked-in evidence, not a projected success rate
 
-The accompanying [audit JSON](../evidence/rfc/0011-existing-coverage-audit.json) pins SHA-256 hashes of the reports and their harnesses. The [read-only audit script](../evidence/rfc/0011-audit-coverage.mjs) recomputes these results from repository files; it does not execute or register models, enumerate HF, or replace missing evidence with a prediction.
+The accompanying [audit JSON](evidence/0011-existing-coverage-audit.json) pins SHA-256 hashes of the reports and their harnesses. The [read-only audit script](evidence/0011-audit-coverage.mjs) recomputes these results from repository files; it does not execute or register models, enumerate HF, or replace missing evidence with a prediction.
 
 | Evidence scope | Observed saved result | What it establishes |
 | --- | --- | --- |
@@ -501,7 +497,7 @@ target in §15 stay in force. Static bounds/identity checks remain deterministic
 
 The removed path is `unsupported model → BVM/GVM/Universal VM`. It is replaced by
 `unsupported relation → precise missing kernel capability → reviewed versioned upgrade → retry`.
-The full kernel descriptor, class binding and activation design is [Kernel design §§K.0–K.8](../design/palw/models/versioned-kernels.md).
+The full kernel descriptor, class binding and activation design is [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md).
 
 ### 16.2 Registration outcomes, independently of hardware
 
@@ -577,7 +573,7 @@ performance claim follows from choosing the kernel-only implementation strategy.
 
 This is a proposed semantic lifecycle for the new route, not a change to current Rust enums, legacy registration,
 active classes or network rules. [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)
-alone defines the policy, sources, seed/sampling and interactive transcript rules. The [Kernel design](../design/palw/models/versioned-kernels.md) binds the policy to the
+alone defines the policy, sources, seed/sampling and interactive transcript rules. The [Kernel design](../design/palw/versioned-kernels.md) binds the policy to the
 Kernel; RFC02 binds it into new class/plan identity; RFC13 records commitment/evidence and resumable tooling.
 
 ```text
@@ -741,6 +737,6 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 
 ## 改定 — 2026-10-12（BeaconConformanceとbootstrap exact sourceの型分離：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §6。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §6。
 
 §17の通常のBeaconConformanceと、限定したbootstrap exact source経路（RFC-0007 2026-10-12改定の `BootstrapExact`、仮称）を型で分離する。bootstrap経路でsource候補を得たことは乱数としての資格を意味せず、entropy資格は別に審査する。単体/統合試験用のsynthetic randomnessはproduction不可として型・設定を分離する。

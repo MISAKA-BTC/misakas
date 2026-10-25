@@ -327,14 +327,6 @@ impl RpcApi for GrpcClient {
     route!(get_palw_vesting_call, GetPalwVesting);
     route!(get_palw_reward_vesting_call, GetPalwRewardVesting);
     route!(get_palw_staged_preclaim_quote_call, GetPalwStagedPreclaimQuote);
-    route!(get_palw_router_binding_v2_call, GetPalwRouterBindingV2);
-    route!(get_palw_paid_claim_call, GetPalwPaidClaim);
-    route!(get_palw_acceptance_reads_call, GetPalwAcceptanceReads);
-    route!(get_palw_rfc_0016_report_call, GetPalwRfc0016Report);
-    route!(get_palw_claim_detail_call, GetPalwClaimDetail);
-    route!(get_palw_court_state_call, GetPalwCourtState);
-    route!(get_palw_fence_schedule_call, GetPalwFenceSchedule);
-    route!(get_palw_bond_detail_call, GetPalwBondDetail);
     route!(get_palw_activation_pool_call, GetPalwActivationPool);
     route!(get_palw_capacity_shadow_call, GetPalwCapacityShadow);
     route!(get_palw_state_proof_call, GetPalwStateProof);

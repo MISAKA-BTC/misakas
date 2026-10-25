@@ -109,7 +109,7 @@ pub(super) fn root_changed(state: &mut PalwChainStateV2, root: &crate::palw_work
     }
 }
 
-pub(super) fn sweep(builder: &mut TransitionBuilder<'_>, now: u64) -> Result<(), PalwStateV2Error> {
+pub(super) fn sweep(builder: &mut TransitionBuilder<'_>, now: u64) {
     let due: Vec<_> = builder
         .state
         .exec_v2_job_use_deadlines
@@ -118,22 +118,12 @@ pub(super) fn sweep(builder: &mut TransitionBuilder<'_>, now: u64) -> Result<(),
         .map(|(_, key)| *key)
         .collect();
     for key in due {
-        builder.write_exec_job_use(key, None)?;
+        builder.write_exec_job_use(key, None);
     }
-    Ok(())
 }
 
 impl TransitionBuilder<'_> {
-    pub(super) fn write_exec_job_use(&mut self, key: Hash64, new: Option<PalwExecJobUseV1>) -> Result<(), PalwStateV2Error> {
-        // RFC-0006: the old-row clone and the deadline node, from the actual rows.
-        if self.native_writers_tracking_v1() {
-            let mut q = super::native_writers::NativeWriteQuoteV1::new("native exec job-use clone and deadline index");
-            if let Some(previous) = self.state.exec_v2_job_uses.get(&key) {
-                q.copy(previous)?;
-            }
-            q.member::<(u64, Hash64), ()>(u64::from(new.is_some()))?;
-            self.admit_native_write_v1(q)?;
-        }
+    pub(super) fn write_exec_job_use(&mut self, key: Hash64, new: Option<PalwExecJobUseV1>) {
         let old = self.state.exec_v2_job_uses.get(&key).cloned();
         if let Some(row) = old {
             self.state.exec_v2_job_use_deadlines.remove(&(row.expires_daa, key));
@@ -143,8 +133,7 @@ impl TransitionBuilder<'_> {
         {
             self.state.exec_v2_job_use_deadlines.insert((row.expires_daa, key));
         }
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_JOB_USES_V1, key, new, |s| &mut s.exec_v2_job_uses)?;
-        Ok(())
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_JOB_USES_V1, key, new, |s| &mut s.exec_v2_job_uses);
     }
 }
 

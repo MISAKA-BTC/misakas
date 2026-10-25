@@ -39,27 +39,6 @@ impl<T: BorshDeserialize> BorshDeserialize for PalwSharedCourtV1<T> {
         Ok(Self(std::sync::Arc::new(T::deserialize_reader(reader)?)))
     }
 }
-/// G14 lane r5-f02-wire: kind of an entry of the per-claim court-service index (a derived projection; never serialized).
-pub const COURT_INDEX_SHARED_NOTICE_V1: u8 = 0;
-/// See [`COURT_INDEX_SHARED_NOTICE_V1`].
-pub const COURT_INDEX_DUTY_CLOCK_V1: u8 = 1;
-
-/// The per-claim court-service index entry a staged row projects to, if any: `(claim, (kind, daa, key))`.
-pub fn court_service_claim_index_entry_v1(
-    key: PalwStagedCourtKeyV1,
-    row: &PalwStagedCourtRowV1,
-) -> Option<(Hash64, (u8, u64, PalwStagedCourtKeyV1))> {
-    match (key, row) {
-        (PalwStagedCourtKeyV1::CourtSharedQuery(_), PalwStagedCourtRowV1::CourtSharedQuery(q)) => {
-            Some((q.claim, (COURT_INDEX_SHARED_NOTICE_V1, q.opened_daa, key)))
-        }
-        (PalwStagedCourtKeyV1::CourtDutyClock(_), PalwStagedCourtRowV1::CourtDutyClock(c)) => {
-            Some((c.claim, (COURT_INDEX_DUTY_CLOCK_V1, 0, key)))
-        }
-        _ => None,
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub enum PalwStagedCourtKeyV1 {
     Claim(Hash64),
@@ -68,46 +47,6 @@ pub enum PalwStagedCourtKeyV1 {
     Inventory(Hash64),
     /// A registered TIR class's published layout (behind `palw_staged_tir_route_v1`).
     TirLayout(Hash64),
-    /// Dormant versioned TIR acquisition sidecars; not legacy Owner courts.
-    TirAcquisition(Hash64, PalwBondKeyV2, Hash64),
-    TirRawChunk(Hash64),
-    TirAcceptedBody(Hash64),
-    /// Claim-wide preparation is fixed at original acceptance, not owner Open.
-    TirPreparation(Hash64, Hash64),
-    /// Original versioned full-allocation TIR frame; never an old ClaimBundle.
-    TirClaim(Hash64),
-    /// G14 R7: a staged conviction witness being assembled, per (claim, filer).
-    TirWitness(Hash64, PalwBondKeyV2),
-    /// RFC-0002 02-A: a registered TIR class's bound `PALWART3` container (behind `palw_tir_container_identity_v1`).
-    TirContainer(Hash64),
-    /// Proposed service ledger; appended tag, no existing tag changes.
-    CourtService,
-    /// RFC-0028 candidate prerequisite history; appended key tag 13.
-    CourtDutyClock(Hash64),
-    CourtSharedContext(Hash64),
-    CourtSharedQuery(Hash64),
-    CourtSharedIds(Hash64),
-    CourtSharedStream(Hash64),
-    CourtSharedChunk(Hash64,u64),
-    CourtSharedResponse(Hash64,PalwBondKeyV2),
-    /// RFC-0030 isolated candidate; appended key20, no old tag changes.
-    CourtEndArchive(Hash64),
-    CourtCloseReceipt(Hash64,crate::palw_state_v2::PalwCourtSideV1),
-    /// Private canonical numerical root, appended key22.
-    CourtSharedRoot(Hash64,u64),
-    CourtSharedRound(Hash64),
-    CourtSharedBottom(Hash64),
-    /// RFC-0034 private provenance, appended key25.
-    CourtArchiveProgress(Hash64,crate::palw_state_v2::PalwCourtSideV1),
-    /// RFC-0032 A material intake (lane material-intake), appended keys 26-29.
-    /// (claim, draft): one submitter's incomplete body; never a target slot.
-    CourtMaterialDraft(Hash64,Hash64),
-    /// (draft, offset): one retained part of a draft.
-    CourtMaterialPart(Hash64,u64),
-    /// (claim, target): the first complete authenticated body.
-    CourtMaterial(Hash64,Hash64),
-    /// (claim, submitter): derived per-claim storage reservation.
-    CourtMaterialLedger(Hash64,PalwBondKeyV2),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -134,59 +73,19 @@ pub enum PalwStagedCourtRowV1 {
     /// `layout_digest` (behind `palw_staged_tir_route_v1`): what a TIR prefix quote and court
     /// rebuild the class's step space from.
     TirLayout(Box<crate::palw_tir_class_v1::PalwTirLayoutV1>),
-    TirAcquisition(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1>),
-    TirRawChunk(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1>),
-    TirAcceptedBody(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1>),
-    TirPreparation(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1>),
-    TirClaim(PalwSharedCourtV1<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1>),
-    TirWitness(PalwSharedCourtV1<crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1>),
-    /// A registered TIR class's `PALWART3` container, bound once by its registrant (behind `palw_tir_container_identity_v1`).
-    TirContainer(Box<crate::palw_tir_container_v1::PalwTirContainerRowV1>),
-    CourtService(PalwSharedCourtV1<crate::palw_court_service_state_v2::CourtServiceStateV2>),
-    CourtDutyClock(Box<crate::palw_court_duty_clock_v1::CourtDutyClockV1>),
-    CourtSharedContext(Box<crate::palw_court_shared_tir_state_v1::SharedTirContextV1>),
-    CourtSharedQuery(Box<crate::palw_court_shared_tir_state_v1::SharedTirQueryV1>),
-    CourtSharedIds(Box<crate::palw_court_shared_tir_state_v1::SharedTirIdsV1>),
-    CourtSharedStream(Box<crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1>),
-    CourtSharedChunk(PalwSharedCourtV1<crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1>),
-    CourtSharedResponse(Box<crate::palw_court_shared_tir_response_v1::SharedDataResponseV1>),
-    CourtEndArchive(PalwSharedCourtV1<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>),
-    CourtCloseReceipt(PalwSharedCourtV1<crate::palw_court_close_receipt_v1::CourtCloseReceiptV1>),
-    CourtSharedRoot(PalwSharedCourtV1<crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1>),
-    CourtSharedRound(PalwSharedCourtV1<crate::palw_court_shared_tir_round_v1::SharedTirRoundRowV1>),
-    CourtSharedBottom(PalwSharedCourtV1<crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1>),
-    /// RFC-0034 private provenance, appended row31.
-    CourtArchiveProgress(PalwSharedCourtV1<crate::palw_court_archive_discharge_v1::ArchiveDeclarationProgressV1>),
-    /// RFC-0032 A material intake, appended rows 32-35.
-    CourtMaterialDraft(Box<crate::palw_court_shared_material_intake_v1::MaterialDraftV1>),
-    CourtMaterialPart(PalwSharedCourtV1<crate::palw_court_shared_material_intake_v1::MaterialPartV1>),
-    CourtMaterial(PalwSharedCourtV1<crate::palw_court_shared_material_intake_v1::MaterialRowV1>),
-    CourtMaterialLedger(Box<crate::palw_court_shared_material_intake_v1::MaterialLedgerV1>),
-    /// G14 lane r6-d1-release (user decision D1), appended row 36 under the SAME key `CourtService`: the book past the
-    /// resolved-binding release rule (released records + causal edges). Written only past `palw_tir_public_conviction_v1`; the
-    /// legacy `CourtService` variant keeps its encoding and stays readable.
-    CourtServiceV3(PalwSharedCourtV1<crate::palw_court_service_release_v1::CourtServiceRowV3>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
-            | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) | Self::CourtSharedRound(_) | Self::CourtSharedBottom(_) | Self::CourtArchiveProgress(_)
-            | Self::CourtMaterialDraft(_) | Self::CourtMaterialPart(_) | Self::CourtMaterial(_) | Self::CourtMaterialLedger(_)
-            | Self::CourtServiceV3(_) => None,
+            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_) => None,
             _ => Some(self),
         }
     }
     pub fn active_row_mut_v1(&mut self) -> Option<&mut Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
-            | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) | Self::CourtSharedRound(_) | Self::CourtSharedBottom(_) | Self::CourtArchiveProgress(_)
-            | Self::CourtMaterialDraft(_) | Self::CourtMaterialPart(_) | Self::CourtMaterial(_) | Self::CourtMaterialLedger(_)
-            | Self::CourtServiceV3(_) => None,
+            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_) => None,
             _ => Some(self),
         }
     }
@@ -296,33 +195,6 @@ impl PalwStagedCourtRowV1 {
                 c.check_v1()
             }
             (PalwStagedCourtKeyV1::Inventory(hash), Self::ArtifactInventory(c)) if *hash == c.artifact_hash => c.check_v1(),
-            (PalwStagedCourtKeyV1::TirAcquisition(..), Self::TirAcquisition(row)) => row.check_structure_v1(key),
-            (PalwStagedCourtKeyV1::TirRawChunk(head), Self::TirRawChunk(row)) => row.check_structure_v1(*head),
-            (PalwStagedCourtKeyV1::TirAcceptedBody(hash), Self::TirAcceptedBody(row)) => row.check_structure_v1(*hash),
-            (PalwStagedCourtKeyV1::TirPreparation(..), Self::TirPreparation(row)) => row.check_structure_v1(key),
-            (PalwStagedCourtKeyV1::TirClaim(..), Self::TirClaim(frame)) => frame.check_structure_v1(key),
-            (PalwStagedCourtKeyV1::TirWitness(claim, filer), Self::TirWitness(row)) => row.check_structure_v1(*claim, *filer),
-            // The legacy variant carries only the version-2 state (a version-3 state rides `CourtServiceV3`, whose check sees the
-            // released records).
-            (PalwStagedCourtKeyV1::CourtService, Self::CourtService(row)) if row.version == 2 => row.check(),
-            (PalwStagedCourtKeyV1::CourtService, Self::CourtServiceV3(row)) => row.check(),
-            (PalwStagedCourtKeyV1::CourtDutyClock(_), Self::CourtDutyClock(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedContext(_), Self::CourtSharedContext(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedQuery(_), Self::CourtSharedQuery(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedIds(_), Self::CourtSharedIds(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedStream(_), Self::CourtSharedStream(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedChunk(..), Self::CourtSharedChunk(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedResponse(..), Self::CourtSharedResponse(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtEndArchive(..), Self::CourtEndArchive(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtCloseReceipt(..), Self::CourtCloseReceipt(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedRoot(..), Self::CourtSharedRoot(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedRound(..), Self::CourtSharedRound(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtSharedBottom(..), Self::CourtSharedBottom(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtArchiveProgress(..), Self::CourtArchiveProgress(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtMaterialDraft(..), Self::CourtMaterialDraft(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtMaterialPart(..), Self::CourtMaterialPart(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtMaterial(..), Self::CourtMaterial(row)) => row.check(key),
-            (PalwStagedCourtKeyV1::CourtMaterialLedger(..), Self::CourtMaterialLedger(row)) => row.check(key),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

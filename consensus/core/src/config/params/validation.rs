@@ -4,41 +4,28 @@ use super::*;
 
 impl Params {
     /// **The three fences of the 2026-10-12 rulings** (register §3): `palw_court_model_scope_v1` (D2), `palw_public_evidence_reward_v1`
-    /// (N4) and `palw_claim_hard_deadline_v1` (X3). D2 and X3 are refused when armed at a real height until their rules are verified (and
-    /// the user approves the X3 policy values); N4 until its arm-readiness record is pinned (`crate::palw_g14_gates_v1`);
-    /// `None` and `Some(never())` pass. Since 2026-10-18 D2 and X3 are gated like the other G14 fences: armed at a real height they need a
-    /// pinned arm-readiness record for that network and height, and an X3 policy with an unmeasured (0) term is refused.
+    /// (N4) and `palw_claim_hard_deadline_v1` (X3). Each is refused when armed at a real height until its rule is built and verified;
+    /// `None` and `Some(never())` pass. The rules exist as dormant, unverified source (`crate::palw_ruling_fences_v1`, 2026-10-15);
+    /// the refusal stays until they are verified and the user approves the X3 policy values.
     pub fn validate_palw_2026_10_12_ruling_fences_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_2026_10_12_ruling_fences_in_v1(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
-    }
-
-    /// [`Self::validate_palw_2026_10_12_ruling_fences_v1`] against `records` in place of the pinned arm-readiness list
-    /// ([`Self::validate_palw_v2_with_arming_records_v1`]).
-    pub fn validate_palw_2026_10_12_ruling_fences_in_v1(
-        &self,
-        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
-    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        // D2 and X3 are record-gated (G14 pattern, audit G-10): armed at a real height, each needs a pinned arm-readiness record for
-        // this network and height (`crate::palw_g14_gates_v1`). The list is empty, so both stay refused on every real network.
-        self.validate_palw_g14_fence_record_in_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::CourtModelScopeV1, records)?;
-        self.validate_palw_g14_fence_record_in_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::ClaimHardDeadlineV1, records)?;
-        // X3's policy: every term is a measurement; 0 means UNMEASURED and is refused, never read as free (REQ-X3-6's price). Its three
-        // spans must be the composition of the windows read from the bundle at activation (user decision 2026-10-18).
-        if let Some(f) = self.palw_claim_hard_deadline_v1.filter(|f| f.activation != ForkActivation::never()) {
-            if !crate::palw_ruling_fences_v1::palw_x3_unmeasured_terms_v1(&f.policy).is_empty() {
-                return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
-                    "palw_claim_hard_deadline_v1 cannot be armed: a policy term is unmeasured (0 is unknown, never free: B_cold_fetch, B_check, B_localize, B_carrier, B_reorg_slack, c_retain)",
-                ));
-            }
-            if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
-                && let Some(why) = crate::palw_ruling_fences_v1::palw_x3_composition_refusal_v1(&bundle.state, f.activation, &f.policy)
-            {
+        for (fence, why) in [
+            (
+                self.palw_court_model_scope_v1,
+                "palw_court_model_scope_v1 cannot be armed: its rule (register D2, ruling 2026-10-12) is not built and verified yet",
+            ),
+            (
+                self.palw_public_evidence_reward_v1,
+                "palw_public_evidence_reward_v1 cannot be armed: its rule (register N4, ruling 2026-10-12) is not built and verified yet",
+            ),
+            (
+                self.palw_claim_hard_deadline_v1.map(|f| f.activation),
+                "palw_claim_hard_deadline_v1 cannot be armed: its rule (register X3, ruling 2026-10-12) is not built and verified yet",
+            ),
+        ] {
+            if fence.is_some_and(|f| f != ForkActivation::never()) {
                 return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why));
             }
         }
-        // N4's rule is built (`crate::palw_ruling_fences_v1`) and its tests exist (T-N9): it is refused when armed until its
-        // arm-readiness record is pinned (`crate::palw_g14_gates_v1`, audit G-02), never by name alone.
-        self.validate_palw_g14_fence_record_in_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::PublicEvidenceRewardV1, records)?;
         // D2's first half is LG14-B's StepLeaf rule (a StepLeaf answer owes no model rows; the accuser supplies them), so the scope
         // fence needs `palw_legacy_held_da_v2` in force at or below it. Checked even though arming is refused above, so the ordering
         // is already pinned when the refusal is lifted.
@@ -70,102 +57,24 @@ impl Params {
         Ok(())
     }
 
-    /// **`palw_court_completion_attempt_v1`** (liveness fix L-COURT-01): it amends how the acceptance walk charges the court slot past
-    /// the 2026-09-11 audit's AC-SLOT rule, so it needs `palw_audit_2026_09_11` armed at or below it. It carries no values: armable
-    /// wherever its prerequisite holds.
-    pub fn validate_palw_court_completion_attempt_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        let Some(fence) = self.palw_court_completion_attempt_v1.filter(|f| *f != ForkActivation::never()) else {
-            return Ok(());
-        };
-        if !self.palw_audit_2026_09_11.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score()) {
-            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
-                "palw_court_completion_attempt_v1 is armed without palw_audit_2026_09_11 at or below it: it amends AC-SLOT's \
-                 charge-on-apply walk",
-            ));
-        }
-        Ok(())
-    }
-
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        let verdict = self.validate_palw_v2_inner(
-            false,
-            crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1,
-            crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
-        );
-        // User order 2026-10-25: testnet-12 arms PALW_T12_FULL_ACTIVATION_FENCES_V1 at
-        // PALW_T12_FULL_ACTIVATION_DAA, including a drill of those shipping rules. The record lists stay
-        // empty; this does not fill them. Any other height or network keeps the refusal.
-        if verdict.is_err() && self.palw_t12_ordered_full_activation_v1() {
-            return Ok(());
-        }
-        verdict
-    }
-
-    /// testnet-12 with every full-activation fence at exactly [`PALW_T12_FULL_ACTIVATION_DAA`].
-    fn palw_t12_ordered_full_activation_v1(&self) -> bool {
-        let Some(at) = PALW_T12_FULL_ACTIVATION_DAA else { return false };
-        if self.net != crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12) {
-            return false;
-        }
-        let fences = self.palw_fences_v1();
-        PALW_T12_FULL_ACTIVATION_FENCES_V1.iter().all(|fence| {
-            fences.iter().any(|(name, activation)| *name == fence.name && (*activation).is_some_and(|f| f.daa_score() == at))
-        })
-    }
-
-    /// **The whole V2 validation with `records` in place of the binary's pinned arm-readiness list**
-    /// (`crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1`, lane g14-close-legacy 2026-10-16). Every other refusal, mirror and
-    /// prerequisite is [`Self::validate_palw_v2`]'s, byte for byte: only WHICH records exist differs. A test arms a gated fence on a
-    /// ruleset that passes this with a record for its exact (fence, genesis, height) — never by skipping validation (audit G-19). The
-    /// node never calls it: `ConfigBuilder::build` runs [`Self::validate_palw_v2`], so a real network arms a gated fence only once a
-    /// reviewed change pins the record in the binary.
-    pub fn validate_palw_v2_with_arming_records_v1(
-        &self,
-        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
-    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false, records, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1)
-    }
-
-    /// [`Self::validate_palw_v2_with_arming_records_v1`] with `cost_records` in place of the binary's pinned TIR frame cost records
-    /// (`crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1`, audit §10): a test arms `palw_tir_public_conviction_v1` on a
-    /// ruleset whose frame cost model a record for its exact network and height names. The node never calls it.
-    pub fn validate_palw_v2_with_arming_and_cost_records_v1(
-        &self,
-        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
-        cost_records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
-    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false, records, cost_records)
+        self.validate_palw_v2_inner(false)
     }
 
     /// Feature-gated private factory exception for release heights only. All
     /// value, dependency and retirement checks run on the actual armed bundle.
-    /// Rule E and its commitment stay exactly at DAA 1; the retirement may be armed
-    /// at DAA 1 or at any later finite height (the RFC-0012 §4.4 private profile that
-    /// accumulates DNS-validator history first). Rule E at or below the retirement is
-    /// then enforced by the ordering validator at the end of the inner path.
     #[cfg(feature = "private-integration-config")]
     pub fn validate_palw_v2_private_rule_e_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         if self.palw_fork_choice_rule_e_v1 != Some(ForkActivation::new(1))
             || self.palw_fork_choice_commitment_v1 != Some(ForkActivation::new(1))
-            || self.palw_dns_retirement.is_none_or(|r| r.activation == ForkActivation::never() || r.activation.daa_score() < 1)
+            || self.palw_dns_retirement.is_none_or(|r| r.activation != ForkActivation::new(1))
         {
-            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
-                "private Rule E factory requires Rule E and its commitment at DAA 1 and a finite retirement at or after them",
-            ));
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid("private Rule E factory requires all three exact heights"));
         }
-        self.validate_palw_v2_inner(
-            true,
-            crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1,
-            crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
-        )
+        self.validate_palw_v2_inner(true)
     }
 
-    fn validate_palw_v2_inner(
-        &self,
-        private_rule_e: bool,
-        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
-        cost_records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
-    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+    fn validate_palw_v2_inner(&self, private_rule_e: bool) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         // The overlay's bond collateral has one gate left: the acceptance-time skip, in force from
         // `bond_spend_gate_mergeset_activation_daa_score`. The own-body gate that covered the blocks
         // below that fence could not run on any network (every overlay ships the fence at the
@@ -249,8 +158,6 @@ impl Params {
         self.validate_palw_stage_execution_v14()?;
         self.validate_palw_native_final_v27()?;
         self.validate_palw_stage_execution_v28()?;
-        self.validate_palw_native_execution_v39()?;
-        self.validate_palw_native_mining_v39()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
         // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
@@ -270,18 +177,13 @@ impl Params {
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
         self.validate_palw_provider_court_v1()?;
-        // **Lane g14p/kernel-route U02** (`crate::palw_kernel_route_arming_v1`): the Panel=1 seat policy's ordering and mirror.
-        self.validate_palw_kernel_route_panel_one_v1()?;
-        self.validate_palw_legacy_held_da_v2_in(records)?;
+        self.validate_palw_legacy_held_da_v2()?;
         // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
         self.validate_palw_bond_budget_v1()?;
         // ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計): dormant, refused when armed.
         self.validate_palw_bond_formula_v2()?;
         self.validate_palw_reporter_income_v2()?;
         self.validate_palw_material_income_v3()?;
-        self.validate_palw_settlement_once_v1()?;
-        self.validate_palw_paid_claim_trap_v1()?;
-        self.validate_palw_native_liability_horizon_v1()?;
         self.validate_palw_panel_lifetime_v2()?;
         self.validate_palw_claim_challenge_v2()?;
         self.validate_palw_claim_compact_v4()?;
@@ -300,39 +202,24 @@ impl Params {
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
         // **Lane LG14-A's public filer** (`crate::palw_legacy_public_filer_v1`): refused when armed.
-        self.validate_palw_legacy_public_filer_in_v1(records)?;
+        self.validate_palw_legacy_public_filer_v1()?;
         // **The three fences of the 2026-10-12 rulings** (register §3): refused when armed until their rules are built.
-        self.validate_palw_2026_10_12_ruling_fences_in_v1(records)?;
-        // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed until its
-        // arm-readiness record is pinned (the list is empty).
+        self.validate_palw_2026_10_12_ruling_fences_v1()?;
+        // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed.
         self.validate_palw_cell_coverage_closure_v1()?;
-        // **RFC-0016's two dormant fences** (`crate::palw_rfc0016_v1`): refused when armed until measured values are pinned.
-        self.validate_palw_model_block_rights_v1()?;
-        self.validate_palw_elastic_final_capacity_v1()?;
         self.validate_palw_memory_routing_court_v2()?;
-        self.validate_palw_class_registration_origin_v1()?;
         self.validate_palw_selected_source_bootstrap_v1()?;
         self.validate_palw_paid_bootstrap_source_v6()?;
+        self.validate_palw_source_economics_v1()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
-        // **ADR-0179's model tiers** (`crate::palw_model_tier_v1`): refused when armed; add-only lists; the mirror must agree.
-        self.validate_palw_model_tier_v1()?;
-        // **G14's per-class detection policy** (`crate::palw_detection_policy_v1`): each policy armable at its own extremes; then
-        // refused when armed (design values without a measured record).
-        self.validate_palw_detection_policy_v1()?;
-        // **RFC-0018's five fences** (`crate::palw_rfc0018_v1`): refused when armed; the mirror must agree.
-        self.validate_palw_rfc0018_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
-        // **The liveness fix L-COURT-01** (`palw_court_completion_attempt_v1`): needs the 2026-09-11 audit at or below it.
-        self.validate_palw_court_completion_attempt_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
         // **palw_fp_prefix_state** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_state_v1()?;
-        // **palw_fp_answer_accounting_v1** (`crate::palw_fp_answer_accounting_v1`, compute-claim audit CX-01/CX-02).
-        self.validate_palw_fp_answer_accounting_v1()?;
         // **palw_fp_tokenizer_match** (`crate::palw_fp_tokenizer_v1`).
         self.validate_palw_fp_tokenizer_match_v1()?;
         // **palw_fp_constraint_v2** (`crate::palw_fp_constraint_v2`).
@@ -352,29 +239,6 @@ impl Params {
         self.validate_palw_court_commitment_scope_v1()?;
         self.validate_palw_staged_public_court_v1()?;
         self.validate_palw_staged_route_extensions_v1()?;
-        // **The cross-lane G14 gates** (`crate::palw_g14_gates_v1`): G-18's legacy-filer prerequisite of the staged court, and the
-        // arm-readiness record of every gated fence (G-10, N4, G-01 option (b), the reward liability horizon).
-        self.validate_palw_g14_gates_in_v1(records)?;
-        // **Audit §10: the TIR frame is priced and clocked only by a MEASURED cost model a pinned record names** (or, on an isolated
-        // G14 test genesis, any well-formed model): `palw_tir_public_conviction_v1` armed with no model, a malformed one, or one no
-        // record names for this network and height is refused.
-        self.validate_palw_tir_frame_cost_in_v1(cost_records)?;
-        self.validate_palw_tir_bounded_door_in_v1(cost_records)?;
-        self.validate_palw_tir_designated_answers_in_v1()?;
-        self.validate_palw_court_outsider_lane_in_v1()?;
-        // RFC-0036 (Proposed): the authenticated state map / row access fence is refused if armed — nothing is wired.
-        self.validate_palw_state_row_map_v1()?;
-        self.validate_palw_court_clock_v2()?;
-        // **The court-capacity fence** (`crate::palw_court_capacity_v1`, audit G-07): LG14-A at or below it, a sound policy, and on a
-        // real network a pinned record and a measured (non-placeholder) policy.
-        self.validate_palw_court_capacity_in_v1(records)?;
-        self.validate_palw_court_transport_v1()?;
-        // **RFC-0023 stage 1** (`crate::palw_unresolved_bound_v1`): mirror agreement; never armable yet.
-        self.validate_palw_unresolved_bound_v1()?;
-        self.validate_palw_claim_local_settlement_v1()?;
-        // **G-13's capacity** (`crate::palw_panel_liability_v1`): LG14-A beside V02's short lock life needs V02's split at or below
-        // the later of the two, so the lock G-13 extends to the liability horizon is Resolved liability, never work capacity.
-        self.validate_palw_g13_liability_split_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).

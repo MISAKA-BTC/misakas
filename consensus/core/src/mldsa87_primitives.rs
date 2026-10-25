@@ -6,9 +6,7 @@
 //! the overlay, only on these four definitions, so they live here and the overlay re-exports them
 //! under its old names. Every value is byte-identical to what it was: the lengths
 //! are FIPS 204's, the script is ADR-0019 §8's, and the key id is the unkeyed BLAKE2b-512 of the
-//! key. This legacy key identity is distinct from the domain-separated native P2PKH
-//! address payload; derive the latter with `kaspa_hashes::blake2b_512_address_payload`
-//! when constructing a payer-address output. Do not substitute the key id for an address.
+//! key — genesis premine outputs, bond payouts and registry ids all hash through them.
 
 use crate::Hash64;
 use crate::tx::{ScriptPublicKey, ScriptVec};
@@ -67,8 +65,7 @@ pub fn p2pkh_mldsa87_payload(spk: &ScriptPublicKey) -> Option<Hash64> {
 }
 
 /// **A key's 64-byte id**: the unkeyed BLAKE2b-512 of the verification key. Unkeyed because the
-/// input is a fixed-length key, not a multi-field structure. This is NOT the native
-/// P2PKH address payload; that uses `kaspa_hashes::blake2b_512_address_payload`.
+/// input is a fixed-length key, not a multi-field structure.
 pub fn mldsa87_key_id(pubkey: &[u8]) -> Hash64 {
     let mut out = [0u8; 64];
     out.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(pubkey).finalize().as_bytes());

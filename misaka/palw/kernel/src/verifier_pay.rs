@@ -1,5 +1,5 @@
 //! **ECON's M\*-49 verifier pay and the held default share** (readiness §3f, the user's rulings of 2026-10-10; design
-//! `docs/design/palw/economics/econ-verifier-incentive-and-allocation.md` §2.2 O2 and §3.2). Dormant: in force only where the consumer injects a
+//! `docs/design/palw/econ-verifier-incentive-and-allocation.md` §2.2 O2 and §3.2). Dormant: in force only where the consumer injects a
 //! [`VerifierPayPolicyV1`] (the node's `palw_verifier_pay_v1` fence, refused when armed) and the ledger's DAA has reached it.
 //!
 //! * **The check fee (M\*-49 item 3).** A job posted past the fence escrows `slots × check_fee` from its poster beside the GAP-5

@@ -223,9 +223,9 @@ pub fn kernel_consumer_ledger_v1(
 ) -> Result<kaspa_consensus_core::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
     // The rebuilt ledger keeps its native-resource reservation (it derefs to `KernelLedgerV1`).
     let mut ledger = route.ledger()?;
-    ledger.preview_mut_v1().court_scope_policy =
+    ledger.court_scope_policy =
         provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa });
-    ledger.preview_mut_v1().verifier_pay_policy = verifier_pay.map(kaspa_consensus_core::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
+    ledger.verifier_pay_policy = verifier_pay.map(kaspa_consensus_core::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
     Ok(ledger)
 }
 

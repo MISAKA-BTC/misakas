@@ -2252,159 +2252,6 @@ mod amendment_1 {
     use misaka_palw_kernel::lifecycle::{ClaimLifecycleV1, ClaimStateV1, LifecyclePolicyV1};
     use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOBS_V1};
 
-    fn claim_local_extras(base: PalwTransitionExtrasV1) -> PalwTransitionExtrasV1 {
-        PalwTransitionExtrasV1 {
-            claim_local_rule_context_v1: Some(([11; 32], [12; 32])),
-            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
-                network_domain: h64(0xE7),
-                ruleset_digest: h64(0xE8),
-                ..Default::default()
-            }),
-            ..base
-        }
-    }
-    fn claim_local_frame(
-        s: &PalwChainStateV2,
-        block: u64,
-    ) -> crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1> {
-        use crate::palw_claim_local_v1::*;
-        let raw = &s.kernel_route.as_ref().unwrap().aux
-            [&(PALW_CLAIM_LOCAL_TABLE_V1, palw_claim_liability_frame_key_v1(h64(block)).to_vec())];
-        palw_decode_claim_liability_frame_v1(raw).unwrap()
-    }
-
-    #[test]
-    fn rfc23s2_exec_root_only_transition_has_an_original_frame_and_real_prefix_edges() {
-        use crate::palw_claim_local_v1::*;
-        use PalwClaimLocalWorkRefV1::*;
-        let (p, mut before, claim) = world(Some(0));
-        with_route(&mut before, claim, Some(PLAN));
-        let prefix = Prefix::new(&mut before, claim, ClaimStateV1::Final { final_daa: 105 }, false);
-        let p = p.with_claim_local_settlement_from_daa(Some(110));
-        let extras = claim_local_extras(xx_declare());
-        let (after, delta) = step_with(&before, &p, 40, 110, &[open_object(prefix.decl(claim))], &extras).unwrap();
-        let f = claim_local_frame(&after, 40);
-        assert!(f
-            .native_changes
-            .iter()
-            .any(|c| c.owner == PalwClaimLocalRowOwnerV1::ExecV2 && c.table == PALW_EXEC_V2_TABLE_ROOTS_V1));
-        let origins = f.exec_dependency_origins_v1().unwrap();
-        assert!(origins.unbound_roots.is_empty());
-        assert_eq!(
-            origins.edges,
-            vec![
-                PalwClaimLocalExecDependencyV1 { consumer: ExecSession { root: claim }, input: ChainClaim { claim } },
-                PalwClaimLocalExecDependencyV1 {
-                    consumer: ExecSession { root: claim },
-                    input: KernelClaim { claim: prefix.claim_id }
-                },
-            ]
-        );
-        // The existing helper checks full delta application, reversion and cold restore.
-        assert_eq!(apply_delta_v2(&before, &delta, &p).unwrap().state_root(), after.state_root());
-        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&after)).unwrap();
-        crate::palw_native_resource_v1::preflight_native_carriage_v1(bytes.as_slice(), bytes.len() as u64).unwrap();
-        let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(after.state_root())).unwrap();
-        assert_eq!(*claim_local_frame(&restored, 40).exec_dependency_origins_v1().unwrap(), *origins);
-    }
-
-    #[test]
-    fn rfc23s2_exec_dependencies_follow_admitted_slices_and_never_point_back_into_base_credit() {
-        use crate::palw_claim_local_v1::*;
-        use PalwClaimLocalWorkRefV1::*;
-        let (p, before, claim, slices, prefix) = session_with(1_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
-        let p = p.with_claim_local_settlement_from_daa(Some(120));
-        let covered = slices.iter().map(|s| s.covered.clone()).collect();
-        let extras = claim_local_extras(xx_slices(covered));
-        let (after, _) = step_with(&before, &p, 50, 120, &[], &extras).unwrap();
-        let f = claim_local_frame(&after, 50);
-        let origins = f.exec_dependency_origins_v1().unwrap();
-        assert!(origins.unbound_roots.is_empty());
-        assert_eq!(origins.edges.len(), 11);
-        for index in 0..3 {
-            let consumer = ExecSlice { root: claim, index };
-            assert!(origins.edges.contains(&PalwClaimLocalExecDependencyV1 {
-                consumer,
-                input: KernelClaim { claim: slices[index as usize].claim_id }
-            }));
-            let input = if index == 0 { KernelClaim { claim: prefix.claim_id } } else { ExecSlice { root: claim, index: index - 1 } };
-            assert!(origins.edges.contains(&PalwClaimLocalExecDependencyV1 { consumer, input }));
-        }
-        assert!(origins.edges.iter().all(|e| !matches!(e.consumer, ChainClaim { .. } | KernelClaim { .. })));
-        // Same raw bytes in another namespace do not collapse the session and its chain anchor.
-        assert_ne!(ExecSession { root: claim }, ChainClaim { claim });
-        // A refused covered slice must not create an input edge.
-        let mut refused = slices[0].covered.clone();
-        refused.slice.slice_index = 99;
-        let (no_slice, refused_delta) = step_with(&before, &p, 51, 120, &[], &claim_local_extras(xx_slices(vec![refused]))).unwrap();
-        assert_eq!(no_slice.exec_v2_state_v1(), before.exec_v2_state_v1());
-        assert!(refused_delta.entries.iter().any(|entry| matches!(entry, PalwDeltaEntryV2::ExecV2Verdict {code, ..} if *code != 0)));
-        assert!(refused_delta.entries.iter().all(|entry| !matches!(entry, PalwDeltaEntryV2::ExecV2Row {..})));
-        assert!(!no_slice.kernel_route.as_ref().unwrap().aux.contains_key(&(
-            PALW_CLAIM_LOCAL_TABLE_V1, palw_claim_liability_frame_key_v1(h64(51)).to_vec())));
-    }
-
-    #[test]
-    fn rfc23s2_exec_legacy_unbound_hashes_do_not_become_authenticated_inputs() {
-        use crate::palw_claim_local_v1::*;
-        let (p, before, claim) = opened();
-        let p = p.with_claim_local_settlement_from_daa(Some(111));
-        let object = PalwConsensusObjectV2::KernelRouteV1 {
-            bytes: misaka_palw_kernel::route::KernelRouteObjectV1::RequestExit { bond: palw_kernel_bond_id_v1(&bond_key(20)) }
-                .encode(),
-            signer: bond_key(20),
-            signature: Vec::new(),
-        };
-        let (after, _) = step_with(&before, &p, 41, 111, &[object], &claim_local_extras(xx())).unwrap();
-        let origins = claim_local_frame(&after, 41).exec_dependency_origins_v1().unwrap();
-        assert_eq!(origins.unbound_roots, vec![claim]);
-        assert!(origins.edges.iter().all(|edge| !matches!(edge.input, PalwClaimLocalWorkRefV1::KernelClaim { .. })));
-    }
-
-    #[test]
-    fn rfc23s2_exec_transient_rows_preserve_global_journal_order_and_owner_namespace() {
-        use crate::palw_claim_local_v1::*;
-        let (p, before, claim) = opened();
-        let p = p.with_claim_local_settlement_from_daa(Some(111));
-        let extras = claim_local_extras(xx());
-        let mut b = TransitionBuilder::new(&before, &p, false, false, false, false, &extras);
-        let point = ctx(41, 111, 41);
-        palw_kernel_route_fold_v1::ensure_route_header(&mut b, &point).unwrap();
-        let id = h64(900);
-        let row = before.exec_v2_root_v1(&claim).unwrap().clone();
-        b.write_exec_root(id, Some(row)).unwrap();
-        b.write_kernel_row(1, borsh::to_vec(&id).unwrap(), Some(vec![1])).unwrap();
-        b.write_exec_root(id, None).unwrap();
-        b.write_kernel_row(1, borsh::to_vec(&id).unwrap(), None).unwrap();
-        palw_claim_local_fold_v1::retain_changed_claim_context_v1(
-            &mut b,
-            &before,
-            &point,
-            &[],
-            PalwBlockWorkV3::None,
-            &[],
-            Hash64::default(),
-        )
-        .unwrap();
-        let f = claim_local_frame(&b.state, 41);
-        assert_eq!(
-            f.native_changes.iter().map(|c| c.owner).collect::<Vec<_>>(),
-            vec![
-                PalwClaimLocalRowOwnerV1::ExecV2,
-                PalwClaimLocalRowOwnerV1::KernelRoute,
-                PalwClaimLocalRowOwnerV1::ExecV2,
-                PalwClaimLocalRowOwnerV1::KernelRoute
-            ]
-        );
-        f.validate_context_v1().unwrap();
-        let mut tampered = (*f).clone();
-        tampered.native_changes[0].owner = PalwClaimLocalRowOwnerV1::KernelRoute;
-        assert!(tampered.validate_context_v1().is_err());
-        let mut tampered = (*f).clone();
-        tampered.native_changes[2].old = Some(vec![7]);
-        assert!(tampered.validate_context_v1().is_err());
-    }
-
     /// The kernel class the claim's V2 class is bound to (onboarding tag 106).
     const KERNEL_CLASS: u64 = 0x4C1A55;
     /// The plan root of that binding: `decl`'s.
@@ -3574,17 +3421,8 @@ mod amendment_1 {
             convicted.claim(&claim).unwrap().phase,
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceProvenFalse, voided_daa: 131 }
         ));
-        // G14 lane closure G-X1 (T-N12 below): the REAL claim's V2 Valid signers answer for its own proven-false piece; no other
-        // V2 charge (the producer's one charge for the lie is its prefix claim's kernel reservation, the route's).
-        let signers: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).collect();
         let after: Vec<(PalwBondKeyV2, u64)> = convicted.bonds.iter().map(|(k, b)| (*k, b.collateral)).collect();
-        for ((bond, before), (_, now)) in collateral.iter().zip(&after) {
-            if signers.contains(bond) {
-                assert!(now < before, "a Valid signer of the REAL claim is charged");
-            } else {
-                assert_eq!(now, before, "no other V2 charge");
-            }
-        }
+        assert_eq!(after, collateral, "no V2 charge");
         assert_eq!(convicted.reserved_exposure(&bond_key(20)), 0, "the extra executors' exposure returns");
         assert!(convicted.vesting_row(&claim).is_none(), "nobody is paid");
         // (c) the prefix claim's material was withheld: a default, the same void.
@@ -3595,63 +3433,6 @@ mod amendment_1 {
             defaulted.claim(&claim).unwrap().phase,
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceDefaulted, .. }
         ));
-    }
-
-    /// **T-N12 (G14 lane closure G-X1): the REAL root's V2 Valid signers are charged when its piece is proven false.** The session's
-    /// first piece — the REAL claim's own run, carried by the root bond's prefix claim (GAP-62) — is exactly what the five V2 seats
-    /// licensed: a conviction of it charges each Valid signer S4 on its lock (lock first, once per seat and claim, the false-Valid
-    /// offence consumed), voids the REAL claim and pays nobody. A later executor's slice is NOT something those seats signed (they
-    /// licensed the claim before any slice existed): its conviction voids the suffix and the root but charges them nothing — its own
-    /// kernel claim's reservation and receipt signers answer for it (the route's, G-K1). The fence is at DAA 0.
-    #[test]
-    fn exec_real_root_v2_signers_are_charged_when_a_slice_is_proven_false() {
-        let (p, s, claim, slices, prefix) =
-            session_with(1_000, ClaimStateV1::Challengeable { since_daa: 100, window_end_daa: 200 }, false, None);
-        assert_eq!(p.exec_v2_from_daa(), Some(0), "EXEC from genesis");
-        let s = license(&p, &s, claim, 45, 111);
-        let s = carry_all(&p, &s, &slices);
-        let signers: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).collect();
-        let locks: Vec<u128> = signers
-            .iter()
-            .map(|seat| s.slashable_locks.get(&(*seat, claim)).expect("each Valid signer locked its share at the licence").amount)
-            .collect();
-        let money = |s: &PalwChainStateV2, bond: &PalwBondKeyV2| s.bonds.get(bond).map(|b| (b.collateral, b.slashed)).unwrap();
-        let before: Vec<(u64, u64)> = signers.iter().map(|seat| money(&s, seat)).collect();
-        let producer = s.claim(&claim).unwrap().bond;
-        let producer_before = money(&s, &producer);
-
-        // (a) the REAL claim's own piece is proven false by an outsider's conviction of its prefix claim.
-        let convicted = kernel_block(&p, &s, 61, 131, vec![prefix.write(ClaimStateV1::Convicted { daa: 131 }, true)]);
-        assert_eq!(convicted.exec_v2_root_v1(&claim).unwrap().prefix, PalwWorkPrefixStageV2::ProvenFalse { daa: 131 });
-        assert!(matches!(
-            convicted.claim(&claim).unwrap().phase,
-            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceProvenFalse, voided_daa: 131 }
-        ));
-        for ((seat, (collateral, slashed)), lock) in signers.iter().zip(&before).zip(&locks) {
-            let (c, sl) = money(&convicted, seat);
-            assert!(u128::from(collateral - c) >= *lock, "{seat:?}: charged at least its lock (S4 = lock + action)");
-            assert_eq!(collateral - c, sl - slashed, "{seat:?}: a real slash");
-            assert!(!convicted.slashable_locks.contains_key(&(*seat, claim)), "{seat:?}: the lock is spent first");
-            let offence = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
-            assert!(convicted.consumed_offences.contains_key(&offence), "{seat:?}: once — the false-Valid offence is consumed");
-        }
-        assert_eq!(money(&convicted, &producer), producer_before, "the producer's one charge is its prefix claim's (the route's)");
-        assert!(convicted.vesting_row(&claim).is_none(), "nobody is paid");
-        // Once: a later block that writes the same verdict again charges nobody twice.
-        let again = kernel_block(&p, &convicted, 62, 132, vec![prefix.write(ClaimStateV1::Convicted { daa: 131 }, true)]);
-        for seat in &signers {
-            assert_eq!(money(&again, seat), money(&convicted, seat), "{seat:?}: charged once");
-        }
-
-        // (b) the prefix verifies; a LATER executor's slice is proven false: the suffix and the root are void, the V2 seats are not
-        // charged (they never signed it).
-        let verified = kernel_block(&p, &s, 61, 131, vec![prefix.write(ClaimStateV1::Final { final_daa: 131 }, false)]);
-        let sliced = kernel_block(&p, &verified, 62, 132, vec![slices[1].write(ClaimStateV1::Convicted { daa: 132 }, true)]);
-        assert_eq!(sliced.exec_v2_slice_v1(&claim, 1).unwrap().stage, PalwWorkSliceStageV2::ProvenFalse { daa: 132 });
-        assert!(matches!(sliced.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { from_index: 1, .. }));
-        for (seat, before) in signers.iter().zip(&before) {
-            assert_eq!(money(&sliced, seat), *before, "{seat:?}: a V2 seat never answers for a slice it did not sign");
-        }
     }
 
     /// Install real kernel reservations and their consumer bond mappings. These rows are setup,
@@ -4629,23 +4410,7 @@ mod amendment_1 {
                 let native = s.vesting_row(&claim).unwrap().total_sompi_u128();
                 let extra = s.exec_v2_reward_vesting_v1(&claim).unwrap().total_sompi_u128();
                 let before = s.vesting_counters();
-                let mut balances: BTreeMap<_, _> = s.bonds.iter().map(|(key, row)| (*key, row.collateral)).collect();
-                // G-X1 concerns the REAL prefix these seats actually licensed.
-                // A later worker's false/defaulted slice and a prefix's DA
-                // default prove no false Valid by these seats. Only a proved
-                // false REAL prefix charges its covering signers' own locks.
-                if prefix && fraud {
-                    let read_extras = xx();
-                    let reader = TransitionBuilder::new(&s, &p, false, false, false, false, &read_extras);
-                    let g = reader.claim_g_v1(&claim).unwrap().g();
-                    for ((seat, owner), lock) in &s.slashable_locks {
-                        if *owner == claim {
-                            let c0 = balances[seat];
-                            let debit = lock.amount.saturating_add(palw_rcore_s3s4_action_v1(c0, g)).min(u128::from(c0));
-                            *balances.get_mut(seat).unwrap() -= u64::try_from(debit).unwrap();
-                        }
-                    }
-                }
+                let balances: Vec<_> = s.bonds.iter().map(|(key, row)| (*key, row.collateral)).collect();
                 let dependency = if prefix { pre.claim_id } else { slices[1].claim_id };
                 let key = palw_exec_v2_kernel_key_v1(&dependency);
                 let mut row: ClaimRowV1 =
@@ -4672,20 +4437,15 @@ mod amendment_1 {
                 assert_eq!(after.vesting_counters().burned - before.burned, native + extra);
                 assert_eq!(u128::from(crate::palw_vesting_v1::palw_vesting_burned_by_delta_v1(&delta)), native + extra);
                 assert_eq!(
-                    after.bonds.iter().map(|(key, row)| (*key, row.collateral)).collect::<BTreeMap<_, _>>(),
+                    after.bonds.iter().map(|(key, row)| (*key, row.collateral)).collect::<Vec<_>>(),
                     balances,
-                    "only the licensed prefix's own proven falsity charges its covering signers; consumers add no punishment"
+                    "the consumer adds no collateral punishment"
                 );
                 assert_eq!(after.reserved_exposure(&bond_key(20)), 0);
                 assert_eq!(after.reserved_exposure(&bond_key(21)), 0, "no second release of Final's executor exposures");
                 assert!(after.pending_payouts_iter().next().is_none());
                 let again = step_with(&after, &p, word + 1, daa + 1, &[], &extras).unwrap().0;
                 assert_eq!(again.safe_weight(), 999);
-                assert_eq!(
-                    again.bonds.iter().map(|(key, row)| (*key, row.collateral)).collect::<BTreeMap<_, _>>(),
-                    balances,
-                    "a repeated verdict never charges a signer twice"
-                );
                 assert_eq!(again.vesting_counters(), after.vesting_counters(), "a duplicate verdict cannot burn twice");
             }
         }
@@ -4874,134 +4634,5 @@ mod amendment_1 {
         assert_eq!(PalwSliceRefusalV2::name_of_code(32), "executor_unfunded");
         assert_eq!(VerificationProviderHorizon.code(), 31);
         assert_eq!(PalwSliceRefusalV2::name_of_code(31), "verification_provider_horizon");
-    }
-
-    #[test]
-    fn rfc23s2_native_dependency_reader_requires_selected_opv_approval_and_holds_missing_evidence() {
-        use crate::palw_state_v2::palw_claim_local_rewards_v1::{RewardReadinessV1, exec_dependency_readiness_v1};
-        use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
-
-        let (p, mut s, root_id, slices, mut prefix) =
-            session_with(1_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
-        let route = s.kernel_route.as_mut().expect("native route");
-        let expiry = s.exec_v2.roots.get(&root_id).unwrap().expiry_daa;
-        let liability_until = crate::palw_exec_v2_verify::palw_exec_v2_retention_terms_v1(
-            expiry,
-            0,
-            p.window_court(),
-            &route.header.policy,
-        )
-        .unwrap()
-        .liability_until;
-        let close_row = |row: &mut ClaimRowV1| {
-            row.life.state = ClaimStateV1::Final { final_daa: 105 };
-            row.life.retention_met = true;
-            row.liability_until = Some(liability_until);
-            row.convicted = false;
-        };
-        close_row(&mut prefix.row);
-        route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&prefix.claim_id)), borsh::to_vec(&prefix.row).unwrap());
-        for slice in &slices {
-            let mut row = slice.row.clone();
-            close_row(&mut row);
-            route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&slice.claim_id)), borsh::to_vec(&row).unwrap());
-        }
-        s = carry_all(&p, &s, &slices);
-        let root = s.exec_v2.roots.get_mut(&root_id).expect("admitted EXEC root");
-        root.prefix = PalwWorkPrefixStageV2::Verified { verified_daa: 107, route_reward: 0 };
-        let now = liability_until + 1;
-
-        let class_key = prefix.row.class_binding_id.to_vec();
-        s.kernel_route.as_mut().unwrap().rows.insert(
-            (misaka_palw_kernel::rows::TABLE_OPV_CLASSES_V1, class_key.clone()),
-            Vec::new(),
-        );
-        assert_eq!(
-            exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
-            RewardReadinessV1::Hold(liability_until),
-            "OPV class without a selected approval enrollment remains held"
-        );
-
-        let route = s.kernel_route.as_mut().unwrap();
-        for (i, (claim, row)) in std::iter::once((prefix.claim_id, &prefix.row))
-            .chain(slices.iter().map(|slice| (slice.claim_id, &slice.row)))
-            .enumerate()
-        {
-            let base_claim = claim.as_bytes().to_owned();
-            let lifetime = misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2 {
-                committed_daa: 100,
-                checking_until: 101,
-                challenge_until: 102,
-                dispute_until: 103,
-                liability_until,
-            };
-            let enrollment = misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2 {
-                version: 2,
-                class: row.class_binding_id,
-                job: row.job_id,
-                base_claim,
-                producer: row.producer,
-                commit_root: [0xA2 + i as u8; 64],
-                lifetime,
-                accepted_until_daa: 200,
-                material_consent: [0xA3 + i as u8; 64],
-                round: 0,
-                prior_transcript: [0; 64],
-            };
-            let enrollment_id = enrollment.id();
-            let target = [0xA4 + i as u8; 64];
-            let index_key = crate::palw_claim_challenge_v2::paid_claim_index_key_v3(
-                crate::palw_claim_challenge_v2::PAID_CLAIM_BASE_INDEX_PREFIX_V3,
-                &base_claim,
-            );
-            let index = crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3 {
-                version: 3,
-                kind: crate::palw_claim_challenge_v2::PalwPaidClaimIndexKindV3::BaseClaim,
-                owner: base_claim,
-                target,
-            };
-            let mut authority = borsh::to_vec(&2u16).unwrap();
-            authority.extend(borsh::to_vec(&enrollment).unwrap());
-            let final_row = crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2 {
-                enrollment: enrollment_id,
-                base_claim,
-                verification_class: enrollment.class,
-                sample_seed: [0xA5 + i as u8; 64],
-                source_context: [0xA6 + i as u8; 64],
-                signed_lifetime: lifetime,
-                complete_receipts: 1,
-                logical_final_daa: 107,
-                completed_rounds: 1,
-                transcript_root: [0xA7 + i as u8; 64],
-            };
-            route.aux.insert(
-                (crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, index_key),
-                borsh::to_vec(&index).unwrap(),
-            );
-            route.aux.insert(
-                (crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, target.to_vec()),
-                authority,
-            );
-            route.aux.insert(
-                (crate::palw_claim_challenge_v2::PAID_CLAIM_FINALS_V2, enrollment_id.to_vec()),
-                borsh::to_vec(&final_row).unwrap(),
-            );
-            assert!(crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(route, &claim));
-        }
-        assert_eq!(
-            exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
-            RewardReadinessV1::Ready,
-            "the canonical positive enrollment/final path unlocks only after every claim deadline"
-        );
-
-        let missing_claim = s.exec_v2.slices.get(&(root_id, 1)).expect("admitted middle slice").evidence_root;
-        assert_eq!(missing_claim, slices[1].claim_id);
-        let route = s.kernel_route.as_mut().unwrap();
-        route.rows.remove(&(TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&missing_claim)));
-        assert_eq!(
-            exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
-            RewardReadinessV1::Hold(u64::MAX),
-            "missing evidence cannot borrow the cached Verified prefix"
-        );
     }
 }

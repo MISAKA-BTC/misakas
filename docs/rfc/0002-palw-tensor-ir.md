@@ -1,9 +1,5 @@
 # RFC-0002: PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the consensus meaning of a class, with a reference evaluator and optional fused kernels
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
-> **適用時期の現行方針（2026-10-17 文書化）:** 本書が参照する画像・動画生成および RFC-0004 の改善に限り **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
-
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -648,7 +644,7 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
 | An IR that grows per model (`QwenGdn`, `Mamba2Scan`, `DeepSeekRoute` as ops) | The same problem, one level down, in a few years. Refused by freeze criterion 1 |
 | Generalise kernels one by one | Worth doing for live bugs (Phase 0), never changes the nature of the boundary |
 | A Turing-complete deterministic VM (WASM-like) | Halting and metering become runtime problems; the court must bound an arbitrary program; nothing an LLM needs requires it |
-| Cryptographic proofs of model computation | Permanently prohibited by the user's 2026-10-15 decision and PRINCIPLES §8; use sampled replay, public localization, deterministic court and the explicit validator-approval assumptions |
+| A zkML VM | Proving cost is orders of magnitude above re-execution; the unilateral court already gives safety |
 | ONNX / StableHLO as the consensus IR | Open op sets, float semantics, implementation-defined corners. Good lowerer *inputs*, not consensus |
 | ONNX importer as the primary frontend (evaluated 2026-09-28) | A new architecture reaches ONNX export later than `transformers`, sometimes never, which defeats day-one registration; exporter-specific decompositions (attention, RoPE, caches) must be pattern-matched back into composites; QDQ carries float scales and ties-to-even rounding and is re-quantized anyway. Kept as an optional secondary frontend after the freeze |
 | Upstream MLIR as the compiler infrastructure, a MISAKA dialect (evaluated 2026-09-28) | A C++/LLVM toolchain in a Rust node for an IR of ~40 primitives whose lowering is template expansion; consensus could not depend on it in any case. Allowed for third-party compilers (the encoding is the interface); revisit for Phase G code generation, outside the identity |
@@ -867,7 +863,7 @@ The acceptance criteria are §II.0.2.
 | R5 staged enablement | §II.7 | analysed here; the registry's `blocking` field and its CLI display are node-only and specified in §II.7.4; the consensus rules of §II.7.5 are decided (2026-10-01) and not yet built |
 | R6 Hub-majority outcome | §II.10 | new acceptance program, **not an implementation claim**; requires a live Hub census, real checkpoints and an adequately seated end-to-end drill |
 | R7 future-family extension | §II.11 | proposed direct-TIR and third-party frontend contract; existing data adapters and quant descriptors cover only their current languages, so this is **not yet a proven end-to-end capability** |
-| R8 local-LLM kernel coverage | §II.12 and [Kernel design §§K.0–K.8](../design/palw/models/versioned-kernels.md) | unmeasured target; real-size checker/court/panel resources need evidence; no VM route |
+| R8 local-LLM kernel coverage | §II.12 and [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) | unmeasured target; real-size checker/court/panel resources need evidence; no VM route |
 | A1–A5 | §II.8 | A2 is met by the pack; A1, A3, A4, A5 complete with the preflight (task 7), `blocking` and the decision on §II.7.5 |
 | A6 | §II.10.5 | open until the measured `register` and `Final` gates pass; neither the 92 % A/B corpus reading nor the earlier Hub estimates close it |
 | A7 | §II.11.4 | open until third-party direct-TIR and frontend-pack paths pass with unchanged node/consensus binaries and independent seats |
@@ -1581,7 +1577,7 @@ The coordinator decided on 2026-10-01: **Proposal A approved** (one seating rule
 override flag that prints a warning (the chain does not enforce it). The consensus rules below are built by the consensus lanes
 (lane D owns the shared predicate; this lane specifies it here, writes the scenarios the drills must include, and builds the
 node-side reporting and the seat duty). None of the consensus rules is built yet. *(Corrected 2026-10-12: Proposal A is built —
-`palw_class_seating`, armed on testnet-12 at DAA 5,300 with `independent_floor = 3`; see the [register](../design/palw/integration/mainnet-spec-register-2026-10-12.md) N1/N2.)*
+`palw_class_seating`, armed on testnet-12 at DAA 5,300 with `independent_floor = 3`; see the [register](../design/palw/mainnet-spec-register-2026-10-12.md) N1/N2.)*
 
 All of them are **fences**: dormant on every preset (`None`, hashed Some-only, a dormant network fingerprints as if the rule did not
 exist), armed on testnet-12 through a flag-day entry like `PALW_T12_TIR_FENCE2_ENTRY`, with a drill that crosses the fence on the
@@ -2080,7 +2076,7 @@ none may be inferred from another.
 
 *Added 2026-10-03; revised 2026-10-06 under ADR-0172. The historical 90/10 VM split is withdrawn.
 This is not a present 90 % measurement. It is narrower than A6's all-Hub denominator and broader than the old
-decoder-only safetensors corpus. [Kernel design §§K.0–K.8](../design/palw/models/versioned-kernels.md) define kernel-only extension.*
+decoder-only safetensors corpus. [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) define kernel-only extension.*
 
 ### II.12.1 Define “90 % of local LLMs” before counting
 
@@ -2141,7 +2137,7 @@ broader all-HF target retains `D_all`; neither target implies the other.
 post-commit challenge protocol. For a new versioned class/profile, bind the active KernelDescriptor digest,
 VerificationPlan root, `challenge_policy_id`, program/artifact/tokenizer/input-schema/layout/context commitments
 and RFC14 dispute-plan digest before any challenge randomness. Resolve checker/challenge/soundness as the approved
-immutable tuple in the [Kernel design](../design/palw/models/versioned-kernels.md); a declarative plan cannot select weaker randomness, omit relations or upload a checker.
+immutable tuple in the [Kernel design](../design/palw/versioned-kernels.md); a declarative plan cannot select weaker randomness, omit relations or upload a checker.
 
 | Immutable identity/statement bindings | Later conformance or activation evidence |
 | --- | --- |
@@ -4197,7 +4193,7 @@ completion percentage; accepted native honest-Final model records remain0.
 
 ## 改定 — 2026-10-12（seatingとモデル保有、単一seat scope：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md) と[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) と[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
 
 Proposal Aの `class_seated`（executor以外のモデル保有operatorを `seat_count` 以上、registrant・executorを除いた独立operatorの下限）は、モデル配布監査ではなく、実際にclaimを検証できるPanelを形成する条件として維持する（ADR-0177 D1補足：Miner・Panelは保有必須、登録者に配布義務はない）。Panel=1暫定modeでは、単一seatで全検証scopeを覆える経路だけを対象とし、旧複数seat前提を一括定数置換しない（RFC-0010 2026-10-12改定）。
 
@@ -4505,14 +4501,8 @@ declaration per modality axis:
 | `token { maximum, unit_bytes = 4, profile = 0 }` | exact u32-id axis, `maximum ≤ maximum_positions` |
 | `patch` / `audio { maximum, unit_bytes, profile }` | RFC03 axes: committed bytes per patch / audio frame and the RFC03 encoding/preprocessing profile root |
 
-A job commits its maximum lengths before Fund: every present axis is
-`1..=maximum`, every absent axis is 0, and no claim or later slice can enlarge them.
-For an unknown stopping point, Commit fixes the actual lengths and applies `check_actual`
-against that original maximum; Fund never requires the future generated ids. A window
-Text job's token axis counts evaluated positions (prompt plus generated ids fed back into
-the decoder, excluding the final returned id that is not evaluated again). Attachment
-checks the original request maximum, and Commit, Final and independent extraction check
-the actual extent against the same Length36 contract. The
+A job commits its actual lengths before Fund (`check_actual`): every present axis is
+`1..=maximum`, every absent axis is 0, and no claim or later slice can enlarge them. The
 RFC03 patch/audio axes decode (so their bytes ride unjudged below their fence) but are refused
 by name until their typed stage contract and fence ship (`MEDIA_LENGTHS_ARMABLE_V36 = false`).
 A Text/Stage class that adopts contract 36 is itself a new class version; existing
@@ -4588,161 +4578,3 @@ settlement, a filing in its own envelope (`u16 37, kind, len, body`; the frozen 
 keeps kinds 0..=2): kind 3 = `WindowFaultV37` (append/KV binding or continuity), kind 4 = the
 job's deterministic v8 `HistorySelectionFaultV8` (`window_selection_job_v37`). Actions 45/46
 ride unjudged below `palw_window_class_v37` or Final27 (A-2); the route decoder ceiling is 46.
-
-**Source-audit correction (2026-10-15; implementation unverified).** Coordinates and
-history/writer shapes alone do not bind a selection court. Registration and attachment
-must additionally bind the program root, actual HistAppend state and input writer, the
-actual selection input, and its Idx dtype and position-specific output shape. All court
-work/scratch/restoration must fit the original paid envelope as well as filing bytes.
-The frozen v1/v2 grammar refuses TopK on symbolic `H` and cannot express the required
-`min(H, selection_cap)` output. Accordingly the source guard is a defensive refusal,
-**not a completed positive window execution path**. A separate versioned execution/source
-contract is still needed; the v37 declarations above and standalone v8 relation do not
-establish that implementation, native Final or RFC02 completion.
-
-### II.14.61 Genesis model set: eight text-generation models in one `.palwart` format (user decisions, 2026-10-15)
-
-**This replaces the initial seven-model target below** (kept as history). The user named ten genesis models, dropped #7
-(Gemma 4 26B-A4B, overlapping #8) and #9 (Qwen3-32B, overlapping #6), and chose the uncensored variant of each (huihui
-abliterated; Dolphin where no huihui variant exists) — #8 included since 2026-10-16, rebuilt from huihui's abliterated
-Qwen3.6-35B-A3B GGUF. Ids keep the original numbering. These
-models are the next network's genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 14,000 release scope
-are unchanged. **Every genesis model is served at a 32K context (32,768 tokens; user decision 2026-10-16).** A PALWQ361 artifact
-bakes its context into its header and rotary table, so #8 is rebuilt with `qwen36-convert --context 32768` from
-`huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF` @ `acd5abe0` (Q8_0), streamed both ends (a measuring pass, then an output
-pass into `palwart pack --from-pipe`, bit-identical to the one-pass file), into the new `Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW`;
-the earlier 512-position `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` stays as history. #1 is re-converted with the A16 converter at
-`--n-ctx 32768` (the published 8k file stays as history).
-
-**Scope: text generation only** (user policy, 2026-10-15). A genesis class maps token ids to next-token logits. Vision towers and
-projectors (mmproj), image/audio/video embedders and processors, and multi-token-prediction (MTP) heads are not computed, not
-covered, not admitted as claims and not rewarded; image paths will not be enabled. The artifact refuses such components by name
-(`check_text_scope_v3`: job inputs, out-of-scope params, tensors and files, program kinds) and so does the genesis claim route
-(`palw_genesis8_admits_input_v1`: anything but token ids).
-
-| # | Source (pinned revision) | Architecture | License | Route |
-| --- | --- | --- | --- | --- |
-| 1 | `dphn/Dolphin3.0-Qwen2.5-1.5B` @ `60c996e2` (re-converted at `--n-ctx 32768`) | Qwen2 dense | Apache-2.0 | BASE-0 A16 |
-| 2 | `huihui-ai/Huihui-Qwen3.5-2B-abliterated` @ `b2e291a6` | Qwen3.5 Gated-DeltaNet hybrid | Apache-2.0 | TIR |
-| 3 | `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @ `05b9e7c9` (tentative: no official Qwen3.8 9B) | Qwen3.5 GDN hybrid | Apache-2.0 | TIR |
-| 4 | `huihui-ai/Huihui-gemma-4-12B-it-abliterated` @ `060ea173` | Gemma-4 Unified (dense, multimodal wrapper) | Apache-2.0 | TIR |
-| 5 | `huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated` @ `b73ec897` | gpt-oss MoE (sinks, sliding window) | Apache-2.0 | TIR |
-| 6 | `huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF` @ `a0b17c71`, bf16 GGUF | Qwen3.8 GDN hybrid (community SFT) | Apache-2.0 | TIR |
-| 8 | `huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF` @ `acd5abe0`, Q8_0 (rebuilt at `--context 32768`) | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime |
-| 10 | `huihui-ai/Llama-3.3-70B-Instruct-abliterated` @ `fa133346` | Llama 3 dense | Llama 3.3 | TIR (not required to be end-to-end adjudicable) |
-
-Every genesis model ships as **one versioned `PALWART3` artifact** (`misaka/palw/tir/artifact/src/palwart_v3.rs`): an index and
-streamed segments holding a canonical manifest (source repository and revision pin, license, attribution), the program record, the
-per-architecture weight section (A16, PALWQ361 integer, TIR inventory; MXFP4 exact integer reserved), the tokenizer, chat template,
-source configuration, license texts and calibration inputs. The legacy `.palwart`/`.palwtir`/`.palwq36` formats stay readable under
-their own magics and identities (kept as inner roots, never reinterpreted); the catalog's `artifact_root` is the `PALWART3` root.
-Published artifacts go to `Misakachain/<SourceName>-PALW` (#10's name begins with "Llama", its card says "Built with Llama", and
-the Llama 3.3 license, Acceptable Use Policy and notice ship with it).
-
-Calibration measures each site's activation range on the float reference (absmax, per-position and per-channel maxima); the
-integer program, and every adjudication over it, is exact and deterministic for any pinned calibration set, so the calibration
-length is a fit choice, not a correctness one. A recurrent (Gated DeltaNet) class is calibrated on one sequence as long as the
-context it serves (freeze-v1 §5.2, enforced by the converter): #2, #3 and #6 calibrate on one 32,768-token sequence. Dense classes
-use four 512-token texts and declare 32,768. The texts are git blobs at one pinned commit; the token file and the measured
-statistics travel in the artifact and the manifest records texts, tokenizer, lengths and policy. The float reference's threaded
-kernels and its node-by-node runs of positions are bit-identical to the one-thread, position-by-position reference, so the
-statistics depend neither on the core count nor on the run length. The memory design for the long context (one full-sequence
-carry, no score matrix, opt-in carry spill, RAM accounting) is [RFC-0020](0020-long-context-calibration-memory.md). A fit guard
-(`palw-tir-fidelity --exec`: held-out short text, and the held-out next 32K tokens with a 32-window drift curve; mean KL <= 0.1,
-top-1 >= 0.8, every window's KL <= 0.1) withholds the index of a class outside the tolerance where it can be measured on the
-conversion host. The genesis list is
-`consensus/core/src/palw_genesis8_catalog_v1.rs` (dormant: edition 0 is built only from supplied roots); the conversion pipeline is
-`scripts/genesis/genesis10_pipeline.py`; per-model status, coverage (architecture × layer kind) and open items are in
-`docs/design/palw/genesis8-status.md`.
-
-Adjudication is unchanged in kind (II.14.62): sampled deterministic re-execution, public localization and the deterministic court;
-genesis listing is economic only, and every claim still needs its own Gate C approval. Open at this writing: registration binding
-of the `PALWART3` root and K2-TIR kernel activation.
-
-#### History: the initial seven-model activation target (user decision, 2026-10-15; superseded the same day)
-
-The initial rewarded set must include all seven models below: the six dense size
-tiers remain, and the 35B-A3B hybrid MoE is an additional model, not a replacement
-for 32B dense. All seven target block production, coinbase and Final weight from
-the start of the new network. This is a completion requirement, not evidence of
-present eligibility or an instruction to bypass admission.
-
-| Tier | Selected model repository |
-| --- | --- |
-| 1.5B | `Misakachain/Qwen2.5-1.5B-PALW-A16-runtime` (original `Qwen/Qwen2.5-1.5B-Instruct`) |
-| 8B | `meta-llama/Llama-3.1-8B-Instruct` |
-| 14B | `Qwen/Qwen3-14B` |
-| 24B | `mistralai/Mistral-Small-3.2-24B-Instruct-2506` |
-| 32B | `Qwen/Qwen3-32B` |
-| 70B | `meta-llama/Llama-3.3-70B-Instruct` |
-| 35B-A3B | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` |
-
-The user fixed the 35B-A3B target to the original **PALWQ361 integer runtime**:
-`palw-runtime/qwen36-35b-a3b.palwq36`, 36,492,831,232 bytes, SHA-256
-`5fe1d15caf0e544b718a4a2398db4f902b9a6722b266dd53824fbc9723578b29`.
-The other `.palwq36` variant and the Claude-related GGUF files do not substitute
-for this artifact. Its tokenizer, complete original context and canonical
-conversion still require their own pinned identities and execution evidence.
-
-The dated publisher revisions and Git/LFS file inventory are recorded in
-`docs/design/palw/tir/launch/initial-seven-models-v1.json`. They are preparation
-metadata: every selected runtime variant, canonical artifact/inventory, real PC,
-tokenizer, context, random/decode rule and source conversion must still be pinned
-before execution. Existing A16 and Qwen36 runtime formats do not automatically
-become Source28/TIR artifacts or inherit a new class's rights. Missing pins remain
-`NOT_RUN`, not a silently substituted checkpoint or a successful release gate.
-
-The launch gate requires **7/7**, with independently reproduced full advertised
-tasks, honest and corrupted-trace courts, native registration/funding, genuine
-Final, coinbase delivery and accepted redemption under the target ruleset. Mistral's
-vision encoder/projector are part of complete-model coverage; the MoE routing,
-expert weights and recurrent state remain included in the 35B model. A nominal
-4-bit weight size is neither verifier RAM nor an admissible cost quote. For 70B,
-measure complete preparation, verification and evidence carriage within the
-owning Panel=1 one-day DAA opportunity; no unmeasured smaller context may stand
-for the full requested class.
-
-The existing qualified-bond allocation (`alpha = 1.5`, 30-day average) and shared
-Q/B/R/F caps apply. Seven entries do not imply equal one-seventh coinbase shares,
-synthetic founding bonds or a model-specific multiplier. Keep the statistical
-A6/A8 populations and their failure denominators unchanged: this launch set is
-a separate all-required engineering gate. Activation is held until every model
-passes, including the added MoE; no shipping preset is changed merely by listing
-the target models here.
-
-### II.14.62 Verification assumptions (user decision, 2026-10-15)
-
-[PRINCIPLES §8](../PRINCIPLES.md#8-llm計算の暗号学的証明を使用しない--2026-10-15ユーザー決定)
-governs this RFC and every implementation and future plan. Use sampled replay,
-algebraic spot checks, public localization, deterministic adjudication and
-economic deterrence. Cryptographic proofs of model computation are permanently
-excluded. Merkle openings, tensor commitments, hashes and signatures authenticate
-data identity and origin; they do not establish correctness of the whole model
-computation.
-
-Consensus credit authentication requires the prescribed randomly selected
-validator approvals under an explicit honest-fraction assumption. A matching
-local replay, an expired challenge period, an optimistic component Final, a
-complete Master aggregate or a private escrow payment does not replace those
-approvals. The all-seven block/coinbase/Final-weight gate must inspect the actual
-ordinary model/claim approval path and original bond caps. Report missing
-approvals, unknown detection rates and absent execution evidence explicitly.
-
-### II.14.63 Unsupported models and consensus upgrades (user decision, 2026-10-15)
-
-When a model cannot be supported under the current RFC02 consensus rules,
-implement the required **hard fork or soft fork** to support it. Record the exact
-model/task/context and missing feature. Existing-rule frontend or lowering
-changes need no consensus change; a new primitive, grammar or validity extension
-uses an explicitly versioned hard fork when old nodes would disagree. Use a
-soft fork only when the new validity conditions restrict the old valid set and
-old nodes accept the resulting blocks. Determine compatibility from the actual
-rules; never reinterpret frozen old bytes or primitive semantics.
-
-Both paths need explicit activation, node/migration implementation, original
-source and full-context evidence, independent replay and public deterministic
-court, DA/resource/deadline/economic checks, sampled-validator approvals, Final,
-redemption and reorg verification. Unsupported models earn no provisional rights
-by bypassing those checks. PRINCIPLES §8 remains mandatory in either upgrade.
-The current implementation and validation backlog is tracked in
-[the remaining-work document](../design/palw/tir/rfc0002-remaining-work-2026-10-15.md).

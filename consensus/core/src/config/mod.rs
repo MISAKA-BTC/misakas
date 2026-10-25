@@ -106,13 +106,6 @@ pub struct Config {
     /// pruning boundary; `archive` preserves EVM state history past pruning.
     pub evm_history_mode: crate::evm::EvmHistoryMode,
 
-    /// G14 capacity lane (`--storage-gc-pruned-evm-indexes`, implied by `--storage-cap-bytes`):
-    /// when the pruning processor prunes a block, also delete the RPC-only EVM indexes derived from
-    /// it (raw tx 217, tx lookup 204, block-hash map 210, number index 213, log postings 205), which
-    /// otherwise outlive the pruned bodies forever. Node-local, NOT consensus-sensitive: none of
-    /// these rows is part of a commitment or read by validation. `false` by default.
-    pub storage_gc_pruned_evm_indexes: bool,
-
     /// C-01 state-backend (design v0.1, Stage 1, slice S4): node-local SHADOW
     /// dual-write of the flat latest-canonical state backend, with a per-block
     /// live differential against the committed snapshot. `false` by default and
@@ -229,7 +222,6 @@ impl Config {
             ram_scale: 1.0,
             retention_period_days: None,
             evm_history_mode: crate::evm::EvmHistoryMode::Recent,
-            storage_gc_pruned_evm_indexes: false,
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
             evm_retire_206: false,

@@ -142,8 +142,7 @@ fn protected_flat_v6_codec_identity_and_route_fences_are_separate_from_v3() {
         K::ExpireFlatModelSealV6 { vector: [1; 64], actor: [2; 64] },
     ] {
         assert_eq!(K::decode(&o.encode()).unwrap(), o);
-        // 41–44 since the +5 renumbering at the `rfc02/merge-final` merge (route.rs: 36–40 belong to RFC02-T, G14R and RFC-7).
-        assert!(matches!(o.tag(), 41..=44));
+        assert!(matches!(o.tag(), 36..=39));
         assert_eq!(
             kaspa_consensus_core::palw_lifecycle_objects_v2::palw_kernel_route_inner_fence_v1(&o),
             Some(kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1)

@@ -487,31 +487,6 @@ fn an_issuer_the_chain_contradicts_and_an_opening_that_does_not_hold_are_refused
     // The shipped rules: the fence is dormant everywhere, so the client stays HEADER_VERIFIED past its checkpoint.
     let shipped = ForkChoiceRulesV1::of(&kaspa_consensus_core::config::params::TESTNET_PARAMS);
     assert_eq!(shipped.commitment, None);
-    assert_eq!(shipped.rule_e, None);
-}
-
-/// **R12 (2026-10-11): the client reads rule E's fence from the params**, so a conflict on a network where rule E may decide is a
-/// `LeafV1Insufficient` STOP rather than a verdict of the pre-rule-E comparator. The legal schedule (commitment <= rule E <=
-/// retirement) is the only one a release may arm; on it the DNS gate is retired and rule E is in force.
-#[test]
-fn the_rules_carry_rule_e_from_the_params_and_a_rule_e_conflict_stops() {
-    let mut params = kaspa_consensus_core::config::params::TESTNET_PARAMS.clone();
-    params.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(0));
-    params.palw_fork_choice_rule_e_v1 = Some(ForkActivation::new(0));
-    let of = ForkChoiceRulesV1::of(&params);
-    assert_eq!(of.rule_e, Some(ForkActivation::new(0)), "the client reads the node's rule-E fence");
-    let f = fork();
-    let (ta, tb) = (f.a.last().unwrap(), f.b.last().unwrap());
-    let views = [view("p1", &f.c, &f.a, f.now), view("p2", &f.c, &f.b, f.now)];
-    let ev = [attest(ta, 106), attest(tb, 106)];
-    let lim = L2LimitsV1::default();
-    // Without rule E the comparator decides this fork (the control); with it, the v1 leaf cannot feed the comparator: STOP.
-    assert_eq!(chosen_tip(&run(&views, &ev, &rules(), &lim, &f.o).unwrap()), ta.header.hash, "control: no rule E, a verdict");
-    let ruled = ForkChoiceRulesV1 { rule_e: of.rule_e, dns_retired: Some(ForkActivation::new(0)), ..rules() };
-    assert!(matches!(run(&views, &ev, &ruled, &lim, &f.o), Err(L2StopV1::LeafV1Insufficient(_))), "a rule-E conflict stops");
-    // A single chain is unaffected by rule E.
-    let single = [view("p1", &f.c, &f.a, f.now), view("p4", &f.c, &f.a, f.now)];
-    assert_eq!(chosen_tip(&run(&single, &[attest(ta, 103)], &ruled, &lim, &f.o).unwrap()), ta.header.hash);
 }
 
 /// The finality seal and ADR-0065 D2: what nodes would never weigh, or may veto, is a STOP.
@@ -880,46 +855,4 @@ fn l2fc_cost_per_view() {
         "L2FC-COST synthetic_state bonds=20000 bond_table_bytes={bond_table} state_root={root_time:?} opening_of_state={leaf_time:?} preimage_bytes={}",
         state.state_root_preimage().len()
     );
-}
-
-#[test]
-fn rfc09_issuer_and_wire_reader_use_v2_v3_and_bind_the_attested_version() {
-    use kaspa_consensus_core::config::params::palw_t12_shipped_params;
-    use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedOpeningV2;
-    for gate_c in [false, true] {
-        let mut p = palw_t12_shipped_params();
-        p.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(0));
-        p.palw_fork_choice_rule_e_v1 = Some(ForkActivation::new(0));
-        if gate_c {
-            p.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
-        }
-        let point = PalwForkChoicePointV1 { block: h(700), daa_score: 100, blue_score: 100 };
-        let cx = PalwBlockContextV2 { block: point.block, daa_score: point.daa_score, blue_score: point.blue_score, subsidy: 0 };
-        let (state, _) =
-            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p.palw_rule_e_state_params_v1().unwrap(), &cx, &[], None).unwrap();
-        let opening = PalwCommittedOpeningV2::of(&state, &p).unwrap();
-        let root = opening.committed_root();
-        let decoded = opening_from_wire_v2(&opening.leaf, &opening.inner_root.to_string()).unwrap();
-        assert_eq!(decoded, opening);
-        assert!(opening_from_wire_v1(&opening.leaf, &opening.inner_root.to_string()).is_none());
-        let rs = ClientRulesetV1::of(&p);
-        let served = IssuerServedV2 { point, opening, committed_root: root, committed_form: true };
-        let sign = |msg: &[u8]| msg.to_vec();
-        let verify = |pk: &[u8], msg: &[u8], sig: &[u8]| pk == b"pk" && msg == sig;
-        let (att, skipped) = issue_attestations_v2(&p, &rs, &[served.clone()], None, 100, b"issuer", &sign);
-        assert!(skipped.is_empty());
-        assert_eq!(att.len(), 1);
-        assert_eq!(att[0].leaf_version, if gate_c { 3 } else { 2 });
-        let keys = vec![(b"issuer".to_vec(), b"pk".to_vec())];
-        verify_attestation_v2(&p, &att[0], &keys, &rs, 100, &L2LimitsV1::default(), &verify).unwrap();
-        let mut wrong = att[0].clone();
-        wrong.leaf_version = 1;
-        wrong.signature = sign(wrong.signing_digest().as_bytes().as_slice());
-        assert!(verify_attestation_v2(&p, &wrong, &keys, &rs, 100, &L2LimitsV1::default(), &verify).is_err());
-        let mut bad = served;
-        bad.opening.inner_root = h(1234);
-        let (att, skipped) = issue_attestations_v2(&p, &rs, &[bad], None, 100, b"issuer", &sign);
-        assert!(att.is_empty());
-        assert_eq!(skipped.len(), 1);
-    }
 }

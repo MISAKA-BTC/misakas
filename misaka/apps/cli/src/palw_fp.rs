@@ -781,7 +781,7 @@ fn build_carrier_priced_for_params_v1(
     funding_entry: &kaspa_consensus_core::tx::UtxoEntry,
 ) -> Result<(Transaction, u64, u64), String> {
     use kaspa_consensus_core::mass::MassCalculator;
-    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
+    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
     let calc = MassCalculator::new(
         params.mass_per_tx_byte,
         params.mass_per_script_pub_key_byte,

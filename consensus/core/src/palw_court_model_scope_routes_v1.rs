@@ -35,13 +35,8 @@
 //! challenger published but does not derive the finalize's exact read set, so a challenger that publishes too few leaves leaves the
 //! accused to add them (bounded per accusation by one finalize's reads, and the challenger's exposure on a dismissed claim); a
 //! composite artifact's and an evaluation close's sections are authenticated by the finalize, not at opening. R-D2-READY: the readiness
-//! digests are committed by a seat readiness root, object tag 230 (`PalwConsensusObjectV2::SeatReadinessRootV1`, ADR-0188 B, landed
-//! 2026-10-22 under `palw_court_model_scope_v1`), which admission refuses while the draw cap is unadopted; until it is adopted a class
-//! registered past the fence takes no readiness proof and seats it by the possession floor's other conditions.
-
-pub mod readiness_root;
-/// ADR-0200 C1: the digest/path disclosure court over recorded tag-230 roots (G14 item 6).
-pub mod readiness_disclosure;
+//! digest is a built predicate whose object tag 230 is reserved but not landed; until then a class registered past the fence takes
+//! no readiness proof and seats it by the possession floor's other conditions.
 
 use borsh::BorshSerialize;
 
@@ -169,7 +164,7 @@ pub static PALW_D2_REPLACEMENT_ROUTES_V1: [PalwD2ReplacementRouteV1; 4] = {
             restricted: CourtUnitKindV1::SeatReadinessLeaves,
             units: &[U::ReadinessDigest, U::ReadinessRefutationLeaf],
             verdict: PalwD2VerdictRouteV1::ReadinessDigest,
-            carriers: "palw_d2_readiness_digest_v1 / palw_d2_readiness_refute_v1 (object tag 230 SeatReadinessRootV1 root+path, ADR-0188 B; refused while the draw cap is unadopted)",
+            carriers: "palw_d2_readiness_digest_v1 / palw_d2_readiness_refute_v1 (object tag 230 reserved, kind not landed: R-D2-READY)",
         },
     ]
 };

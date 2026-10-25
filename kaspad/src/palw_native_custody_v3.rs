@@ -39,13 +39,30 @@ use kaspa_consensus_core::{
 use kaspa_hashes::Hash64;
 use std::{collections::BTreeMap, sync::Arc};
 
-/// **The provider wire** — one definition, shared with the remote miner (audit C-03): the request a producer sends its session's
-/// providers (`checkpoint`, candidate `header`, `envelope`, `capture`, `prompt`), the Ready answer (`Signed` / `Refused`) and the
-/// manifest answer a backend-less producer asks for (`NativeManifestV3`). Moved, not changed: the Borsh layouts are the ones this
-/// module defined.
-pub use misaka_palw_remote::native_custody_exchange_v3::{
-    PALW_NATIVE_READY_EXCHANGE_VERSION_V3, PalwNativeManifestResponseV3, PalwNativeReadyRequestV3, PalwNativeReadyResponseV3,
-};
+/// Wire version of [`PalwNativeReadyRequestV3`] / [`PalwNativeReadyResponseV3`].
+pub const PALW_NATIVE_READY_EXCHANGE_VERSION_V3: u16 = 3;
+
+/// **What a producer sends its session's providers.** Everything a provider needs to derive the bundle ITSELF and to obtain
+/// the material authority from its own Consensus API: the pre-entropy checkpoint (a direct parent of `header`), the candidate
+/// header at the attempt's nonce, the envelope carrying the signed base attempt and the exact Ready (its provider signatures
+/// and seal are placeholders — authority never reads them), and the capture. `prompt` is a cross-check only: a provider
+/// re-derives the prompt from the anchor with its own backend and refuses a different one.
+#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwNativeReadyRequestV3 {
+    pub version: u16,
+    pub checkpoint: BlockHash,
+    pub header: Header,
+    pub envelope: PalwAttemptMaterialEnvelopeV3,
+    pub capture: Vec<u8>,
+    pub prompt: Vec<u32>,
+}
+
+/// A provider's answer: its signatures over `Ready::id` (each after durable publication), or why it signed nothing.
+#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwNativeReadyResponseV3 {
+    Signed { version: u16, signatures: Vec<(PalwBondKeyV2, Vec<u8>)> },
+    Refused { version: u16, reason: String },
+}
 
 /// **The producer↔provider transport.** Synchronous on purpose: the producer calls it from a blocking task, and a provider's
 /// work (rebuilding the typed bundle, fsync) is CPU and disk, not await. An implementation returns signatures only from
@@ -70,18 +87,6 @@ pub trait NativeReadyExchangeV3: Send + Sync {
     ) -> Result<(), String> {
         Err("explicit V4 kernel material ingress unavailable".into())
     }
-    /// RFC08 bounded provider replacement: every new provider replays the original work under its own native state,
-    /// persists material and the new signed generation, then the sponsor's atomic ReplaceBeforeV4 carrier is queued.
-    /// The caller still waits for its own positive native admission; a queued carrier is not acceptance.
-    fn replace_kernel_material_v4(
-        &self,
-        _context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
-        _bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
-        _intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
-        _grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
-    ) -> Result<(), String> {
-        Err("explicit V4 kernel material replacement unavailable".into())
-    }
     /// Read permission/data identity only. The caller obtains the opaque native
     /// authority with its own explicitly configured registered checker key.
     fn fetch_kernel_material_unit_v4(
@@ -102,6 +107,17 @@ pub trait NativeReadyExchangeV3: Send + Sync {
     > {
         self.fetch_kernel_material_unit_v4(query, authority)
             .map_err(kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4::Unknown)
+    }
+    /// Explicit newly funded replacement; never silently changes an active
+    /// roster. A transport success still requires own native generation read.
+    fn replace_kernel_material_v4(
+        &self,
+        _context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+        _grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+    ) -> Result<(), String> {
+        Err("explicit bounded kernel provider replacement unavailable".into())
     }
     /// Queue a fully signed prospective contract; the caller must wait for its
     /// OWN coherent native prior-state admission before any execution/draw.
@@ -184,8 +200,18 @@ pub fn palw_native_draw_manifest_v3(
     row: &PalwMonetaryMaterialRowV1,
     attempt: &PalwAttemptUnsignedV2,
 ) -> Result<PalwMaterialManifestV1, String> {
-    // One definition with the remote miner's (audit C-03).
-    kaspa_consensus_core::palw_attempt_material_v3::palw_native_draw_manifest_v3(row, attempt)
+    let session = row.terms.native_session.as_ref().ok_or("row carries no prospective native session")?;
+    Ok(PalwMaterialManifestV1 {
+        root: row.terms.root,
+        scopes: vec![PalwMaterialScopeV1 {
+            claim: attempt_id_v2(attempt),
+            commitment: attempt.execution_root,
+            codec: session.codec,
+            bytes: 1,
+            units: 1,
+            content: Hash64::from_u64_word(1),
+        }],
+    })
 }
 
 /// A PAV3 envelope with placeholder provider signatures and seal of the real lengths — the shape the header-stage gate sees at
@@ -499,7 +525,33 @@ mod tests {
     }
 }
 
-// The wire scans of the request/response types live beside their definitions (`misaka_palw_remote::native_custody_exchange_v3`).
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PalwNativeReadyRequestV3 {
+    fn scan_native_wire_v1<R: std::io::Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
+        r.step()?;
+        u16::scan_native_wire_v1(r)?
+            .merge(BlockHash::scan_native_wire_v1(r)?)?
+            .merge(Header::scan_native_wire_v1(r)?)?
+            .merge(PalwAttemptMaterialEnvelopeV3::scan_native_wire_v1(r)?)?
+            .merge(Vec::<u8>::scan_native_wire_v1(r)?)?
+            .merge(Vec::<u32>::scan_native_wire_v1(r)?)
+    }
+}
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PalwNativeReadyResponseV3 {
+    fn scan_native_wire_v1<R: std::io::Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
+        r.step()?;
+        match r.byte()? {
+            0 => u16::scan_native_wire_v1(r)?.merge(Vec::<(PalwBondKeyV2, Vec<u8>)>::scan_native_wire_v1(r)?),
+            1 => u16::scan_native_wire_v1(r)?.merge(String::scan_native_wire_v1(r)?),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "native Ready response tag unknown")),
+        }
+    }
+}
 
 /// Canonical map construction without an intermediate unreserved BTree map.
 /// The source signature owner remains alive while its exact map frame is
@@ -526,6 +578,6 @@ pub fn palw_native_signature_map_owned_v3(
     for row in signatures {
         borsh::to_writer(&mut bytes, row).map_err(|e| e.to_string())?;
     }
-    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
+    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
     retain_native_value_decode_v1(&bytes, || borsh::from_slice::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes)).map_err(|e| e.to_string())
 }

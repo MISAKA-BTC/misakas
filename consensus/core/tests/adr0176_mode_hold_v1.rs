@@ -33,7 +33,7 @@ const KAS: u64 = 100_000_000;
 const DAY: u64 = PALW_BOND_HOLD_DAA_PER_DAY_V1;
 
 fn bond(n: u8) -> PalwBondKeyV2 {
-    PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_bytes([n; 64]), 0))
+    PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes([n; 32]), 0))
 }
 
 fn id(bond: u8, n: u64) -> Hash64 {
@@ -499,112 +499,4 @@ fn exit_and_re_registration_wait_for_the_long_view_and_the_liability() {
     v.tick(100);
     assert!(v.try_claim(2, 1_000 * KAS, 100, PalwHoldModeV1::PanelOne, 0).is_ok(), "3/day after the slash: 2 used + 1");
     assert!(v.try_claim(2, 1_000 * KAS, 101, PalwHoldModeV1::PanelOne, 0).is_err(), "the old consumption counts against the new cap");
-}
-
-// ---- C2 (user decision 2026-10-15): the 7-day exit hold; exit, re-registration and mode switches never reset long liabilities or
-// ---- capacity. TEST SOURCES ONLY (not run by the lane that wrote them).
-
-#[test]
-fn c2_panel_one_only_bond_recovers_issuance_in_a_day_but_exits_after_seven() {
-    // A bond that only ever made Panel=1 claims: its day view frees after one day (issuance capacity recovers), but its long view —
-    // the exit hold — keeps the capital for 7 days (C2: kept at 7 days; the 1-day recovery is issuance, never release).
-    let p = policy(1);
-    let capital = 1_000 * KAS;
-    let mut w = World::new(p);
-    w.tick(10);
-    // The burst view (2 per 72 DAA at this capital) spreads the day's three: two at DAA 10, the third at 83.
-    for _ in 0..2 {
-        w.try_claim(1, capital, 10, PalwHoldModeV1::PanelOne, 0).unwrap();
-    }
-    w.tick(83);
-    w.try_claim(1, capital, 83, PalwHoldModeV1::PanelOne, 0).unwrap();
-    assert!(w.try_claim(1, capital, 83, PalwHoldModeV1::PanelOne, 0).is_err(), "the day's three are used");
-    w.tick(10 + DAY);
-    w.try_claim(1, capital, 10 + DAY, PalwHoldModeV1::PanelOne, 0).expect("Panel=1 issuance recovers after one day");
-    // Every claim terminal at once (a colluding immediate Final): the liability hold ends after H_L; the long view does not.
-    w.close_all_open(10 + DAY);
-    for now in [10 + DAY + w.p.liability_hold_daa + 1, 10 + 3 * DAY, 10 + 7 * DAY - 1] {
-        assert!(w.s.withdrawal_holds(&bond(1), now), "exit held at {now}: the long view is 7 days for a Panel=1-only bond");
-    }
-    assert_eq!(PALW_BOND_EXIT_HOLD_DAYS_V1, 7);
-}
-
-#[test]
-fn c2_a_mode_switch_never_resets_the_kept_liability() {
-    // A Panel=0 claim closes keeping its liability (formula v2) until `until`; the bond then switches to Panel=1. The liability view
-    // keeps counting in the concurrent-collateral check across the switch, and only its own clock ends it.
-    let mut p = policy(1);
-    p.hold.as_mut().unwrap().concurrent_liability_permille = 500;
-    p.validate().unwrap();
-    let capital = 10_000 * KAS;
-    let mut w = World::new(p);
-    w.tick(1);
-    w.try_claim(1, capital, 1, PalwHoldModeV1::PanelZero, 4_000 * KAS).unwrap();
-    let until = 50 * DAY;
-    let mut j = Vec::new();
-    w.s.close_keeping_liability_v1(&id(1, 1), until, &mut j);
-    assert_eq!(w.s.kept_liability_v1(&bond(1)), (4_000 * KAS) as u128);
-    w.tick(10 * DAY);
-    // 4,000 kept + 2,000 new > 5,000 (φ = 500 ‰): refused in Panel=1 exactly as it would be in Panel=0.
-    assert_eq!(
-        w.try_claim(1, capital, 10 * DAY, PalwHoldModeV1::PanelOne, 2_000 * KAS),
-        Err(PalwBudgetRefusalV1::LiabilityExceedsCapital)
-    );
-    assert_eq!(
-        w.try_claim(1, capital, 10 * DAY, PalwHoldModeV1::PanelZero, 2_000 * KAS),
-        Err(PalwBudgetRefusalV1::LiabilityExceedsCapital)
-    );
-    assert_eq!(w.s.kept_liability_v1(&bond(1)), (4_000 * KAS) as u128, "the switch kept the liability");
-    w.tick(until + 1);
-    assert_eq!(w.s.kept_liability_v1(&bond(1)), 0, "only the liability's own clock ends it");
-}
-
-#[test]
-fn c2_the_liability_hold_only_extends() {
-    // Closing a later claim with an EARLIER hold never shortens the bond's liability hold (a re-close, a mode switch or a colluding
-    // early Final cannot reset it).
-    let p = policy(1);
-    let capital = 10_000 * KAS;
-    let mut w = World::new(p);
-    w.tick(1);
-    w.try_claim(1, capital, 1, PalwHoldModeV1::PanelZero, 100 * KAS).unwrap();
-    w.try_claim(1, capital, 1, PalwHoldModeV1::PanelOne, 100 * KAS).unwrap();
-    let mut j = Vec::new();
-    w.s.close_at(&id(1, 1), Some(20 * DAY), &mut j);
-    w.s.close_at(&id(1, 2), Some(2 * DAY), &mut j);
-    assert!(w.s.liability_holds(&bond(1), 19 * DAY), "the later hold stands");
-    assert!(!w.s.liability_holds(&bond(1), 20 * DAY + 1));
-}
-
-#[test]
-fn c2_exit_then_re_registration_never_beats_the_long_view() {
-    // The capital of bond 1 is consumed in Panel=1 (3/day), held for 7 days, then re-registered as bond 2 (a fresh key, a fresh
-    // ledger). Over any 7-day window the SAME capital never issues more than 7·daily, because bond 2 can only exist once bond 1's long
-    // view released (the withdrawal gate), so the two bonds' issuing windows never overlap.
-    let p = policy(1);
-    let capital = 1_000 * KAS;
-    let mut w = World::new(p);
-    let mut issued: Vec<u64> = Vec::new();
-    for now in (1..7 * DAY).step_by(10) {
-        w.tick(now);
-        if w.try_claim(1, capital, now, PalwHoldModeV1::PanelOne, 0).is_ok() {
-            issued.push(now);
-        }
-    }
-    // Every claim terminal (its liability hold starts); only the long view keeps the capital after that.
-    w.close_all_open(7 * DAY);
-    // The earliest DAA bond 1's capital can leave.
-    let exit = (1..=15 * DAY).find(|now| !w.s.withdrawal_holds(&bond(1), *now)).expect("the hold ends");
-    let last = *issued.last().expect("bond 1 issued");
-    assert!(exit >= last + 7 * DAY, "exit no earlier than the long view of the last reservation");
-    for now in (exit..exit + 7 * DAY).step_by(10) {
-        w.tick(now);
-        if w.try_claim(2, capital, now, PalwHoldModeV1::PanelOne, 0).is_ok() {
-            issued.push(now);
-        }
-    }
-    for start in (0..exit + 7 * DAY).step_by(DAY as usize) {
-        let in_window = issued.iter().filter(|d| **d >= start && **d < start + 7 * DAY).count();
-        assert!(in_window <= 21, "the same capital issued {in_window} claims in the 7 days from {start}");
-    }
 }

@@ -53,8 +53,7 @@ impl TransitionBuilder<'_> {
         }
         // X3 (REQ-X3-6): an X3 claim's material hold must cover its claim-fixed hard deadline — prosecution may start from public
         // material any time X3 admits it, and the material is what it reads. `None` below the fence.
-        // G14 r6: through the X3 × clock-v2 combined rule (`a + 10,000` where clock v2 also governs).
-        if let Some(hard) = crate::palw_court_clock_v2::palw_claim_x3_cap_hard_v2(self.params, claim)
+        if let Some(hard) = crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(self.params, claim)
             && terms.material_until < hard
         {
             return Err(PalwStateV2Error::ExecV2Refused(
@@ -84,7 +83,7 @@ impl TransitionBuilder<'_> {
         id: Hash64,
         row: PalwPaidConsumerContractV1,
     ) -> Result<(), PalwStateV2Error> {
-        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| budget.put_consumer_contract_v1(id, Some(row), j))?
+        self.bond_budget_op(|budget, _, j| budget.put_consumer_contract_v1(id, Some(row), j))
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("paid consumer engine missing".into()))?
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))
     }
@@ -101,7 +100,7 @@ impl TransitionBuilder<'_> {
         if self.state.paid_consumer_contract_v1(&id).is_none() {
             return Ok(());
         }
-        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| budget.put_consumer_contract_v1(id, None, j))?
+        self.bond_budget_op(|budget, _, j| budget.put_consumer_contract_v1(id, None, j))
             .expect("contract has engine")
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))
     }

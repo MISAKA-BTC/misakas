@@ -63,8 +63,6 @@ pub mod fp_recompute;
 pub mod fp_worker;
 pub mod fuzz_a16;
 pub mod fuzz_qwen36;
-/// RFC-0006 consumer v2: GDN step / checkpoint-transition / convolution-window evidence from a base0 retention.
-pub mod gdn_evidence_v2;
 /// RFC-0003 §I.3, §II.2.1: the tensor (image, embedding) worker, seat and court halves — a `PalwGenJobV1` on a registered class (dormant).
 pub mod gen_tensor_worker;
 /// RFC-0003 §II.2.1: the generative worker, seat and court halves — FP Job V5 on a registered pipeline class (dormant).
@@ -89,7 +87,6 @@ pub mod qwen36_backend;
 pub mod qwen36_calibrate;
 pub mod qwen36_plan;
 pub mod qwen36_reference;
-pub mod remote_gguf;
 pub mod rc;
 pub mod rope;
 /// ADR-0133 S1, authenticated (SEAT-S4): the V2 segment opening a partial seat replays, tied to

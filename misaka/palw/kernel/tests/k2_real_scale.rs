@@ -1,4 +1,4 @@
-//! **K2-TIR-v4 at the ledger level** (`docs/design/palw/models/k2-real-scale.md`): segmented claims over tiled prompts past 4,096 ids, a lie in
+//! **K2-TIR-v4 at the ledger level** (`docs/design/palw/k2-real-scale.md`): segmented claims over tiled prompts past 4,096 ids, a lie in
 //! one segment localized to one element and convicted with bounded bytes, a withheld position defaulted, a position served in parts
 //! with its demanders' bonds held until the grace, and the 9B-8k fixture's shape-level verdict under the per-prosecution bounds.
 //!

@@ -155,7 +155,7 @@ pub(super) fn open_da_session_v2(
     };
     builder.write_claim(claim_id, Some(disputed))?;
     builder.disarm_deadline(claim_id);
-    builder.arm_deadline(deadline_daa, claim_id)?;
+    builder.arm_deadline(deadline_daa, claim_id);
     Ok(())
 }
 
@@ -321,7 +321,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
     // `palw_legacy_public_filer_v1` no reservation exists and the expression is the one it was.
     let reserved = !admission.accuser_is_seat && builder.state.legacy_dispute_reservation_v1(&claim_id, &accuser).is_some();
     let seat_like =
-        admission.accuser_is_seat || reserved || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser)?);
+        admission.accuser_is_seat || reserved || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser));
     let session = PalwDaSessionV1 {
         opened_daa: ctx.daa_score,
         deadline_daa: admission.deadline_daa,
@@ -330,7 +330,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
         units,
         stage: admission.stage,
     };
-    builder.write_da_session((claim_id, accuser), Some(session))?;
+    builder.write_da_session((claim_id, accuser), Some(session));
     let mut record = builder.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
     let pauses = if seat_like {
         record.open_seat_sessions = record.open_seat_sessions.saturating_add(1);
@@ -339,7 +339,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
             *opened = opened.saturating_add(1);
         } else if reserved {
             // Lane LG14-A: on the reservation's own budget; neither DA-8 count moves.
-            builder.legacy_dispute_count_session_v1(claim_id, accuser)?;
+            builder.legacy_dispute_count_session_v1(claim_id, accuser);
         } else {
             // **The fourth review's HIGH: a record-holder's pause is not a seat's session.** It is
             // counted with the seats' OPEN sessions (`open_seat_sessions`, `paused_since`: all DA-5 and
@@ -361,7 +361,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
     if pauses {
         record.paused_since = Some(ctx.daa_score);
     }
-    builder.write_da_claim(claim_id, Some(record))?;
+    builder.write_da_claim(claim_id, Some(record));
     // DA-5 / DL-1: a seat's first open session pauses a live claim, and any session defers a
     // terminal claim's retirement — either way DL-1 gives it no deadline while the session is open.
     // X3 (REQ-X3-5): on a licensed claim accepted past `palw_claim_hard_deadline_v1` any open session holds its Final (DL-1's X3 row).
@@ -719,8 +719,7 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     ladder: u64,
     opening_turn: u64,
     published: crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1<'_>,
-    direct_evidence: bool,
-) -> Result<Option<Hash64>, PalwStateV2Error> {
+) -> Result<Hash64, PalwStateV2Error> {
     let refused = |why: String| PalwStateV2Error::HeldDissectionRefused { claim: claim_id, leaf: leaf_index, why };
     // **D2 (REQ-T6-3 restricted, REQ-T6-4 replaced; `palw_court_model_scope_v1`)**: every dissection opened at a named leaf is
     // answered by the producer's root claim, whose object carries model operands (`AttnRootClaimOperands`: an attention site's
@@ -755,22 +754,15 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     // the claim's open cutoff and only if `start + B_remaining <= hard`. `Ok` below the fence.
     crate::palw_ruling_fences_v1::palw_claim_pursuit_may_start_v1(builder.params, claim, ctx.daa_score)
         .map_err(|why| refused(why.to_string()))?;
-    // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` court admission (the challenger's reservation, the escrow,
-    // the deadline-aware queue) replaces the fixed concurrency cap — a queued prosecution opens nothing now (`Ok(None)`); below the
-    // fence, the cap as it always was.
-    let admission_window =
-        builder.state.class_model_court_window_v1(&claim.class_id).unwrap_or_else(|| builder.params.window_court());
-    // Lane r5-f03-ingress: the paid public ingress wraps the same admission (identical while its schedule is missing).
-    match super::palw_court_capacity_fold_v1::court_ingress_admission_v1(
-        builder,
-        ctx,
-        claim_id,
-        challenger_bond,
-        direct_evidence,
-        admission_window,
-    )? {
-        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(None),
-        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open | super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {}
+    let open_sessions = builder.state.court_sessions.len() as u64;
+    let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
+    if open_sessions >= max_sessions {
+        return Err(PalwStateV2Error::CourtSessionsAtCapacity {
+            open: open_sessions,
+            max: max_sessions,
+            turn_deadline_daa: builder.params.turn_deadline_daa(),
+            per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+        });
     }
     let challenger_collateral =
         builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;
@@ -861,13 +853,11 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     };
     cap_session_rung_deadline_v2(&mut opened, builder.params);
     builder.write_court(session_id, Some(opened))?;
-    super::palw_court_capacity_fold_v1::court_opened_v1(builder, ctx, claim_id, challenger_bond, session_id)?;
     if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
         builder.disarm_deadline(claim_id);
     }
-    // The session's id, for a caller that keys something to it (the held leaf challenge's close group); `None` when the prosecution
-    // was queued past `palw_court_capacity_v1`.
-    Ok(Some(session_id))
+    // The session's id, for a caller that keys something to it (the held leaf challenge's close group).
+    Ok(session_id)
 }
 
 /// Explicit V2 routed retrieval. The native claim stamp selects the router;

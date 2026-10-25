@@ -5,7 +5,7 @@ use misaka_palw_kernel::{ledger::KernelLedgerV1, rows::LedgerRowsV1};
 use std::{
     io::{self, Read},
     mem::size_of,
-    ops::Deref,
+    ops::{Deref, DerefMut},
 };
 
 /// The lease travels with the consumer and, when cached, with its shared Arc.
@@ -21,9 +21,11 @@ impl Deref for ReservedKernelLedgerV1 {
         &self.ledger
     }
 }
-// RFC-0006: there is deliberately NO `DerefMut`. A consensus fold mutates the ledger only through the typed, admitted methods
-// (`kernel_ledger_mutation.rs`, and the fixed-membership `try_*` methods here); off-chain previews and tests say so explicitly with
-// `preview_mut_v1`.
+impl DerefMut for ReservedKernelLedgerV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ledger
+    }
+}
 impl std::fmt::Debug for ReservedKernelLedgerV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&self.ledger, f)
@@ -54,7 +56,7 @@ impl ReservedKernelLedgerV1 {
     /// Reserve before an audited fixed-membership mutation. Keep every growth
     /// request in the same owner ticket; no detached temporary lease can expire
     /// while the new BTree membership is still retained by this ledger.
-    pub(super) fn reserve_membership_v1<K, V>(&mut self, absent: bool) -> Result<(), NativeCoverageV1> {
+    fn reserve_membership_v1<K, V>(&mut self, absent: bool) -> Result<(), NativeCoverageV1> {
         if !absent {
             return Ok(());
         }
@@ -106,15 +108,6 @@ impl ReservedKernelLedgerV1 {
     pub fn try_apply_paid_claim_tally_checked_v2(&mut self, claim: &[u8; 64]) -> Result<(), NativeDecodeErrorV1<String>> {
         self.prepare_panel_tally_v1(claim).map_err(NativeDecodeErrorV1::Resource)?;
         self.ledger.apply_paid_claim_tally_v2(claim).map_err(NativeDecodeErrorV1::Decode)
-    }
-    /// **RFC-0006 (RFC06-1): the typed memory this ledger's tickets hold** — its admitted expansion plus every admitted growth since.
-    /// Every row the ledger holds was admitted as at least one map-node envelope, so this bounds the rows a flush can materialize
-    /// from it (`palw_kernel_route_fold_v1::flush`). `0` with tracking off.
-    pub fn admitted_memory_v1(&self) -> u64 {
-        self.lease
-            .as_ref()
-            .map_or(0, |lease| lease.memory_v1())
-            .saturating_add(self.projection_lease.as_ref().map_or(0, |lease| lease.memory_v1()))
     }
     pub fn as_rebuilt_from_v1(self, rows: &LedgerRowsV1) -> Self {
         // The ticket remains alive while the derived indexes are reconstructed.
@@ -443,255 +436,11 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
     Ok(shape)
 }
 
-/// Actual field counts from an allocation-free second pass over the same wire.
-/// These are allocation bounds, not semantic validation or scheduling authority.
-#[derive(Clone, Copy, Debug)]
-struct StepSpaceShapeV1 {
-    blocks: u64,
-    nodes: u64,
-    layers: u64,
-    fixed_global: u64,
-    fixed_layer: u64,
-    hist_global: u64,
-    hist_layer: u64,
-    params: u64,
-}
-fn step_space_shape_v1(bytes: &[u8]) -> io::Result<StepSpaceShapeV1> {
-    use misaka_palw_tir::{program::{ParamDecl, ConstDecl, Node}, types::{DType, TensorType}};
-    let mut r = NativeWireReaderV1::new(bytes, bytes.len() as u64);
-    if r.short()? != misaka_palw_tir::program::TIR_PROGRAM_VERSION_V1 {
-        return Err(wire::wire_bad("unknown TIR program version for StepSpace shape"));
-    }
-    r.skip(64 + 4 + 4)?;
-    let mut out = StepSpaceShapeV1 { blocks:0,nodes:0,layers:0,fixed_global:0,fixed_layer:0,hist_global:0,hist_layer:0,params:0 };
-    out.params = u64::from(r.word()?);
-    for _ in 0..out.params { ParamDecl::scan_native_wire_v1(&mut r)?; }
-    let constants = r.word()?;
-    for _ in 0..constants { ConstDecl::scan_native_wire_v1(&mut r)?; }
-    let states = r.word()?;
-    for _ in 0..states {
-        String::scan_native_wire_v1(&mut r)?;
-        let fixed = match r.byte()? {
-            0 => { r.skip(16)?; true },
-            1 => { r.skip(4)?; false },
-            _ => return Err(wire::wire_bad("unknown state kind for StepSpace shape")),
-        };
-        DType::scan_native_wire_v1(&mut r)?;
-        Vec::<u32>::scan_native_wire_v1(&mut r)?;
-        let per_layer = match r.byte()? { 0=>false,1=>true,_=>return Err(wire::wire_bad("invalid state per_layer boolean")) };
-        let count=match (fixed,per_layer) {
-            (true,false)=>&mut out.fixed_global,(true,true)=>&mut out.fixed_layer,
-            (false,false)=>&mut out.hist_global,(false,true)=>&mut out.hist_layer,
-        };
-        *count=count.checked_add(1).ok_or_else(||wire::wire_bad("StepSpace state count overflow"))?;
-    }
-    out.blocks=u64::from(r.word()?);
-    for _ in 0..out.blocks {
-        String::scan_native_wire_v1(&mut r)?;
-        Vec::<TensorType>::scan_native_wire_v1(&mut r)?;
-        let nodes=u64::from(r.word()?);
-        out.nodes=out.nodes.checked_add(nodes).ok_or_else(||wire::wire_bad("StepSpace node count overflow"))?;
-        for _ in 0..nodes { Node::scan_native_wire_v1(&mut r)?; }
-        Vec::<u16>::scan_native_wire_v1(&mut r)?;
-    }
-    r.byte()?; // schedule.pre
-    out.layers=u64::from(r.word()?);
-    r.skip(out.layers)?;
-    r.byte()?; // schedule.post
-    r.skip(2+64)?; // logits and logits scheme
-    if r.remaining()!=0 { return Err(wire::wire_bad("StepSpace shape trailing bytes")); }
-    Ok(out)
-}
-
-/// Borrowed scanner output only. No public fields/constructor: a caller cannot
-/// substitute a budget or declared count for the actual canonical-byte scan.
-/// This quote owns no lease and certifies neither semantic validity nor Source.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct NativeTirProgramShapeV1 {
-    program_requests: u64,
-    structural_items: u64,
-    step_space: StepSpaceShapeV1,
-}
-impl NativeTirProgramShapeV1 {
-    pub(crate) fn program_requests_v1(&self) -> u64 { self.program_requests }
-    pub(crate) fn structural_items_v1(&self) -> u64 { self.structural_items }
-    pub(crate) fn step_space_counts_v1(&self) -> (u64,u64,u64,u64,u64,u64,u64) {
-        let s=self.step_space;
-        (s.blocks,s.nodes,s.layers,s.fixed_global,s.fixed_layer,s.hist_global,s.hist_layer)
-    }
-    #[cfg(test)]
-    pub(crate) fn parameter_count_v1(&self)->u64 { self.step_space.params }
-}
-/// Same audited program codec/analysis walk used by ledger restoration.
-/// The stack prefix supplies framing; actual bytes are scanned without a copy.
-pub(crate) fn standalone_tir_program_shape_v1(bytes: &[u8]) -> io::Result<NativeTirProgramShapeV1> {
-    let len = u32::try_from(bytes.len()).map_err(|_| wire::wire_bad("TIR program frame exceeds u32"))?;
-    let prefix = len.to_le_bytes();
-    let source = std::io::Cursor::new(prefix).chain(bytes);
-    let mut reader = NativeWireReaderV1::new(source, u64::from(len) + 4);
-    let shape = program_blob::<misaka_palw_tir::TirProgramV1, _>(
-        &mut reader, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)?;
-    if reader.remaining() != 0 { return Err(wire::wire_bad("standalone TIR program trailing bytes")); }
-    let program_requests = shape.heap.checked_add(size_of::<NativeRetainedV1<misaka_palw_tir::TirProgramV1>>() as u64)
-        .ok_or_else(|| wire::wire_bad("standalone TIR owner framing overflow"))?;
-    // Vec<u8> is tracked separately by the existing wire scanner. Include it:
-    // in particular schedule.layers is byte-valued and still bounds occurrences.
-    let structural_items = shape.collection_entries.checked_add(shape.byte_entries)
-        .ok_or_else(|| wire::wire_bad("TIR structural item count overflow"))?;
-    Ok(NativeTirProgramShapeV1 { program_requests, structural_items, step_space: step_space_shape_v1(bytes)? })
-}
-/// Source-only decoded-program + normal-form validator profile. The general
-/// program/gate/ledger profile above deliberately keeps its wider semantics.
-/// Source executes neither court cone/range analysis nor gate price unrolling.
-pub(crate) fn source_tir_program_shape_v1(bytes:&[u8])
-    ->Result<(NativeTirProgramShapeV1,u64),NativeDecodeErrorV1<String>> {
-    use misaka_palw_tir::{program::{TirProgramV1,MAX_CARRY,MAX_NODE_INPUTS},types::{DType,Dim,TensorType},validate::BlockInfo};
-    use std::collections::BTreeSet;
-    use super::typed::BTreeNodeEnvelopeV1 as Tree;
-    let decode=|e:io::Error| {
-        match e.kind() {
-            io::ErrorKind::OutOfMemory => NativeDecodeErrorV1::Resource(
-                NativeCoverageV1::overflow::<TirProgramV1>("Source program wire shape")),
-            io::ErrorKind::TimedOut | io::ErrorKind::Unsupported => NativeDecodeErrorV1::Resource(
-                NativeCoverageV1::unsupported::<TirProgramV1>("Source program wire shape", "local wire exploration/platform coverage")),
-            _ => NativeDecodeErrorV1::Decode(e.to_string()),
-        }
-    };
-    // Existing complete versioned scanner and metadata authority; no decoded
-    // caller count, alternate grammar or hand-selected program subset.
-    let shape=standalone_tir_program_shape_v1(bytes).map_err(decode)?;
-    let mut r=NativeWireReaderV1::new(bytes,bytes.len() as u64);
-    let raw=TirProgramV1::scan_native_wire_v1(&mut r).map_err(decode)?;
-    if r.remaining()!=0 {return Err(NativeDecodeErrorV1::Decode("Source program shape trailing bytes".into()));}
-    let err=||NativeDecodeErrorV1::Resource(NativeCoverageV1::overflow::<TirProgramV1>("Source normal-form cardinality"));
-    // Includes every actual nested collection/byte element. It is a linear
-    // bound on any unvalidated shape rank/perm length, not MAX_RANK admission.
-    let n=shape.structural_items_v1();
-    let (blocks,nodes,_,fg,fl,hg,hl)=shape.step_space_counts_v1();
-    let states=fg.checked_add(fl).and_then(|v|v.checked_add(hg)).and_then(|v|v.checked_add(hl)).ok_or_else(err)?;
-    let mut q=TirNativeRequestsV1::new();
-    let mut add=|bytes|q.add_v1(bytes).map_err(NativeDecodeErrorV1::Resource);
-    // Parsed program and validator's cloned constant payloads coexist. A full
-    // second raw payload envelope overbounds only those const shape/data clones.
-    add(raw.heap.checked_mul(2).ok_or_else(err)?)?;
-    q.exact_v1::<TirProgramV1>(1).map_err(NativeDecodeErrorV1::Resource)?;
-    q.exact_v1::<u8>((bytes.len() as u64).max(1024).checked_mul(2).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
-    // Declaration sets stay live through validation; n bounds each actual
-    // declaration family. Node envelopes include the constant key's inline Vecs.
-    q.exact_v1::<Tree<&str,()>>(n.checked_add(states).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
-    q.exact_v1::<Tree<(DType,Vec<u32>,Vec<u8>),()>>(n).map_err(NativeDecodeErrorV1::Resource)?;
-    q.vec_v1::<BlockInfo>(blocks).map_err(NativeDecodeErrorV1::Resource)?;
-    // Carry clone occurs BEFORE per-node output shape validation. Rank may be
-    // malformed; use n, never MAX_RANK. At most MAX_CARRY carried tensors are
-    // checked before the retained carry and temporary layer carry-out clones.
-    let carry=(MAX_CARRY as u64).checked_mul(2).ok_or_else(err)?;
-    q.vec_v1::<TensorType>(carry).map_err(NativeDecodeErrorV1::Resource)?;
-    q.vec_v1::<Dim>(carry.checked_mul(n).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
-    // One node's operand shapes, plus inference's overlapping intermediate
-    // shape vectors. Gather can temporarily concatenate two actual ranks;
-    // Select holds two broadcasts; HistAppend also prepends H to a row clone.
-    q.vec_v1::<TensorType>(MAX_NODE_INPUTS as u64).map_err(NativeDecodeErrorV1::Resource)?;
-    q.vec_v1::<Dim>((MAX_NODE_INPUTS as u64).checked_mul(n).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
-    let inferred=n.checked_mul(2).and_then(|v|v.checked_add(1)).ok_or_else(err)?;
-    for _ in 0..4 {q.vec_v1::<Dim>(inferred).map_err(NativeDecodeErrorV1::Resource)?;}
-    q.vec_v1::<bool>(n).map_err(NativeDecodeErrorV1::Resource)?; // transpose seen
-    // Per-block effect sets; each state index inserts once in either set.
-    q.exact_v1::<Tree<u16,()>>(states.checked_mul(2).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
-    q.vec_v1::<bool>(nodes).map_err(NativeDecodeErrorV1::Resource)?;
-    // Liveness expands each node once. Initial roots <=nodes+MAX_CARRY+1;
-    // every pushed edge is one actual input element, whose count <=n.
-    let dfs=nodes.checked_add(n).and_then(|v|v.checked_add(MAX_CARRY as u64+1)).ok_or_else(err)?;
-    q.vec_v1::<usize>(dfs).map_err(NativeDecodeErrorV1::Resource)?;
-    // Three-category used map, its inner ID sets, and one cloned set coexist.
-    q.exact_v1::<Tree<&str,BTreeSet<u16>>>(3).map_err(NativeDecodeErrorV1::Resource)?;
-    q.exact_v1::<Tree<u16,()>>(n.checked_mul(2).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
-    // Failure formatting: a Dim is at most "Fixed(4294967295)" (17 bytes)
-    // plus separator <=20; output+Gather inferred shapes total <=3*n. Other
-    // variable debug output is u8 perm (<=5 bytes/entry), or checked <=128B
-    // names. 1024 covers fixed literals/indices. Four growing writer envelopes
-    // cover nested shape_err/TirError/StepError to_string owners and copies.
-    let diagnostic=n.checked_mul(3).and_then(|v|v.checked_mul(20)).and_then(|v|v.checked_add(1024)).ok_or_else(err)?;
-    for _ in 0..4 {q.vec_v1::<u8>(diagnostic).map_err(NativeDecodeErrorV1::Resource)?;}
-    Ok((shape,q.bytes_v1()))
-}
-
-#[cfg(test)]
-mod source_program_profile_tests_v1 {
-    use super::*;
-    fn local_decode(bytes:&[u8],limit:u64)
-        ->Result<NativeRetainedV1<misaka_palw_tir::TirProgramV1>,NativeDecodeErrorV1<String>> {
-        let (_,q)=source_tir_program_shape_v1(bytes)?;
-        let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:limit,database_bytes:0});
-        let result=(|| {
-            let lease=checker.reserve_requests_v1(q,0).map_err(NativeDecodeErrorV1::Resource)?;
-            let program=misaka_palw_tir::TirProgramV1::decode_canonical(bytes).map_err(|e|NativeDecodeErrorV1::Decode(e.to_string()))?;
-            Ok(NativeRetainedV1::from_owner_reserved_v1(program,Some(lease)))
-        })();
-        if result.is_err() {assert_eq!(checker.outstanding(),(0,0));}
-        result
-    }
-    #[test]
-    fn source_normal_form_profile_real_program_and_exact_quota_lifetime() {
-        for committed in [false,true] {
-            let f=crate::palw_tir_public_claim_v1::palw_tir_public_fixed_history_frame_fixture_v1(
-                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,committed);
-            let bytes=&f.execution.binding.class.program;
-            let (shape,q)=source_tir_program_shape_v1(bytes).unwrap();
-            assert!(q>bytes.len() as u64);
-            assert!(q<shape.program_requests_v1(),"Source-only profile excludes gate/cone/range allocations");
-            assert!(matches!(local_decode(bytes,q-1),Err(NativeDecodeErrorV1::Resource(_))));
-            let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:q,database_bytes:0});
-            let lease=checker.reserve_requests_v1(q,0).unwrap();
-            let decoded=misaka_palw_tir::TirProgramV1::decode_canonical(bytes).unwrap();
-            let held=NativeRetainedV1::from_owner_reserved_v1(decoded,Some(lease));
-            assert_eq!(held.encode(),*bytes);assert_eq!(checker.outstanding(),(q,0));
-            assert!(checker.reserve_requests_v1(1,0).is_err());
-            drop(held);assert_eq!(checker.outstanding(),(0,0));
-            drop(checker.reserve_requests_v1(q,0).unwrap());assert_eq!(checker.outstanding(),(0,0));
-        }
-    }
-    #[test]
-    fn source_normal_form_malformed_wire_rank_and_duplicate_carry_release_quota() {
-        use misaka_palw_tir::{program::MAX_CARRY,types::{DType,Dim}};
-        let x=crate::palw_tir_court_v1::test_support::tiny_execution(None);
-        let mut p=x.binding.class.decode_program().unwrap();
-        let pre=p.schedule.pre as usize;
-        // Valid Borsh, invalid normal form. Carry cloning happens before the
-        // node's rank check; repeated indices duplicate this unvalidated shape.
-        p.blocks[pre].nodes[0].out.dtype=DType::I32;
-        p.blocks[pre].nodes[0].out.shape=vec![Dim::Fixed(1);4096];
-        p.blocks[pre].carry_out=vec![0;MAX_CARRY];
-        let bytes=p.encode();let (_,q)=source_tir_program_shape_v1(&bytes).unwrap();
-        assert!(matches!(local_decode(&bytes,q-1),Err(NativeDecodeErrorV1::Resource(_))));
-        assert!(matches!(local_decode(&bytes,q),Err(NativeDecodeErrorV1::Decode(_))));
-        let mut unknown=bytes.clone();unknown[..2].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert!(matches!(source_tir_program_shape_v1(&unknown),Err(NativeDecodeErrorV1::Decode(_))));
-        assert!(source_tir_program_shape_v1(&bytes[..bytes.len()-1]).is_err());
-    }
-    #[test]
-    fn source_normal_form_repeated_liveness_edges_are_linear_and_reject_dead_node() {
-        use misaka_palw_tir::{DType,Ref,TensorType,builder::ProgramBuilder,program::HISTORY_BOUND_V1_HELD};
-        let mut b=ProgramBuilder::new(256,HISTORY_BOUND_V1_HELD);
-        let scores=b.param("scores",DType::I32,&[4],false);
-        let mut pre=b.block("pre",vec![]);
-        let mut x=scores;
-        for _ in 0..128 {x=pre.add(x,x,DType::I32);}
-        let pre=pre.finish(&[x]);
-        let mut post=b.block("post",vec![TensorType::fixed(DType::I32,&[4])]);
-        let y=post.cast(Ref::CarryIn(0),DType::I32);post.commit(y);let post=post.finish(&[]);
-        let p=b.finish(pre,vec![],post,0);let bytes=p.encode();
-        let (_,q)=source_tir_program_shape_v1(&bytes).unwrap();
-        assert_eq!(local_decode(&bytes,q).unwrap().encode(),bytes);
-        let mut dead=p;
-        let mut extra=dead.blocks[dead.schedule.post as usize].nodes[0].clone();extra.commit=false;
-        dead.blocks[dead.schedule.post as usize].nodes.push(extra);
-        let bytes=dead.encode();let (_,q)=source_tir_program_shape_v1(&bytes).unwrap();
-        assert!(matches!(local_decode(&bytes,q),Err(NativeDecodeErrorV1::Decode(s)) if s.contains("dead")));
-    }
-}
-
+/// Borrowed standalone adapter to the same audited program codec/analysis walk
+/// used by ledger restoration. The stack prefix supplies only Borsh framing;
+/// the actual program bytes are scanned directly without a concatenated Vec.
 pub(crate) fn standalone_tir_program_requests_v1(bytes: &[u8]) -> io::Result<u64> {
-    Ok(standalone_tir_program_shape_v1(bytes)?.program_requests_v1())
+    standalone_program_requests_v1::<misaka_palw_tir::TirProgramV1>(bytes, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
 }
 pub(crate) fn standalone_program_requests_v1<T: NativeWireScanV1>(bytes: &[u8], cap: u64) -> io::Result<u64> {
     let len = u32::try_from(bytes.len()).map_err(|_| wire::wire_bad("TIR program frame exceeds u32"))?;
@@ -875,8 +624,7 @@ mod expansion_completion_tests {
             replay_bytes: borsh::to_vec(&v9.replay).unwrap(),
         };
         for (table, key, bytes) in
-            // The row's leading root is a 64-BYTE digest (an untyped `[1; 64]` is `[i32; 64]`, 256 bytes the codec rightly refuses).
-            [(0, r7.id(), borsh::to_vec(&([1u8; 64], r7)).unwrap()), (19, r9.id(), borsh::to_vec(&([1u8; 64], r9)).unwrap())]
+            [(0, r7.id(), borsh::to_vec(&([1; 64], r7)).unwrap()), (19, r9.id(), borsh::to_vec(&([1; 64], r9)).unwrap())]
         {
             let rows = LedgerRowsV1::from([((table, borsh::to_vec(&key).unwrap()), bytes.clone())]);
             let request = inventory_ledger_expansion_v1(&rows, false).unwrap();

@@ -210,7 +210,7 @@ fn capture_builder_reuses_committed_tiles_and_preserves_the_genesis_terminal() {
         }
         let target = expected.step.output_preimage.coord;
         let assemble = |tiles: &[(u64, leg::PalwStepTileLeafV1)], hashes: &[Hash64], chunks: &[Vec<u8>]| {
-            gdn_refutation_from_leaves_v2(b, target, hashes, tiles, &[], &[], chunks, leg::PALW_STEP_LEG_MAX_LEAVES)
+            gdn_refutation_from_capture_v2(b, target, hashes, tiles, &[], &[], chunks, leg::PALW_STEP_LEG_MAX_LEAVES)
         };
         let assembled = assemble(&tiles, &hashes, &[]).unwrap();
         assert_eq!(*assembled, expected);

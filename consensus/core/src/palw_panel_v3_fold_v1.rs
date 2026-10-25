@@ -26,7 +26,7 @@
 //! V2 door — receipts, the coverage and S2 licences, DA accusations (a bound panel is what `DaClaimNotAccusable` asks for), the
 //! court — works for a V3 claim exactly as for a V2 one, by any ordinary public bond.
 //!
-//! **RFC-0006 × RFC-0010: the per-shard V3 draw** (agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §1). A V3-rule claim of a
+//! **RFC-0006 × RFC-0010: the per-shard V3 draw** (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §1). A V3-rule claim of a
 //! class with a layer-shard plan (past `palw_tir_shard_v1`) is admitted with the engine's strata — one stratum a shard,
 //! `[outsider?] ++ 3 class seats` each, the class seats from the bonds that proved the shard's readiness, the outsider from the
 //! base class — and its binding writes, beside the V2 panel record (shard-major), RFC-0006's per-shard record: the armed
@@ -195,9 +195,6 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
         ))
     }
 
-    fn opt_in_seal_reveal_v6(&self) -> bool {
-        self.state.kernel_route.as_ref().is_some_and(|route| route.opt_in_seal_reveal_v6())
-    }
     fn paid_material(&self, context: &Digest) -> Result<crate::palw_beacon_source_fee_v1::PaidBeaconMaterialV5, String> {
         let route = self.state.kernel_route.as_ref().ok_or("Panel paid sources have no rooted kernel route")?;
         if route.beacon_source_target_v4(context)?.context.subject_kind != misaka_palw_challenge::SubjectKindV1::PanelAssignment {
@@ -450,10 +447,7 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     fn available_collateral(&self, bond: &BondIdV1) -> u128 {
         let key = panel_bond_key_v1(*bond);
         let state = &self.builder.state;
-        let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
-            self.builder.params.min_collateral_sompi(),
-            self.builder.params.legacy_public_filer_active_at(self.ctx.daa_score),
-        );
+        let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.builder.params.min_collateral_sompi());
         let may_work = state.bonds.get(&key).is_some_and(|record| palw_bond_may_take_work_v2(record, floor))
             && !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, &key);
         if !may_work {
@@ -757,7 +751,7 @@ fn freeze_source_epochs_v1(
             deadline_daa: deadline,
         };
         snapshot.validate_for(&request, policy).map_err(|e| inconsistent("new source subject", e))?;
-        builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&snapshot).expect("snapshot serializes")))?;
+        builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&snapshot).expect("snapshot serializes")));
         retained += count;
     }
     Ok(())
@@ -861,11 +855,7 @@ fn bind_v2(
         // reached `Final`; a lock kept would hold a seat's room for a Panel it no longer sits on — Q-5's redraw rule).
         if strata.is_some() {
             for (key, _) in builder.claim_locks_v1(claim_id) {
-                // G14 G-13: a frame-credited lock stays for the ORIGINAL frame's own conviction while its door is open.
-                if crate::palw_tir_public_claim_v1::palw_tir_public_frame_keeps_lock_v1(&builder.state, &key.0, *claim_id, ctx.daa_score) {
-                    continue;
-                }
-                builder.write_slashable_lock(key, None)?;
+                builder.write_slashable_lock(key, None);
             }
         }
         // The previous round's seats leave duty with their exposure; the redraw deals different ones.
@@ -874,7 +864,7 @@ fn bind_v2(
     builder.write_panel(
         *claim_id,
         Some(PalwPanelStateV2 { anchor: binding.panel_seed_v3, seats: seats.clone(), bound_daa: ctx.daa_score }),
-    )?;
+    );
     builder.reserve_seat_duties_with(*claim_id, &seats, binding.exposure as u128, ctx.daa_score)?;
     if let Some(strata) = strata {
         // RFC-0006's per-shard record: the plan frozen, the outsider flag, each seat's share — the armed machinery runs from here.
@@ -897,7 +887,7 @@ fn bind_v2(
     builder.write_claim(*claim_id, Some(bound))?;
     if !retry {
         // ADR-0164 F-K (K4's denominator): a claim that reached its Panel.
-        builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound)?;
+        builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
     }
     Ok(())
 }

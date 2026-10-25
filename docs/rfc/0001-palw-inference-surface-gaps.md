@@ -1,7 +1,5 @@
 # RFC-0001: PALW 推論サーフェスの欠落機能 — 決定論的な生成制御・サービング・入力拡張の設計
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -393,7 +391,7 @@ claim の形(1 推論 = 1 claim)は変わらない。各リクエストが自分
 
 1〜3 は P0(§A、Job V4 / fence `palw_fp_decode_rules`)で実装済み。4〜6 を次のとおり採択し、実装した(いずれも休眠 fence、どの preset でも arm しない)。
 
-> **2026-10-12 訂正:** その後、testnet-12 は int-11 flag day(`PALW_T12_INT11_FENCES_V1`)で `palw_fp_decode_rules`・`palw_fp_decode_constraint`(FP Job V6)・`palw_fp_prefix_state`・`palw_fp_prefix_inherit`・`palw_fp_job_v5` を DAA 5,300 で arm した。上の「どの preset でも arm しない」は採択時点の記述であり、稼働中の testnet-12 には当てはまらない([台帳](../design/palw/integration/mainnet-spec-register-2026-10-12.md) X4・T11)。
+> **2026-10-12 訂正:** その後、testnet-12 は int-11 flag day(`PALW_T12_INT11_FENCES_V1`)で `palw_fp_decode_rules`・`palw_fp_decode_constraint`(FP Job V6)・`palw_fp_prefix_state`・`palw_fp_prefix_inherit`・`palw_fp_job_v5` を DAA 5,300 で arm した。上の「どの preset でも arm しない」は採択時点の記述であり、稼働中の testnet-12 には当てはまらない([台帳](../design/palw/mainnet-spec-register-2026-10-12.md) X4・T11)。
 
 4. **KV キャッシュ段階 2 は今、専用の休眠 fence で**:`palw_fp_prefix_state`(FP Job version 11、`PalwFpPrefixStateV1` を carry)。段階 1(node のみ)は answer-only 経路で出荷済み。報酬側(credit)のみで、fold は全 prefill leaf を ctx 束縛 hash で畳むままなので、**キャッシュした prefix は commit 実行を速くしない**(段階 2b「継承 leaf」は残課題)。decode rules が有効な状況では D10 が既に prefill を 0 として credit するため、version 11 が価格を動かすのは「宣言された状態を seat が検証する」点であり、価格差ではない(e2e で等値を確認)。
 5. **embeddings の claim 化は RFC-0003 の Embedding profile で**:ローカル `/v1/embeddings` は claim 無しのまま、claim 形は `PalwGenJobV1`(`Embedding` body)。gateway に job 構築器と `misaka.claim` の名前付き拒否を置いた(free-prompt レーンの worker しか持たない gateway は拒否する)。
@@ -423,7 +421,7 @@ claim の形(1 推論 = 1 claim)は変わらない。各リクエストが自分
 
 ## 改定 — 2026-10-12（W1・W2・X4・N4：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md)。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md)。
 
 - **W1:** Gatewayの整数seed変換を `le64(n+1)` に統一し、オーバーフローとなる入力を拒否する。gateway側の表示・入力変換規則であり、直ちにコンセンサス分岐が起こると断定しない。
 - **W2:** FP V4自体のtext規則は変更しない。TextStream pipelineには追加規則を適用する。

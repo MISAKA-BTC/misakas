@@ -27,7 +27,7 @@
 //!
 //! `A2U_INT12_REPLAY_OUT=<dir>` also writes each ruleset's chain (`<dir>/a2u-<ruleset>.borsh`: the headers, transactions, refusals,
 //! per-block roots and the view) for the replay through the live release itself (`a2u_int12_replay.rs.int12`,
-//! `scripts/verify/a2u-int12-replay.sh`; `docs/design/palw/integration/a2-uniformity-new-kinds.md` §5).
+//! `scripts/verify/a2u-int12-replay.sh`; `docs/design/palw/a2-uniformity-new-kinds.md` §5).
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
 };
@@ -48,10 +48,6 @@ use kaspa_consensus_core::palw_lifecycle_objects_v2::{
     palw_int12_kind_refused_past_fence_v1, palw_lifecycle_kind_owner_v1, palw_lifecycle_object_may_ride_v2,
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
-use kaspa_consensus_core::palw_tir_designated_answers_v1::{
-    PalwTirDesignatedEventV1, PalwTirDesignatedOutcomeV1, PalwTirDesignatedRequestV1, PalwTirRequestKeyV1,
-    palw_tir_designated_outcome_v1,
-};
 use kaspa_consensus_core::palw_state_v2::{
     PalwBondKeyV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, palw_object_chunk_group_id_v1,
 };
@@ -115,22 +111,6 @@ fn arm_the_release(params: &mut Params) {
 /// **Every owning fence at `at`** — the lifecycle kinds', the header forms' and the kernel-route inner kinds' — through exhaustive
 /// matches over their `ALL` lists, so a fence a lane adds does not compile here until this harness arms it. The documented
 /// validation bypass: `validate_palw_v2` refuses each of them at every real height.
-/// G14 original paid TIR conviction (tags 170-171) at `at`: the conviction fence, and the staged TIR route, the staged court, R-core+
-/// and the aggregate liability each armed at or below `at` (the objective-offence ledger through [`arm_objective_offence_at_or_below`]).
-fn arm_tir_public_conviction_at_or_below(params: &mut Params, at: ForkActivation) {
-    params.palw_tir_public_conviction_v1 = Some(at);
-    for field in [&mut params.palw_staged_tir_route_v1, &mut params.palw_staged_public_court_v1, &mut params.palw_rcore_plus] {
-        if field.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score()) {
-            *field = Some(at);
-        }
-    }
-    arm_objective_offence_at_or_below(params, at);
-    if params.palw_capacity_aggregate_liability.as_ref().is_none_or(|l| l.activation.daa_score() > at.daa_score()) {
-        params.palw_capacity_aggregate_liability =
-            Some(kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at));
-    }
-}
-
 /// The objective-offence ledger and its attribution (ADR-0144 §9) at `at` unless the ruleset already arms them at or below it.
 fn arm_objective_offence_at_or_below(params: &mut Params, at: ForkActivation) {
     let never = ForkActivation::never();
@@ -242,68 +222,6 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_exec_payload_v2 = Some(at);
                 params.sync_palw_exec_payload_v2();
             }
-            // RFC-0008 release recovery (tags 240-242's v2 rows): in force at the later of its own and the monetary material
-            // fence (armed above through `MonetaryMaterialV1`), with its unapproved probe terms.
-            PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => {
-                params.palw_material_release_recovery_v2 = Some(
-                    kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at),
-                );
-            }
-            // RFC-0006 memory/routing court v2 (tags 243-244): in force at the later of its own and the shard court's fence.
-            PalwLifecycleKindFenceV1::MemoryRoutingCourtV2 => {
-                params.palw_memory_routing_court_v2 = Some(at);
-                if params.palw_shard_court.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score()) {
-                    params.palw_shard_court = Some(at);
-                }
-            }
-            // G14 original paid TIR conviction (tags 170-171): in force where the staged TIR route, the staged court, the
-            // objective-offence ledger, R-core+ and the aggregate liability all are, each armed at or below `at` here.
-            PalwLifecycleKindFenceV1::TirPublicConvictionV1 => arm_tir_public_conviction_at_or_below(params, at),
-            // RFC-0002 02-A (tag 175): the TIR container binding, in force where the TIR lane is (`palw_tir_v1` is armed above).
-            PalwLifecycleKindFenceV1::TirContainerIdentityV1 => params.palw_tir_container_identity_v1 = Some(at),
-            PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => params.palw_tir_designated_answers_v1 = Some(at),
-            // R-D2-READY (tag 230): D2's fence. Its mirror on the state params comes from `sync_palw_2026_10_12_ruling_fences_v1`.
-            PalwLifecycleKindFenceV1::CourtModelScopeV1 => params.palw_court_model_scope_v1 = Some(at),
-            // RFC-0024 (tags 201-204): the bounded door.
-            PalwLifecycleKindFenceV1::TirBoundedDoorV1 => params.palw_tir_bounded_door_v1 = Some(at),
-            // Selected-source bootstrap (aux 148). Public validation still refuses activation; this arm only
-            // makes the kind fence exhaustive for the harness, which already expects that refusal.
-            PalwLifecycleKindFenceV1::SelectedSourceBootstrapV1 => {
-                let base = at.daa_score();
-                let h = |n: u8| kaspa_consensus_core::Hash64::from_bytes([n; 64]);
-                params.palw_selected_source_bootstrap_v1 =
-                    Some(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1 {
-                        at,
-                        policy: kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1 {
-                            version: 1,
-                            chain_genesis: h(3),
-                            network: h(4),
-                            ruleset: h(5),
-                            epoch: 1,
-                            freeze_cutoff_daa: base,
-                            anchor_cutoff_daa: base + 1,
-                            starts_at_daa: base + 2,
-                            ends_at_daa: base + 3,
-                            stake_release_daa: base + 4,
-                            selection: misaka_palw_challenge::bootstrap_epoch_v1::BootstrapPolicyV1 {
-                                version: 1,
-                                seats: 2,
-                                quorum: 2,
-                                maximum_population: 2,
-                                maximum_draw_attempts: 2,
-                                maximum_source_works: 2,
-                            },
-                            source_profile: h(6),
-                            checker_scope: h(7),
-                            maximum_claim_bytes: 100,
-                            maximum_check_work: 100,
-                            maximum_history_headers: 100,
-                            security_review: h(8),
-                            economic_review: h(9),
-                        },
-                    });
-                params.sync_palw_selected_source_bootstrap_v1();
-            }
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {
@@ -315,11 +233,6 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwHeaderFormFenceV1::ReceiptSpendV4 => params.palw_receipt_spend_v4 = Some(at),
             // The PAV3 attempt carriage shares `palw_monetary_material_v1` (armed above through `MonetaryMaterialV1`).
             PalwHeaderFormFenceV1::NativeMaterialV3 => {}
-            // RFC-0002 §II.14: the PNR9 native receipt carriage's own (never armable) fence.
-            PalwHeaderFormFenceV1::NativeReceiptV39 => {
-                params.palw_native_mining_v39 =
-                    Some(kaspa_consensus_core::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(at, [0; 64]))
-            }
             // The PXE2 header form shares the lifecycle kind's fence (armed above, the same field).
             PalwHeaderFormFenceV1::ExecPayloadV2 => params.palw_exec_payload_v2 = Some(at),
         }
@@ -380,16 +293,12 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             // RFC-0017 (inner 74/75): a bare height, mirrored below.
             PalwKernelInnerFenceV1::ModelEligibilityV1 => params.palw_model_eligibility_v1 = Some(at),
-            // RFC-0016 V8 (inner 76): a bare height, mirrored below.
-            PalwKernelInnerFenceV1::ElasticCapacityV1 => params.palw_elastic_final_capacity_v1 = Some(at),
         }
     }
     params.sync_palw_model_eligibility_v1();
-    params.sync_palw_rfc0016_v1();
     params.sync_palw_claim_challenge_v2();
     params.sync_palw_econ_contracts_v1();
     params.sync_palw_permissionless_panel_v1();
-    params.sync_palw_memory_routing_court_v2();
     // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
     // a row that lands with a fence this harness does not arm fails here, so node C judges every block with it far above.
     for row in PALW_A2_KIND_FENCE_TABLE_V1.iter().filter(|row| row.landed) {
@@ -411,10 +320,6 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_claim_challenge_v2"
             | "palw_panel_lifetime_v2"
             | "palw_monetary_material_v1"
-            | "palw_material_release_recovery_v2"
-            | "palw_memory_routing_court_v2"
-            | "palw_tir_public_conviction_v1"
-            | "palw_native_mining_v39"
             | "palw_staged_tir_route_v1"
             | "palw_staged_float_constraint_v1"
             | "palw_exec_payload_v2"
@@ -448,20 +353,6 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
-            // Bare heights mirrored onto the V2 bundle the fold reads, armed as `fork_id_v1`'s probe arms them (landed after this
-            // harness was last run: validation 2026-10-17). Far above the chain they judge nothing here.
-            "palw_settlement_once_v1" => {
-                params.palw_settlement_once_v1 = Some(at);
-                params.sync_palw_settlement_once_v1();
-            }
-            "palw_paid_claim_trap_v1" => {
-                params.palw_paid_claim_trap_v1 = Some(at);
-                params.sync_palw_paid_claim_trap_v1();
-            }
-            "palw_class_registration_origin_v1" => {
-                params.palw_class_registration_origin_v1 = Some(at);
-                params.sync_palw_class_registration_origin_v1();
-            }
             // The 2026-10-12 rulings' rules (register X3, N4, D2): bare heights and X3's unapproved probe policy, mirrored onto the
             // V2 bundle the fold reads. Each keys on a claim's acceptance DAA, so far above the chain they judge nothing here.
             "palw_court_model_scope_v1" | "palw_public_evidence_reward_v1" | "palw_claim_hard_deadline_v1" => {
@@ -599,97 +490,10 @@ fn zeros<T: borsh::BorshDeserialize>() -> T {
 /// `PALW_LIFECYCLE_NEW_KINDS_V1` is carried here without an edit (a kind no near-zero body decodes to needs a hand-built sample in
 /// [`well_formed`], and the panic says so).
 fn zero_filled_kind(tag: u8) -> Obj {
-    let object: Obj = match tag {
-        170 | 171 => tir_public_sample(tag),
-        _ => minimal_decode(&[tag])
-            .unwrap_or_else(|| panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample instead")),
-    };
+    let object: Obj = minimal_decode(&[tag])
+        .unwrap_or_else(|| panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample instead"));
     assert_eq!(borsh::to_vec(&object).unwrap()[0], tag);
     object
-}
-
-/// **Kinds 170/171 (G14 original paid TIR control and atomic Valid grant/Ready, `palw_tir_public_conviction_v1`)**: their bodies
-/// fix lengths (ML-DSA-87 signatures, a bounded owned part) no near-zero body decodes to, so they take the hand-built shape core's
-/// `zero_filled_kind` uses (`palw_tir_public_carriage_v1`'s `#[cfg(test)]` fixtures, which this crate cannot reach). Shape only:
-/// nothing here is signed or admissible — below its fence the kind must ride undecided like every other new kind.
-fn tir_public_sample(tag: u8) -> Obj {
-    use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
-    use kaspa_consensus_core::palw_tir_public_carriage_v1::{
-        PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1, PalwTirPublicGrantReadyV1,
-    };
-    use kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1;
-    use kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1;
-    let h = Hash64::from_u64_word;
-    let bond = |n: u64| PalwBondKeyV2(TransactionOutpoint::new(h(n), 0));
-    let sig = || vec![2u8; MLDSA87_SIGNATURE_LEN];
-    match tag {
-        170 => Obj::TirPublicControlV1 {
-            control: Box::new(PalwTirPublicControlV1 {
-                version: 1,
-                claim: h(1),
-                allocation_id: h(2),
-                source_id: h(3),
-                target: PalwTirPublicControlTargetV1::Acquisition { owner: bond(7), reserved_daa: 10 },
-                expected_turn: 4,
-                declared_rent_sompi: 0,
-                signer: bond(8),
-                action: PalwTirPublicControlActionV1::Acquisition(PalwTirPublicOwnedActionV1::Part {
-                    demand_id: h(4),
-                    answerer: bond(8),
-                    offset: 16_384,
-                    bytes: vec![1, 2, 3],
-                }),
-                signature: sig(),
-            }),
-        },
-        171 => {
-            let receipt = kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2 {
-                claim: h(1),
-                verdict: kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid,
-                seat_bond: bond(8),
-                signed_daa: 20,
-                signature: sig(),
-            };
-            let grant = PalwTirPublicCustodyGrantV1 {
-                version: 1,
-                claim: receipt.claim,
-                seat: receipt.seat_bond,
-                signed_daa: receipt.signed_daa,
-                pledge_id: h(20),
-                valid_receipt_digest: PalwTirPublicCustodyGrantV1::receipt_digest_v1(&receipt),
-                signature: sig(),
-            };
-            let descriptor = kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1 {
-                version: 1,
-                source_id: h(3),
-                class_id: h(10),
-                artifact_root: h(11),
-                execution_root: h(12),
-                trace_root: h(13),
-                step_root: h(14),
-                step_leaf_count: 19,
-                decode_count: 3,
-                vocab: 8,
-                material_until_daa: 1000,
-                manifest_digest: h(15),
-                retained_bytes: 1024,
-            };
-            Obj::TirPublicGrantReadyV1 {
-                grant: Box::new(PalwTirPublicGrantReadyV1 {
-                    version: 1,
-                    claim: h(1),
-                    allocation_id: h(2),
-                    source_id: h(3),
-                    signer: bond(8),
-                    receipt,
-                    grant,
-                    descriptor,
-                    signature: sig(),
-                }),
-            }
-        }
-        _ => unreachable!("only kinds 170 and 171 take this sample"),
-    }
 }
 
 /// One well-formed, signed object of every kind the live build cannot decode that has a hand-built sample.
@@ -1101,38 +905,10 @@ async fn carry(a: &mut T12Chain, wallet: &mut Wallet, config: &Config, payloads:
     }
     batches.push(&payloads[start..]);
     for batch in &batches {
-        // Each carrier spends its card's coin; a carrier held back must hand the coin back (its change never exists).
-        let coins_before = wallet.coins.clone();
-        let built: Vec<Transaction> =
+        let txs: Vec<Transaction> =
             batch.iter().enumerate().map(|(card, (_, payload))| wallet.carrier(config, card, payload.clone())).collect();
-        // **Node-local template policy is not a block rule.** The H-1 gate (`palw_mempool_h1_carrier_refusal`, asked again at the
-        // template) rehearses the fold on an object the gate covers — here the objective evidence a zero-filled new kind assembles
-        // (tags 160–167) — and keeps the carrier out of THIS node's template. That never splits consensus: block validity does not
-        // ask it, and a block another node mines with the carrier is judged by the fold alone, which rides a kind below its fence
-        // unjudged. The harness keeps the template's behaviour: a refused carrier is asserted to be refused by that policy only
-        // (validation 2026-10-17: the expectation that every carrier rides THIS template was stale), and the block carries the rest.
-        let refusals = a.ctx.consensus.palw_h1_carrier_refusals_v1(&built.iter().cloned().map(Arc::new).collect::<Vec<_>>());
-        let mut txs = Vec::new();
-        let mut kept = Vec::new();
-        for (card, ((tx, (what, payload)), refusal)) in built.into_iter().zip(batch.iter()).zip(refusals).enumerate() {
-            match refusal {
-                Some(why) => {
-                    wallet.coins[card] = coins_before[card].clone();
-                    let tag = payload.get(2).copied();
-                    assert!(
-                        tag.is_some_and(|tag| PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(t, _, _)| *t == tag)),
-                        "only a new kind below its fence may be held back by the node-local H-1 policy: {what}: {why}"
-                    );
-                    eprintln!("[a2u] {what}: kept out of this node's template by the node-local H-1 policy ({why}); not a block rule");
-                }
-                None => {
-                    txs.push(tx);
-                    kept.push(what);
-                }
-            }
-        }
         let block = a.heartbeat(ttpb, txs.clone()).await;
-        for (tx, what) in txs.iter().zip(kept) {
+        for (tx, (what, _)) in txs.iter().zip(batch.iter()) {
             assert!(block.transactions.iter().any(|t| t.id() == tx.id()), "carried, its block valid: {what}");
         }
     }
@@ -1348,10 +1124,10 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     let pfs4 = pfs4_block(&mut a, &config);
     let live = live_build_shape_refusals(&pfs4);
     let err = a.ctx.consensus.validate_and_insert_block(pfs4.clone().to_immutable()).virtual_state_task.await.expect_err("refused");
-    let pfs4_refusal = err.to_string();
+    let header_refusal = err.to_string();
     assert!(
-        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == pfs4_refusal),
-        "the header path refuses a PFS4 header with the live build's gate's refusal: {pfs4_refusal} (the gate's: {live:?})"
+        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == header_refusal),
+        "the header path refuses a PFS4 header with the live build's gate's refusal: {header_refusal} (the gate's: {live:?})"
     );
     let mut proof: Vec<Vec<Arc<kaspa_consensus_core::header::Header>>> = vec![Vec::new(); config.params.max_block_level as usize + 1];
     proof[0].push(Arc::new(pfs4.header.clone()));
@@ -1376,10 +1152,10 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     let pav3 = pav3_block(&mut a, &config);
     let live = live_build_shape_refusals(&pav3);
     let err = a.ctx.consensus.validate_and_insert_block(pav3.clone().to_immutable()).virtual_state_task.await.expect_err("refused");
-    let pav3_refusal = err.to_string();
+    let header_refusal = err.to_string();
     assert!(
-        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == pav3_refusal),
-        "the header path refuses a PAV3 header with the live build's gate's refusal: {pav3_refusal} (the gate's: {live:?})"
+        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == header_refusal),
+        "the header path refuses a PAV3 header with the live build's gate's refusal: {header_refusal} (the gate's: {live:?})"
     );
     let mut proof: Vec<Vec<Arc<kaspa_consensus_core::header::Header>>> = vec![Vec::new(); config.params.max_block_level as usize + 1];
     proof[0].push(Arc::new(pav3.header.clone()));
@@ -1399,9 +1175,7 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         "the pruning-proof path refuses a PAV3 header with the live build's gate's refusal: {a_proof}"
     );
     assert_ne!(proof_refusal(&now), a_proof, "past the fence the form is the PAV3 carriage, judged by its own decode");
-    // Both refused headers, each with its own refusal (validation 2026-10-17: the PAV3 section shadowed the PFS4 refusal, so the
-    // replay compared the PFS4 block against the PAV3 message).
-    let refused = vec![(pfs4.to_immutable(), pfs4_refusal), (pav3.to_immutable(), pav3_refusal)];
+    let refused = vec![(pfs4.to_immutable(), header_refusal)];
 
     // ---- every node agrees, block by block ----
     let blocks = chain_blocks(&a);
@@ -1414,7 +1188,7 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     }
     assert_ne!(plain_view.0, view(&a).0, "the carriers moved the chain");
     eprintln!(
-        "[a2u {tag}] {} chain blocks to DAA {}, {} carriers, 2 refused headers; every node agrees",
+        "[a2u {tag}] {} chain blocks to DAA {}, {} carriers, 1 refused header; every node agrees",
         blocks.len(),
         a.daa_of(a.sink()),
         payloads.len() + mixed.len()
@@ -1498,106 +1272,4 @@ async fn t12_a2u_adr0175_past_its_fence_a_definition_update_is_refused_and_its_b
     kaspa_core::log::try_init_logger("warn");
     assert_eq!(adr0175_versions_after_publishing(false).await, 2, "the live build's rule: the version is applied");
     assert_eq!(adr0175_versions_after_publishing(true).await, 1, "past palw_model_immutable_v1: refused, not applied");
-}
-
-/// ADR-0191 step B (tag 245): a designated-custodian request opened on `claim`/`root`, with two designated custodians and a one-DAA
-/// window each. The custodian identities are opaque to the fold (it checks only membership of the answerer), so fixed 32-byte ids
-/// stand in for them; the key is the real claim's id and the chain's sink hash.
-fn designated_request(claim: Hash64, root: Hash64, opened_daa: u64) -> PalwTirDesignatedRequestV1 {
-    let (mut claim_digest, mut root_digest) = ([0u8; 32], [0u8; 32]);
-    claim_digest.copy_from_slice(&claim.as_bytes()[..32]);
-    root_digest.copy_from_slice(&root.as_bytes()[..32]);
-    PalwTirDesignatedRequestV1 {
-        key: PalwTirRequestKeyV1 { claim: claim_digest, root: root_digest, coordinates: 7 },
-        designated: vec![[0xC1; 32], [0xC2; 32]],
-        obligation_daa: 1_000,
-        opened_daa,
-    }
-}
-
-/// **The tag-245 fold in a real block** (ADR-0191 step B). Armed at DAA 0 in a params copy (the conviction fence it needs armed with
-/// it), a block carrying the opening of a designated request, then a block carrying its answer by the first designated custodian,
-/// are both accepted; the tip's registry reads `Answered` for the request.
-#[tokio::test]
-async fn t12_a2u_tir_designated_event_folds_in_a_real_block_past_its_fence() {
-    kaspa_core::log::try_init_logger("warn");
-    let (mut config, _, premine, floats) = t12_with_harness_cards();
-    arm_tir_public_conviction_at_or_below(&mut config.params, ForkActivation::new(0));
-    config.params.palw_tir_designated_answers_v1 = Some(ForkActivation::new(0));
-    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("testnet-12 is V2") };
-    let bundle = bundle.clone();
-    let mut a = t12_genesis_chain(&config, &bundle, &premine, &floats);
-    let ttpb = config.params.target_time_per_block();
-    while a.daa_of(a.sink()) < 2 {
-        a.heartbeat(ttpb, Vec::new()).await;
-    }
-    let (_, claim_id) = a.attempt(0, ttpb, Vec::new(), &|_| true).await;
-    let mut wallet = Wallet { coins: floats.clone() };
-
-    let request = designated_request(claim_id, a.sink(), 1);
-    let key = request.key;
-    let opened = Obj::TirDesignatedEventV1 { event: PalwTirDesignatedEventV1::Open(request.clone()) };
-    carry(&mut a, &mut wallet, &config, &[("a designated request opened (tag 245)".into(), payload_of(&opened))]).await;
-    let (_, state) = a.tip_state();
-    assert_eq!(state.tir_designated_record(&key).map(|r| &r.request), Some(&request), "the opening is folded into the registry");
-
-    let answered_by = request.designated[0];
-    let body = [0xB7; 32];
-    let answer_daa = a.daa_of(a.sink());
-    let answer = Obj::TirDesignatedEventV1 {
-        event: PalwTirDesignatedEventV1::Answer { key, custodian: answered_by, body, at_daa: answer_daa },
-    };
-    carry(&mut a, &mut wallet, &config, &[("the first designated custodian answers (tag 245)".into(), payload_of(&answer))]).await;
-
-    let (_, state) = a.tip_state();
-    let record = state.tir_designated_record(&key).expect("the request is in the registry at the tip");
-    let tip_daa = a.daa_of(a.sink());
-    assert_eq!(
-        palw_tir_designated_outcome_v1(record, tip_daa).expect("the outcome is defined"),
-        PalwTirDesignatedOutcomeV1::Answered { by: answered_by, body },
-        "the tip's registry reads Answered for the event"
-    );
-    eprintln!("[a2u tir-designated] request opened at DAA 1, answered at DAA {answer_daa}; the tip (DAA {tip_daa}) reads Answered");
-}
-
-/// **Dormant (fence None, the t12 params)**: the same tag-245 carriers are valid, carried and skipped exactly as before the fold
-/// existed (A-2): the blocks stand, and the registry stays empty.
-#[tokio::test]
-async fn t12_a2u_tir_designated_event_below_its_fence_is_skipped_and_writes_nothing() {
-    kaspa_core::log::try_init_logger("warn");
-    let (config, bundle, premine, floats) = config_with(Ruleset::Launch, None);
-    assert!(config.params.palw_tir_designated_answers_v1_fence().is_none(), "the t12 params arm no designated-answer fence");
-    let mut a = t12_genesis_chain(&config, &bundle, &premine, &floats);
-    let ttpb = config.params.target_time_per_block();
-    while a.daa_of(a.sink()) < 2 {
-        a.heartbeat(ttpb, Vec::new()).await;
-    }
-    let (_, claim_id) = a.attempt(0, ttpb, Vec::new(), &|_| true).await;
-    let mut wallet = Wallet { coins: floats.clone() };
-
-    let request = designated_request(claim_id, a.sink(), 1);
-    let key = request.key;
-    let opened = Obj::TirDesignatedEventV1 { event: PalwTirDesignatedEventV1::Open(request.clone()) };
-    let answer = Obj::TirDesignatedEventV1 {
-        event: PalwTirDesignatedEventV1::Answer {
-            key,
-            custodian: request.designated[0],
-            body: [0xB7; 32],
-            at_daa: a.daa_of(a.sink()),
-        },
-    };
-    let blocks = carry(
-        &mut a,
-        &mut wallet,
-        &config,
-        &[
-            ("a designated request opened (tag 245), dormant".into(), payload_of(&opened)),
-            ("a designated answer (tag 245), dormant".into(), payload_of(&answer)),
-        ],
-    )
-    .await;
-    assert!(blocks >= 1, "the dormant carriers were carried in blocks that stand");
-    let (_, state) = a.tip_state();
-    assert!(state.tir_designated_records().is_empty(), "below the fence the registry is never written");
-    assert!(state.tir_designated_record(&key).is_none(), "and the request is not in it");
 }

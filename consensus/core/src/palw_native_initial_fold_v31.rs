@@ -44,9 +44,8 @@ fn global(builder: &TransitionBuilder<'_>) -> Result<InitialGlobalV31, PalwState
     }
     Ok(row)
 }
-fn write_header(builder: &mut TransitionBuilder<'_>, h: &NativeInitialHeaderV31) -> Result<(), PalwStateV2Error> {
-    builder.write_kernel_row(TABLE, key(&(h.id, 1u8)), Some(bytes(&(h.root(), h))))?;
-    Ok(())
+fn write_header(builder: &mut TransitionBuilder<'_>, h: &NativeInitialHeaderV31) {
+    builder.write_kernel_row(TABLE, key(&(h.id, 1u8)), Some(bytes(&(h.root(), h))));
 }
 fn policy(
     builder: &mut TransitionBuilder<'_>,
@@ -85,7 +84,7 @@ fn prepay(
     let actor = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(signer);
     let mut shard = super::palw_flat_execution_fold_v11::quota_shard(builder, p, &epoch, actor, [0; 64])?;
     shard.debit_ordinary(&p.quota, &epoch, &metadata).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64]);
     Ok(true)
 }
 fn header(builder: &TransitionBuilder<'_>, id: Digest) -> Result<NativeInitialHeaderV31, PalwStateV2Error> {
@@ -117,11 +116,11 @@ fn cleanup(builder: &mut TransitionBuilder<'_>, h: &NativeInitialHeaderV31) -> R
         .position(|(id, op)| *id == h.id && *op == h.operator)
         .ok_or_else(|| refused("initial31 original retained owner absent"))?;
     for index in 0..h.start.count {
-        builder.write_kernel_row(TABLE, key(&(h.id, 2u8, index)), None)?;
+        builder.write_kernel_row(TABLE, key(&(h.id, 2u8, index)), None);
     }
-    builder.write_kernel_row(TABLE, key(&(h.id, 1u8)), None)?;
+    builder.write_kernel_row(TABLE, key(&(h.id, 1u8)), None);
     g.ids.remove(i);
-    builder.write_kernel_row(TABLE, key(&0u8), Some(bytes(&g)))?;
+    builder.write_kernel_row(TABLE, key(&0u8), Some(bytes(&g)));
     Ok(())
 }
 pub(super) fn apply(
@@ -174,8 +173,8 @@ fn inner(
         };
         g.next = next;
         g.ids.push((id, op));
-        write_header(builder, &h)?;
-        builder.write_kernel_row(TABLE, key(&0u8), Some(bytes(&g)))?;
+        write_header(builder, &h);
+        builder.write_kernel_row(TABLE, key(&0u8), Some(bytes(&g)));
         return Ok(());
     }
     let part = if action == INITIAL_PART_ACTION_V31 {
@@ -214,7 +213,7 @@ fn inner(
             return Ok(());
         }
         h.attempts[part.index as usize] += 1;
-        write_header(builder, &h)?;
+        write_header(builder, &h);
         let extent = if part.index + 1 == h.start.count {
             h.start.bytes as usize - part.index as usize * INITIAL_PART_BYTES_V31
         } else {
@@ -224,8 +223,8 @@ fn inner(
             return Ok(());
         }
         h.accepted[part.index as usize / 8] |= 1 << (part.index % 8);
-        builder.write_kernel_row(TABLE, key(&(id, 2u8, part.index)), Some(part.bytes.to_vec()))?;
-        write_header(builder, &h)?;
+        builder.write_kernel_row(TABLE, key(&(id, 2u8, part.index)), Some(part.bytes.to_vec()));
+        write_header(builder, &h);
         return Ok(());
     }
     if action != INITIAL_ASSEMBLE_ACTION_V31 || h.assembly_attempts >= 2 || !(0..h.start.count).all(|i| h.has_part(i)) {
@@ -235,7 +234,7 @@ fn inner(
         return Ok(());
     }
     h.assembly_attempts += 1;
-    write_header(builder, &h)?;
+    write_header(builder, &h);
     let mut object = Vec::with_capacity(h.start.bytes as usize);
     for i in 0..h.start.count {
         let raw = builder

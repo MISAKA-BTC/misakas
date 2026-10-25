@@ -2,14 +2,14 @@
 """Turn the test run's JUnit report into the CI job summary, so no test count is ever hand-typed.
 
     misaka-ci-summary.py --junit target/nextest/ci/junit.xml --commit <sha> --rust "<rustc -V>" \
-        [--release-json release.json] [--readiness docs/operations/releases/mainnet-readiness.md] >> $GITHUB_STEP_SUMMARY
+        [--release-json release.json] [--readiness docs/mainnet-readiness.md] >> $GITHUB_STEP_SUMMARY
 
 `cargo nextest run` writes the JUnit file under the `ci` profile (`.config/nextest.toml`; the
 Test Suite job sets `NEXTEST_PROFILE=ci`). Every number this prints is read from a file of the
 run: tests and failures from the JUnit report, grouped by area from each test binary's crate
 name; the network and fingerprint the tree declares from `release.json` (labelled
 *declared*: the release workflow is where a built binary is made to print them); and the
-readiness tally from the PASS / PARTIAL / TODO marks in `docs/operations/releases/mainnet-readiness.md`.
+readiness tally from the PASS / PARTIAL / TODO marks in `docs/mainnet-readiness.md`.
 
 It exits 0 even when tests failed. The test step's own status is the verdict; this step only
 reports it, and it must still run (`if: always()`) when that step went red.
@@ -130,7 +130,7 @@ def main():
     ap.add_argument("--commit", default=os.environ.get("GITHUB_SHA", ""))
     ap.add_argument("--rust", default="")
     ap.add_argument("--release-json", default="release.json")
-    ap.add_argument("--readiness", default="docs/operations/releases/mainnet-readiness.md")
+    ap.add_argument("--readiness", default="docs/mainnet-readiness.md")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:

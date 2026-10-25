@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # scripts/verify/a2u-int12-replay.sh — replay the A2U pin test's chains through the live testnet-12 build itself
-# (docs/design/palw/integration/a2-uniformity-new-kinds.md §5).
+# (docs/design/palw/a2-uniformity-new-kinds.md §5).
 #
 #   scripts/verify/a2u-int12-replay.sh <work-dir> <dump> [<dump>…]
 #

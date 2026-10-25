@@ -486,18 +486,9 @@ impl PalwChainStateV2 {
         {
             return Ok(());
         }
-        // A native PAV3 claim's covenant is its prior signed session, bound to the claim at acceptance (`native_binding`) and keyed
-        // by the session root — the claim id cannot exist before the attempt is mined. Read it exactly as
-        // `require_native_monetary_material_scope_v1` does (validation 2026-10-17: the root-only lookup refused every PAV3 claim's
-        // own budget commit).
-        let row = self
-            .monetary_material_row_v1(root)
-            .or_else(|| {
-                self.monetary_material_rows_v1().into_iter().find(|r| r.native_binding.as_ref().is_some_and(|b| b.claim == root))
-            })
-            .ok_or_else(|| {
-                crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("new paid material has no explicit signed monetary covenant".into())
-            })?;
+        let row = self.monetary_material_row_v1(root).ok_or_else(|| {
+            crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("new paid material has no explicit signed monetary covenant".into())
+        })?;
         if row.terms.policy != policy.id()
             || (!row.root_seen && accepted_daa > row.terms.enrollment_until_daa)
             || dependencies.is_some_and(|ids| ids != row.terms.dependencies.as_slice())
@@ -577,14 +568,6 @@ impl PalwChainStateV2 {
                     return Err(bad("material manifest obligation differs"));
                 }
                 manifest.validate(row.terms.max_material_bytes).map_err(|_| bad("signed material manifest capacity"))?;
-                // Import gate aligned with the fold (`check_enrollment`) and the lifecycle owner (240/241 TypedKernelV4 ->
-                // material release recovery V2): a carried covenant naming the complete typed kernel codec must have been
-                // accepted at or past that fence; a snapshot cannot smuggle the new codec below it.
-                if manifest.scopes.iter().any(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
-                    && params.material_release_recovery_at_v2(row.accepted_daa).is_none()
-                {
-                    return Err(bad("typed complete kernel codec carried below its recovery fence"));
-                }
             }
             if key.as_slice() != row.terms.root.as_byte_slice()
                 || row.terms.policy != p.id()
@@ -653,9 +636,9 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("monetary material requires the payment provenance and provider signature gates"));
         }
-        // Event-relative time cost and recovery liveness are measured values: arming needs a pinned record for this exact
-        // policy on this network (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
-        self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::MonetaryMaterialV1, &f.policy)
+        Err(PalwModeV2Error::Invalid(
+            "monetary material cannot be armed: event-relative time cost and recovery liveness approval remain pending",
+        ))
     }
 }
 

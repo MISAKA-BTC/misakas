@@ -154,16 +154,7 @@ pub struct PalwTirJobShapeV1 {
     pub positions: u32,
 }
 
-/// Actual immutable job token coordinate, not supplied material or availability.
-#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
-pub enum PalwTirTokenSourceV1 { Prompt(u32), Generated(u32) }
 impl PalwTirJobShapeV1 {
-    /// Same absolute-position split used by the court's token source.
-    pub fn token_source_v1(&self,pos:u32)->PalwTirTokenSourceV1 {
-        if pos<self.prefill {PalwTirTokenSourceV1::Prompt(pos)}
-            else {PalwTirTokenSourceV1::Generated(pos-self.prefill)}
-    }
-
     /// The legacy coordinate `(call, position)` of absolute position `a`.
     pub fn call_position(&self, a: u32) -> (u32, u32) {
         if a < self.prefill { (0, a) } else { (a - self.prefill + 1, 0) }
@@ -220,48 +211,6 @@ pub(crate) fn floor_sum(n: u128, m: u128, a: u128, b: u128) -> u128 {
         b = y_max % m;
         std::mem::swap(&mut m, &mut a);
     }
-}
-
-/// Additional StepSpace vectors, derived from opaque actual wire metadata.
-/// Does NOT include Source input clones/hash writers, a lease or admission.
-/// Caller must separately retain the program codec/analysis quote and reserve
-/// all coexisting owners before calling an allocating constructor.
-pub(crate) fn native_tir_step_space_additional_requests_v1(
-    shape: &crate::palw_native_resource_v1::NativeTirProgramShapeV1,
-) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
-    let (blocks,nodes,layers,fixed_global,fixed_layer,hist_global,hist_layer)=shape.step_space_counts_v1();
-    step_space_requests_from_counts_v1(blocks,nodes,layers,fixed_global,fixed_layer,hist_global,hist_layer)
-}
-fn step_space_requests_from_counts_v1(blocks:u64,nodes:u64,layers:u64,
-    fixed_global:u64,fixed_layer:u64,hist_global:u64,hist_layer:u64,
-) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
-    use crate::palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1};
-    let overflow = || NativeCoverageV1::overflow::<PalwTirStepSpaceV1>("StepSpace structural cardinality");
-    let mut q = TirNativeRequestsV1::new();
-    let occurrences=layers.checked_add(2).ok_or_else(overflow)?;
-    q.exact_v1::<BlockSpaceV1>(blocks)?;
-    // Every commit is one actual node. Independently growing per-block Vecs
-    // need a pinned minimum even for blocks with just one committed node.
-    q.vec_v1::<CommitNodeV1>(nodes)?;
-    let mut one=TirNativeRequestsV1::new();
-    one.vec_v1::<CommitNodeV1>(1)?;
-    q.add_v1(blocks.checked_mul(one.bytes_v1()).ok_or_else(overflow)?)?;
-    // occurrences() uses exact layers+2; occurrence_slot_bases creates a second
-    // such list, then collects its bases while that temporary is still live.
-    q.exact_v1::<(u8, Option<u16>)>(occurrences)?;
-    q.exact_v1::<(u8, Option<u16>)>(occurrences)?;
-    q.vec_v1::<u32>(occurrences)?;
-    // Global states always instantiate once. Per-layer states instantiate at
-    // only the schedule layers referencing that state, hence <= actual layers.
-    // Separate fixed/history bounds avoid charging both kinds for every state.
-    let fixed=fixed_layer.checked_mul(layers).and_then(|n|n.checked_add(fixed_global)).ok_or_else(overflow)?;
-    let hist=hist_layer.checked_mul(layers).and_then(|n|n.checked_add(hist_global)).ok_or_else(overflow)?;
-    q.vec_v1::<PalwTirStateInstanceV1>(fixed)?;
-    q.vec_v1::<PalwTirStateInstanceV1>(hist)?;
-    // At most one layers Vec coexists with both output Vecs; global [None]
-    // still allocates one entry when there are zero scheduled layers.
-    q.vec_v1::<Option<u16>>(layers.max(1))?;
-    Ok(q.bytes_v1())
 }
 
 impl PalwTirStepSpaceV1 {
@@ -471,11 +420,6 @@ impl PalwTirStepSpaceV1 {
         self.hist.iter().fold(0u64, |acc, s| acc.saturating_add(s.tiles()))
     }
 
-    /// Measurement accessor (no rule): the history-tile leaves one completed tile holds, over every history instance.
-    pub fn hist_leaves_per_tile_v1(&self) -> u64 {
-        self.hist_leaves_per_tile()
-    }
-
     /// The leaves of absolute position `a`.
     pub fn leaves_at_position(&self, job: &PalwTirJobShapeV1, a: u32) -> u64 {
         let post_occ = self.occurrences.len() - 1;
@@ -493,100 +437,6 @@ impl PalwTirStepSpaceV1 {
             n = n.saturating_add(self.hist_leaves_per_tile());
         }
         n
-    }
-
-    /// **The widest leaf of `job`, in lanes** (G14 audit §11 (a)): every leaf holds at most this many four-byte lanes — a committed
-    /// node's tile is `min(tile_len, elements at the job's widest H)` (H never shrinks with the position), a checkpoint tile
-    /// `min(tile_lanes, elements)`, a history tile `h_tile` rows of `min(tile_lanes, elements)` lanes. Exact for the class and the job,
-    /// unlike the layout's widest tile (a 4,096-lane logits tile over an 8-word vocabulary holds 8 lanes).
-    pub fn maximum_leaf_lanes_v1(&self, job: &PalwTirJobShapeV1) -> u64 {
-        let last = job.positions.saturating_sub(1);
-        let mut widest = 0u64;
-        for (block, _) in &self.occurrences {
-            let h = self.h_of(*block, last);
-            for c in &self.blocks[*block as usize].commits {
-                widest = widest.max(c.elements(h).min(u64::from(c.tile_len)));
-            }
-        }
-        for s in &self.fixed {
-            widest = widest.max(s.elements.min(u64::from(s.tile_lanes)));
-        }
-        for s in &self.hist {
-            widest = widest.max(s.elements.min(u64::from(s.tile_lanes)).saturating_mul(u64::from(self.layout.h_tile)));
-        }
-        widest
-    }
-
-    /// **The most four-byte lanes `count` consecutive leaves of `job` can hold** (G14 audit §11 (a)): the smaller of `count` widest
-    /// leaves and the positions such a window can touch — a position has at least `L_min` leaves (its non-post commits at `H = 1`,
-    /// every position has them), so `count` consecutive leaves span at most `⌈(count − 1) / L_min⌉ + 1` positions — each at the most
-    /// lanes any position emits (its commits at the widest `H` with the post block, a checkpoint and a history tile).
-    pub fn maximum_window_lanes_v1(&self, job: &PalwTirJobShapeV1, count: u64) -> u128 {
-        let per_leaf = u128::from(count).saturating_mul(u128::from(self.maximum_leaf_lanes_v1(job)));
-        let post = self.occurrences.len() - 1;
-        let minimum: u64 = self
-            .occurrences
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != post)
-            .map(|(_, (b, _))| self.block_leaves_at(*b, 0))
-            .fold(0u64, |acc, n| acc.saturating_add(n));
-        if minimum == 0 || count == 0 {
-            return per_leaf;
-        }
-        let last = job.positions.saturating_sub(1);
-        let mut position = 0u128;
-        for (block, _) in &self.occurrences {
-            let h = self.h_of(*block, last);
-            for c in &self.blocks[*block as usize].commits {
-                position = position.saturating_add(u128::from(c.elements(h)));
-            }
-        }
-        for s in &self.fixed {
-            position = position.saturating_add(u128::from(s.elements));
-        }
-        for s in &self.hist {
-            position = position.saturating_add(u128::from(s.elements).saturating_mul(u128::from(self.layout.h_tile)));
-        }
-        let spans = u128::from((count - 1).div_ceil(minimum)) + 1;
-        per_leaf.min(spans.saturating_mul(position))
-    }
-
-    /// **The most step-leaf runs an honest owner needs to acquire the cone of ANY leaf of `job`** (G14 audit §11 (b)), when it fetches
-    /// each missing stretch as one full run of `run` leaves from its first missing leaf. Derived from what the court's cone evaluation
-    /// reads (`palw_tir_court_v1::TirSource`): committed values at the leaf's own position; a fixed state between checkpoints by
-    /// REPLAY back to the last checkpoint (the checkpoint leaf at the position before it), so at most `checkpoint_interval` positions
-    /// back; a history row in the current (incomplete) tile from its commit point, so at most `h_tile` positions further back; a
-    /// completed history tile from its one tile leaf at the tile's last position, over the reading block's attention window `W`
-    /// (the whole context where a block has none). So the cone lies in ONE contiguous stretch of positions
-    /// `[a − checkpoint_interval − h_tile, a]` plus at most `⌈(W + checkpoint_interval) / h_tile⌉ + 1` single positions' history
-    /// leaves; never more than the job's whole leaf range.
-    pub fn cone_runs_bound_v1(&self, job: &PalwTirJobShapeV1, leaf_count: u64, run: u64) -> u64 {
-        let run = run.max(1);
-        let whole = leaf_count.div_ceil(run);
-        let last = job.positions.saturating_sub(1);
-        // Every occurrence's commits at the widest H (the post block included), a checkpoint and a history tile: the most leaves
-        // any one position holds.
-        let commits_per_position =
-            self.occurrences.iter().fold(0u64, |acc, (block, _)| acc.saturating_add(self.block_leaves_at(*block, last)));
-        let per_position =
-            commits_per_position.saturating_add(self.fixed_leaves_per_checkpoint()).saturating_add(self.hist_leaves_per_tile());
-        let ci = u64::from(self.layout.checkpoint_interval);
-        let ht = u64::from(self.layout.h_tile);
-        let stretch = ci.saturating_add(ht).saturating_add(1).saturating_mul(per_position);
-        let mut bound = stretch.div_ceil(run).saturating_add(1);
-        if !self.hist.is_empty() {
-            let window = self
-                .blocks
-                .iter()
-                .map(|b| b.window.map(u64::from).unwrap_or(u64::from(job.positions)))
-                .max()
-                .unwrap_or(u64::from(job.positions));
-            let tiles = window.saturating_add(ci).div_ceil(ht.max(1)).saturating_add(1);
-            let per_tile = self.hist_leaves_per_tile().div_ceil(run).saturating_add(1);
-            bound = bound.saturating_add(tiles.saturating_mul(per_tile));
-        }
-        bound.min(whole).max(1)
     }
 
     /// Canonical four-byte lanes emitted at one position, without constructing its leaf
@@ -1129,87 +979,4 @@ pub fn verify_tir_binding_v1(
         return Err(PalwTirStepError::Binding("the parts do not produce the committed execution root"));
     }
     Ok(PalwTirVerifiedBindingV1 { space, class_id, context_hash, job })
-}
-
-#[cfg(test)]
-mod native_step_space_inventory_tests_v1 {
-    use super::*;
-    #[test]
-    fn actual_scanned_nonempty_step_space_vectors_fit_additional_quote() {
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
-        let class = &x.binding.class;
-        let shape = crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&class.program).unwrap();
-        assert!(shape.structural_items_v1() > 0 && shape.program_requests_v1() > 0);
-        let decoded=class.decode_program().unwrap();
-        let (b,n,l,fg,fl,hg,hl)=shape.step_space_counts_v1();
-        assert_eq!((b,n,l),(decoded.blocks.len() as u64,decoded.blocks.iter().map(|b|b.nodes.len() as u64).sum::<u64>(),decoded.schedule.layers.len() as u64));
-        assert_eq!(shape.parameter_count_v1(),decoded.params.len() as u64);
-        let count=|fixed:bool,layer:bool| decoded.states.iter().filter(|s|matches!(s.kind,StateKind::Fixed{..})==fixed && s.per_layer==layer).count() as u64;
-        assert_eq!((fg,fl,hg,hl),(count(true,false),count(true,true),count(false,false),count(false,true)));
-        let quote = native_tir_step_space_additional_requests_v1(&shape).unwrap();
-        let space = PalwTirStepSpaceV1::new(class).unwrap();
-        let mut actual = space.blocks.capacity() * std::mem::size_of::<BlockSpaceV1>();
-        actual += space.blocks.iter().map(|b| b.commits.capacity() * std::mem::size_of::<CommitNodeV1>()).sum::<usize>();
-        actual += space.occurrences.capacity() * std::mem::size_of::<(u8,Option<u16>)>();
-        actual += space.slot_bases.capacity() * std::mem::size_of::<u32>();
-        actual += (space.fixed.capacity()+space.hist.capacity()) * std::mem::size_of::<PalwTirStateInstanceV1>();
-        assert!(quote >= actual as u64);
-    }
-    #[test]
-    fn actual_fixed_history_step_space_capacities_fit_scanned_quote() {
-        for committed in [false,true] {
-            let fx=crate::palw_tir_public_claim_v1::palw_tir_public_fixed_history_frame_fixture_v1(
-                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,committed);
-            let class=&fx.execution.binding.class;
-            let shape=crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&class.program).unwrap();
-            let space=PalwTirStepSpaceV1::new(class).unwrap();
-            assert!(!space.fixed_instances().is_empty());
-            assert!(!space.hist_instances().is_empty());
-            let (blocks,nodes,layers,fg,fl,hg,hl)=shape.step_space_counts_v1();
-            assert_eq!(blocks,space.program.blocks.len() as u64);
-            assert_eq!(nodes,space.program.blocks.iter().map(|b|b.nodes.len() as u64).sum::<u64>());
-            assert_eq!(layers,space.program.schedule.layers.len() as u64);
-            assert_eq!(space.occurrences.len() as u64,layers+2);
-            assert!((space.fixed_instances().len() as u64)<=fg+fl*layers);
-            assert!((space.hist_instances().len() as u64)<=hg+hl*layers);
-            let mut actual=space.blocks.capacity()*std::mem::size_of::<BlockSpaceV1>();
-            actual+=space.blocks.iter().map(|b|b.commits.capacity()*std::mem::size_of::<CommitNodeV1>()).sum::<usize>();
-            actual+=space.occurrences.capacity()*std::mem::size_of::<(u8,Option<u16>)>();
-            actual+=space.slot_bases.capacity()*std::mem::size_of::<u32>();
-            actual+=(space.fixed.capacity()+space.hist.capacity())*std::mem::size_of::<PalwTirStateInstanceV1>();
-            let quote=native_tir_step_space_additional_requests_v1(&shape).unwrap();
-            assert!(quote>=actual as u64,"committed={committed} quote={quote} actual retained capacity={actual}");
-        }
-    }
-    #[test]
-    fn scanned_step_space_counts_distinguish_state_kinds_and_layer_flags() {
-        let x=crate::palw_tir_court_v1::test_support::tiny_execution(None);
-        let mut p=x.binding.class.decode_program().unwrap();
-        p.states.clear();
-        for (index,(kind,per_layer)) in [
-            (StateKind::Fixed{lo:-1,hi:1},false),(StateKind::Fixed{lo:-1,hi:1},true),
-            (StateKind::Hist{window:4},false),(StateKind::Hist{window:4},true),
-        ].into_iter().enumerate() {
-            p.states.push(misaka_palw_tir::program::StateDecl{name:format!("scan-{index}"),kind,dtype:misaka_palw_tir::types::DType::I8,shape:vec![4],per_layer});
-        }
-        p.schedule.layers=vec![p.schedule.pre;7];
-        // Wire-metadata test only: this synthetic state/schedule combination is
-        // NOT passed off as a valid executable class or Source constructor.
-        let s=crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&p.encode()).unwrap();
-        let (_,_,layers,fg,fl,hg,hl)=s.step_space_counts_v1();
-        assert_eq!((layers,fg,fl,hg,hl),(7,1,1,1,1));
-    }
-    #[test]
-    fn structural_overflow_and_hostile_canonical_shape_are_refused_before_space_construction() {
-        assert!(step_space_requests_from_counts_v1(0,0,u64::MAX,0,0,0,0).is_err());
-        assert!(step_space_requests_from_counts_v1(0,0,2,0,u64::MAX,0,0).is_err());
-        assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&[]).is_err());
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
-        let mut bytes = x.binding.class.program.clone();
-        bytes.push(0);
-        assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&bytes).is_err());
-        let mut bytes = vec![0u8;2+64+4+4];
-        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&bytes).is_err());
-    }
 }

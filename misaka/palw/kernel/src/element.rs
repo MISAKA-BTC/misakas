@@ -1,4 +1,4 @@
-//! **Element courts (K2-TIR-v4)** — `docs/design/palw/models/k2-real-scale.md` §3.
+//! **Element courts (K2-TIR-v4)** — `docs/design/palw/k2-real-scale.md` §3.
 //!
 //! A fault names ONE output element of one committed value of a segmented claim. The filing opens one leaf of the output holding it
 //! and, per input, the leaves covering the element's **dependency line** (one element for an elementwise or structure primitive, the
@@ -325,14 +325,6 @@ pub fn element_value_v1(
     e: u64,
     ops: &dyn OperandsV1,
 ) -> Result<Option<i128>, MissingV1> {
-    element_value_with_states_v39(&program.states,node,sh,e,ops)
-}
-/// Shared scalar integer arithmetic over an original owning39 node. The
-/// enclosing39 court authenticates its own source/wiring/profile; no V1 program
-/// or legacy Prepared grant is synthesized by this function.
-pub(crate) fn element_value_with_states_v39(
-    states:&[misaka_palw_tir::StateDecl],node:&Node,sh:&ElementShapesV1,e:u64,ops:&dyn OperandsV1,
-)->Result<Option<i128>,MissingV1>{
     // A rank-one lookup table gathered by an arbitrary-shaped index tensor has no
     // coordinate transform: its output's flat position IS the index tensor's position.
     // Check the index before touching the table, exactly as the generic branch does.
@@ -447,7 +439,7 @@ pub(crate) fn element_value_with_states_v39(
             }
             line_eval(&Prim::TopK { axis: 0, k: *k }, line, dt(0), out_dtype, *k as usize).and_then(|t| t.data.get(o[a]).copied())
         }
-        Prim::StateWrite { state } => match states.get(*state as usize).map(|s| &s.kind) {
+        Prim::StateWrite { state } => match program.states.get(*state as usize).map(|s| &s.kind) {
             Some(StateKind::Fixed { lo, hi }) => Some(ops.get(0, e)?.clamp(*lo as i128, *hi as i128)),
             _ => None,
         },

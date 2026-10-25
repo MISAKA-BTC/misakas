@@ -52,7 +52,7 @@ pub const PALW_MATERIAL_MAX_BYTES: usize = 16 << 20;
 /// chunking does not make a larger native carriage importable. Both modes account for
 /// the same canonical state/declaration envelope, including every class id and length.
 /// Native 100k/four-population carriage and decoded RSS still require measured headroom;
-/// see `docs/design/palw/consensus/pruned-ibd-palw-state-chunked-transport.md`.
+/// see `docs/design/palw/pruned-ibd-palw-state-chunked-transport.md`.
 pub const PALW_PRUNING_STATE_MAX_BYTES: usize = 384 << 20;
 
 /// Lane PA, B-F2: the size at which a serving node says, loudly, that the single-message transport is nearing its cap (half of it).
@@ -126,9 +126,6 @@ pub struct PalwGossipCenter {
     /// bond and no block required. Checking this before the `to_vec` skips the copy as well as the
     /// queue, on the majority of nodes.
     inbox_taken: std::sync::atomic::AtomicBool,
-    /// **DRILL ONLY (`--palw-drill-extra-seat`)**: this node runs several seat identities in one process, so its own broadcast
-    /// receipts are also put in its own inbox (the daemon fans the inbox out to every seat service). Off on every ordinary node.
-    drill_receipt_loopback: std::sync::atomic::AtomicBool,
     hasher: RandomState,
     /// **Where a served material comes from** — registered by the node's panel service, which is
     /// the party holding a retention directory (its own captures AND, since the pull transport,
@@ -371,7 +368,6 @@ impl Default for PalwGossipCenter {
             inbox_tx,
             inbox_rx: Mutex::new(Some(inbox_rx)),
             inbox_taken: std::sync::atomic::AtomicBool::new(false),
-            drill_receipt_loopback: std::sync::atomic::AtomicBool::new(false),
             hasher: RandomState::new(),
             material_resolver: Mutex::new(None),
             served_recently: Mutex::new(ServeThrottle::default()),
@@ -569,18 +565,6 @@ impl PalwGossipCenter {
         }
         settle(bytes.len() as u64);
         Some(bytes)
-    }
-
-    /// **DRILL ONLY**: loop this node's own broadcast receipts back into its inbox (several seat identities in one process).
-    pub fn drill_enable_receipt_loopback(&self) {
-        self.drill_receipt_loopback.store(true, std::sync::atomic::Ordering::Release);
-    }
-
-    /// The receipt this node just broadcast, into its own inbox when the drill loopback is on (dropped if the inbox is full).
-    pub fn drill_loop_back_receipt(&self, bytes: &[u8]) {
-        if self.drill_receipt_loopback.load(std::sync::atomic::Ordering::Acquire) {
-            let _ = self.inbox_tx.try_send(PalwGossipEvent::Receipt { bytes: bytes.to_vec() });
-        }
     }
 
     pub fn take_inbox(&self) -> Option<mpsc::Receiver<PalwGossipEvent>> {

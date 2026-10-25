@@ -90,11 +90,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the PROMPT-ID tile tree, bounded by n_ctx; PromptLongerThanTheStepTree is its own named refusal (ADR-0081 D3)",
     ),
     ("consensus/core/src/palw_prompt_ids_v1.rs", "step_opening_v1", "the prompt-id tile tree, as above"),
-    (
-        "consensus/core/src/palw_legacy_held_da_v2.rs",
-        "step_merkle_root_v1",
-        "the legacy held PromptIds answer re-roots the PROMPT-ID tile tree (bounded by declared_prefill_tokens), not the step tree",
-    ),
     ("consensus/core/src/palw_prompt_ids_v1.rs", "step_opening_root_v1", "the prompt-id tile tree, as above"),
     (
         "consensus/core/src/palw_step_refute.rs",
@@ -123,7 +118,14 @@ const ALLOWED: &[(&str, &str, &str)] = &[
          over a class wider than 2^22 can ever certify, and it fails as HonestRunConvicted. Making the two agree is a \
          VALIDITY change (a refused drill would newly certify) and needs the U-08 fence. Tracked, not fixed.",
     ),
-    // (Test-only `*_e2e.rs` modules, `kaspad/src/palw_panel/tir_court_e2e.rs` among them, are skipped by `is_split_test_module`.)
+    // ---- test-only modules the file-level boundary cannot see ----
+    (
+        "kaspad/src/palw_panel/tir_court_e2e.rs",
+        "step_merkle_root_v1",
+        "a TEST-ONLY module (`#[cfg(test)] mod tir_court_e2e;` in palw_panel.rs, so the whole file is test code and the \
+         module-head boundary finds no cut): it garbles a test capture's leaves and re-roots THAT capture's own step tree, \
+         bounded by the capture's own leaf count",
+    ),
     // ---- no production caller today ----
     (
         "misaka/palw/base0/src/produce.rs",
@@ -139,8 +141,6 @@ fn is_split_test_module(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     name == "tests.rs"
         || name.ends_with("_tests.rs")
-        // the node's E2E suites (`kaspad/src/*_e2e.rs`), declared only under `#[cfg(test)]` or from another such suite's `#[path]`
-        || name.ends_with("_e2e.rs")
         || path.components().any(|c| c.as_os_str() == "tests")
         // or a split module that says so itself (`#![cfg(test)]` under its header)
         || std::fs::read_to_string(path).is_ok_and(|text| text.lines().take(8).any(|l| l.trim() == "#![cfg(test)]"))

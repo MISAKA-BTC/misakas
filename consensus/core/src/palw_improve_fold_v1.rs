@@ -270,101 +270,6 @@ fn palw_improve_claim_is_evaluation_hook_v1(claim: &PalwClaimStateV2) -> bool {
 // Several of these are the lanes' API (A4–A6: candidates, material, setter sets, scores, fees, S1),
 // called from their arms once those land.
 #[allow(dead_code)]
-/// **RFC-0008 once-only settlement (RFC08-1): the exact obligation one improvement-ledger credit settles** — the source row it
-/// pays out of. Every credit names it, so one source is credited once across every consumer (a hold refunded by its deadline
-/// AND by the material sweep, a grant tranche vested twice, an evaluation fee at two Finals) whatever each path's own guard says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PalwImproveCreditV1 {
-    /// The refund of a posted improvement bond: `kind` (artifact, dataset, setter set, candidate) of the row `id` of `line`.
-    HoldRefund { line: Hash64, kind: u8, id: [u8; 64] },
-    /// An evaluation claim's fee (the executor's share, role 0; a credited seat's, role 1).
-    EvalFee { claim: Hash64, final_daa: u64, role: u8 },
-    /// An S1 bounty of one key of one task.
-    S1Bounty { line: Hash64, task: Hash64, key: [u8; 64] },
-    /// An S1 setter reward of one artifact.
-    S1Setter { line: Hash64, artifact: Hash64 },
-    /// One vesting tranche of a grant `(line, epoch, index)` up to its vested target.
-    GrantTranche { line: Hash64, epoch: u64, index: u32, target: u64 },
-    /// A dissolved line's balance to its owner.
-    Dissolution { line: Hash64 },
-}
-
-/// The hold kinds of [`PalwImproveCreditV1::HoldRefund`].
-pub(crate) const PALW_IMPROVE_HOLD_ARTIFACT_V1: u8 = 1;
-pub(crate) const PALW_IMPROVE_HOLD_DATASET_V1: u8 = 2;
-pub(crate) const PALW_IMPROVE_HOLD_SETTER_SET_V1: u8 = 3;
-pub(crate) const PALW_IMPROVE_HOLD_CANDIDATE_V1: u8 = 4;
-
-impl PalwImproveCreditV1 {
-    /// The obligation for crediting `bond`, and the combined liability predicate's leg: an evaluation fee is its claim's reward
-    /// (sourced from the claim); a refund of one's own bond, a pool award, a grant tranche and a dissolution stand behind no claim.
-    fn obligation_v1(
-        &self,
-        bond: &PalwBondKeyV2,
-        amount: u64,
-    ) -> (crate::palw_settlement_once_v1::PalwSettlementObligationV1, super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1) {
-        use super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1 as L;
-        use crate::palw_settlement_once_v1::{PalwSettlementLegV1, PalwSettlementObligationV1, palw_settlement_subject_v1};
-        let party = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(bond);
-        let (subject, ordinal, leg) = match *self {
-            Self::HoldRefund { line, kind, id } => (
-                palw_settlement_subject_v1(b"improve-hold-refund", &[line.as_bytes().as_slice(), &[kind], &id]),
-                0,
-                L::NoLiableClaim("a refund of the payee's own posted improvement bond"),
-            ),
-            Self::EvalFee { claim, final_daa, role } => (
-                palw_settlement_subject_v1(b"improve-eval-fee", &[claim.as_bytes().as_slice()]),
-                u64::from(role),
-                L::V2Claim {
-                    claim,
-                    final_daa: Some(final_daa),
-                    horizon: None,
-                    draw: 0,
-                    paid_now: amount,
-                    exported_before: None,
-                    vest_until: None,
-                },
-            ),
-            Self::S1Bounty { line, task, key } => (
-                palw_settlement_subject_v1(b"improve-s1-bounty", &[line.as_bytes().as_slice(), task.as_bytes().as_slice(), &key]),
-                0,
-                L::NoLiableClaim("an S1 improvement-pool award stands behind no claim"),
-            ),
-            Self::S1Setter { line, artifact } => (
-                palw_settlement_subject_v1(b"improve-s1-setter", &[line.as_bytes().as_slice(), artifact.as_bytes().as_slice()]),
-                0,
-                L::NoLiableClaim("an S1 improvement-pool award stands behind no claim"),
-            ),
-            Self::GrantTranche { line, epoch, index, target } => (
-                palw_settlement_subject_v1(
-                    b"improve-grant",
-                    &[line.as_bytes().as_slice(), &epoch.to_le_bytes(), &index.to_le_bytes()],
-                ),
-                target,
-                L::NoLiableClaim("a vesting improvement grant tranche stands behind no claim"),
-            ),
-            Self::Dissolution { line } => (
-                palw_settlement_subject_v1(b"improve-dissolution", &[line.as_bytes().as_slice()]),
-                0,
-                L::NoLiableClaim("a dissolved line's fee balance returned to its owner"),
-            ),
-        };
-        (PalwSettlementObligationV1::with_party(PalwSettlementLegV1::ImprovementEarning, subject, party, ordinal), leg)
-    }
-}
-
-/// An S1 key's digest (its answer span, as the credit identity carries it). Streamed token by token: no buffer is allocated.
-pub(crate) fn palw_improve_s1_key_digest_v1(key: &[u32]) -> [u8; 64] {
-    let mut state = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/settlement-once/improve-s1-key/v1").to_state();
-    state.update(&(key.len() as u64).to_le_bytes());
-    for token in key {
-        state.update(&token.to_le_bytes());
-    }
-    let mut out = [0u8; 64];
-    out.copy_from_slice(state.finalize().as_bytes());
-    out
-}
-
 impl TransitionBuilder<'_> {
     fn improvement_active_v1(&self, daa: u64) -> Result<(), PalwStateV2Error> {
         if self.params.improve_active_at(daa) { Ok(()) } else { Err(refused("palw_improvement_v1 is not in force")) }
@@ -434,40 +339,16 @@ impl TransitionBuilder<'_> {
     }
 
     /// Credit the earnings ledger (§17.11.5): what the flush pays out later.
-    ///
-    /// **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: `credit` names the source row; past the
-    /// fence its marker is checked and written before the ledger row, and a repeat (or a refusal by the combined liability
-    /// predicate) credits nothing. `Dormant` below the fence: the historical credit, byte for byte.
-    pub(super) fn credit_improvement_earnings_v1(
-        &mut self,
-        credit: PalwImproveCreditV1,
-        now: u64,
-        bond: &PalwBondKeyV2,
-        amount: u64,
-    ) -> Result<(), PalwStateV2Error> {
+    fn credit_improvement_earnings_v1(&mut self, bond: &PalwBondKeyV2, amount: u64) {
         if amount == 0 {
-            return Ok(());
-        }
-        let (obligation, leg) = credit.obligation_v1(bond, amount);
-        let once = self.settle_once_liable_v1(
-            now,
-            obligation,
-            crate::palw_settlement_once_v1::PalwSettlementConsumerV1::ImprovementPool,
-            amount,
-            crate::palw_settlement_once_v1::PalwSettlementDebitV1::Held { amount },
-            leg,
-        )?;
-        if !once.pays() {
-            return Ok(());
+            return;
         }
         let owed = self.state.improvement_earnings.get(bond).copied().unwrap_or(0).saturating_add(amount);
-        self.write_improvement_earning(*bond, Some(owed))?;
-        Ok(())
+        self.write_improvement_earning(*bond, Some(owed));
     }
 
-    fn write_improvement_pool_row_v1(&mut self, line_id: &Hash64, pool: PalwImprovementPoolV1) -> Result<(), PalwStateV2Error> {
-        self.write_improvement_pool(*line_id, Some(pool))?;
-        Ok(())
+    fn write_improvement_pool_row_v1(&mut self, line_id: &Hash64, pool: PalwImprovementPoolV1) {
+        self.write_improvement_pool(*line_id, Some(pool));
     }
 
     /// **A hold** (§17.11.1): debit `bond` into the pool's `held`.
@@ -483,7 +364,7 @@ impl TransitionBuilder<'_> {
         let mut pool = self.improvement_pool_of_v1(line_id);
         pool.held = pool.held.checked_add(amount).ok_or(PalwStateV2Error::Overflow("improvement held"))?;
         pool.held_in += amount as u128;
-        self.write_improvement_pool_row_v1(line_id, pool)?;
+        self.write_improvement_pool_row_v1(line_id, pool);
         Ok(())
     }
 
@@ -499,7 +380,7 @@ impl TransitionBuilder<'_> {
         let mut pool = self.improvement_pool_of_v1(line_id);
         pool.balance = pool.balance.checked_add(amount).ok_or(PalwStateV2Error::Overflow("improvement balance"))?;
         pool.fees_in += amount as u128;
-        self.write_improvement_pool_row_v1(line_id, pool)?;
+        self.write_improvement_pool_row_v1(line_id, pool);
         Ok(())
     }
 
@@ -509,15 +390,12 @@ impl TransitionBuilder<'_> {
         line_id: &Hash64,
         recipient: &PalwBondKeyV2,
         amount: u64,
-        hold: (u8, [u8; 64]),
-        now: u64,
     ) -> Result<(), PalwStateV2Error> {
         let mut pool = self.improvement_pool_of_v1(line_id);
         pool.held = pool.held.checked_sub(amount).ok_or(PalwStateV2Error::Overflow("improvement held underflow"))?;
         pool.refunded += amount as u128;
-        self.write_improvement_pool_row_v1(line_id, pool)?;
-        let credit = PalwImproveCreditV1::HoldRefund { line: *line_id, kind: hold.0, id: hold.1 };
-        self.credit_improvement_earnings_v1(credit, now, recipient, amount)?;
+        self.write_improvement_pool_row_v1(line_id, pool);
+        self.credit_improvement_earnings_v1(recipient, amount);
         Ok(())
     }
 
@@ -527,7 +405,7 @@ impl TransitionBuilder<'_> {
         pool.held = pool.held.checked_sub(amount).ok_or(PalwStateV2Error::Overflow("improvement held underflow"))?;
         pool.balance = pool.balance.checked_add(amount).ok_or(PalwStateV2Error::Overflow("improvement balance"))?;
         pool.forfeited_in += amount as u128;
-        self.write_improvement_pool_row_v1(line_id, pool)?;
+        self.write_improvement_pool_row_v1(line_id, pool);
         Ok(())
     }
 
@@ -602,7 +480,7 @@ impl TransitionBuilder<'_> {
         pool.fees_in += fee as u128;
         pool.held = pool.held.checked_add(held).ok_or(PalwStateV2Error::Overflow("improvement held"))?;
         pool.held_in += held as u128;
-        self.write_improvement_pool_row_v1(line_id, pool)?;
+        self.write_improvement_pool_row_v1(line_id, pool);
         let mut header = self.improvement_epoch_of_v1(line_id, epoch)?;
         let index = header.candidates;
         self.write_improvement_candidate(
@@ -620,9 +498,9 @@ impl TransitionBuilder<'_> {
                 submitted_daa: daa,
                 counts: None,
             }),
-        )?;
+        );
         header.candidates += 1;
-        self.write_improvement_epoch((*line_id, epoch), Some(header))?;
+        self.write_improvement_epoch((*line_id, epoch), Some(header));
         Ok(index)
     }
 
@@ -670,11 +548,11 @@ impl TransitionBuilder<'_> {
             self.write_improvement_pool_entry(
                 (*line_id, header.epoch, POOL_KIND_HOLDOUT, *id),
                 Some(PalwPoolEntryV2::HoldOut { id: *id, supplier: *supplier }),
-            )?;
+            );
             header.pool_entries += 1;
             header.holdout_cases += 1;
             let epoch = header.epoch;
-            self.write_improvement_epoch((*line_id, epoch), Some(header))?;
+            self.write_improvement_epoch((*line_id, epoch), Some(header));
             return Ok(PalwMaterialPlacementV1::HoldOut { epoch });
         }
         let (epoch, placement) = match &open {
@@ -685,7 +563,7 @@ impl TransitionBuilder<'_> {
         };
         let mut frontier = self.state.improvement_material.get(&(*line_id, epoch)).cloned().unwrap_or_default();
         palw_improve_material_append_v1(&mut frontier, palw_improve_material_leaf_v1(kind, id));
-        self.write_improvement_material((*line_id, epoch), Some(frontier))?;
+        self.write_improvement_material((*line_id, epoch), Some(frontier));
         Ok(placement)
     }
 
@@ -717,11 +595,11 @@ impl TransitionBuilder<'_> {
         self.write_improvement_pool_entry(
             (*line_id, header.epoch, POOL_KIND_SETTER, *set_id),
             Some(PalwPoolEntryV2::SetterSet { set_id: *set_id, setter: *setter, items }),
-        )?;
+        );
         header.pool_entries += 1;
         header.setter_sets += 1;
         let epoch = header.epoch;
-        self.write_improvement_epoch((*line_id, epoch), Some(header))?;
+        self.write_improvement_epoch((*line_id, epoch), Some(header));
         Ok(epoch)
     }
 
@@ -729,7 +607,7 @@ impl TransitionBuilder<'_> {
     pub(crate) fn drop_improvement_item_v1(&mut self, line_id: &Hash64, epoch: u64, item: u32) -> Result<(), PalwStateV2Error> {
         let mut row = self.state.improvement_items.get(&(*line_id, epoch, item)).copied().ok_or_else(|| refused("no such item"))?;
         row.dropped = true;
-        self.write_improvement_item((*line_id, epoch, item), Some(row))?;
+        self.write_improvement_item((*line_id, epoch, item), Some(row));
         Ok(())
     }
 
@@ -776,7 +654,7 @@ impl TransitionBuilder<'_> {
             return Err(refused("the item already has this subject's score of this kind"));
         }
         row.scores.push(score);
-        self.write_improvement_result(key, Some(row))?;
+        self.write_improvement_result(key, Some(row));
         Ok(())
     }
 
@@ -802,7 +680,7 @@ impl TransitionBuilder<'_> {
         if row.scores.len() == before {
             return Ok(false);
         }
-        self.write_improvement_result(key, if row.scores.is_empty() { None } else { Some(row) })?;
+        self.write_improvement_result(key, if row.scores.is_empty() { None } else { Some(row) });
         Ok(true)
     }
 
@@ -814,7 +692,6 @@ impl TransitionBuilder<'_> {
     /// back with the rest at the epoch's end (the ordinary rule gives it to the panel reserve, which this
     /// escrow's accounting has no place for), and the executor never takes it. Returns what was paid
     /// (0 once the escrow is spent).
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn pay_improvement_eval_fee_v1(
         &mut self,
         line_id: &Hash64,
@@ -822,8 +699,6 @@ impl TransitionBuilder<'_> {
         subject: &PalwEvalSubjectV1,
         executor: &PalwBondKeyV2,
         panel: Option<(usize, &[PalwBondKeyV2])>,
-        claim_id: &Hash64,
-        final_daa: u64,
     ) -> Result<u64, PalwStateV2Error> {
         let policy = self.improvement_policy_of_v1(line_id)?;
         let fee = policy.fees.eval_fee_per_job;
@@ -857,30 +732,29 @@ impl TransitionBuilder<'_> {
         match subject {
             PalwEvalSubjectV1::Parent => {
                 header.escrow.parent_spent += paid;
-                self.write_improvement_epoch((*line_id, epoch), Some(header))?;
+                self.write_improvement_epoch((*line_id, epoch), Some(header));
             }
             PalwEvalSubjectV1::Previous(_) => {
                 header.escrow.previous_spent += paid;
-                self.write_improvement_epoch((*line_id, epoch), Some(header))?;
+                self.write_improvement_epoch((*line_id, epoch), Some(header));
             }
             PalwEvalSubjectV1::Candidate(class_id) => {
                 let (index, row) =
                     self.state.improvement_candidate(line_id, epoch, class_id).ok_or_else(|| refused("no such candidate"))?;
                 let mut row = row.clone();
                 row.escrow_spent += paid;
-                self.write_improvement_candidate((*line_id, epoch, index), Some(row))?;
+                self.write_improvement_candidate((*line_id, epoch, index), Some(row));
             }
         }
         if paid > 0 {
             let mut pool = self.improvement_pool_of_v1(line_id);
             pool.held = pool.held.checked_sub(paid).ok_or(PalwStateV2Error::Overflow("improvement held underflow"))?;
             pool.paid += paid as u128;
-            self.write_improvement_pool_row_v1(line_id, pool)?;
-            let fee_credit = |role: u8| PalwImproveCreditV1::EvalFee { claim: *claim_id, final_daa, role };
-            self.credit_improvement_earnings_v1(fee_credit(0), final_daa, executor, split.producer)?;
+            self.write_improvement_pool_row_v1(line_id, pool);
+            self.credit_improvement_earnings_v1(executor, split.producer);
             if let Some((_, credited)) = panel {
                 for seat in credited.iter().take(split.credited as usize) {
-                    self.credit_improvement_earnings_v1(fee_credit(1), final_daa, seat, split.per_seat)?;
+                    self.credit_improvement_earnings_v1(seat, split.per_seat);
                 }
             }
         }
@@ -897,8 +771,6 @@ impl TransitionBuilder<'_> {
         line_id: &Hash64,
         recipient: &PalwBondKeyV2,
         stage: PalwRewardStageV1,
-        credit: PalwImproveCreditV1,
-        now: u64,
     ) -> Result<u64, PalwStateV2Error> {
         let policy = self.improvement_policy_of_v1(line_id)?;
         let amount = match stage {
@@ -913,17 +785,17 @@ impl TransitionBuilder<'_> {
         pool.s1_budget -= amount;
         pool.balance -= amount;
         pool.paid += amount as u128;
-        self.write_improvement_pool_row_v1(line_id, pool)?;
-        self.credit_improvement_earnings_v1(credit, now, recipient, amount)?;
+        self.write_improvement_pool_row_v1(line_id, pool);
+        self.credit_improvement_earnings_v1(recipient, amount);
         Ok(amount)
     }
 
     // ---- hooks spec 15's arms call ----
 
     /// **Usage at `Final`** (spec 17 §17.4.5): each governed line the claim's class heads counts it.
-    pub(super) fn note_improvement_usage_at_final_v1(&mut self, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
+    pub(super) fn note_improvement_usage_at_final_v1(&mut self, claim: &PalwClaimStateV2, final_daa: u64) {
         if !self.params.improve_active_at(final_daa) || palw_improve_claim_is_evaluation_hook_v1(claim) {
-            return Ok(());
+            return;
         }
         for line_id in self.state.improvement_lines_headed_by(&claim.class_id) {
             let Some(line) = self.state.improvement_lines.get(&line_id) else { continue };
@@ -940,9 +812,8 @@ impl TransitionBuilder<'_> {
                 PalwUsageMeasureV1::Claims => 1,
                 PalwUsageMeasureV1::WorkLeaves => claim.pwu as u128,
             });
-            self.write_improvement_usage(line_id, Some(usage))?;
+            self.write_improvement_usage(line_id, Some(usage));
         }
-        Ok(())
     }
 
     /// **φ** (spec 17 §17.11.1): the pool's part of a governed line's owner leg. Returns what stays the
@@ -955,16 +826,16 @@ impl TransitionBuilder<'_> {
         to_owner - ((to_owner as u128 * phi as u128) / 1000) as u64
     }
 
-    pub(super) fn take_improvement_phi_v1(&mut self, line_id: &Hash64, to_owner: u64, daa: u64) -> Result<u64, PalwStateV2Error> {
+    pub(super) fn take_improvement_phi_v1(&mut self, line_id: &Hash64, to_owner: u64, daa: u64) -> u64 {
         let to_pool = to_owner - self.improvement_owner_cash_v1(line_id, to_owner, daa);
         if to_pool == 0 {
-            return Ok(to_owner);
+            return to_owner;
         }
         let mut pool = self.improvement_pool_of_v1(line_id);
         pool.balance = pool.balance.saturating_add(to_pool);
         pool.phi_in += to_pool as u128;
-        self.write_improvement_pool_row_v1(line_id, pool)?;
-        Ok(to_owner - to_pool)
+        self.write_improvement_pool_row_v1(line_id, pool);
+        to_owner - to_pool
     }
 
     /// **The developer's promotion on a governed line** (spec 17 §17.4.1) is refused.
@@ -1079,16 +950,16 @@ pub(super) fn apply_improvement_policy_set_v1(
                 regression_epoch: None,
                 regression_check: None,
             };
-            builder.write_improvement_policy(line_id, Some(PalwImprovementPolicyRecordV1 { policy: policy.clone(), pending: None }))?;
-            builder.write_improvement_usage(line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }))?;
-            builder.write_improvement_pool(line_id, Some(PalwImprovementPoolV1::default()))?;
+            builder.write_improvement_policy(line_id, Some(PalwImprovementPolicyRecordV1 { policy: policy.clone(), pending: None }));
+            builder.write_improvement_usage(line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }));
+            builder.write_improvement_pool(line_id, Some(PalwImprovementPoolV1::default()));
             push_head_v1(
                 builder,
                 &line_id,
                 head_seq,
                 PalwLineageHeadEntryV1 { epoch: 0, class_id: line.head, previous: None, daa, cause: PalwHeadCauseV1::OptIn },
-            )?;
-            builder.write_improvement_line(line_id, Some(line))?;
+            );
+            builder.write_improvement_line(line_id, Some(line));
         }
         (None, None) => return Err(policy_refused("an opt-out of a line that is not governed")),
         (Some(mut line), Some(policy)) => {
@@ -1109,13 +980,13 @@ pub(super) fn apply_improvement_policy_set_v1(
             } else {
                 record.pending = Some(Box::new(policy.clone()));
             }
-            builder.write_improvement_policy(line_id, Some(record))?;
+            builder.write_improvement_policy(line_id, Some(record));
             if idle {
                 // [E28] The next check lands on the new grid (or an earlier vesting step, §17.5.2).
                 line.next_check_daa = palw_improve_next_boundary_v1(daa, policy.windows.grid);
                 line.next_due_daa = next_due_v1(builder, &line, daa)?;
             }
-            builder.write_improvement_line(line_id, Some(line))?;
+            builder.write_improvement_line(line_id, Some(line));
         }
         (Some(line), None) if line.status != PalwImprovementLineStatusV1::Governed => {
             // [D14] One opt-out: a second would restart the delay (or re-govern a line past it).
@@ -1129,7 +1000,7 @@ pub(super) fn apply_improvement_policy_set_v1(
             if let Some(at) = effective_daa {
                 line.next_due_daa = line.next_due_daa.min(at);
             }
-            builder.write_improvement_line(line_id, Some(line))?;
+            builder.write_improvement_line(line_id, Some(line));
         }
     }
     Ok(())
@@ -1144,12 +1015,11 @@ fn role_refusal(role: &str) -> &'static str {
 }
 
 /// Append a head entry at `seq`, dropping the one 64 behind it.
-fn push_head_v1(builder: &mut TransitionBuilder<'_>, line_id: &Hash64, seq: u32, entry: PalwLineageHeadEntryV1) -> Result<(), PalwStateV2Error> {
-    builder.write_improvement_head((*line_id, seq), Some(entry))?;
+fn push_head_v1(builder: &mut TransitionBuilder<'_>, line_id: &Hash64, seq: u32, entry: PalwLineageHeadEntryV1) {
+    builder.write_improvement_head((*line_id, seq), Some(entry));
     if seq >= PALW_IMPROVE_HEAD_HISTORY_MAX_V1 as u32 {
-        builder.write_improvement_head((*line_id, seq - PALW_IMPROVE_HEAD_HISTORY_MAX_V1 as u32), None)?;
+        builder.write_improvement_head((*line_id, seq - PALW_IMPROVE_HEAD_HISTORY_MAX_V1 as u32), None);
     }
-    Ok(())
 }
 
 /// Move the head (spec 17 §17.4.1): the entry, the line's head, and the usage restart.
@@ -1160,18 +1030,17 @@ fn move_head_v1(
     to: Hash64,
     daa: u64,
     cause: PalwHeadCauseV1,
-) -> Result<(), PalwStateV2Error> {
+) {
     assert!(!builder.extras.model_immutable_active, "immutable registrations have no head replacement authority");
     push_head_v1(
         builder,
         &line.line_id,
         line.head_seq,
         PalwLineageHeadEntryV1 { epoch, class_id: to, previous: Some(line.head), daa, cause },
-    )?;
+    );
     line.head_seq += 1;
     line.head = to;
-    builder.write_improvement_usage(line.line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }))?;
-    Ok(())
+    builder.write_improvement_usage(line.line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }));
 }
 
 // ---- the sponsor's deposit (tag 82, spec 17 §17.11.1) --------------------------------------------
@@ -1191,7 +1060,7 @@ pub(super) fn apply_improvement_pool_funded_v1(
     let mut pool = builder.improvement_pool_of_v1(&payload.line_id);
     pool.balance = pool.balance.checked_add(payload.amount).ok_or(PalwStateV2Error::Overflow("improvement balance"))?;
     pool.deposited += payload.amount as u128;
-    builder.write_improvement_pool(payload.line_id, Some(pool))?;
+    builder.write_improvement_pool(payload.line_id, Some(pool));
     Ok(())
 }
 
@@ -1269,8 +1138,8 @@ pub(super) fn apply_lineage_rollback_v1(
         pool.unvested = pool.unvested.saturating_sub(left);
         pool.balance = pool.balance.saturating_add(left);
         pool.forfeited_in += left as u128;
-        builder.write_improvement_pool(line_id, Some(pool))?;
-        builder.write_improvement_grant((line_id, promoted_epoch, index), Some(PalwRewardGrantV1 { forfeited: true, ..grant }))?;
+        builder.write_improvement_pool(line_id, Some(pool));
+        builder.write_improvement_grant((line_id, promoted_epoch, index), Some(PalwRewardGrantV1 { forfeited: true, ..grant }));
     }
     if let Some((_, winner)) = builder.state.improvement_candidate(&line_id, promoted_epoch, &last.class_id) {
         let until = daa.saturating_add(terms.ban_daa);
@@ -1282,14 +1151,14 @@ pub(super) fn apply_lineage_rollback_v1(
             line.barred.truncate(PALW_IMPROVE_BARRED_MAX_V1);
         }
     }
-    move_head_v1(builder, &mut line, promoted_epoch, payload.to_class, daa, cause)?;
+    move_head_v1(builder, &mut line, promoted_epoch, payload.to_class, daa, cause);
     // The promotion can no longer be named: its rows retire once their grants settle.
     line.regression_check = None;
     line.last_promotion = None;
     line.regression_epoch = None;
     // [D12] The next check, vesting step or opt-out, whichever is first.
     line.next_due_daa = next_due_v1(builder, &line, daa)?;
-    builder.write_improvement_line(line_id, Some(line))?;
+    builder.write_improvement_line(line_id, Some(line));
     Ok(())
 }
 
@@ -1301,19 +1170,19 @@ pub(super) fn advance_improvement_v1(builder: &mut TransitionBuilder<'_>, ctx: &
     if !builder.params.improve_active_at(ctx.daa_score) {
         return Ok(());
     }
-    retire_improvement_rows_v1(builder)?;
+    retire_improvement_rows_v1(builder);
     let due: Vec<Hash64> =
         builder.state.improvement_due.iter().take_while(|(at, _)| *at <= ctx.daa_score).map(|(_, line_id)| *line_id).collect();
     for line_id in due {
         advance_improvement_line_v1(builder, ctx, line_id)?;
     }
-    flush_improvement_earnings_v1(builder, ctx)?;
+    flush_improvement_earnings_v1(builder, ctx);
     Ok(())
 }
 
 /// The bounded retirement of decided epochs' detail rows (spec 17 §17.5.4): pool entries, then items,
 /// then results, in key order, oldest decided epoch first.
-fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) -> Result<(), PalwStateV2Error> {
+fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) {
     let mut budget = PALW_IMPROVE_RETIRE_ROWS_PER_BLOCK_V1;
     while budget > 0 {
         let Some(&(_, line_id, epoch)) = builder.state.improvement_retiring.iter().next() else { break };
@@ -1321,7 +1190,7 @@ fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) -> Result<(),
             builder.state.improvement_pool_entries.range(pool_range(&line_id, epoch)).map(|(k, _)| *k).take(budget).collect();
         budget -= pool.len();
         for key in pool {
-            builder.write_improvement_pool_entry(key, None)?;
+            builder.write_improvement_pool_entry(key, None);
         }
         let items: Vec<_> = builder
             .state
@@ -1332,17 +1201,17 @@ fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) -> Result<(),
             .collect();
         budget -= items.len();
         for key in items {
-            builder.write_improvement_item(key, None)?;
+            builder.write_improvement_item(key, None);
         }
         let lo = (line_id, epoch, 0, PalwEvalSubjectV1::Parent);
         let hi = (line_id, epoch, u32::MAX, PalwEvalSubjectV1::Previous(Hash64::from_bytes([0xFF; 64])));
         let results: Vec<_> = builder.state.improvement_results.range(lo..=hi).map(|(k, _)| *k).take(budget).collect();
         budget -= results.len();
         for key in results {
-            builder.write_improvement_result(key, None)?;
+            builder.write_improvement_result(key, None);
         }
         // The evaluation lane's job rows (A6), in the same budget.
-        let (jobs, jobs_left) = builder.retire_improvement_eval_jobs_v1(&line_id, epoch, budget)?;
+        let (jobs, jobs_left) = builder.retire_improvement_eval_jobs_v1(&line_id, epoch, budget);
         budget -= jobs;
         let remaining = builder.state.improvement_pool_entries.range(pool_range(&line_id, epoch)).next().is_some()
             || builder.state.improvement_items.range((line_id, epoch, 0)..=(line_id, epoch, u32::MAX)).next().is_some()
@@ -1353,24 +1222,23 @@ fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) -> Result<(),
         }
         if let Some(mut header) = builder.state.improvement_epochs.get(&(line_id, epoch)).cloned() {
             header.retire = PalwEpochRetireV1::Done;
-            builder.write_improvement_epoch((line_id, epoch), Some(header))?;
+            builder.write_improvement_epoch((line_id, epoch), Some(header));
         } else {
             break;
         }
     }
-    Ok(())
 }
 
 /// The bounded flush of the earnings ledger into payout rows (spec 17 §17.11.5): at most two per
 /// block, and never into the last `PALW_IMPROVE_PAYOUT_QUEUE_RESERVE_V1` free rows of the queue. A bond
 /// that no longer exists has nobody to pay: its earnings are burned.
-fn flush_improvement_earnings_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+fn flush_improvement_earnings_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     for _ in 0..PALW_IMPROVE_PAYOUTS_PER_BLOCK_V1 {
         if builder.state.pending_payouts.len() + PALW_IMPROVE_PAYOUT_QUEUE_RESERVE_V1 >= PALW_V2_MAX_PENDING_PAYOUTS {
-            return Ok(());
+            return;
         }
-        let Some((&bond, &amount)) = builder.state.improvement_earnings.iter().next() else { return Ok(()) };
-        builder.write_improvement_earning(bond, None)?;
+        let Some((&bond, &amount)) = builder.state.improvement_earnings.iter().next() else { return };
+        builder.write_improvement_earning(bond, None);
         let Some(payload) = builder.state.bonds.get(&bond).map(|record| record.payout_payload) else { continue };
         let mut h =
             blake2b_simd::Params::new().hash_length(64).key(crate::palw_improve_policy_v1::PALW_IMPROVE_PAYOUT_DOMAIN_V1).to_state();
@@ -1380,9 +1248,8 @@ fn flush_improvement_earnings_v1(builder: &mut TransitionBuilder<'_>, ctx: &Palw
         let mut key = [0u8; 64];
         key.copy_from_slice(h.finalize().as_bytes());
         key[0] = PALW_STATE_V2_IMPROVE_PAYOUT_KEY_PREFIX;
-        builder.write_payout(Hash64::from_bytes(key), Some(PalwPayoutV2 { payload, amount }))?;
+        builder.write_payout(Hash64::from_bytes(key), Some(PalwPayoutV2 { payload, amount }));
     }
-    Ok(())
 }
 
 /// Advance one line (spec 17 §17.5.2).
@@ -1409,13 +1276,13 @@ fn advance_improvement_line_v1(
         }
     }
     vest_improvement_grants_v1(builder, &line_id, daa)?;
-    retire_settled_epochs_v1(builder, &line, daa)?;
+    retire_settled_epochs_v1(builder, &line, daa);
     if dissolve_if_done_v1(builder, &mut line, daa)? {
-        builder.write_improvement_line(line_id, Some(line))?;
+        builder.write_improvement_line(line_id, Some(line));
         return Ok(());
     }
     line.next_due_daa = next_due_v1(builder, &line, daa)?;
-    builder.write_improvement_line(line_id, Some(line))?;
+    builder.write_improvement_line(line_id, Some(line));
     Ok(())
 }
 
@@ -1506,11 +1373,11 @@ fn step_idle_v1(
         decided_daa: None,
         retire: PalwEpochRetireV1::Pending,
     };
-    builder.write_improvement_epoch((line.line_id, epoch), Some(header))?;
-    builder.write_improvement_usage(line.line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }))?;
+    builder.write_improvement_epoch((line.line_id, epoch), Some(header));
+    builder.write_improvement_usage(line.line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }));
     let mut pool = builder.improvement_pool_of_v1(&line.line_id);
     pool.s1_budget = ((pool.balance as u128 * policy.bounty_share_permille as u128) / 1000) as u64;
-    builder.write_improvement_pool(line.line_id, Some(pool))?;
+    builder.write_improvement_pool(line.line_id, Some(pool));
     line.open_epoch = Some(epoch);
     line.next_epoch = epoch + 1;
     Ok(true)
@@ -1564,7 +1431,7 @@ fn step_epoch_v1(
         }
         _ => return Ok(false),
     }
-    builder.write_improvement_epoch((line_id, epoch), Some(header))?;
+    builder.write_improvement_epoch((line_id, epoch), Some(header));
     Ok(true)
 }
 
@@ -1620,7 +1487,7 @@ fn draw_epoch_v1(
     };
     if (drawn.len() as u32) < policy.eval.n_min {
         header.seed = Some(seed);
-        builder.write_improvement_epoch((line_id, epoch), Some(header))?;
+        builder.write_improvement_epoch((line_id, epoch), Some(header));
         decide_epoch_v1(builder, ctx, line, epoch, PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::TooFewItems })?;
         return Ok(true);
     }
@@ -1635,7 +1502,7 @@ fn draw_epoch_v1(
     let mut pool = builder.improvement_pool_of_v1(&line_id);
     if pool.balance < need {
         header.seed = Some(seed);
-        builder.write_improvement_epoch((line_id, epoch), Some(header))?;
+        builder.write_improvement_epoch((line_id, epoch), Some(header));
         decide_epoch_v1(
             builder,
             ctx,
@@ -1647,7 +1514,7 @@ fn draw_epoch_v1(
     }
     pool.balance -= need;
     pool.held += need;
-    builder.write_improvement_pool(line_id, Some(pool))?;
+    builder.write_improvement_pool(line_id, Some(pool));
     header.escrow = PalwEpochEscrowV1 { parent: parent_escrow, parent_spent: 0, previous: previous_escrow, previous_spent: 0 };
     if previous.is_some() {
         header.previous = previous;
@@ -1674,7 +1541,7 @@ fn draw_epoch_v1(
                 judge,
                 dropped: false,
             }),
-        )?;
+        );
         item += 1;
     }
     // The suites (spec 17 §17.8.1): entries drawn by R from the registered public datasets the policy names, `min(count,
@@ -1700,14 +1567,14 @@ fn draw_epoch_v1(
                     judge: None,
                     dropped: false,
                 }),
-            )?;
+            );
             item += 1;
         }
     }
     header.seed = Some(seed);
     header.items = item;
     header.state = PalwEpochStateV1::Evaluating;
-    builder.write_improvement_epoch((line_id, epoch), Some(header))?;
+    builder.write_improvement_epoch((line_id, epoch), Some(header));
     Ok(true)
 }
 
@@ -1768,12 +1635,12 @@ fn score_epoch_v1(
         builder.write_improvement_candidate(
             (*line_id, epoch, *index),
             Some(PalwEpochCandidateV1 { counts: Some(*counts), ..row.clone() }),
-        )?;
+        );
     }
     if let Some(counts) = previous_counts {
         let mut header = builder.improvement_epoch_of_v1(line_id, epoch)?;
         header.previous_counts = Some(counts);
-        builder.write_improvement_epoch((*line_id, epoch), Some(header))?;
+        builder.write_improvement_epoch((*line_id, epoch), Some(header));
     }
     let list: Vec<(Hash64, PalwPromotionCountsV1)> = counted.iter().map(|(_, row, counts)| (row.class_id, *counts)).collect();
     Ok(palw_improve_decide_v1(&list, &rule))
@@ -1825,7 +1692,7 @@ fn decide_epoch_v1(
         let mut pool = builder.improvement_pool_of_v1(&line_id);
         pool.held -= unspent;
         pool.balance += unspent;
-        builder.write_improvement_pool(line_id, Some(pool))?;
+        builder.write_improvement_pool(line_id, Some(pool));
     }
     let candidates: Vec<PalwEpochCandidateV1> =
         builder.state.improvement_candidates(&line_id, epoch).into_iter().map(|(_, row)| row.clone()).collect();
@@ -1847,14 +1714,14 @@ fn decide_epoch_v1(
             let fee_refund = (row.fee_paid - fee_share.min(row.fee_paid)).min(pool.balance);
             pool.balance -= fee_refund;
             pool.held = pool.held.checked_add(fee_refund).ok_or(PalwStateV2Error::Overflow("improvement held"))?;
-            builder.write_improvement_pool(line_id, Some(pool))?;
+            builder.write_improvement_pool(line_id, Some(pool));
             row.bond + unspent + fee_refund
         } else if Some(row.class_id) == winner {
             // The winner's bond vests (below); its unspent escrow comes back; its fee stays.
             let mut pool = builder.improvement_pool_of_v1(&line_id);
             pool.held -= row.bond;
             pool.unvested += row.bond;
-            builder.write_improvement_pool(line_id, Some(pool))?;
+            builder.write_improvement_pool(line_id, Some(pool));
             grants.push(PalwRewardGrantV1 {
                 recipient: row.submitter,
                 stage: PalwRewardStageV1::WinnerBond,
@@ -1871,11 +1738,7 @@ fn decide_epoch_v1(
             // A loser's bond and unspent escrow come back; its fee stays.
             row.bond + unspent
         };
-        let candidate = crate::palw_settlement_once_v1::palw_settlement_subject_v1(
-            b"improve-candidate",
-            &[&epoch.to_le_bytes(), row.class_id.as_bytes().as_slice()],
-        );
-        builder.release_improvement_hold_v1(&line_id, &row.submitter, refund, (PALW_IMPROVE_HOLD_CANDIDATE_V1, candidate), daa)?;
+        builder.release_improvement_hold_v1(&line_id, &row.submitter, refund)?;
     }
     if let Some(class_id) = winner {
         // S2 (§17.11.3).
@@ -1920,9 +1783,9 @@ fn decide_epoch_v1(
         }
         pool.balance -= granted;
         pool.unvested += granted;
-        builder.write_improvement_pool(line_id, Some(pool))?;
+        builder.write_improvement_pool(line_id, Some(pool));
         if !builder.extras.model_immutable_active {
-            move_head_v1(builder, line, epoch, class_id, daa, PalwHeadCauseV1::Promoted)?;
+            move_head_v1(builder, line, epoch, class_id, daa, PalwHeadCauseV1::Promoted);
             // [E22] The rollback terms are the promoted epoch's policy's, pinned now.
             line.last_promotion = Some(PalwLastPromotionV1 {
                 epoch,
@@ -1934,7 +1797,7 @@ fn decide_epoch_v1(
         }
     }
     for grant in grants {
-        builder.write_improvement_grant((line_id, epoch, header.grants), Some(grant))?;
+        builder.write_improvement_grant((line_id, epoch, header.grants), Some(grant));
         header.grants += 1;
     }
     // Re-read: scoring may have written the header (the regression check's counts).
@@ -1944,7 +1807,7 @@ fn decide_epoch_v1(
     header.outcome = Some(outcome);
     header.decided_daa = Some(daa);
     header.retire = PalwEpochRetireV1::Pending;
-    builder.write_improvement_epoch((line_id, epoch), Some(header))?;
+    builder.write_improvement_epoch((line_id, epoch), Some(header));
     // The line is idle again: a pending policy comes into force, a pending opt-out starts its delay.
     line.open_epoch = None;
     if let Some(mut record) = builder.state.improvement_policies.get(&line_id).cloned()
@@ -1952,7 +1815,7 @@ fn decide_epoch_v1(
     {
         record.policy = *pending;
         line.policy_digest = palw_improvement_policy_digest_v1(&record.policy);
-        builder.write_improvement_policy(line_id, Some(record))?;
+        builder.write_improvement_policy(line_id, Some(record));
     }
     if let PalwImprovementLineStatusV1::OptingOut { effective_daa: None } = line.status {
         line.status = PalwImprovementLineStatusV1::OptingOut { effective_daa: Some(daa.saturating_add(policy.windows.grid)) };
@@ -2002,17 +1865,16 @@ fn vest_improvement_grants_v1(builder: &mut TransitionBuilder<'_>, line_id: &Has
         let mut pool = builder.improvement_pool_of_v1(line_id);
         pool.unvested = pool.unvested.saturating_sub(pay);
         pool.paid += pay as u128;
-        builder.write_improvement_pool(*line_id, Some(pool))?;
-        let tranche = PalwImproveCreditV1::GrantTranche { line: key.0, epoch: key.1, index: key.2, target };
-        builder.credit_improvement_earnings_v1(tranche, daa, &grant.recipient, pay)?;
-        builder.write_improvement_grant(key, Some(grant))?;
+        builder.write_improvement_pool(*line_id, Some(pool));
+        builder.credit_improvement_earnings_v1(&grant.recipient, pay);
+        builder.write_improvement_grant(key, Some(grant));
     }
     Ok(())
 }
 
 /// Delete decided epochs whose detail rows are gone, whose grants are settled, and that no rollback
 /// can name (spec 17 §17.5.4): the header, its candidates and its grants.
-fn retire_settled_epochs_v1(builder: &mut TransitionBuilder<'_>, line: &PalwImprovementLineV1, _daa: u64) -> Result<(), PalwStateV2Error> {
+fn retire_settled_epochs_v1(builder: &mut TransitionBuilder<'_>, line: &PalwImprovementLineV1, _daa: u64) {
     let line_id = line.line_id;
     let decided: Vec<u64> = builder
         .state
@@ -2032,15 +1894,14 @@ fn retire_settled_epochs_v1(builder: &mut TransitionBuilder<'_>, line: &PalwImpr
         for (index, _) in
             builder.state.improvement_candidates(&line_id, epoch).into_iter().map(|(i, r)| (i, r.clone())).collect::<Vec<_>>()
         {
-            builder.write_improvement_candidate((line_id, epoch, index), None)?;
+            builder.write_improvement_candidate((line_id, epoch, index), None);
         }
         for (index, _) in builder.state.improvement_grants(&line_id, epoch).into_iter().map(|(i, g)| (i, *g)).collect::<Vec<_>>() {
-            builder.write_improvement_grant((line_id, epoch, index), None)?;
+            builder.write_improvement_grant((line_id, epoch, index), None);
         }
-        builder.write_improvement_material((line_id, epoch), None)?;
-        builder.write_improvement_epoch((line_id, epoch), None)?;
+        builder.write_improvement_material((line_id, epoch), None);
+        builder.write_improvement_epoch((line_id, epoch), None);
     }
-    Ok(())
 }
 
 /// **Dissolution** (spec 17 §17.4.4, §17.11.5): past an opt-out's effective DAA, with no epoch open and
@@ -2074,35 +1935,35 @@ fn dissolve_if_done_v1(
         return Ok(false);
     }
     if let Some(owner) = builder.state.model_line_or_founding(&line_id).and_then(|l| l.owner) {
-        builder.credit_improvement_earnings_v1(PalwImproveCreditV1::Dissolution { line: line_id }, daa, &owner, pool.balance)?;
+        builder.credit_improvement_earnings_v1(&owner, pool.balance);
     }
     let epochs: Vec<u64> = builder.state.improvement_epochs.range((line_id, 0)..=(line_id, u64::MAX)).map(|((_, e), _)| *e).collect();
     for epoch in epochs {
         for (index, _) in
             builder.state.improvement_candidates(&line_id, epoch).into_iter().map(|(i, r)| (i, r.clone())).collect::<Vec<_>>()
         {
-            builder.write_improvement_candidate((line_id, epoch, index), None)?;
+            builder.write_improvement_candidate((line_id, epoch, index), None);
         }
         for (index, _) in builder.state.improvement_grants(&line_id, epoch).into_iter().map(|(i, g)| (i, *g)).collect::<Vec<_>>() {
-            builder.write_improvement_grant((line_id, epoch, index), None)?;
+            builder.write_improvement_grant((line_id, epoch, index), None);
         }
-        builder.write_improvement_epoch((line_id, epoch), None)?;
+        builder.write_improvement_epoch((line_id, epoch), None);
     }
     let materials: Vec<u64> =
         builder.state.improvement_material.range((line_id, 0)..=(line_id, u64::MAX)).map(|((_, e), _)| *e).collect();
     for epoch in materials {
-        builder.write_improvement_material((line_id, epoch), None)?;
+        builder.write_improvement_material((line_id, epoch), None);
     }
     if !builder.extras.model_immutable_active {
         let heads: Vec<u32> =
             builder.state.improvement_heads.range((line_id, 0)..=(line_id, u32::MAX)).map(|((_, s), _)| *s).collect();
         for seq in heads {
-            builder.write_improvement_head((line_id, seq), None)?;
+            builder.write_improvement_head((line_id, seq), None);
         }
     }
-    builder.write_improvement_policy(line_id, None)?;
-    builder.write_improvement_usage(line_id, None)?;
-    builder.write_improvement_pool(line_id, None)?;
+    builder.write_improvement_policy(line_id, None);
+    builder.write_improvement_usage(line_id, None);
+    builder.write_improvement_pool(line_id, None);
     line.status = PalwImprovementLineStatusV1::Dissolved;
     line.open_epoch = None;
     line.next_due_daa = u64::MAX;
@@ -2378,7 +2239,7 @@ mod tests {
                 ] {
                     let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
                     b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
-                    assert!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None, &h(0xE7), 0).unwrap() > 0);
+                    assert!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None).unwrap() > 0);
                 }
             }
             let dup = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value: 1 };
@@ -2648,7 +2509,7 @@ mod tests {
         let s = at(&s, &p, 2_510, |b| {
             for _ in 0..3 {
                 assert_eq!(
-                    b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL), None, &h(0xE7), 0).unwrap(),
+                    b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL), None).unwrap(),
                     fee_per_job
                 );
             }
@@ -2789,7 +2650,7 @@ mod tests {
         });
         let s = at(&s, &p, 1_510, |b| {
             for _ in 0..3 {
-                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL), None, &h(0xE7), 0).unwrap(), 1);
+                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL), None).unwrap(), 1);
             }
         });
         assert_eq!(s.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Evaluating);
@@ -2933,7 +2794,7 @@ mod tests {
                 ] {
                     let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
                     b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
-                    b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None, &h(0xE7), 0).unwrap();
+                    b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None).unwrap();
                 }
             }
         });

@@ -328,13 +328,10 @@ pub(crate) fn output_point(o: &FlatOperandV5, shape: &[usize], index: u64) -> Re
 /// No whole-axis reconstruction. Sound even if the emitted set has other faults:
 /// a correct sorted TopK set cannot have a dominated member and an authenticated gap.
 pub fn verify_topk_fault_v7(c: &TopKContextV7<'_>, f: &TopKFaultV7) -> Result<(), DismissalV1> {
-    let pr = common::prepare(&c.base)?;
-    verify_topk_prepared_v32(c,f,&pr)
-}
-pub(crate) fn verify_topk_prepared_v32(c:&TopKContextV7<'_>,f:&TopKFaultV7,pr:&crate::element::PreparedV1<'_>)->Result<(),DismissalV1>{
     f.structure().map_err(|_| bad("malformed TopK fault"))?;
     let o = f.output.node.as_ref().unwrap();
     let (p, s, n) = (o.position, o.occurrence, o.node);
+    let pr = common::prepare(&c.base)?;
     let scope = derived(c, &pr, p, s, n)?;
     if !common::authenticate_node(&c.base, &pr, o, (p, s, n)) {
         return Err(bad("TopK output not bound"));

@@ -43,7 +43,7 @@
 //!
 //! **Every number here is POLICY and UNAPPROVED.** The 1 / 7 day spans are the user's design baseline; the per-day rates, the burst
 //! window and factor and the concurrent-liability fraction come from the measurement procedure in
-//! `docs/design/palw/economics/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md` — never from current code values or past examples.
+//! `docs/design/palw/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md` — never from current code values or past examples.
 
 use super::*;
 use crate::tx::TransactionOutpoint;
@@ -62,9 +62,8 @@ pub const PALW_BOND_HOLD_DAA_PER_DAY_V1: u64 = PALW_BOND_HOLD_DAY_MS_V1 / crate:
 
 /// **User decision (2026-10-14 / 2026-10-15): Panel=1's common hold, in days** (1-day-equivalent DAA).
 pub const PALW_BOND_HOLD_PANEL_ONE_DAYS_V1: u32 = 1;
-/// **User decision (2026-10-16, replacing 2026-10-14/15's 7 days): Panel=0's common hold, in days** — fixed at 1, the same as
-/// Panel=1, so the per-day cap is the one calculation (a fast forged claim and an honestly computed one hit the same cap).
-pub const PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1: u32 = 1;
+/// **User decision (2026-10-14 / 2026-10-15): Panel=0's common hold, in days** (7-day-equivalent DAA; RFC-0015 §8.5.5 `W`).
+pub const PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1: u32 = 7;
 
 /// **INTERIM, UNAPPROVED: the burst window**, DAA — one tenth of a day-equivalent (72 DAA, 2.4 h at the nominal slot). POLICY to be
 /// fixed from the measured submission pattern (plan §Stage 1); listed in the decision doc.
@@ -233,10 +232,9 @@ fn ceil_mul_div(a: u128, b: u128, d: u128) -> u128 {
     a.checked_mul(b).map(|p| p.div_ceil(d)).unwrap_or(u128::MAX)
 }
 
-/// **The burst caps** (an additional limit): `⌈daily(C) · W_burst · β / (daa_per_day · 1000)⌉` per dimension — the caps an income row
-/// or a Round-rights draw (C3) is admitted against. The ceiling keeps a bond whose daily rate is below one unit per burst window able
-/// to use it at all; the long and day views still bound the totals, so the ceiling never raises a period total (splitting capital can
-/// only add burst headroom, never period capacity).
+/// **The burst caps** (an additional limit): `⌈daily(C) · W_burst · β / (daa_per_day · 1000)⌉` per dimension. The ceiling keeps a
+/// bond whose daily rate is below one unit per burst window able to use it at all; the long and day views still bound the totals, so
+/// the ceiling never raises a period total (splitting capital can only add burst headroom, never period capacity).
 pub fn palw_bond_hold_burst_caps_v1(policy: &PalwBondBudgetPolicyV1, hold: &PalwBondHoldPolicyV1, capital: u64) -> PalwBudgetVectorV1 {
     let daily = palw_bond_hold_daily_caps_v1(policy, capital);
     let num = (hold.burst_window_daa as u128).saturating_mul(hold.burst_factor_permille as u128);
@@ -249,30 +247,6 @@ pub fn palw_bond_hold_burst_caps_v1(policy: &PalwBondBudgetPolicyV1, hold: &Palw
         reward_sompi: sat(f(daily.reward_sompi as u128)),
         final_weight: f(daily.final_weight),
         round_rights: sat(f(daily.round_rights as u128)),
-    }
-}
-
-/// **The burst caps a CLAIM is admitted against**: the claims ceiling `n` of [`palw_bond_hold_burst_caps_v1`] is the burst's unit, and
-/// every other dimension is capped at `n` claims' worth of its daily rate (`⌈daily_d · n / daily_q⌉`, never below its own prorated
-/// ceiling). A claim is a discrete unit: ceiling each dimension separately let the claims dimension round up (1.2 → 2 claims) while
-/// the reward and block dimensions stayed at 1.2 claims' worth, so the second claim the burst allows was refused by them. Income rows
-/// and Round-rights draws are continuous amounts and keep the prorated caps; both write the same burst view, so a claim's rights are
-/// in the view an income row reads (one principal, never used twice).
-pub fn palw_bond_hold_claim_burst_caps_v1(policy: &PalwBondBudgetPolicyV1, hold: &PalwBondHoldPolicyV1, capital: u64) -> PalwBudgetVectorV1 {
-    let daily = palw_bond_hold_daily_caps_v1(policy, capital);
-    let prorated = palw_bond_hold_burst_caps_v1(policy, hold, capital);
-    if daily.claims == 0 {
-        return prorated;
-    }
-    let claims = prorated.claims as u128;
-    let worth = |x: u128, own: u128| ceil_mul_div(x, claims, daily.claims as u128).max(own);
-    let sat = |x: u128| u64::try_from(x).unwrap_or(u64::MAX);
-    PalwBudgetVectorV1 {
-        claims: prorated.claims,
-        block_units: sat(worth(daily.block_units as u128, prorated.block_units as u128)),
-        reward_sompi: sat(worth(daily.reward_sompi as u128, prorated.reward_sompi as u128)),
-        final_weight: worth(daily.final_weight, prorated.final_weight),
-        round_rights: sat(worth(daily.round_rights as u128, prorated.round_rights as u128)),
     }
 }
 
@@ -330,7 +304,6 @@ impl PalwHoldViewV1 {
 /// `u32::MAX − view`. No registration outpoint can equal it (no transaction has 2³²−2 outputs, and the id is a keyed hash), so the
 /// view's aggregate row never meets a real bond's row.
 pub fn palw_bond_hold_shadow_bond_v1(view: PalwHoldViewV1, bond: &PalwBondKeyV2) -> PalwBondKeyV2 {
-    // A transaction id is 64 bytes on this chain (`Hash64`): the whole keyed digest is the id.
     let digest = keyed64(PALW_BOND_HOLD_SHADOW_BOND_DOMAIN_V1, &[&[view as u8], &enc(bond)]);
     PalwBondKeyV2(TransactionOutpoint::new(digest, u32::MAX - view as u32))
 }
@@ -340,10 +313,8 @@ pub fn palw_bond_hold_shadow_claim_v1(view: PalwHoldViewV1, claim: &Hash64) -> H
     keyed64(PALW_BOND_HOLD_SHADOW_CLAIM_DOMAIN_V1, &[&[view as u8], claim.as_byte_slice()])
 }
 
-/// Whether an origin writes shadow rows: claims (and old claims seeded at the fence) and — ADR-0176 C3 (user decision 2026-10-15) —
-/// Round rights and the monetary income rows ([`palw_bond_hold_rate_origin_v1`]), so a bond's day and burst views are ONE short-period
-/// ledger over every path (the same principal is never used twice across claims and income paths). Reporter debt stays outside the
-/// window until a tranche enters its own native queue (unchanged).
+/// Whether an origin writes shadow rows: claims (and old claims seeded at the fence). Monetary income rows (fees, native income,
+/// reporter debt) and Round rights are bounded by the long view alone (decision doc: per-day Round-rights / income rates).
 pub fn palw_bond_hold_shadows_origin_v1(origin: PalwBudgetOriginV1) -> bool {
     matches!(
         origin,
@@ -352,7 +323,7 @@ pub fn palw_bond_hold_shadows_origin_v1(origin: PalwBudgetOriginV1) -> bool {
             | PalwBudgetOriginV1::FreePrompt
             | PalwBudgetOriginV1::Legacy
             | PalwBudgetOriginV1::KernelRoute
-    ) || palw_bond_hold_rate_origin_v1(origin)
+    )
 }
 
 impl PalwBondBudgetStateV1 {
@@ -391,7 +362,7 @@ impl PalwBondBudgetStateV1 {
                 return Err(PalwBudgetRefusalV1::Exhausted { dim });
             }
         }
-        let burst = palw_bond_hold_claim_burst_caps_v1(policy, hold, capital);
+        let burst = palw_bond_hold_burst_caps_v1(policy, hold, capital);
         if let Some(dim) = palw_bond_hold_first_excess_v1(&self.hold_view_v1(PalwHoldViewV1::Burst, bond), reservation, &burst) {
             return Err(PalwBudgetRefusalV1::Burst { dim });
         }

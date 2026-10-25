@@ -18,7 +18,7 @@ use kaspa_consensus_core::palw_work_slice_v2::PalwExecV2RewardFundV1;
 
 /// Prove the actual native inventory at this span. No cached readiness row or
 /// lifecycle/Panel/Final setter is used. Each proof is authenticated at acceptance.
-pub(super) async fn ready_native_seats(cw: &mut Cw) {
+async fn ready_native_seats(cw: &mut Cw) {
     use crate::pipeline::virtual_processor::tests::g14_registration_e2e::Tensors;
     let tensors = cw.f.params.tensors.iter().map(|(key, tensor)| (*key, tensor.to_le_bytes())).collect();
     let operands = palw_tir_inventory_operands_v1(&cw.f.program, &Tensors(tensors)).expect("native inventory");
@@ -126,12 +126,7 @@ async fn finalize_native_root(cw: &mut Cw, s: &Session) -> (u64, Obj) {
     let licence = license_native_root(cw, s.real.claim).await;
     let end = cw.net.daa() + cw.net.bundle.state.window_challenge() + 1_000;
     while !matches!(cw.net.chain.tip_state().1.claim(&s.real.claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }) {
-        assert!(
-            cw.net.daa() < end,
-            "native Final must be reachable before the signed root expiry: claim {:?}, root {:?}",
-            cw.net.chain.tip_state().1.claim(&s.real.claim).map(|c| c.phase.clone()),
-            cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).map(|r| r.phase.clone())
-        );
+        assert!(cw.net.daa() < end, "native Final must be reachable before the signed root expiry");
         cw.net.beat_to(cw.net.daa() + 1).await;
     }
     let state = cw.net.chain.tip_state().1;
@@ -206,8 +201,6 @@ async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_acce
     )
     .await;
     let class = cw.v2_class;
-    // RFC08 08-C: no seam — the registry's own rules admit the class before its REAL attempt.
-    admit_class_without_seam(&mut cw).await;
     let real = real_attempt(&mut cw, ROOT_CARD, class, 0xA7E5).await;
     let terms = cw.net.chain.tip_state().1.paid_consumer_terms_v1(&real.claim).expect("actual native accepted terms");
     let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
@@ -310,9 +303,7 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     cw.net._keep.push(Box::new(receiver));
     // Signed worker terms are fixed before any computation. The native trace
     // commitment remains the module's seam; only the prefix kernel matrix lies.
-    // The lying prefix reaches its paid Final unrefuted (its drawn seats collude); the signed lifetime covers the paid path.
-    cw.collude_lies = true;
-    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 2_048).await;
+    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 1_024).await;
     for (index, slice) in s.slices.iter().enumerate() {
         s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
     }
@@ -366,11 +357,7 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
         receipt.legs.iter().filter(|((_, fund), _)| *fund == PalwExecV2RewardFundV1::KernelFee).map(|(_, leg)| leg.amount).sum();
     assert!(fee_total > 0, "fixture must exercise actual funded fees");
     assert_eq!(fees_held, fee_total);
-    // Past the paid path the poster also pays the escrows it posted for other paid work (source claims), recomputed from the rows,
-    // and any recorded slash (none here); the session's fees are exactly the route rewards.
-    let session_jobs: Vec<Digest> = std::iter::once(&s.prefix).chain(s.slices.iter()).map(|k| k.job.id()).collect();
-    let others = other_paid_escrows(&before_final, &ledger, cw.net.kid(REGISTRANT), &session_jobs);
-    assert_eq!(poster_before - cw.net.collateral(REGISTRANT), fee_total + others, "every fee has the actual poster debit");
+    assert_eq!(poster_before - cw.net.collateral(REGISTRANT), fee_total, "every fee has the actual poster debit");
     assert_eq!(receipt.total_sompi_u128() + u128::from(native.producer.amount), u128::from(receipt.allocation_sompi));
     let counters = state.vesting_counters();
     let final_root = state.state_root();
@@ -393,7 +380,7 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     let repeated = cw.net.chain.tip_state().1;
     assert_eq!(repeated.exec_v2_reward_vesting_v1(&s.real.claim), Some(&receipt));
     assert_eq!(repeated.vesting_counters(), counters, "replayed native licence funds no second allocation");
-    assert_eq!(cw.net.collateral(REGISTRANT), poster_before - fee_total - others);
+    assert_eq!(cw.net.collateral(REGISTRANT), poster_before - fee_total);
     let replay = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&replay, "native funded-Final replay");
 
@@ -449,9 +436,7 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
     })
     .await;
     cw.net._keep.push(Box::new(receiver));
-    // The lying prefix reaches its paid Final unrefuted (its drawn seats collude); the signed lifetime covers the paid path.
-    cw.collude_lies = true;
-    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 2_048).await;
+    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 1_024).await;
     for (index, slice) in s.slices.iter().enumerate() {
         s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
     }
@@ -463,7 +448,6 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
     let counters = funded.vesting_counters();
     let funded_ledger = cw.net.ledger().to_rows();
     let poster = cw.net.collateral(REGISTRANT);
-    let poster_slashed = cw.net.slashed(REGISTRANT);
     let root_money = (cw.net.collateral(ROOT_CARD), cw.net.slashed(ROOT_CARD));
     let fork = cw.net.chain.sink();
     let fork_daa = cw.net.daa();
@@ -543,9 +527,7 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
     assert!(failed_again.exec_v2_reward_vesting_v1(&s.real.claim).is_none());
     assert_eq!(failed_again.vesting_counters().created, counters.created);
     assert_eq!(failed_again.vesting_counters().moved, counters.moved);
-    // The poster is neither refunded nor charged twice; a collusive Clean signer of the convicted prefix (the poster may be a drawn
-    // seat) is charged exactly what its recorded slash says, once.
-    assert_eq!(cw.net.collateral(REGISTRANT) + (cw.net.slashed(REGISTRANT) - poster_slashed), poster);
+    assert_eq!(cw.net.collateral(REGISTRANT), poster);
 }
 
 /// Full positive native/Panel/EXEC funds through actual signed Final, second
@@ -558,9 +540,6 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     use kaspa_consensus_core::palw_vesting_v1::palw_vesting_payout_key_v1;
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     const W: u64 = 436;
-    if let Ok(filter) = std::env::var("G14_LOG") {
-        kaspa_core::log::try_init_logger(&filter);
-    }
     // Predeclared signed lifetimes isolate the first root's exact payout window.
     // R admits both funded roots together; it does not serialize their payment.
     const FIRST_LIFETIME: u64 = 1_024;
@@ -581,11 +560,6 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             policy.max_open_claims_per_bond = 1_000;
             policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 };
             params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy });
-            // The signed covenant policy's window is the physical monetary window (`palw_monetary_material_fold_v1::policy`):
-            // the paid-source arming of the world follows this test's W.
-            if let Some(material) = params.palw_monetary_material_v1.as_mut() {
-                material.policy.window_daa = W;
-            }
             params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
             params.palw_material_income_v3 = Some(ForkActivation::new(1));
             params.sync_palw_bond_budget_v1();
@@ -906,58 +880,4 @@ async fn x8_g14_native_signed_monetary_covenant_funds_exact_fee_once_and_recover
     assert_eq!(restored.consent, row.consent);
     assert_eq!(restored.last_payment, row.last_payment);
     assert_eq!(recovered.chain.ctx.consensus.palw_material_income_hold_until_v1(root), Some(u64::MAX));
-}
-
-/// **RFC08 08-C: EXEC without the `cfg(test)` admission seam** (`exec_v2_test_admit_class_v1` is never called): the class is
-/// admitted by the registry's own rules (signed capability declarations, readiness proofs of the real inventory, the lifecycle and
-/// room the chain derives), the honest session's kernel claims reach their approved paid Finals, the native root is licensed by the
-/// chain-drawn Panel's signed receipts and reaches Final with its funded vesting rows.
-#[tokio::test]
-async fn x8_g14_no_seam_honest_root_reaches_final_and_is_funded() {
-    let mut cw = active_world().await;
-    cw.no_seam = true;
-    let mut s = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 2_048).await;
-    for (index, slice) in s.slices.iter().enumerate() {
-        s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
-    }
-    let (final_daa, _) = finalize_native_root(&mut cw, &s).await;
-    let state = cw.net.chain.tip_state().1;
-    let receipt = state.exec_v2_reward_vesting_v1(&s.real.claim).expect("the funded EXEC receipt").clone();
-    let native = state.vesting_row(&s.real.claim).expect("the native vesting row").clone();
-    assert_eq!(receipt.final_daa, final_daa);
-    assert!(receipt.total_sompi_u128() + u128::from(native.producer.amount) > 0, "the honest root is paid");
-    let replay = replay_with_lane(&cw.net, &s.lane).await;
-    cw.net.assert_same(&replay, "no-seam honest native Final replay");
-}
-
-/// **RFC08 08-C: a forged prefix without the seam is really slashed**: the root bond's prefix claim lies (its drawn seats collude,
-/// so it reaches its paid Final unrefuted), the root reaches Final, and an outsider's public proof from the read API alone
-/// convicts the prefix after Final: the prefix producer's collateral is actually slashed, the root voids and its funded rows burn.
-#[tokio::test]
-async fn x8_g14_no_seam_forged_prefix_is_convicted_and_slashed_after_final() {
-    let mut cw = active_world().await;
-    cw.no_seam = true;
-    cw.collude_lies = true;
-    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 2_048).await;
-    for (index, slice) in s.slices.iter().enumerate() {
-        s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
-    }
-    finalize_native_root(&mut cw, &s).await;
-    assert!(cw.net.chain.tip_state().1.vesting_row(&s.real.claim).is_some(), "the forged root was funded at Final");
-    let before = cw.net.collateral(s.prefix.claim.producer);
-    let api = cw.net.api().unwrap();
-    let fresh = Fresh::from_api(&api, api.ledger_root(), 0x95);
-    let proof = match fresh.check(s.prefix.claim.id, &s.prefix.claim.published(&cw.cand, &[]), &cw.cand.params) {
-        OutsiderFindingV1::Prosecute(proof) => proof,
-        other => panic!("the public read finds the forged prefix: {other:?}"),
-    };
-    let objection = cw.net.route(ACCUSER, &K::FileProof { accuser: cw.net.kid(ACCUSER), claim: s.prefix.claim.id, proof });
-    cw.net.send(vec![(ACCUSER, objection)]).await;
-    let failed = cw.net.chain.tip_state().1;
-    assert!(cw.net.ledger().claims[&s.prefix.claim.id].convicted);
-    assert!(cw.net.collateral(s.prefix.claim.producer) < before, "a real slash of the forging producer's collateral");
-    assert!(matches!(failed.exec_v2_root_v1(&s.real.claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
-    assert!(failed.vesting_row(&s.real.claim).is_none() && failed.exec_v2_reward_vesting_v1(&s.real.claim).is_none());
-    let replay = replay_with_lane(&cw.net, &s.lane).await;
-    cw.net.assert_same(&replay, "no-seam forged prefix conviction replay");
 }

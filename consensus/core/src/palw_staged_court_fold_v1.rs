@@ -32,23 +32,6 @@ impl PalwChainStateV2 {
         params: &PalwStateParamsV2,
         extras: &PalwTransitionExtrasV1,
     ) -> Result<u64, PalwStateV2Error> {
-        Self::staged_custodian_upper_v1(self.tir_classes.contains_key(&class_id), now, params, extras)
-    }
-    /// Class-independent native upper for a prospective REGISTERED TIR claim.
-    /// The claim adapter still checks registration and rederives this bound.
-    pub fn staged_registered_tir_maximum_custodians_v1(
-        now: u64,
-        params: &PalwStateParamsV2,
-        extras: &PalwTransitionExtrasV1,
-    ) -> Result<u64, PalwStateV2Error> {
-        Self::staged_custodian_upper_v1(true, now, params, extras)
-    }
-    fn staged_custodian_upper_v1(
-        registered_tir: bool,
-        now: u64,
-        params: &PalwStateParamsV2,
-        extras: &PalwTransitionExtrasV1,
-    ) -> Result<u64, PalwStateV2Error> {
         let flat = if params.panel_v3_rule_at(now) {
             u64::from(params.panel_v3().ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?.policy.seat_count)
         } else {
@@ -61,7 +44,7 @@ impl PalwChainStateV2 {
                     .ok_or(PalwStateV2Error::Overflow("prospective source shard custodians"))?,
             );
         }
-        if params.tir_shard_active_at(now) && registered_tir {
+        if params.tir_shard_active_at(now) && self.tir_classes.contains_key(&class_id) {
             maximum = maximum.max(u64::from(misaka_palw_panel::MAX_STRATIFIED_SEATS_V1));
         }
         maximum.checked_add(1).ok_or(PalwStateV2Error::Overflow("prospective source custodians"))
@@ -128,8 +111,7 @@ impl PalwChainStateV2 {
     }
     pub(super) fn staged_retirement_floor_v1(&self, claim: &Hash64, ordinary: u64) -> u64 {
         if self.claims.get(claim).is_some_and(|c| c.phase.is_terminal()) {
-            let original = self.staged_claim_contract_v1(claim).map(|c| ordinary.max(c.terms.material_until_daa)).unwrap_or(ordinary);
-            original.max(self.staged_tir_source_until_v1(*claim).unwrap_or(0))
+            self.staged_claim_contract_v1(claim).map(|c| ordinary.max(c.terms.material_until_daa)).unwrap_or(ordinary)
         } else {
             ordinary
         }
@@ -147,231 +129,15 @@ impl PalwChainStateV2 {
             _ => None,
         }
     }
-    pub(super) fn staged_owner_allowance_used_v1(&self, owner: PalwBondKeyV2, limit: usize) -> usize {
+    fn staged_owner_allowance_used_v1(&self, owner: PalwBondKeyV2, limit: usize) -> usize {
         let regular = self.staged_by_owner.range((owner, ZERO_HASH64)..).take_while(|(bond, _)| *bond == owner).take(limit).count();
-        let inventory = self
+        regular
+            + self
                 .staged_inventory_by_owner
                 .range((owner, ZERO_HASH64)..)
                 .take_while(|(bond, _)| *bond == owner)
                 .take(limit.saturating_sub(regular))
-                .count();
-        regular + inventory + self.staged_tir_acquisition_count_v1(owner, limit.saturating_sub(regular + inventory))
-    }
-    /// Separate allocation keys: one claim's old Owner row and multiple paid
-    /// sidecars cannot overwrite each other's quota or collateral exposure.
-    pub fn staged_tir_acquisition_v1(
-        &self,
-        claim: Hash64,
-        owner: PalwBondKeyV2,
-        allocation: Hash64,
-    ) -> Option<&crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1> {
-        match self.staged_courts.get(&PalwStagedCourtKeyV1::TirAcquisition(claim, owner, allocation)) {
-            Some(PalwStagedCourtRowV1::TirAcquisition(row)) => Some(row.as_ref()),
-            _ => None,
-        }
-    }
-    pub fn staged_tir_acquisition_count_v1(&self, owner: PalwBondKeyV2, limit: usize) -> usize {
-        self.staged_tir_by_owner.range((owner, ZERO_HASH64, ZERO_HASH64)..)
-            .take_while(|(bond, _, _)| *bond == owner).take(limit).count()
-    }
-    pub fn staged_tir_acquisition_exposure_v1(&self, owner: &PalwBondKeyV2) -> u128 {
-        self.staged_tir_by_owner.range((*owner, ZERO_HASH64, ZERO_HASH64)..)
-            .take_while(|(bond, _, _)| bond == owner)
-            .filter_map(|(_, claim, allocation)| self.staged_tir_acquisition_v1(*claim, *owner, *allocation))
-            .map(|row| u128::from(row.owned.contract_v1().terms.plan.deposit_sompi))
-            .fold(0u128, u128::saturating_add)
-    }
-    /// Original full-allocation escrow is distinct from both the ordinary FP
-    /// reservation and each outside owner's separately funded acquisition.
-    pub fn staged_tir_claim_exposure_v1(&self, producer: &PalwBondKeyV2) -> u128 {
-        self.staged_tir_claims_by_producer.range((*producer, ZERO_HASH64)..)
-            .take_while(|(bond, _)| bond == producer)
-            .filter_map(|(_, claim)| crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim))
-            .map(|frame| u128::from(frame.plan_v1().terms.plan.deposit_sompi))
-            .fold(0u128, u128::saturating_add)
-    }
-    /// **G14 R5: an outside owner's demand on an ORIGINAL TIR frame is open** — a pending accusation (the one
-    /// `palw_accusation_pending_v1` predicate), so no non-fraud end closes the claim neutrally while the demanded custodians still
-    /// owe their answer or the owner its collection. Rows exist only past `palw_tir_public_conviction_v1`.
-    pub fn staged_tir_public_demand_open_v1(&self, claim: &Hash64) -> bool {
-        self.staged_tir_by_claim.get(claim).is_some_and(|rows| {
-            rows.iter().any(|(_, key)| match key {
-                PalwStagedCourtKeyV1::TirAcquisition(row_claim, owner, allocation) => self
-                    .staged_tir_acquisition_v1(*row_claim, *owner, *allocation)
-                    .is_some_and(|row| row.owned.active_v1().is_some()),
-                _ => false,
-            })
-        })
-    }
-    /// **G14 R4 (node discovery): the ORIGINAL frames after `after`, in key order** — at most `min(limit, 64)` claim ids, read from
-    /// the rooted `TirClaim` rows. Metadata only; an outside verifier's worker pages through it to choose what to check.
-    pub fn staged_tir_frames_after_v1(&self, after: Option<Hash64>, limit: usize) -> Vec<Hash64> {
-        use std::ops::Bound;
-        let lower = match after {
-            Some(claim) => Bound::Excluded(PalwStagedCourtKeyV1::TirClaim(claim)),
-            None => Bound::Included(PalwStagedCourtKeyV1::TirClaim(ZERO_HASH64)),
-        };
-        self.staged_courts
-            .range((lower, Bound::Unbounded))
-            .map_while(|(key, _)| match key {
-                PalwStagedCourtKeyV1::TirClaim(claim) => Some(*claim),
-                _ => None,
-            })
-            .take(limit.min(64))
-            .collect()
-    }
-    /// **G14 R4 (node discovery): the outside owners' acquisition keys on `claim`** — `(owner, allocation)` of every live
-    /// `TirAcquisition` row (at most K_owner). Metadata only: an owner finds its own row after its Open is accepted.
-    pub fn staged_tir_acquisitions_of_v1(&self, claim: &Hash64) -> Vec<(PalwBondKeyV2, Hash64)> {
-        self.staged_tir_by_claim.get(claim).map_or_else(Vec::new, |rows| {
-            rows.iter()
-                .filter_map(|(_, key)| match key {
-                    PalwStagedCourtKeyV1::TirAcquisition(_, owner, allocation) => Some((*owner, *allocation)),
-                    _ => None,
-                })
-                .collect()
-        })
-    }
-    /// The live `TirAcquisition` rows of `claim`, with their keys (at most the rows of one frame: K_owner slot holders plus the
-    /// retired ones that wait for the material horizon).
-    fn staged_tir_owner_rows_v1(
-        &self,
-        claim: &Hash64,
-    ) -> Vec<(PalwStagedCourtKeyV1, &crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1)> {
-        self.staged_tir_by_claim.get(claim).map_or_else(Vec::new, |rows| {
-            rows.iter()
-                .filter_map(|(_, key)| match key {
-                    PalwStagedCourtKeyV1::TirAcquisition(c, owner, allocation) => {
-                        self.staged_tir_acquisition_v1(*c, *owner, *allocation).map(|row| (*key, row))
-                    }
-                    _ => None,
-                })
-                .collect()
-        })
-    }
-    /// **G14 R1/R7: outside owners holding one of `claim`'s K_owner slots** — every live `TirAcquisition` row that can still demand
-    /// or still has an unpaid demand open ([`crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::holds_owner_slot_v1`]). A row
-    /// that spent its turns, or whose idle slot a later Open reclaimed, stays in state to its horizon but holds no slot. The K_owner
-    /// cap reads this count before any duty is created.
-    pub fn staged_tir_owner_count_v1(&self, claim: &Hash64) -> u64 {
-        self.staged_tir_owner_rows_v1(claim).into_iter().filter(|(_, row)| row.owned.holds_owner_slot_v1()).count() as u64
-    }
-    /// **Lane g14-court-capacity-r2 (past `palw_court_capacity_v1`): the owner queue of `claim`** — every row that still wants a slot
-    /// (`holds_owner_slot_v1`), in arrival order `(reserved_daa, key)` (one claim: one door, so arrival order is deadline order). The
-    /// first K_owner of it are ADMITTED (they may demand); the rest WAIT, imposing no custodian load, and are admitted in this order
-    /// as the rows ahead release their slots — so an Open filed later never starts before an Open filed earlier. Each entry carries the
-    /// DAA from which it holds its slot (`admitted_since`): its Open, or the latest release (`last_progress_daa` of a row ahead that
-    /// stopped wanting — its last move, or its reclamation) that let it in.
-    pub fn staged_tir_owner_queue_v1(&self, claim: &Hash64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2, bool, u64)> {
-        let rows = self.staged_tir_owner_rows_v1(claim);
-        let mut wanting: Vec<(u64, PalwStagedCourtKeyV1, PalwBondKeyV2)> = rows
-            .iter()
-            .filter(|(_, row)| row.owned.holds_owner_slot_v1())
-            .map(|(key, row)| (row.owned.contract_v1().reserved_daa, *key, row.owned.contract_v1().owner))
-            .collect();
-        wanting.sort();
-        let mut released: Vec<u64> = rows
-            .iter()
-            .filter(|(_, row)| !row.owned.holds_owner_slot_v1())
-            .map(|(_, row)| row.owned.spent_v1().last_progress_daa)
-            .collect();
-        released.sort_unstable();
-        let cap = crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1 as usize;
-        wanting
-            .into_iter()
-            .enumerate()
-            .map(|(position, (reserved, key, owner))| {
-                // The j-th admitted row beyond the first K_owner needed the j-th release (in time) to get in.
-                let since = if position < cap {
-                    reserved
-                } else {
-                    released.get(position - cap).copied().unwrap_or(reserved).max(reserved)
-                };
-                (key, owner, position < cap, since)
-            })
-            .collect()
-    }
-    /// **Lane g14-court-capacity-r2: is the owner row `key` of `claim` admitted** (among the first K_owner of the owner queue)?
-    pub fn staged_tir_owner_admitted_v1(&self, claim: &Hash64, key: &PalwStagedCourtKeyV1) -> bool {
-        self.staged_tir_owner_queue_v1(claim).iter().any(|(k, _, admitted, _)| k == key && *admitted)
-    }
-    /// **Lane g14-court-capacity-r2: the admitted rows of `claim` idle at `now`**, idleness counted from the later of the row's own
-    /// last progress and the DAA it was admitted (a row that waited is never idle for the time it waited).
-    pub fn staged_tir_idle_admitted_owners_v1(&self, claim: &Hash64, now: u64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2)> {
-        let queue = self.staged_tir_owner_queue_v1(claim);
-        self.staged_tir_owner_rows_v1(claim)
-            .into_iter()
-            .filter_map(|(key, row)| {
-                let (_, owner, admitted, since) = *queue.iter().find(|(k, ..)| *k == key)?;
-                let idle_since = row.owned.idle_since_v1().max(since);
-                (admitted && now >= idle_since.saturating_add(row.owned.owner_idle_grace_daa_v1())).then_some((key, owner))
-            })
-            .collect()
-    }
-    /// **Lane g14-court-capacity-r2: the admitted rows of `claim` past their tenure at `now`** — only while some row WAITS: an admitted
-    /// row holds its slot at most `tenure` DAA from its admission while another verifier waits, then yields it (retired in place,
-    /// its deposit NOT forfeited — it was active; its accepted answers stay rooted, and a conviction needs no slot).
-    pub fn staged_tir_overstayed_owners_v1(&self, claim: &Hash64, now: u64, tenure: u64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2)> {
-        let queue = self.staged_tir_owner_queue_v1(claim);
-        if queue.iter().all(|(_, _, admitted, _)| *admitted) {
-            return Vec::new();
-        }
-        queue
-            .into_iter()
-            .filter(|(_, _, admitted, since)| *admitted && now >= since.saturating_add(tenure))
-            .map(|(key, owner, ..)| (key, owner))
-            .collect()
-    }
-    /// **Lane g14-court-capacity-r2: would a Demand of the owner row `key` at `now` be admitted** — it is admitted already, or the
-    /// rotation that Demand triggers (overstayed rows past `tenure` yield, idle admitted rows are reclaimed) frees enough slots for
-    /// every waiting row ahead of it and itself. What a node's owner worker asks before it signs a Demand (a refused Demand is a
-    /// wasted carrier); the fold decides.
-    pub fn staged_tir_owner_demand_admits_v1(&self, claim: &Hash64, key: &PalwStagedCourtKeyV1, now: u64, tenure: u64) -> bool {
-        let queue = self.staged_tir_owner_queue_v1(claim);
-        let Some(position) = queue.iter().position(|(k, ..)| k == key) else { return false };
-        if queue[position].2 {
-            return true;
-        }
-        let mut freed: std::collections::BTreeSet<PalwStagedCourtKeyV1> =
-            self.staged_tir_idle_admitted_owners_v1(claim, now).into_iter().map(|(k, _)| k).collect();
-        freed.extend(self.staged_tir_overstayed_owners_v1(claim, now, tenure).into_iter().map(|(k, _)| k));
-        let cap = crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1 as usize;
-        position < cap + freed.len()
-    }
-    /// **G14 R1 / G-T1: the slot an Open at DAA `now` reclaims when the frame is at K_owner** — the slot holder that has been idle
-    /// longest ([`crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::owner_idle_at_v1`]; ties by key), or `None` when every
-    /// holder is still making progress.
-    pub fn staged_tir_idle_owner_v1(&self, claim: &Hash64, now: u64) -> Option<(PalwStagedCourtKeyV1, PalwBondKeyV2)> {
-        self.staged_tir_owner_rows_v1(claim)
-            .into_iter()
-            .filter(|(_, row)| row.owned.owner_idle_at_v1(now))
-            .min_by_key(|(key, row)| (row.owned.idle_since_v1(), *key))
-            .map(|(key, row)| (key, row.owned.contract_v1().owner))
-    }
-    /// **G14 R1 / G-T1: can an independent bond Open an owner acquisition on `claim` at DAA `now`?** — a free slot under K_owner, or
-    /// an idle holder whose slot the Open reclaims. Metadata for the node's owner worker; the fold decides.
-    pub fn staged_tir_owner_slot_open_v1(&self, claim: &Hash64, now: u64) -> bool {
-        self.staged_tir_owner_count_v1(claim) < crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1
-            || self.staged_tir_idle_owner_v1(claim, now).is_some()
-    }
-    /// **G14 R6: an ORIGINAL TIR frame's d0 conviction door is still open at `now`** — `[accepted, collect_until)` of the frame's
-    /// own terms. Gate C waits on it (never a deadline failure), and the claim's `Final` floor is its close.
-    pub fn palw_tir_public_prosecution_open_v1(&self, claim: &Hash64, now: u64) -> bool {
-        crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
-            .is_some_and(|frame| now < frame.plan_v1().terms.collect_until_daa)
-    }
-    pub fn staged_tir_source_until_v1(&self, claim: Hash64) -> Option<u64> {
-        self.staged_tir_by_claim.get(&claim).and_then(|rows| rows.last().map(|(until, _)| *until))
-    }
-    pub fn staged_tir_preparation_v1(
-        &self,
-        claim: Hash64,
-        allocation: Hash64,
-    ) -> Option<&crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1> {
-        match self.staged_courts.get(&PalwStagedCourtKeyV1::TirPreparation(claim, allocation)) {
-            Some(PalwStagedCourtRowV1::TirPreparation(row)) => Some(row.as_ref()),
-            _ => None,
-        }
+                .count()
     }
     pub fn staged_original_job_v1(
         &self,
@@ -604,7 +370,6 @@ impl PalwChainStateV2 {
         Ok((page, None))
     }
     pub fn staged_bond_exit_held_v1(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
-        if self.court_service_holds_bond_v1(bond) || self.court_archive_holds_bond_v1(bond) { return true; }
         now.checked_add(1).is_some_and(|after| {
             self.staged_holds
                 .range((*bond, after, PalwStagedCourtKeyV1::Claim(ZERO_HASH64))..)
@@ -652,90 +417,6 @@ impl PalwChainStateV2 {
             }
             page.push((*claim, *owner, *seed));
             cursor = Some((*at, *claim, *owner, *seed));
-        }
-        Ok((page, None))
-    }
-    /// Fixed original preparation duties, independent of owner Opens. This is
-    /// metadata discovery only, not an admission, work or sanction credential.
-    pub fn staged_tir_preparation_duties_after_v1(
-        &self,
-        signer: PalwBondKeyV2,
-        now: u64,
-        after: Option<(u64, Hash64, Hash64)>,
-        limit: usize,
-    ) -> Result<(Vec<(Hash64, Hash64)>, Option<(u64, Hash64, Hash64)>), String> {
-        use std::ops::Bound;
-        if self.last_point().is_none_or(|p| p.daa_score != now) || limit == 0 {
-            return Err("TIR preparation page changes accepted snapshot clock or finite capacity".into());
-        }
-        let Some(first_live) = now.checked_add(1) else { return Ok((Vec::new(), None)) };
-        let lower = match after {
-            Some((at, claim, allocation)) if at >= first_live => Bound::Excluded((signer, at, claim, allocation)),
-            _ => Bound::Included((signer, first_live, ZERO_HASH64, ZERO_HASH64)),
-        };
-        let cap = limit.min(64);
-        let mut page = Vec::with_capacity(cap);
-        let mut cursor = None;
-        for (_, at, claim, allocation) in self.staged_tir_preparers.range((lower, Bound::Unbounded))
-            .take_while(|(bond, ..)| *bond == signer).take(cap + 1)
-        {
-            if page.len() == cap { return Ok((page, cursor)); }
-            let row = self.staged_tir_preparation_v1(*claim, *allocation)
-                .ok_or("TIR preparation index lost its original claim-wide row")?;
-            let c = row.preparation.contract_v1();
-            if c.preparation_until_daa != *at || now < c.original_accepted_daa || now >= c.material_until_daa
-                || !row.preparation.pending_signers_v1().contains(&signer)
-            {
-                return Err("TIR preparation index differs from original unpaid literal duty".into());
-            }
-            page.push((*claim, *allocation));
-            cursor = Some((*at, *claim, *allocation));
-        }
-        Ok((page, None))
-    }
-    /// Accepted-snapshot EDF page over TIR acquisition's exact outstanding
-    /// literal slots. Metadata only, at most64 rows plus one indexed lookahead.
-    /// This reader cannot create a grant, paid allocation or collection right.
-    pub fn staged_tir_duties_after_v1(
-        &self,
-        signer: PalwBondKeyV2,
-        now: u64,
-        after: Option<(u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>,
-        limit: usize,
-    ) -> Result<
-        (Vec<(Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>, Option<(u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>),
-        String,
-    > {
-        use std::ops::Bound;
-        if self.last_point().is_none_or(|p| p.daa_score != now) || limit == 0 {
-            return Err("TIR duty page changes accepted snapshot clock or finite capacity".into());
-        }
-        let Some(first_live) = now.checked_add(1) else { return Ok((Vec::new(), None)) };
-        let lower = match after {
-            Some((at, claim, owner, allocation, turn, demand)) if at >= first_live => {
-                Bound::Excluded((signer, at, claim, owner, allocation, turn, demand))
-            }
-            _ => Bound::Included((signer, first_live, ZERO_HASH64, PALW_BOND_KEY_V2_MIN, ZERO_HASH64, 0, ZERO_HASH64)),
-        };
-        let cap = limit.min(64);
-        let mut page = Vec::with_capacity(cap);
-        let mut cursor = None;
-        for (_, at, claim, owner, allocation, turn, demand) in self.staged_tir_responders
-            .range((lower, Bound::Unbounded)).take_while(|(bond, ..)| *bond == signer).take(cap + 1)
-        {
-            if page.len() == cap { return Ok((page, cursor)); }
-            let row = self.staged_tir_acquisition_v1(*claim, *owner, *allocation)
-                .ok_or("TIR duty index has no literal allocation row")?;
-            let c = row.owned.contract_v1();
-            let pending = row.owned.active_v1().ok_or("TIR duty index lost its accepted demand")?;
-            if pending.collected || pending.respond_until_daa != *at || pending.turn != *turn || pending.demand_id != *demand
-                || !row.owned.response_custodians_v1().contains(&signer) || pending.slots.get(&signer).is_some_and(|slot| slot.finished.is_some())
-                || now < c.reserved_daa || now >= c.terms.material_until_daa
-            {
-                return Err("TIR duty index differs from exact unpaid signer/source/turn/clock".into());
-            }
-            page.push((*claim, *owner, *allocation, *turn, *demand));
-            cursor = Some((*at, *claim, *owner, *allocation, *turn, *demand));
         }
         Ok((page, None))
     }
@@ -952,362 +633,22 @@ impl TransitionBuilder<'_> {
             },
         }))))
     }
-    /// Proposed native journal adapter. Production block/admission callers are
-    /// still absent. Recovery cannot clear a binding, move a duty deadline,
-    /// release collateral, or turn quota into default permission.
-    pub(super) fn recover_court_service_supply_v1(
-        &mut self,
-        ctx: &PalwBlockContextV2,
-    ) -> Result<Vec<crate::palw_court_service_state_v2::ClaimServiceRecovery>, PalwStateV2Error> {
-        let Some(old) = self.state.court_service_state_v1() else { return Ok(Vec::new()) };
-        if old.book.last_observed_daa != Some(ctx.daa_score) {
-            return Err(PalwStateV2Error::CarriageInconsistent("court service recovery needs the current accepting-block supply clock".into()));
-        }
-        let mut next = old.clone();
-        // G14 lane r6-d1-release: the sweep keeps causal order along the row's recorded edges (none on a legacy row).
-        let edges = self.state.court_service_causal_edges_v1();
-        let report = next.repair_missing_supply_ordered_v1(&edges).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        if &next != old {
-            self.write_court_service_state_v1(next)?;
-        }
-        Ok(report)
-    }
-
-    /// **G14 lane r6-d1-release: write the book's live state in the row variant it already has** (the released `CourtServiceV3`
-    /// keeps its records and edges; a legacy row stays legacy). Through the one journalled writer.
-    pub(super) fn write_court_service_state_v1(
-        &mut self,
-        next: crate::palw_court_service_state_v2::CourtServiceStateV2,
-    ) -> Result<(), PalwStateV2Error> {
-        let row = match self.state.court_service_row_v3_v1() {
-            Some(released) => {
-                let mut row = released.clone();
-                row.state = next;
-                PalwStagedCourtRowV1::CourtServiceV3(Box::new(row).into())
-            }
-            None => PalwStagedCourtRowV1::CourtService(Box::new(next).into()),
-        };
-        self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService, Some(row))
-    }
-
-    pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
-        self.check_archive_progress_write_v1(&key,new.as_ref())?;
-        self.check_material_intake_write_v1(&key,new.as_ref())?;
-        if matches!(key,PalwStagedCourtKeyV1::CourtSharedBottom(_)) || matches!(&new,Some(PalwStagedCourtRowV1::CourtSharedBottom(_))) {
-            let Some(PalwStagedCourtRowV1::CourtSharedBottom(r))=&new else {
-                return Err(PalwStateV2Error::CarriageInconsistent("shared bottom evidence cannot be removed or retyped".into()));
-            };
-            r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
-            if let Some(old)=self.state.staged_court_row_v1(&key) {
-                if Some(old)!=new.as_ref(){return Err(PalwStateV2Error::CarriageInconsistent("shared bottom evidence is immutable".into()));}
-            } else {
-                if Some(r.rules)!=self.extras.native_court_rules_v1 || self.state.bond(&r.control.filer).is_none_or(|b|b.pubkey!=r.filer_pubkey) {
-                    return Err(PalwStateV2Error::CarriageInconsistent("shared bottom does not capture native rules/key".into()));
-                }
-                match r.position {
-                    None=>crate::palw_court_shared_tir_bottom_v1::check_shared_tir_bottom_v1(&self.state,self.params,&r.rules,&r.control)
-                        .map(|_|()),
-                    // Lane r6-p2-shared: a row-v2 (single-position) bottom is written only past `palw_tir_bounded_door_v1`.
-                    Some(position)=>if !self.extras.tir_bounded_door_active {
-                        Err("shared position bottom below palw_tir_bounded_door_v1".to_string())
-                    } else {
-                        let positioned=crate::palw_court_shared_tir_bottom_v1::SignedSharedTirPositionBottomV2 {control:r.control.clone(),position};
-                        crate::palw_court_shared_tir_bottom_v1::check_shared_tir_position_bottom_v2(&self.state,self.params,&r.rules,&positioned)
-                            .map(|_|())
-                    },
-                }.map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-        }
-        if let PalwStagedCourtKeyV1::CourtSharedRound(..) = key {
-            let Some(PalwStagedCourtRowV1::CourtSharedRound(r)) = &new else {
-                return Err(PalwStateV2Error::CarriageInconsistent("canonical shared round cannot be removed or retyped".into()));
-            };
-            r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
-            if let Some(old)=self.state.staged_court_row_v1(&key) {
-                if Some(old)!=new.as_ref(){return Err(PalwStateV2Error::CarriageInconsistent("canonical shared round is immutable".into()));}
-            } else {
-                if Some(r.rules)!=self.extras.native_court_rules_v1
-                    || self.state.bond(&r.control.signer).is_none_or(|b|b.pubkey!=r.signer_pubkey) {
-                    return Err(PalwStateV2Error::CarriageInconsistent("shared round does not capture native rules/key".into()));
-                }
-                // Lane r6-p2-shared: a version-2 (position) round is written only past `palw_tir_bounded_door_v1`.
-                if r.control.version==crate::palw_court_shared_tir_round_v1::SHARED_TIR_POSITION_ROUND_VERSION_V2 && !self.extras.tir_bounded_door_active {
-                    return Err(PalwStateV2Error::CarriageInconsistent("shared position round below palw_tir_bounded_door_v1".into()));
-                }
-                crate::palw_court_shared_tir_round_v1::check_shared_tir_round_v1(&self.state,self.params,&r.rules,&r.control)
-                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-        }
-        if let PalwStagedCourtKeyV1::CourtSharedRoot(..) = key {
-            let Some(PalwStagedCourtRowV1::CourtSharedRoot(r)) = &new else {
-                return Err(PalwStateV2Error::CarriageInconsistent("canonical shared root cannot be removed or retyped".into()));
-            };
-            r.check(&key).and_then(|()| r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
-            if let Some(old) = self.state.staged_court_row_v1(&key) {
-                if Some(old) != new.as_ref() { return Err(PalwStateV2Error::CarriageInconsistent("canonical shared root is immutable".into())); }
-            } else {
-                if self.state.bond(&r.control.signer).is_none_or(|bond| bond.pubkey != r.signer_pubkey) {
-                    return Err(PalwStateV2Error::CarriageInconsistent("shared root does not capture native producer key".into()));
-                }
-                if Some(r.rules) != self.extras.native_court_rules_v1 {
-                    return Err(PalwStateV2Error::CarriageInconsistent("shared root rules are not native accepting rules".into()));
-                }
-                crate::palw_court_shared_tir_root_v1::check_shared_tir_root_v1(&self.state,self.params,&r.rules,&r.control)
-                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-        }
-        let archive_pruned=self.archive_prune_removes_v1(&key,new.as_ref());
-        if let PalwStagedCourtKeyV1::CourtCloseReceipt(..) = key && !archive_pruned {
-            if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
-                return Err(PalwStateV2Error::CarriageInconsistent("signed close receipt is immutable".into()));
-            }
-            let Some(PalwStagedCourtRowV1::CourtCloseReceipt(r))=&new else {
-                return Err(PalwStateV2Error::CarriageInconsistent("signed close receipt cannot be removed or retyped".into()));
-            };
-            if self.state.staged_court_row_v1(&key).is_none() {
-                if r.rules!=self.extras.native_court_rules_v1 {
-                    return Err(PalwStateV2Error::CarriageInconsistent("receipt rules are not the accepting native context".into()));
-                }
-                if !matches!(self.court_end_evidence.as_deref(),Some(crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {point,object})
-                    if *point==r.point && object.as_ref()==r.declaration.as_ref()) {
-                    return Err(PalwStateV2Error::CarriageInconsistent("close receipt is not this native declaration event".into()));
-                }
-            }
-            r.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        }
-        if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key && !archive_pruned {
-            let Some(PalwStagedCourtRowV1::CourtEndArchive(a)) = &new else {
-                return Err(PalwStateV2Error::CarriageInconsistent("court archive cannot be removed or retyped".into()));
-            };
-            if let Some(old) = self.state.staged_court_row_v1(&key) {
-                let PalwStagedCourtRowV1::CourtEndArchive(old)=old else {
-                    return Err(PalwStateV2Error::CarriageInconsistent("court archive foreign row".into()));
-                };
-                a.check_material_extension(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-            a.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        }
-        match &new {
-            Some(PalwStagedCourtRowV1::CourtSharedResponse(r)) => {
-                r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
-                    return Err(PalwStateV2Error::CarriageInconsistent("shared data response is immutable".into()));
-                }
-            },
-            Some(PalwStagedCourtRowV1::CourtSharedStream(s)) => {
-                s.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                let old=match self.state.staged_court_row_v1(&key) {
-                    Some(PalwStagedCourtRowV1::CourtSharedStream(old))=>Some(old.as_ref()),None=>None,
-                    _=>return Err(PalwStateV2Error::CarriageInconsistent("shared stream foreign key".into())),
-                };
-                s.check_advance(&self.state,old).map_err(PalwStateV2Error::CarriageInconsistent)?;
-            },
-            Some(PalwStagedCourtRowV1::CourtSharedChunk(c)) => {
-                c.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                let s=crate::palw_court_shared_tir_stream_state_v1::stream(&self.state,c.slot_id).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                c.check_binding(s).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                if let Some(old)=self.state.staged_court_row_v1(&key) {
-                    if Some(old)!=new.as_ref() {return Err(PalwStateV2Error::CarriageInconsistent("shared chunk immutable".into()));}
-                } else if s.finished.is_some() || c.offset!=s.accepted_bytes || c.previous!=s.head || c.daa<s.last_daa {
-                    return Err(PalwStateV2Error::CarriageInconsistent("shared chunk does not advance current prefix".into()));
-                }
-            },
-            Some(PalwStagedCourtRowV1::CourtSharedContext(c)) => {
-                c.check(&key).and_then(|()| c.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
-                    return Err(PalwStateV2Error::CarriageInconsistent("shared context is immutable".into()));
-                }
-            },
-            Some(PalwStagedCourtRowV1::CourtSharedQuery(q)) => {
-                q.check(&key).and_then(|()|q.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                match self.state.staged_court_row_v1(&key) {
-                    Some(PalwStagedCourtRowV1::CourtSharedQuery(old)) => {
-                        if !q.same_opening(old) || old.body.is_some() && old.body!=q.body {
-                            return Err(PalwStateV2Error::CarriageInconsistent("shared opening/data cannot be replaced".into()));
-                        }
-                    },
-                    Some(_)=>return Err(PalwStateV2Error::CarriageInconsistent("shared query key contains foreign row".into())),
-                    None=>{},
-                }
-            },
-            Some(PalwStagedCourtRowV1::CourtSharedIds(ids)) => {
-                ids.check(&key).and_then(|()|ids.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
-                    return Err(PalwStateV2Error::CarriageInconsistent("sealed shared IDs are immutable".into()));
-                }
-            },_=>{},
-        }
-        if let Some(PalwStagedCourtRowV1::CourtDutyClock(clock)) = &new {
-            clock.check(&key).and_then(|()| clock.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
-            if self.state.staged_court_row_v1(&key).is_some_and(|old| Some(old) != new.as_ref()) {
-                return Err(PalwStateV2Error::CarriageInconsistent("native duty clock is immutable".into()));
-            }
-        }
-        // G14 lane r6-d1-release: the book's live state, from either row variant (`CourtServiceV3` is the released form).
-        let new_service: Option<&crate::palw_court_service_state_v2::CourtServiceStateV2> = match &new {
-            Some(PalwStagedCourtRowV1::CourtService(service)) if key == PalwStagedCourtKeyV1::CourtService => Some(service.as_ref()),
-            Some(PalwStagedCourtRowV1::CourtServiceV3(row)) if key == PalwStagedCourtKeyV1::CourtService => Some(&row.state),
-            _ => None,
-        };
-        if key == PalwStagedCourtKeyV1::CourtService {
-            if let Some(PalwStagedCourtRowV1::CourtServiceV3(row)) = &new {
-                // The released form is new consensus behaviour: dormant below the conviction fence.
-                if !self.extras.tir_public_conviction_active {
-                    return Err(PalwStateV2Error::CarriageInconsistent(
-                        "the released court service row is written only past palw_tir_public_conviction_v1".into(),
-                    ));
-                }
-                row.check().map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-            if let Some(old) = self.state.court_service_state_v1() {
-                let old_released = self.state.court_service_row_v3_v1().is_some();
-                match &new {
-                    Some(PalwStagedCourtRowV1::CourtService(service)) if !old_released => {
-                        service.check_retains_unresolved(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                    }
-                    Some(PalwStagedCourtRowV1::CourtService(_)) => {
-                        return Err(PalwStateV2Error::CarriageInconsistent("a released service book cannot return to the legacy row".into()));
-                    }
-                    Some(PalwStagedCourtRowV1::CourtServiceV3(row)) => {
-                        let lifted = self.state.court_service_as_v3_v1()
-                            .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service book vanished under its writer".into()))?;
-                        row.check_transition_from_v1(&lifted).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                    }
-                    _ if !old.claims.is_empty() || old_released => {
-                        return Err(PalwStateV2Error::CarriageInconsistent("unresolved service book cannot be removed or retyped".into()));
-                    }
-                    _ => {}
-                }
-            }
-            for row in self.state.staged_courts.values() {
-                if let PalwStagedCourtRowV1::CourtSharedContext(c)=row {
-                    let Some(service)=new_service else {
-                        return Err(PalwStateV2Error::CarriageInconsistent("shared data retains service binding".into()));
-                    };
-                    c.check_binding(service).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                }
-                if let PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
-                    let Some(service) = new_service else {
-                        return Err(PalwStateV2Error::CarriageInconsistent("unresolved duty history retains service binding".into()));
-                    };
-                    clock.check_service_binding(service).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                }
-            }
-        }
-        if let Some(service) = new_service {
-            service.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        }
-        if let PalwStagedCourtKeyV1::Claim(claim) = key
-            && let Some(binding) = self.state.court_service_state_v1().and_then(|s| s.claims.get(&claim))
-        {
-            let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, claim)
-                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service semantic update lost original frame".into()))?;
-            if frame.plan_v1().semantic.is_some()
-                && let Some(row) = new.as_ref()
-            {
-                let PalwStagedCourtRowV1::ClaimBundle(bundle) = row else {
-                    return Err(PalwStateV2Error::CarriageInconsistent("service semantic dependency cannot change row type".into()));
-                };
-                row.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                let old = self.state.staged_bundle_contract_v1(claim)
-                    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service semantic update lost signed dependency".into()))?;
-                if old.history_custody.pledge != bundle.history_custody.pledge
-                    || old.original_binding != bundle.original_binding
-                {
-                    return Err(PalwStateV2Error::CarriageInconsistent("service semantic original pledge/binding is immutable".into()));
-                }
-                let until = crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame, binding.hard_deadline_daa)
-                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
-                crate::palw_court_service_state_v2::require_tir_service_semantic_custody_v1(frame, bundle, until)
-                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-        }
-        if new.is_none() && !archive_pruned && self.state.court_service_holds_material_v1(&key) {
-            return Err(PalwStateV2Error::CarriageInconsistent("unresolved court service retains original evidence".into()));
-        }
-        self.reserve_map_row_v1(&key, &new, |s| &s.staged_courts, false, "native staged_courts writer")?;
-        self.reserve_staged_indices_v1(&key, &new)?;
+    pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) {
         let old = match &new {
             Some(row) => self.state.staged_courts.insert(key, row.clone()),
             None => self.state.staged_courts.remove(&key),
         };
         update_indices(&mut self.state, key, old.as_ref(), new.as_ref());
-        if key == PalwStagedCourtKeyV1::CourtService {
-            let service = match &new {
-                Some(PalwStagedCourtRowV1::CourtService(service)) => Some(service.as_ref()),
-                Some(PalwStagedCourtRowV1::CourtServiceV3(row)) => Some(&row.state),
-                _ => None,
-            };
-            if let Some(service) = service {
-                // Do not re-date unrelated claims midway through an accepting block. G14 lane r6-d1-release (user decision D1): a
-                // bound claim keeps its normal (pre-Final / Final) deadline — DL-1 arms it — and only a TERMINAL bound claim owes
-                // none (its retirement waits for the release, which re-arms it).
-                let held_terminal: Vec<Hash64> = service
-                    .claims
-                    .keys()
-                    .filter(|claim| self.state.claims.get(*claim).is_some_and(|c| c.phase.is_terminal()))
-                    .copied()
-                    .collect();
-                self.state.deadlines.retain(|(_, claim)| !held_terminal.contains(claim));
-            }
-        }
         if old != new {
             self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old, new });
         }
-        Ok(())
     }
-    /// RFC-0006: what `update_indices` allocates for this write, bounded from the ACTUAL old and new rows without calling the
-    /// Vec-returning index helpers. Every derived index row (responder/prefix/selected/flat/history/TIR/preparer/hold) is a
-    /// projection of one nested typed membership of the row, so `native_members_v1() + 1` bounds each family's output; the
-    /// helpers' scratch Vecs (old and new) and the new index nodes (sized by the largest index tuple) are admitted together.
-    fn reserve_staged_indices_v1(
-        &mut self,
-        key: &PalwStagedCourtKeyV1,
-        new: &Option<PalwStagedCourtRowV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1};
-        if !self.native_writers_tracking_v1() {
-            return Ok(());
-        }
-        let members = |row: Option<&PalwStagedCourtRowV1>| -> Result<u64, PalwStateV2Error> {
-            row.map_or(Some(0), NativeHeapV1::native_members_v1).and_then(|m| m.checked_add(1)).ok_or_else(|| {
-                PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwStagedCourtRowV1>("staged index membership count"))
-            })
-        };
-        let old_m = members(self.state.staged_courts.get(key))?;
-        let new_m = members(new.as_ref())?;
-        // The widest index tuple (`staged_tir_responders`) bounds every family's element and node size.
-        type Widest = (PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64);
-        const FAMILIES: u64 = 9;
-        let mut q = super::native_writers::NativeWriteQuoteV1::new("native staged court index scratch and nodes");
-        for m in [old_m, new_m] {
-            for _ in 0..FAMILIES {
-                q.grown::<Widest>(m)?;
-            }
-        }
-        let nodes = new_m.checked_mul(FAMILIES).ok_or_else(|| {
-            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwStagedCourtRowV1>("staged index node count"))
-        })?;
-        q.member::<Widest, ()>(nodes)?;
-        // `staged_tir_by_claim` may add an outer bucket for a new claim.
-        q.member::<Hash64, BTreeSet<(u64, PalwStagedCourtKeyV1)>>(u64::from(new.is_some()))?;
-        // G14 lane r5-f02-wire: the per-claim court-service index adds at most one entry and one outer bucket, and only for the two
-        // row kinds it projects (every other write is quoted exactly as before).
-        if let Some(row) = new.as_ref()
-            && crate::palw_staged_court_state_v1::court_service_claim_index_entry_v1(*key, row).is_some()
-        {
-            q.member::<Hash64, BTreeSet<(u8, u64, PalwStagedCourtKeyV1)>>(1)?;
-            q.member::<(u8, u64, PalwStagedCourtKeyV1), ()>(1)?;
-        }
-        self.admit_native_write_v1(q)
-    }
-    pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+    pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedCourtRowV1>) {
         if let Some(c) = contract {
-            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(c))?;
+            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(c));
         }
-        Ok(())
     }
-    fn replace_staged_contract_v1(&mut self, claim: Hash64, contract: PalwStagedClaimContractV1) -> Result<(), PalwStateV2Error> {
+    fn replace_staged_contract_v1(&mut self, claim: Hash64, contract: PalwStagedClaimContractV1) {
         let row = match self.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(claim)) {
             Some(PalwStagedCourtRowV1::ClaimBundle(bundle)) => {
                 let mut bundle = bundle.clone();
@@ -1316,25 +657,23 @@ impl TransitionBuilder<'_> {
             }
             _ => PalwStagedCourtRowV1::Claim(contract),
         };
-        self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(row))?;
-        Ok(())
+        self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(row));
     }
-    pub(super) fn record_staged_panel_v1(&mut self, claim: Hash64, panel: &PalwPanelStateV2) -> Result<(), PalwStateV2Error> {
+    pub(super) fn record_staged_panel_v1(&mut self, claim: Hash64, panel: &PalwPanelStateV2) {
         if let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() {
             contract.panel.extend(panel.seats.iter().map(|seat| seat.bond));
             if let Some(custody) = &mut contract.prefix_custody {
                 custody.expected_panel = panel.seats.iter().map(|seat| seat.bond).collect();
             }
-            self.replace_staged_contract_v1(claim, contract)?;
+            self.replace_staged_contract_v1(claim, contract);
             if let Some(PalwStagedCourtRowV1::ClaimBundle(mut bundle)) =
                 self.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(claim)).cloned()
             {
                 bundle.history_custody.custody.expected_panel =
                     panel.seats.iter().map(|seat| seat.bond).filter(|bond| *bond != bundle.history_custody.producer).collect();
-                self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::ClaimBundle(bundle)))?;
+                self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::ClaimBundle(bundle)));
             }
         }
-        Ok(())
     }
     /// Called only on actual signed Valid credit edges; ordinary membership/Sampled pay is
     /// insufficient. Qualification remains claim-rooted after duty/receipt pruning.
@@ -1344,15 +683,15 @@ impl TransitionBuilder<'_> {
         receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
         credited: &[PalwBondKeyV2],
         now: u64,
-    ) -> Result<(), PalwStateV2Error> {
+    ) {
         if self.extras.staged_public_court.is_none() {
-            return Ok(());
+            return;
         }
         let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() else {
-            return Ok(());
+            return;
         };
         let Some(custody) = &mut contract.prefix_custody else {
-            return Ok(());
+            return;
         };
         let mut changed = false;
         for receipt in receipts.iter().filter(|r| {
@@ -1362,9 +701,8 @@ impl TransitionBuilder<'_> {
             changed |= custody.qualify(claim, receipt, now);
         }
         if changed {
-            self.replace_staged_contract_v1(claim, contract)?;
+            self.replace_staged_contract_v1(claim, contract);
         }
-        Ok(())
     }
 }
 
@@ -1592,11 +930,7 @@ pub(super) fn open(
             return Err(stage_refused(seed.claim, "X3: a paid stage cannot extend a claim's deadlines fixed at acceptance"));
         }
         extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
-        // G14 U06 (`palw_court_clock_v2`): a claim accepted past the fence reads its clock from acceptance and its dispute record
-        // (a paid stage's retention never moves it); older claims keep the old formula over the extended retention.
-        let hard = crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
-            b.params,
-            b.state.legacy_disputes.get(&seed.claim),
+        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
             &extended_claim,
             palw_da_disclose_window_daa_v1(b.params),
         );
@@ -1608,11 +942,7 @@ pub(super) fn open(
         if bundle.is_none() {
             b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged prefix court", ctx.daa_score)?;
         }
-        let funding_plan = if bundle.is_some() { extended_terms.plan } else { plan };
-        let funded = funding_plan
-            .rent_sompi
-            .checked_add(funding_plan.deposit_sompi)
-            .ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
+        let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
         let encoded = borsh::to_vec(seed).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
         let message = seed.signing_message();
@@ -1639,17 +969,21 @@ pub(super) fn open(
         .map_err(|e| stage_refused(seed.claim, e))?;
         let row = if let Some(acquisition) = acquisition {
             let custody = public_custody.expect("checked above");
-            let row = if bundle.is_some() {
-                crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit_with_allocation_v1(
-                    row, contract.producer, custody, acquisition, extended_terms, ladder, funded,
+            PalwStagedCourtRowV1::PublicPrefix(
+                Box::new(
+                    crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
+                        row,
+                        contract.producer,
+                        custody,
+                        acquisition,
+                        extended_terms,
+                        ladder,
+                        funded,
+                    )
+                    .map_err(|e| stage_refused(seed.claim, e))?,
                 )
-            } else {
-                crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
-                    row, contract.producer, custody, acquisition, extended_terms, ladder, funded,
-                )
-            }
-            .map_err(|e| stage_refused(seed.claim, e))?;
-            PalwStagedCourtRowV1::PublicPrefix(Box::new(row).into())
+                .into(),
+            )
         } else {
             PalwStagedCourtRowV1::Prefix(Box::new(row).into())
         };
@@ -1658,11 +992,11 @@ pub(super) fn open(
             b.write_staged_row_v1(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
                 Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
-            )?;
+            );
             b.write_claim(seed.claim, Some(extended_claim))?;
             if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
-                b.write_legacy_dispute(seed.claim, Some(dispute))?;
+                b.write_legacy_dispute(seed.claim, Some(dispute));
             }
             b.da_rekey_v1(seed.claim, until, ctx.daa_score)?;
             if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned()
@@ -1676,7 +1010,7 @@ pub(super) fn open(
             for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
                 if lock.expiry_daa < until {
                     lock.expiry_daa = until;
-                    b.write_slashable_lock(lock_key, Some(lock))?;
+                    b.write_slashable_lock(lock_key, Some(lock));
                 }
             }
         }
@@ -1716,11 +1050,7 @@ pub(super) fn open(
             return Err(stage_refused(seed.claim, "X3: a paid stage cannot extend a claim's deadlines fixed at acceptance"));
         }
         extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
-        // G14 U06 (`palw_court_clock_v2`): a claim accepted past the fence reads its clock from acceptance and its dispute record
-        // (a paid stage's retention never moves it); older claims keep the old formula over the extended retention.
-        let hard = crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
-            b.params,
-            b.state.legacy_disputes.get(&seed.claim),
+        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
             &extended_claim,
             palw_da_disclose_window_daa_v1(b.params),
         );
@@ -1767,11 +1097,11 @@ pub(super) fn open(
             b.write_staged_row_v1(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
                 Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
-            )?;
+            );
             b.write_claim(seed.claim, Some(extended_claim))?;
             if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
-                b.write_legacy_dispute(seed.claim, Some(dispute))?;
+                b.write_legacy_dispute(seed.claim, Some(dispute));
             }
             b.da_rekey_v1(seed.claim, until, ctx.daa_score)?;
             if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned()
@@ -1787,7 +1117,7 @@ pub(super) fn open(
             for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
                 if lock.expiry_daa < until {
                     lock.expiry_daa = until;
-                    b.write_slashable_lock(lock_key, Some(lock))?;
+                    b.write_slashable_lock(lock_key, Some(lock));
                 }
             }
         }
@@ -1984,7 +1314,7 @@ fn write_admitted_family_v1(
     } else {
         row
     };
-    b.write_staged_row_v1(key, Some(row))?;
+    b.write_staged_row_v1(key, Some(row));
     Ok(())
 }
 pub(super) fn leaf(
@@ -2253,7 +1583,7 @@ fn history_control_v1(
             return Err(stage_refused(movement.claim, "history grant is unsigned, duplicated or outside exact original custody"));
         }
         contract.history_custody.check_v1(&contract.claim.panel).map_err(|e| stage_refused(movement.claim, e))?;
-        b.write_staged_row_v1(claim_key, Some(PalwStagedCourtRowV1::ClaimBundle(contract)))?;
+        b.write_staged_row_v1(claim_key, Some(PalwStagedCourtRowV1::ClaimBundle(contract)));
         return Ok(());
     }
     let Action::HistoryRecovery { stage_seed, action, .. } = &movement.action else {
@@ -2265,15 +1595,8 @@ fn history_control_v1(
     };
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
-            b.params,
-            b.state.legacy_disputes.get(&movement.claim),
-            b.state.claim(&movement.claim),
-            palw_da_disclose_window_daa_v1(b.params),
-            bundle.plan.terms.accepted_daa,
-            bundle.plan.terms.collect_until_daa,
-            ctx.daa_score,
-        )
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
     {
         return Err(stage_refused(movement.claim, "history recovery changes original paid frame or horizon"));
     }
@@ -2369,7 +1692,7 @@ fn artifact_inventory_control_v1(
                 "public tokenizer EOF inventory",
                 ctx.daa_score,
             )?;
-            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(Box::new(row).into())))?;
+            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(Box::new(row).into())));
         }
         Action::ArtifactInventoryMove(action) => {
             let Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(mut row)) = b.state.staged_courts.get(&key).cloned() else {
@@ -2388,11 +1711,11 @@ fn artifact_inventory_control_v1(
                     b.write_staged_row_v1(
                         PalwStagedCourtKeyV1::Inventory(movement.claim),
                         Some(PalwStagedCourtRowV1::ArtifactInventory(certificate)),
-                    )?;
+                    );
                 }
-                b.write_staged_row_v1(key, None)?;
+                b.write_staged_row_v1(key, None);
             } else {
-                b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(row)))?;
+                b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(row)));
             }
         }
         _ => return Err(stage_refused(movement.claim, "not an artifact inventory action")),
@@ -2416,15 +1739,8 @@ fn selected_control_v1(
     }
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
-            b.params,
-            b.state.legacy_disputes.get(&movement.claim),
-            b.state.claim(&movement.claim),
-            palw_da_disclose_window_daa_v1(b.params),
-            bundle.plan.terms.accepted_daa,
-            bundle.plan.terms.collect_until_daa,
-            ctx.daa_score,
-        )
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
     {
         return Err(stage_refused(movement.claim, "selected source changes original paid frame identity or clock"));
     }
@@ -2529,7 +1845,7 @@ fn selected_control_v1(
     }
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     if initial {
-        b.write_staged_row_v1(key, Some(row))?;
+        b.write_staged_row_v1(key, Some(row));
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
         let new_index = selected_response_index_rows_v1(&row);
@@ -2559,15 +1875,8 @@ fn native_selected_control_v1(
     };
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
-            b.params,
-            b.state.legacy_disputes.get(&movement.claim),
-            b.state.claim(&movement.claim),
-            palw_da_disclose_window_daa_v1(b.params),
-            bundle.plan.terms.accepted_daa,
-            bundle.plan.terms.collect_until_daa,
-            ctx.daa_score,
-        )
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
     {
         return Err(stage_refused(movement.claim, "native selected source changes original paid frame identity or clock"));
     }
@@ -2654,7 +1963,7 @@ fn native_selected_control_v1(
     }
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     if initial {
-        b.write_staged_row_v1(key, Some(row))?;
+        b.write_staged_row_v1(key, Some(row));
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
         let new_index = selected_response_index_rows_v1(&row);
@@ -2689,15 +1998,8 @@ fn tir_prefix_control_v1(
         .ok_or_else(|| stage_refused(movement.claim, "TIR prefix move has no active native stage"))?;
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != native.seed.seed_id_v1()
-        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
-            b.params,
-            b.state.legacy_disputes.get(&movement.claim),
-            b.state.claim(&movement.claim),
-            palw_da_disclose_window_daa_v1(b.params),
-            bundle.plan.terms.accepted_daa,
-            bundle.plan.terms.collect_until_daa,
-            ctx.daa_score,
-        )
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
     {
         return Err(stage_refused(movement.claim, "TIR prefix move changes the paid frame, active seed or clock"));
     }
@@ -2778,7 +2080,7 @@ pub(super) fn publish_tir_layout(
         return Err(stage_refused(class_id, "published layout does not authenticate the registered class"));
     }
     crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&class).map_err(|e| stage_refused(class_id, e.to_string()))?;
-    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::TirLayout(Box::new(layout.clone()))))?;
+    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::TirLayout(Box::new(layout.clone()))));
     Ok(())
 }
 
@@ -2983,7 +2285,7 @@ pub(super) fn open_native(
         .into(),
     });
     bundle.check_v1().map_err(|e| stage_refused(seed.claim, e))?;
-    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)))?;
+    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)));
     Ok(())
 }
 
@@ -3003,15 +2305,8 @@ fn flat_control_v1(
     };
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
-            b.params,
-            b.state.legacy_disputes.get(&movement.claim),
-            b.state.claim(&movement.claim),
-            palw_da_disclose_window_daa_v1(b.params),
-            bundle.plan.terms.accepted_daa,
-            bundle.plan.terms.collect_until_daa,
-            ctx.daa_score,
-        )
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
     {
         return Err(stage_refused(movement.claim, "flat source changes literal paid original owner, seed or clock"));
     }
@@ -3138,7 +2433,7 @@ fn flat_control_v1(
     bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     if initial {
-        b.write_staged_row_v1(key, Some(row))?;
+        b.write_staged_row_v1(key, Some(row));
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
         let new_index = flat_response_index_rows_v1(&row);
@@ -3171,15 +2466,8 @@ fn float_control_v1(
     };
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
-            b.params,
-            b.state.legacy_disputes.get(&movement.claim),
-            b.state.claim(&movement.claim),
-            palw_da_disclose_window_daa_v1(b.params),
-            bundle.plan.terms.accepted_daa,
-            bundle.plan.terms.collect_until_daa,
-            ctx.daa_score,
-        )
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
     {
         return Err(stage_refused(movement.claim, "Float32 source changes literal paid original owner, seed or clock"));
     }
@@ -3307,7 +2595,7 @@ fn float_control_v1(
     bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     if initial {
-        b.write_staged_row_v1(key, Some(row))?;
+        b.write_staged_row_v1(key, Some(row));
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
         let new_index = flat_response_index_rows_v1(&row);
@@ -3381,12 +2669,7 @@ fn bundle_control_v1(
         };
         let mut claim = b.state.claim(&movement.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
         claim.trace_retention_daa = claim.trace_retention_daa.max(plan.terms.material_until_daa);
-        let hard = crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
-            b.params,
-            b.state.legacy_disputes.get(&movement.claim),
-            &claim,
-            palw_da_disclose_window_daa_v1(b.params),
-        );
+        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(&claim, palw_da_disclose_window_daa_v1(b.params));
         let until = hard
             .checked_add(b.params.window_challenge_at(ctx.daa_score))
             .ok_or(PalwStateV2Error::Overflow("bundle native material window"))?
@@ -3419,12 +2702,12 @@ fn bundle_control_v1(
             opened: Vec::new(),
         };
         bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
-        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(bundle).into())))?;
-        b.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(movement.claim), Some(PalwStagedCourtRowV1::ClaimBundle(extended)))?;
+        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(bundle).into())));
+        b.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(movement.claim), Some(PalwStagedCourtRowV1::ClaimBundle(extended)));
         b.write_claim(movement.claim, Some(claim))?;
         if let Some(mut dispute) = b.state.legacy_disputes.get(&movement.claim).cloned() {
             dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
-            b.write_legacy_dispute(movement.claim, Some(dispute))?;
+            b.write_legacy_dispute(movement.claim, Some(dispute));
         }
         b.da_rekey_v1(movement.claim, until, ctx.daa_score)?;
         if let Some(mut liability) = b.state.panel_liabilities.get(&movement.claim).cloned()
@@ -3438,7 +2721,7 @@ fn bundle_control_v1(
         for (lock_key, mut lock) in b.claim_locks_v1(&movement.claim) {
             if lock.expiry_daa < until {
                 lock.expiry_daa = until;
-                b.write_slashable_lock(lock_key, Some(lock))?;
+                b.write_slashable_lock(lock_key, Some(lock));
             }
         }
         return Ok(());
@@ -3475,7 +2758,7 @@ fn bundle_control_v1(
             }
             bundle.active = Some(next as u8);
             bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
-            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)))?;
+            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)));
             return Ok(());
         }
         Action::InventoryPart { offset, bytes } => {
@@ -3545,51 +2828,8 @@ pub(super) fn index_rows(
             (due, vec![(c.owner, c.plan.terms.material_until_daa, key)])
         }
         PalwStagedCourtRowV1::ArtifactInventoryOpen(c) => (c.until_daa, vec![(c.offer.opener, c.until_daa, key)]),
-        PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) | PalwStagedCourtRowV1::TirContainer(_) | PalwStagedCourtRowV1::CourtService(_)
-        | PalwStagedCourtRowV1::CourtServiceV3(_) => {
-            (u64::MAX, Vec::new())
-        }
-        PalwStagedCourtRowV1::CourtDutyClock(c) => (c.material_until_daa, Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedContext(c) => (c.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedQuery(q) => (q.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedIds(ids) => (ids.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedResponse(r) => (r.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtEndArchive(r) => (r.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtCloseReceipt(r) => (r.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtArchiveProgress(r) => (r.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedRoot(r) => (r.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedRound(r) => (r.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedBottom(r) => (r.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
-        // RFC-0032 A: drafts and their parts leave at their TTL; canonical material and
-        // the derived ledger stay until the claim's material horizon.
-        PalwStagedCourtRowV1::CourtMaterialDraft(d) => (d.expires_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtMaterialPart(p) => (p.expires_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtMaterial(m) => (m.material_until_daa,Vec::new()),
-        PalwStagedCourtRowV1::CourtMaterialLedger(l) => (l.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) => (u64::MAX, Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
-        PalwStagedCourtRowV1::TirAcquisition(row) => {
-            let c = row.owned.contract_v1();
-            // Owner escrow only. The literal list is NOT a substitute for a
-            // distinct native qualified custody grant; no signer hold or DA
-            // sanction is created from mere membership in a drawn Panel.
-            (c.terms.material_until_daa, vec![(c.owner, c.terms.material_until_daa, key)])
-        }
-        PalwStagedCourtRowV1::TirRawChunk(row) => (row.material_until_daa, Vec::new()),
-        PalwStagedCourtRowV1::TirAcceptedBody(row) => (row.material_until_daa, Vec::new()),
-        // This dormant row is a source lease, not proof of a funded pledge or
-        // qualified Valid grant. Native admission must establish signer holds.
-        PalwStagedCourtRowV1::TirPreparation(row) => (row.preparation.contract_v1().material_until_daa, Vec::new()),
-        // A staged witness leaves at the frame's door close; it holds no bond (its filer is not liable on the claim).
-        PalwStagedCourtRowV1::TirWitness(row) => (row.until_daa, Vec::new()),
-        PalwStagedCourtRowV1::TirClaim(frame) => {
-            if key != frame.key_v1() { return (0, Vec::new()); }
-            let terms = frame.plan_v1().terms;
-            let holds = frame.custody_v1().liable_signers_v1().into_iter()
-                .map(|signer| (signer, terms.bond_exit_after_daa, key)).collect();
-            (terms.material_until_daa, holds)
-        }
     }
 }
 pub(super) fn update_indices(
@@ -3599,7 +2839,6 @@ pub(super) fn update_indices(
     new: Option<&PalwStagedCourtRowV1>,
 ) {
     if let Some(row) = old {
-        update_tir_indices_v1(state, key, row, false);
         for entry in history_response_index_rows_v1(row) {
             state.staged_history_responders.remove(&entry);
         }
@@ -3626,7 +2865,6 @@ pub(super) fn update_indices(
         }
     }
     if let Some(row) = new {
-        update_tir_indices_v1(state, key, row, true);
         state.staged_history_responders.extend(history_response_index_rows_v1(row));
         state.staged_flat_responders.extend(flat_response_index_rows_v1(row));
         state.staged_selected_responders.extend(selected_response_index_rows_v1(row));
@@ -3652,27 +2890,7 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     state.staged_selected_responders.clear();
     state.staged_flat_responders.clear();
     state.staged_history_responders.clear();
-    state.staged_tir_by_owner.clear();
-    state.staged_tir_claims_by_producer.clear();
-    state.staged_tir_by_claim.clear();
-    state.staged_court_service_by_claim.clear();
-    state.staged_tir_responders.clear();
-    state.staged_tir_preparers.clear();
     for (key, row) in &state.staged_courts {
-        if let Some(entry) = tir_claim_producer_index_v1(*key, row) {
-            state.staged_tir_claims_by_producer.insert(entry);
-        }
-        if let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(*key, row) {
-            state.staged_tir_by_owner.insert((owner, claim, allocation));
-            state.staged_tir_responders.extend(tir_response_index_rows_v1(*key, row));
-        }
-        if let Some((claim, until)) = tir_source_index_metadata_v1(*key, row) {
-            state.staged_tir_by_claim.entry(claim).or_default().insert((until, *key));
-        }
-        if let Some((claim, entry)) = crate::palw_staged_court_state_v1::court_service_claim_index_entry_v1(*key, row) {
-            state.staged_court_service_by_claim.entry(claim).or_default().insert(entry);
-        }
-        state.staged_tir_preparers.extend(tir_preparation_index_rows_v1(*key, row));
         state.staged_history_responders.extend(history_response_index_rows_v1(row));
         state.staged_flat_responders.extend(flat_response_index_rows_v1(row));
         state.staged_selected_responders.extend(selected_response_index_rows_v1(row));
@@ -3687,102 +2905,6 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
             }
         }
         state.staged_holds.extend(holds);
-    }
-}
-
-pub(super) fn tir_index_metadata_v1(
-    key: PalwStagedCourtKeyV1,
-    row: &PalwStagedCourtRowV1,
-) -> Option<(PalwBondKeyV2, Hash64, Hash64, u64)> {
-    let (PalwStagedCourtKeyV1::TirAcquisition(claim, owner, allocation), PalwStagedCourtRowV1::TirAcquisition(row)) = (key, row) else {
-        return None;
-    };
-    let c = row.owned.contract_v1();
-    if (c.claim, c.owner) != (claim, owner) { return None; }
-    Some((owner, claim, allocation, c.terms.material_until_daa))
-}
-pub(super) fn tir_source_index_metadata_v1(
-    key: PalwStagedCourtKeyV1,
-    row: &PalwStagedCourtRowV1,
-) -> Option<(Hash64, u64)> {
-    match (key, row) {
-        (PalwStagedCourtKeyV1::TirClaim(claim), PalwStagedCourtRowV1::TirClaim(frame)) => {
-            (frame.key_v1() == key).then_some((claim, frame.plan_v1().terms.material_until_daa))
-        }
-        (PalwStagedCourtKeyV1::TirPreparation(claim, allocation), PalwStagedCourtRowV1::TirPreparation(row)) => {
-            let c = row.preparation.contract_v1();
-            ((claim, allocation) == (c.claim, c.allocation_id)).then_some((claim, c.material_until_daa))
-        }
-        _ => tir_index_metadata_v1(key, row).map(|(_, claim, _, until)| (claim, until)),
-    }
-}
-pub(super) fn tir_claim_producer_index_v1(
-    key: PalwStagedCourtKeyV1,
-    row: &PalwStagedCourtRowV1,
-) -> Option<(PalwBondKeyV2, Hash64)> {
-    let (PalwStagedCourtKeyV1::TirClaim(claim), PalwStagedCourtRowV1::TirClaim(frame)) = (key, row) else { return None };
-    (frame.key_v1() == key).then_some((frame.custody_v1().pledge_v1().producer, claim))
-}
-pub(super) fn tir_preparation_index_rows_v1(
-    key: PalwStagedCourtKeyV1,
-    row: &PalwStagedCourtRowV1,
-) -> Vec<(PalwBondKeyV2, u64, Hash64, Hash64)> {
-    let (PalwStagedCourtKeyV1::TirPreparation(claim, allocation), PalwStagedCourtRowV1::TirPreparation(row)) = (key, row) else {
-        return Vec::new();
-    };
-    let c = row.preparation.contract_v1();
-    if (claim, allocation) != (c.claim, c.allocation_id) { return Vec::new(); }
-    row.preparation.pending_signers_v1().into_iter()
-        .map(|signer| (signer, c.preparation_until_daa, claim, allocation)).collect()
-}
-/// Exact current unpaid literal slots, not a Panel draw and not an admission or
-/// collection credential. Native versioned admission still owes grant checks.
-pub(super) fn tir_response_index_rows_v1(
-    key: PalwStagedCourtKeyV1,
-    row: &PalwStagedCourtRowV1,
-) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)> {
-    let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(key, row) else { return Vec::new() };
-    let PalwStagedCourtRowV1::TirAcquisition(row) = row else { return Vec::new() };
-    let Some(pending) = row.owned.active_v1().filter(|p| !p.collected) else { return Vec::new() };
-    row.owned.response_custodians_v1().iter().filter(|signer| {
-        pending.slots.get(signer).is_none_or(|slot| slot.finished.is_none())
-    }).map(|signer| (*signer, pending.respond_until_daa, claim, owner, allocation, pending.turn, pending.demand_id)).collect()
-}
-fn update_tir_indices_v1(state: &mut PalwChainStateV2, key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1, insert: bool) {
-    // G14 lane r5-f02-wire: the per-claim court-service index (initial notice, duty clocks). `update_indices` reaches this on every
-    // native write and on delta apply/undo, so the projection follows the rooted rows across reorgs.
-    if let Some((claim, entry)) = crate::palw_staged_court_state_v1::court_service_claim_index_entry_v1(key, row) {
-        if insert {
-            state.staged_court_service_by_claim.entry(claim).or_default().insert(entry);
-        } else if let Some(rows) = state.staged_court_service_by_claim.get_mut(&claim) {
-            rows.remove(&entry);
-            if rows.is_empty() { state.staged_court_service_by_claim.remove(&claim); }
-        }
-    }
-    if let Some(entry) = tir_claim_producer_index_v1(key, row) {
-        if insert { state.staged_tir_claims_by_producer.insert(entry); }
-        else { state.staged_tir_claims_by_producer.remove(&entry); }
-    }
-    if let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(key, row) {
-        if insert {
-            state.staged_tir_by_owner.insert((owner, claim, allocation));
-            state.staged_tir_responders.extend(tir_response_index_rows_v1(key, row));
-        } else {
-            state.staged_tir_by_owner.remove(&(owner, claim, allocation));
-            for entry in tir_response_index_rows_v1(key, row) { state.staged_tir_responders.remove(&entry); }
-        }
-    }
-    if let Some((claim, until)) = tir_source_index_metadata_v1(key, row) {
-        if insert {
-            state.staged_tir_by_claim.entry(claim).or_default().insert((until, key));
-        } else if let Some(rows) = state.staged_tir_by_claim.get_mut(&claim) {
-            rows.remove(&(until, key));
-            if rows.is_empty() { state.staged_tir_by_claim.remove(&claim); }
-        }
-    }
-    for entry in tir_preparation_index_rows_v1(key, row) {
-        if insert { state.staged_tir_preparers.insert(entry); }
-        else { state.staged_tir_preparers.remove(&entry); }
     }
 }
 pub(super) fn selected_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)> {
@@ -3894,54 +3016,12 @@ pub(super) fn update_response_indices(
 }
 pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
-    let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score)
-        .filter(|(_, key)| !matches!(key,PalwStagedCourtKeyV1::CourtSharedRoot(..)|PalwStagedCourtKeyV1::CourtSharedRound(..)|PalwStagedCourtKeyV1::CourtSharedBottom(..))
-            && !b.state.court_service_holds_material_v1(key))
-        .take(64).map(|(_, key)| *key).collect();
+    let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score).take(64).map(|(_, key)| *key).collect();
     for key in due {
         let Some(mut saved) = b.state.staged_courts.get(&key).cloned() else { continue };
-        // An expired incomplete draft releases its parts and its submitter's reservation.
-        if let PalwStagedCourtRowV1::CourtMaterialDraft(draft) = &saved {
-            if ctx.daa_score >= draft.expires_daa {
-                super::palw_court_shared_material_intake_fold_v1::release_draft(b, draft)?;
-            }
-            continue;
-        }
-        // Acquisition metadata and immutable public bytes have their own exact
-        // paid material TTL, not an old mutable court checkpoint or DA default.
-        // No semantic close, sibling default, or expired response erases them.
-        let tir_until = match &saved {
-            PalwStagedCourtRowV1::TirAcquisition(row) => Some(row.owned.contract_v1().terms.material_until_daa),
-            PalwStagedCourtRowV1::TirRawChunk(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::TirAcceptedBody(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::TirPreparation(row) => Some(row.preparation.contract_v1().material_until_daa),
-            PalwStagedCourtRowV1::TirClaim(frame) => Some(frame.plan_v1().terms.material_until_daa),
-            PalwStagedCourtRowV1::TirWitness(row) => Some(row.until_daa),
-            PalwStagedCourtRowV1::CourtDutyClock(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedContext(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedQuery(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedIds(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedResponse(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtEndArchive(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtCloseReceipt(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtArchiveProgress(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedRoot(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedRound(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedBottom(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtMaterialPart(row) => Some(row.expires_daa),
-            PalwStagedCourtRowV1::CourtMaterial(row) => Some(row.material_until_daa),
-            PalwStagedCourtRowV1::CourtMaterialLedger(row) => Some(row.material_until_daa),
-            _ => None,
-        };
-        if let Some(until) = tir_until {
-            if ctx.daa_score >= until { b.write_staged_row_v1(key, None)?; }
-            continue;
-        }
         let material = saved.owner_accounting_v1().map(|(_, _, _, until)| until);
         if material.is_none_or(|until| ctx.daa_score >= until) {
-            b.write_staged_row_v1(key, None)?;
+            b.write_staged_row_v1(key, None);
             continue;
         }
         let old = saved.checkpoint_v1().map_err(|e| stage_refused(ZERO_HASH64, e))?;
@@ -3951,11 +3031,10 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
         let row_key = (row.claim, row.reserver);
         let closed =
             b.state.claim(&row.claim).is_some_and(|c| c.phase.is_terminal() && !matches!(c.phase, PalwClaimPhaseV2::Final { .. }));
+        let default = if closed { None } else { row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))? };
         if closed {
             row.mark_claim_closed_v1().map_err(|e| stage_refused(row.claim, e))?;
-        }
-        let default = row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
-        if let Some(default) = &default {
+        } else if let Some(default) = &default {
             row.mark_default_collected_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
             collect_prefix_default(b, ctx, default)?;
         } else {
@@ -3978,9 +3057,19 @@ fn collect_prefix_default(
     default: &crate::palw_prefix_public_owned_v1::PalwPrefixJointDefaultV1,
 ) -> Result<(), PalwStateV2Error> {
     let claim = b.state.claim(&default.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(default.claim))?;
-    // The expired pending source proves these exact frozen signers, not a new
-    // Panel draw. A sibling close cannot discharge an unconsumed Valid signer;
-    // the existing economic helper skips an already charged producer and S4 key.
-    let unpaid = default.panel.iter().copied().chain(std::iter::once(default.producer)).collect();
-    b.staged_selected_default_charge_v1(ctx, default.claim, &claim, default.producer, &unpaid, default.owner)
+    let stage = match claim.phase {
+        PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Live,
+        PalwClaimPhaseV2::ReceiptLicensed { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Licensed,
+        PalwClaimPhaseV2::Final { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::FinalRow,
+        _ => return Err(stage_refused(default.claim, "public collection has no live economic claim")),
+    };
+    let charge = PalwDaDefaultChargeV1 {
+        claim_id: default.claim,
+        producer: default.producer,
+        stage,
+        g: b.claim_g_v1(&default.claim).map(|g| g.g()).unwrap_or(0),
+        covering: default.panel.iter().copied().collect(),
+        winner: default.owner,
+    };
+    b.da_default_charge_v1(ctx, &claim, &charge)
 }

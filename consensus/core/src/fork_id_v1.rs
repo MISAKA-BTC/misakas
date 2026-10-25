@@ -279,12 +279,6 @@ pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
         .map(|fence| fence.daa_score())
         .filter(|&score| score != 0 && score != u64::MAX)
         .collect();
-    // **RFC-0019 §7.3: every annual catalog edition's height gates too.** An edition is a fence an un-upgraded binary does not carry
-    // (it changes the allocation weights from its height), but it lives inside `palw_model_tier_v1`'s value, so `palw_fences_v1`
-    // names only the tier fence's own height. ORed in HERE, as the doc above asks: before the edition a peer lacking it is a warning
-    // (the identity id still matches — the edition left it in normalisation), from its height a refusal, so a node still on the
-    // old binary is cut off by name rather than silently extending the old weights.
-    fences.extend(params.palw_annual_catalog_activations_v1().into_iter().filter(|&score| score != 0 && score != u64::MAX));
     fences.sort_unstable();
     fences.dedup();
     fences
@@ -806,9 +800,6 @@ mod tests {
             "palw_court_commitment_scope_v1" => params.palw_court_commitment_scope_v1 = Some(at),
             "palw_staged_public_court_v1" => params.palw_staged_public_court_v1 = Some(at),
             "palw_staged_tir_route_v1" => params.palw_staged_tir_route_v1 = Some(at),
-            // G14 original paid TIR conviction: a bare height; `palw_tir_public_conviction_v1_fence` resolves it only with the staged
-            // TIR route, the staged court, the objective-offence ledger, R-core+ and the aggregate liability, which the probe does not ask.
-            "palw_tir_public_conviction_v1" => params.palw_tir_public_conviction_v1 = Some(at),
             "palw_staged_float_constraint_v1" => params.palw_staged_float_constraint_v1 = Some(at),
             // codex RFC-8 / RFC-12 final's monetary fences (R6781-F): bare heights, and the paid consumer lifecycle with its
             // unapproved probe terms (its values only ride along).
@@ -822,21 +813,6 @@ mod tests {
                 params.palw_panel_lifetime_v2 = Some(crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at))
             }
             "palw_material_release_recovery_v2"=> {params.palw_material_release_recovery_v2=Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));}
-            // The retired compact contract v4 (PRINCIPLES §8): validation refuses every activation; the probe asks only the hashers
-            // and the schedule, with nominal policy values that only ride along.
-            "palw_claim_compact_v4" => {
-                params.palw_claim_compact_v4 = Some(crate::palw_claim_compact_v4::PalwClaimCompactFenceV4 {
-                    activation: at,
-                    policy: crate::palw_claim_compact_v4::PalwClaimCompactPolicyV4 {
-                        max_contracts: 1,
-                        maximum_opening_bytes: 1,
-                        maximum_proof_bytes: 1,
-                        maximum_verifier_work: 1,
-                        maximum_stream_words: 1,
-                        require_independent_review: true,
-                    },
-                })
-            }
             "palw_monetary_material_v1" => {
                 params.palw_monetary_material_v1 = Some(crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1 {
                     activation: at,
@@ -879,18 +855,6 @@ mod tests {
             }
             "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
             "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
-            "palw_settlement_once_v1" => {
-                params.palw_settlement_once_v1 = Some(at);
-                params.sync_palw_settlement_once_v1();
-            }
-            "palw_paid_claim_trap_v1" => {
-                params.palw_paid_claim_trap_v1 = Some(at);
-                params.sync_palw_paid_claim_trap_v1();
-            }
-            "palw_native_liability_horizon_v1" => {
-                params.palw_native_liability_horizon_v1 = Some(at);
-                params.sync_palw_native_liability_horizon_v1();
-            }
             "palw_paid_consumer_lifecycle_v1" => {
                 params.palw_paid_consumer_lifecycle_v1 = Some(crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
                     activation: at,
@@ -914,14 +878,6 @@ mod tests {
             "palw_stage_execution_v28" => {
                 params.palw_stage_execution_v28 =
                     Some(crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(at, [0; 64]));
-            }
-            "palw_native_execution_v39" => {
-                params.palw_native_execution_v39 =
-                    Some(crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(at, [0; 64]));
-            }
-            "palw_native_mining_v39" => {
-                params.palw_native_mining_v39 =
-                    Some(crate::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(at, [0; 64]));
             }
             "palw_funded_execution_v11" => {
                 params.palw_funded_execution_v11 =
@@ -971,51 +927,14 @@ mod tests {
             // The three fences of the 2026-10-12 rulings: bare heights, refused when armed by `validate_palw_v2`.
             "palw_court_model_scope_v1" => params.palw_court_model_scope_v1 = Some(at),
             "palw_public_evidence_reward_v1" => params.palw_public_evidence_reward_v1 = Some(at),
-            // Compute-claim audit CX-01/CX-02: a bare height, refused when armed without its prerequisites by `validate_palw_v2`.
-            "palw_fp_answer_accounting_v1" => params.palw_fp_answer_accounting_v1 = Some(at),
-            // RFC-0002 02-A (pre-existing gap the probe panicked on; found by lane compute-exec): a bare height.
-            "palw_tir_container_identity_v1" => params.palw_tir_container_identity_v1 = Some(at),
             "palw_claim_hard_deadline_v1" => {
                 params.palw_claim_hard_deadline_v1 =
                     Some(crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at))
             }
             // RFC-0006 R6-CELL round 4's coverage closure: a bare height, refused when armed by `validate_palw_v2`.
             "palw_cell_coverage_closure_v1" => params.palw_cell_coverage_closure_v1 = Some(at),
-            // The cross-lane G14 gates: bare heights, refused when armed by `validate_palw_v2` (no pinned record); the probe does not validate.
-            "palw_g14_route_required_v1" => params.palw_g14_route_required_v1 = Some(at),
-            "palw_reward_liability_horizon_v1" => params.palw_reward_liability_horizon_v1 = Some(at),
-            // The court-capacity fence: a height with the placeholder policy, refused when armed by `validate_palw_v2`.
-            "palw_court_capacity_v1" => {
-                params.palw_court_capacity_v1 = Some(crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at(at))
-            }
-            "palw_court_transport_v1" => {
-                params.palw_court_transport_v1 = Some(crate::palw_court_transport_v1::PalwCourtTransportFenceV1::unapproved_probe_at(at))
-            }
-            // RFC-0016's two dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
-            "palw_unresolved_bound_v1" => params.palw_unresolved_bound_v1 = Some(at),
-            "palw_claim_local_settlement_v1" => params.palw_claim_local_settlement_v1 = Some(at),
-            "palw_model_block_rights_v1" => params.palw_model_block_rights_v1 = Some(at),
-            "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
             // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
             "palw_model_eligibility_v1" => params.palw_model_eligibility_v1 = Some(at),
-            // ADR-0179's model tiers: the design values and empty lists, refused when armed by `validate_palw_v2`.
-            "palw_model_tier_v1" => {
-                params.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at));
-            }
-            // G14's per-class detection policy: the height with no policy, refused when armed by `validate_palw_v2`.
-            "palw_detection_policy_v1" => {
-                params.palw_detection_policy_v1 = Some(crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1::at(at));
-            }
-            // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
-            "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),
-            "palw_panel_anchor_permissionless_v1" => params.palw_panel_anchor_permissionless_v1 = Some(at),
-            // The liveness fix L-COURT-01: a bare height (needs palw_audit_2026_09_11, in force wherever this probe arms it).
-            "palw_court_completion_attempt_v1" => params.palw_court_completion_attempt_v1 = Some(at),
-            "palw_rule_e_participation_v2" => params.palw_rule_e_participation_v2 = Some(at),
-            "palw_independently_work_certified_v1" => params.palw_independently_work_certified_v1 = Some(at),
-            "palw_dag_width_schedule_v1" => {
-                params.palw_dag_width_schedule_v1 = Some(crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1::unapproved_probe_at(at))
-            }
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {
@@ -1152,20 +1071,6 @@ mod tests {
             "palw_fp_derived_work" => params.palw_fp_derived_work = Some(at),
             "palw_fp_decode_constraint" => params.palw_fp_decode_constraint = Some(at),
             "palw_shard_court" => params.palw_shard_court = Some(at),
-            // RFC-0006 memory/routing court v2: a bare height, refused when armed by `validate_palw_v2` (the probe does not run it).
-            "palw_memory_routing_court_v2" => params.palw_memory_routing_court_v2 = Some(at),
-            // lane g14p/r7-fence-16000: the five G14 fences newly on `palw_fences_v1` — bare heights; their prerequisites and mirrors are
-            // `validate_palw_v2`'s, which the probe does not run.
-            "palw_tir_bounded_door_v1" => params.palw_tir_bounded_door_v1 = Some(at),
-            "palw_tir_designated_answers_v1" => params.palw_tir_designated_answers_v1 = Some(at),
-            "palw_court_outsider_lane_v1" => params.palw_court_outsider_lane_v1 = Some(at),
-            "palw_state_row_map_v1" => params.palw_state_row_map_v1 = Some(at),
-            "palw_kernel_route_panel_one_v1" => params.palw_kernel_route_panel_one_v1 = Some(at),
-            "palw_court_clock_v2" => params.palw_court_clock_v2 = Some(at),
-            "palw_class_registration_origin_v1" => {
-                params.palw_class_registration_origin_v1 = Some(at);
-                params.sync_palw_class_registration_origin_v1();
-            }
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
             // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.

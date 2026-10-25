@@ -1,6 +1,0 @@
-
-running 1 test
-test pipeline::virtual_processor::tests::carrier_bond_rent_conservation::palw_bond_burn_and_object_rent_cannot_spend_the_same_actual_fee ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1064 filtered out; finished in 0.03s
-

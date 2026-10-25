@@ -5,7 +5,7 @@
 //! * `--mode self-job --prompt-stdin --n-predict N` → execute the job over the stdin bytes
 //! * `--mode verify   --prompt-stdin --n-predict N` → independently re-execute the same job
 //! and the **v2 full-logits-trace interface** (`kaspa_consensus_core::palw_v2`,
-//! docs/design/palw/execution/palw-full-logits-trace-v2-design.md — Land stage, devnet/shadow/zero-credit only):
+//! docs/palw-full-logits-trace-v2-design.md — Land stage, devnet/shadow/zero-credit only):
 //!
 //! * `--mode v2-job` → one framed Borsh `PalwJobEnvelopeV2` on stdin, one framed Borsh
 //!   `PalwJobResultV2` on stdout. Token IDs are the input identity (the worker never

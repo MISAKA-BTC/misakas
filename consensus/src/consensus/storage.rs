@@ -379,7 +379,7 @@ impl ConsensusStorage {
         // suffices.
         //
         // **Sized to the overlay window, not to `block_data_cache_size`** (the 2026-10-03 panel
-        // starvation, docs/design/palw/verification/t12-panel-backlog-1003.md §4). Every virtual commit — and the
+        // starvation, docs/design/palw/t12-panel-backlog-1003.md §4). Every virtual commit — and the
         // template and the validation of every block beside it — walks the selected chain back
         // `overlay_window_walk_bound` and reads these three per-block rows for each ancestor
         // (`selected_chain_overlay_window`). A 120 s PALW network has `bps() == 1`, so the cache held

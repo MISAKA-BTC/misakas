@@ -876,28 +876,13 @@ const wallet = {
 async function addEstimatedGas(tx) {
   if (tx.gas != null) return tx;
   if (!wallet.provider || typeof wallet.provider.request !== 'function') throw new Error('The wallet cannot estimate transaction gas.');
-  let estimate;
-  try { estimate = bi(await wallet.provider.request({ method: 'eth_estimateGas', params: [tx] })); }
-  catch (e) {
-    // MISAKA Wallet moves what a payment is short of from the UTXO lane inside the confirmation, so an
-    // account that is short NOW cannot be estimated now: the node refuses with LackOfFundForMaxFee. Left
-    // to itself the wallet then signs with its 21,000 fallback, which no facade call fits. Name the
-    // ceiling instead (the wallet shows it before signing); any other failure still stops the order.
-    // (feat/misakaoptions-access-first 36902502d, ported in the 2026-10-15 merge sweep.)
-    if (estimateShortOfFunds(e) && wallet.topsUp()) { tx.gas = toHex(FACADE_CALL_GAS_CEILING); return tx; }
-    throw e;
-  }
+  const estimate = bi(await wallet.provider.request({ method: 'eth_estimateGas', params: [tx] }));
   if (estimate <= 0n) throw new Error('The node returned an invalid gas estimate.');
   // 25% headroom covers a small state change between estimation and signing;
   // the estimator still supplies the transaction-specific intrinsic cost.
   tx.gas = toHex(estimate + (estimate / 4n) + 1000n);
   return tx;
 }
-
-// The gas a facade call is given when the node cannot estimate it for a topping-up wallet short of funds.
-const FACADE_CALL_GAS_CEILING = 120000n;
-// The node's refusal to estimate for an account whose balance is short of the call's value.
-function estimateShortOfFunds(e) { return /LackOfFund|insufficient funds?/i.test(String((e && (e.message || (e.data && e.data.message))) || e || '')); }
 
 // ============================================================================================
 // 6. local records: price history (sampled), sent transactions
@@ -3194,10 +3179,10 @@ async function pageAdd(arg) {
         <div class="step-h"><span class="n">1</span><b>Register the class</b> ${stepTag(...s.reg)}</div>
         <div class="step-b">
           <p class="small">A class is a registered model graph: its artifact's shape profile and canonical job ride in a <code>ClassRegistered</code> carrier signed by an <b>active bond</b> (ML-DSA-87), with a fee. <b>This step cannot be done from a browser</b>: the node that holds the artifact builds and submits it. The commands, from the runbooks in <code>docs/</code>:</p>
-          <pre class="cmd"># 0. a bonded key with funds (docs/history/networks/testnet-11/testnet11-join-mining.md, section 3); keep the outpoint the node prints
+          <pre class="cmd"># 0. a bonded key with funds (docs/history/testnet11-join-mining.md, section 3); keep the outpoint the node prints
 kaspad --testnet --netsuffix=11 --appdir=~/.t11 --palw-register-bond --palw-producer-key=~/.misaka/miner.seed
 
-# 1. pair the artifact with a class and run the admission gate: no node, no key, no coin (docs/operations/models/palw-model-onboarding-sdk.md)
+# 1. pair the artifact with a class and run the admission gate: no node, no key, no coin (docs/palw-model-onboarding-sdk.md)
 palw-class inspect   --network ${CFG.NETWORK_NAME} /path/to/artifact.palwart
 palw-class preflight --network ${CFG.NETWORK_NAME} /path/to/artifact.palwart --model-id "&lt;model id&gt;"
 
@@ -3976,7 +3961,7 @@ function selfTestReport() {
   eq('open orders: not carried yet, or carried and not settled — newest first, cancels are not orders', openRows, 'dca');
   // ---- the developer dashboard: ADR-0108's extension id, and ADR-0095's declaration rules ----
   const mcDoc = {"manifest": "misaka-palw/extension-manifest/v1", "kind": "model-class", "name": "PALW-BASE-0/rc \u2014 the floor, by its ledger row", "network": "testnet-11", "source": {"note": "derived from the pinned seed; every node mints it, nobody converts it"}, "artifact": {"root": "bcf2d9eb7357bd6c267df2df6588393ca71c67d7c802903ca7031948303c793dcb78bfe26488f52d0393be08e0cc0777b080e2dce9355d3576036b734545b8df"}, "requires": {"ruleset_id": "ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5", "fences": {"palw_kary_court": "active"}}, "declares": {"object_id": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8", "capabilities": ["attempt", "fp"]}, "verification": {"model_id": "PALW-BASE-0/rc"}, "admission": {"object": "ClassRegistered"}};
-  eq('extension_id of docs/reference/manifests/extensions/model-class.json is the CLI\'s (misaka palw extension inspect)', extensionIdOf(mcDoc), '68041ae3ce95b7ba5eb7e8d600771d6ec90abde457ed3e71c4b60e20c02258d7fa30fd99db267ebba35ab427c43969a307351a3e5317b35deba68f3519cf964c');
+  eq('extension_id of docs/extension-manifests/model-class.json is the CLI\'s (misaka palw extension inspect)', extensionIdOf(mcDoc), '68041ae3ce95b7ba5eb7e8d600771d6ec90abde457ed3e71c4b60e20c02258d7fa30fd99db267ebba35ab427c43969a307351a3e5317b35deba68f3519cf964c');
   eq('canonical JSON sorts keys and drops whitespace', canonicalJson({ b: [1, { d: 'x', c: null }], a: true }), '{"a":true,"b":[1,{"c":null,"d":"x"}]}');
   const T = (u, g, lead, hold, note) => ({ minUnits: bi(u), grants: g, leadDaa: bi(lead || 0), holdDaa: bi(hold || 0), note: note || '' });
   eq('tiers: a flat ladder is refused', validateTiers([T(10, ['SUPPORT']), T(10, ['SUPPORT'])], 0n, 100n) != null, true);

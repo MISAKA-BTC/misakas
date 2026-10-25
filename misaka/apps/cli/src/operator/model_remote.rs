@@ -185,7 +185,7 @@ pub(crate) fn price_carrier(
         params.mass_per_sig_op,
         params.storage_mass_parameter,
     );
-    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
+    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
     let probe = misaka_palw_remote::bundle::carrier_body_v1(
         object,
         funding_outpoint,

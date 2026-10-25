@@ -99,16 +99,7 @@ pub(crate) fn bind_one(src: &Src, r: &Resolver, layer: Option<usize>) -> Result<
     }
 }
 
-/// Whether the lazy cache's whole-tensor re-read has been reported (once a process).
-static LAZY_REREAD_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 impl ParamStore {
-    /// Bytes of the params resident in this store: every bound tensor (`f32`), plus what the lazy cache holds (RFC-0020 §2).
-    pub fn resident_bytes(&self) -> u64 {
-        let t = |x: &Tensor| x.data.len() as u64 * 4;
-        let lazy = self.lazy_cache.lock().unwrap_or_else(|e| e.into_inner()).held_bytes as u64;
-        self.global.values().map(t).sum::<u64>() + self.layered.values().map(t).sum::<u64>() + lazy
-    }
     /// Bind a param instance LAZILY: the source is read when an op asks (the whole tensor, or the rows it needs).
     pub fn insert_lazy(&mut self, p: u32, layer: Option<usize>, lazy: Arc<dyn LazyParam>) {
         self.lazy.insert((p, layer), lazy);
@@ -147,18 +138,6 @@ impl ParamStore {
         if c.held_bytes + bytes <= c.budget_bytes {
             c.held_bytes += bytes;
             c.held.insert(key, t.clone());
-        } else if !LAZY_REREAD_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            // RFC-0020 §4: a whole tensor that does not fit the cache is read from its source again at every ask — every
-            // position, for a dense linear or an embedding. Correct, but it is the slow (and, for a streamed source, the
-            // re-downloading) trap; say so once.
-            eprintln!(
-                "warning: row-streamed calibration re-reads param {p} (layer {layer:?}, {} MiB) whole at every ask: it does not fit \
-                 the lazy cache ({} MiB held of {} MiB). Raise --calib-lazy-cache-mib above the layer's lazily bound dense tensors, \
-                 or raise --calib-lazy-mib so only expert stacks are bound lazily (RFC-0020 §4)",
-                bytes >> 20,
-                c.held_bytes >> 20,
-                c.budget_bytes >> 20
-            );
         }
         Ok(PView::Owned(t))
     }
@@ -384,63 +363,6 @@ pub struct Session<'a> {
     pub cross_states: Option<Vec<Vec<f32>>>,
     /// The hash constants of each PLE layer (`crate::ngram`), by model layer.
     ngram_tables: BTreeMap<usize, crate::ngram::NgramTables>,
-    /// Inside [`Session::eval_occurrence_run`]: how many rows of each history the node in flight may read (the rows a
-    /// position-by-position run would have appended by then). Empty otherwise: every row is visible.
-    hist_rows: BTreeMap<u32, usize>,
-}
-
-/// The state a reference names, if it names one.
-fn state_ref(r: &Ref) -> Option<u32> {
-    match r {
-        Ref::State(s) => Some(*s),
-        _ => None,
-    }
-}
-
-/// The site-key prefix of a block occurrence (`pre.`, `L3.`, `post.`).
-fn block_prefix(role: BlockRole, layer: Option<usize>) -> String {
-    match (role, layer) {
-        (BlockRole::Pre, _) => "pre.".to_string(),
-        (BlockRole::Post, _) => "post.".to_string(),
-        (_, Some(l)) => format!("L{l}."),
-        _ => String::new(),
-    }
-}
-
-/// The first `limit` rows of a history (all of them without a limit).
-fn visible_rows<'v>(rows: &'v [Vec<f32>], limit: Option<&usize>) -> &'v [Vec<f32>] {
-    match limit {
-        Some(n) => &rows[..(*n).min(rows.len())],
-        None => rows,
-    }
-}
-
-/// **Whether block `bi` may run node by node over a run of positions** ([`Session::eval_occurrence_run`]) and give the
-/// position-by-position result. It may when every state the block touches is either
-/// * a history with exactly one append node, read only by attention nodes (each attention then reads the rows a
-///   position-by-position run would have appended by that point: one per earlier position, plus the current position's when
-///   the append comes first), or
-/// * a fixed state read and written by ONE node only (a Gated DeltaNet or a causal conv1d: the recurrence steps through the
-///   positions in order inside that node).
-///
-/// Anything else — a state written by one node and read by another within a position, an op outside these — keeps the block
-/// position by position.
-pub fn block_runs_by_position(prog: &HlProgram, bi: usize) -> bool {
-    let mut touch: BTreeMap<u32, Vec<&Op>> = BTreeMap::new();
-    for node in &prog.blocks[bi].nodes {
-        let mut states: Vec<u32> = node.inputs.iter().filter_map(state_ref).chain(node.writes.iter().copied()).collect();
-        states.sort_unstable();
-        states.dedup();
-        for st in states {
-            touch.entry(st).or_default().push(&node.op);
-        }
-    }
-    touch.values().all(|ops| {
-        let recurrence = ops.len() == 1 && matches!(ops[0], Op::GatedDelta { .. } | Op::CausalConv1d { .. });
-        let history = ops.iter().filter(|o| matches!(o, Op::HistAppend)).count() == 1
-            && ops.iter().all(|o| matches!(o, Op::HistAppend | Op::Attention { .. }));
-        recurrence || history
-    })
 }
 
 impl<'a> Session<'a> {
@@ -457,7 +379,6 @@ impl<'a> Session<'a> {
             mrope_pos: BTreeMap::new(),
             cross_states: None,
             ngram_tables: BTreeMap::new(),
-            hist_rows: BTreeMap::new(),
         }
     }
     pub fn with_site_stats(mut self) -> Self {
@@ -471,16 +392,6 @@ impl<'a> Session<'a> {
     }
     pub fn position(&self) -> usize {
         self.pos
-    }
-
-    /// Bytes of the attention histories this session holds (`f32` rows by length; RFC-0020 §2).
-    pub fn history_bytes(&self) -> u64 {
-        self.hist.values().flatten().map(|r| (r.len() * 4 + 24) as u64).sum()
-    }
-
-    /// Bytes of the fixed recurrent states this session holds.
-    pub fn state_bytes(&self) -> u64 {
-        self.fixed.values().map(|v| v.len() as u64 * 4).sum()
     }
 
     /// Evaluate one block occurrence at an explicit position, for drivers that run a sequence
@@ -500,108 +411,6 @@ impl<'a> Session<'a> {
         }
         self.pos = pos;
         self.eval_block(bi, layer, carries, token)
-    }
-
-    /// [`eval_occurrence`](Self::eval_occurrence) for the run of positions `pos0 .. pos0 + tokens.len()` (positions of one
-    /// occurrence still arrive in increasing order, run after run), evaluated **node by node**: each node for every position
-    /// of the run, in position order, before the next node. For a block [`block_runs_by_position`] admits the result is the
-    /// position-by-position result bit for bit — every value is the same operations in the same order (a linear's row is one
-    /// f64 fold in index order whichever way the rows are scheduled), each site observes its values in position order, a
-    /// recurrence steps through the positions in order, and an attention reads only the history rows a position-by-position
-    /// run would have appended by then. What changes is that a linear's matrix is read once per run instead of once per
-    /// position. Any other block, a run of one, or a traced session runs position by position. Returns each position's
-    /// outputs.
-    pub fn eval_occurrence_run(
-        &mut self,
-        bi: usize,
-        layer: Option<usize>,
-        carries: &[Vec<Vec<f32>>],
-        tokens: &[usize],
-        pos0: usize,
-    ) -> Result<Vec<Vec<Vec<f32>>>> {
-        let prog = self.prog;
-        if carries.len() != tokens.len() {
-            return Err(LowerError::eval(format!("internal: a run of {} tokens with {} carries", tokens.len(), carries.len())));
-        }
-        if let Some(t) = tokens.iter().find(|t| **t >= prog.vocab) {
-            return Err(LowerError::eval(format!("token {t} ≥ vocab {}", prog.vocab)));
-        }
-        if tokens.len() <= 1 || self.trace.is_some() || !block_runs_by_position(prog, bi) {
-            let mut outs = Vec::with_capacity(tokens.len());
-            for (j, t) in tokens.iter().enumerate() {
-                outs.push(self.eval_occurrence(bi, layer, &carries[j], *t, pos0 + j)?);
-            }
-            return Ok(outs);
-        }
-        let block = &prog.blocks[bi];
-        let prefix = block_prefix(block.role, layer);
-        let n = tokens.len();
-        if let Some(stats) = self.sites.as_mut() {
-            for (j, cs) in carries.iter().enumerate() {
-                for (k, c) in cs.iter().enumerate() {
-                    stats.entry(format!("{prefix}carry{k}")).or_default().observe(c, pos0 + j);
-                }
-            }
-        }
-        // Each history's append node (exactly one, `block_runs_by_position`).
-        let appended_at: BTreeMap<u32, usize> = block
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| matches!(node.op, Op::HistAppend))
-            .filter_map(|(i, node)| node.inputs.get(1).and_then(state_ref).map(|st| (st, i)))
-            .collect();
-        let mut vals: Vec<Vec<Vec<Vec<f32>>>> = (0..n).map(|_| Vec::with_capacity(block.nodes.len())).collect();
-        for (i, node) in block.nodes.iter().enumerate() {
-            let outs: Vec<Vec<Vec<f32>>> = match &node.op {
-                Op::Linear { bias, lora: None } => {
-                    let w = self.param(node.inputs[1], layer)?;
-                    let b = if *bias { Some(self.param(node.inputs[2], layer)?) } else { None };
-                    let xs = (0..n).map(|j| operand(node.inputs[0], &vals[j], &carries[j])).collect::<Result<Vec<&[f32]>>>()?;
-                    linear_raw_many(&xs, &w.data, w.shape[0], b.as_ref().map(|t| t.data.as_slice()))
-                        .into_iter()
-                        .map(|y| vec![y])
-                        .collect()
-                }
-                _ => {
-                    let reads: Vec<u32> = if matches!(node.op, Op::Attention { .. }) {
-                        node.inputs.iter().filter_map(state_ref).collect()
-                    } else {
-                        vec![]
-                    };
-                    let mut o = Vec::with_capacity(n);
-                    for j in 0..n {
-                        let p = pos0 + j;
-                        self.pos = p;
-                        self.hist_rows.clear();
-                        for st in &reads {
-                            let rows = if appended_at.get(st).is_some_and(|a| *a < i) { p + 1 } else { p };
-                            self.hist_rows.insert(*st, rows);
-                        }
-                        let out = self.eval_node(node, &vals[j], &carries[j], layer, tokens[j], &prefix);
-                        self.hist_rows.clear();
-                        o.push(out?);
-                    }
-                    o
-                }
-            };
-            for (j, out) in outs.into_iter().enumerate() {
-                if let (Some(site), Some(stats)) = (&node.site, self.sites.as_mut()) {
-                    stats.entry(format!("{prefix}{site}")).or_default().observe(&out[0], pos0 + j);
-                }
-                vals[j].push(out);
-            }
-        }
-        self.pos = pos0 + n - 1;
-        (0..n)
-            .map(|j| {
-                block
-                    .outputs
-                    .iter()
-                    .map(|r| operand(*r, &vals[j], &carries[j]).map(<[f32]>::to_vec))
-                    .collect::<Result<Vec<Vec<f32>>>>()
-            })
-            .collect()
     }
 
     /// Logits for `token` at the current position; advances the position.
@@ -640,7 +449,12 @@ impl<'a> Session<'a> {
     fn eval_block(&mut self, bi: usize, layer: Option<usize>, carries: &[Vec<f32>], token: usize) -> Result<Vec<Vec<f32>>> {
         let prog = self.prog;
         let block = &prog.blocks[bi];
-        let prefix = block_prefix(block.role, layer);
+        let prefix = match (block.role, layer) {
+            (BlockRole::Pre, _) => "pre.".to_string(),
+            (BlockRole::Post, _) => "post.".to_string(),
+            (_, Some(l)) => format!("L{l}."),
+            _ => String::new(),
+        };
         if let Some(stats) = self.sites.as_mut() {
             // The block's inputs get a site of their own (`carry0`, …): a lowering that needs the
             // residual stream at code resolution reads its range here.
@@ -1174,12 +988,9 @@ impl<'a> Session<'a> {
                 };
                 let q = x(0)?.to_vec();
                 let sinks_v = if *sinks { Some(self.param(ins[3], layer)?.data.clone()) } else { None };
-                // Borrowed, not cloned: a clone would copy the whole history every layer and step. Inside a run of positions
-                // (`eval_occurrence_run`) the history may already hold later positions' rows: only the visible ones are read.
-                let keys: &[Vec<f32>] =
-                    visible_rows(self.hist.get(&(ks, lyr)).map(Vec::as_slice).unwrap_or(&[]), self.hist_rows.get(&ks));
-                let values: &[Vec<f32>] =
-                    visible_rows(self.hist.get(&(vs, lyr)).map(Vec::as_slice).unwrap_or(&[]), self.hist_rows.get(&vs));
+                // Borrowed, not cloned: a clone would copy the whole history every layer and step.
+                let keys: &[Vec<f32>] = self.hist.get(&(ks, lyr)).map(Vec::as_slice).unwrap_or(&[]);
+                let values: &[Vec<f32>] = self.hist.get(&(vs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 // Sparse block attention: only the rows of the selected blocks and of the incomplete
                 // tail take part (a masked softmax is the softmax over the rows left).
                 let (keys_sel, values_sel);
@@ -1595,120 +1406,17 @@ fn operand<'v>(r: Ref, vals: &'v [Vec<Vec<f32>>], carries: &'v [Vec<f32>]) -> Re
 
 // ───────────────────────────── kernels ─────────────────────────────
 
-/// Rows a thread of [`linear_raw`] runs at once.
-const LINEAR_ROWS: usize = 4;
-
-/// The float reference's matrix-vector product `y[o] = Σ_i w[o, i]·x[i] (+ b[o])`, each row summed in f64 in index order: a left
-/// fold from the neutral element of `Iterator::sum`, exactly what the first form of this kernel (`.map(|(a, b)| a·b).sum()`)
-/// computed.
-///
-/// Rows are independent, so they are split across threads (small products stay on one thread), and a thread runs
-/// [`LINEAR_ROWS`] rows at once: independent accumulators keep the FP pipes busy where one row's chain of dependent adds left
-/// them waiting on each add's latency. Every row is still ONE sequential fold in one order, and `x` converted to f64 once is
-/// the same exact conversion, so the result is the one-row sequential result bit for bit (pinned by
-/// `linear_raw_is_the_sequential_fold_bit_for_bit`): calibration statistics, and every artifact built from them, are unchanged.
 pub fn linear_raw(x: &[f32], w: &[f32], out: usize, b: Option<&[f32]>) -> Vec<f32> {
     use rayon::prelude::*;
     let n = x.len();
-    let xd: Vec<f64> = x.iter().map(|v| *v as f64).collect();
-    // The fold's start: the neutral element `Iterator::sum` uses for f64, read from the library rather than assumed.
-    let zero: f64 = std::iter::empty::<f64>().sum();
-    let finish = |o: usize, s: f64| -> f32 { (s + b.map(|b| b[o] as f64).unwrap_or(0.0)) as f32 };
-    let block = |c: usize, dst: &mut [f32]| {
-        let o0 = c * LINEAR_ROWS;
-        if dst.len() == LINEAR_ROWS {
-            let r0 = &w[o0 * n..(o0 + 1) * n];
-            let r1 = &w[(o0 + 1) * n..(o0 + 2) * n];
-            let r2 = &w[(o0 + 2) * n..(o0 + 3) * n];
-            let r3 = &w[(o0 + 3) * n..(o0 + 4) * n];
-            let (mut s0, mut s1, mut s2, mut s3) = (zero, zero, zero, zero);
-            for ((((a0, a1), a2), a3), xi) in r0.iter().zip(r1).zip(r2).zip(r3).zip(&xd) {
-                s0 += *a0 as f64 * *xi;
-                s1 += *a1 as f64 * *xi;
-                s2 += *a2 as f64 * *xi;
-                s3 += *a3 as f64 * *xi;
-            }
-            dst[0] = finish(o0, s0);
-            dst[1] = finish(o0 + 1, s1);
-            dst[2] = finish(o0 + 2, s2);
-            dst[3] = finish(o0 + 3, s3);
-        } else {
-            for (k, d) in dst.iter_mut().enumerate() {
-                let o = o0 + k;
-                let mut s = zero;
-                for (a, xi) in w[o * n..(o + 1) * n].iter().zip(&xd) {
-                    s += *a as f64 * *xi;
-                }
-                *d = finish(o, s);
-            }
-        }
+    let row = |o: usize| -> f32 {
+        let r = &w[o * n..(o + 1) * n];
+        let s: f64 = r.iter().zip(x).map(|(a, b)| *a as f64 * *b as f64).sum();
+        (s + b.map(|b| b[o] as f64).unwrap_or(0.0)) as f32
     };
-    let mut y = vec![0f32; out];
-    if out * n >= 1 << 16 {
-        y.par_chunks_mut(LINEAR_ROWS).enumerate().for_each(|(c, d)| block(c, d));
-    } else {
-        y.chunks_mut(LINEAR_ROWS).enumerate().for_each(|(c, d)| block(c, d));
-    }
-    y
-}
-
-/// [`linear_raw`] for several inputs at once (a run of positions): `ys[j][o]` is `linear_raw(xs[j], w, out, b)[o]` bit for bit —
-/// each is the same fold in index order from the same start — while a block of [`LINEAR_ROWS`] rows is read once for every
-/// input instead of once per input, four inputs at a time. Inputs of unequal length are run one by one.
-pub fn linear_raw_many(xs: &[&[f32]], w: &[f32], out: usize, b: Option<&[f32]>) -> Vec<Vec<f32>> {
-    use rayon::prelude::*;
-    const INPUTS: usize = 4;
-    let m = xs.len();
-    if m == 0 {
-        return Vec::new();
-    }
-    let n = xs[0].len();
-    if m == 1 || xs.iter().any(|x| x.len() != n) {
-        return xs.iter().map(|x| linear_raw(x, w, out, b)).collect();
-    }
-    let zero: f64 = std::iter::empty::<f64>().sum();
-    // The conversion is exact: converting each input once gives the same products.
-    let xd: Vec<Vec<f64>> = xs.iter().map(|x| x.iter().map(|v| *v as f64).collect()).collect();
-    let finish = |o: usize, s: f64| -> f32 { (s + b.map(|b| b[o] as f64).unwrap_or(0.0)) as f32 };
-    // `y[o·m + j]`: output row `o` for input `j`; a thread owns whole rows.
-    let block = |c: usize, dst: &mut [f32]| {
-        let o0 = c * LINEAR_ROWS;
-        for r in 0..dst.len() / m {
-            let o = o0 + r;
-            let wr = &w[o * n..(o + 1) * n];
-            let mut j = 0;
-            while j + INPUTS <= m {
-                let (x0, x1, x2, x3) = (&xd[j], &xd[j + 1], &xd[j + 2], &xd[j + 3]);
-                let (mut s0, mut s1, mut s2, mut s3) = (zero, zero, zero, zero);
-                for ((((a, b0), b1), b2), b3) in wr.iter().zip(x0).zip(x1).zip(x2).zip(x3) {
-                    let a = *a as f64;
-                    s0 += a * *b0;
-                    s1 += a * *b1;
-                    s2 += a * *b2;
-                    s3 += a * *b3;
-                }
-                dst[r * m + j] = finish(o, s0);
-                dst[r * m + j + 1] = finish(o, s1);
-                dst[r * m + j + 2] = finish(o, s2);
-                dst[r * m + j + 3] = finish(o, s3);
-                j += INPUTS;
-            }
-            for (jj, x) in xd.iter().enumerate().skip(j) {
-                let mut s0 = zero;
-                for (a, b0) in wr.iter().zip(x) {
-                    s0 += *a as f64 * *b0;
-                }
-                dst[r * m + jj] = finish(o, s0);
-            }
-        }
-    };
-    let mut y = vec![0f32; out * m];
-    if out * n * m >= 1 << 16 {
-        y.par_chunks_mut(LINEAR_ROWS * m).enumerate().for_each(|(c, d)| block(c, d));
-    } else {
-        y.chunks_mut(LINEAR_ROWS * m).enumerate().for_each(|(c, d)| block(c, d));
-    }
-    (0..m).map(|j| (0..out).map(|o| y[o * m + j]).collect()).collect()
+    // Rows are independent and each is summed in one fixed order, so the parallel result is the
+    // sequential one bit for bit; small products stay on one thread.
+    if out * n >= 1 << 16 { (0..out).into_par_iter().map(row).collect() } else { (0..out).map(row).collect() }
 }
 
 fn linear(x: &[f32], w: &Tensor, b: Option<&[f32]>) -> Vec<f32> {
@@ -1919,11 +1627,6 @@ pub struct AttnShape {
 /// (`repeat_kv`). A window keeps the last `window` rows. ALiBi adds `slope_h · j` (a per-row
 /// constant away from `−slope·(i−j)`), scaled with the scores for Falcon. Sinks join the softmax
 /// and are dropped. Returns `(out, scores, probs)`; the last two only when `want_sites`.
-///
-/// Heads are independent (each reads its own query slice and writes its own output slice), so a long history runs them on
-/// separate threads; each head's arithmetic is the one-thread arithmetic in the same order and the outputs, scores and probs
-/// are assembled in head order, so the result is the one-thread result bit for bit
-/// (`attention_and_gated_delta_across_threads_are_the_one_thread_result`).
 #[allow(clippy::too_many_arguments)]
 pub fn attention(
     q: &[f32],
@@ -1940,46 +1643,16 @@ pub fn attention(
     let AttnShape { heads, kv_heads, head_dim, v_head_dim } = sh;
     let n = keys.len();
     let start = window.map(|w| n.saturating_sub(w)).unwrap_or(0);
-    if crate::ram_account::enabled() {
-        // Per query and head: the dot products, scores and probabilities (f64), and the f32 copies the sites observe.
-        let per_head = (n - start) as u64 * (8 + 8 + 8 + if want_sites { 8 } else { 0 });
-        crate::ram_account::note_max(crate::ram_account::Kind::AttentionTemp, heads as u64 * per_head);
-    }
     let group = heads / kv_heads;
-    // `Iterator::sum`'s own start for f64: every dot below is the fold `.map(|(a, b)| a·b).sum()` computed, bit for bit.
-    let zero: f64 = std::iter::empty::<f64>().sum();
-    let head = |h: usize| -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let mut out = vec![0f32; heads * v_head_dim];
+    let (mut all_scores, mut all_probs) = (Vec::new(), Vec::new());
+    for h in 0..heads {
         let kvh = h / group;
         let qh = &q[h * head_dim..(h + 1) * head_dim];
-        let kj = |j: usize| &keys[j][kvh * head_dim..(kvh + 1) * head_dim];
-        // q·k for every visible key, four keys at a time (four independent folds in index order: the FP pipes stay busy where one
-        // fold waits on each add's latency).
-        let mut dots = Vec::with_capacity(n - start);
-        let mut j = start;
-        while j + 4 <= n {
-            let (k0, k1, k2, k3) = (kj(j), kj(j + 1), kj(j + 2), kj(j + 3));
-            let (mut s0, mut s1, mut s2, mut s3) = (zero, zero, zero, zero);
-            for ((((a, b0), b1), b2), b3) in qh.iter().zip(k0).zip(k1).zip(k2).zip(k3) {
-                let a = *a as f64;
-                s0 += a * *b0 as f64;
-                s1 += a * *b1 as f64;
-                s2 += a * *b2 as f64;
-                s3 += a * *b3 as f64;
-            }
-            dots.extend([s0, s1, s2, s3]);
-            j += 4;
-        }
-        for jj in j..n {
-            let mut s0 = zero;
-            for (a, b) in qh.iter().zip(kj(jj)) {
-                s0 += *a as f64 * *b as f64;
-            }
-            dots.push(s0);
-        }
         let mut sc: Vec<f64> = (start..n)
-            .zip(&dots)
-            .map(|(j, dot)| {
-                let dot = *dot;
+            .map(|j| {
+                let kj = &keys[j][kvh * head_dim..(kvh + 1) * head_dim];
+                let dot: f64 = qh.iter().zip(kj).map(|(a, b)| *a as f64 * *b as f64).sum();
                 match alibi {
                     Some(al) => {
                         let slope = al.slopes[h];
@@ -1995,32 +1668,16 @@ pub fn attention(
             sc.iter_mut().for_each(|s| *s = (*s / c).tanh() * c);
         }
         let p = softmax_with_sink(&sc, sinks.map(|s| s[h] as f64));
-        let (scores, probs): (Vec<f32>, Vec<f32>) = if want_sites {
-            (sc.iter().map(|v| *v as f32).collect(), p.iter().map(|v| *v as f32).collect())
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let mut out = vec![0f32; v_head_dim];
+        if want_sites {
+            all_scores.extend(sc.iter().map(|v| *v as f32));
+            all_probs.extend(p.iter().map(|v| *v as f32));
+        }
         for (jj, j) in (start..n).enumerate() {
             let vj = &values[j][kvh * v_head_dim..(kvh + 1) * v_head_dim];
-            for (o, vv) in out.iter_mut().zip(vj) {
+            for (o, vv) in out[h * v_head_dim..(h + 1) * v_head_dim].iter_mut().zip(vj) {
                 *o += (p[jj] * *vv as f64) as f32;
             }
         }
-        (out, scores, probs)
-    };
-    let per: Vec<(Vec<f32>, Vec<f32>, Vec<f32>)> = if heads > 1 && heads * (n - start) * head_dim.max(v_head_dim) >= 1 << 16 {
-        use rayon::prelude::*;
-        (0..heads).into_par_iter().map(head).collect()
-    } else {
-        (0..heads).map(head).collect()
-    };
-    let mut out = Vec::with_capacity(heads * v_head_dim);
-    let (mut all_scores, mut all_probs) = (Vec::new(), Vec::new());
-    for (o, sc, p) in per {
-        out.extend(o);
-        all_scores.extend(sc);
-        all_probs.extend(p);
     }
     (out, all_scores, all_probs)
 }
@@ -2222,15 +1879,12 @@ pub fn gated_delta_traced(
 ) -> Vec<f32> {
     let rep = nv / nk;
     let mut out = vec![0f32; nv * dv];
-    // Value heads are independent: head `vh` reads its key/query head and writes only its own state slice `s[vh·dk·dv ..]`, its
-    // output slice and its delta. Large states run the heads on separate threads; each head's arithmetic is the one-thread
-    // arithmetic in the same order and the deltas are appended in head order, so the result is the one-thread result bit for
-    // bit (`attention_and_gated_delta_across_threads_are_the_one_thread_result`).
-    let head = |vh: usize, st: &mut [f32], o: &mut [f32]| -> Vec<f32> {
+    for vh in 0..nv {
         let kh = match map {
             HeadMap::Group => vh / rep,
             HeadMap::Tile => vh % nk,
         };
+        let st = &mut s[vh * dk * dv..(vh + 1) * dk * dv];
         // A decay of `nv·dk` values is channel-wise (`MIXER_KDA_V1`): row `i` of the state (a key channel) decays by `exp(g[vh, i])`.
         if g.len() == nv * dk && dk > 1 {
             for i in 0..dk {
@@ -2249,30 +1903,15 @@ pub fn gated_delta_traced(
             let mem: f64 = (0..dk).map(|i| st[i * dv + j] as f64 * kv[i] as f64).sum();
             *dj = (vv[j] as f64 - mem) * beta[vh] as f64;
         }
+        deltas.extend(delta.iter().map(|d| *d as f32));
         for i in 0..dk {
             for j in 0..dv {
                 st[i * dv + j] = (st[i * dv + j] as f64 + kv[i] as f64 * delta[j]) as f32;
             }
         }
-        for (j, oj) in o.iter_mut().enumerate() {
-            *oj = ((0..dk).map(|i| st[i * dv + j] as f64 * qv[i] as f64).sum::<f64>() * q_scale) as f32;
+        for j in 0..dv {
+            out[vh * dv + j] = ((0..dk).map(|i| st[i * dv + j] as f64 * qv[i] as f64).sum::<f64>() * q_scale) as f32;
         }
-        delta.iter().map(|d| *d as f32).collect()
-    };
-    let states = &mut s[..nv * dk * dv];
-    let per: Vec<Vec<f32>> = if nv > 1 && nv * dk * dv >= 1 << 16 {
-        use rayon::prelude::*;
-        states
-            .par_chunks_mut((dk * dv).max(1))
-            .zip(out.par_chunks_mut(dv.max(1)))
-            .enumerate()
-            .map(|(vh, (st, o))| head(vh, st, o))
-            .collect()
-    } else {
-        states.chunks_mut((dk * dv).max(1)).zip(out.chunks_mut(dv.max(1))).enumerate().map(|(vh, (st, o))| head(vh, st, o)).collect()
-    };
-    for d in per {
-        deltas.extend(d);
     }
     out
 }

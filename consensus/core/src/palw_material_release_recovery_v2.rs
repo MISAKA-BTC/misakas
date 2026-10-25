@@ -10,17 +10,7 @@ use crate::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeSet;
 
-/// Kernel-route aux table 137 (renumbered 134 → 137 on 2026-10-15: 134/135 are RFC-0016's queue index and telemetry, 136 is
-/// RFC-0018's certification table; 137 grepped free across this tree, integ/decisions-1015 and integ/validation).
-pub const PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2: u8 = 137;
-/// **The forms this fence owns inside the monetary material kinds (240–242)** — appended inside NEW kinds, so neither the new-kind
-/// table nor the int-12 wire ledger names them (`palw_lifecycle_kind_owner_v1` routes each to
-/// `PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2`; below it they ride unjudged as the monetary-material-only build reads them).
-pub const PALW_MATERIAL_RECOVERY_FORMS_V2: [(&str, crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1); 3] = [
-    ("MonetaryMaterialEnrolledV1 / MonetaryMaterialReplacedV1 with a TypedKernelV4 scope", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
-    ("PalwMonetaryMaterialActionV1::RecoveryV2", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
-    ("PalwMonetaryMaterialActionV1::ChallengeCurrentV4", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
-];
+pub const PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2: u8 = 134;
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_CONTRACTS_V2: u32 = 4096;
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_GENERATIONS_V2: u16 = 64;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -151,6 +141,13 @@ pub enum PalwMaterialRecoveryActionV2 {
         providers: Vec<PalwMaterialRecoverySignatureV2>,
         sponsor_signature: Vec<u8>,
     },
+}
+/// The admission horizon is native and signed, not elapsed local TTL.
+pub fn bounded_replacement_deadline_v4(now: u64, until: u64, max_window: u64) -> Result<(), &'static str> {
+    if until < now || now.checked_add(max_window).is_none_or(|max| until > max) {
+        return Err("bounded replacement signed admission deadline is expired or outside policy");
+    }
+    Ok(())
 }
 impl PalwMaterialRecoveryActionV2 {
     pub fn root(&self) -> Hash64 {
@@ -511,9 +508,7 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("recovery requires the signed monetary covenant first"));
         }
-        // Cost and bounded provider-ack liveness are measured values: arming needs a pinned record for this exact policy on this
-        // network (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
-        self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::MaterialReleaseRecoveryV2, &f.policy)
+        Err(PalwModeV2Error::Invalid("release recovery cannot be armed: cost and bounded provider-ack liveness approval pending"))
     }
 }
 
@@ -719,15 +714,7 @@ pub fn material_provider_terminals_owned_v4(
             }
         }
     }
-    preflight_native_value_v1::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded[..], encoded.len() as u64).map_err(|e| e.to_string())?;
+    preflight_native_value_v1::<Vec<PalwMaterialTerminalReceiptV2>>(encoded.as_slice(), encoded.len() as u64).map_err(|e| e.to_string())?;
     retain_native_value_decode_v1(&encoded, || borsh::from_slice::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded))
         .map_err(|e| e.to_string())
-}
-
-/// The admission horizon is native and signed, not elapsed local TTL.
-pub fn bounded_replacement_deadline_v4(now: u64, until: u64, max_window: u64) -> Result<(), &'static str> {
-    if until < now || now.checked_add(max_window).is_none_or(|max| until > max) {
-        return Err("bounded replacement signed admission deadline is expired or outside policy");
-    }
-    Ok(())
 }

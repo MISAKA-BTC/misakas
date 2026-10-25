@@ -460,7 +460,7 @@ impl PalwHorizonExtensionFenceV1 {
 /// **The claim-fixed hard deadline** of a kernel claim accepted at `committed_daa` (`d0`): fixed at acceptance, never moved by an
 /// extension. `None` on overflow (refused).
 // X3: the kernel claim has no native `dispute_hard_deadline`; this is its local claim-fixed bound from its own acceptance. The fold
-// caps it with `palw_ruling_fences_v1::palw_claim_effective_deadline_v1(own, palw_court_clock_v2::palw_claim_x3_cap_hard_v2(root))` — the EXEC root
+// caps it with `palw_ruling_fences_v1::palw_claim_effective_deadline_v1(own, palw_claim_hard_deadline_of_v1(root))` — the EXEC root
 // native claim's X3 deadline where `palw_claim_hard_deadline_v1` governs it. The lead may replace the local term once X3 defines a
 // kernel-claim deadline.
 pub fn palw_horizon_extension_hard_deadline_v1(committed_daa: u64, policy: &PalwHorizonExtensionPolicyV1) -> Option<u64> {
@@ -614,24 +614,6 @@ pub fn palw_minimum_price_c_upper_v1(
     let capital = area.div_ceil(1_000_000u128 * policy.capital_rate_period_daa as u128);
     let total = (base as u128).checked_add(capital).ok_or(PalwMinimumPriceRefusalV1::Unrepresentable)?;
     u64::try_from(total).map_err(|_| PalwMinimumPriceRefusalV1::Unrepresentable)
-}
-
-/// **`C_upper` for an X3 claim** (REQ-X3-6, 2026-10-18): the class cost of [`palw_minimum_price_c_upper_v1`] plus the priced retention
-/// extension `extra_daa × c_retain` ([`crate::palw_ruling_fences_v1::palw_x3_retention_cost_sompi_v1`]). `extension` is `None` under the
-/// old ruleset, which leaves the term unchanged. An unmeasured `c_retain` (0) with a positive extension is refused as UNKNOWN.
-pub fn palw_minimum_price_c_upper_x3_v1(
-    policy: &PalwMinimumPricePolicyV1,
-    class: &Digest,
-    capital_sompi: u64,
-    span_daa: u64,
-    x3_policy: &crate::palw_ruling_fences_v1::PalwClaimHardDeadlinePolicyV1,
-    extension: Option<&crate::palw_ruling_fences_v1::PalwX3RetentionExtensionV1>,
-) -> Result<u64, PalwMinimumPriceRefusalV1> {
-    let base = palw_minimum_price_c_upper_v1(policy, class, capital_sompi, span_daa)?;
-    let Some(extension) = extension else { return Ok(base) };
-    let retention = crate::palw_ruling_fences_v1::palw_x3_retention_cost_sompi_v1(x3_policy, extension.extra_daa)
-        .map_err(PalwMinimumPriceRefusalV1::Unknown)?;
-    base.checked_add(retention).ok_or(PalwMinimumPriceRefusalV1::Unrepresentable)
 }
 
 /// `required_M = ⌈C_upper / p_collect_lower⌉`; refused as UNKNOWN when `p_collect_lower` is zero and the cost positive.
@@ -1400,53 +1382,5 @@ mod tests {
         assert_ne!(palw_model_verification_deferred_payout_key_v1(&[5; 64]), Hash64::from_bytes([5; 64]));
         assert_eq!(palw_model_verification_context_key_v1(&tally).len(), 65);
         assert_ne!(palw_model_verification_context_key_v1(&tally), palw_model_verification_decided_key_v1(&tally));
-    }
-}
-
-/// REQ-X3-6 (econ): the X3 `C_upper` variant prices the retention extension at `c_retain`, and refuses an unmeasured `c_retain`.
-#[cfg(test)]
-mod x3_c_upper_tests {
-    use super::*;
-    use crate::palw_ruling_fences_v1::{PalwClaimHardDeadlineFenceV1, PalwX3RetentionExtensionV1};
-
-    fn ext(extra_daa: u64) -> PalwX3RetentionExtensionV1 {
-        PalwX3RetentionExtensionV1 { base_retention_daa: 100, retention_daa: 100 + extra_daa, extra_daa }
-    }
-
-    #[test]
-    fn c_upper_x3_keeps_the_old_term_without_an_extension_and_prices_the_extension_otherwise() {
-        let policy = PalwMinimumPricePolicyV1::unapproved_probe_v1();
-        let mut x3 = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy;
-        let class = [7u8; 64];
-        let base = palw_minimum_price_c_upper_v1(&policy, &class, 1_000_000, 1_000).unwrap();
-        assert_eq!(base, 1_100);
-        // Old ruleset: no extension, the term is the unchanged class cost (even with c_retain unmeasured).
-        x3.retention_cost_per_daa_sompi = 0;
-        assert_eq!(palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, None), Ok(base));
-        // Priced: base + extra_daa × c_retain exactly.
-        x3.retention_cost_per_daa_sompi = 3;
-        assert_eq!(palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, Some(&ext(50))), Ok(base + 150));
-        // A zero-length extension costs nothing even when c_retain is unmeasured.
-        x3.retention_cost_per_daa_sompi = 0;
-        assert_eq!(palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, Some(&ext(0))), Ok(base));
-    }
-
-    #[test]
-    fn c_upper_x3_refuses_an_unmeasured_positive_extension_and_an_overflow_and_an_unmeasured_class() {
-        let policy = PalwMinimumPricePolicyV1::unapproved_probe_v1();
-        let mut x3 = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy;
-        let class = [7u8; 64];
-        x3.retention_cost_per_daa_sompi = 0;
-        assert!(matches!(
-            palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, Some(&ext(50))),
-            Err(PalwMinimumPriceRefusalV1::Unknown(_))
-        ));
-        x3.retention_cost_per_daa_sompi = u64::MAX;
-        assert!(palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, Some(&ext(2))).is_err());
-        x3.retention_cost_per_daa_sompi = 3;
-        assert!(matches!(
-            palw_minimum_price_c_upper_x3_v1(&policy, &[9u8; 64], 1_000_000, 1_000, &x3, Some(&ext(50))),
-            Err(PalwMinimumPriceRefusalV1::Unknown(_))
-        ));
     }
 }

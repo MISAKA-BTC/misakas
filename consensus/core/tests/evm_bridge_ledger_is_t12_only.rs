@@ -35,11 +35,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was d445125c…, 27ad3cf4…)
+// re-pin 2026-10-25 @6549f9be22d4: testnet-12 arms the int-13 list at DAA 15500 (was b272e2f5…, 11ce9af4…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "b272e2f5f7adcacc8e3b7ef5121f2223a04ed50a7a0ec6ad5a3ffde3ebb066ad",
+    "0939168ba7ae48d8c5c43a07225b7aeaf652afe370c9159692034506b0143cff",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "11ce9af44c0ee06cd645b678f84a80e6a4b06a52e6f2bdbcd8635f0663744934",
+    "c03485ce631db71a22d7ab122460ab757e2dd4b6020d03045cac2343aa19e940",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

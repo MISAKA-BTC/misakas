@@ -1793,9 +1793,7 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
         plan,
         param_commitments: pc.clone(),
     };
-    let mut preview_owner = v.c.s.kernel_route().unwrap().ledger().unwrap();
-    // RFC-0006: an off-chain preview mutates the reserved ledger explicitly (there is no `DerefMut`).
-    let preview = preview_owner.preview_mut_v1();
+    let mut preview = v.c.s.kernel_route().unwrap().ledger().unwrap();
     preview.begin_block(v.c.daa + 1).unwrap();
     let kid = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor);
     preview.sync_bond(kid, v.c.s.bond(&sponsor).unwrap().collateral);
@@ -1927,19 +1925,11 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
     let route = v.c.s.kernel_route().unwrap();
     let (contract, sources, promises) = route.paid_beacon_material_v5(&terms.source.context).unwrap().unwrap();
     let context = route.beacon_source_target_v4(&terms.source.context).unwrap().context;
-    // User decision 2026-10-18 (ADR-0185 note): the Panel v5 beacon reads its opted-in sources by seal-reveal — the commitments
-    // sealed after the target, opened after the seal window; no source need be Final. The chain's own history reads the same.
-    assert!(route.opt_in_seal_reveal_v6());
-    let state = misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(
-        &context,
-        &contract.source,
-        &sources,
-        Some((&contract, &promises)),
-        route.ledger().unwrap().daa,
-    )
-    .unwrap();
-    let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) = state else {
-        panic!("revealed opted-in sources must lock the paid Panel beacon: {state:?} ({} sources)", sources.len());
+    let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) =
+        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&context, &contract, &sources, &promises, route.ledger().unwrap().daa)
+            .unwrap()
+    else {
+        panic!("actual source Finals must lock the paid Panel beacon");
     };
     let proof = BeaconProofV1 {
         epoch: seal.beacon_epoch,

@@ -1,8 +1,0 @@
-{
-  "mode": "Read-only generator; writes intercepted in memory",
-  "current_only": [],
-  "generated_only": [],
-  "summary": [
-    "wrote consensus/core/src/palw_native_resource_v1/generated.rs: 1311 explicit types, 0 opaque/unresolved types"
-  ]
-}

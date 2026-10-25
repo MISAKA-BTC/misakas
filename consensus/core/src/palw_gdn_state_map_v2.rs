@@ -62,16 +62,10 @@ fn add(a: u64, b: u64) -> Result<u64, &'static str> {
 impl<'a> PalwGdnStateGeometryV2<'a> {
     pub fn of(profile: &'a PalwShapeProfileV3) -> Result<Self, &'static str> {
         let id = profile.state_chunk_map_id;
-        // RFC-0006 consumer v2's composed hybrid maps carry exactly the solo recurrence enumeration of their `gdn=` half after
-        // the attention half (`maps::hybrid_composed_state_chunk_map_id_v1/_v2`): v1's full window, v2's head windows.
-        let layout = if id == maps::gdn_state_chunk_map_id_v1()
-            || id == maps::hybrid_state_chunk_map_id_v1()
-            || id == maps::hybrid_composed_state_chunk_map_id_v1()
-        {
+        let layout = if id == maps::gdn_state_chunk_map_id_v1() || id == maps::hybrid_state_chunk_map_id_v1() {
             PalwGdnStateLayoutV2::FullConvV1
         } else if id == maps::gdn_state_chunk_map_id_v2()
             || id == maps::hybrid_state_chunk_map_id_v2()
-            || id == maps::hybrid_composed_state_chunk_map_id_v2()
             || id == maps::hybrid_state_chunk_map_id_v3()
             || id == maps::hybrid_state_chunk_map_id_v4()
         {
@@ -179,22 +173,6 @@ impl<'a> PalwGdnStateGeometryV2<'a> {
         }
         let ordinal = self.layers().position(|candidate| candidate == layer)? as u64;
         Some((ordinal * u64::from(self.heads) + u64::from(head)) * u64::from(per_head) + u64::from(block))
-    }
-    /// Locate a convolution block — `head` is the window head under the head layouts and must be 0 under the full-window v1
-    /// layout — at its index inside the recurrence enumeration (after every delta block), without walking unrelated chunks.
-    pub fn conv_chunk_index(&self, layer: u16, head: u32, block: u32) -> Option<u64> {
-        let conv_heads = if self.layout == PalwGdnStateLayoutV2::FullConvV1 { 1 } else { self.heads };
-        if head >= conv_heads {
-            return None;
-        }
-        let per_head = self.conv_kernel.div_ceil(self.conv_rows_per_chunk);
-        if block >= per_head {
-            return None;
-        }
-        let delta_total =
-            self.recurrence_layers * u64::from(self.heads) * u64::from(self.v_dim.div_ceil(self.delta_rows_per_chunk));
-        let ordinal = self.layers().position(|candidate| candidate == layer)? as u64;
-        Some(delta_total + (ordinal * u64::from(conv_heads) + u64::from(head)) * u64::from(per_head) + u64::from(block))
     }
     pub fn entry(&self, index: u64) -> Option<PalwGdnStateChunkEntryV2> {
         if index >= self.chunks {

@@ -20,7 +20,6 @@ enum BlockDepthType {
 #[derive(Clone)]
 pub struct BlockDepthManager<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T: HeaderStoreReader> {
     merge_depth: u64,
-    merge_depth_history: Option<kaspa_consensus_core::config::params::ForkedParam<u64>>,
     finality_depth: u64,
     genesis_hash: BlockHash,
     depth_store: Arc<S>,
@@ -41,7 +40,6 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
     ) -> Self {
         Self {
             merge_depth,
-            merge_depth_history: None,
             finality_depth,
             genesis_hash,
             depth_store,
@@ -50,13 +48,6 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
             _headers_store: headers_store,
         }
     }
-    pub fn with_merge_depth_history(mut self, history: kaspa_consensus_core::config::params::ForkedParam<u64>) -> Self {
-        if history.activation() != kaspa_consensus_core::config::params::ForkActivation::never() {
-            self.merge_depth_history = Some(history);
-        }
-        self
-    }
-
     pub fn calc_merge_depth_root(&self, ghostdag_data: &GhostdagData, pruning_point: BlockHash) -> BlockHash {
         self.calculate_block_at_depth(ghostdag_data, BlockDepthType::MergeRoot, pruning_point)
     }
@@ -75,9 +66,7 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
             return ORIGIN;
         }
         let depth = match depth_type {
-            BlockDepthType::MergeRoot => self
-                .merge_depth_history
-                .map_or(self.merge_depth, |h| h.get(self._headers_store.get_daa_score(ghostdag_data.selected_parent).unwrap())),
+            BlockDepthType::MergeRoot => self.merge_depth,
             BlockDepthType::Finality => self.finality_depth,
         };
         if ghostdag_data.blue_score < depth {
@@ -108,11 +97,6 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
         }
 
         let required_blue_score = ghostdag_data.blue_score - depth;
-        // A depth increase can move the root behind its parent's cached root. Only that
-        // boundary needs a fresh walk; ordinary and pre-fence blocks keep the cached path.
-        if self.merge_depth_history.is_some() && self.ghostdag_store.get_blue_score(current).unwrap() > required_blue_score {
-            current = pruning_point;
-        }
 
         for chain_block in self.reachability_service.forward_chain_iterator(current, ghostdag_data.selected_parent, true) {
             if self.ghostdag_store.get_blue_score(chain_block).unwrap() >= required_blue_score {

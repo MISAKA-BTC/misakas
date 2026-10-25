@@ -3381,7 +3381,7 @@ fn serve_connection(
         }
         // **RFC-0003 §II.1 — image generation.** This binary serves ONE family worker (`--worker`) and holds no generative class, and no generative
         // worker process exists to talk to (the class is held in process by `misaka_palw_base0::gen_worker`), so the route answers by name rather
-        // than 404: `imagegen` is the library it will call (CODE_GAP recorded in docs/evidence/palw/implementation-records/rfc-0001-0003-delivery-record.md).
+        // than 404: `imagegen` is the library it will call (CODE_GAP recorded in docs/design/palw/rfc-0001-0003-delivery-record.md).
         ("POST", "/v1/images/generations") => respond(
             stream,
             "501 Not Implemented",

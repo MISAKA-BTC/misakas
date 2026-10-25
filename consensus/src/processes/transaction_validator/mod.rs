@@ -31,7 +31,6 @@ pub struct TransactionValidator {
     /// reds but this, and the isolation guard was sized as though the reds shared one aggregate
     /// output — the shape they had before ADR-0058 paid each of them its own.
     mergeset_size_limit: u64,
-    mergeset_size_history: Option<kaspa_consensus_core::config::params::ForkedParam<u64>>,
     sig_cache: Cache<SigCacheKey, bool>,
     pub(crate) mass_calculator: MassCalculator,
     /// kaspa-pq PQ-only enforcement mode for this network (ADR-0019).
@@ -164,7 +163,6 @@ pub struct TransactionValidator {
     /// the height. `None` on every shipped preset.
     palw_fp_decode_constraint_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     palw_staged_public_court_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    palw_tir_public_conviction_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **RFC-0001 §2.5: `Params::palw_fp_constraint_v2_fence()`** — read by the header-context door only (a second-form
     /// constraint below its height is refused). `None` on every shipped preset.
     palw_fp_constraint_v2_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -210,7 +208,6 @@ impl TransactionValidator {
             coinbase_payload_script_public_key_max_len,
             coinbase_maturity,
             mergeset_size_limit,
-            mergeset_size_history: None,
             sig_cache: Cache::with_counters(10_000, counters),
             mass_calculator,
             pq_enforcement,
@@ -235,7 +232,6 @@ impl TransactionValidator {
             palw_fp_prefix_inherit_fence: None,
             palw_fp_decode_constraint_fence: None,
             palw_staged_public_court_fence: None,
-            palw_tir_public_conviction_fence: None,
             palw_fp_constraint_v2_fence: None,
         }
     }
@@ -324,12 +320,6 @@ impl TransactionValidator {
         self
     }
 
-    pub fn with_tir_public_conviction_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
-        self.palw_tir_public_conviction_fence =
-            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
-        self
-    }
-
     /// RFC-0001 §2.5: declare the second constraint form's fence (`Params::palw_fp_constraint_v2_fence()`).
     pub fn with_fp_constraint_v2_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
         self.palw_fp_constraint_v2_fence =
@@ -376,17 +366,6 @@ impl TransactionValidator {
         self
     }
 
-    pub fn dag_width_declared(&self) -> bool {
-        self.mergeset_size_history.is_some()
-    }
-
-    pub fn with_mergeset_size_history(mut self, history: kaspa_consensus_core::config::params::ForkedParam<u64>) -> Self {
-        if history.activation() != kaspa_consensus_core::config::params::ForkActivation::never() {
-            self.mergeset_size_history = Some(history);
-        }
-        self
-    }
-
     pub fn new_for_tests(
         max_tx_inputs: usize,
         max_tx_outputs: usize,
@@ -407,7 +386,6 @@ impl TransactionValidator {
             coinbase_payload_script_public_key_max_len,
             coinbase_maturity,
             mergeset_size_limit,
-            mergeset_size_history: None,
             sig_cache: Cache::with_counters(10_000, counters),
             mass_calculator: MassCalculator::new(0, 0, 0, 0),
             // Tests run upstream-compatible (no PQ restriction) unless a test
@@ -445,7 +423,6 @@ impl TransactionValidator {
             palw_fp_prefix_inherit_fence: None,
             palw_fp_decode_constraint_fence: None,
             palw_staged_public_court_fence: None,
-            palw_tir_public_conviction_fence: None,
             palw_fp_constraint_v2_fence: None,
         }
     }

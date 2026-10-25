@@ -1,4 +1,4 @@
-//! **The numbers `docs/history/networks/testnet-11/testnet11-join-mining.md` prints for a newcomer's bond, derived.**
+//! **The numbers `docs/history/testnet11-join-mining.md` prints for a newcomer's bond, derived.**
 //!
 //! Issue #95: a newcomer registered a bond for a Qwen3.6 producer and its producer then logged
 //! `holding: the bond's exposure ceiling leaves no room for another claim` forever. Two causes,
@@ -66,7 +66,7 @@ fn the_model_tier_collateral_the_docs_quote() {
     // against, whatever the operator asked to produce.
     const FLOOR_PWU_PER_INFERENCE: u64 = 7_708;
 
-    // The figures `docs/history/networks/testnet-11/testnet11-join-mining.md` prints.
+    // The figures `docs/history/testnet11-join-mining.md` prints.
     assert_eq!(palw_v2_collateral_for_claim_lifetime_v1(pwu_per_inference(&qwen36)), 386_745_547_200);
     assert_eq!(palw_v2_collateral_for_claim_lifetime_v1(pwu_per_inference(&a16)), 228_908_844_480);
     assert_eq!(palw_v2_collateral_for_claim_lifetime_v1(FLOOR_PWU_PER_INFERENCE), 1_110_106_160);

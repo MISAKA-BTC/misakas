@@ -214,7 +214,6 @@ impl ProofContext {
                     // ADR-0125: and the round lane's rule, validation as building.
                     ppm.palw_round_lane,
                 )
-                .with_dag_width(ppm.dag_width)
             })
             .collect_vec();
 

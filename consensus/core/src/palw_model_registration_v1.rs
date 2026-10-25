@@ -390,12 +390,11 @@ pub fn palw_model_preflight_v1(
     // ADR-0152 §4-ter C5's held check and addendum §4-bis.8's — one shared function, the processor's
     // two calls with its arguments (testnet-12 lifecycle audit T12-030: this preflight asked only
     // the first, so a canonical job the processor drops read ADMISSION_OK).
-    let attribution = crate::palw_attempt_rules_v1::palw_registration_attribution_v2(
+    let attribution = crate::palw_attempt_rules_v1::palw_registration_attribution_v1(
         profile,
         canonical,
         shape.offence_attribution,
         shape.prompt_ids_form,
-        shape.memory_routing_court,
     );
 
     let mut refusal: Option<crate::palw_refusal_v1::PalwRefusalV1> = None;

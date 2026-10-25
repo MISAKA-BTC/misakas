@@ -28,8 +28,7 @@ use crate::prequant::{QFormat, QLayout, QWeight, QuantConfig};
 use crate::quantfmt::blocks::BlocksFormat;
 use crate::quantfmt::{NeedsDescriptor, QuantFormat, QuantRegistry};
 use crate::spec::{ArchSpec, Gain, NormSpec, Residual};
-use crate::weights::remote_blob::{ByteSourceReaderV1, ByteSourceV1};
-use crate::weights::{Tensor, TensorMeta, TensorSource, f16_to_f32};
+use crate::weights::{Tensor, TensorMeta, TensorSource, f16_to_f32, read_exact_at};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::{BufReader, Read};
@@ -198,9 +197,8 @@ pub struct GgufFile {
     pub tensors: BTreeMap<String, GgufTensorInfo>,
     pub alignment: u64,
     pub data_start: u64,
-    /// The data: an open file, or a remote file read by windows and hashed in order (genesis 8: `weights::remote_blob`);
-    /// `None` for a header parsed from a reader.
-    file: Option<Arc<dyn ByteSourceV1>>,
+    /// The open data file (`None` for a header parsed from a reader).
+    file: Option<Arc<std::fs::File>>,
     /// Tensors of undescribed types: the most bytes the layout allows each (the gap to the next).
     unsized_bounds: BTreeMap<String, u64>,
 }
@@ -332,29 +330,10 @@ impl GgufFile {
     pub fn open_with_budget(path: &Path, reg: &QuantRegistry, budget: &mut GgufReadBudget) -> Result<Self> {
         let f = std::fs::File::open(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?;
         let len = f.metadata().map_err(|e| LowerError::Io(e.to_string()))?.len();
-        let file: Arc<dyn ByteSourceV1> = Arc::new(f.try_clone().map_err(|e| LowerError::Io(e.to_string()))?);
+        let file = Arc::new(f.try_clone().map_err(|e| LowerError::Io(e.to_string()))?);
         let mut g = Self::parse_with_budget(BufReader::new(f), Some(len), path, reg, budget)?;
         g.file = Some(file);
         Ok(g)
-    }
-
-    /// **A GGUF over any byte source** (genesis 8: a remote file read by HTTP range and hashed in order). The header — metadata
-    /// and tensor table, untrusted — is parsed through the source with the same bounds as a local file, at most `header_cap`
-    /// bytes of it; tensor data is read on demand.
-    pub fn open_source(src: Arc<dyn ByteSourceV1>, label: &Path, reg: &QuantRegistry, header_cap: u64) -> Result<Self> {
-        let len = src.len();
-        let mut budget = GgufReadBudget::new(header_cap, u64::MAX, MAX_TENSORS);
-        let mut g = {
-            let reader = ByteSourceReaderV1 { src: &*src, pos: 0, limit: header_cap.min(len) };
-            Self::parse_with_budget(BufReader::with_capacity(8 << 20, reader), Some(len), label, reg, &mut budget)?
-        };
-        g.file = Some(src);
-        Ok(g)
-    }
-
-    /// The data source, when the view holds data (a verifying source is finished through it).
-    pub fn data_source(&self) -> Option<&Arc<dyn ByteSourceV1>> {
-        self.file.as_ref()
     }
 
     /// **The header of a GGUF file, from any reader** — a file, a prefix fetched by range, a header
@@ -554,7 +533,7 @@ impl GgufFile {
         self.file.is_some()
     }
 
-    fn data_file(&self) -> Result<&dyn ByteSourceV1> {
+    fn data_file(&self) -> Result<&std::fs::File> {
         self.file.as_deref().ok_or_else(|| LowerError::weights("GGUF: a header-only view holds no tensor data"))
     }
 
@@ -623,7 +602,8 @@ impl GgufFile {
             return Err(LowerError::weights(format!("GGUF `{}`: a slice past the tensor", t.name)));
         }
         let mut b = vec![0u8; len as usize];
-        self.data_file()?.read_at(&mut b, t.offset + start).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
+        read_exact_at(self.data_file()?, &mut b, t.offset + start)
+            .map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
         Ok(b)
     }
 
@@ -635,7 +615,8 @@ impl GgufFile {
             return Err(LowerError::weights(format!("GGUF `{name}`: bytes {range:?} of a tensor of {len}")));
         }
         let mut b = vec![0u8; (range.end - range.start) as usize];
-        self.data_file()?.read_at(&mut b, t.offset + range.start).map_err(|e| LowerError::weights(format!("GGUF `{name}`: {e}")))?;
+        read_exact_at(self.data_file()?, &mut b, t.offset + range.start)
+            .map_err(|e| LowerError::weights(format!("GGUF `{name}`: {e}")))?;
         Ok(b)
     }
 
@@ -665,17 +646,6 @@ impl GgufFile {
         let (t, inp, rows, start, len) = self.expert_rows(name, e)?;
         let raw = self.raw_range(t, start, len)?;
         Ok(Tensor::new(vec![rows, inp], self.decode_floats(t, &raw, inp, rows)?))
-    }
-
-    /// `(name, digest)` of every quant-format descriptor the tensors are read with (what a runtime pack pins).
-    pub fn quant_descriptors(&self) -> Vec<(String, String)> {
-        let mut out: BTreeMap<String, String> = BTreeMap::new();
-        for t in self.tensors.values() {
-            if let Some(fmt) = &t.ty.fmt {
-                out.insert(fmt.name().to_string(), fmt.digest_hex());
-            }
-        }
-        out.into_iter().collect()
     }
 
     /// Tensor count by type (for reports).
@@ -1274,8 +1244,6 @@ fn arch_keys(arch: &str) -> &'static [&'static str] {
             "ssm.time_step_rank",
             "ssm.inner_size",
             "full_attention_interval",
-            // Checked against full_attention_interval and the tensors where the layer kinds are synthesised.
-            "attention.recurrent_layers",
         ],
         _ => &[],
     }
@@ -1307,12 +1275,6 @@ fn llama3_factors(dim: usize, theta: f64, (factor, lo, hi, orig): (f64, f64, f64
 impl GgufModel {
     pub fn open(path: &Path) -> Result<Self> {
         Self::from_file(GgufFile::open(path)?)
-    }
-
-    /// **Genesis 8:** the model over any byte source ([`GgufFile::open_source`]): a remote file read by HTTP range and hashed in
-    /// order. `validate_snapshot` finishes the source's check (the whole-file SHA-256 against its pin).
-    pub fn open_source(src: Arc<dyn ByteSourceV1>, label: &Path, reg: &QuantRegistry, header_cap: u64) -> Result<Self> {
-        Self::from_file(GgufFile::open_source(src, label, reg, header_cap)?)
     }
 
     /// [`open`](Self::open) with the quant formats of `reg` (built-ins plus supplied descriptors).
@@ -1639,33 +1601,6 @@ impl GgufModel {
                         return Err(LowerError::not_lowerable(format!(
                             "GGUF qwen35: layer {i}'s tensors disagree with full_attention_interval {interval}"
                         )));
-                    }
-                }
-                // **`attention.recurrent_layers`** (written by newer llama.cpp converters, e.g. the Qwen3.8 GGUFs of the genesis set):
-                // one bool per BLOCK, the multi-token-prediction blocks included. It restates the layer kinds; it is accepted only
-                // when every decoder layer's flag is the kind `full_attention_interval` and the tensors already gave (a flag that
-                // disagrees is a different model and is refused by name). The trailing MTP blocks' flags describe dropped layers.
-                if let Some(flags) = get("attention.recurrent_layers") {
-                    let a =
-                        flags.as_arr().ok_or_else(|| LowerError::bad("GGUF qwen35: attention.recurrent_layers is not an array"))?;
-                    if a.len() != blocks {
-                        return Err(LowerError::bad(format!(
-                            "GGUF qwen35: attention.recurrent_layers has {} entries for {blocks} blocks",
-                            a.len()
-                        )));
-                    }
-                    for (i, t) in types.iter().enumerate() {
-                        let recurrent = match &a[i] {
-                            GValue::Bool(b) => *b,
-                            other => other.as_u64().map(|v| v != 0).ok_or_else(|| {
-                                LowerError::bad(format!("GGUF qwen35: attention.recurrent_layers[{i}] is not a bool"))
-                            })?,
-                        };
-                        if recurrent != (*t == "linear_attention") {
-                            return Err(LowerError::not_lowerable(format!(
-                                "GGUF qwen35: attention.recurrent_layers[{i}] = {recurrent} disagrees with full_attention_interval {interval}"
-                            )));
-                        }
                     }
                 }
                 let sections: Vec<u64> = get("rope.dimension_sections")
@@ -2208,13 +2143,6 @@ impl GgufModel {
 }
 
 impl TensorSource for GgufModel {
-    /// A verifying data source (the streamed remote file) completes its whole-file check here, before an artifact is published.
-    fn validate_snapshot(&self) -> Result<()> {
-        match self.file.data_source() {
-            Some(src) => src.finish(),
-            None => Ok(()),
-        }
-    }
     fn shape(&self, name: &str) -> Option<Vec<usize>> {
         if let Some((w, _)) = self.rotation_tensor(name) {
             return Some(vec![w, self.rotation.as_ref()?.block]);

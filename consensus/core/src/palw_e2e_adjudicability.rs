@@ -662,7 +662,7 @@ pub fn palw_rc_court_e2e_root_v1() -> Hash64 {
 /// (`the_pinned_rc_e2e_root_is_what_this_build_certifies`). It is inside every RC network's
 /// `consensus_params_id`, so testnet-11's fingerprint moves with it — testnet-11 is superseded by
 /// testnet-12 (its chain past DAA 7,219 is unsyncable by a correct validator, see
-/// `docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md`), and testnet-12 re-mints its genesis with this root.
+/// `docs/testnet-12-regenesis-2026-09-23.md`), and testnet-12 re-mints its genesis with this root.
 ///
 /// **Moved before that for ADR-0082's fused graph** (`PALW-QWEN25-A16-V5`, the fourth family). Measured
 /// consequence, because the two halves of this doc are easy to read apart: adding the family alone

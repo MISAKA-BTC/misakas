@@ -482,6 +482,7 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
     /// committed checkpoint's chunks restored through the class's map
     /// (`qwen36_cache_from_checkpoint_chunks_v1`), and the next forward is the position after it —
     /// so a resumed walk and a walk from row zero can be compared chunk for chunk.
+    #[cfg(test)]
     pub(crate) fn with_cache(
         artifact: &'a crate::qwen36::Qwen36ArtifactV1,
         plan: &'a crate::qwen36_plan::Qwen36ProfilePlanV1,
@@ -581,20 +582,6 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
         let heads = self.shape.linear_v_heads as u32;
         let dim = self.shape.linear_head_dim as u32;
         let kernel = self.shape.conv_kernel as u32;
-        // RFC-0006 consumer v2: the solo key-head map v3 — the same dispatch the producer's capture runs, so a seat's bytes are the
-        // executor's (the class's key heads, `base0_gdn_state_geometry_for_class_v1`).
-        if declared == map::gdn_state_chunk_map_id_v3() {
-            return crate::fp_capture::base0_gdn_state_chunks_for_map_v2(
-                profile,
-                &layers,
-                &states,
-                self.shape.linear_k_heads as u32,
-                heads,
-                dim,
-                kernel,
-            )
-            .map_err(|e| Base0FpRecomputeError::Map(e.to_string()));
-        }
         if declared == map::gdn_state_chunk_map_id_v2() {
             let geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel)
                 .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
@@ -666,25 +653,6 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
                 &gdn_chunks,
             )
             .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")));
-        }
-        // **RFC-0006 consumer v2: the composed hybrid maps (NEW ids)** — the hybrid v1/v2 halves actually composed: the integer-kv
-        // v2 cache half, then the recurrence's own solo enumeration (gdn v1's full window or v2's head window, by the map), through
-        // the producer's own walk (`base0_composed_state_chunks_v1` over `Base0CaptureGeometryV1::Composed`).
-        if map::palw_map_is_hybrid_composed_v2(&declared) {
-            let geometry = crate::legs::base0_capture_geometry_v1(profile, positions)
-                .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
-            let gdn_chunks = crate::fp_capture::base0_gdn_state_chunks_for_map_v2(
-                profile,
-                &layers,
-                &states,
-                self.shape.linear_k_heads as u32,
-                heads,
-                dim,
-                kernel,
-            )
-            .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
-            return crate::legs::base0_composed_state_chunks_v1(&geometry, |entry| self.attn_chunk_bytes_v1(entry), &gdn_chunks)
-                .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")));
         }
         if declared == map::hybrid_state_chunk_map_id_v1() || declared == map::hybrid_state_chunk_map_id_v2() {
             return Err(Base0FpRecomputeError::NoStateSerializer {

@@ -79,7 +79,7 @@ impl LoopbackNativeProviderV3 {
         &self,
         request: &ProviderTransportRequestV1,
     ) -> Result<(Response, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), String> {
-        preflight_native_value_v1::<Request>(&request.body[..], request.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Request>(request.body.as_slice(), request.body.len() as u64).map_err(|e| e.to_string())?;
         let r =
             retain_native_value_decode_v1(&request.body, || borsh::from_slice::<Request>(&request.body)).map_err(|e| e.to_string())?;
         let api = self.consensus_manager.consensus().unguarded_session_blocking();
@@ -161,21 +161,22 @@ impl LoopbackNativeProviderV3 {
             })
             .collect();
         let mut capsule = (*ingress.enrollment).clone();
-        let Recovery::FundedEnroll { monetary, providers, .. } = &mut capsule else { unreachable!() };
-        for (offer, (bond, ordinary, _)) in monetary.offers.iter_mut().zip(&signatures) {
-            if offer.provider != *bond {
-                return Err("kernel signed capsule roster differs".into());
+        let consent = {
+            let Recovery::FundedEnroll { monetary, providers, .. } = &mut capsule else { unreachable!() };
+            for (offer, (bond, ordinary, _)) in monetary.offers.iter_mut().zip(&signatures) {
+                if offer.provider != *bond {
+                    return Err("kernel signed capsule roster differs".into());
+                }
+                offer.signature = ordinary.clone();
             }
-            offer.signature = ordinary.clone();
-        }
-        for (provider, (bond, _, recovery)) in providers.iter_mut().zip(&signatures) {
-            if provider.provider != *bond {
-                return Err("kernel signed capsule recovery roster differs".into());
+            for (provider, (bond, _, recovery)) in providers.iter_mut().zip(&signatures) {
+                if provider.provider != *bond {
+                    return Err("kernel signed capsule recovery roster differs".into());
+                }
+                provider.signature = recovery.clone();
             }
-            provider.signature = recovery.clone();
-        }
-        // The signed consent's id (the capsule is complete; persisting it below does not change it).
-        let consent = monetary.id();
+            monetary.id()
+        };
         // A crash cannot externally expose a signature whose full native
         // verification context/signature capsule is not durably recoverable.
         for p in self.providers.iter().filter(|p| intent.providers.contains(&p.bond)) {
@@ -246,7 +247,7 @@ impl AuthenticatedSocketExchangeV3 {
         if responders.iter().ne(material.intent.providers.iter()) {
             return Err("kernel ingress partial authenticated roster".into());
         }
-        preflight_native_value_v1::<Response>(&response.body[..], response.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Response>(response.body.as_slice(), response.body.len() as u64).map_err(|e| e.to_string())?;
         retain_native_value_decode_v1(&response.body, || borsh::from_slice::<Response>(&response.body)).map_err(|e| e.to_string())
     }
     pub(super) fn ingest_kernel_v4(&self, material: &Material, ingress: &Ingress) -> Result<(), String> {

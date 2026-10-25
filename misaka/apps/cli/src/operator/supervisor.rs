@@ -428,7 +428,7 @@ fn stop_refusal(owed: &[Owed]) -> Finding {
     f.required("this node serves its claims until each is final or voided")
         .fix("misaka mining stop --drain   stop drawing now, keep serving, exit when the last one ends")
         .fix("misaka mining stop --force   stop now and accept what the list above costs")
-        .docs("docs/history/networks/testnet-11/testnet11-join-mining.md#6b-do-not-stop-your-node-with-claims-in-flight")
+        .docs("docs/history/testnet11-join-mining.md#6b-do-not-stop-your-node-with-claims-in-flight")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1164,7 +1164,7 @@ pub(crate) async fn stop(ctx: &crate::node::Ctx, profile: Profile, drain_: bool,
                 .current(why)
                 .fix("misaka mining stop --force   (stop anyway)")
                 .fix("or run this as the node's user, on the node's host, once its RPC answers")
-                .docs("docs/history/networks/testnet-11/testnet11-join-mining.md#6b-do-not-stop-your-node-with-claims-in-flight"),
+                .docs("docs/history/testnet11-join-mining.md#6b-do-not-stop-your-node-with-claims-in-flight"),
             );
         };
         if !owed.is_empty() && !drain_ {

@@ -305,12 +305,6 @@ impl IbdFlow {
             // node has already decided it wants this peer's proof.
             self.serve_pending_nomination().await;
 
-            // G14 capacity lane: an IBD does not START while node storage is in the low-space pause;
-            // this flow waits (the peer's offer is kept) and starts once space is reclaimed.
-            if !kaspa_utils::storage_budget::global_writable() {
-                info!("IBD with peer {} deferred: node storage is in the low-space pause", self.router);
-                kaspa_utils::storage_budget::wait_global_writable().await;
-            }
             if let Some(_guard) = self.ctx.try_set_ibd_running(self.router.key(), relay_header.daa_score, relay_header.blue_work) {
                 info!("IBD started with peer {}", self.router);
 
@@ -2387,7 +2381,6 @@ impl IbdFlow {
                 .collect();
 
             while let Some(chunk) = chunk_stream.next().await? {
-                storage_intake_open()?;
                 let (current_daa_score, current_timestamp) = {
                     let last_header = chunk.last().expect("chunk is never empty");
                     (last_header.daa_score, last_header.timestamp)
@@ -3158,7 +3151,6 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         consensus: &ConsensusProxy,
         chunk: &[BlockHash],
     ) -> Result<QueueChunkOutput, ProtocolError> {
-        storage_intake_open()?;
         let mut jobs = Vec::with_capacity(chunk.len());
         let mut current_daa_score = 0;
         let mut current_timestamp = 0;
@@ -3192,7 +3184,6 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         consensus: &ConsensusProxy,
         chunk: &[BlockHash],
     ) -> Result<QueueChunkOutput, ProtocolError> {
-        storage_intake_open()?;
         let mut jobs = Vec::with_capacity(chunk.len());
         let mut current_daa_score = 0;
         let mut current_timestamp = 0;
@@ -3225,21 +3216,6 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             jobs.push(consensus.validate_and_insert_block(block).virtual_state_task);
         }
         Ok(QueueChunkOutput { jobs, daa_score: current_daa_score, timestamp: current_timestamp })
-    }
-}
-
-/// **G14 capacity lane: block intake stops at a chunk boundary while node storage is in the
-/// low-space pause.** The IBD aborts with a LOCAL resource error — never a verdict on the peer or
-/// its blocks (`ProtocolError::is_local_native_resource_unavailable`); a staging consensus is
-/// cancelled, which itself frees space, and the flow retries once the budget resumes. Everything
-/// already handed to consensus finishes and is committed normally. Always open without a budget.
-fn storage_intake_open() -> Result<(), ProtocolError> {
-    if kaspa_utils::storage_budget::global_writable() {
-        Ok(())
-    } else {
-        Err(ProtocolError::LocalNativeResourceUnavailable(
-            "node storage is in the low-space pause (--storage-cap-bytes); block intake resumes once space is reclaimed".into(),
-        ))
     }
 }
 

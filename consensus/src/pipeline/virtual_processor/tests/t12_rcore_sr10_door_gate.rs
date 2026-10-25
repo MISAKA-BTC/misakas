@@ -95,7 +95,7 @@ fn gate(armed: bool) -> Gate {
 /// core suites' `t12_2m_flag_day_row`: `a_R` at the registry's reference rate over the canonical job's
 /// 262,145 positions, so the row's canonical `D` is the derived 13,995 DAA, measured; λ the row's
 /// declared canonical leaves over those positions. Active from genesis.
-pub(super) fn t12_2m_flag_day_row(params: &kaspa_consensus_core::config::params::Params) -> PalwClassVerifyRowV1 {
+fn t12_2m_flag_day_row(params: &kaspa_consensus_core::config::params::Params) -> PalwClassVerifyRowV1 {
     use kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2;
     let class_id = kaspa_consensus_core::config::params::PALW_T12_RCORE_CONSERVATIVE_CLASSES[0];
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };

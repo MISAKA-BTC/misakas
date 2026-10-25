@@ -29,12 +29,8 @@ use std::{
 };
 
 mod bootstrap;
-/// The G14 collusion drill's private rulesets (`g14-v1`).
-pub mod g14_drill_factory;
 pub use bootstrap::export_private_complete_bootstrap_v1;
 mod claim_paid_bootstrap;
-mod paid_request;
-pub use paid_request::generate_private_paid_request_v4;
 pub use claim_paid_bootstrap::{PrivatePaidNativeRequestV4, PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
 mod paid_claim_factory;
 pub use paid_claim_factory::private_paid_claim_params_v3;
@@ -51,12 +47,9 @@ mod paid_claim_observation_v5;
 mod paid_claim_observation_v6;
 pub(crate) mod recovery_ack_carrier_v4;
 mod recovery_observation_v4;
-mod exec_origin_coverage_v1;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
 mod kernel_paid_checker_v4;
 pub use kernel_paid_checker_v4::PrivateKernelPaidCheckSpecV4;
-mod kernel_paid_replace_v4;
-pub use kernel_paid_replace_v4::PrivateKernelPaidReplaceSpecV4;
 mod source_bootstrap_checker_v1;
 pub use source_bootstrap_checker_v1::PrivateSourceBootstrapCheckerSpecV1;
 mod source_bootstrap_producer_v1;
@@ -75,7 +68,6 @@ pub struct AdditionalCampaignWorkersV1 {
     pub source_checker: Option<PrivateSourceBootstrapCheckerSpecV1>,
     pub source_producer: Option<PrivateSourceBootstrapProducerSpecV1>,
     pub generation_export: Option<PrivatePaidMaterialGenerationExportSpecV5>,
-    pub kernel_paid_replace: Option<PrivateKernelPaidReplaceSpecV4>,
 }
 mod kernel_paid_material_generation_worker_v5;
 pub use kernel_paid_material_generation_worker_v5::PrivateKernelPaidMaterialGenerationSpecV5;
@@ -158,96 +150,19 @@ pub fn private_native_settlement_params_v1(
     Ok(params)
 }
 
-/// The smallest later retirement height a private profile accepts: DAA 1 stays the original profile, so a later
-/// height is never a second name for it.
-pub const PRIVATE_LATE_RETIREMENT_MIN_DAA_V1: u64 = 2;
-
-/// **RFC-0012 §4.4 (user decision 2026-10-15, §8): the private-only profile that arms `palw_dns_retirement_v1`
-/// at a later, explicit DAA**, so a local multi-process run accumulates real DNS-validator history (bonds,
-/// attestations, coinbase validator shares, quality liabilities, reserve, exits) before the fence. Applied to
-/// an already built private profile (which armed retirement at DAA 1): only the retirement height moves; the
-/// settlement policy, the legacy evidence horizon, Rule E and its commitment (both DAA 1, so at or below the
-/// fence) are unchanged, and every production value/dependency validator runs again on the result. Reachable
-/// only from the feature-gated private entry point; no preset, `Params` default or public network reads it.
-pub fn private_late_retirement_params_v1(
-    mut params: kaspa_consensus_core::config::params::Params,
-    retirement_daa: u64,
-) -> Result<kaspa_consensus_core::config::params::Params, String> {
-    use kaspa_consensus_core::config::params::ForkActivation;
-    if retirement_daa < PRIVATE_LATE_RETIREMENT_MIN_DAA_V1 || retirement_daa == u64::MAX {
-        return Err(format!(
-            "a later private retirement must be a finite DAA of at least {PRIVATE_LATE_RETIREMENT_MIN_DAA_V1} (DAA 1 is the original profile)"
-        ));
-    }
-    let retirement = params.palw_dns_retirement.as_mut().ok_or("this private profile arms no DNS retirement to move")?;
-    if retirement.activation != ForkActivation::new(1) {
-        return Err("the later retirement applies only to a profile built with its original DAA-1 retirement".into());
-    }
-    retirement.activation = ForkActivation::new(retirement_daa);
-    validate_private_native_relations(&params)?;
-    Ok(params)
-}
-
-/// The exact salted factory policy a running Config must equal, where its only permitted departure is the later
-/// private retirement height ([`private_late_retirement_params_v1`]): every other value still has to match.
-fn private_expected_retirement_v1(
-    expected: kaspa_consensus_core::config::params::Params,
-    config: &Config,
-) -> Result<kaspa_consensus_core::config::params::Params, String> {
-    use kaspa_consensus_core::config::params::ForkActivation;
-    match config.params.palw_dns_retirement.map(|r| r.activation) {
-        Some(activation) if activation != ForkActivation::new(1) => private_late_retirement_params_v1(expected, activation.daa_score()),
-        _ => Ok(expected),
-    }
-}
-
 fn validate_private_native_relations(params: &kaspa_consensus_core::config::params::Params) -> Result<(), String> {
     use kaspa_consensus_core::config::params::ForkActivation;
     params.validate_palw_fork_choice_rule_e_order_v1().map_err(|e| e.to_string())?;
     if params.palw_fork_choice_rule_e_v1 != Some(ForkActivation::new(1))
         || params.palw_fork_choice_commitment_v1 != Some(ForkActivation::new(1))
-        || params.palw_dns_retirement.is_none_or(|r| r.activation == ForkActivation::never() || r.activation.daa_score() < 1)
+        || params.palw_dns_retirement.is_none_or(|r| r.activation != ForkActivation::new(1))
     {
-        return Err("private retirement requires Rule E/commitment at DAA 1 and a finite retirement at or after them".into());
+        return Err("private retirement requires its exact Rule E/commitment/retirement heights".into());
     }
     let mut checked = params.clone();
     checked.palw_probabilistic_constraints_v1 = None;
-    // The typed roots ride the kernel route this copy makes dormant (the paid-claim profiles arm them from DAA 0).
-    checked.palw_typed_roots_v1 = None;
     checked.palw_signed_registration_v1 = None;
     checked.palw_panel_free_v1 = None;
-    // A paid-claim profile (v3/v4): its explicitly unapproved release fences are validated by its own relations
-    // (`paid_claim_factory::validate_private_paid_claim_relations_v3` and the v4 scope check) and are dormant here as there,
-    // so the production validators below judge everything else, the retirement among it.
-    if checked.palw_claim_challenge_v2.is_some() {
-        let never = ForkActivation::never();
-        if let Some(f) = checked.palw_beacon_source_opt_in_v1.as_mut() {
-            f.activation = never;
-        }
-        if let Some(f) = checked.palw_beacon_source_fee_v1.as_mut() {
-            f.activation = never;
-        }
-        if let Some(f) = checked.palw_claim_challenge_v2.as_mut() {
-            f.activation = never;
-        }
-        if let Some(f) = checked.palw_monetary_material_v1.as_mut() {
-            f.activation = never;
-        }
-        if let Some(f) = checked.palw_material_release_recovery_v2.as_mut() {
-            f.activation = never;
-        }
-        if let Some(f) = checked.palw_panel_lifetime_v2.as_mut() {
-            f.activation = never;
-        }
-        if let Some(f) = checked.palw_paid_consumer_lifecycle_v1.as_mut() {
-            f.activation = never;
-        }
-        checked.palw_reporter_income_v2 = Some(never);
-        checked.palw_material_income_v3 = Some(never);
-        checked.palw_provider_court_v1 = Some(never);
-        checked.sync_palw_claim_challenge_v2();
-        checked.sync_palw_permissionless_panel_v1();
-    }
     // The OPV mechanics budget rides the Panel-free fence (RFC-0015 §8.3 lead default); its policy is checked here, its arming
     // refusal excepted like the fence's.
     if let Some(budget) = checked.palw_bond_budget_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
@@ -306,36 +221,6 @@ fn validate_private_complete_relations(params: &kaspa_consensus_core::config::pa
     validate_private_native_relations(params)
 }
 
-/// **The G14 collusion drill's ruleset** (`g14-v1`; `scripts/drills/g14_collusion_drill.py`): the salted testnet-12 drill with the
-/// G14 set armed at `at_daa` (0: genesis mode) through drill arming records and a `seats`-seat Panel
-/// ([`kaspa_consensus_core::config::private_g14_drill`]). Reachable only from the feature-gated private entry point.
-pub fn private_g14_drill_params_v1(
-    salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
-    at_daa: u64,
-    set: self::g14_drill_factory::PrivateG14DrillSetV1,
-    seats: u16,
-) -> Result<kaspa_consensus_core::config::params::Params, String> {
-    use self::g14_drill_factory::{PrivateG14DrillModeV1, private_g14_drill_v1};
-    Ok(private_g14_drill_v1(salt, PrivateG14DrillModeV1::from_daa(at_daa), set, seats)?.params)
-}
-
-/// The G14 drill a running Config claims to be (option (b) armed is the drill's mark: no other private profile arms it), rebuilt from
-/// its salt, height, set and Panel so its records and ruleset id can be checked; `None` for every other profile.
-fn private_g14_drill_of_config_v1(
-    config: &Config,
-) -> Result<Option<self::g14_drill_factory::PrivateG14DrillV1>, String> {
-    use self::g14_drill_factory::{PrivateG14DrillModeV1, PrivateG14DrillSetV1, private_g14_drill_v1};
-    use kaspa_consensus_core::config::params::ForkActivation;
-    let Some(at) = config.params.palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) else { return Ok(None) };
-    let salt = config.palw_drill_genesis_salt.as_ref().ok_or("the G14 drill needs its salted genesis")?;
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
-        return Err("the G14 drill needs its ConsensusV2 bundle".into());
-    };
-    let set =
-        if config.params.palw_legacy_public_filer_v1.is_some() { PrivateG14DrillSetV1::Full } else { PrivateG14DrillSetV1::RouteRequiredOnly };
-    private_g14_drill_v1(salt, PrivateG14DrillModeV1::from_daa(at.daa_score()), set, bundle.panel.seat_count()).map(Some)
-}
-
 /// Test-policy identity, not a release result or economic/security approval.
 pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
     let genesis_money = config.palw_drill_genesis_salt.as_ref().map(|salt| {
@@ -373,11 +258,6 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
     let mut manifest = serde_json::json!({
         "version": 1,
         "kind": "rfc12-private-integration-probe",
-        "paidRequestGenerator": true,
-        "importCrashFailpoints": {
-            "available": cfg!(feature = "private-integration-config"),
-            "rendezvousVersion": 1,
-        },
         "network": config.params.net.to_string(),
         "genesis": config.params.genesis.hash.to_string(),
         "consensusParamsId": config.params.consensus_params_id().to_string(),
@@ -429,41 +309,19 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             });
         }
     }
-    // The G14 collusion drill (`g14-v1`): what is armed where, through which records. Only this profile carries the field.
-    if let Ok(Some(drill)) = private_g14_drill_of_config_v1(config) {
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
-            unreachable!("the drill validated its ConsensusV2 bundle")
-        };
-        let mode = match drill.mode {
-            self::g14_drill_factory::PrivateG14DrillModeV1::Genesis => "genesis",
-            self::g14_drill_factory::PrivateG14DrillModeV1::Cross { .. } => "cross",
-        };
-        let records: Vec<serde_json::Value> = drill
-            .records
-            .iter()
-            .map(|r| serde_json::json!({"fence": r.fence.name(), "activationDaa": r.activation_daa}))
-            .collect();
-        let flag_days = self::g14_drill_factory::PRIVATE_G14_DRILL_FLAG_DAYS_V1.to_vec();
-        manifest["g14Drill"] = serde_json::json!({
-            "version": 1,
-            "mode": mode,
-            "atDaa": drill.mode.at_daa(),
-            "compressedT12FlagDays": flag_days,
-            "set": format!("{:?}", drill.set),
-            "panelSeats": bundle.panel.seat_count(),
-            "panelQuorum": bundle.panel.quorum(),
-            "anchorDelayDaa": bundle.panel.anchor_delay(),
-            "drillRecords": records,
-            "recordsPinnedInBinary": false,
-            "shippedValidationRefuses": config.params.validate_palw_v2().is_err(),
-            "tirPublicConvictionResolvesAt": config.params.palw_tir_public_conviction_v1_fence().map(|f| f.daa_score()),
-            "routeMirror": config.params.palw_g14_route_required_v1_mirror().map(|m| format!("{m:?}")),
-        });
-    }
-    if config.params.palw_material_release_recovery_v2.is_some() {
-        // Paid-v4 private profile: PAV3 + material release recovery V2. Compact V4 is retired (PRINCIPLES §8).
+    if let Some(compact) = config.params.palw_claim_compact_v4.as_ref() {
         manifest["privatePaidProfileVersion"] = serde_json::json!(4);
-        manifest["compactClaimPolicy"] = serde_json::json!({"retired": true, "reason": "PRINCIPLES §8"});
+        manifest["compactClaimPolicy"] = serde_json::json!({
+            "id": faster_hex::hex_string(&compact.policy.id()),
+            "activationDaa": compact.activation.daa_score(),
+            "maximumOpeningBytes": compact.policy.maximum_opening_bytes,
+            "maximumProofBytes": compact.policy.maximum_proof_bytes,
+            "maximumVerifierWork": compact.policy.maximum_verifier_work.to_string(),
+            "maximumStreamWords": compact.policy.maximum_stream_words,
+            "maxContracts": compact.policy.max_contracts,
+            "independentReviewRequired": compact.policy.require_independent_review,
+            "approved": false,
+        });
     }
     if let Some(recovery) = config.params.palw_material_release_recovery_v2.as_ref() {
         manifest["releaseRecoveryPolicy"] = serde_json::json!({
@@ -527,18 +385,6 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
     let private_complete = config.params.palw_probabilistic_constraints_v1.is_some()
         || config.params.palw_signed_registration_v1.is_some()
         || config.params.palw_panel_free_v1.is_some();
-    if let Some(drill) = private_g14_drill_of_config_v1(config)? {
-        // The G14 collusion drill (`g14-v1`): the exact salted factory ruleset, validated through the test arming-record path with
-        // its own drill records. The shipped validation still refuses it (`private_g14_drill_v1` asserts that).
-        if config.private_population.is_some() {
-            return Err("the G14 drill profile has no population override".into());
-        }
-        if config.params.consensus_params_id() != drill.params.consensus_params_id() {
-            return Err("private G14 drill Config differs from its exact salted factory policy".into());
-        }
-        config.params.validate_palw_v1().map_err(|error| error.to_string())?;
-        config.params.validate_palw_v2_with_arming_records_v1(&drill.records).map_err(|error| format!("{error:?}"))?;
-    }
     if config.params.palw_selected_source_bootstrap_v1.is_some() {
         if config.private_population.is_some() {
             return Err("private source profile refuses population overrides".into());
@@ -548,7 +394,7 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         if config.private_population.is_some() {
             return Err("the paid-v4 private probe has no population override".into());
         }
-        let expected = private_expected_retirement_v1(private_paid_claim_params_v4(salt)?, config)?;
+        let expected = private_paid_claim_params_v4(salt)?;
         if config.params.consensus_params_id() != expected.consensus_params_id() {
             return Err("private paid-v4 Config differs from its exact salted factory policy".into());
         }
@@ -557,7 +403,7 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         if config.private_population.is_some() {
             return Err("the paid-v3 private probe has no population override".into());
         }
-        let expected = private_expected_retirement_v1(private_paid_claim_params_v3(salt)?, config)?;
+        let expected = private_paid_claim_params_v3(salt)?;
         if config.params.consensus_params_id() != expected.consensus_params_id() {
             return Err("private paid-claim Config differs from its exact salted factory policy".into());
         }
@@ -566,7 +412,7 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         if config.private_population.is_some() {
             return Err("the complete-only private bootstrap profile has no population override".into());
         }
-        let expected = private_expected_retirement_v1(private_complete_check_params_v1(salt)?, config)?;
+        let expected = private_complete_check_params_v1(salt)?;
         if config.params.consensus_params_id() != expected.consensus_params_id() {
             return Err("private complete-check Config differs from its exact salted factory policy".into());
         }
@@ -799,9 +645,8 @@ pub fn create_private_integration_core_with_kernel_paid_consumers_v4(
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     work: Option<PrivateKernelPaidWorkSpecV4>,
     checker: Option<PrivateKernelPaidCheckSpecV4>,
-    replace: Option<PrivateKernelPaidReplaceSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    create_private_integration_core_with_campaign_workers_v1(
+    create_private_integration_core_with_kernel_paid_replacement_v4(
         runtime,
         args,
         fd_total_budget,
@@ -812,9 +657,6 @@ pub fn create_private_integration_core_with_kernel_paid_consumers_v4(
         work,
         checker,
         None,
-        None,
-        PrivatePaidObservationClaimsV5::empty(),
-        AdditionalCampaignWorkersV1 { kernel_paid_replace: replace, ..AdditionalCampaignWorkersV1::default() },
     )
 }
 
@@ -1011,9 +853,7 @@ pub fn create_private_integration_core_with_campaign_workers_v1(
         return Err("a producing paid-v4 custody node needs an explicit sorted distinct roster of 2..8 provider bonds".into());
     }
     prepare_private_integration_probe(args, &config)?;
-    kaspa_core::warn!(
-        "RFC12 PRIVATE paid-v4: release-recovery mechanics (compact V4 retired); acceptance, soundness and economic approval pending"
-    );
+    kaspa_core::warn!("RFC12 PRIVATE paid-v4: compact/recovery mechanics; acceptance, soundness and economic approval pending");
     let hook: crate::palw_native_custody_v3::PalwNativeCustodyHookV3 = match (native, ack_fees) {
         (Some(native), Some(fees)) => native.into_hook_with_service_v4(Box::new(move |service, ctx| fees.start(service, ctx))),
         (Some(native), None) => native.into_hook(),
@@ -1028,12 +868,10 @@ pub fn create_private_integration_core_with_campaign_workers_v1(
         let checker = kernel_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
         let generation = kernel_generation.map(|generation| generation.prepare(&ctx)).transpose()?;
         let replacement = kernel_replacement.map(|replacement| replacement.prepare(&ctx)).transpose()?;
-        let kernel_paid_replace = additional.kernel_paid_replace.map(|replace| replace.prepare(&ctx)).transpose()?;
         let source_checker = additional.source_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
         let source_producer = additional.source_producer.map(|producer| producer.prepare(&ctx)).transpose()?;
         let generation_export = additional.generation_export.map(|export| export.prepare(&ctx)).transpose()?;
         recovery_observation_v4::start(&ctx)?;
-        exec_origin_coverage_v1::start(&ctx)?;
         if !observations.is_empty() {
             paid_claim_observation_v5::start(&ctx, observations.as_slice())?;
             if ctx.config.params.palw_paid_bootstrap_source_v6.is_some() {
@@ -1041,7 +879,7 @@ pub fn create_private_integration_core_with_campaign_workers_v1(
             }
         }
         let exchange = hook(ctx)?;
-        if (producer.is_some() || replacement.is_some() || kernel_paid_replace.is_some()) && exchange.is_none() {
+        if (producer.is_some() || replacement.is_some()) && exchange.is_none() {
             return Err("kernel work/replacement requires an explicit authenticated provider exchange".into());
         }
         if let Some(producer) = producer {
@@ -1065,9 +903,6 @@ pub fn create_private_integration_core_with_campaign_workers_v1(
         }
         if let Some(replacement) = replacement {
             replacement.start(exchange.as_ref().ok_or("replacement provider exchange is absent")?.clone())?;
-        }
-        if let Some(replace) = kernel_paid_replace {
-            replace.start(exchange.as_ref().ok_or("kernel paid replacement exchange is absent")?.clone())?;
         }
         Ok(exchange)
     });
@@ -1145,63 +980,6 @@ mod tests {
         let mut changed = config.clone();
         changed.params.palw_tir_v1.as_mut().unwrap().activation = kaspa_consensus_core::config::params::ForkActivation::new(2);
         assert!(validate_private_probe(&args, &changed).is_err(), "stale mirror/changed schedule is not an exception");
-    }
-
-    /// The private profile's probe manifest and validators recurse deeper than a libtest thread's 2 MiB in a debug build: the
-    /// body runs on its own 64 MiB thread (what the node gives its own validation), its panic re-raised.
-    #[test]
-    fn private_late_retirement_moves_only_the_fence_and_keeps_the_daa1_profile() {
-        let worker = std::thread::Builder::new()
-            .name("private-late-retirement".into())
-            .stack_size(64 << 20)
-            .spawn(private_late_retirement_moves_only_the_fence_and_keeps_the_daa1_profile_body)
-            .expect("a test thread");
-        if let Err(panic) = worker.join() {
-            std::panic::resume_unwind(panic);
-        }
-    }
-
-    fn private_late_retirement_moves_only_the_fence_and_keeps_the_daa1_profile_body() {
-        use kaspa_consensus_core::config::params::ForkActivation;
-        let salt = PalwDrillSaltV1::from_bytes([0x16; 32]).unwrap();
-        let original = private_paid_claim_params_v4(&salt).unwrap();
-        assert_eq!(original.palw_dns_retirement.unwrap().activation, ForkActivation::new(1), "the DAA-1 profile is unchanged");
-        let late = private_late_retirement_params_v1(original.clone(), 200).unwrap();
-        let retirement = late.palw_dns_retirement.unwrap();
-        assert_eq!(retirement.activation, ForkActivation::new(200));
-        assert_eq!(retirement.settlement.id(), original.palw_dns_retirement.unwrap().settlement.id());
-        assert_eq!(retirement.legacy_evidence_horizon_daa, original.palw_dns_retirement.unwrap().legacy_evidence_horizon_daa);
-        assert_eq!(late.palw_fork_choice_rule_e_v1, Some(ForkActivation::new(1)), "Rule E stays at or below the fence");
-        assert_eq!(late.palw_fork_choice_commitment_v1, Some(ForkActivation::new(1)));
-        assert_eq!(late.genesis.hash, original.genesis.hash);
-        assert_ne!(late.consensus_params_id(), original.consensus_params_id(), "the height is part of the identity");
-        for refused in [0, 1, u64::MAX] {
-            assert!(private_late_retirement_params_v1(original.clone(), refused).is_err(), "refused height {refused}");
-        }
-        assert!(private_late_retirement_params_v1(late.clone(), 300).is_err(), "only a DAA-1 profile moves, once");
-        let mut config = Config::new(late.clone());
-        config.palw_drill_genesis_salt = Some(salt);
-        let expected = private_expected_retirement_v1(private_paid_claim_params_v4(&salt).unwrap(), &config).unwrap();
-        assert_eq!(expected.consensus_params_id(), late.consensus_params_id());
-        assert_eq!(private_probe_manifest(&config)["retirement"]["activationDaa"], 200);
-        let complete = private_late_retirement_params_v1(private_complete_check_params_v1(&salt).unwrap(), 200).unwrap();
-        let mut config = Config::new(complete);
-        config.palw_drill_genesis_salt = Some(salt);
-        let args = Args {
-            testnet: true,
-            testnet_suffix: 12,
-            disable_dns_seeding: true,
-            outbound_target: 0,
-            disable_upnp: true,
-            listen: Some("127.0.0.1:53011".parse().unwrap()),
-            rpclisten: Some("127.0.0.1:53012".parse().unwrap()),
-            appdir: Some(std::env::temp_dir().join("unopened-rfc12-late-retirement-probe").display().to_string()),
-            ..Args::default()
-        };
-        validate_private_probe(&args, &config).unwrap();
-        let mut moved = config.clone();
-        moved.params.palw_panel_free_v1.as_mut().unwrap().min_effective_bits = 2;
-        assert!(validate_private_probe(&args, &moved).is_err(), "only the retirement height may depart from the factory");
     }
 
     #[test]

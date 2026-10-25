@@ -67,7 +67,7 @@ pub const PALW_PROVIDER_ANSWER_TAG_V1: u8 = 152;
 pub const PALW_DA_TRANSFER_TAG_V1: u8 = 153;
 
 /// **INTERIM terms** — consensus constants of the (never-armed) fence, drill values, not security values (module doc of the design:
-/// `docs/design/palw/verification/da16-transport-and-provider-court.md` §2.6).
+/// `docs/design/palw/da16-transport-and-provider-court.md` §2.6).
 pub const PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1: u64 = 100 * SOMPI_PER_KASPA;
 pub const PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1: u64 = 10 * SOMPI_PER_KASPA;
 /// What a challenge the provider answered costs its challenger (burned from the bond): challenges are not free court work.
@@ -95,10 +95,14 @@ impl Params {
         self.palw_provider_court_v1.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa_score))
     }
 
-    /// **The fence's record gate** (lane g14p/kernel-route, U03/U04): needs `palw_probabilistic_constraints_v1` at or below it and a
-    /// pinned arm-readiness record (`crate::palw_kernel_route_arming_v1`; the pinned list is empty, so every armed height is refused).
+    /// **The fence's refusal**: the court ships on the kernel route, which no network can arm, so any armed height is refused.
     pub fn validate_palw_provider_court_v1(&self) -> Result<(), PalwModeV2Error> {
-        self.validate_palw_kernel_route_fence_record_v1(crate::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1::ProviderCourtV1)
+        match self.palw_provider_court_v1 {
+            Some(f) if f != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
+                "palw_provider_court_v1 cannot be armed: it is part of the kernel route's public-DA surface (RFC-0009 §4.2, RFC-0014 §16), which no network can arm",
+            )),
+            _ => Ok(()),
+        }
     }
 }
 

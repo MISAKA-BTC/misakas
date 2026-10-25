@@ -149,7 +149,14 @@ struct CompactSessionStateV4 {
     proving: bool,
 }
 impl CompactVerificationSessionV4 {
-    // PRINCIPLES §8 (2026-10-15): the producer-side session (`prover`) is removed. No producer proof record is generated.
+    pub fn prover(
+        registration: &CompactClaimRegistrationV4,
+        seed: Digest,
+        maximum_words: u64,
+        maximum_bytes: u64,
+    ) -> Result<Self, String> {
+        Self::new(registration, seed, maximum_words, maximum_bytes, None)
+    }
     pub fn verifier(
         registration: &CompactClaimRegistrationV4,
         seed: Digest,
@@ -157,9 +164,6 @@ impl CompactVerificationSessionV4 {
         maximum_bytes: u64,
         proof: &NativeCompactProofV4,
     ) -> Result<Self, String> {
-        if crate::claim_paid_v2::COMPACT_V4_RETIRED {
-            return Err(crate::claim_paid_v2::COMPACT_V4_RETIRED_REASON.into());
-        }
         proof.validate_shape(registration.plan.id(), seed, maximum_bytes)?;
         Self::new(registration, seed, maximum_words, maximum_bytes, Some(proof))
     }
@@ -262,10 +266,14 @@ impl CompactRelationConsumerV4 for CompactVerificationSessionV4 {
         if !state.visited.insert(instance.clone()) {
             return Err("compact native instance visited twice".into());
         }
-        if state.proving {
-            return Err("compact producer generation is retired (PRINCIPLES §8)".into());
-        }
-        let proof = state.proofs.get(&instance).cloned().ok_or("compact proof missing actual authenticated relation")?;
+        let proof = if state.proving {
+            let proof = prove_relation_v1(compiled, &seed, position, occurrence, inputs, output, &mut state.budget)
+                .map_err(|e| e.to_string())?;
+            state.proofs.insert(instance.clone(), proof.clone());
+            proof
+        } else {
+            state.proofs.get(&instance).cloned().ok_or("compact proof missing actual authenticated relation")?
+        };
         verify_relation_v1(compiled, &seed, inputs, output, &proof, &mut state.budget).map_err(|e| e.to_string())?;
         Ok(true)
     }

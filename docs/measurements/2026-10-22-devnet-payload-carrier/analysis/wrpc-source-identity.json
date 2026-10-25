@@ -1,7 +1,0 @@
-{
-  "path": "scripts/drills/misaka_wrpc_json.py",
-  "sha256": "b544b5794d13d2272d2a6a255e19334b77cea4ff376a5777aa6bef7e61eeb08f",
-  "base_commit": "0e3a23bd8c5987787797048d3df0626949ccae61",
-  "matches_base_bytes": true,
-  "note": "Supplement after run: this imported tracked dependency was not listed in initial Python manifest. Current bytes equal measured native base tracked bytes; runtime files were frozen during experiment. Do not label this as an initial manifest entry."
-}

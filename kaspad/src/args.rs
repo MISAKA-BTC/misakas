@@ -546,14 +546,6 @@ pub struct Args {
     /// release's int-11 list at 5,300 that is `--palw-drill-int11-at` below it. Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_int13_at: Option<u64>,
-    /// **DRILL ONLY: cross the full-activation flag day as the release will arm it, at this DAA**
-    /// (`config::drill::palw_drill_full_activation_at_v1`): every entry of `PALW_T12_FULL_ACTIVATION_FENCES_V1` — the int-13 list plus
-    /// every G14 / RFC fence of the full-activation release — at H' (the shipped height `PALW_T12_FULL_ACTIVATION_DAA` is `None`; the
-    /// target is 16,000). Excludes `--palw-drill-int13-at` and `--palw-drill-model-court-at`. It needs `palw_gen_v1` in force at or
-    /// below it (`--palw-drill-int11-at` below it), and the result must validate (record-gated entries pass only where validation admits
-    /// them). Command line only, like the salt.
-    #[serde(skip)]
-    pub palw_drill_full_activation_at: Option<u64>,
     /// **DRILL ONLY: arm RFC-0004's improvement fence (`palw_improvement_v1`) at this DAA**
     /// (`config::drill::palw_drill_improve_fence_at_v1`), with the drill's ceilings. It needs
     /// `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court` and `palw_fp_decode_rules` in
@@ -641,13 +633,6 @@ pub struct Args {
     /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): verify the shards of live sharded claims this bond does
     /// not seat from public material, and accuse (as a non-seat bond) or demand their runs on chain. Off by default; files no receipt.
     pub palw_tir_shard_watch: bool,
-    /// **G14 ③ / ⑦: the GDN step filer** (`--palw-gdn-step-filer`): file `GdnStepAccusedV2` against a recurrence step this node's own
-    /// recompute convicts. Off by default; dormant below `palw_memory_routing_court_v2`.
-    pub palw_gdn_step_filer: bool,
-    /// **G14 item 3 (lane r5-f03-ingress): the paid public court ingress** (`--palw-court-paid-ingress`): the held/outsider filer files
-    /// an accusation whose admission burns the court ingress fee. Off by default: without it the filer settles such a case instead of
-    /// paying. Dormant either way while the ingress fee schedule is not adopted (typed-missing) or below `palw_court_outsider_lane_v1`.
-    pub palw_court_paid_ingress: bool,
     /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
     /// the chain's registered root before it is used.
     pub palw_tir_shard_mirror: Option<String>,
@@ -660,10 +645,6 @@ pub struct Args {
     /// This node's canonical free-prompt claims commit a capture with one lane of this step leaf
     /// corrupted — the one-move court's drill (ADR-0100 §6 step 2).
     pub palw_drill_tamper_fp_leaf: Option<u64>,
-    /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill): the lie this node's canonical claims commit as ORIGINAL TIR
-    /// frames — `cone:<leaf>` (D-05), `selection:<position>` (D-06), `output` (D-07), `no-tfp1` (D-18). Parsed by
-    /// [`parse_palw_drill_tamper_tir_frame_v1`]; see `palw_panel::PalwDrillTirFrameFaultV1`.
-    pub palw_drill_tamper_tir_frame: Option<String>,
     /// DRILL ONLY: open a court against every licensed claim, reproduced or not.
     pub palw_drill_challenge_all: bool,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
@@ -675,59 +656,6 @@ pub struct Args {
     /// This node refuses every leaf-evidence request on the interval lane, so a seat that named a
     /// leaf must demand its evidence on chain (ADR-0111 Decision 3).
     pub palw_drill_refuse_leaf_evidence: bool,
-    /// **DRILL ONLY (the G14 collusion drill, `scripts/drills/g14_collusion_drill.py`; devnet/simnet or a salted testnet-12 drill):
-    /// this seat COLLUDES with these producer bonds** (`<txid>:<index>`, comma-separated) — every duty on a claim they produced is
-    /// signed `Valid` as if the replay had reproduced it, and this node submits no PALW object other than its seat receipts, readiness
-    /// proofs and bond registration, so it never accuses, demands or files anything. Models a Panel whose every seat is the
-    /// producer's. Command line only.
-    #[serde(skip)]
-    pub palw_drill_collude_with: Option<String>,
-    /// **DRILL ONLY (the G14 collusion drill D-11; devnet/simnet or a salted testnet-12 drill): this producer never answers a
-    /// legacy held data-availability unit** (LG14-B tag 157 → 158), so a public descent's demand runs to its deadline and the claim
-    /// ends in the objective DA default, never a presumed computation fault. Every other unit is answered as before. Command line only.
-    #[serde(skip)]
-    pub palw_drill_withhold_held_da: bool,
-    /// **DRILL ONLY (the G14 collusion drill): `--palw-drill-tamper-leaf` with the leaf chosen per draw** — the first held, openable,
-    /// non-fused leaf in the second half of the honest run (`palw_producer::PALW_DRILL_TAMPER_AUTO_LEAF_V1`). Refused on mainnet.
-    #[serde(skip)]
-    pub palw_drill_tamper_auto_leaf: bool,
-    /// **DRILL ONLY (G14 audit G-17; devnet/simnet or a salted testnet-12 drill): the attempt-lane lie this producer commits** — one of
-    /// [`kaspa_consensus_core::palw_backend::PalwDrillFaultV1`]'s kinds, produced through the family's own drill path with every root
-    /// re-derived (`execute_with_drill_fault`): `output`, `selection:<pos>:<lane>`, `oov:<pos>`, `tokenizer`, `prompt-relabel`,
-    /// `short-prefill:<n>`, `garbage-prompt`, `skip-all`, `activation`, `interval:<n>`, `bend:<row>[:same]`, `leaf:<n>`. Parsed by
-    /// [`parse_palw_drill_fault_v1`]. Not with `--palw-drill-tamper-leaf` / `-auto-leaf` / `-sparse-fault-seed`. Command line only.
-    #[serde(skip)]
-    pub palw_drill_fault: Option<String>,
-    /// **DRILL ONLY (G14 audit G-17 / §5.1 "sparse fault"; devnet/simnet or a salted testnet-12 drill): a single-leaf lie whose leaf is
-    /// drawn uniformly, BEFORE any challenge is known, from this seed and the honest run** — over every held, openable, non-fused step
-    /// leaf of the capture (`palw_producer::palw_drill_sparse_lie_leaf_v1`), so exactly one interval is wrong and a sampled check finds
-    /// it with the probability the audit's hypergeometric formula gives. The attempt lane and this node's canonical free-prompt claims.
-    #[serde(skip)]
-    pub palw_drill_sparse_fault_seed: Option<u64>,
-    /// **DRILL ONLY (G14 audit G-17; devnet/simnet or a salted testnet-12 drill): the lie this node's canonical free-prompt claims
-    /// commit** — `kv:<call>:<layer>:<pos>:<k|v>:<lane>:<delta>` (a cache row forged: the state/KV fault, D-09),
-    /// `attn:<call>:<layer>:<pos>:<head>:<lane>:<delta>[:follow]` (a fused attention output forged, followed downstream or not), or
-    /// `skip-all` (the commitment names an execution root no computation reproduces: the skip-all-compute claim). Parsed by
-    /// [`parse_palw_drill_fp_fault_v1`]; a backend without the verb refuses the run. Command line only.
-    #[serde(skip)]
-    pub palw_drill_fp_fault: Option<String>,
-    /// **DRILL ONLY (G14 audit G-17 / D-11; devnet/simnet or a salted testnet-12 drill): this producer answers NO data-availability unit
-    /// it owes, of any kind** (the generalisation of `--palw-drill-withhold-held-da`), so every demand runs to its deadline and ends in
-    /// the objective DA default, never a presumed computation fault. Command line only.
-    #[serde(skip)]
-    pub palw_drill_withhold_all_da: bool,
-    /// **DRILL ONLY (the G14 collusion drill on a small host; devnet/simnet or a salted testnet-12 drill): run ANOTHER seat identity in
-    /// this process** — `key=<seed file>,bond=<txid:index>[,fee=<txid:index>][,pay=<address>]`, repeatable. Each is a full Panel service
-    /// of its own (its own key, bond, fee float and state dir) sharing this node's chain, with this node's drill-collusion flags and no
-    /// production, registration or canonical claims of its own. Lets a 3-of-3 colluding Panel and its producer live in one process
-    /// (the host runs at most three nodes). Command line only.
-    #[serde(skip)]
-    pub palw_drill_extra_seat: Vec<String>,
-    /// **DRILL ONLY: the producer bonds the `--palw-drill-extra-seat` seats collude with** (`<txid:index>,...`), leaving this node's own
-    /// seat honest — so a producer and its colluding Panel share one process while the producer still answers what it owes (a node
-    /// given `--palw-drill-collude-with` submits no disclosure). Without it the extra seats take this node's own collusion list.
-    #[serde(skip)]
-    pub palw_drill_extra_seat_collude_with: Option<String>,
     /// **DRILL ONLY (a salted testnet-12 drill: `palw_private_drill_network_v1`): this seat signs a SECOND vertex for one round** — once, at
     /// the first round at or past this DAA, with the first vertex's leaves' verdicts changed — so the drill can show RFC-0007's
     /// equivocation caught, slashed and ejected. Any node watching blocks files the evidence. Command line only.
@@ -905,11 +833,6 @@ pub struct Args {
     pub palw_native_calibration_snapshot: Option<String>,
     #[serde(skip)]
     pub palw_native_calibration_root: Option<String>,
-    /// Separately versioned owning39 wrapper; never extends snapshot34.
-    #[serde(skip)]
-    pub palw_native_calibration39_snapshot: Option<String>,
-    #[serde(skip)]
-    pub palw_native_calibration39_root: Option<String>,
 
     pub rocksdb_preset: Option<String>,
     pub rocksdb_wal_dir: Option<String>,
@@ -925,21 +848,6 @@ pub struct Args {
     /// Refuse startup when the data mount has less than this percentage of free disk.
     /// `0` disables the gate; sync-only profiles and `--vps-8gb` default to 15.
     pub min_disk_free_percent: u8,
-
-    /// G14 capacity lane: the byte cap of the node's managed storage root (`<appdir>/<network>`).
-    /// `None` (the default) disables the storage budget entirely; 30_000_000_000 is the pruned-node
-    /// recommendation. Node-local: no consensus rule reads it.
-    pub storage_cap_bytes: Option<u64>,
-    /// Headroom under which the node pauses write intake (default: 1 % of the cap, ≥ 64 MiB).
-    pub storage_safety_margin_bytes: Option<u64>,
-    /// Per-category budget overrides, `<category>=<bytes>` (repeatable; categories: active-db,
-    /// staging-db, wal-maintenance, palw-retained, ibd-spill, logs, other).
-    #[serde(rename = "storage-category-budget")]
-    pub storage_category_budgets: Vec<String>,
-    /// Delete the RPC-only EVM indexes (raw tx, tx lookup, block-hash map, number index, log
-    /// postings) of blocks the pruning processor prunes. Implied by `--storage-cap-bytes`; never on
-    /// an archival node. Node-local: the indexes are no commitment and no validation input.
-    pub storage_gc_pruned_evm_indexes: bool,
 
     /// Node RPC profile (design §9): a named bundle that enables a sensible set of
     /// RPC listeners so operators don't wire each one by hand. Explicit `--rpclisten*`
@@ -1043,7 +951,6 @@ impl Default for Args {
             palw_drill_anchor_duty_after_slots: None,
             palw_drill_int11_at: None,
             palw_drill_int13_at: None,
-            palw_drill_full_activation_at: None,
             palw_drill_improve_at: None,
             palw_drill_tir_shard_at: None,
             palw_improve_evaluate: false,
@@ -1066,25 +973,13 @@ impl Default for Args {
             palw_drill_tamper_boundary: None,
             palw_tir_shard_demand_runs: false,
             palw_tir_shard_watch: false,
-            palw_gdn_step_filer: false,
-            palw_court_paid_ingress: false,
             palw_tir_shard_mirror: None,
             palw_tir_shard_fetch: false,
             palw_tir_shard_run_leaves: None,
             palw_drill_tamper_fp_leaf: None,
-            palw_drill_tamper_tir_frame: None,
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
             palw_drill_refuse_leaf_evidence: false,
-            palw_drill_collude_with: None,
-            palw_drill_withhold_held_da: false,
-            palw_drill_tamper_auto_leaf: false,
-            palw_drill_fault: None,
-            palw_drill_sparse_fault_seed: None,
-            palw_drill_fp_fault: None,
-            palw_drill_withhold_all_da: false,
-            palw_drill_extra_seat: Vec::new(),
-            palw_drill_extra_seat_collude_with: None,
             palw_drill_vertex_equivocate_at: None,
             palw_canonical_claims: false,
             palw_canonical_class: None,
@@ -1175,18 +1070,12 @@ impl Default for Args {
             override_params_file: None,
             palw_native_calibration_snapshot: None,
             palw_native_calibration_root: None,
-            palw_native_calibration39_snapshot: None,
-            palw_native_calibration39_root: None,
             rocksdb_preset: None,
             rocksdb_wal_dir: None,
             rocksdb_cache_size: None,
             node_profile: NodeProfile::Full,
             vps_8gb: false,
             min_disk_free_percent: 0,
-            storage_cap_bytes: None,
-            storage_safety_margin_bytes: None,
-            storage_category_budgets: vec![],
-            storage_gc_pruned_evm_indexes: false,
             profile: None,
             allow_public_rpc: false,
         }
@@ -1210,10 +1099,6 @@ impl Args {
         config.ram_scale = self.ram_scale;
         config.retention_period_days = self.retention_period_days;
         config.evm_history_mode = self.evm_history_mode; // §12: EVM state-history retention
-        // G14 capacity lane: RPC-only EVM indexes of pruned blocks are reclaimed under a storage cap
-        // (or on request); an archival node keeps everything.
-        config.storage_gc_pruned_evm_indexes =
-            !self.archival && (self.storage_gc_pruned_evm_indexes || self.storage_cap_bytes.is_some());
         config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
@@ -1723,47 +1608,6 @@ impl Args {
             panic!("native calibration34 root supplied without its snapshot");
         }
 
-        if let Some(path) = &self.palw_native_calibration39_snapshot {
-            use kaspa_consensus_core::palw_native_calibration_v39::NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V39;
-            use std::io::Read;
-            if self.network().network_type() != NetworkType::Devnet
-                || self.override_params_file.is_some()
-                || self.palw_drill_genesis_salt.is_some()
-                || self.palw_native_calibration_snapshot.is_some()
-                || self.palw_native_calibration_root.is_some()
-            {
-                panic!("native39 owning wrapper requires the original devnet base without generic overrides or snapshot34 flags");
-            }
-            #[cfg(feature = "devnet-prealloc")]
-            if self.num_prealloc_utxos.is_some() {
-                panic!("native39 owning wrapper uses pinned original devnet UTXOs");
-            }
-            let pin: kaspa_consensus_core::Hash64 = self
-                .palw_native_calibration39_root
-                .as_deref()
-                .expect("native39 needs explicit wrapper root")
-                .parse()
-                .unwrap_or_else(|e| panic!("native39 wrapper root: {e}"));
-            let file = fs::File::open(path).unwrap_or_else(|e| panic!("native39 wrapper snapshot: {e}"));
-            if file.metadata().unwrap_or_else(|e| panic!("native39 snapshot metadata: {e}")).len()
-                > NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V39 as u64
-            {
-                panic!("native39 snapshot byte cap");
-            }
-            let mut bytes = Vec::new();
-            file.take(NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V39 as u64 + 1)
-                .read_to_end(&mut bytes)
-                .unwrap_or_else(|e| panic!("native39 bounded snapshot read: {e}"));
-            config.params = kaspa_consensus_core::palw_native_calibration_v39::load_isolated_native_calibration_v39(
-                &config.params,
-                &bytes,
-                pin.as_bytes(),
-            )
-            .unwrap_or_else(|e| panic!("native39 owning wrapper snapshot: {e}"));
-        } else if self.palw_native_calibration39_root.is_some() {
-            panic!("native39 root supplied without owning wrapper snapshot");
-        }
-
         // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
         // syncing by work alone while its operator believes it is pinned — the one failure mode
         // where a silent fallback is worse than not starting.
@@ -2111,102 +1955,6 @@ pub fn cli() -> Command {
                     "PALW DRILL ONLY: this node refuses every leaf-evidence request on the interval lane, so a seat that \
                      named a leaf demands its evidence on chain through the held data-availability court (ADR-0111 \
                      Decision 3). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-collude-with")
-                .long("palw-drill-collude-with")
-                .require_equals(true)
-                .value_name("txid:index[,txid:index...]")
-                .help(
-                    "PALW DRILL ONLY (the G14 collusion drill): this seat colludes with these producer bonds — it signs Valid on every \
-                     claim they produced without judging it, and submits no PALW object but its receipts, readiness proofs and bond \
-                     registration (it never accuses, demands or files). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-tamper-auto-leaf")
-                .long("palw-drill-tamper-auto-leaf")
-                .action(clap::ArgAction::SetTrue)
-                .help(
-                    "PALW DRILL ONLY (the G14 collusion drill): --palw-drill-tamper-leaf with the leaf chosen per draw — the first \
-                     held, openable, non-fused step leaf in the second half of the honest run. Refused on mainnet.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-fault")
-                .long("palw-drill-fault")
-                .require_equals(true)
-                .value_name("output|selection:<pos>:<lane>|oov:<pos>|tokenizer|prompt-relabel|short-prefill:<n>|garbage-prompt|skip-all|activation|interval:<n>|bend:<row>[:same]|leaf:<n>")
-                .help(
-                    "PALW DRILL ONLY (G14 audit G-17): the attempt-lane lie this producer commits, through the family's own drill path \
-                     with every root re-derived — output root substituted, a token not the job's selection, an out-of-vocabulary token, \
-                     an instance tokenizer field in the context, another anchor's prompt, a cut prefill, a prompt root with no preimage, \
-                     an execution root no computation reproduces (skip-all), the activation root or checkpoint interval replaced, bent \
-                     logits, or one step leaf. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-sparse-fault-seed")
-                .long("palw-drill-sparse-fault-seed")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(u64))
-                .help(
-                    "PALW DRILL ONLY (G14 audit G-17, the sparse single-interval fault): every claim lies at ONE step leaf drawn \
-                     uniformly from this seed and the honest run, before any challenge exists, over the capture's held, openable, \
-                     non-fused leaves (attempt lane and canonical free-prompt claims). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-fp-fault")
-                .long("palw-drill-fp-fault")
-                .require_equals(true)
-                .value_name("kv:<call>:<layer>:<pos>:<k|v>:<lane>:<delta>|attn:<call>:<layer>:<pos>:<head>:<lane>:<delta>[:follow]|skip-all")
-                .help(
-                    "PALW DRILL ONLY (G14 audit G-17): the lie this node's canonical free-prompt claims commit — a forged KV cache row \
-                     (state fault), a forged fused attention output, or an execution root no computation reproduces (skip-all). A \
-                     backend without the verb refuses the run. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-withhold-all-da")
-                .long("palw-drill-withhold-all-da")
-                .action(clap::ArgAction::SetTrue)
-                .help(
-                    "PALW DRILL ONLY (G14 audit G-17 / D-11): this producer answers no data-availability unit it owes, of any kind, \
-                     so every demand ends in the objective DA default. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-extra-seat")
-                .long("palw-drill-extra-seat")
-                .require_equals(true)
-                .action(clap::ArgAction::Append)
-                .value_name("key=<seed file>,bond=<txid:index>[,fee=<txid:index>][,pay=<address>]")
-                .help(
-                    "PALW DRILL ONLY (the G14 collusion drill on a small host): run another seat identity in this process — a Panel \
-                     service of its own sharing this node's chain, with this node's drill-collusion flags and nothing of its own to \
-                     produce or register. Repeatable. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-extra-seat-collude-with")
-                .long("palw-drill-extra-seat-collude-with")
-                .require_equals(true)
-                .value_name("txid:index[,txid:index...]")
-                .help(
-                    "PALW DRILL ONLY: the producer bonds the --palw-drill-extra-seat seats collude with (sign Valid without judging, \
-                     file nothing), leaving this node's own seat honest. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-drill-withhold-held-da")
-                .long("palw-drill-withhold-held-da")
-                .action(clap::ArgAction::SetTrue)
-                .help(
-                    "PALW DRILL ONLY (the G14 collusion drill D-11): this producer never answers a legacy held data-availability unit \
-                     (LG14-B), so a public descent's demand ends in the objective DA default. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL \
-                     ONLY.",
                 ),
         )
         .arg(
@@ -2696,19 +2444,6 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
-            Arg::new("palw-drill-full-activation-at")
-                .long("palw-drill-full-activation-at")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(u64))
-                .help(
-                    "With --palw-drill-genesis-salt only: cross the full-activation flag day as the release will arm it — every entry \
-                     of PALW_T12_FULL_ACTIVATION_FENCES_V1 (the int-13 list plus every G14 / RFC fence) at this DAA — on the drill \
-                     chain. Nothing else moves. Excludes --palw-drill-int13-at and --palw-drill-model-court-at. Refused without the \
-                     salt, at 0, at a height another fence uses, unless palw_gen_v1 is in force at or below it (--palw-drill-int11-at \
-                     below it), and unless the armed ruleset validates (record-gated fences need their arming records).",
-                ),
-        )
-        .arg(
             Arg::new("palw-drill-improve-at")
                 .long("palw-drill-improve-at")
                 .require_equals(true)
@@ -2900,18 +2635,6 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
-            Arg::new("palw-drill-tamper-tir-frame")
-                .long("palw-drill-tamper-tir-frame")
-                .require_equals(true)
-                .help(
-                    "PALW DRILL ONLY (G14 audit drills D-05/D-06/D-07/D-18): the lie this node's canonical claims commit as ORIGINAL TIR \
-                     frames — cone:<leaf> (one committed step leaf forged, roots re-derived), selection:<position> (the committed token at \
-                     that decode position is not the job's own selection), output (a substituted output root), no-tfp1 (published \
-                     without its TFP1 frame past palw_tir_public_conviction_v1, refused at acceptance). DEVNET/SIMNET OR A SALTED \
-                     TESTNET-12 DRILL ONLY.",
-                ),
-        )
-        .arg(
             Arg::new("palw-drill-tamper-boundary")
                 .long("palw-drill-tamper-boundary")
                 .require_equals(true)
@@ -2958,27 +2681,6 @@ pub fn cli() -> Command {
                 .help(
                     "RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (DefaultAccusedTirStep, unit \
                      TirStepRun) before it abstains; the executor answers inside the disclosure window or its claim defaults.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-gdn-step-filer")
-                .long("palw-gdn-step-filer")
-                .action(clap::ArgAction::SetTrue)
-                .help(
-                    "G14 / RFC-0006: the GDN step filer — re-execute the served recurrence steps of disputable Qwen3.6 hybrid claims from \
-                     public material and file GdnStepAccusedV2 (tag 243) when the court's own verdict convicts the step; reserves the claim \
-                     first near its Final deadline where the legacy public filer is in force, re-submits what a reorg dropped, and hands a \
-                     conviction to the false-Valid filer. Dormant below palw_memory_routing_court_v2. Off by default.",
-                ),
-        )
-        .arg(
-            Arg::new("palw-court-paid-ingress")
-                .long("palw-court-paid-ingress")
-                .action(clap::ArgAction::SetTrue)
-                .help(
-                    "G14 item 3: let the held/outsider court filer pay the once-only court ingress fee (the paid public path whose \
-                     per-claim outside reservation a coalition cannot occupy). Without it a case whose admission would burn the fee \
-                     settles unpaid. Dormant while the fee schedule is unadopted or below palw_court_outsider_lane_v1. Off by default.",
                 ),
         )
         .arg(
@@ -3830,23 +3532,6 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 .help("The number of total days of data to keep.")
         )
         .arg(
-            Arg::new("palw-native-calibration39-snapshot")
-                .long("palw-native-calibration39-snapshot")
-                .value_name("file")
-                .value_parser(clap::value_parser!(String))
-                .requires("palw-native-calibration39-root")
-                .conflicts_with("palw-native-calibration-snapshot")
-                .help("Pinned owning39 wrapper on a distinct local devnet. Does not qualify shipping Final or A6/A8.")
-        )
-        .arg(
-            Arg::new("palw-native-calibration39-root")
-                .long("palw-native-calibration39-root")
-                .value_name("128-hex")
-                .value_parser(clap::value_parser!(String))
-                .requires("palw-native-calibration39-snapshot")
-                .help("Explicit object root of the separately versioned owning39 wrapper.")
-        )
-        .arg(
             Arg::new("palw-native-calibration-snapshot")
                 .long("palw-native-calibration-snapshot")
                 .value_name("file")
@@ -3888,36 +3573,6 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                        maxinpeers=32, rpcmaxclients=8, nogrpc, min-disk-free-percent=15. Warns when system memory is below 7.5GB.")
         )
         .arg(
-            Arg::new("storage-cap-bytes")
-                .long("storage-cap-bytes")
-                .env("KASPAD_STORAGE_CAP_BYTES")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(u64))
-                .help("G14: cap the node's managed storage root (<appdir>/<network>: DBs, staging DBs, WAL, PALW retention, spill files, logs) at this many bytes. Reservations are taken before IBD staging DBs and spill files, obsolete data is reclaimed first, RocksDB footprints are bounded, and below the safety margin write intake pauses (nothing is invalidated) until space is reclaimed. Off by default; 30000000000 is the pruned-node recommendation. Put the root on a dedicated quota-capable volume."),
-        )
-        .arg(
-            Arg::new("storage-safety-margin-bytes")
-                .long("storage-safety-margin-bytes")
-                .env("KASPAD_STORAGE_SAFETY_MARGIN_BYTES")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(u64))
-                .help("G14: headroom under --storage-cap-bytes below which write intake pauses (default 1% of the cap, at least 64 MiB). Resumes at twice this."),
-        )
-        .arg(
-            Arg::new("storage-category-budget")
-                .long("storage-category-budget")
-                .value_name("category=bytes")
-                .action(ArgAction::Append)
-                .help("G14: override one per-category budget under --storage-cap-bytes (repeatable). Categories: active-db, staging-db, wal-maintenance, palw-retained, ibd-spill, logs, other."),
-        )
-        .arg(
-            Arg::new("storage-gc-pruned-evm-indexes")
-                .long("storage-gc-pruned-evm-indexes")
-                .env("KASPAD_STORAGE_GC_PRUNED_EVM_INDEXES")
-                .action(clap::ArgAction::SetTrue)
-                .help("G14: when a block is pruned, also delete its RPC-only EVM indexes (raw tx, tx lookup, block-hash map, number index, log postings), which otherwise outlive the pruned bodies forever. Implied by --storage-cap-bytes; ignored on an archival node. Node-local, consensus-neutral."),
-        )
-        .arg(
             Arg::new("min-disk-free-percent")
                 .long("min-disk-free-percent")
                 .env("KASPAD_MIN_DISK_FREE_PERCENT")
@@ -3948,7 +3603,7 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help("RocksDB configuration preset: 'default' (SSD/NVMe) or 'hdd' (optimized for hard disk drives with BlobDB, compression, rate limiting). \
-                       HDD preset recommended for archival nodes on HDD storage (see docs/operations/node/archival.md).")
+                       HDD preset recommended for archival nodes on HDD storage (see docs/archival.md).")
         )
         .arg(
             Arg::new("rocksdb-wal-dir")
@@ -4178,7 +3833,6 @@ impl Args {
             palw_drill_anchor_duty_after_slots: m.get_one::<u64>("palw-drill-anchor-duty-after-slots").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_int13_at: m.get_one::<u64>("palw-drill-int13-at").copied(),
-            palw_drill_full_activation_at: m.get_one::<u64>("palw-drill-full-activation-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_drill_tir_shard_at: m.get_one::<u64>("palw-drill-tir-shard-at").copied(),
             palw_tir_shard_hold: m.get_many::<u16>("palw-tir-shard-hold").map(|v| v.copied().collect()).unwrap_or_default(),
@@ -4204,13 +3858,10 @@ impl Args {
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
             palw_tir_shard_watch: m.get_one::<bool>("palw-tir-shard-watch").copied().unwrap_or(false),
-            palw_gdn_step_filer: m.get_one::<bool>("palw-gdn-step-filer").copied().unwrap_or(false),
-            palw_court_paid_ingress: m.get_one::<bool>("palw-court-paid-ingress").copied().unwrap_or(false),
             palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
             palw_tir_shard_fetch: m.get_one::<bool>("palw-tir-shard-fetch").copied().unwrap_or(false),
             palw_tir_shard_run_leaves: m.get_one::<u32>("palw-tir-shard-run-leaves").copied(),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
-            palw_drill_tamper_tir_frame: m.get_one::<String>("palw-drill-tamper-tir-frame").cloned(),
             palw_drill_challenge_all: m
                 .get_one::<bool>("palw-drill-challenge-all")
                 .copied()
@@ -4221,15 +3872,6 @@ impl Args {
                 .copied()
                 .unwrap_or(defaults.palw_drill_refuse_leaf_evidence),
             palw_drill_vertex_equivocate_at: m.get_one::<u64>("palw-drill-vertex-equivocate-at").copied(),
-            palw_drill_collude_with: m.get_one::<String>("palw-drill-collude-with").cloned(),
-            palw_drill_withhold_held_da: m.get_one::<bool>("palw-drill-withhold-held-da").copied().unwrap_or(false),
-            palw_drill_tamper_auto_leaf: m.get_one::<bool>("palw-drill-tamper-auto-leaf").copied().unwrap_or(false),
-            palw_drill_fault: m.get_one::<String>("palw-drill-fault").cloned(),
-            palw_drill_sparse_fault_seed: m.get_one::<u64>("palw-drill-sparse-fault-seed").copied(),
-            palw_drill_fp_fault: m.get_one::<String>("palw-drill-fp-fault").cloned(),
-            palw_drill_withhold_all_da: m.get_one::<bool>("palw-drill-withhold-all-da").copied().unwrap_or(false),
-            palw_drill_extra_seat: m.get_many::<String>("palw-drill-extra-seat").map(|v| v.cloned().collect()).unwrap_or_default(),
-            palw_drill_extra_seat_collude_with: m.get_one::<String>("palw-drill-extra-seat-collude-with").cloned(),
             palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
             palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
             palw_canonical_interval_daa: m
@@ -4371,8 +4013,6 @@ impl Args {
             override_params_file: m.get_one::<String>("override-params-file").cloned(),
             palw_native_calibration_snapshot: m.get_one::<String>("palw-native-calibration-snapshot").cloned(),
             palw_native_calibration_root: m.get_one::<String>("palw-native-calibration-root").cloned(),
-            palw_native_calibration39_snapshot: m.get_one::<String>("palw-native-calibration39-snapshot").cloned(),
-            palw_native_calibration39_root: m.get_one::<String>("palw-native-calibration39-root").cloned(),
             rocksdb_preset: m.get_one::<String>("rocksdb-preset").cloned().or(defaults.rocksdb_preset),
             rocksdb_wal_dir: m.get_one::<String>("rocksdb-wal-dir").cloned().or(defaults.rocksdb_wal_dir),
             rocksdb_cache_size: m.get_one::<usize>("rocksdb-cache-size").cloned().or(defaults.rocksdb_cache_size),
@@ -4383,21 +4023,6 @@ impl Args {
                 .cloned()
                 .filter(|_| m.value_source("min-disk-free-percent") != Some(DefaultValue))
                 .unwrap_or(defaults.min_disk_free_percent),
-            storage_cap_bytes: m.get_one::<u64>("storage-cap-bytes").cloned().or(defaults.storage_cap_bytes),
-            storage_safety_margin_bytes: m
-                .get_one::<u64>("storage-safety-margin-bytes")
-                .cloned()
-                .or(defaults.storage_safety_margin_bytes),
-            storage_category_budgets: arg_match_many_unwrap_or::<String>(
-                &m,
-                "storage-category-budget",
-                defaults.storage_category_budgets,
-            ),
-            storage_gc_pruned_evm_indexes: arg_match_unwrap_or::<bool>(
-                &m,
-                "storage-gc-pruned-evm-indexes",
-                defaults.storage_gc_pruned_evm_indexes,
-            ),
             profile: m.get_one::<String>("profile").cloned().or(defaults.profile),
             allow_public_rpc: arg_match_unwrap_or::<bool>(&m, "allow-public-rpc", defaults.allow_public_rpc),
         };
@@ -5043,209 +4668,6 @@ pub fn parse_palw_tir_shard_declare_v1(spec: &str) -> Result<(kaspa_hashes::Hash
     let s_l: u16 = s_l.parse().map_err(|_| "S_L is not a number".to_string())?;
     let s_p: u16 = s_p.parse().map_err(|_| "S_P is not a number".to_string())?;
     Ok((class, s_l, s_p))
-}
-
-/// **`--palw-drill-tamper-tir-frame=<fault>`, parsed** (G14 audit drills D-05/D-06/D-07/D-18): `cone:<leaf>`,
-/// `selection:<position>`, `output` or `no-tfp1`. Anything else is refused by name.
-pub fn parse_palw_drill_tamper_tir_frame_v1(spec: &str) -> Result<crate::palw_panel::PalwDrillTirFrameFaultV1, String> {
-    use crate::palw_panel::PalwDrillTirFrameFaultV1 as F;
-    match spec.split_once(':') {
-        Some(("cone", leaf)) => Ok(F::Cone { leaf: leaf.parse().map_err(|_| "cone:<leaf> needs a step leaf number".to_string())? }),
-        Some(("selection", position)) => Ok(F::Selection {
-            position: position.parse().map_err(|_| "selection:<position> needs a decode position number".to_string())?,
-        }),
-        None if spec == "output" => Ok(F::Output),
-        None if spec == "no-tfp1" => Ok(F::NoTfp1),
-        _ => Err(format!("unknown TIR frame drill fault '{spec}': expected cone:<leaf>, selection:<position>, output or no-tfp1")),
-    }
-}
-
-/// **`--palw-drill-fault=<fault>`, parsed** (G14 audit G-17): the attempt-lane drill fault by name. The substituted roots are fixed
-/// drill constants (a lie, recognisable in a log); anything else is refused by name.
-pub fn parse_palw_drill_fault_v1(spec: &str) -> Result<kaspa_consensus_core::palw_backend::PalwDrillFaultV1, String> {
-    use kaspa_consensus_core::palw_backend::{PalwDrillBendV1, PalwDrillFaultV1 as F};
-    let num = |what: &str, v: Option<&str>| -> Result<u64, String> {
-        v.ok_or_else(|| format!("{spec}: needs {what}"))?.parse::<u64>().map_err(|_| format!("{spec}: {what} is not a number"))
-    };
-    let u32of = |what: &str, v: Option<&str>| -> Result<u32, String> {
-        u32::try_from(num(what, v)?).map_err(|_| format!("{spec}: {what} does not fit 32 bits"))
-    };
-    let mut it = spec.split(':');
-    let kind = it.next().unwrap_or_default();
-    let fault = match kind {
-        "output" => F::OutputRoot(kaspa_hashes::Hash64::from_u64_word(0xD07D_07D0_7D07_D07D)),
-        "selection" => F::TokenNotSelected { pos: u32of("<pos>", it.next())?, lane: u32of("<lane>", it.next())? },
-        "oov" => F::TokenOutOfVocab { pos: u32of("<pos>", it.next())? },
-        "tokenizer" => F::LegacyContextField,
-        "prompt-relabel" => F::RelabelPrompt { from: kaspa_hashes::Hash64::from_u64_word(0xD08D_08D0_8D08_D08D) },
-        "short-prefill" => F::ShortPrefill(u32of("<n>", it.next())?),
-        "garbage-prompt" => F::GarbagePromptRoot,
-        "skip-all" => F::UnboundExecutionRoot(kaspa_hashes::Hash64::from_u64_word(0x5C1F_A11C_0DE5_C1F0)),
-        "activation" => F::ActivationRoot(kaspa_hashes::Hash64::from_u64_word(0xAC71_AC71_AC71_AC71)),
-        "interval" => F::CheckpointInterval(u32of("<n>", it.next())?),
-        "bend" => {
-            let row = u32of("<row>", it.next())?;
-            let mode = match it.next() {
-                None => PalwDrillBendV1::NewArgmax,
-                Some("same") => PalwDrillBendV1::SameArgmax,
-                Some(other) => return Err(format!("{spec}: bend mode '{other}' is not 'same'")),
-            };
-            F::BendLogits { row, mode, lane: None }
-        }
-        "leaf" => F::StepLeaf(num("<n>", it.next())?),
-        _ => {
-            return Err(format!(
-                "unknown drill fault '{spec}': expected output, selection:<pos>:<lane>, oov:<pos>, tokenizer, prompt-relabel, \
-                 short-prefill:<n>, garbage-prompt, skip-all, activation, interval:<n>, bend:<row>[:same] or leaf:<n>"
-            ));
-        }
-    };
-    if it.next().is_some() {
-        return Err(format!("{spec}: too many fields for '{kind}'"));
-    }
-    Ok(fault)
-}
-
-/// **`--palw-drill-fp-fault=<fault>`, parsed** (G14 audit G-17): a canonical free-prompt claim's lie.
-pub fn parse_palw_drill_fp_fault_v1(spec: &str) -> Result<crate::palw_panel::PalwDrillFpFaultV1, String> {
-    use crate::palw_panel::PalwDrillFpFaultV1 as F;
-    use kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1 as B;
-    let fields: Vec<&str> = spec.split(':').collect();
-    let n = |i: usize| -> Result<i64, String> {
-        fields.get(i).ok_or_else(|| format!("{spec}: too few fields"))?.parse::<i64>().map_err(|_| format!("{spec}: field {i} is not a number"))
-    };
-    let fit = |v: i64, max: i64, what: &str| -> Result<i64, String> {
-        if (0..=max).contains(&v) { Ok(v) } else { Err(format!("{spec}: {what} out of range")) }
-    };
-    match fields.first().copied() {
-        Some("skip-all") if fields.len() == 1 => Ok(F::SkipAll),
-        Some("kv") if fields.len() == 7 => {
-            let kind = match fields[4] {
-                "k" => 0,
-                "v" => 1,
-                other => return Err(format!("{spec}: cache kind '{other}' is not k or v")),
-            };
-            Ok(F::Backend(B::CacheRow {
-                call: fit(n(1)?, u32::MAX as i64, "call")? as u32,
-                layer: fit(n(2)?, u16::MAX as i64, "layer")? as u16,
-                position: fit(n(3)?, u32::MAX as i64, "position")? as u32,
-                kind,
-                lane: fit(n(5)?, u16::MAX as i64, "lane")? as u16,
-                delta: i32::try_from(n(6)?).map_err(|_| format!("{spec}: delta does not fit 32 bits"))?,
-            }))
-        }
-        Some("attn") if fields.len() == 7 || (fields.len() == 8 && fields[7] == "follow") => Ok(F::Backend(B::AttnOutput {
-            call: fit(n(1)?, u32::MAX as i64, "call")? as u32,
-            layer: fit(n(2)?, u16::MAX as i64, "layer")? as u16,
-            position: fit(n(3)?, u32::MAX as i64, "position")? as u32,
-            head: fit(n(4)?, u16::MAX as i64, "head")? as u16,
-            lane: fit(n(5)?, u16::MAX as i64, "lane")? as u16,
-            delta: i32::try_from(n(6)?).map_err(|_| format!("{spec}: delta does not fit 32 bits"))?,
-            follow: fields.len() == 8,
-        })),
-        _ => Err(format!(
-            "unknown free-prompt drill fault '{spec}': expected kv:<call>:<layer>:<pos>:<k|v>:<lane>:<delta>, \
-             attn:<call>:<layer>:<pos>:<head>:<lane>:<delta>[:follow] or skip-all"
-        )),
-    }
-}
-
-/// One `--palw-drill-extra-seat` identity, parsed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PalwDrillExtraSeatV1 {
-    pub key_path: String,
-    pub bond: String,
-    pub fee_outpoint: Option<String>,
-    pub pay_address: Option<String>,
-}
-
-/// **`--palw-drill-extra-seat=key=<file>,bond=<txid:index>[,fee=<txid:index>][,pay=<address>]`, parsed.**
-pub fn parse_palw_drill_extra_seat_v1(spec: &str) -> Result<PalwDrillExtraSeatV1, String> {
-    let (mut key, mut bond, mut fee, mut pay) = (None, None, None, None);
-    for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-        let (k, v) = part.split_once('=').ok_or_else(|| format!("{spec}: '{part}' is not name=value"))?;
-        let slot = match k {
-            "key" => &mut key,
-            "bond" => &mut bond,
-            "fee" => &mut fee,
-            "pay" => &mut pay,
-            other => return Err(format!("{spec}: unknown field '{other}' (key, bond, fee, pay)")),
-        };
-        if slot.replace(v.to_owned()).is_some() {
-            return Err(format!("{spec}: '{k}' given twice"));
-        }
-    }
-    let key_path = key.ok_or_else(|| format!("{spec}: needs key=<seed file>"))?;
-    let bond = bond.ok_or_else(|| format!("{spec}: needs bond=<txid:index>"))?;
-    crate::palw_producer::parse_outpoint(&bond).map_err(|e| format!("{spec}: bond {e}"))?;
-    if let Some(fee) = &fee {
-        crate::palw_producer::parse_outpoint(fee).map_err(|e| format!("{spec}: fee {e}"))?;
-    }
-    Ok(PalwDrillExtraSeatV1 { key_path, bond, fee_outpoint: fee, pay_address: pay })
-}
-
-#[cfg(test)]
-mod palw_drill_g17_tests {
-    use super::*;
-    use kaspa_consensus_core::palw_backend::{PalwDrillBendV1, PalwDrillFaultV1 as F, PalwFreePromptDrillFaultV1 as B};
-    /// G-17: every new injection parses by name, and nothing else does.
-    #[test]
-    fn g17_drill_injections_parse_by_name() {
-        assert!(matches!(parse_palw_drill_fault_v1("output").unwrap(), F::OutputRoot(_)));
-        assert_eq!(parse_palw_drill_fault_v1("selection:3:17").unwrap(), F::TokenNotSelected { pos: 3, lane: 17 });
-        assert_eq!(parse_palw_drill_fault_v1("oov:2").unwrap(), F::TokenOutOfVocab { pos: 2 });
-        assert_eq!(parse_palw_drill_fault_v1("tokenizer").unwrap(), F::LegacyContextField);
-        assert!(matches!(parse_palw_drill_fault_v1("prompt-relabel").unwrap(), F::RelabelPrompt { .. }));
-        assert_eq!(parse_palw_drill_fault_v1("short-prefill:4").unwrap(), F::ShortPrefill(4));
-        assert_eq!(parse_palw_drill_fault_v1("garbage-prompt").unwrap(), F::GarbagePromptRoot);
-        assert!(matches!(parse_palw_drill_fault_v1("skip-all").unwrap(), F::UnboundExecutionRoot(_)));
-        assert!(matches!(parse_palw_drill_fault_v1("activation").unwrap(), F::ActivationRoot(_)));
-        assert_eq!(parse_palw_drill_fault_v1("interval:9").unwrap(), F::CheckpointInterval(9));
-        assert_eq!(
-            parse_palw_drill_fault_v1("bend:1:same").unwrap(),
-            F::BendLogits { row: 1, mode: PalwDrillBendV1::SameArgmax, lane: None }
-        );
-        assert_eq!(parse_palw_drill_fault_v1("leaf:5").unwrap(), F::StepLeaf(5));
-        for bad in ["", "outputs", "selection:1", "oov", "tokenizer:1", "leaf:x", "bend:1:new", "interval:-1", "short-prefill:1:2"] {
-            assert!(parse_palw_drill_fault_v1(bad).is_err(), "{bad}");
-        }
-        use crate::palw_panel::PalwDrillFpFaultV1 as P;
-        assert_eq!(parse_palw_drill_fp_fault_v1("skip-all").unwrap(), P::SkipAll);
-        assert_eq!(
-            parse_palw_drill_fp_fault_v1("kv:0:1:2:v:3:-4").unwrap(),
-            P::Backend(B::CacheRow { call: 0, layer: 1, position: 2, kind: 1, lane: 3, delta: -4 })
-        );
-        assert_eq!(
-            parse_palw_drill_fp_fault_v1("attn:1:0:0:2:5:7:follow").unwrap(),
-            P::Backend(B::AttnOutput { call: 1, layer: 0, position: 0, head: 2, lane: 5, delta: 7, follow: true })
-        );
-        for bad in ["", "kv:0:1:2:x:3:4", "kv:0:1:2:k:3", "attn:1:0:0:2:5:7:lead", "skip-all:1", "leaf:3"] {
-            assert!(parse_palw_drill_fp_fault_v1(bad).is_err(), "{bad}");
-        }
-        let txid = "00".repeat(64);
-        let seat = parse_palw_drill_extra_seat_v1(&format!("key=/k/1.hex,bond={txid}:1,fee={txid}:2")).unwrap();
-        assert_eq!((seat.key_path.as_str(), seat.fee_outpoint.is_some(), seat.pay_address), ("/k/1.hex", true, None));
-        for bad in ["", "key=/k", &format!("bond={txid}:1"), &format!("key=/k,bond={txid}:1,key=/j"), &format!("key=/k,bond=x,")] {
-            assert!(parse_palw_drill_extra_seat_v1(bad).is_err(), "{bad}");
-        }
-    }
-}
-
-#[cfg(test)]
-mod palw_drill_tir_frame_tests {
-    use super::*;
-    use crate::palw_panel::PalwDrillTirFrameFaultV1 as F;
-    /// The four G14 frame drills (D-05, D-06, D-07, D-18) parse by name; nothing else does.
-    #[test]
-    fn g14_tir_frame_drill_faults_parse_by_name() {
-        assert_eq!(parse_palw_drill_tamper_tir_frame_v1("cone:7").unwrap(), F::Cone { leaf: 7 });
-        assert_eq!(parse_palw_drill_tamper_tir_frame_v1("selection:0").unwrap(), F::Selection { position: 0 });
-        assert_eq!(parse_palw_drill_tamper_tir_frame_v1("output").unwrap(), F::Output);
-        assert_eq!(parse_palw_drill_tamper_tir_frame_v1("no-tfp1").unwrap(), F::NoTfp1);
-        for bad in ["", "cone", "cone:", "cone:x", "selection:-1", "output:1", "no-tfp", "leaf:7"] {
-            assert!(parse_palw_drill_tamper_tir_frame_v1(bad).is_err(), "{bad}");
-        }
-    }
 }
 
 /// **`--palw-drill-tamper-boundary=<position>:<occurrence>`, parsed** (RFC-0006, D-S3).

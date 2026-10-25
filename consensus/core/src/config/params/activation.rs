@@ -13,11 +13,6 @@ impl Params {
         self.palw_public_evidence_reward_v1.is_some_and(|f| f.is_active(daa_score))
     }
 
-    /// `palw_fp_answer_accounting_v1` is in force at `daa_score` (compute-claim audit CX-01/CX-02).
-    pub fn palw_fp_answer_accounting_v1_active_at(&self, daa_score: u64) -> bool {
-        self.palw_fp_answer_accounting_v1.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa_score))
-    }
-
     /// `palw_claim_hard_deadline_v1` is in force at `daa_score` (register X3).
     pub fn palw_claim_hard_deadline_v1_active_at(&self, daa_score: u64) -> bool {
         self.palw_claim_hard_deadline_v1.is_some_and(|f| f.activation.is_active(daa_score))
@@ -277,7 +272,7 @@ impl Params {
     /// kaspa-pq: `true` when PQ-only enforcement is active at `daa_score`.
     /// In `Consensus` mode this gates legacy secp256k1 signature opcodes,
     /// P2SH, and non-ML-DSA-87 script classes at the consensus and script-
-    /// engine level. See ADR-0019 / docs/design/pq/kaspa-pq-design-mldsa87.md.
+    /// engine level. See ADR-0019 / docs/kaspa-pq-design-mldsa87.md.
     #[inline]
     #[must_use]
     pub fn is_pq_active(&self, daa_score: u64) -> bool {

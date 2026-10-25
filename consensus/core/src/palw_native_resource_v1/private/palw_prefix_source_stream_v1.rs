@@ -5,8 +5,8 @@ native_struct!(crate::palw_prefix_source_stream_v1::PalwPrefixSourceStreamV1; co
 native_struct!(crate::palw_prefix_source_stream_v1::PendingV1; length, offset, expected, hash);
 
 use super::*;
-#[allow(unused_imports)]
-use crate::palw_native_resource_v1::{NativeWireScanV1,NativeWireReaderV1,NativeWireShapeV1};
 use crate::palw_native_resource_v1::wire::wire_struct;
+#[allow(unused_imports)]
+use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};
 wire_struct!(crate::palw_prefix_source_stream_v1::PalwPrefixSourceStreamV1; crate::Hash64, crate::Hash64, crate::palw_prefix_source_stream_v1::PalwPrefixSourceRangeV1, u64, Vec<i32>, Option<crate::palw_prefix_source_stream_v1::PendingV1>);
 wire_struct!(crate::palw_prefix_source_stream_v1::PendingV1; u32, u32, crate::Hash64, crate::palw_rendering_stream_v1::LeafHashContinuationV1);

@@ -187,7 +187,7 @@ impl<'a> TirClassRunnerV1<'a> {
         verify: bool,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirJobRunV1, String> {
-        let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf, None, None)?;
+        let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf)?;
         self.commit(ctx, cap, d)
     }
 
@@ -200,7 +200,7 @@ impl<'a> TirClassRunnerV1<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<(TirJobRunV1, Vec<TirResumePointV1>), String> {
         let mut points = Vec::new();
-        let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf, None, None)?;
+        let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf)?;
         Ok((self.commit(ctx, cap, d)?, points))
     }
 
@@ -254,48 +254,8 @@ impl<'a> TirClassRunnerV1<'a> {
         until: Option<u32>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirRangeRunV1, String> {
-        let d = self.drive(ctx, prompt, cap, false, from, until, None, on_leaf, None, None)?;
+        let d = self.drive(ctx, prompt, cap, false, from, until, None, on_leaf)?;
         Ok(TirRangeRunV1 { first_index: d.first_index, leaf_hashes: d.hashes, logits_rows: d.rows, generated: d.generated })
-    }
-
-    /// The same original execution without retaining N step hashes, all selecting
-    /// rows or checkpoint copies. Callbacks must consume each bounded leaf/row
-    /// before the executor reuses its working buffers. Generated IDs remain live
-    /// because the original selector and later positions read that exact prefix.
-    pub fn stream_v1(
-        &self,
-        ctx: &PalwJobContextV2,
-        prompt: &[u32],
-        cap: u64,
-        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
-        on_row: &mut dyn FnMut(u32, &[i32]) -> Result<(), String>,
-    ) -> Result<Vec<u32>, String> {
-        let d = self.drive(ctx, prompt, cap, false, None, None, None, on_leaf, Some(on_row), None)?;
-        debug_assert!(d.hashes.is_empty() && d.rows.is_empty());
-        Ok(d.generated)
-    }
-
-    /// One original position, retaining only its latest Fixed/Hist/ID state.
-    /// No N hashes, selecting-row history or checkpoint list is constructed.
-    /// One position is bounded by the registered program, not constant CPU work.
-    pub(crate) fn replay_streamed_position_v1(
-        &self,
-        ctx: &PalwJobContextV2,
-        prompt: &[u32],
-        cap: u64,
-        from: Option<&TirResumePointV1>,
-        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
-        on_row: &mut dyn FnMut(u32, &[i32]) -> Result<(), String>,
-    ) -> Result<TirResumePointV1, String> {
-        let next = match from {
-            Some(point) => point.position.checked_add(1).ok_or("TIR replay position overflow")?,
-            None => 0,
-        };
-        let until = next.checked_add(1).ok_or("TIR replay position overflow")?;
-        let mut last = None;
-        let driven = self.drive(ctx, prompt, cap, false, from, Some(until), None, on_leaf, Some(on_row), Some(&mut last))?;
-        debug_assert!(driven.hashes.is_empty() && driven.rows.is_empty());
-        last.ok_or("TIR streamed position produced no continuation state".into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -309,8 +269,6 @@ impl<'a> TirClassRunnerV1<'a> {
         until: Option<u32>,
         mut record: Option<&mut Vec<TirResumePointV1>>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
-        mut stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
-        last_resume: Option<&mut Option<TirResumePointV1>>,
     ) -> Result<Driven, String> {
         let space = self.space;
         if ctx.shape_profile_id != self.class_id {
@@ -362,16 +320,12 @@ impl<'a> TirClassRunnerV1<'a> {
         let range_leaves =
             (space.running_total(&job, end) as u64).checked_sub(first_index).ok_or("a replay leaf range runs backwards")?;
         let mut hashes = Vec::new();
-        if stream_rows.is_none() {
-            hashes.try_reserve_exact(range_leaves.min(1 << 24) as usize).map_err(|_| "cannot reserve replay hash storage")?;
-        }
+        hashes.try_reserve_exact(range_leaves.min(1 << 24) as usize).map_err(|_| "cannot reserve replay hash storage")?;
         let mut emit = Emitter {
             ctx_hash: ctx.context_hash(),
             class_id: self.class_id,
             hashes,
             first_index,
-            emitted: 0,
-            retain_hashes: stream_rows.is_none(),
             leaf: PalwStepTileLeafV1 {
                 version: PALW_TIR_STEP_LEAF_VERSION_V1,
                 coord: PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 },
@@ -385,11 +339,9 @@ impl<'a> TirClassRunnerV1<'a> {
             meta: verify.then(Vec::new),
         };
         let mut rows: Vec<Vec<i32>> = Vec::new();
-        if stream_rows.is_none() {
-            rows.try_reserve_exact(selections_through - selections_before).map_err(|_| "cannot reserve replay trace headers")?;
-        }
+        rows.try_reserve_exact(selections_through - selections_before).map_err(|_| "cannot reserve replay trace headers")?;
         for a in first_position..end {
-            let first = emit.first_index + emit.emitted;
+            let first = emit.first_index + emit.hashes.len() as u64;
             let token = if a < job.prefill {
                 prompt[a as usize]
             } else {
@@ -427,12 +379,8 @@ impl<'a> TirClassRunnerV1<'a> {
                     Some(select) => select(&generated, &row, generated.len() as u32),
                     None => base0_decode_token_select_v1(&row) as u32,
                 };
-                if let Some(consume) = stream_rows.as_mut() {
-                    consume(generated.len() as u32, &row)?;
-                } else {
-                    rows.push(row);
-                }
                 generated.push(id);
+                rows.push(row);
             }
             // Fixed-state checkpoints: every instance after this position's write.
             let checkpoint = (a + 1) % space.layout.checkpoint_interval == 0;
@@ -485,11 +433,8 @@ impl<'a> TirClassRunnerV1<'a> {
                 points.push(self.capture(&exec, a, &generated)?);
             }
         }
-        if end == job.positions && emit.first_index + emit.emitted != total {
-            return Err(format!("{} leaves produced, the step space counts {total}", emit.first_index + emit.emitted));
-        }
-        if let Some(last) = last_resume {
-            *last = Some(self.capture(&exec, end.checked_sub(1).ok_or("empty TIR continuation")?, &generated)?);
+        if end == job.positions && emit.first_index + emit.hashes.len() as u64 != total {
+            return Err(format!("{} leaves produced, the step space counts {total}", emit.first_index + emit.hashes.len() as u64));
         }
         Ok(Driven { first_index, hashes: emit.hashes, rows, generated, tiled, _memory: memory })
     }
@@ -590,8 +535,6 @@ struct Emitter {
     hashes: Vec<Hash64>,
     /// The index of `hashes[0]` in the job's step space (0 unless resumed).
     first_index: u64,
-    emitted: u64,
-    retain_hashes: bool,
     leaf: PalwStepTileLeafV1,
     position: u32,
     call: u32,
@@ -610,11 +553,8 @@ impl Emitter {
             m.push((self.leaf.coord, value_count));
         }
         let hash = step_tile_leaf_hash_v1(&self.ctx_hash, &self.class_id, &self.leaf);
-        let index = self.first_index + self.emitted;
-        self.emitted += 1;
-        if self.retain_hashes {
-            self.hashes.push(hash);
-        }
+        let index = self.first_index + self.hashes.len() as u64;
+        self.hashes.push(hash);
         on_leaf(&TirLeafOutV1 { index, position: self.position, preimage: &self.leaf, hash });
     }
 }

@@ -1,0 +1,909 @@
+# RFC-0008 v2 implementation record — claim-backed work slices on the weightless EXEC lane (DORMANT)
+
+**2026-10-10 audit addendum:** the review branch combines integration `3730cc90f` and X8R `5c04fc473`.
+The [four-RFC code-design audit](rfc-0006-0007-0008-0012-design-audit-2026-10-10.md) identifies open **CODE_GAP** items:
+kernel rewards paid before root Final, declared suffix work without canonical execution-cost derivation, and post-settlement
+convictions/defaults not propagated to the root or its slice payouts. The round-3 netting below is not a proof that these gates pass.
+The audit changes rounding to once per executor and caps new settlement legs by the remaining allocation; already-paid route excess
+still requires the reward-path hooks. All public fences remain dormant. Its validation record supersedes earlier test counts for this
+combined branch, without claiming VPS or multi-process network verification.
+
+Branch `rfc8/x8-exec-v2` (worktree `MISAKA-wt-b/wc-x8`), base `c931df046`, written 2026-10-08 by lane X8; reviewed, integrated and
+completed on `rfc8/x8r-review` by lane X8R (sections 10–12), merged with the integration line at `35a9ae1c8` (the UNSCHED reset: the
+shipped t12 ids are int-12's). Normative text: [RFC-0008](../../rfc/0008-palw-claim-backed-consensus-blocks.md) and the
+[implementation spec v1](rfc-0008-implementation-spec.md) with its **amendment 1** (section 10 there: the verification route and the
+five design decisions). This record says what exists, what proves it, and what does not.
+
+**The fence `palw_exec_payload_v2` is `None` on every ruleset and cannot be armed on a public one: `PALW_EXEC_PAYLOAD_V2_ARMABLE =
+false`, so `validate_palw_v2` refuses every real height by name.** Only a salted drill of testnet-12 lifts that refusal
+(`palw_exec_payload_v2_armable_on`), and every other refusal — the prerequisites, among them the kernel route whose own validation
+refuses every height — still applies there. No shipped params id, fingerprint, schedule id or golden changed (the field is Some-only in
+every hasher and `Some(never())` collapses out). Every pipeline test arms the fence by editing the `Config` it owns *after*
+`ConfigBuilder::build`, the documented validation bypass; no node can. Nothing here is a statement that RFC-0008 is complete: the
+capacity/liveness and recovery drills of spec section 9 are external, and section 12 names the code that remains.
+
+Statuses (the matrix vocabulary): **IMPLEMENTED_AND_TESTED** (real node path, real pipeline test, behind the unarmed fence) ·
+**DORMANT_NOT_INTEGRATED** (code with no node caller) · **CODE_GAP** · **DESIGN_GAP** · **EXTERNAL_GATE_PENDING**.
+
+## 1. Commits
+
+| commit | content |
+| --- | --- |
+| `6176a636a` | milestone 1: `PXE2` envelope and both subtype payloads, ledgers and pure rules, the fold (declaration, six-rule admission, settlement, void, expiry), the dormant fence, delta/object/tail allocation, core tests |
+| `ebf7b0536` | the weightless carriage: anchor trailer `PXA2`, closure, header/body gates, virtual processing, template, verdicts, sync/IBD/orphan hooks, first pipeline tests |
+| `48c90a4b3` | permit verdicts in canonical order (duplicate permit, payee bound); EXEC_TX, restart, replay, IBD, burst and orphan-pool tests |
+| `e54330e33` | `WORK_SLICE` challenge subject checked against the shared contract crate (`misaka-palw-sdk` test) |
+| `504aed522` | reorg test (stranded anchor leaves the window; republished slice credited once; a third node agrees) |
+| `0dca2ca35` | RPC claim provenance names the new void reason (an exhaustive match in `kaspa-rpc-service` that the first commits broke) |
+| `960f65a42` | kaspad: the operator's `EXEC_TX` producer signs `PXE2` from the fence; the two exhaustive matches in `kaspad/src/palw_panel.rs` (void reason, object name); this record; a pointer in the spec |
+| `ad1f609ed` (X8R) | merge of the integration line `9ea89994b`: union-only conflicts; `WorkRootExpired` takes the explicit void number 130 |
+| `253e5a355` (X8R) | the review (section 10): every un-gated pipeline path gated on the fence at the block's DAA; tag 130 rides exactly as an undecodable payload; P11, the orphan fence-off test |
+| `966606811` (X8R) | amendment 1: the verification route through the G14 kernel route, suffix void (void reasons 131/132), leg cap, refusal record (delta note 181), RPC op 240, relay admission, the `EXEC_SLICE` producer, the drill-path armability, the kernel-route prerequisite |
+| `fd9a7f22e` (X8R) | merge of the integration line `35a9ae1c8` (UNSCHED: ids back to int-12's) |
+| `5a033f804` (X8R) | the record's test section: the one milestone invocation `x8r-m4` |
+| `bdaf1a050` (X8R round 2) | the leg cap fixed at verification and net of the route's reward; a post-Final forfeit defaults its slice (section 10b); spec 10.2/10.5 revised; section 13 |
+| (X8R round 2, next commit) | **the composed real-node run** (section 12, item 1): `g14_kernel_route_e2e::conformance::exec_slices`, two tests, and the `cfg(test)` seam `exec_v2_test_admit_class_v1` |
+
+## 2. Allocation and wire facts
+
+| item | value |
+| --- | --- |
+| object tag | 130 `ExecWorkRootOpenedV2` (tags 131-139 unused) |
+| delta number | 180 `ExecV2Row { table, key, old, new }`, tables 1 roots, 2 slices, 3 jobs, 4 anchored; **181 `ExecV2Verdict { carrier, code }`**, the refusal record (a note: inert on apply and revert); 182-189 unused |
+| state carriage tail | `0xEE` (`PALW_CARRIAGE_EXEC_V2_TAIL_V1`); the empty carriage is byte-identical to before; root block `exec_v2/v1` is Some-only |
+| void reasons | **explicit borsh 130** `WorkRootExpired` (was the implicit 11; moved by X8R at the integration merge, beside RFC-0010's explicit 120–122), **131** `WorkSliceProvenFalse`, **132** `WorkSliceDefaulted` (amendment 1); pinned in `rcore_v22_skeleton::the_v22_void_reasons_are_pinned` and `exec_v2_fold_v1::the_object_and_delta_numbers_are_the_allocated_ones` |
+| slice refusal codes | `PalwSliceRefusalV2::code`, 1–27 (0 = admitted), never renumbered (`refusal_codes_are_distinct_and_named`) |
+| RPC | op **240** `getPalwExecV2Status` (lane range 240–249), gRPC messages 1294/1295; a versioned camelCase JSON observation (`PalwExecV2ObservationV1`, version 1) |
+| verification binding domains | `misaka-palw/exec-v2/slice-job-nonce/v1`, `misaka-palw/exec-v2/token-state/v1` (amendment 1) |
+| envelope | magic `PXE2`, version 2, subtypes `EXEC_TX` / `EXEC_SLICE` (exclusive), 16 KiB header cap, distinct keyed-BLAKE2b signing/content/payload/binding/id domains and ML-DSA-87 contexts per subtype |
+| anchor trailer | `PXA2` v1 at the end of a **chain** block's coinbase extra data: up to 8 heads, count, Merkle root over the covered members in canonical order |
+| limits | open roots 256 (4 per bond), extra executors 7, slices per root 128, pending depth 4 (16 per bond), 8 slices folded per block, lifetime 100,000 DAA, root work 2^48 |
+| fence | `Params::palw_exec_payload_v2: Option<ForkActivation>`, mirrored by `sync_palw_exec_payload_v2()` into the V2 bundle; in `palw_fences_v1`, `for_each_fence` and both id hashers (Some-only) |
+| arming prerequisites (enforced the day it flips) | ConsensusV2, `palw_execution_lane` open, `palw_lane_accept_parents_first`, `palw_rcore_plus`, `palw_canonical_work` and **`palw_probabilistic_constraints_v1`** (the verification route) in force at or below it; **`palw_audit_2026_09_11` declared** (tag 130's mixed-fleet tolerance) |
+| armability | `PALW_EXEC_PAYLOAD_V2_ARMABLE = false`; `palw_exec_payload_v2_armable_on(params)` is true only on a salted testnet-12 drill (network testnet-12, genesis not public testnet-12's) |
+
+## 3. Design as built (where it departs from or fixes the spec's open choices)
+
+* **Carriage.** Lane edges are execution data. Past the fence a chain block names *no* lane block as a parent (header rule); lane blocks
+  hang from one chain anchor plus lane parents. A chain block's coinbase carries the `PXA2` trailer; the covered set is the closure of
+  its heads through lane-parent edges, stopping at what the parent state already anchored and dropping anything outside the two-span
+  window, with a foreign anchor, or carrying a legacy `PXR1` envelope. The covered blocks are appended to the in-memory `mergeset_reds`
+  of the anchoring block's ghostdag data only. The stored ghostdag data is untouched, so blue score, blue work, DAA, bits, pruning
+  point and mergeset size cannot see an EXEC block, and the existing verdict / acceptance / coinbase / non-DAA code treats a covered
+  block exactly as it treated a red round block. The same function builds the template's anchor and validates the walk.
+* **v1 does not coexist.** Past the fence an algo-10 header carries exactly a `PXE2` envelope; a `PXR1` envelope is refused by name,
+  and below the fence a `PXE2` header is refused by name. One carrier is never accepted through both paths. `PXR1` bytes keep their
+  validation below the fence.
+* **Accounting.** `root_credited + sum(credited disjoint slice work) <= canonical root claim work` (the root's prefix is the REAL claim's
+  admitted canonical work), one accepted use per `(root, index)`, one job-work identity per live session, one settlement per root at
+  the root claim's `Final`. Slices have no `Final`, subsidy or escrow of their own. Extra executors' exposure is the claim reservation
+  in the one committed ledger and is re-derived in `assert_internal_consistency`.
+* **Hold, expiry, void.** A licensed root claim whose session is not ready owes no `Final` deadline (the DA/credit pause); a session
+  not ready by its expiry voids the claim uncharged (`WorkRootExpired`): silence is never a conviction.
+* **Settlement.** The producer leg is split by work share (`sum paid == allocation`, nothing minted); slice legs go through
+  `add_panel_payout` (unvested). Splitting a range into more slices pays no more.
+* **Permit verdicts.** The covered `EXEC_TX` members are judged in canonical `(round, index, block hash)` order: the lowest hash takes
+  a permit, a second block of the same permit is `PermitAlreadyUsed`, and the distinct payees one coinbase may pay are bounded
+  (`PayeeBound`). A refused member is covered and credited nothing; it never makes the chain block invalid.
+* **Reorg consequence (by design, documented).** The anchoring window is the block's span and the one before (a span is one DAA on
+  testnet-12). A lane block anchored on a branch that is reorganised away, and outside the window on the new branch, is not covered
+  there; the executor republishes. Nothing is invalidated or double credited (test 10 below).
+
+## 4. Requirement -> code -> test -> status
+
+Pipeline tests are `consensus/src/pipeline/virtual_processor/tests/t12_exec_v2_carriage.rs` (abbreviated `P#`); fold tests are
+`consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` (`F`); module tests live beside their module.
+
+| spec | requirement | code | evidence | status |
+| --- | --- | --- | --- | --- |
+| 1 | EXEC never a selected parent; zero raw/PALW weight, blue score, DAA/retarget, pruning level, k-anticone | `palw_exec_v2_augment` (reds appended in memory only), header rule (no lane parent from a chain block), algo 10 derives no block level (`algo_id_derives_no_block_level`, unchanged) | P1 twin-chain comparison of blue score, blue work, DAA, bits, timestamp, pruning point, mergeset size and absence from stored mergesets; P9 14-block burst against a twin; P3 chain block naming a lane parent refused | IMPLEMENTED_AND_TESTED |
+| 1 | heartbeat / BASE-0 / REAL unchanged; EXEC never feeds beacon entropy | no edit to those rules; the challenge contract tags a slice `ExecWorkSlice` (not a beacon source) | P1/P9 twins; `misaka/palw/sdk/tests/exec_v2_work_slice_subject.rs`; the contract's own eligibility test | IMPLEMENTED_AND_TESTED |
+| 1 | fence dormant on all presets, fingerprints unchanged, refused until section 9 passes | `palw_exec_v2.rs` (`PALW_EXEC_PAYLOAD_V2_ARMABLE`, `palw_exec_payload_v2_armable_on`, `validate_palw_exec_payload_v2`), `params.rs`, `fork_id_v1.rs` | `tests/palw_exec_payload_v2_fence.rs` (7 tests: 20 rulesets dormant, `never()` collapses, a height moves ruleset+schedule not identity, every real height refused by name, mirror consistency, **a salted drill may arm and a public ruleset may not**) | IMPLEMENTED_AND_TESTED |
+| 2 | exhaustive dispatch; both/neither/unknown version reject the whole carrier | `PalwExecV2Envelope::validate_shape`, `expected_payload_root` | `palw_exec_v2` module tests (`the_dispatch_table_is_exhaustive...`, `decode_is_strict`, `a_decodable_envelope_of_another_version...`) | IMPLEMENTED_AND_TESTED |
+| 2 | distinct TX/SLICE domains; no cross-network/version/anchor/subtype replay; golden vectors | keyed domains + contexts, `signing_message` | `domains_are_distinct...`, `a_permit_signature_never_verifies_as_a_slice_signature...`, `golden_vectors_pin_the_hashes`, `subtype_bytes_are_pinned`; P2 forged commitment / re-hung anchor refused | IMPLEMENTED_AND_TESTED |
+| 2 | constant algo-10 header price for both subtypes; no free header | no change to the lane's target; relay admission (amendment 1, §10.3) | P2 (a slice block is an algo-10 constant-target block); `palw_exec_v2_relay` tests | IMPLEMENTED_AND_TESTED; the flood residual decided (§10.3) |
+| 3 | root on an accepted REAL claim; prefix = admitted canonical work; no whole-session work to the root | `apply_root_declared_v2` | F `a_root_opens_on_an_accepted_claim_and_earns_nothing`, `every_refused_declaration_is_named_and_writes_nothing`, `a_root_declaration_is_signed_by_the_claims_bond...`; P1 (opened through a signed 0x4b carrier, prefix == claim pwu) | IMPLEMENTED_AND_TESTED |
+| 3 | plan is a partition with no gap or overlap | `palw_work_plan_range_v2` | `a_plan_is_a_partition_with_no_gap_and_no_overlap`; F `a_session_opens_once_and_a_job_is_worked_once` | IMPLEMENTED_AND_TESTED |
+| 3 | six admission rules in order, refusal named, no write on refusal | `exec_v2_admit_slice_v1`, `apply_covered_slices_v2` | F `each_admission_rule_refuses_by_name_in_the_specs_order...`, `a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`, `a_correct_slice_borrowed_from_another_root_or_job_is_refused_by_binding`; P4 unauthorised / skipping / borrowed slice anchored and credited nothing | IMPLEMENTED_AND_TESTED |
+| 3 | pending depth allows the next slice before verification; bounded | depth 4, per bond 16, 8 per block | F `the_pending_depth_and_the_per_bond_quota_bound...`, `two_slices_in_one_block_see_each_other_in_order...` | IMPLEMENTED_AND_TESTED |
+| 3 | slice binds root/class/kernel/plan/job/range/predecessor/result/input/output/evidence/DA/executor/identity | `PalwWorkSliceV1::slice_id`, `challenge_binding` | `the_challenge_subject_is_a_pure_function_of_the_slice...`; sdk test: flipping any of the 14 fields moves the contract's `ChallengeSubjectV1::id()` | IMPLEMENTED_AND_TESTED |
+| 4 | separate permit / work / root / job ledgers; branch-local; atomic restore | `PalwExecV2StateV1`, journaled `ExecV2Row` | F `two_branches_hold_independent_ledgers_and_each_credits_a_slice_once`, `the_exec_v2_tail_is_pinned_at_0xee...`, `a_corrupted_ledger_is_caught_by_the_consistency_check`; P10 reorg at the pipeline | IMPLEMENTED_AND_TESTED |
+| 4 | checked ints; conservation; one settlement per root; no re-escrow; no carrier subsidy | `settle_root_v2`, `settle_root_partial_v2`, `settle_at_final_v2` (+ the leg cap, §10.5) | `settlement_conserves_the_allocation_exactly...`, `splitting_a_range_into_more_slices_pays_no_more`; F `the_root_settles_once_at_final...`; **F `amendment_1::a_final_kernel_claim_verifies_its_slice_and_the_root_settles_once_with_capped_legs`, `a_slice_leg_is_capped_at_what_its_claims_held_when_they_verified`, `a_leg_cap_is_fixed_when_the_slice_verifies_so_a_held_back_last_slice_takes_no_earlier_leg`, `a_leg_cap_is_net_of_the_routes_final_reward_on_the_same_claim`** (verification through kernel claim rows, no test door; round 2, section 10b) | IMPLEMENTED_AND_TESTED at fold level; the composed real-node run is section 12 |
+| 4 | a verified slice whose kernel claim forfeits after `Final` (unserved post-Final demand) defaults and voids an unsettled root | `palw_exec_v2_claim_outcome_v1` (a `Final` row reserving nothing at or before its horizon), `sync_slice_verification_v2` | F `amendment_1::a_verified_slice_whose_claim_forfeits_after_final_defaults_and_voids_an_unsettled_root` (round 2) | IMPLEMENTED_AND_TESTED (fold) |
+| 4 | root Final held while not ready; expiry voids uncharged; rows retire with the claim | `final_is_held_v2`, `sweep_expired_roots_v2`, `on_claim_voided_v2`, `on_claim_retired_v2` | F `a_licensed_claim_with_an_unready_session_owes_no_final_deadline...`, `an_unfinished_session_voids_its_claim_uncharged_at_its_expiry`, `the_rows_retire_with_their_claim...` | IMPLEMENTED_AND_TESTED (fold) |
+| 4 | EXEC_TX permit use unchanged; one consumption per key; fee accepted and paid once | `palw_round_verdicts_v1` (canonical order, `taken`, `payees`) | P6: permitted spend accepted, fee to the bond's registered payout once; duplicate permit and ungranted round covered and refused | IMPLEMENTED_AND_TESTED |
+| 4 | one credit, no N+1 finalized attempts; slice work is not extra reward | slices create no attempt, no permit, no credit; settlement only re-divides the root claim's own producer leg by work share | F the session-free twin comparisons (producer leg + slice legs == the twin's leg; the root claim's Final is the only one) | IMPLEMENTED_AND_TESTED; the schedule-credit question decided: **no raise** (amendment 1, §10.4) |
+| 5 | lane edges are execution data; a chain block names no lane parent; same classifier for both subtypes | header processor, `round_lane_members_v2` | P3 | IMPLEMENTED_AND_TESTED |
+| 5 | header/body-committed head/closure commitment, canonical order with subtype, bounds, window | `palw_exec_v2_anchor.rs`, `check_exec_v2_shape`, `palw_exec_v2_anchor_verify` | 16 anchor module tests; P1, P3 (lying count/root disqualified, heartbeat still anchors), P2 | IMPLEMENTED_AND_TESTED |
+| 5 | template filters stale heads, resumes from the lane checkpoint; invalid carrier skipped by verdict, not by chain fault | `palw_exec_v2_pick_heads`, `palw_exec_v2_virtual`, `exec_v2_slice_adapt_block_template`, `heartbeat_adapt_block_template` keeps the trailer | P1, P9 (health view), P10 (stale head skipped, republished block anchored) | IMPLEMENTED_AND_TESTED |
+| 5 | sync, pruning-proof, IBD, template, orphan pool treat the lane alike | `services.rs` hooks, `SyncManager::with_exec_hooks`, `deps_manager.rs`, `orphans.rs::block_deps`, body-stage head dependency (`MissingParents`, retryable) | P8 (headers and bodies through both hooks; the un-hooked list lands every header and is refused the anchoring body by name), P7 (arrival order), `orphans::an_anchoring_block_waits_for_its_lane_heads_as_for_its_parents` | IMPLEMENTED_AND_TESTED |
+| 5 | legacy v1 coexistence defined; no double acceptance | v1 refused past the fence (section 3) | P2, P5 | IMPLEMENTED_AND_TESTED |
+| 6 | `WORK_SLICE` challenge under RFC-0007 Part VI; positive verification of the whole root | the slice's kernel-route claim is its verification (`palw_exec_v2_verify`, amendment 1 §10.1): admission binds it; `sync_slice_verification_v2` reads its Final after the route's tick; the root is ready only when every slice is verified; the `WORK_SLICE` subject binding stays on the slice | F `amendment_1::*` (binding refusals by name; Final verifies; Final at admission verifies at once); `palw_exec_v2_verify` module tests (token state, nonce); **real node: `exec_slices::x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready_on_the_real_node`** (the statement derived from public rows, OPV Finals with no Panel verify each slice, leg caps fixed, the root ready, the hold released) | IMPLEMENTED_AND_TESTED (fold and real node; the REAL root's class admitted through the seam) |
+| 6 | public-bond prosecution of a slice or boundary; exact court; DA default; false Valid; localization | the kernel route's own (G14): an outside bond files `FileProof` / `FileDemand` on the slice's kernel claim from public rows and DA; a conviction or default reaches the slice through the sync | the route's real-node G14 cases (`g14_kernel_route_*`, `g14_opv_*`: covered lie convicted by an outsider pre- and post-Final, withheld material defaulted); F `amendment_1::a_convicted_slice_voids_*`, `a_defaulted_slice_voids_*`; **composed on the real node: `exec_slices::x8_g14_an_outsider_convicts_a_slices_kernel_claim_and_its_suffix_and_root_void_on_the_real_node`** | IMPLEMENTED_AND_TESTED on the real node, with one named seam for the REAL root's class admission (section 12, item 1) |
+| 6 | a proved false predecessor voids the dependent suffix; no prefix payment | `void_suffix_v2` (amendment 1, §10.2); void reasons 131/132, uncharged at V2 | F `a_convicted_slice_voids_its_suffix_and_the_root_and_charges_the_root_nothing`, `a_defaulted_slice_voids_*_and_a_verified_one_convicted_later_still_voids_an_unsettled_root` | IMPLEMENTED_AND_TESTED (fold) |
+| 6 | EXEC_TX acceptance independent of a co-located session | verdicts are per member | P6 (a TX block is judged with no session state) | IMPLEMENTED_AND_TESTED |
+| 7 | per-root/bond/lane quotas, closure walk bound, independent slice queue; deterministic under every arrival order | constants in section 2; closure leaf bound = lane `max_per_mergeset`; heads 8; relay admission and the producer's one-carrier-per-slice rule (§10.3) | F quota test; anchor `a_lane_longer_than_the_bound_is_refused...`, `heads_are_bounded_and_a_diamond_is_covered_once`; P7, P9; `palw_exec_v2_relay` tests; `palw_exec_slice_producer` decision-table test | IMPLEMENTED_AND_TESTED (relay and production node-local) |
+| 7 | bounded dedup checkpoint after pruning | `anchored` window drop; rows retire with the claim; the carriage tail travels in pruned import | F `an_anchor_records_what_it_covered_once_and_the_window_drops_the_old`; carriage round trip | pipeline pruned import not run: EXTERNAL_GATE_PENDING (drill) |
+| 8 | observability: subtype, pending/verified/voided, root state, evidence, backlog, the reason for a lane refusal | RPC op 240 `getPalwExecV2Status` (`palw_exec_v2_observation_v1`): roots, slices, each verification claim's state, a block's refusal record (delta note 181), lane health; refusal codes pinned | F `a_slice_whose_claim_is_final_at_admission_*_and_the_refusal_record_names_every_carrier`, `refusal_codes_are_distinct_and_named`; gRPC `op_240_round_trips_on_the_grpc_wire`; rpc-core mock round trips | IMPLEMENTED_AND_TESTED (read model); an explorer page reads op 240 (none written) |
+| - | restart reopens the same database with the lane state intact | store tip + delta rows | P7 | IMPLEMENTED_AND_TESTED |
+| - | reorg across slice acceptance | per-block state | P10 (node 1 reorganises onto a longer branch; credit exists on neither branch until republished; a third node agrees) | IMPLEMENTED_AND_TESTED |
+| - | the operator's `EXEC_TX` producer signs `PXE2` from the fence (the v1 producer would stop the permit lane at it) | `kaspad/src/palw_round_producer.rs` (`signed_round_commitment`, `PalwRoundProducerConfig::exec_v2_fence` from `Params::palw_exec_payload_v2_fence()` in `daemon.rs`) | unit test `the_round_commitment_is_pxr1_below_the_fence_and_a_valid_pxe2_exec_tx_from_it`: PXR1 byte for byte below the fence; from it a `PXE2` envelope the header stage's stateless check accepts and a different nonce does not; the node-side half (template, verdicts, payout) is P6 | IMPLEMENTED_AND_TESTED at the signing unit; the running kaspad producer across a fence is a drill (EXTERNAL_GATE_PENDING) |
+| - | an `EXEC_SLICE` producer | `kaspad/src/palw_exec_slice_producer.rs`: intents name `(root, index, kernel claim)`; the statement is derived from public rows (`palw_exec_v2_slice_statement_v1`); template → adapt → PoW → `PXE2` slice signature → submit; republish of a carrier that left the window uncovered (§10.7). The computation and its kernel claim are the kernel route's own producer path | `palw_exec_slice_producer` tests (decision table, intent parsing) | IMPLEMENTED_AND_TESTED at the unit; the running service across a fence is a drill |
+
+## 5. Section 9 gates
+
+| gate | evidence now | open | status |
+| --- | --- | --- | --- |
+| Root lifecycle / REAL eligibility | root opens on a really admitted REAL claim through the pipeline (P1); prefix is the claim's canonical work; session open earns nothing; the hold, expiry void; **verification by kernel claims, root `Final` and the one capped settlement at fold level without a test door** (F `amendment_1::*`) | the REAL root claim's own `Final` and the capped settlement on the real node (they need the root class's Panel, the G14-for-rewards gap; fold-tested) | EXTERNAL (drill) + the onboarding gap |
+| Wire / compatibility | golden vectors, domains, strict decode, fence below / at / above activation (P5, P2, **P11: unarmed and armed-far nodes agree byte for byte**), v1 refused past the fence, fingerprints unchanged, **registry re-audited at both integration merges** (section 11) | old-node behaviour against a v2 header across a real fence is a drill | IMPLEMENTED_AND_TESTED for the unit/pipeline part; drill EXTERNAL_GATE_PENDING |
+| Lane isolation | twin-chain numeric equality, mergeset absence, forged headers refused, 14-block burst (P1, P2, P3, P9) | burst at lane width (hundreds), paired baseline/v2 DAG runs | IMPLEMENTED_AND_TESTED for the cases listed; capacity EXTERNAL_GATE_PENDING |
+| Accounting | duplicate, overlap, skip, cross-root/job replay, checked overflow, repeated Final, prefix conservation, branch independence (F, module tests, P4, P9, P10); the leg cap; no schedule-credit raise (§10.4) | — | IMPLEMENTED_AND_TESTED |
+| Public verification | the kernel route's G14 cases (outsider conviction pre/post Final, DA default, OPV windows) carry over by the binding; suffix void and both void reasons at fold level | the kernel route's own external soundness review | IMPLEMENTED_AND_TESTED on the real node (composed run, section 12) + EXTERNAL |
+| Liveness / capacity | relay admission and production backpressure built (node-local) | stopped producer / verifier / DA / court; no TX starvation under slice flood; identical heartbeat/BASE-0/clock/anchor-duty outcomes | EXTERNAL_GATE_PENDING |
+| Deterministic state / recovery | restart (P7), shuffled arrival and head-before-body (P7, orphans), IBD through both lists (P8), reorg (P10), fold branch independence, P11 replays | pruned import and archival-vs-fresh-vs-pruned comparison, property tests over event histories, stale head wedge drill | partly IMPLEMENTED_AND_TESTED; drills EXTERNAL_GATE_PENDING |
+
+## 6. Gaps, named (as X8 left them, with X8R's resolution)
+
+1. **Verification route** — X8: none. **X8R: built** (amendment 1 §10.1): a slice is verified, convicted or defaulted only through its
+   kernel-route claim; the binding refuses by name; the sync runs after the route's tick. The test door `mark_slice_verified_for_tests`
+   remains for chains with no kernel route (the arithmetic tests). Pipeline-class slices are refused (`VerificationKindUnsupported`)
+   until a segment state is defined for them.
+2. **Post-Final liability of slice legs** — **decided and built** (§10.5): the kernel reservation is the liability; each leg is capped
+   at it. **Revised in round 2** (section 10b): the cap is fixed when the slice verifies and is net of the route's own `Final` reward.
+3. **Suffix void** — **built** (§10.2).
+4. **Flood residual** — **decided** (§10.3) and the relay admission / production backpressure **built** (node-local).
+5. **Anchoring-window strand** — **decided** (§10.7): the window stays two spans; the producer republishes.
+6. **Schedule credit of settled slice work** — **decided** (§10.4): no raise in the first release.
+7. **Repeated jobs** follow the existing ticket rules (unchanged).
+8. **RPC, refusal record, producer, permit equivocation** — RPC op 240, delta note 181 and the `EXEC_SLICE` producer **built**; v2
+   permit double-signing **decided** (§10.6): no offence (honest reattachment re-signs a permit), the canonical order makes a second
+   block `PermitAlreadyUsed`, relay keeps it un-announced.
+9. **The fork-id probe** — the integration line's own (unchanged here).
+
+## 7. What arming still needs
+
+There is no DAA-9,000 flag day (user, 2026-10-08): the fence rides the one full-activation release, after every RFC is implemented.
+The code gates of this fence are closed. The composed run's one seam is named in section 12, item 1. In order:
+
+1. **Code:** none of this lane's. The composed real-node run is built (section 12, item 1). It still uses one test seam: the REAL
+   root's class is admitted by the seam, not by the onboarded class's real budget. That gap is the onboarding lanes'
+   G14-for-rewards item, and it applies to every onboarded class, not to slices alone. **Owner dependency:** the kernel route
+   (`palw_probabilistic_constraints_v1`) is a prerequisite and is itself refused by its own validation. The fence can therefore be armed,
+   on a drill or a release, only together with it.
+2. **Drill path (done here):** `palw_exec_payload_v2_armable_on` lifts the gates' refusal on a salted testnet-12 drill; every other refusal
+   applies, so a drill arms it only together with the kernel route, the OPV / onboarding fences its classes use, and the five structural
+   prerequisites.
+3. **Release:** flip `PALW_EXEC_PAYLOAD_V2_ARMABLE` in the change that sets the height, after review; add the height to the release's
+   fence list and to `t12-repin.sh`; re-pin the goldens (a schedule entry moves the schedule id). Prerequisites at or below the height:
+   ConsensusV2, execution lane, `palw_lane_accept_parents_first`, `palw_rcore_plus`, `palw_canonical_work`, `palw_probabilistic_constraints_v1`,
+   and `palw_audit_2026_09_11` declared.
+4. **EXTERNAL drills** (spec section 9), with the shipped binary — the operators' round producers sign `PXE2` from the fence and the slice
+   producer publishes from intents: below / at / above activation including the `PXR1` cutoff (an old EXEC block in the window at the
+   fence); a root opened before the fence (dropped by name); restart and pruned import across the fence; the two sync lists with an
+   un-upgraded peer; a slice flood against the baseline DAG with equal heartbeat/BASE-0/clock/anchor-duty outcomes and no EXEC_TX
+   starvation; a stopped verifier / DA / court run (slices stay pending, roots expire uncharged); an outsider convicting and defaulting a
+   slice through the kernel route on the drill chain; a reorg across the fence; archival-vs-fresh-vs-pruned state comparison.
+
+## 8. Tests and how to run them
+
+One invocation (X8R's milestone run, `x8r-m4`, 2026-10-09, all green; run through `buildslot.sh`):
+
+```text
+cargo test --offline -j 4 --no-fail-fast -p kaspa-consensus-core -p kaspa-consensus -p kaspa-p2p-flows -p kaspad -p kaspa-rpc-core \
+  -p kaspa-grpc-core -p kaspa-rpc-service --lib --test palw_exec_payload_v2_fence -- exec_v2 the_v22_void_reasons_are_pinned \
+  palw_lifecycle_objects_v2:: pow_layer0:: fork_id_v1:: the_gates_are_open every_ruleset_leaves_it_dormant never_is_the_dormant_spelling \
+  a_set_height_is_fingerprinted every_real_height_is_refused a_mirror_without_the_field a_salted_drill t12_round_lane_e2e \
+  lane_accept_parents_first ibd_parents_first processes::coinbase:: orphans palw_exec_slice_producer palw_round_producer op_240
+```
+
+| target | passed | what it holds |
+| --- | --- | --- |
+| `kaspa-consensus` lib | 32 / 0 failed | P1–P11 (11), `t12_round_lane_e2e` (5), `lane_accept_parents_first` (5), `ibd_parents_first` (1), `processes::coinbase` (10) |
+| `kaspa-consensus-core` lib | 126 / 0 failed | the envelope, anchor, work-slice and verify modules; `exec_v2_fold_v1` incl. `amendment_1::*` (8) and the tag-130 admission test; the void-reason pins; `palw_lifecycle_objects_v2`, `pow_layer0`, `fork_id_v1` |
+| `palw_exec_payload_v2_fence` | 7 / 0 failed | the fence's dormancy, ids, refusals and the drill path |
+| `kaspa-p2p-flows` lib | 6 / 0 failed | the orphan pool (incl. the fence-off test) and the v2 relay memory |
+| `kaspad` lib | 7 / 0 failed | the `EXEC_SLICE` producer's decision table and intents, the round producer's PXR1/PXE2 signing |
+| `kaspa-grpc-core` lib | 1 / 0 failed | op 240 on the gRPC wire |
+
+Pipeline tests: P1 `slices_are_carried_anchored_credited_and_weightless` - P2 `header_and_body_gates_refuse_each_hostile_lane_block_by_name` -
+P3 `a_chain_block_names_no_lane_block_and_a_lying_trailer_is_disqualified_while_a_heartbeat_anchors` -
+P4 `an_unauthorised_a_skipping_and_a_borrowed_slice_are_anchored_and_credited_nothing` -
+P5 `below_the_fence_a_pxe2_header_is_refused_and_a_root_declaration_is_dropped` (the pre-X8 shape refusal, byte for byte) -
+P6 `a_permitted_tx_block_is_anchored_its_fee_paid_once_and_a_duplicate_permit_or_an_ungranted_round_is_refused` -
+P7 `lane_state_survives_a_restart_and_a_replaying_node_agrees_whatever_the_arrival_order` -
+P8 `ibd_carries_the_anchored_lane_blocks_through_both_sync_lists` -
+P9 `a_burst_of_competing_slice_blocks_is_anchored_once_credited_once_and_weightless` -
+P10 `a_reorg_unanchors_the_lane_and_the_winning_branch_anchors_and_credits_it_once` -
+P11 `fence_off_every_lane_object_is_judged_as_before_and_an_armed_node_agrees`.
+
+Not compiled in this run: `testing/integration` (its op-240 arm mirrors op 220's) and the `misaka-palw-sdk` subject test (unchanged).
+
+Round 2 (`x8r-m5`, 2026-10-09): `cargo test -p kaspa-consensus-core --lib -- exec_v2 palw_work_slice_v2 the_v22_void_reasons_are_pinned`,
+71 passed / 0 failed (it includes the three round-2 fold tests, section 10b). In the same invocation,
+`scripts/release/t12-repin.sh --shipping --drift-only` reported **no drift**: 361 ok, testnet-12 params id `5ee7fd8ee019968c…`, schedule id
+`1678e07359f6727e…` — the live int-12 ids.
+
+The composed run (`x8r-m6`, then `x8r-m7` after the lane-aware replay was added): `cargo test -p kaspa-consensus --lib -- x8_g14
+t12_exec_v2 g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_class_activates`. In `m6`, P1–P11 and the
+onboarding conformance test passed with the seam and the `Cw::over_with` refactor. In `m7`, both `x8_g14` tests passed (145 s).
+
+The lane's closing invocation (`x8r-m8`, 2026-10-09, all green): `cargo test -p kaspa-consensus-core -p kaspa-consensus -p misaka-palw-sdk
+--lib --test palw_exec_payload_v2_fence --test exec_v2_work_slice_subject -- exec_v2 x8_g14 palw_work_slice_v2
+the_v22_void_reasons_are_pinned <the fence test names> the_contract_names_the_kind no_field_of_a_slice the_pre_beacon_commitment_binds`.
+
+| target | passed | what it holds |
+| --- | --- | --- |
+| `kaspa-consensus` lib | 13 / 0 failed | P1–P11 and both composed real-node tests (316 s, most of it the onboarded class's lottery) |
+| `kaspa-consensus-core` lib | 71 / 0 failed | every `exec_v2` module and fold test, round 2 included; the void-reason pins |
+| `palw_exec_payload_v2_fence` | 7 / 0 failed | dormancy, ids, refusals, the drill path |
+| `misaka-palw-sdk` `exec_v2_work_slice_subject` | 3 / 0 failed | the `WORK_SLICE` subject against the shared contract crate |
+
+The seam adds no params, hash or schedule input: `PalwKernelRouteExtrasV1` is a fold input, and nothing hashes it. The round-2 repin
+(no drift) therefore stands for it.
+
+## 10. X8R review of every pipeline path the fence does not guard (2026-10-08)
+
+Lane X8R (branch `rfc8/x8r-review`) reviewed every change of `6176a636a..960f65a42` outside the fold. The bar, from the user's directive:
+each change is either **(a) a no-op while `palw_exec_payload_v2` is `None`** — byte-identical verdicts, state and relay behaviour on
+the live int-12 ruleset — or **(b) a deliberate node-only change that is safe for a mixed fleet**. A change that moved live behaviour with
+the fence off is a bug and was gated or reverted. Because the real release will carry the fence armed at a height H while int-12
+nodes are still on the network, every gate below is also checked **armed with H above the block** ("armed-below"): the gates read the
+fence *at the block's own DAA*, not merely its presence, wherever a DAA is in hand.
+
+One fact bounds several trailer findings: on every kaspa-pq preset the coinbase payload's miner script must be the 69-byte ML-DSA-87
+P2PKH (`NonPqCoinbasePayloadScript`) and the payload cap is 204 bytes, so a payload is at least 88 bytes and a one-head `PXA2` trailer
+(140 bytes) never fits: with the fence off a block whose tag ends in a trailer is always refused `PayloadLenAboveMax`. The trailer
+readers below therefore could not change a *valid* block's verdict, but they did change what a node does with such a block before (or
+instead of) refusing it, and one of them changed other miners' templates.
+
+| # | path | X8 change | fence-off finding | verdict | X8R action / pin |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `pow_layer0::check_palw_commitment_shape_at` (header isolation **and the pruning-proof header gate**) | a `PXE2` algo-10 payload gets its own 16 KiB cap and the v2 shape decode, ungated | relay path: still refused (later, at the stateless check, as `BadPalwCarriageAdmission` instead of `BadPalwCommitmentShape`; the refusal telemetry class moves). **Proof path: the proof gate runs only this check, so a pruning proof could carry a `PXE2` header that int-12 refuses** | **BUG** | new `check_palw_commitment_shape_exec_at(.., exec_v2_active)`; `_at` is the pre-X8 function exactly; the header stage and `PruningProofManager` (`with_palw_exec_v2`) pass the fence at the header's DAA. Pins: module test (`pre_v2` error equality), P5, P11 |
+| 2 | `pre_ghostdag::check_round_lane_parents` | a non-lane block names no lane parent past the fence | gated `is_active(header.daa_score)` | (a) | — |
+| 3 | `pre_ghostdag::palw_carriage_stateless_v2` | algo 10: `PXE2` below / `PXR1` past the fence refused by name | `PXR1` below the fence falls through untouched; a `PXE2` header no longer reaches this branch below the fence (row 1) | (a) | kept as defence in depth |
+| 4 | `post_pow::round_lane_members_v2` (`check_mergeset_size_limit`, the header rule) | members decoded by the v2-aware `palw_exec_lane_coords_v1`; slices counted | identical for every `PXR1` byte string; `PXE2` cannot be stored below the fence after row 1 | (a) | made explicit: `lane_coords` is the v1 decode (same error text) where the fence is not armed |
+| 5 | `post_pow::check_round_lane_mergeset` | envelope anchor == selected parent (v2); lane total bound `members + slices` before the v1 rule | with no slice the total bound is the v1 rule's first check, same error text (`TooMany`) | (a) | anchor check also gated on the fence being armed |
+| 6 | `deps_manager::try_begin` | the anchor's heads are task dependencies, **ungated** | any coinbase ending in a trailer made the task wait for named pending blocks: no deadlock (each side commits to the other's hash, so no cycle), but a processing-order change a miner controls | **BUG** (minor) | gated on the fence at the block's DAA (`BlockTaskDependencyManager::new(fence)`) |
+| 7 | `flowcontext/orphans.rs::block_deps` | the anchor's heads are orphan dependencies, **ungated** | an orphan whose tag ends in a trailer naming unknown hashes was **held for those hashes forever** (until eviction) where int-12 releases it with its parent and hands it to consensus: a relay divergence, and the sender of the invalid block is never charged | **BUG** | gated on the fence at the block's DAA (`OrphanBlocksPool::with_exec_v2`). Pin: `orphans::fence_off_a_trailer_in_a_miners_tag_is_not_a_dependency` (None and armed-above) |
+| 8 | `processes/sync` hooks | IBD lists the anchored lane blocks and requests header-only lane children | hooks installed only where the fence is armed (`services.rs`): `None` is the old code path | (a) / (b) | armed-below: the children hook now lists only lane blocks at or past the fence, so the body list is int-12's below it |
+| 9 | `body_validation_in_isolation::check_exec_v2_shape` | trailer shape, no trailer on a lane block, a slice carries only its coinbase | gated `is_active(daa)` | (a) | — |
+| 10 | `body_validation_in_context` | heads with no body → retryable `MissingParents`; `check_payload_len_at` before the payload read | heads gated; inactive `check_payload_len_at` is `len <= cap` else `PayloadLenAboveMax(len, cap)` — the error the payload reader gave, at the same point | (a) | P11 pins the over-cap trailer refusal string |
+| 11 | `coinbase::deserialize_coinbase_payload` | a payload ending in the magic may exceed the cap by a trailer, **ungated** | every body-validated payload passed the strict check first; a reader of a payload that skipped in-context validation (trusted blocks) would accept what int-12 refuses | **BUG** (latent) | lenient only where the fence is armed (`CoinbaseManager::with_exec_v2_armed`) |
+| 12 | `coinbase::modify_coinbase_payload` | a trailer at the end of the cached template's payload survives the next miner's data, **ungated** | the bytes are the *previous miner's* tag (`getBlockTemplate` extra data): re-appended to another miner's payload they push it over the cap, so one RPC caller poisoned every other miner's template | **BUG** (node-local) | carried only where the fence is armed |
+| 13 | `virtual_processor::palw_exec_v2_augment` | covered blocks appended to the in-memory reds | gated `is_active(header.daa_score)`; returns the same `Arc` otherwise | (a) | — |
+| 14 | `palw_exec_v2_non_daa` (chain walk ×4, virtual, `utxo_validation`) | covered blocks join the non-DAA set | gated on `palw_exec_v2.is_none()` only: armed-below it extended the set with the mergeset's round blocks (idempotent — `difficulty.rs` already puts every round block outside the DAA set) | (a) | now gated on the block's own DAA |
+| 15 | `palw_round_verdicts_v1` | canonical order `(round, index, hash)`, a running `taken` set and the payee bound, **ungated** | chain mergesets: the header rule makes both checks redundant and `uses` is re-sorted, but the `judged` order (telemetry) moved, and **virtual's mergeset is no header the rule judged**, so the checks could change virtual's UTXO view | **BUG** (node-local) | order and both checks only past the fence; below it the old hash order, byte for byte |
+| 16 | `palw_record_round_verdicts`, `exec_lane_adapt_block_template` (the round template refactor) | coordinates through the v2-aware decoder; the extra total bound | identical for `PXR1`; total bound = the v1 rule's first check | (a) | — |
+| 17 | `heartbeat_adapt_block_template` | the trailer is re-appended to the beat's miner data | provably a no-op (a trailer in miner data re-serialises to the same bytes, else the fallback), but proof by argument | (a) | gated on the fence at the template's DAA |
+| 18 | `build_block_template` (virtual's anchor) | the template's miner data carries the virtual's anchor | gated `palw_exec_v2_active_at(virtual daa)` | (a) | — |
+| 19 | `palw_add_round_parents` | virtual takes no round parent within `mergeset_size_limit + 1` DAA of the fence | `None`: untouched. **Armed: the v1 EXEC_TX lane stopped up to 181 DAA (~8 h on testnet-12) before the fence on upgraded nodes** | (b) | virtual's own DAA (round parents add none) computed only within one mergeset of the fence; none past it |
+| 20 | `calculate_virtual_state` | `UtxoProcessingContext` built after the DAA window; the exec state read | no side effect moved; the read is gated on the virtual's DAA | (a) | — |
+| 21 | acceptance walk: tag 130 dropped by name below the fence | | equals int-12's skip at extraction: rent ceiling 0, no carrier refund, no slot, not an H-1 carrier, the refund settle sequence unchanged (the drop happens before any state is read) | (a) | P5, P11 |
+| 22 | **`palw_lifecycle_object_may_ride_v2`, tag 130** | the declaration's shape checked at ride time | int-12 cannot decode tag 130 and, testnet-12 declaring the audit fence, **tolerates** it (A-2). An upgraded node refused a malformed declaration in isolation, so **a block carrying it was invalid on upgraded nodes and valid on int-12: a consensus split with the fence off** | **BUG (critical)** | tag 130 rides unjudged; `validate_palw_lifecycle_tx` judges it exactly as an undecodable payload (`Ok` iff the ruleset tolerates); arming now requires `palw_audit_2026_09_11` declared. Pins: `exec_v2_fold_v1::a_tag_130_carrier_rides_exactly_as_an_undecodable_payload`, P11 (a malformed declaration is carried and the block stands) |
+| 23 | fold (`palw_state_v2.rs`, `palw_exec_v2_fold.rs`) | deadline hold, arm guard, exposure rows, `settle_at_final_v2`, void/retire hooks, expiry sweep, root block, tail `0xEE`, delta 180 | each is a no-op on an empty table (`settle_at_final_v2` returns `(amount, [])` and writes nothing; the sweep returns on an empty map; root block and tail are Some-only), and nothing fills the table unless the fence is active | (a) | — |
+| 24 | enums | `WorkRootExpired`, `PayeeBound`, `ExecWorkRootOpenedV2`, delta 180, new `RuleError`s | written only past the fence; `RuleError` is not serialised | (a) | `WorkRootExpired` now explicit 130 |
+| 25 | kaspad round producer, RPC/kaspad names, params and fork id | | producer: `exec_v2_fence: None` signs `PXR1` byte for byte (unit test); names are display only; ids Some-only with the `never()` collapse | (a) / (b) | repin (section 11) |
+
+**Pins added.** P11 `t12_exec_v2_fence_off_every_lane_object_is_judged_as_before_and_an_armed_node_agrees`: node A (fence unarmed)
+carries a plain chain, then two tag-130 carriers (one malformed), a heartbeat whose tag ends in a well-formed trailer and its twin one byte
+off the magic (both refused with the same `PayloadLenAboveMax(len, 204)`), and a `PXE2` header (refused with the pre-X8 shape error);
+node B (unarmed) and node C (armed at 1,000,000) replay every block and agree on every status, every refusal, the sink, the PALW state
+root and the virtual UTXO multiset — before the lane objects and after them. P5 now expects the pre-X8 shape refusal. Core:
+the shape-gate module test and the tag-130 admission test. Flows: the fence-off orphan test.
+
+**Cross-lane findings (not this lane's code; reported to the Lead).** The row-22 split class is not unique to tag 130. On the
+integration line every object kind appended after int-12 whose may-ride arm refuses anything is a pre-fence split on testnet-12 for the
+same reason (int-12 tolerates the undecodable payload): `KernelRouteV1` (110: unsigned or oversized), `KernelConstraintReceiptV1` (111:
+unsigned), the onboarding objects 104–107 and 109 (unsigned), `SignedRegistrationV1` (108), `PanelBeaconProofV3` (120: oversized). The
+row-1 class likewise applies to RFC-0009's `PFS4` arm of the same shape gate (int-12's gate has no `PFS4` arm), on the pruning-proof path.
+
+## 10b. X8R round 2 (2026-10-09): the amendment's own code
+
+The successor X8R reviewed `966606811` (amendment 1) against the same bar, plus the design premise (`docs/PRINCIPLES.md`, section 13
+below). Everything it touches outside the fold is node-local and dormant: the relay prefilter returns `true` where the fence is not in
+force; the `EXEC_SLICE` producer is not started where the fence is `None`; op 240 is a read. The virtual processor's review hunks match
+rows 14, 15, 17 and 19 above. One change looked risky and is right: the covered-slice fold went from `let _verdicts = …` to `…?`. Before
+the change, an error inside an admitted slice's writes was dropped after partial writes. Now it fails the transition the same way on
+every node, so no node can diverge on it.
+
+| # | path | finding | verdict | action / pin |
+| --- | --- | --- | --- | --- |
+| R2-1 | `settle_at_final_v2`, the leg cap (§10.5) | The cap read each slice claim's reservation **at the root's settlement**. The route releases a Final claim's reservation once its liability horizon passes, so the cap of every slice verified long enough before the root's `Final` was 0. The root bond is an authorised executor, so it could hold back the LAST slice until the earlier executors' horizons passed and keep their whole legs. That is an economic capture of honest work, and it also breaks the principle's §4 bound by mistake: the cap no longer tracked the liability that existed. | **BUG** (dormant) | `PalwWorkSliceStageV2::Verified { verified_daa, leg_cap }`. The cap is fixed when the slice verifies (the sync, or admission when the claim is already Final), as `palw_exec_v2_leg_cap_v1` = the reservation then held **less the route's own `Final` reward on that claim**. That second part extends the route's invariant `claim_reward < claim_collateral` to the second gain on the same claim. Settlement sums the snapshots. Pins: `amendment_1::a_leg_cap_is_fixed_when_the_slice_verifies_so_a_held_back_last_slice_takes_no_earlier_leg`, `a_leg_cap_is_net_of_the_routes_final_reward_on_the_same_claim`. |
+| R2-2 | `palw_exec_v2_claim_outcome_v1`, `sync_slice_verification_v2` | The route answers a demand left unserved after `Final` (inside the horizon) by forfeiting the WHOLE reservation and leaving the state `Final` (`PostFinalDefault`). The outcome read only the state, so such a slice stayed `Verified` and its root could settle with the withheld slice's leg paid. The settlement-time cap had zeroed that leg incidentally; fixing R2-1 would have exposed it. | **BUG** (dormant) | A `Final` row reserving nothing at or before its `liability_until` is **Defaulted**. Past the horizon it is the release and stays verified. The sync voids the suffix and the unsettled root on it, as on a conviction after `Final` (§10.2). Admission refuses such a claim (`VerificationClaimFailed`). A claim row the route no longer holds still defaults a *pending* slice, and now leaves a *verified* one alone. Op 240 shows the claim as `ForfeitedAfterFinal`. Pin: `amendment_1::a_verified_slice_whose_claim_forfeits_after_final_defaults_and_voids_an_unsettled_root`. |
+| R2-3 | fold module doc, `PalwWorkSliceStageV2::Verified` doc | still said "nothing can mark a slice Verified … not wired" | stale | rewritten |
+
+## 11. Integration (X8R)
+
+* **Merges.** `ad1f609ed` merged the integration line at `9ea89994b` (past `86dbc1fc2`); `fd9a7f22e` merged it again at `35a9ae1c8`,
+  which carries the UNSCHED reset (`f9c263d3e`): no DAA-9,000 schedule, the shipped testnet-12 ids back to the live int-12 release's.
+  Conflicts were both-added arms only (RFC-0010's void reasons, the G14 / RFC-0010 objects, deltas and tails beside this lane's; one
+  registry row in the remaining-RFC matrix) and were resolved as the union, the integration line's blocks first.
+* **Allocation audit** (after both merges, against the whole tree): object tags — 130 is the only one of 130–139 in use and no other
+  lane uses the range; deltas — 180 and 181 are this lane's, no duplicate discriminant anywhere in `PalwDeltaEntryV2` (160–161 G14, 170–173
+  RFC-0010); carriage tails — `0xEE` is unique (`0xEC` kernel route, `0xED` RFC-0010); void reasons — **`WorkRootExpired` was X8's
+  implicit 11 and is now the explicit 130**, 131/132 added by amendment 1, beside RFC-0010's 120–122; RPC — op 240 (gRPC 1294/1295) in
+  this lane's 240–249. The registry (`remaining-rfc-integration-matrix.md` section 2) records all of it.
+* **The shipped ids.** No change of this branch moves a params, schedule or identity id (the fence is `None` on every preset, Some-only in
+  every hasher); `scripts/release/t12-repin.sh --shipping --drift-only` is the check (its result is in section 8).
+
+## 12. What remains (code), and the cross-lane finding
+
+1. **The composed real-node run — built (X8R round 2).** Module `consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/conformance/exec_slices.rs`,
+   a child of the onboarding conformance world. The run:
+   * A TIR V2 class goes through 104 → OPV kernel class → 106 → 107 → beacon → 109 → `Active`, all by blocks.
+   * A REAL attempt on that class is made by card 0 from the node's own template.
+   * A tag-130 session opens on that REAL claim under the binding's kernel plan.
+   * For each of the three slices: a kernel job carries the slice job nonce; the executor seals and reveals its OPV claim; the slice
+     statement is derived from public rows (`palw_exec_v2_slice_statement_v1_impl`); an `EXEC_SLICE` lane block is signed by the
+     executor; the next heartbeat anchors it; the fold admits it against its kernel claim.
+
+   Then two outcomes, one per test:
+   * **(a) conviction.** An outsider builds a fresh verifier from the read API plus the executor's published DA and nothing else,
+     and files the proof against slice 1's lying claim. The route convicts it and slashes the executor's real bond. In the same
+     block: slice 1 is proven false, slice 2 is void, the root is void, and the REAL claim is void (`WorkSliceProvenFalse`). The root
+     bond is not charged. Op 240 shows `Convicted`.
+   * **(b) the honest twin.** Every kernel claim finalizes after its public window with no Panel. Every slice verifies, and its leg
+     cap equals the claim's reservation less the route's reward. The root is ready and the REAL claim's `Final` hold is released.
+
+   **Both tests:** a second node replays the chain together with its lane blocks (each delivered under the chain block it was
+   inserted at) and agrees on the sink, the PALW root, the kernel route's rows and every block's delta root. Result `x8r-m7`
+   (2026-10-09): 2 passed.
+
+   **The one seam (named, not hidden):** the REAL root's class takes the attempt because the processor's `cfg(test)` hook
+   `exec_v2_test_admit_class_v1` waives four gates for that one class, and nothing else: the model-registry lifecycle and room
+   (`check_class_admits_claim`), the seating (`check_class_seated_root_v1`) and the per-bond share (`check_bond_class_share`). It
+   reaches consensus-core through `PalwKernelRouteExtrasV1::test_admitted_classes`, which is empty in every build that is not a test
+   and absent wherever the kernel route is not in force. It is shaped like `kernel_route_test_attest_artifact_v1`: height-gated and
+   append-only. **Residual: an onboarded class admitting REAL work under its real budget = the G14-for-rewards gap.** That gap is
+   assigned to OPVB with derived eligibility; when it lands, the seam is replaced by it.
+
+   **Not run on the real node:** the REAL root claim's own `Final` and the capped settlement. Both need the root class's Panel,
+   which is the same gap. They are pinned at fold level (`amendment_1::*`).
+
+   **Note:** under the work target, a cheap class's ticket is hard (≈ 23M draws expected). The test's lottery runs up to 400M
+   draws, and one run takes about 2.5 minutes.
+2. **Pipeline-class slices**: refused by name until the K2-at-scale lane defines a segment state for pipeline (K2-TIR-v3) claims.
+3. **The initial boundary** (`initial_state_root`) is the root bond's declaration; its link to the REAL claim's verified output is not
+   checked (every slice after it is verified as a continuation of it).
+4. **Cross-lane (routed by the Lead to A2U, `fix/a2-uniform-new-tags`):** every lifecycle object kind appended after int-12 whose
+   may-ride arm refuses anything (110, 111, 104–109, 120) splits a mixed testnet-12 fleet before its fence, as tag 130 did; the `PFS4` arm
+   of the commitment shape gate is ungated on the pruning-proof path. This lane's tag-130 arm is the pattern A2U's kind→fence table
+   generalises.
+
+## 13. The design premise's section 6, for a slice leg (X8R round 2)
+
+`docs/PRINCIPLES.md` section 6 lists seven conditions that must all hold before a computation earns reward or consensus work weight.
+A slice earns no weight (sections 1 and 10.4). Its only reward is its **leg**: a share of the root claim's own producer leg, re-divided
+by work, with nothing minted. Its kernel claim also earns the route's own `Final` reward, which is the route's to justify. Each condition,
+as it stands for the leg:
+
+| # | condition | how the leg meets it | open |
+| --- | --- | --- | --- |
+| 1 | verification coverage of every rewarded relation | Each slice's computation is one kernel-route program claim of the root class's bound kernel class (its plan is the root's `plan_root`). The binding pins executor, job (by the slice job nonce), prompt, run and evidence. Consecutive slices form one token stream (rule 4). | **The initial boundary** (slice 0's predecessor) is the root bond's declaration. "This session continues the REAL claim's job" is a relation no check covers (section 12, item 3). It moves no reward from a third party: legs only re-divide the root bond's own leg, and the root bond chose the boundary. Still, until it is covered, a session cannot be called the REAL job's continuation. DESIGN_GAP. |
+| 2 | approved probabilistic soundness and grinding resistance | Inherited from the kernel class's plan and the one post-commit challenge contract (seal before reveal, `claim_seal_delay_daa`). The slice adds no seed and no court. | The route's soundness bound and beacon review. EXTERNAL. |
+| 3 | public, authenticated material | The kernel claim's evidence. A withheld position defaults the claim before `Final`, and after `Final` forfeits its reservation, which now defaults the slice (R2-2). | DA transport at scale (DA16). EXTERNAL. |
+| 4 | one outside verifier localizes and adjudicates | The kernel route's G14 cases on the real node (outsider conviction before and after `Final`, DA default). A conviction reaches the slice through the sync. **Composed on the real node** (section 12, item 1): an outsider's proof from public material voids the slice's suffix and its root. | The REAL root's class is admitted through the named test seam (the G14-for-rewards gap). |
+| 5 | collectible collateral consistent with the maximum gain | Leg ≤ the claim's reservation at verification − the route's reward on it (R2-1). So the claim's total gain stays under what a conviction inside the horizon slashes. | Whether `reservation × detection probability` covers the gain is the route's calibration (MEAS: `opv-measurements.md`). EXTERNAL. |
+| 6 | resources and incentive for an honest verifier in time | The route's own (accuser share, demand bond, deadlines). The slice adds no deadline that is shorter than the route's. | MEAS. EXTERNAL. |
+| 7 | dispute, DA/default, `Final` and reorg consistency | The root claim's `Final` is held while any slice is unverified. A conviction or default before settlement voids the suffix and the root (pre- or post-`Final` of the slice's claim). Restart (P7), reorg (P10) and replay (P11) agree. After settlement a conviction slashes the kernel reservation; the leg is not clawed back, which is why it is capped (5). | The fork-choice rule E release prerequisite (not this lane's). |
+
+## 14. X8R round 3 (2026-10-10): the user's revision, G14 completion (GAP-60 to GAP-63) and ADR-0176 D2
+
+The user revised RFC-0008 and the implementation spec on 2026-10-10 ("Unified EXEC_TX / EXEC_SLICE: one root settlement, unique work,
+zero EXEC weight/DAA, model-bond allocation and Rule E"). The revision wins on design. Spec section 10 is now a labelled, non-normative
+implementation record, and its subsection 10.9 maps the revision onto the code. The gaps are G14C's (`g14/completion`,
+`g14-completion-matrix.md` §3.7 and §5).
+
+### 14.1 GAP-63: the merge
+
+`3b2b655d4` merges the integration head `b8ae9412b` (the user's `pre`, SMALL, SHARD2, X12N). Conflicts:
+
+* `palw_state_v2.rs`, four hunks. Both sides added a hold at the same three places: the licensed claim's deadline rule, DL-1's rebuild
+  and `arm_deadline`. Both are kept. The session's hold (`exec_v2_holds_final_v1`) and SHARD's holds (the V3 S2 licence under a pending
+  accusation, the lane-A part-C expiry) are independent, and each returns "no deadline". The object enum keeps tag 130 and DA16's 150–153.
+* The spec. The user's text is taken whole, and the X8R amendment becomes section 10, labelled.
+* The two matrices. Both sides are kept. In the registry, the RPC row takes the newer allocation (203 is L2FC's) and records op 240 as
+  used. In the readiness row, the Lead's and X8R's texts sit side by side, labelled.
+
+### 14.2 GAP-62: the initial boundary is linked to the REAL output (the prefix binding)
+
+**Design.** Before this round the initial boundary was the root bond's declaration, and nothing checked it. Now the REAL claim's own
+run is public material that the kernel route adjudicates, carried by a kernel claim of the same job. Wherever the kernel route is in
+force, the declaration names a **prefix claim**, and the fold checks it from chain data alone:
+
+1. The prefix claim is a single-program kernel claim of the bound kernel class, by the root bond's kernel bond.
+2. Its job carries the prefix job nonce `H("misaka-palw/exec-v2/prefix-job-nonce/v1"; root ‖ prefix work ‖ job ‖ plan)`.
+3. Its job's prompt is the one the REAL claim's execution anchor names. That prompt is `palw_attempt_prompt_ids_v1` at the IR class's
+   canonical prefill, read from the class record's facts.
+4. Its generated tokens are the REAL claim's committed output: `palw_attempt_output_root_v1(ctx, generated) == claim.output_root`.
+   `ctx` is the canonical attempt context J5a/J5b derive.
+5. The initial boundary is `token_state(prompt ‖ generated)`.
+
+A wrong initial boundary therefore never enters the chain (`InitialBoundaryNotLinked`).
+
+**Following the prefix claim.** The prefix claim is then followed like a slice's claim:
+- while it is pending, it holds the root's `Final`;
+- its `Final` verifies it;
+- its conviction, its default, or its forfeit after `Final` voids the whole session: every slice, the root
+  (`Voided { from_index: 0 }`) and the REAL claim (`WorkSliceProvenFalse` / `WorkSliceDefaulted`).
+
+So an outsider holding the model convicts a lie in the REAL run from public material, exactly as it convicts a slice. This needs no
+new court, no new seed and no new DA protocol, and no model acquisition condition (ADR-0177).
+
+**Code.**
+- Types: `PalwWorkRootDeclarationV2::prefix_claim`, which is hashed into the declaration id; `PalwWorkRootV2::{prefix_claim, prefix}`;
+  `PalwWorkPrefixStageV2`; six `PalwWorkRootRefusalV2` variants.
+- `palw_exec_v2_verify`: `palw_exec_v2_prefix_job_nonce_v1`, `palw_exec_v2_real_job_v1` and `palw_exec_v2_prefix_binding_v1`.
+- The fold (`apply_root_declared_v2`, `sync_slice_verification_v2`): the prefix is synced first, then `void_prefix_v2`.
+- Op 240 shows `prefixClaim`, `prefixStage` and `prefixVerificationState`.
+- Where no kernel route is in force (the pipeline tests below the route), the prefix is `Unbound`, as before.
+
+**Limit.** The binding covers the REAL claim's *output* (and its run's computation, through the kernel claim). The REAL V2 claim's own
+step trace is still adjudicated on its own route. That is GAP-81, which the Lead decided per claim route (14.5).
+
+### 14.3 ADR-0176 D2: one work, one right, one budget
+
+A slice and its root draw from one budget: the root claim's single allocation `A`. Each kernel claim that verifies the prefix or a
+slice was paid the route's `Final` reward `r` for the same work.
+
+**The rule.** `Verified` now snapshots `r` (`route_reward`), and so does the prefix stage. At settlement:
+- each slice leg is its work share less what the route paid it, aggregated per bond and never negative;
+- the root executor keeps `A − Σ r − Σ legs`;
+- so `Σ legs + root leg + Σ r = A` whenever `Σ r ≤ A`, and nothing is paid twice.
+
+Each executor's total is its work share when its share is at least its route reward. If `Σ r > A`, the allocation pays nothing more,
+and the excess is the route's to clip (H-3a below).
+
+**What does not change.**
+- Weight and DAA stay 0.
+- An `EXEC_SLICE` carrier mints nothing, so `B` is 0 per carrier.
+- `Q`: each kernel claim draws `Q` from its own producer's window, as ADR-0176 D2's `m·N` claims require.
+
+**Hooks for lane BUDGET** (`palw_bond_budget_v1`; the engine is not built here):
+
+| Hook | What it does |
+| --- | --- |
+| H-3 | BUDGET's existing hook. Nothing is drawn per carrier. |
+| H-3a `palw_bond_budget_bind_vehicle_v1(kernel_claim, root)` | Called at the declaration (for the prefix) and at slice admission. The read `PalwChainStateV2::exec_v2_root_of_kernel_claim_v1` answers it at any time. The engine draws the bound claim's route `FinalReward` from the root's `R` (Clip), never from a fresh reservation on the executor. |
+| H-3b | The root's `Final` reward is clipped before the split. |
+
+The spec's subsection 10.9 has the table.
+
+### 14.4 GAP-60: the slice DA default on the real node, and rule 4 at node
+
+**The default.** A new composed test drives the slice DA default on the real node:
+1. Slice 1's executor publishes its claim's DA without one committed position.
+2. An outsider's fresh verifier, built from the read API and that DA alone, finds `Demand([(0, p)])`.
+3. The outsider files the demand through the route. Nobody answers.
+4. At the deadline the route defaults the claim (`Unavailable { producer_defaulted: true }`, the executor pays the penalty).
+5. The same block defaults slice 1 and voids slice 2, the root and the REAL claim (`WorkSliceDefaulted`). The root bond is charged
+   nothing.
+
+No seat is involved, because the slices' class is OPV.
+
+**Rule 4 at node.** The same test first carries a statement backed by a claim of slice 1's job nonce whose prompt skips slice 0's run.
+That lane block is carried and anchored, and the fold refuses it `PredecessorMismatch`, which op 240's refusal record names. It is
+credited nothing.
+
+### 14.5 GAP-61: superseded by the Lead's GAP-81 decision
+
+GAP-61 asked to replace the admission seam `exec_v2_test_admit_class_v1` with OPVB's reward gate. OPVB's head (`c3221bc34`, the Lead's
+GAP-81, unbuilt at this writing) makes the gate per claim verification route:
+- `Onboarded` grants a V2-root claim nothing beyond the old rules;
+- the claim gate, seating, bond share and activation lose every G14 bypass;
+- only kernel-route claims earn the new rewards.
+
+OPVB withdrew the helper `active_admitting_real` that GAP-61 named.
+
+**What that means here.** A session's REAL root is a V2 claim, so it is admitted on the **legacy channel**, whose old rules need Panel
+seat readiness (possession proofs). This harness cannot produce those proofs. So the seam stays, `cfg(test)` only, and is re-documented
+to say what it now stands for. No code here calls the gate, and OPVB was not merged:
+- its head is unbuilt;
+- the verified `6e9dfa065` carries the withdrawn premise.
+
+**Already per-route.** The session's split is already per-route:
+- the root earns on the legacy channel;
+- every prefix and slice claim is a kernel-route claim, gated and adjudicated by the route;
+- legs re-divide the root's allocation (14.3).
+
+**Follow-up (OPVB / Lead).** When OPVB integrates, `PalwRewardGateV1::channel()` names the channel each leg draws from. The composed
+run's seam goes only when a harness can prove seat readiness, or when the Lead lets a session's root be a kernel-route claim.
+
+
+## Later audit correction: finite job authorization
+
+The original milestone's active `jobs` index retires with its claim. It is not the current replay
+protection boundary. RFC8 implementation spec §12.6 adds an independent authenticated one-use
+history, keyed by class / REAL authorization / authenticated input, and a fixed 100,000-DAA
+source-header authorization. Inner delta table 7 and optional carriage tail `0xF2` record the
+history; tables 5/6 and tails F0/F1 are the later reward/hold amendments. Root/slice wire fields
+and top-level object/delta numbers are unchanged. History admits at most 100,000 rows and expires
+at most 256 retired-owner rows per block, without evicting unexpired rows.
+
+Claim retirement cannot renew the original source's deadline. A different claim id is not evidence
+that an execution anchor cannot recur. The public fence remains refused; source-clock provenance
+for pruned joiners, multi-process replay and release resource bounds are separate open requirements.
+Current verification is recorded in the RFC6/7/8/12 design audit, rather than inferred from the
+original milestone's counts above.
+
+The subsequent §12.7 correction captures the original REAL clock at native acceptance in
+authenticated state, instead of fetching its header again when a root opens. Own and merged
+native work retain the header that admission checked. Inner table 8, conditional
+`exec_v2_origins/v1` root domain and optional F3 carriage tail carry one 136-byte primary entry
+per eligible live native claim; there is no separate EXEC cap on native work. Claim retirement
+removes that entry through the same journal while the one-use history remains independent.
+Capture leaves native weight/income and admission clock rules unchanged. Root opening enforces
+the finite profile using only recorded state, including after original-header deletion.
+
+Unrecorded legacy claims cannot receive a clock from a late local lookup: new root opening
+explicitly refuses with `AuthorizationUnrecorded`. This is an interim fail-closed rule, not an
+approved permanent exclusion. The carried proof in §12.8 below provides a bounded explicit migration.
+Its historical coverage/availability, real pruned P2P recovery, release
+resource measurements and the finite profile's coverage of eligible DAG work remain open.
+An already opened root's authenticated F2 history continues to supply its original clock when
+F3 is absent. The native header-loss regression exercises signed root reader/fold and snapshot
+restore, with no DAG mining while the original header is absent; it is not an actual pruning drill.
+
+Spec §12.8 adds `ExecOriginRecordedV1` (tag 131), under the same dormant EXEC fence, to record a
+legacy native clock from an explicitly carried original header. The claim's immutable carrying
+hash, attempt id/class/bond and recorded attribution authenticate the proof; no new income,
+weight, authorization lease or signature permission is created. Existing origin rows cannot be
+overwritten, and an opened root's F2 history cannot be contradicted. This uses existing F3/table 8
+recovery. The ordinary fee-market carrier and generic ObjectChunk completion use the same owning
+fence/A2 semantics. The old live-kind wire pins are unchanged; tag 131 has its own new-kind pin.
+
+Proof length is bounded by the existing 1,600,000-byte assembled-object budget, including the
+69-byte tag/key/length. Parent vectors are checked against remaining bytes and canonical run
+structure before hashing; malformed Borsh parent runs refuse without a panic. Native capture
+uses that safe header decoder too. Core tests cover carried proof, chunks, rollback, no new
+native income/weight, immutable original expiry and rejected substitutions/history conflicts.
+Node tests use an actually admitted signed header in a dormant-native fold control, then exercise
+reader/fold migration from a legacy-shaped snapshot with the actual source header deleted.
+They retain the existing class/Panel and synthetic native-trace seams, and are not a historical
+activation or multi-process pruning/P2P drill. Oversized historical header coverage, availability
+before every original copy is pruned and worst expanded hash cost remain required gates.
+
+The finite profile now compares both authenticated clocks with root opening:
+`max(source_daa, accepted_daa) <= opening_daa < source_daa + 100_000` (spec §12.6).
+The earlier source/acceptance inequality was unproven and unnecessary for finite replay protection.
+A later source clock waits until opening reaches it; acceptance cannot renew the source deadline.
+Snapshot validation checks source DAA against the retained root's opening DAA, rather than just
+against the later state point. This changes only the dormant EXEC profile, not native admission,
+income, weight or existing wire fields. All previously admissible clock pairs remain admissible.
+The reversed pair's provenance/fold regression is an arithmetic fixture, not a validated live DAG
+counterexample. Actual multi-process DAG/activation/pruning evidence remains required.
+
+### EXEC origin hashing: bounded run scratch (2026-10-11)
+
+The original header writer borrows `CompressedParents::expanded_iter`; its worst-case nearly
+408 MB of parent input per digest was never a single expanded allocation. It does, however,
+iterate and submit each hash again at every repeated level. EXEC origin verification now uses
+the same frozen preimage with repeated run bytes cached in at most 2 MiB of temporary scratch.
+Each expanded level still writes its own length and all the original hash bytes in the same order.
+Runs larger than 32,768 hashes fall back to the original writer; no header is rejected by this
+scratch choice. It is not a new consensus/admission cap or a migration-coverage decision.
+
+Only EXEC native capture/carried-proof verification calls the optimized identity and pre-PoW
+functions. Those calls already require the dormant EXEC profile. Ordinary block/PoW/Round callers
+retain the original parent writer. Both paths share the existing field writer and its version,
+algo, state-root and commitment gates. No domain, wire id, fingerprint, native entitlement or
+Root authorization/expiry policy changes. No cache enters state or survives its hashing invocation.
+
+The parent-byte oracle compares the entire written sequence against the original expanded
+writer, including empty/single parents, mixed runs, level 255 and below/at/above the scratch bound.
+Full identity/pre-PoW digests are compared on nonzero fields across versions 0–3 and algo ids 0–10;
+an arbitrary cached header hash is ignored. An above-bound header exercises the fallback without
+imposing the witness carriage cap on ordinary native capture. The explicit timing test compares
+the original and cached writers on the same synthetic headers, alternates order and checks both
+digests first. Its largest case fits the witness byte cap and repeats its run across 255 levels;
+it is adversarial structural work, not an actually accepted native header or a valid EXEC claim.
+The cryptographic input bytes, worst CPU budget, release resource approval and shared eight-slot
+chunk transport availability remain separate gates.
+
+The explicit timing run passed once (the ordinary regression keeps it ignored), using Rust 1.93.0
+on macOS aarch64, jobs 2, dev/test debug 0 and incremental 0. The test profile prints
+`[unoptimized]`, but the workspace overrides consensus-core, hashes and blake2b to opt-level 2.
+Each row reports one identity digest, not two-digest provenance verification, node admission or
+throughput under load. Six samples alternate writer order; the table uses sorted sample index 3.
+These are observations, not an approved maximum latency or RSS bound.
+
+| Parents in run | Repeated levels | Borsh bytes | Parent input bytes/digest | Original | Cached | Cached/original |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 1 | 8,892 | 0 | 6.031 µs | 6.030 µs | 1.000 |
+| 1 | 255 | 8,956 | 16,320 | 20.728 µs | 20.765 µs | 1.002 |
+| 10 | 8 | 9,532 | 5,120 | 9.967 µs | 9.637 µs | 0.967 |
+| 64 | 255 | 12,988 | 1,044,480 | 781.716 µs | 695.000 µs | 0.889 |
+| 24,859 | 255 | 1,599,868 | 405,698,880 | 299.763458 ms | 265.722500 ms | 0.886 |
+
+Reproduce with `cargo test --locked -p kaspa-consensus-core --lib exec_origin_header_parent_run_timing -- --ignored --nocapture --test-threads=1`
+and the environment above. `/tmp/rfc-exec-origin-hash-timing.log` records **1 passed, 0 failed**,
+4.91 seconds of test runtime; timing is deliberately not a pass/fail threshold. The largest row's
+direct parent count exceeds the native u8 parent-count limit, reinforcing its structural-only
+scope. The measured roughly 11% reduction justifies retaining the bounded scratch optimization;
+it does not close the release resource or historical coverage gates.
+
+The final broad core run passed **469 tests, 0 failed, 1 ignored**, in 36.07 seconds
+(4m 02s build including artifact-lock waiting). The ignored test is the timing test explicitly
+run above. Command: `cargo test --locked -p kaspa-consensus-core --lib -- exec_origin_header hashing::header:: header::tests:: exec_v2 palw_exec palw_lifecycle palw_vesting_read_v1 rfc0012 da_ court_ provider_ rider --test-threads=2`.
+This includes the three new parity/fallback tests and existing EXEC, court, DA, provider, rider,
+vesting and RFC12 core regressions; do not add the earlier narrow parity run to this count.
+Log: `/tmp/rfc-exec-origin-run-cache-core.log`.
+
+The EVM-enabled node regression also passed **1 test, 0 failed** in 52.28 seconds (4m 02s
+build): `cargo test --locked -p kaspa-consensus --features evm --lib -- x8_g14_root_admission --test-threads=1`.
+It exercises native capture from an actually admitted signed header, then removes that header
+from the node store and compares snapshot authority and carried-proof migration, state/delta
+equality and undo. The existing class/Panel/synthetic-trace test seams remain; this is not a
+multi-process pruning/P2P or historical activation approval.
+Log: `/tmp/rfc-exec-origin-run-cache-node.log`.
+
+The unfiltered payload-fence suite passed **7 tests, 0 failed** in 0.36 seconds (3m 57s build):
+`cargo test --locked -p kaspa-consensus-core --test palw_exec_payload_v2_fence -- --test-threads=1`.
+It preserves public non-armability while allowing the existing salted private drill.
+Log: `/tmp/rfc-exec-origin-run-cache-fence.log`.
+
+`cargo check --locked -p kaspad --features evm` completed successfully in 4m 34s, with existing
+warnings (`/tmp/rfc-exec-origin-run-cache-daemon.log`). `git diff --check` and rustfmt checks for
+the three changed Rust files passed. The final distinct ordinary regression total is **477 passed,
+0 failed, 1 ignored** (469 core + 1 node + 7 fence); the separately invoked timing test passed once.
+No public activation fence was armed, no deployment/push was performed, and broader requirements
+remain open as documented above.
+
+### EXEC origin verification: cheap refusal before expanded digests (2026-10-11)
+
+The origin verifier previously recomputed the accepted header identity before checking the algo
+and envelope, then recomputed the pre-PoW digest before rejecting an attempt-id/class/bond mismatch.
+An obviously incompatible proof could therefore feed nearly 408 MB into a header digest.
+The verifier now performs those rejection-only checks first, followed by full accepted identity
+and the original anchor binding. The result/refusal reason and the existing optional zero job
+identity behavior are preserved; successful proofs still compute both digests. Source DAA is
+returned only after all required checks pass. Native capture and carried-proof validation use
+the same dormant EXEC path. No cached hash, caller hint, version migration rule or new admission
+cap replaces accepted identity authentication.
+
+Moving envelope decoding earlier also requires bounded allocation on hostile vector lengths.
+The ordinary Borsh 1.5.1 `Vec<u8>` reader can initially allocate up to 1 MiB even when the incoming
+envelope is at most 8,192 bytes. The origin-only reader decodes the same PAV2/Borsh fields and
+checks public-key and signature lengths against bytes actually remaining before copying either.
+It rejects truncation and trailing bytes as before. It does not impose current version, signature
+length or key-shape policies on already accepted historical headers. Other ordinary envelope
+decoders and the live block/PoW/Round paths remain unchanged. The explicit struct initializer and
+nonzero-field codec comparison guard its correspondence to the ordinary wire format.
+
+Codec tests compare decoded values for 64 combinations of versions and vector sizes, including
+unsupported versions and non-admission sizes. They also compare all truncations of a small
+nonzero-field envelope, missing magic, trailing data and hostile lengths in each vector.
+A separate provenance fixture compares the old predicate using ordinary hashing/decoding with
+the new pipeline in 13 binding/substitution cases, counting each digest via local callbacks rather
+than timing or global counters. Matching fields alone never authorize changed nonce or signature
+bytes; arbitrary cached hashes remain irrelevant. A synthetic within-carriage-cap parent run
+expanding above 400 MB with a wrong class must refuse before entering either header digest.
+These fixtures do not certify native admission, soundness, economic conditions or resource maxima.
+
+The adversary may copy all matching public envelope fields and still reach the identity digest.
+Header decoding also still does work proportional to the encoded bytes. Thus this removes needless
+work on cheaply incompatible proofs, while the worst-case release CPU/RSS/fee and eight-slot lane
+availability gates remain open. No public fence is armed by this change.
+
+The broad core regression passed **473 tests, 0 failed, 1 ignored** in 31.81 seconds
+(3m 57s build), including all four new tests. The ignored case remains the previous explicit
+hash-writer timing test; no timing measurement is needed to establish zero digest invocations.
+Command: `cargo test --locked -p kaspa-consensus-core --lib -- exec_origin_attempt_codec exec_origin_header hashing::header:: header::tests:: exec_v2 palw_exec palw_lifecycle palw_vesting_read_v1 rfc0012 da_ court_ provider_ rider --test-threads=2`.
+Environment: Rust 1.93.0 / macOS aarch64, jobs 2, dev/test debug 0, incremental 0, locked dependencies.
+Log: `/tmp/rfc-exec-origin-early-refusal-core.log`.
+
+The EVM-enabled node origin regression passed **1 test, 0 failed** in 5.69 seconds (3m 56s build):
+`cargo test --locked -p kaspa-consensus --features evm --lib -- x8_g14_root_admission --test-threads=1`.
+The actually admitted signed header exercises native capture and carried proof after source-header
+deletion, with snapshot, state/delta and undo checks. Existing class/Panel/synthetic-trace seams
+remain, and it does not approve actual multi-process pruning/P2P or all historical inputs.
+Log: `/tmp/rfc-exec-origin-early-refusal-node.log`. These suite runtimes on a shared host are
+verification records, not a normalized old/new performance comparison.
+
+The unfiltered payload-fence suite passed **7 tests, 0 failed** in 0.36 seconds (5m 26s build
+including lock waiting): `cargo test --locked -p kaspa-consensus-core --test palw_exec_payload_v2_fence -- --test-threads=1`.
+Log: `/tmp/rfc-exec-origin-early-refusal-fence.log`. `cargo check --locked -p kaspad --features evm`
+also completed successfully in 6m 05s with existing warnings, recorded in
+`/tmp/rfc-exec-origin-early-refusal-daemon.log`.
+
+The final distinct regression total is **481 passed, 0 failed, 1 ignored** (473 core + 1 node +
+7 fence). `git diff --check`, rustfmt checks on the origin reader/new codec test file and a scoped
+rustfmt check of only the two new fold tests passed; existing fold-test sections were not reformatted.
+No public activation, push or deployment was performed. Full RFC6/7/8/12 completion remains unproven
+for the original coverage, resource, economic, soundness and multi-process conditions.
+
+### EXEC origin resources: actual reader, canonical release (2026-10-11)
+
+An ignored `exec_v2_origin_resource_probe` now calls the public
+`PalwChainStateV2::exec_v2_origin_witness_admissible_v1` on separate process fixtures.
+It covers setup-only baseline, wrong class (cheap refusal), matching public attempt fields with
+substituted nonce (identity refusal), a synthetically pinned large-header success control, eight
+sequential identity refusals, and a one-parent success control. Each measured case warms up once
+and takes six samples; values below are the **upper median**, sorted sample index 3. For eight
+refusals, per-reader time is that batch duration divided by eight, not a distribution of individual
+request latencies. Semantic assertions check the exact expected refusal/source clock and that the
+read-only method stores no origin. There is no timing/RSS pass threshold.
+
+Both profiles ran all six cases successfully. Large inputs have 24,977 parents repeated over 255
+levels, Borsh size 1,599,918 bytes, and **407,624,640 parent bytes per digest**. The direct-parent
+count exceeds native's u8 bound: the success control uses an arithmetic row pinned by the ordinary
+writers, not an actually native-admitted signed header. The fake copies its public attempt id,
+class and bond, while nonce substitution must fail at identity. Eight calls are an artificial
+sequence, not evidence that eight full proofs are admissible in a block or available through chunks.
+
+| Case | Dev opt-level 2 per reader (ms) | Release per reader (ms) | Release batch (ms) | Release maximum process RSS (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Setup-only baseline | — | — | — | 15.266 |
+| Wrong class | 0.128458 | 0.104875 | 0.104875 | 15.422 |
+| Matching fake | 266.786792 | 261.117541 | 261.117541 | 20.062 |
+| Pinned large identity | 531.719416 | 522.286958 | 522.286958 | 20.016 |
+| Eight refusals | 266.439744 | 261.079411 | 2,088.635292 | 20.188 |
+| One parent × 255 levels | 0.032750 | 0.030542 | 0.030542 | 12.844 |
+
+RSS is the child process's maximum, including setup, test harness, loaded code and retained bytes.
+It is not incremental verifier RSS, a heap measurement, or an all-node memory bound; baseline
+subtraction is not a guaranteed allocation bound. Darwin `getrusage(2)` specifies bytes for
+`ru_maxrss`; the runner converts GNU time's Linux kilobytes to bytes separately. No Linux run was
+performed. Samples run sequentially on a shared macOS aarch64 host, Rust 1.93.0; no tail-latency,
+confidence-bound, node concurrency, 100k-claim state or availability approval follows from medians.
+The dev profile has the existing core/hashes/blake2b opt-level 2 overrides, debug 0, incremental 0.
+
+The fresh EVM-enabled release build used the workspace's canonical profile: opt-level 3,
+thin LTO, strip true, overflow checks true, debug assertions false, jobs 2 and incremental 0.
+It completed in **6m 49s**, with no profile weakening or release-LTO override.
+`cargo test --locked --release -p kaspa-consensus-core --features evm --lib exec_v2_origin_resource_probe --no-run --message-format=json-render-diagnostics`
+used the isolated `CARGO_TARGET_DIR=/tmp/misaka-rfc8-origin-release-7tzx12r5`.
+The runner checks that Cargo's JSON artifact matches the executable, opt-level 3 and its assertion /
+overflow policy. It records the binary and build-log SHA-256; labels alone are not build evidence.
+
+Reproduce with the actual executable from the Cargo artifact:
+`python3 scripts/verify/rfc8-origin-resource-probe.py --binary <executable> --profile canonical-release --build-log <cargo-json-log> --output-dir <new-directory>`.
+The script invokes `/usr/bin/time -l` on macOS or `-v` on Linux, preserves each raw case log,
+and checks exactly one successful explicit test plus metrics. It never overwrites an existing
+output directory or interprets observations as an approved gate.
+Build log: `/tmp/rfc8-origin-resource-release-build.log`; final raw cases:
+`/tmp/rfc8-origin-resource-dev-cases` and `/tmp/rfc8-origin-resource-release-cases`.
+The committed machine-readable observations are
+[evidence/rfc-0008-origin-resource-2026-10-11.json](evidence/rfc-0008-origin-resource-2026-10-11.json),
+including the source/runner hashes and all 12 final case logs parsed against the final runner.
+The earlier dev smoke run is not added to those final case counts.
+
+At the measured production base `89a2555ce`, the caller inventory revealed an additional scope gap: `palw_v2_validate_objects` checks
+tag 131, while H1/rehearsal then uses the core single-object fold, which checks it again before
+writing. At that base, a successful H1 could hash four parent preimages, with clone/journal overhead
+outside this reader probe; actual block fold and pool/template/reorg repetition remain to measure.
+The spec now makes those consumers and unaccepted traffic explicit resource/fee approval conditions.
+An inclusion fee cannot fund a refused proof, and eight chunk slots alone do not bound all calls.
+No authenticated reuse, admission-cost policy or smaller historical-header cap was introduced here.
+
+The final normal core regression on the measured dev executable passed **473 tests, 0 failed,
+2 ignored** in 47.93 seconds. The ignored cases are the prior hash-writer timing test and this
+explicit resource probe. It uses the same broad filters recorded above, without `--ignored`.
+Log: `/tmp/rfc8-origin-resource-core-regression.log`. The dev smoke probe passed once in 2.52 seconds
+(5m 13s build); both final six-case runner processes exited successfully. Production logic was
+unchanged; the previous node/fence/daemon verification remains attached to production base
+`89a2555ce`. Full RFC coverage, composite CPU/memory/fee bounds, soundness, economic conditions,
+real-node workload, archival migration and chunk/P2P availability remain unapproved.
+
+Final script verification re-parsed all 12 actual case logs, checked the committed source/runner
+hashes, successfully ran a release matching-fake smoke case, and rejected a dev executable labeled
+as release before creating output files. The additional smoke is not added to the six-case table.
+`git diff --check`, Python syntax parsing, and a scoped rustfmt check on only the new ignored Rust
+test passed. No public activation, push or deployment was performed.
+
+
+### EXEC origin H1/rehearsal: one fresh authentication (2026-10-11)
+
+Starting from `5d8efa11e`, tag 131's query paths now ask
+`palw_v2_origin_rehearsal_v1`. It checks the exact state/proof/point with the existing public
+admission reader, then runs the writer's common guards, loaded through a lazy extras supplier.
+All common guard expressions and their order were mechanically compared with the prior writer;
+only the state/params/extras access and in-transition registration view were substituted.
+The actual writer still supplies its own delta entries, so a newly registered class can bind its
+plan in that same transition. Origin has no registration arm and supplies an empty registration view.
+
+H1 and typed rehearsal preserve the node's no-V2-bundle gate and the old `NotAccepted` / `Refused`
+classification. They create no transition builder or discarded write journal for Origin. The
+successful query authenticates once (identity and pre-PoW, two digests); the previous successful
+query authenticated twice (four digests). Failed proofs do not load extras. Other object paths
+keep their single-object writer. Actual node acceptance and actual block folding still perform
+fresh checks independently: a read verdict is not a mutable authorization, reusable hint or cache.
+No object encoding, source-DAA rule, carriage row, state commitment or public fence changed.
+
+The new core comparison uses the former admission-reader + one-object writer as its oracle:
+17 input/state cases and 32 combinations of writer flags and immutable-model policy, plus changed
+points across the fence and an unrelated object. It checks cached-hash irrelevance, changed nonce /
+DAA / claim / class / bond / anchor, missing claim, wrong source, already recorded origin, dormant
+and boundary fences, malformed bytes, lazy extras, and read-only state roots/counts. Its provenance
+fixture remains arithmetic, not native signature evidence.
+
+The extended node regression uses its actually admitted signed REAL header and compares both query
+APIs with the former node acceptance + writer path for missing/recorded clocks, four fence settings
+and five proof variants. A `cfg(test)` copy of the former node query uses the private flags/extras
+without changing their production visibility or skipping authentication. A separate processor with
+no V2 bundle preserves the early refusal. The
+existing missing-source-header, actual migration write, carriage and undo assertions remain.
+That fixture still has the documented REAL model-registry/seat/share and synthetic-trace seam;
+it does not certify native REAL Final, public-market payment, historical activation or P2P pruning.
+
+The §12.8 cryptographic parent-input bound for one successful H1/rehearsal query is now `510B`,
+not the former `1,020B`. The prior dated resource observations and their frozen-source hashes are
+historical evidence attached to `5d8efa11e`; they are not fresh composite-path measurements.
+State materialization, extras, repeated pool/template/reorg/chunk calls, actual block pipelines,
+uncapped native capture, tail latency, fees and shared-lane availability remain open. Removing this
+one duplication does not approve resource/economic/participation gates or the complete four RFCs.
+
+The final full EVM-enabled core run passed **3,642 tests, 0 failed, 13 ignored** in **70.13 s**
+after a 5m 43s build (including artifact-lock wait). Command:
+`cargo test --locked -p kaspa-consensus-core --features evm --lib -- --test-threads=2`,
+with jobs 2, dev/test debug 0 and incremental 0. Log:
+`/tmp/rfc8-origin-rehearsal-core-final.log`. The preliminary full run's only failure was a stale
+source pin to the old two-argument extras-builder call; the previous compiled core binary also
+failed that same pin, and HEAD already passed state/point/objects. Only the pin was updated;
+all production market/fence/refund wiring stayed unchanged. The full run includes the new Origin
+comparison and the existing same-block immutable-model plan-registration regression. The earlier
+one-test smoke is not counted again. The 13 ignored cases are explicit probes/dumps/measurements;
+they are not additional successful tests or resource approval.
+
+The final EVM-enabled node command
+`cargo test --locked -p kaspa-consensus --features evm --lib x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_absent -- --test-threads=1`
+passed **1 test, 0 failed, 0 ignored** in **29.71 s** (6m 57s build including lock wait),
+log `/tmp/rfc8-origin-rehearsal-node-final.log`. From that exact newly built executable,
+`pipeline::virtual_processor::tests::h1_the_template_asks_the_carrier_gate_the_mempool_asks`
+also passed **1 test** (0.00 s), log `/tmp/rfc8-origin-rehearsal-h1-callers.log`. This checks the
+mempool/template/sweep caller wiring; it is distinct from the behavioral Origin test above.
+`cargo check --locked -p kaspad --features evm` succeeded in **2m 55s**, including lock wait,
+with existing warnings; log `/tmp/rfc8-origin-rehearsal-daemon.log`. The same jobs/debug/incremental
+settings were used. Scoped rustfmt checks for the new core query/test and node helper/oracle/test
+block, the common-guard text/order comparison, and `git diff --check` passed.
+No public fence activation, push or deployment was performed. All remaining RFC obligations above
+remain open; these successes are not soundness, whole-node resource, archival/P2P or economic approval.
+
+
+### Carried Origin per-block verification budget (2026-10-11)
+
+Starting from `b6404f59e`, direct Origin and completed Origin chunks use an explicit ceiling
+of two eligible header decode/authentication attempts per block. The node filter and whole fold
+enforce the same rule with independent ephemeral counters. Failed attempts consume the counter;
+state restore does not refund spent work, and a new block starts fresh. Cheap metadata is checked
+before charging, and the existing full reader repeats its checks and authenticates independently.
+No verified flag, permit or caller-supplied authority is passed to the writer. A one-object
+rehearsal starts with a fresh counter and cannot exhaust this ceiling.
+
+Completed Origin chunks no longer consume FamilyCertified grading slots. Before EXEC's owning
+fence they remain unknown to the inner classifier, preserving dormant accounting. The generic
+inner classifier now checks the writer's structural count/index/size limits before assembly.
+The ceiling is an initial dormant-lane bound, chosen from the former incidental two-completion
+limit under dormant grading accounting; it is not a calibrated throughput, latency, fee or
+availability approval. No public preset, Round ticket code, wire, carriage or state-root layout
+changed, and no public activation was performed.
+
+The new core test checks missing-claim refusal without a charge, two rejected nonce lies,
+non-refund after checkpoint restore, refusal of a third valid proof, fresh-block success and
+dormant refusal. The extended actual-processor fixture uses three admitted signed REAL headers,
+two coherent partial chunk groups and an independently admissible Base0 certificate. It checks
+Origin/certification isolation, the shared direct/chunk ceiling, next-block retry, repeated
+rejected completion charging, a coherent oversized chunk's structural refusal, raw whole-fold
+refusal of three proofs without changing the parent, and delta undo. Existing missing-source-
+header Root and H1/rehearsal oracle assertions remain. The documented model/seat/share waiver,
+synthetic REAL trace, skip-PoW and simulated-node limitations remain: this does not prove native
+REAL Final/payment, historical migration liveness, pruning or network/P2P availability.
+
+For one acceptance-filter pass followed by one committed fold, the conservative carried-Origin
+cryptographic parent-input bound is `3,060B` (4,895,788,860 bytes at the header cap). Raw chunk
+assembly/group hashes, cheap rejected traffic, repeated invocations, native capture, state
+cloning/roots, RSS and elapsed time are outside this bound. Eligible malicious attempts may
+exhaust the honest proof slots; next-block acceptance is tested, automatic requeue is not promised.
+The dated release observations remain historical evidence from `5d8efa11e`; no fresh whole-node
+resource approval or service-rate/fee calibration is claimed. The broader four-RFC goal remains open.
+
+Validation with jobs 2, dev/test debug 0 and incremental 0:
+
+- `cargo test --locked -p kaspa-consensus-core --features evm --lib -- --test-threads=2`: **3,643 passed, 0 failed, 13 ignored**, 69.55s runtime, 0.18s cached build. Log `/tmp/rfc8-origin-budget-core-full.log`. The earlier one-test smoke is included here, not counted again; the ignored cases remain explicit probes/dumps/measurements.
+- EVM node Origin fixture: **1 passed, 0 failed, 0 ignored**, 204.66s runtime after a 3m55s build. Log `/tmp/rfc8-origin-budget-node.log`. Two additional actual signed REAL admissions extend the fixture; its total runtime is not a header-reader performance measurement.
+- From that exact EVM node executable, sequential regression filters: `chunk` **8 passed** (46.18s), `certification` **4 passed** (58.32s), H1 caller **1 passed** (0.00s), `t12_a2u_` **3 passed** (26.79s), and the existing Family two-drill cap **1 passed** (20.02s). All have zero failures/ignored. Two cases overlap between chunk/certification: these are 15 distinct regressions, or 16 distinct node tests including Origin. Logs `/tmp/rfc8-origin-budget-node-{chunk,certification,h1_the_template_asks_the_carrier_gate_the_mempool_asks,t12_a2u_,grading-cap}.log`.
+- `cargo check --locked -p kaspad --features evm`: success in 35.78s, existing warnings. Log `/tmp/rfc8-origin-budget-daemon.log`.
+- Scoped rustfmt checks of the new budget type/core test/metadata reader/node charging and classification/node fixture, plus `git diff --check`: success. After compilation only placement of a Rust documentation comment was corrected; tested behavior was unchanged.
+
+No public activation, push or deployment was performed. These results do not close the remaining
+resource, fee/rate, migration availability, historical coverage, soundness or economic gates.

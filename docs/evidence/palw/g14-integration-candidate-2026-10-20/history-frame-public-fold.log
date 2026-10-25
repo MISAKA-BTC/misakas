@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_state_v2::palw_tir_public_fold_v1::tests::owner_fee_and_deposit_are_a_separate_component_without_new_absolute_clocks ... ok
-test palw_state_v2::palw_tir_public_fold_v1::tests::new_original_frame_cannot_license_an_unqualified_valid_or_reinterpret_typed_receipt ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 4682 filtered out; finished in 0.06s
-

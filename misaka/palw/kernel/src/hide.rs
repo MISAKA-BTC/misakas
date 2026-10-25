@@ -1,4 +1,4 @@
-//! **Flat 64-element hiding tiles** — DA16b option (a) (`docs/design/palw/models/k2-real-scale.md` §4.2, `docs/design/palw/verification/da16-transport-and-provider-court.md`
+//! **Flat 64-element hiding tiles** — DA16b option (a) (`docs/design/palw/k2-real-scale.md` §4.2, `docs/design/palw/da16-transport-and-provider-court.md`
 //! §7.9; lane G14-S, 2026-10-11). The v3 leaf rule for a **masked** value (model-dependent, ADR-0177 D2 Level 2) whose whole-value
 //! court (option (c), [`crate::seg_scope`]) does not fit its bound: every 9B / BGE activation.
 //!

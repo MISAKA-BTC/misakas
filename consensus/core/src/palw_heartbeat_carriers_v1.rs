@@ -111,25 +111,6 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::CourtEvalRootClaimed { .. } => true,
         // ADR-0152 §4-ter: the held dissection's opening and step 6's checkpoint conviction.
         O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
-        // RFC-0006 consumer v2: the versioned one-move recurrence accusation (tag 243) and tag 244's accusations are court openings
-        // like the two above; tag 244's router binding declaration is registration traffic.
-        O::GdnStepAccusedV2 { .. } => true,
-        O::MemoryRoutingV2 { object } => {
-            matches!(object.as_ref(), crate::palw_memory_routing_v2::PalwMemoryRoutingObjectV2::Accused { .. })
-        }
-        // ADR-0191 step B (tag 245): designated-custodian traffic, not an H-1 obligation.
-        O::TirDesignatedEventV1 { .. } => false,
-        // RFC reader/router declaration is registration traffic, like a router binding.
-        O::ReaderRouterDeclaredV2 { .. } | O::SourceBootstrapV1 { .. } | O::RoutedMaterialAnsweredV2 { .. } => false,
-        // A routed step accusation is a court opening, like the GDN one-move accusation.
-        O::RoutedStepAccusedV2 { .. } => true,
-        // R-D2-READY (tag 230): seat readiness, not an H-1 obligation.
-        O::SeatReadinessRootV1 { .. } => false,
-        O::SeatReadinessDemandedV1 { .. } | O::SeatReadinessAnsweredV1 { .. } => false,
-        // RFC-0032 A material intake (tag 255): shared terminal material, not an H-1 obligation.
-        O::MaterialIntakeV1 { .. } => false,
-        // RFC-0024 (tags 201-204): the position terminal and lookahead are court moves, like tags 64-66.
-        O::TirPositionDissectedV2 { .. } | O::TirPositionClosedV2 { .. } | O::TirLookaheadDisclosedV2 { .. } | O::TirLookaheadChosenV2 { .. } => true,
         // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.
         O::TirShardCourtAccused { .. } => true,
         // RFC-0003 §I.4.7: the generative one-move accusation, a court opening too.
@@ -142,17 +123,12 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::PublicCourtStreamLeafV1 { .. }
         | O::PublicCourtStreamMoveV1 { .. }
         | O::PublicCourtStreamOpenedNativeV1 { .. }
-        | O::TirPublicControlV1 { .. }
-        | O::TirPublicGrantReadyV1 { .. }
-        | O::SharedCourtOpV1 { .. }
         | O::TirClassLayoutPublishedV1 { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
         | O::ClassRegistered { .. }
         | O::ClassSemanticsDeclaredV1 { .. }
-        // RFC-0002 02-A (tag 175): a TIR class's container binding is registration traffic, like the declaration above.
-        | O::TirClassContainerBoundV1 { .. }
         // RFC-0002 Phase F (tag 61): an IR registration is a registration, like the one above.
         | O::ClassRegisteredTirV1 { .. }
         // RFC-0003 (tag 68): a generative registration, likewise.
@@ -277,7 +253,12 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::TrapCommittedV1 { .. }
         | O::TrapRevealedV1 { .. }
         // RFC-0010: a certified Panel epoch output is evidence in the fee market beside the claims it serves, not a conviction.
-        | O::PanelBeaconProofV3 { .. } => false,
+        | O::PanelBeaconProofV3 { .. }
+        | O::GdnStepAccusedV2 { .. }
+        | O::ReaderRouterDeclaredV2 { .. }
+        | O::RoutedStepAccusedV2 { .. }
+        | O::SourceBootstrapV1 { .. }
+        | O::RoutedMaterialAnsweredV2 { .. } => false,
     }
 }
 

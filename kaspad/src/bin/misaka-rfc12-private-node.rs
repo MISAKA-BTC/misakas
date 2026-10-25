@@ -11,23 +11,22 @@ use kaspad_lib::{
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
         AdditionalCampaignWorkersV1, PrivateKernelMaterialReplacementSpecV4, PrivateKernelPaidCheckSpecV4,
-        PrivateKernelPaidMaterialGenerationSpecV5, PrivateKernelPaidReplaceSpecV4, PrivateKernelPaidWorkSpecV4,
-        PrivateNativeCustodySpecV3, PrivatePaidMaterialGenerationExportSpecV5, PrivatePaidObservationClaimsV5,
-        PrivateRecoveryAckFeeSpecV4, PrivateSourceBootstrapCheckerSpecV1, PrivateSourceBootstrapProducerSpecV1,
+        PrivateKernelPaidMaterialGenerationSpecV5, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3,
+        PrivatePaidMaterialGenerationExportSpecV5, PrivatePaidObservationClaimsV5, PrivateRecoveryAckFeeSpecV4,
+        PrivateSourceBootstrapCheckerSpecV1, PrivateSourceBootstrapProducerSpecV1,
         create_private_integration_core_with_campaign_workers_v1, create_private_integration_core_with_native_custody_v3,
-        create_private_integration_core_with_native_custody_v4,
+        create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_paid_observations_v5,
         create_private_integration_core_with_runtime, create_private_integration_core_with_source_workers_v1,
         export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
-        export_private_paid_program_work_v3, export_private_source_paid_bootstrap_v1, generate_private_paid_request_v4,
-        prepare_private_integration_probe, private_complete_check_params_v1, private_g14_drill_params_v1,
-        private_late_retirement_params_v1, private_native_settlement_params_v1, private_paid_claim_params_v3,
+        export_private_paid_program_work_v3, export_private_source_paid_bootstrap_v1, prepare_private_integration_probe,
+        private_complete_check_params_v1, private_native_settlement_params_v1, private_paid_claim_params_v3,
         private_paid_claim_params_v4, private_probe_manifest, private_source_bootstrap_paid_params_with_consumer_v6,
         private_source_bootstrap_params_v1,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 const USAGE: &str = "misaka-rfc12-private-node (requires --features private-integration-config)
---private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4|g14-v1|source-v1|source-paid-v1 --private-probe-salt=HEX --testnet --netsuffix=12
+--private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4|source-v1|source-paid-v1 --private-probe-salt=HEX --testnet --netsuffix=12
 source-v1/source-paid-v1 require --private-probe-source-policy=ABSOLUTE_BORSH (explicit nonzero activation and full policy;
   no values are selected or approved) and optionally --private-probe-source-check=ABSOLUTE_JSON
   (one actual drawn slot, registered model material, independent carrier key/input and finite resource/fee caps).
@@ -36,19 +35,11 @@ source-v1/source-paid-v1 require --private-probe-source-policy=ABSOLUTE_BORSH (e
   source-paid-v1 combines the exact paid-v4 base and this explicit source policy on every node.
   --private-probe-paid-bootstrap-source-policy=ABSOLUTE_BORSH optionally arms the distinct V6 consumer
   (u64 nonzero scheduled activation, PaidBootstrapSourcePolicyV6); all nodes must use the exact same policy.
+  --private-probe-source-economics=ABSOLUTE_BORSH is the finite unapproved economics input
+  (u64 activation, PalwSourceEconomicsPolicyV1) and requires that V6 policy. It does not approve the numbers.
 population-v1 additionally requires --private-probe-bonds=N (actual funded registry only).
-g14-v1 (the G14 collusion drill, scripts/drills/g14_collusion_drill.py): --private-probe-g14-at=N (0: every G14 fence from
-  genesis; N > 0: testnet-12's shipped rules below N and the DAA-14,000 candidate set from N), --private-probe-g14-set=full|
-  route-required-only (default full), --private-probe-panel-seats=3..5 (default 3; R-core+ fixes the quorum at 3). Armed through drill arming records naming
-  this genesis and height, never pinned; the shipped validation still refuses the ruleset.
-Any profile: --private-probe-retirement-daa=N (N >= 2) arms palw_dns_retirement_v1 at DAA N instead of DAA 1, so a private
-  run accumulates DNS-validator history before the fence (RFC-0012 §4.4); Rule E and its commitment stay at DAA 1. The
-  height is part of the profile's identity: every node, export and print of one run must name the same N.
 Read-only mode: --print-private-probe-profile
 Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1, paid-v3, paid-v4 or source-paid-v1)
-Generate authenticated live paid-v4 request:
-  --private-probe-request-rpc=ws://127.0.0.1:PORT --private-probe-request-block=PINNED_HASH
-  --private-probe-request-spec=JSON --private-probe-request-inputs=BORSH --private-probe-generate-paid-request=NEW_FILE
 Offline actual paid Program work: --private-probe-paid-request=FILE --private-probe-export-paid-work=FRESH_DIRECTORY
 paid-v3/paid-v4 node mode, RFC-0008 PAV3 native custody (unverified, unapproved mechanics):
   --private-probe-native-provider-keys=SEED_FILE@TXID:INDEX,SEED_FILE@TXID:INDEX[,...] (fixture seats, >=2 operators)
@@ -72,9 +63,6 @@ paid-v4 hosted providers additionally require an explicit ACK carrier fee payer:
     independent of original claim inputs; no Fund operation is synthesized)
   --private-probe-kernel-paid-check=ABSOLUTE_JSON (explicit assigned checker bond/key, provider endpoint,
     acquisition limits and separate receipt payer/funding; checker-only mode needs no producer exchange)
-  --private-probe-kernel-replace=ABSOLUTE_JSON (sponsor's bounded provider replacement for one root: new sorted
-    2..8 roster, signed valid_until_daa and input cap; replays the producer outbox's own request/context, never native
-    acceptance by itself)
   --private-probe-kernel-paid-material-generation-v5=ABSOLUTE_JSON (exact original signed claim continuation,
     separate explicit funding slot/fee cap; exclusive with paid-work and material-replacement workers)
   --private-probe-kernel-paid-material-generation-v7=ABSOLUTE_JSON (version7 private authorization,
@@ -131,22 +119,12 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-native-recovery-providers"
                         | "--private-probe-kernel-paid-work"
                         | "--private-probe-kernel-paid-check"
-                        | "--private-probe-kernel-replace"
-                        | "--private-probe-retirement-daa"
-                        | "--private-probe-g14-at"
-                        | "--private-probe-g14-set"
-                        | "--private-probe-panel-seats"
-                        | "--private-probe-request-rpc"
-                        | "--private-probe-request-block"
-                        | "--private-probe-request-spec"
-                        | "--private-probe-request-inputs"
-                        | "--private-probe-generate-paid-request"
-
                         | "--private-probe-kernel-paid-material-generation-v5"
                         | "--private-probe-kernel-paid-material-generation-v7"
                         | "--private-probe-kernel-material-replacement"
                         | "--private-probe-source-policy"
                         | "--private-probe-paid-bootstrap-source-policy"
+                        | "--private-probe-source-economics"
                         | "--private-probe-source-check"
                         | "--private-probe-source-open"
                         | "--private-probe-paid-generation-export"
@@ -185,44 +163,9 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .remove("--private-probe-bonds")
         .map(|n| n.parse::<u32>().map_err(|_| "private bond size must be u32".to_owned()))
         .transpose()?;
-    let retirement_daa = flags
-        .values
-        .remove("--private-probe-retirement-daa")
-        .map(|n| n.parse::<u64>().map_err(|_| "private retirement DAA must be u64".to_owned()))
-        .transpose()?;
-    let g14_at = flags
-        .values
-        .remove("--private-probe-g14-at")
-        .map(|n| n.parse::<u64>().map_err(|_| "the G14 drill height must be u64".to_owned()))
-        .transpose()?;
-    let g14_set = match flags.values.remove("--private-probe-g14-set").as_deref() {
-        None | Some("full") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::Full,
-        Some("route-required-only") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::RouteRequiredOnly,
-        Some(other) => return Err(format!("unknown G14 drill set {other} (full | route-required-only)")),
-    };
-    let panel_seats = flags
-        .values
-        .remove("--private-probe-panel-seats")
-        .map(|n| n.parse::<u16>().map_err(|_| "the G14 drill Panel size must be u16".to_owned()))
-        .transpose()?;
-    if profile == "g14-v1" && g14_at.is_none() {
-        return Err("the g14-v1 profile requires --private-probe-g14-at (0: genesis mode)".into());
-    }
-    if profile != "g14-v1" && (g14_at.is_some() || panel_seats.is_some()) {
-        return Err("--private-probe-g14-at / --private-probe-panel-seats belong to the g14-v1 profile".into());
-    }
     let bootstrap = flags.values.remove("--private-probe-export-bootstrap");
     let paid_request = flags.values.remove("--private-probe-paid-request");
     let paid_output = flags.values.remove("--private-probe-export-paid-work");
-    let generate = flags.values.remove("--private-probe-generate-paid-request");
-    let request_rpc = flags.values.remove("--private-probe-request-rpc");
-    let request_block = flags.values.remove("--private-probe-request-block");
-    let request_spec = flags.values.remove("--private-probe-request-spec");
-    let request_inputs = flags.values.remove("--private-probe-request-inputs");
-    let request_parts = [request_rpc.is_some(), request_block.is_some(), request_spec.is_some(), request_inputs.is_some()];
-    if (generate.is_some() && !request_parts.iter().all(|v| *v)) || (generate.is_none() && request_parts.iter().any(|v| *v)) {
-        return Err("request generation requires its RPC, pinned block, spec, inputs and fresh output together".into());
-    }
     let source_profile = matches!(profile.as_str(), "source-v1" | "source-paid-v1");
     let paid_v4_profile = matches!(profile.as_str(), "paid-v4" | "source-paid-v1");
     let source_policy = flags.values.remove("--private-probe-source-policy");
@@ -232,6 +175,10 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let paid_bootstrap_source_policy = flags.values.remove("--private-probe-paid-bootstrap-source-policy");
     if paid_bootstrap_source_policy.is_some() && profile != "source-paid-v1" {
         return Err("V6 downstream source policy requires explicit source-paid-v1 profile".into());
+    }
+    let source_economics = flags.values.remove("--private-probe-source-economics");
+    if source_economics.is_some() && (profile != "source-paid-v1" || paid_bootstrap_source_policy.is_none()) {
+        return Err("source economics requires source-paid-v1 and its explicit V6 policy".into());
     }
     let source_checker_file = flags.values.remove("--private-probe-source-check");
     if source_checker_file.is_some() && (!source_profile || flags.print || bootstrap.is_some() || paid_output.is_some()) {
@@ -300,21 +247,6 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         })
         .transpose()?;
     let kernel_checker_file = flags.values.remove("--private-probe-kernel-paid-check");
-    let kernel_replace_file = flags.values.remove("--private-probe-kernel-replace");
-    if kernel_replace_file.is_some()
-        && (!paid_v4_profile || native.is_none() || flags.print || bootstrap.is_some() || paid_output.is_some())
-    {
-        return Err("kernel replacement options require an explicit paid-v4 custody sponsor node".into());
-    }
-    let kernel_replace = kernel_replace_file
-        .map(|file| {
-            let path = Path::new(&file);
-            if !path.is_absolute() {
-                return Err("kernel replacement specification path must be absolute".into());
-            }
-            PrivateKernelPaidReplaceSpecV4::read(path)
-        })
-        .transpose()?;
     if kernel_checker_file.is_some() && (!paid_v4_profile || flags.print || bootstrap.is_some() || paid_output.is_some()) {
         return Err("kernel checker options require explicit paid-v4 node mode".into());
     }
@@ -365,10 +297,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     } else {
         None
     };
-    if kernel_replace.is_some() && kernel_replacement.is_some() {
-        return Err("one root uses either the sponsor replacement or the producer replacement sender".into());
-    }
-    if kernel_generation.is_some() && (kernel_work.is_some() || kernel_replacement.is_some() || kernel_replace.is_some()) {
+    if kernel_generation.is_some() && (kernel_work.is_some() || kernel_replacement.is_some()) {
         return Err("V5 continuation cannot run with the original paid producer/replacement worker".into());
     }
     if !recovery_providers.is_empty()
@@ -415,6 +344,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             &salt,
             Path::new(source_policy.as_ref().ok_or("source policy absent")?),
             paid_bootstrap_source_policy.as_deref().map(Path::new),
+            source_economics.as_deref().map(Path::new),
         )?,
         "complete-v1" => private_complete_check_params_v1(&salt)?,
         "paid-v3" => private_paid_claim_params_v3(&salt)?,
@@ -423,13 +353,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         "population-v1" => {
             private_native_settlement_params_v1(derive_private_population_v1(&salt, population.expect("size checked"))?.params)?
         }
-        "g14-v1" => private_g14_drill_params_v1(&salt, g14_at.expect("height checked"), g14_set, panel_seats.unwrap_or(3))?,
         _ => return Err("unallocated private profile".into()),
-    };
-    // RFC-0012 §4.4: only the retirement height moves; the DAA-1 profile is unchanged when the option is absent.
-    let params = match retirement_daa {
-        Some(daa) => private_late_retirement_params_v1(params, daa)?,
-        None => params,
     };
     if params.skip_proof_of_work {
         return Err("private fixture must retain real PoW".into());
@@ -437,37 +361,6 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let mut config = Config::new(params);
     config.palw_drill_genesis_salt = Some(salt);
     config.private_population = population;
-    if let Some(output) = generate {
-        if profile != "paid-v4"
-            || flags.print
-            || bootstrap.is_some()
-            || paid_output.is_some()
-            || native.is_some()
-            || kernel_work.is_some()
-            || kernel_checker.is_some()
-            || kernel_replace.is_some()
-            || kernel_replacement.is_some()
-            || kernel_generation.is_some()
-            || generation_export.is_some()
-            || source_checker.is_some()
-            || source_producer.is_some()
-            || !observations.is_empty()
-            || ack_fees.is_some()
-            || !recovery_providers.is_empty()
-        {
-            return Err("request generation is an exclusive paid-v4 tooling mode".into());
-        }
-        let report = generate_private_paid_request_v4(
-            &config,
-            request_rpc.as_deref().unwrap(),
-            request_block.as_deref().unwrap(),
-            Path::new(request_spec.as_deref().unwrap()),
-            Path::new(request_inputs.as_deref().unwrap()),
-            Path::new(&output),
-        )?;
-        println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
-        return Ok(());
-    }
     if flags.print {
         println!("{}", serde_json::to_string_pretty(&private_probe_manifest(&config)).map_err(|e| e.to_string())?);
         return Ok(());
@@ -510,15 +403,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let runtime = Runtime::from_args(&args);
     let (core, rpc) = if profile == "source-v1" {
         create_private_integration_core_with_source_workers_v1(&runtime, &args, budget, config, source_checker, source_producer)?
-    } else if profile == "source-paid-v1"
-        || generation_export.is_some()
-        || kernel_replace.is_some()
-        || kernel_work.is_some()
-        || kernel_checker.is_some()
-        || kernel_replacement.is_some()
-        || kernel_generation.is_some()
-        || !observations.is_empty()
-    {
+    } else if profile == "source-paid-v1" || generation_export.is_some() {
         create_private_integration_core_with_campaign_workers_v1(
             &runtime,
             &args,
@@ -532,12 +417,27 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             kernel_replacement,
             kernel_generation,
             observations,
-            AdditionalCampaignWorkersV1 {
-                source_checker,
-                source_producer,
-                generation_export,
-                kernel_paid_replace: kernel_replace,
-            },
+            AdditionalCampaignWorkersV1 { source_checker, source_producer, generation_export },
+        )?
+    } else if kernel_work.is_some()
+        || kernel_checker.is_some()
+        || kernel_replacement.is_some()
+        || kernel_generation.is_some()
+        || !observations.is_empty()
+    {
+        create_private_integration_core_with_paid_observations_v5(
+            &runtime,
+            &args,
+            budget,
+            config,
+            native,
+            ack_fees,
+            recovery_providers,
+            kernel_work,
+            kernel_checker,
+            kernel_replacement,
+            kernel_generation,
+            observations,
         )?
     } else {
         match native {

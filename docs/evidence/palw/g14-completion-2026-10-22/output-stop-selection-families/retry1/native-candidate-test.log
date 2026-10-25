@@ -1,6 +1,0 @@
-
-running 1 test
-test pipeline::virtual_processor::tests::funded_original_native_candidate::palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1065 filtered out; finished in 0.07s
-

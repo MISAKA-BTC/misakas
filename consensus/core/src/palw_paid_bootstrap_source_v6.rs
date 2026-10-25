@@ -5,7 +5,7 @@ pub use misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceP
 use misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6;
 use borsh::{BorshDeserialize, BorshSerialize};
 
-pub const PAID_BOOTSTRAP_SOURCE_TABLE_V6: u8 = 149;
+pub const PAID_BOOTSTRAP_SOURCE_TABLE_V6: u8 = 138;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwPaidBootstrapSourceFenceV6 {
     pub activation: ForkActivation,

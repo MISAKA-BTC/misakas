@@ -7,13 +7,6 @@ use misaka_palw_challenge::{
     BeaconContextV1, ChallengeSubjectV1, PostCommitChallengePolicyV1, RootV1, SubjectKindV1, VerifiedWorkBeaconV1,
 };
 
-/// PRINCIPLES §8 (2026-10-15): the native compact V4 plan, its producer proof record and proof binding are retired. The
-/// object variants below keep their wire identity for decoding only; every constructor that would admit, bind or credit them
-/// refuses.
-pub const COMPACT_V4_RETIRED: bool = true;
-pub const COMPACT_V4_RETIRED_REASON: &str =
-    "compact V4 is retired (PRINCIPLES §8): no compact proof record is generated, bound, accepted or credited";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PaidClaimTargetV2 {
     Program,
@@ -217,15 +210,6 @@ pub enum PaidClaimObjectV2 {
         round: u32,
         proof: crate::claim_compact_v1::native_v4::NativeCompactProofV4,
     },
-    /// **RFC-0007 §4.1 T6** (consumer-owned; dormant `palw_paid_claim_trap_v1`, appended — every earlier discriminant and encoding
-    /// is unchanged): the producer's ONE salted commitment of a paid claim, to a planted fault (a trap) or to the null fault (an
-    /// ordinary claim), posted before the claim's beacon seal window. Past the fence every non-staged paid claim carries exactly
-    /// one and no seat is drawn without it, so its presence, size and poster say nothing. Opened, for a trap only, by the audit
-    /// mesh's existing reveal object.
-    TrapCommitment {
-        enrollment: Digest,
-        commitment: Digest,
-    },
     /// Appended index 15. The generation is signed separately from the exact
     /// historical V2 commit; none of its fields enter enrollment.id() or a draw.
     CommitWithMaterialGenerationV5 {
@@ -362,24 +346,6 @@ pub struct PaidClaimCheckAuthorityV2 {
     compact_consumer: Option<std::rc::Rc<dyn crate::claim_compact_v1::native_v4::CompactRelationConsumerV4>>,
     can_complete: bool,
 }
-/// **The bootstrap lock's marker anchor** (user decision 2026-10-17, dormant): a paid lock taken before any approved paid Final
-/// exists carries this anchor in place of a work beacon's challenge anchor, so every reader tells a bootstrap lock from a beacon
-/// lock off the authenticated row alone. A beacon anchor equal to it is a 512-bit preimage of a fixed domain hash.
-pub fn paid_claim_bootstrap_anchor_v2() -> Digest {
-    object_id(b"MISAKA/PALW/PAID-CLAIM-BOOTSTRAP-ANCHOR/V2", &())
-}
-/// **The seal-reveal lock's marker anchor** (user decision 2026-10-17 on F1, dormant): a paid lock seeded by the commitments of claims
-/// sealed after the target (`misaka_palw_challenge::paid_opt_in::collect_paid_seal_reveal_seed_v6`) carries this anchor; readers
-/// re-derive the authority from the lock row, as for a bootstrap lock.
-pub fn paid_claim_seal_anchor_v2() -> Digest {
-    object_id(b"MISAKA/PALW/PAID-CLAIM-SEAL-REVEAL-ANCHOR/V2", &())
-}
-/// **The bootstrap checker-draw seed** of one paid claim: the network's pinned bootstrap seed (genesis / annual-fork params), bound
-/// to the claim's beacon context and its signed statement. PREDICTABLE by construction — anyone can compute the draw before the
-/// claim commits; that is why the window ends at the first approved paid Final and its claims earn the reduced reward.
-pub fn paid_claim_bootstrap_seed_v2(bootstrap_seed: &Digest, context: &BeaconContextV1, commitment_root: &Digest) -> Digest {
-    object_id(b"MISAKA/PALW/PAID-CLAIM-BOOTSTRAP-SEED/V2", &(bootstrap_seed, context.id(), commitment_root))
-}
 impl PaidClaimCheckAuthorityV2 {
     pub(crate) fn from_approved_bootstrap_parts_v6(
         class: &PaidClaimClassV2,
@@ -415,39 +381,6 @@ impl PaidClaimCheckAuthorityV2 {
         now: u64,
         checker_snapshot: Digest,
     ) -> Result<Self, String> {
-        Self::verify_seeded(class, enrollment, subject, context, now, checker_snapshot, |expected| {
-            misaka_palw_challenge::challenge_seed_v1(context, expected, beacon).map_err(|e| e.to_string())
-        })
-    }
-    /// **The bootstrap check authority** (dormant; user decision 2026-10-17): the same statement checks as [`Self::verify`], with
-    /// the checker draw seeded by `sample_seed` instead of a locked work beacon. The native lock computes that seed with
-    /// [`paid_claim_bootstrap_seed_v2`] from the network's pinned bootstrap seed, only while no approved paid Final exists, and
-    /// writes it into the lock row (anchor [`paid_claim_bootstrap_anchor_v2`]); every later reader passes the lock row's seed — an
-    /// authenticated chain row, never a value a party supplies.
-    #[allow(clippy::too_many_arguments)]
-    pub fn verify_bootstrap_v2(
-        class: &PaidClaimClassV2,
-        enrollment: &PaidClaimEnrollmentV2,
-        subject: &ChallengeSubjectV1,
-        context: &BeaconContextV1,
-        now: u64,
-        checker_snapshot: Digest,
-        sample_seed: Digest,
-    ) -> Result<Self, String> {
-        if class.interactive_plan.is_some() {
-            return Err("a staged/interactive paid class takes no bootstrap seed".into());
-        }
-        Self::verify_seeded(class, enrollment, subject, context, now, checker_snapshot, |_| Ok(sample_seed))
-    }
-    fn verify_seeded(
-        class: &PaidClaimClassV2,
-        enrollment: &PaidClaimEnrollmentV2,
-        subject: &ChallengeSubjectV1,
-        context: &BeaconContextV1,
-        now: u64,
-        checker_snapshot: Digest,
-        seed_of: impl FnOnce(&ChallengeSubjectV1) -> Result<Digest, String>,
-    ) -> Result<Self, String> {
         let expected = paid_subject_with_checker_snapshot_v2(subject, class, enrollment, checker_snapshot)?;
         if !enrollment.lifetime.receipt_open(now)
             || context.policy != class.source_policy
@@ -459,7 +392,7 @@ impl PaidClaimCheckAuthorityV2 {
         {
             return Err("paid check authority is late or substitutes its signed statement/policy".into());
         }
-        let seed = seed_of(&expected)?;
+        let seed = misaka_palw_challenge::challenge_seed_v1(context, &expected, beacon).map_err(|e| e.to_string())?;
         Ok(Self {
             enrollment: enrollment.id(),
             base_claim: enrollment.base_claim,
@@ -616,10 +549,6 @@ impl PaidClaimCheckAuthorityV2 {
         now: u64,
         previous: &[(Digest, Digest, Digest)],
     ) -> Result<Self, String> {
-        // PRINCIPLES §8 (2026-10-15): the V4 compact plan is retired; no check authority is built for it.
-        if COMPACT_V4_RETIRED {
-            return Err(COMPACT_V4_RETIRED_REASON.into());
-        }
         Self::for_interactive_round_inner(
             class,
             enrollment,
@@ -636,9 +565,6 @@ impl PaidClaimCheckAuthorityV2 {
         )
     }
     pub fn with_compact_proof_binding_v4(mut self, root: Digest) -> Result<Self, String> {
-        if COMPACT_V4_RETIRED {
-            return Err(COMPACT_V4_RETIRED_REASON.into());
-        }
         if self.interactive_plan.as_ref().is_none_or(|p| p.version != 4) || self.compact_proof_root.is_some() || root == [0; 64] {
             return Err("compact proof binding has wrong plan/duplicate/zero root".into());
         }
@@ -654,9 +580,6 @@ impl PaidClaimCheckAuthorityV2 {
         session: std::rc::Rc<crate::claim_compact_v1::native_v4::CompactVerificationSessionV4>,
         proof: Option<&crate::claim_compact_v1::native_v4::NativeCompactProofV4>,
     ) -> Result<Self, String> {
-        if COMPACT_V4_RETIRED {
-            return Err(COMPACT_V4_RETIRED_REASON.into());
-        }
         let plan = self.interactive_plan.as_ref().ok_or("compact plan missing")?;
         if plan.version != 4
             || *plan != registration.plan

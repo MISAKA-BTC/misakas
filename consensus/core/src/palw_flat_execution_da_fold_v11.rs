@@ -119,7 +119,7 @@ pub(super) fn demand(
             let binding = book.job().quota_subject(class.record()).map_err(refused)?;
             let action = plan.action(QuotaActionKindV11::DARequest, bytes).map_err(refused)?;
             shard.debit_public_action(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
-            write_shard(builder, &shard, id)?;
+            write_shard(builder, &shard, id);
         }
         1 => {
             let seal = court::seal_row(builder.state.kernel_route.as_ref().unwrap(), &request.entitlement)?;
@@ -128,7 +128,7 @@ pub(super) fn demand(
             }
             let mut shard = quota_shard_seal(builder, p, &epoch, actor, id, Some(request.entitlement))?;
             shard.debit_protected(&p.quota, &epoch, &plan, ProtectedActionKindV11::DARequest, bytes).map_err(refused)?;
-            write_shard(builder, &shard, id)?;
+            write_shard(builder, &shard, id);
         }
         2 => {
             discovery::debit_request(builder, ctx, p, actor, id, request.entitlement, &plan, bytes)?;
@@ -219,13 +219,13 @@ pub(super) fn demand(
     state.required_retained_until = state.required_retained_until.max(proof_until);
     let demand = d.id();
     capacity::request(builder, id, request.lane, request.entitlement, request.slot, 1, demand.as_bytes(), ctx.daa_score, deadline)?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(14u8, id, counts.next_ordinal)), Some(key(&demand)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(14u8, id, counts.next_ordinal)), Some(key(&demand)));
     counts.next_ordinal += 1;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, id)), Some(key(&counts)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&demand), Some(key(&d)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, request.slot), Some(key(&demand)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
-    builder.note_kernel_bond(signer)?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, id)), Some(key(&counts)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&demand), Some(key(&d)));
+    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, request.slot), Some(key(&demand)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
+    builder.note_kernel_bond(signer);
     Ok(())
 }
 fn close_demand(builder: &mut TransitionBuilder<'_>, mut d: NativeExecutionDemandV11) -> Result<(), PalwStateV2Error> {
@@ -236,9 +236,9 @@ fn close_demand(builder: &mut TransitionBuilder<'_>, mut d: NativeExecutionDeman
         counts.open_ordinary = counts.open_ordinary.checked_sub(1).ok_or_else(|| refused("native ordinary DA count underflow"))?;
     }
     d.body.settled = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&d.id()), Some(key(&d)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.job_id), Some(key(&state)))?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.job_id)), Some(key(&counts)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&d.id()), Some(key(&d)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.job_id), Some(key(&state)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.job_id)), Some(key(&counts)));
     Ok(())
 }
 pub(super) fn answer(
@@ -278,7 +278,7 @@ pub(super) fn answer(
     let producer = palw_kernel_bond_id_v1(signer);
     let mut trace = trace_shard(builder, p, &trace_plan, producer, d.job_id, 0, d.job_id)?;
     trace.debit_reserved(&p.quota, &epoch, &trace_plan, &d.job_id, 0).map_err(refused)?;
-    write_trace(builder, &trace, 0, d.job_id)?;
+    write_trace(builder, &trace, 0, d.job_id);
     if complete23 {
         frame()?;
     }
@@ -291,7 +291,7 @@ pub(super) fn answer(
     let mut shard = quota_shard(builder, p, &epoch, binding.producer, d.job_id)?;
     let action = plan.action(QuotaActionKindV11::DAAnswer, &bytes[68..]).map_err(refused)?;
     shard.debit_reserved(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
-    write_shard(builder, &shard, d.job_id)?;
+    write_shard(builder, &shard, d.job_id);
     let answer = decode_flat_vector_answer_v9(&bytes[68..]).map_err(|e| refused(e.to_string()))?;
     if !answer.authenticates(&d.body) {
         return Err(refused("native answer is not the original typed opening"));
@@ -305,7 +305,7 @@ pub(super) fn answer(
         header: FlatVectorServedHeaderV9 { answered_daa: ctx.daa_score, answer_root: flat_vector_answer_root_v9(&bytes[68..]) },
         answer: bytes[68..].to_vec(),
     };
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, d.body.unit.key(&d.body.vector), Some(key(&served)))?;
+    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, d.body.unit.key(&d.body.vector), Some(key(&served)));
     close_demand(builder, d)
 }
 pub(super) fn settle(
@@ -346,14 +346,13 @@ pub(super) fn settle(
         finder: palw_kernel_bond_id_v1(&d.body.requester),
         kind: NativeAdjudicationKindV11::DataUnavailable,
     };
-    // G14 lane closure G-14: a default is never refused for short collateral; what the bond still holds of the reserve is collected.
-    let reserve = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
-        builder.state.bonds.get(&row.header.producer).map(|b| b.collateral),
-        claim.reserved_original,
-    );
+    let reserve = claim.reserved_original;
+    if builder.state.bonds.get(&row.header.producer).is_none_or(|b| b.collateral < reserve) {
+        return Err(refused("native original DA default slash unavailable"));
+    }
     let settlement = book.adjudicate(class.record(), &result, reserve).map_err(refused)?;
     close_adjudicated_quota(builder, ctx, p, d.job_id, &class, &book, &plan, *signer)?;
-    let collected = if reserve == 0 { 0 } else { builder.slash_bond(row.header.producer, reserve as u128)? };
+    let collected = builder.slash_bond(row.header.producer, reserve as u128)?;
     if collected != reserve {
         return Err(refused("native original DA default debit changed"));
     }

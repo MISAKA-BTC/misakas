@@ -68,7 +68,7 @@ pub(super) fn authorize(
         policy: mirror.policy.id(),
         consumed_claim: None,
     };
-    builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, key, Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, key, Some(borsh::to_vec(&row).unwrap()));
     Ok(())
 }
 
@@ -164,17 +164,17 @@ pub(super) fn capture(
         authority_kind: 0,
     };
     auth.consumed_claim = Some(id);
-    builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, panel_capture_key_v2(&id), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, panel_capture_key_v2(&id), Some(borsh::to_vec(&row).unwrap()));
     builder.write_kernel_row(
         PALW_PANEL_LIFETIME_TABLE_V2,
         panel_authorization_key_v2(&auth.terms.id()),
         Some(borsh::to_vec(&auth).unwrap()),
-    )?;
+    );
     builder.write_kernel_row(
         PALW_PANEL_LIFETIME_TABLE_V2,
         borsh::to_vec(&id.as_bytes()).unwrap(),
         Some(borsh::to_vec(&enrollment).unwrap()),
-    )?;
+    );
     Ok(())
 }
 
@@ -208,7 +208,7 @@ pub(super) fn enroll(
         return Ok(());
     }
     row.authority_kind = 1;
-    builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, borsh::to_vec(&terms.claim).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, borsh::to_vec(&terms.claim).unwrap(), Some(borsh::to_vec(&row).unwrap()));
     Ok(())
 }
 
@@ -255,7 +255,7 @@ pub(super) fn observe_pauses(builder: &mut TransitionBuilder<'_>, ctx: &PalwBloc
             _ => false,
         };
         if changed {
-            builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, key, Some(borsh::to_vec(&row).unwrap()))?;
+            builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, key, Some(borsh::to_vec(&row).unwrap()));
         }
     }
     Ok(())

@@ -44,38 +44,6 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
             r.readiness_collateral_multiple
         ));
     }
-    // RFC-0019: the annual model catalog this node's binary carries (`ApprovedModels(h)`), the root in force and the next switch.
-    // Readiness is measured off-chain (scripts/release/misaka-catalog-readiness.py), never read from a node as a vote.
-    let c = &r.annual_catalog;
-    if c.scheduled {
-        out.push_str(&format!(
-            "  annual catalog (RFC-0019): tier fence DAA {} ({}) · edition {} in force · root {}{} · kernel ≤ v{} · readiness {}\n",
-            c.fence_daa,
-            if c.active { "in force" } else { "scheduled" },
-            c.current_edition,
-            short(&c.current_root),
-            if c.has_next {
-                format!(" · next: edition {} at DAA {} (root {})", c.next_edition, c.next_activation_daa, short(&c.next_root))
-            } else {
-                " · no further edition carried".to_string()
-            },
-            c.kernel_version_max,
-            c.readiness
-        ));
-        for e in &c.editions {
-            out.push_str(&format!(
-                "    edition {:>3} · DAA {:>10} · {:>9} · +{} models · root {} · previous {}\n",
-                e.edition,
-                e.activation_daa,
-                e.state,
-                e.models,
-                short(&e.root),
-                short(&e.previous_root)
-            ));
-        }
-    } else {
-        out.push_str("  annual catalog (RFC-0019): not scheduled on this network (palw_model_tier_v1 absent)\n");
-    }
     if r.work_target_shadow {
         out.push_str(&format!(
             "  work target (ADR-0137 shadow): W {} CCU/block · floor W₀ {} · network draws (Q32) {} · effective {} · epoch {} · closed model blocks {}/{} expected · rate {} sompi/G · panel in-flight replay {} · horizon {} spans · final-work epochs {}\n",
@@ -282,37 +250,5 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("PANEL_NOT_DRAWABLE"), "a served reading replaces the derived one: {text}");
-    }
-
-    /// RFC-0019: the catalog section says what the binary carries, what is in force and what switches next — and that readiness is
-    /// off-chain; a node before wire version 4 (or a network without the tier fence) reads "not scheduled".
-    #[test]
-    fn rfc0019_the_registry_renders_the_annual_catalog() {
-        use kaspa_rpc_core::{RpcPalwAnnualCatalogEdition, RpcPalwAnnualCatalogStatus};
-        let none = GetPalwModelRegistryResponse { available: true, tip_daa: 13_000, ..Default::default() };
-        assert!(render(&none).contains("annual catalog (RFC-0019): not scheduled"));
-        let mut r = none.clone();
-        r.annual_catalog = RpcPalwAnnualCatalogStatus {
-            scheduled: true,
-            fence_daa: 14_000,
-            active: false,
-            current_edition: 0,
-            current_root: "ab".repeat(64),
-            has_next: false,
-            editions: vec![RpcPalwAnnualCatalogEdition {
-                edition: 0,
-                activation_daa: 0,
-                previous_root: "00".repeat(64),
-                root: "ab".repeat(64),
-                models: 0,
-                state: "ACTIVE".to_string(),
-            }],
-            kernel_version_max: 1,
-            readiness: "off-chain".to_string(),
-            ..Default::default()
-        };
-        let text = render(&r);
-        assert!(text.contains("tier fence DAA 14000 (scheduled)") && text.contains("edition 0 in force"), "{text}");
-        assert!(text.contains("no further edition carried") && text.contains("readiness off-chain"), "{text}");
     }
 }

@@ -231,6 +231,3 @@ mod tests {
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_json_key_set_v1.rs"]
 mod native_resource_inventory_v1;
-
-#[path = "palw_json_key_producer_v1.rs"]
-pub(crate) mod producer;

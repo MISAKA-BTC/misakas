@@ -1,4 +1,4 @@
-//! **`KernelDescriptorV1`, the class binding, and the binary's descriptor schedule** (`docs/design/palw/models/versioned-kernels.md` §K.2, §K.5).
+//! **`KernelDescriptorV1`, the class binding, and the binary's descriptor schedule** (`docs/design/palw/versioned-kernels.md` §K.2, §K.5).
 //!
 //! A descriptor names, by id, every sub-specification a class bound to it is judged by. Its digest is
 //! what a class binds; the schedule says whether that digest may be used at a DAA. Meanings are
@@ -214,7 +214,7 @@ tiles of 4096 ids under a prompt root; OptimisticPublicVerification only; \
 whole-value pricing revision 2: rank-one axis-0 unbatched Gather uses 16 work units per output before factor 64, \
 with unchanged operand authentication and output hash prices; DA16b disclosure retains revision-1 conservative prices";
 
-/// **K2-TIR-v4** (`docs/design/palw/models/k2-real-scale.md`): K2-TIR-v2's families and checkers under the real-scale commitment and court
+/// **K2-TIR-v4** (`docs/design/palw/k2-real-scale.md`): K2-TIR-v2's families and checkers under the real-scale commitment and court
 /// suites — segmented claims ([`crate::seg`]), element courts ([`crate::element`]), per-position DA ([`crate::seg_da`]). A new descriptor:
 /// classes bound to v1–v3 keep their rules. The whole-claim evidence bound is a parse bound here (2^60): the gate bounds ONE prosecution
 /// instead, and reports the whole-claim material as the producer's DA obligation.
@@ -246,7 +246,7 @@ whole-value pricing revision 2 and conservative revision-1 DA16b disclosure as i
 /// The memory model of K2-TIR-v5: params past `first_input` are the job's input (`crate::seg_encoder`).
 pub const MEMORY_MODEL_JOB_INPUTS_V1: u32 = 2;
 
-/// **K2-TIR-v5** (`docs/design/palw/models/k2-real-scale.md` §12): K2-TIR-v4 (its families, commitments, element courts, DA and gate) for a
+/// **K2-TIR-v5** (`docs/design/palw/k2-real-scale.md` §12): K2-TIR-v4 (its families, commitments, element courts, DA and gate) for a
 /// bidirectional encoder or a head over one: ONE position over a padded token axis whose ids and count are the job's input
 /// ([`crate::seg_encoder`]). A new descriptor: v4 classes keep their rules.
 pub fn k2_tir_v5_descriptor() -> KernelDescriptorV1 {

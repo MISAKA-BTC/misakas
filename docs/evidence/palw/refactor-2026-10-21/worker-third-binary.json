@@ -1,7 +1,0 @@
-{
-  "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-worker-third-build-_zj5rtwx/panel-tests",
-  "sha256": "d4fc3d79422f6d9973100e0fcbb796386f8edb620c1e43354bad5f2ab31568aa",
-  "source_pins": "worker-third-build-source-hashes.json",
-  "build_log": "worker-panel-tests-third.log",
-  "scope": "Third fresh full Panel executable; production source pinned, 455 passes / nine source-guard failures."
-}

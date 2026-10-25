@@ -111,7 +111,7 @@ pub const TABLE_COURT_SCOPE_V1: u8 = 28;
 pub const COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-court-scope-extension/v1";
 /// **Table 29** (RFC-0002, conformance-only candidate classes): class id → (preparing bond, ClassRecordV1), separate from reward
 /// registrations. Codex allocated 28 on its branch; G14-S's court scope landed on 28 first, so the candidates moved to 29 at the
-/// RFC02-T merge (2026-10-11, `docs/design/palw/integration/remaining-rfc-integration-matrix.md`).
+/// RFC02-T merge (2026-10-11, `docs/design/palw/remaining-rfc-integration-matrix.md`).
 pub const TABLE_CONFORMANCE_CLASSES_V1: u8 = 29;
 /// The root extension table 29 adds once it holds a row (every older root unchanged), applied after table 28's.
 pub const CONFORMANCE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-conformance-extension/v1";

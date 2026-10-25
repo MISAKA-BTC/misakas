@@ -868,36 +868,6 @@ pub fn step_merkle_range_siblings_capped_v1(
     Ok(out)
 }
 
-/// Derive a contiguous range's canonical outer siblings from its two boundary
-/// single-leaf openings. Both boundaries must authenticate to the same expected
-/// root. No full tree or interior leaf list is fetched; this authenticates data
-/// identity only. The caller admits the bounded output allocation and hash work.
-pub fn step_range_siblings_from_edges_capped_v1(
-    leaf_count: u64, first: &PalwStepOpeningV1, last: &PalwStepOpeningV1,
-    expected_root: Hash64, max_step_leaf_count: u64,
-) -> Result<Vec<Hash64>, PalwStepLegError> {
-    if first.leaf_index > last.leaf_index {
-        return Err(PalwStepLegError::LeafIndexOutOfRange { index: first.leaf_index, count: leaf_count });
-    }
-    for edge in [first, last] {
-        if step_opening_root_capped_v1(leaf_count, edge, max_step_leaf_count)? != expected_root {
-            return Err(PalwStepLegError::CommittedRootMismatch);
-        }
-    }
-    // Successful root checks establish last < leaf_count and no u64 overflow.
-    let (mut a, mut b, mut width) = (first.leaf_index, last.leaf_index + 1, leaf_count);
-    let (mut left, mut right) = (first.siblings.iter(), last.siblings.iter());
-    let mut out = Vec::new();
-    while width > 1 {
-        let l = if width % 2 == 1 && a == width - 1 { None } else { left.next().copied() };
-        let r = if width % 2 == 1 && b == width { None } else { right.next().copied() };
-        if a % 2 == 1 { out.push(l.ok_or(PalwStepLegError::OpeningPathTooShort)?); }
-        if b % 2 == 1 && b < width { out.push(r.ok_or(PalwStepLegError::OpeningPathTooShort)?); }
-        a /= 2; b = b.div_ceil(2); width = width.div_ceil(2);
-    }
-    Ok(out)
-}
-
 /// **A single leaf's opening, derived from a RANGE opening that contains it** (ADR-0085
 /// Decision 2). A challenger holding an interval opening — the accused's committed leaf hashes for
 /// `[first, first + k)` and the range's siblings — needs, for the court's refutation, the ordinary
@@ -2347,14 +2317,11 @@ pub fn check_step_refutation_capped_v1(
 ///   missing arithmetic" acquittal (unreachable past the shape pass, kept as the second lock). No map (the long form) stays as it was.
 ///
 /// Without it (`false`): byte for byte [`check_step_refutation_capped_v1`].
-pub fn check_step_refutation_closure_capped_v1<'m>(
+pub fn check_step_refutation_closure_capped_v1(
     refutation: &PalwStepRefutationV1,
     max_step_leaf_count: u64,
-    // `bool` is the round-4 closure (`From<bool>`); RFC-0006 consumer v2's mode re-reads the profile and checkpoint counts
-    // through what that consumer reaches, with the claim's router binding row (RFC06-4: the claim gate's and the court's predicate).
-    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'m>>,
+    cell_closure: bool,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
-    let cell_closure = cell_closure.into();
     let binding = &refutation.binding;
     let (context_hash, profile_hash, checkpoint_profile_hash) = verify_binding(binding)?;
     let committed = &binding.committed_execution_root;
@@ -2369,7 +2336,8 @@ pub fn check_step_refutation_closure_capped_v1<'m>(
             return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
         }
         // R6-CELL round 4 (REQ-CELL-2): past the closure an uncoverable profile is not a canonical class.
-        if cell_closure.refuses_profile(&binding.shape_profile) {
+        if cell_closure && crate::palw_cell_coverage_closure_v1::palw_cell_closure_legacy_refusal_v1(&binding.shape_profile).is_some()
+        {
             return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
         }
         // The class-context bound, in the enumeration's own form — AFTER the profile's own
@@ -2668,7 +2636,7 @@ fn checkpoint_fault(
     opening: &PalwStepOpeningV1,
     preimage: &PalwCheckpointLeafV2,
     // R6-CELL round 4: the coverage closure governs this claim (see `check_step_refutation_closure_capped_v1`).
-    cell_closure: crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'_>,
+    cell_closure: bool,
 ) -> Option<PalwStepFaultV1> {
     if preimage.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
@@ -2724,18 +2692,7 @@ fn checkpoint_fault(
         // **R6-CELL round 4 (`palw_cell_coverage_closure_v1`)**: past the closure a mapped class the court cannot count is not a
         // class at all (it is refused at registration and convicted by the shape pass), so `None` is never read as no fault. The
         // unmapped long form keeps its `None`.
-        // RFC-0006 consumer v2: a solo gdn v1/v2 or composed hybrid checkpoint's count IS derivable past that consumer's fence
-        // (`memory_v2::gdn_checkpoint_chunk_count_v2`), so it is checked rather than read as a fault.
-        None if cell_closure.is_memory_routing_v2()
-            && crate::palw_step_refute::memory_v2::gdn_checkpoint_chunk_count_v2(&binding.shape_profile, positions).is_some() =>
-        {
-            let canonical =
-                crate::palw_step_refute::memory_v2::gdn_checkpoint_chunk_count_v2(&binding.shape_profile, positions).unwrap_or(0);
-            if preimage.state_chunk_count as u64 != canonical {
-                return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
-            }
-        }
-        None if cell_closure.in_force() && binding.state_chunk_map_id != Hash64::default() => {
+        None if cell_closure && binding.state_chunk_map_id != Hash64::default() => {
             return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
         }
         _ => {}
@@ -4199,39 +4156,5 @@ mod opening_from_range_tests {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod range_from_edges_tests {
-    use super::*;
-    #[test]
-    fn boundary_openings_reconstruct_every_ragged_range() {
-        for n in 1..=33usize {
-            let leaves: Vec<_> = (0..n).map(|i| Hash64::from_bytes([i as u8;64])).collect();
-            let root = step_merkle_root_capped_v1(&leaves,n as u64).unwrap();
-            for a in 0..n { for b in a+1..=n {
-                let first = step_opening_capped_v1(&leaves,a as u64,n as u64).unwrap();
-                let last = step_opening_capped_v1(&leaves,(b-1) as u64,n as u64).unwrap();
-                let siblings = step_range_siblings_from_edges_capped_v1(n as u64,&first,&last,root,n as u64).unwrap();
-                assert_eq!(siblings,step_merkle_range_siblings_capped_v1(&leaves,a,b-a,n as u64).unwrap());
-                let range=PalwStepRangeOpeningV1 {first_leaf_index:a as u64,leaf_hashes:leaves[a..b].to_vec(),siblings};
-                assert_eq!(step_range_opening_root_capped_v1(n as u64,&range,n as u64).unwrap(),root);
-            }}
-        }
-    }
-    #[test]
-    fn mixed_roots_invalid_boundaries_and_bad_paths_refuse() {
-        let leaves: Vec<_> = (0..5).map(|i| Hash64::from_bytes([i;64])).collect();
-        let root=step_merkle_root_v1(&leaves).unwrap();
-        let first=step_opening_capped_v1(&leaves,0,5).unwrap();let last=step_opening_capped_v1(&leaves,4,5).unwrap();
-        assert!(step_range_siblings_from_edges_capped_v1(5,&last,&first,root,5).is_err());
-        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&last,root,4).is_err());
-        let mut bent=last.clone();bent.leaf_hash=Hash64::default();
-        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&bent,root,5).is_err());
-        let mut missing=first.clone();missing.siblings.pop();
-        assert!(step_range_siblings_from_edges_capped_v1(5,&missing,&last,root,5).is_err());
-        let mut extra=last;extra.siblings.push(Hash64::default());
-        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&extra,root,5).is_err());
     }
 }

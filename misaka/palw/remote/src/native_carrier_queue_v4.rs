@@ -63,8 +63,7 @@ pub enum NativeCarrierPurposeV4 {
         until_daa: u64,
     },
 }
-/// Queue identity of a root's bounded provider replacement carrier: distinct from its initial enrollment (keyed by the
-/// root itself), so a replacement never overwrites or retires the original FundedEnroll carrier.
+/// One pending carrier cell per root, shared by retry/reorg/deadline attempts.
 pub fn kernel_replacement_carrier_id_v4(root: Hash64) -> Hash64 {
     Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/KERNEL-REPLACEMENT-CARRIER/V4", &root))
 }
@@ -546,7 +545,7 @@ mod tests {
         bytes.push(2);
         bytes.extend([0u8; 192]);
         bytes.extend(u32::MAX.to_le_bytes());
-        assert!(preflight_native_value_v1::<Snapshot>(&bytes[..], bytes.len() as u64).is_err());
+        assert!(preflight_native_value_v1::<Snapshot>(&bytes, bytes.len() as u64).is_err());
         assert!(decode_owned(&bytes, || borsh::from_slice::<Snapshot>(&bytes)).is_err());
     }
 }

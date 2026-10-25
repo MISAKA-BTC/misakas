@@ -274,21 +274,6 @@ pub(crate) fn topk_relation_rows_v25(
     only_row: Option<u64>,
     known_output: Option<crate::seg::NodeOpeningV1>,
 ) -> FlatFindingV25 {
-    topk_relation_rows_checked_v32(c,scope_root,pr,public,unit,expected,own,scan,only_row,known_output,&|f|checked(c,f))
-}
-pub(crate) fn topk_relation_rows_checked_v32(
-    c: &FlatContextV25<'_>,
-    scope_root: &Digest,
-    pr: &PreparedV1<'_>,
-    public: &dyn FlatPublicReadsV25,
-    unit: FlatReadV5,
-    expected: &Tensor,
-    own: &dyn Fn() -> Result<Vec<Tensor>, String>,
-    scan: &mut TopKScanBudgetV7,
-    only_row: Option<u64>,
-    known_output: Option<crate::seg::NodeOpeningV1>,
-    check:&dyn Fn(FlatFaultV25)->FlatFindingV25,
-) -> FlatFindingV25 {
     // A borrowed output comes from the selected-TopK locator, which has already run this
     // node's header court. The envelope prices exactly one header read per attempt, so the
     // court must not be asked a second time.
@@ -441,7 +426,7 @@ pub(crate) fn topk_relation_rows_checked_v32(
                 Err(f) => return f.into(),
             }
         };
-        return check(FlatFaultV25::TopK(TopKFaultV7 { version: 7, row, kind: fault, output: out, scores }));
+        return checked(c, FlatFaultV25::TopK(TopKFaultV7 { version: 7, row, kind: fault, output: out, scores }));
     }
     error("all selected rows agree but their typed commitment differs")
 }
@@ -455,19 +440,6 @@ fn ordinary_relation(
     expected: &Tensor,
     own: &dyn Fn() -> Result<Vec<Tensor>, String>,
     token: &dyn Fn() -> Option<crate::seg::PromptTileOpeningV1>,
-) -> FlatFindingV25 {
-    ordinary_relation_checked_v32(c,scope_root,pr,public,unit,expected,own,token,&|f|checked(c,f))
-}
-pub(crate) fn ordinary_relation_checked_v32(
-    c: &FlatContextV25<'_>,
-    scope_root: &Digest,
-    pr: &PreparedV1<'_>,
-    public: &dyn FlatPublicReadsV25,
-    unit: FlatReadV5,
-    expected: &Tensor,
-    own: &dyn Fn() -> Result<Vec<Tensor>, String>,
-    token: &dyn Fn() -> Option<crate::seg::PromptTileOpeningV1>,
-    check:&dyn Fn(FlatFaultV25)->FlatFindingV25,
 ) -> FlatFindingV25 {
     let output = match crate::flat_detect5::read_node(&c.base, pr, public, unit) {
         Ok(o) => o,
@@ -592,7 +564,7 @@ pub(crate) fn ordinary_relation_checked_v32(
             }
         }
     }
-    check(FlatFaultV25::Ordinary(FlatPointFaultV25 { version: 25, element, output: cached.unwrap(), inputs, token: token() }))
+    checked(c, FlatFaultV25::Ordinary(FlatPointFaultV25 { version: 25, element, output: cached.unwrap(), inputs, token: token() }))
 }
 /// Locate a discrepancy in one independently replayed ordinary relation. The
 /// complete program scope and exact relation coordinate are checked before any
@@ -699,15 +671,4 @@ fn check_flat_claim_mode_v25(
         Err(f) => f,
         Ok(()) => FlatFindingV25::Clean,
     }
-}
-
-/// Only a new32 independently authenticated consumer may supply this prepared
-/// wiring. Existing public25 entry points continue deriving V1 preparation.
-pub(crate) fn checked_prepared_v32(c:&FlatContextV25<'_>,pr:&PreparedV1<'_>,f:FlatFaultV25)->FlatFindingV25{
-    let result=match &f {
-        FlatFaultV25::Ordinary(f)=>crate::flat_point25::verify_point_prepared_v25(&PointContextV25{court_id:ordinary_point_court_id_v25(),base:c.base()},f,pr),
-        FlatFaultV25::TopK(f)=>crate::flat_topk7::verify_topk_prepared_v32(&crate::flat_topk7::TopKContextV7{court_id:crate::flat_topk7::topk_court_id_v7(),base:c.base()},f,pr),
-        FlatFaultV25::Legacy(f)=>crate::flat_court5::verify_flat_fault_prepared_v32(&c.base,f,pr).map(|_|()),
-    };
-    match result{Ok(())=>FlatFindingV25::Fault(f),Err(e)=>error(e)}
 }

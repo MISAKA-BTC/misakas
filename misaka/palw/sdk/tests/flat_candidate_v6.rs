@@ -129,8 +129,7 @@ fn mixed_candidate7_sdk_rederives_identity_and_whole_scope_before_signing() {
     let d = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor().digest();
     let prepared = prepare_flat_candidate_v7(h(1).as_bytes(), d, &p.encode(), &pc, 128).unwrap();
     assert_eq!(prepared.plan.version, 7);
-    // Inner tag 45 since the +5 renumbering at the rfc02/merge-final merge (route.rs: candidate v7 is 45-52).
-    assert_eq!(&prepared.object.encode()[..2], &[1, 45]);
+    assert_eq!(&prepared.object.encode()[..2], &[1, 40]);
     assert_eq!(K::decode(&prepared.object.encode()).unwrap(), prepared.object);
     assert_ne!(prepared.class, prepare_flat_candidate_v7(h(2).as_bytes(), d, &p.encode(), &pc, 128).unwrap().class);
     assert_ne!(prepared.class, prepare_flat_candidate_v7(h(1).as_bytes(), d, &p.encode(), &pc, 127).unwrap().class);

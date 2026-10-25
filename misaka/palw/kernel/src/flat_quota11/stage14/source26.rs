@@ -259,16 +259,16 @@ pub fn derive_stage_source_caller_plan_v28(
     quota:&QuotaPolicyV11,execution:&ExecutionPolicyV11,discovery:&discovery13::DiscoveryPolicyV13,
 )->Result<CheckedStageSourcePlanV26,String>{
     execution.check(quota)?;discovery.check(quota)?;
-    let own=if stage.is_invocation_v32(){super::bounded28::derive_stage_quota_v32(class,job)?}else{super::bounded28::derive_stage_quota_v28(class,job)?};
+    let own=super::bounded28::derive_stage_quota_v28(class,job)?;
     if own.root()!=stage.root(){return Err("stage28 source caller changes independent maximum/actual quotation".into());}
     let source=stage.source_plan(class,quota,discovery)?;
     let requests=stage.requests_per_owner();
     let attempts=requests.checked_mul(2).ok_or("stage28 source caller attempt overflow")?;
     let required_horizon=(requests as u64).checked_mul(execution.horizons.da_answer).and_then(|n|n.checked_add(execution.horizons.proof_grace)).ok_or("stage28 acquisition horizon overflow")?;
-    let bytes=if stage.is_invocation_v32(){stage.restore_bytes().checked_add(32768)}else{class.source_restore_bytes()
+    let bytes=class.source_restore_bytes()
         .checked_add(borsh::to_vec(class.wire()).map_err(|e|e.to_string())?.len() as u64)
         .and_then(|n|n.checked_add(u64::try_from(job.input_raw_bytes()).ok()?))
-        .and_then(|n|n.checked_add(32768))}.ok_or("stage28 source caller original restore extent overflow")?;
+        .and_then(|n|n.checked_add(32768)).ok_or("stage28 source caller original restore extent overflow")?;
     let work=bytes.checked_mul(bytes).and_then(|n|n.checked_mul(64)).and_then(|n|n.checked_add(bytes.checked_mul(1024)?)).ok_or("stage28 caller restore work overflow")?;
     let mut request=action_envelope(work as u128,bytes,None)?;
     include_source_court_io_v11(&mut request,class.source().parameters())?;

@@ -19,7 +19,7 @@ pub use execution::PalwNativeRoutingExecutionAuthorityV2;
 mod claim_execution;
 pub use claim_execution::PalwNativeRoutingClaimAuthorityV2;
 
-pub const PALW_READER_ROUTER_TABLE_V2: u8 = 147;
+pub const PALW_READER_ROUTER_TABLE_V2: u8 = 136;
 pub const PALW_READER_ROUTER_VERSION_V2: u16 = 2;
 pub const PALW_READER_ROUTER_DOMAIN_V2: &[u8] = b"misaka-palw/reader-router/declaration/v2";
 /// Existing registrant identity signature role, with an independent versioned

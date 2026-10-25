@@ -100,7 +100,6 @@
 //! ([`palw_held_opening_ctx_of_v1`] is `None`) and the fused finding settles as before.
 
 use super::*;
-use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::palw_attn_responder_v1::{PalwAttnHeldEvidenceV1, PalwAttnHeldFilingV1};
 use kaspa_consensus_core::palw_producer_v2::{PalwCourtDutyV2, PalwObjectRehearsalV1};
 use kaspa_consensus_core::palw_shard_court_v1::{PalwLeafEvidenceV1, PalwOneMoveClaimV2, PalwShardCourtVerdictV1};
@@ -311,7 +310,7 @@ pub(super) fn palw_held_opening_v1(
         Err(why) => return PalwHeldOpeningV1::Missing(why),
     };
     // 3. N2 — the challenger's evidence, the A-held line's builder.
-    let challenger = match palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend), &filing, leaf, served.carried.as_deref()) {
+    let challenger = match palw_held_challenger_evidence_v1(backend, &filing, leaf, served.carried.as_deref()) {
         Ok(challenger) => challenger,
         Err(why) => return PalwHeldOpeningV1::Unplayable(why),
     };
@@ -379,13 +378,6 @@ pub(super) fn palw_held_rehearsal_step_v1(rehearsal: &PalwObjectRehearsalV1) -> 
             | PalwStateV2Error::HeldDissectionFurtherSessionRefused { .. }
             | PalwStateV2Error::DuplicateSession(_),
         ) => PalwSeatAccuseStepV1::Retry,
-        // Lane g14-court-capacity-r2 (past `palw_court_capacity_v1`): the prosecution is queued (it re-files with its ticket), its
-        // ticket lapsed (dropped at the next sweep, then a filing queues anew), its reservation has not landed, or the block's court
-        // budget is spent — each a wait, never a reason to abandon a prosecution the court will still serve. The decoy price is an
-        // escrow on the free half: `AccusationExposureCeiling` above.
-        PalwObjectRehearsalV1::Refused(refusal) if kaspa_consensus_core::palw_state_v2::palw_court_refusal_waits_v1(refusal) => {
-            PalwSeatAccuseStepV1::Retry
-        }
         PalwObjectRehearsalV1::Refused(_) | PalwObjectRehearsalV1::NotAccepted(_) => PalwSeatAccuseStepV1::Settle,
     }
 }
@@ -496,27 +488,6 @@ pub(super) trait PalwHeldFilerHostV1 {
     fn sign(&self, message: &[u8], context: &[u8]) -> Option<Vec<u8>>;
     /// The fold's answer to `object` in the next block (`palw_object_rehearsal_v1`); `None`: no tip.
     fn rehearse(&self, object: &PalwConsensusObjectV2) -> Option<PalwObjectRehearsalV1>;
-    /// **G14 item 3 (lane r5-f03-ingress)**: whether this node pays the paid court ingress (`--palw-court-paid-ingress`).
-    fn paid_ingress_opt_in(&self) -> bool {
-        false
-    }
-    /// The once-only court ingress fee the fold burns from the opener at `daa` (`palw_court_ingress_fee_due_v1`); `None` while
-    /// the paid ingress is dormant (every shipped build: its schedule is typed-missing).
-    fn ingress_fee_due(&self, _daa: u64) -> Option<u64> {
-        None
-    }
-}
-
-/// **G14 item 3 (lane r5-f03-ingress): the filer's paid-ingress gate.** `None`: no fee is due (dormant ingress) — the fold's answer
-/// alone decides, exactly as before. With a fee due: an operator that did not opt in settles the case unpaid (it never burns a fee
-/// it was not told to pay); one that did files — the fold burns the fee once, at admission, and its outside reservation on the
-/// claim is the outsider's own (a coalition cannot occupy it).
-pub(super) fn palw_held_paid_ingress_step_v1(opt_in: bool, fee_due: Option<u64>) -> Option<PalwSeatAccuseStepV1> {
-    match fee_due {
-        None | Some(0) => None,
-        Some(_) if opt_in => None,
-        Some(_) => Some(PalwSeatAccuseStepV1::Settle),
-    }
 }
 
 /// **The loop's half, once a tick** — see the module's header, step 2. The chain's held dissections
@@ -537,7 +508,9 @@ pub(super) fn palw_held_dissections_step_v1<H: PalwHeldFilerHostV1>(
     filer: &mut PalwReplayFilerV1,
     current_daa: u64,
     bond: PalwBondKeyV2,
-    court_outbox: &mut CourtOutboxV1,
+    court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+    court_due: &mut HashMap<PalwCourtQueueKeyV1, u64>,
+    court_moved: &HashMap<PalwCourtQueueKeyV1, u64>,
 ) -> usize {
     let fresh = |at: Option<u64>| at.is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA));
     let dissecting: Vec<Hash64> = filer
@@ -570,10 +543,10 @@ pub(super) fn palw_held_dissections_step_v1<H: PalwHeldFilerHostV1>(
         let (key, object) = dissect.filed.clone().expect("built above");
         let due = super::palw_replay_filer_opening_due_v1(current_daa);
         let mut settle = false;
-        if queued_v1(court_outbox, key) {
+        if queued_v1(court_pending, key) {
             // Queued (by this case, or the same accusation by another filer): dated again, and the
             // fold asked again a re-plan after the last ask.
-            super::date_v1(court_outbox, key, due);
+            super::date_v1(court_due, key, due);
             if fresh(dissect.asked_at) {
                 continue;
             }
@@ -582,37 +555,26 @@ pub(super) fn palw_held_dissections_step_v1<H: PalwHeldFilerHostV1>(
                 None | Some((PalwSeatAccuseStepV1::File, _)) => {}
                 Some((PalwSeatAccuseStepV1::Retry, r)) => {
                     info!("[{PALW_PANEL}] claim {claim}: the held dissection's opening waits — the fold: {r:?} (P2-8e)");
-                    court_outbox.retain_pending(|(a, b, c, _)| (*a, *b, *c) != key);
+                    court_pending.retain(|(a, b, c, _)| (*a, *b, *c) != key);
                     dissect.sends = dissect.sends.saturating_sub(1);
                     dissect.refused_at = Some(current_daa);
                 }
                 Some((PalwSeatAccuseStepV1::Settle, r)) => {
                     info!("[{PALW_PANEL}] claim {claim}: the held dissection's opening settles — the fold: {r:?} (P2-8e)");
-                    court_outbox.retain_pending(|(a, b, c, _)| (*a, *b, *c) != key);
+                    court_pending.retain(|(a, b, c, _)| (*a, *b, *c) != key);
                     settle = true;
                 }
             }
         } else {
-            let in_flight = court_outbox
-                .submitted_at(&key)
-                .is_some_and(|sent| current_daa < sent.saturating_add(super::PALW_REPLAY_FILER_REFILE_DAA_V1));
+            let in_flight =
+                court_moved.get(&key).is_some_and(|sent| current_daa < sent.saturating_add(super::PALW_REPLAY_FILER_REFILE_DAA_V1));
             // Never sent and not queued: the lane dropped it (the mempool or the carrier builder
             // refused it) — asked again only a re-plan after it was queued.
-            let dropped_early = dissect.sends > 0 && !court_outbox.has_submitted(&key) && fresh(Some(dissect.queued_at));
+            let dropped_early = dissect.sends > 0 && !court_moved.contains_key(&key) && fresh(Some(dissect.queued_at));
             if in_flight || dropped_early || dissect.sends >= PALW_HELD_OPENING_SENDS_V1 || fresh(dissect.refused_at) {
                 continue;
             }
             dissect.asked_at = Some(current_daa);
-            if let Some(PalwSeatAccuseStepV1::Settle) =
-                palw_held_paid_ingress_step_v1(host.paid_ingress_opt_in(), host.ingress_fee_due(current_daa.saturating_add(1)))
-            {
-                info!(
-                    "[{PALW_PANEL}] claim {claim}: the held dissection's opening would burn the court ingress fee and this node does \
-                     not pay it (--palw-court-paid-ingress off) — settled unpaid"
-                );
-                filer.settle_at(&claim, current_daa);
-                continue;
-            }
             match host.rehearse(&object).map(|r| (palw_held_rehearsal_step_v1(&r), r)) {
                 None => {}
                 Some((PalwSeatAccuseStepV1::File, _)) => {
@@ -621,8 +583,8 @@ pub(super) fn palw_held_dissections_step_v1<H: PalwHeldFilerHostV1>(
                          {}) — due by DAA {due} (ADR-0152 DA-3, §4-ter, P2-8e)",
                         dissect.leaf, key.0
                     );
-                    super::date_v1(court_outbox, key, due);
-                    court_outbox.push_pending((key.0, key.1, key.2, object));
+                    super::date_v1(court_due, key, due);
+                    court_pending.push((key.0, key.1, key.2, object));
                     dissect.sends += 1;
                     dissect.queued_at = current_daa;
                     queued_now += 1;
@@ -751,19 +713,6 @@ impl PalwHeldFilerHostV1 for PalwPanelHeldFilerHostV1<'_> {
     fn rehearse(&self, object: &PalwConsensusObjectV2) -> Option<PalwObjectRehearsalV1> {
         self.session.palw_object_rehearsal_v1(object)
     }
-
-    fn paid_ingress_opt_in(&self) -> bool {
-        self.panel.drill_config_v1().court_paid_ingress
-    }
-
-    fn ingress_fee_due(&self, daa: u64) -> Option<u64> {
-        match &self.panel.consensus_config.params.palw_consensus_mode {
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
-                kaspa_consensus_core::palw_state_v2::palw_court_ingress_fee_due_v1(&bundle.state, daa)
-            }
-            _ => None,
-        }
-    }
 }
 
 /// **Whether a run of `class_id` builds a held opening, and under what** — the gates, pure (the
@@ -843,10 +792,12 @@ impl PalwPanelService {
         current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<PalwCourtQueueKeyV1, u64>,
+        court_moved: &HashMap<PalwCourtQueueKeyV1, u64>,
     ) {
         let host = PalwPanelHeldFilerHostV1 { panel: self, session, network_domain };
-        palw_held_dissections_step_v1(&host, filer, current_daa, bond_key, court_outbox);
+        palw_held_dissections_step_v1(&host, filer, current_daa, bond_key, court_pending, court_due, court_moved);
     }
 }
 
@@ -995,29 +946,6 @@ mod tests {
             "C5's unanswerable class"
         );
         assert_eq!(step(R::NotAccepted("the signature does not verify".into())), PalwSeatAccuseStepV1::Settle);
-        // Lane g14-court-capacity-r2: the court-capacity waits retry; a refusal the court will never lift settles.
-        use kaspa_consensus_core::palw_state_v2::{
-            PALW_COURT_REFUSAL_NO_RESERVATION_V1, PALW_COURT_REFUSAL_QUEUED_V1, PALW_COURT_REFUSAL_TICKET_EXPIRED_V1,
-        };
-        for wait in [PALW_COURT_REFUSAL_QUEUED_V1, PALW_COURT_REFUSAL_TICKET_EXPIRED_V1, PALW_COURT_REFUSAL_NO_RESERVATION_V1] {
-            assert_eq!(
-                step(R::Refused(PalwStateV2Error::CourtCapacityRefused(wait.to_string()))),
-                PalwSeatAccuseStepV1::Retry,
-                "{wait}"
-            );
-        }
-        assert_eq!(
-            step(R::Refused(PalwStateV2Error::CourtCapacityRefused("the block's court budget … cannot take this operation".into()))),
-            PalwSeatAccuseStepV1::Retry,
-            "the block's budget is spent: the next block"
-        );
-        assert_eq!(
-            step(R::Refused(PalwStateV2Error::CourtCapacityRefused(
-                "a court session opened now could outlast the claim's hard deadline".into()
-            ))),
-            PalwSeatAccuseStepV1::Settle,
-            "too late for this claim: no wait helps"
-        );
     }
 
     /// **The restart rebuild**: the book is a function of the chain's court duties — a fresh book (a
@@ -1143,12 +1071,7 @@ mod tests {
                 evidence: vec![],
             },
         )];
-        let fresh = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
-            &mut court_pending,
-            &mut std::collections::HashMap::new(),
-            &mut std::collections::HashMap::new(),
-            |outbox| filer.observe_held_v1(&duties, &me, 110, outbox),
-        );
+        let fresh = filer.observe_held_v1(&duties, &me, 110, &mut court_pending);
         assert_eq!(fresh.len(), 3, "each session, once");
         assert!(filer.case(&waiting).is_none() && filer.settled_v1(&waiting), "the waiting case ends before its run");
         assert!(court_pending.is_empty(), "its queued copy with it");
@@ -1162,16 +1085,5 @@ mod tests {
         let found = PalwReplayRunV1::HostFailed("whatever it found".into());
         assert!(filer.on_run_v1(running, found, 111, &me).is_none());
         assert!(filer.settled_v1(&running) && court_pending.is_empty());
-    }
-
-    /// G14 item 3 (lane r5-f03-ingress): the paid-ingress gate. Dormant (no fee due) → the fold alone decides, opted in or not; a fee
-    /// due → an operator that did not opt in settles unpaid, one that did files.
-    #[test]
-    fn r5_f03_the_filer_pays_the_court_ingress_only_when_opted_in() {
-        assert_eq!(palw_held_paid_ingress_step_v1(false, None), None, "dormant: unchanged");
-        assert_eq!(palw_held_paid_ingress_step_v1(true, None), None, "dormant: unchanged");
-        assert_eq!(palw_held_paid_ingress_step_v1(false, Some(0)), None, "a zero fee is no fee");
-        assert_eq!(palw_held_paid_ingress_step_v1(true, Some(5)), None, "opted in: file and pay");
-        assert_eq!(palw_held_paid_ingress_step_v1(false, Some(5)), Some(PalwSeatAccuseStepV1::Settle), "not opted in: settle unpaid");
     }
 }

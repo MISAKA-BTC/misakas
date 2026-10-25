@@ -1,5 +1,5 @@
-//! **The rules of the user's 2026-10-12 rulings** (`docs/design/palw/integration/mainnet-spec-register-2026-10-12.md` §3,
-//! `docs/audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md` "ユーザー判断 — 2026-10-12") — three DORMANT fences, each `None` on every
+//! **The rules of the user's 2026-10-12 rulings** (`docs/design/palw/mainnet-spec-register-2026-10-12.md` §3,
+//! `docs/design/palw/rfc-adr-review-resolution-2026-10-12.md` "ユーザー判断 — 2026-10-12") — three DORMANT fences, each `None` on every
 //! preset and refused when armed by [`Params::validate_palw_2026_10_12_ruling_fences_v1`]:
 //!
 //! ```text
@@ -141,180 +141,6 @@ impl PalwClaimHardDeadlineFenceV1 {
             },
         }
     }
-
-    /// **G-09: the X3 CANDIDATE derived from the existing horizons** (2026-10-16, cross-lane lane) — an UNARMED PLACEHOLDER: not approved
-    /// by the user, and validation refuses every armed X3 value whatever its policy. Derivation (every term an existing window of the
-    /// bundle the claim is accepted under, read at the activation height):
-    ///
-    /// ```text
-    /// T_prepare = window_bind + window_receipt            acceptance → receipt deadline (DL-1's PanelBound row: bind, then receipt)
-    /// T_observe = window_challenge_at(activation)         receipt deadline → open cutoff (the challenge window a licence opens)
-    /// T_resolve = B_disclose + B_court                    open cutoff → hard: the two B_remaining terms with an existing source
-    ///           = window_challenge + window_court         (palw_da_disclose_window_daa_v1 = the UNSHORTENED window_challenge)
-    /// hard − d0 = bind + receipt + window_challenge_at(activation) + window_challenge + court
-    ///           = 600 + 600 + 120 + 1,200 + 3,000 = 5,520 DAA on testnet-12 at DAA 14,000 (short window in force)
-    /// ```
-    ///
-    /// Properties: (i) a pursuit started at the open cutoff finishes exactly at `hard` while the five unmeasured `B_*` terms are 0
-    /// (REQ-X3-4 holds with equality; each measured term must be ADDED to `T_resolve`); (ii) `hard` exceeds the producer's existing
-    /// retention (`bind + receipt + window_challenge + court`, 5,400 on testnet-12) by `window_challenge_at` (120), the extension
-    /// REQ-X3-6 prices at `c_retain`; (iii) for
-    /// any licence `L <= d0 + bind + receipt`, `hard >= L + challenge + court` — the legacy FP liability floor of
-    /// `palw_reward_liability_horizon_v1` (G-08) — so X3 never Finals a claim before its liability horizon. UNMEASURED and left 0
-    /// ([`palw_x3_unmeasured_terms_v1`]): `B_cold_fetch`, `B_check`, `B_localize`, `B_carrier`, `B_reorg_slack` and `c_retain`.
-    pub fn candidate_from_horizons_v1(activation: ForkActivation, params: &PalwStateParamsV2) -> Self {
-        let challenge = params.window_challenge_at(activation.daa_score());
-        Self {
-            activation,
-            policy: PalwClaimHardDeadlinePolicyV1 {
-                version: PALW_CLAIM_HARD_DEADLINE_POLICY_VERSION_V1,
-                prepare_daa: params.window_bind().saturating_add(params.window_receipt()),
-                observe_daa: challenge,
-                resolve_daa: palw_da_disclose_window_daa_v1(params).saturating_add(params.window_court()),
-                cold_fetch_daa: 0,
-                check_daa: 0,
-                localize_daa: 0,
-                carrier_daa: 0,
-                reorg_slack_daa: 0,
-                retention_cost_per_daa_sompi: 0,
-            },
-        }
-    }
-}
-
-/// **X3's five `Δ` terms, in DAA.**
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PalwX3DeltaTermsV1 {
-    pub cold_fetch_daa: u64,
-    pub check_daa: u64,
-    pub localize_daa: u64,
-    pub carrier_daa: u64,
-    pub reorg_slack_daa: u64,
-}
-
-impl PalwX3DeltaTermsV1 {
-    /// `Δ = B_cold_fetch + B_check + B_localize + B_carrier + B_reorg_slack` (saturating).
-    pub fn delta_daa(&self) -> u64 {
-        [self.cold_fetch_daa, self.check_daa, self.localize_daa, self.carrier_daa, self.reorg_slack_daa].into_iter().fold(0, u64::saturating_add)
-    }
-}
-
-/// **V10: X3's `Δ` terms — 目安 (provisional, user 2026-10-22), lane P3, awaiting independent verification; revision trigger: P1's
-/// M-X3 and the re-measurement on the slowest supported node** (`B_cold_fetch`, `B_check`, `B_localize` are conservative stand-ins) (`docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md` V10;
-/// every term is converted at the 120 s/DAA block target, faster than t12's measured 184 s median, so a seconds-bound task never
-/// takes more DAA than budgeted):
-/// Lane P1's under-load fixture measurements (`studio/values-p1-measure` 13072773c, `measurements.md`): cold fetch compute ≤ 94 ms
-/// (1 DAA), check ≤ 277 ms all leaves (1 DAA), localize 11–462 DAA (11 owner turns × 1–42 DAA per turn), carrier 1–3 DAA, reorg
-/// slack not run. Fixture classes, not real models, so the stand-ins below stay above them:
-/// * `B_cold_fetch` 512: the largest genesis model plus the claim material (≤ 161 GB) at a stated 50 Mbit/s floor = 215 DAA, × 2,
-///   rounded up (P1's 1 DAA is compute only, no transfer).
-/// * `B_check` 512: a claim's check on the slowest supported node — conservative stand-in (4,096 tokens at 60 s per 16 tokens =
-///   128 DAA) × 4 for the unmeasured minimum-hardware factor (P1: 1 DAA on the fixture).
-/// * `B_localize` 512: P1's measured worst 462 DAA (11 owner turns at the 42-DAA turn deadline), rounded up (1.11×).
-/// * `B_carrier` 120: 27 close parts at one part per 2 DAA (half of a 125,000 B block) + 6 DAA worst observed latency, × 2 (P1: 1–3).
-/// * `B_reorg_slack` 360: the testnet-12 finality depth (43,200 s / 120 s): an included object is final or re-included within it
-///   (45× the 8-DAA strict-economic-win reorg bound).
-///
-/// `Δ = 2,016`: with `B_disclose + B_court = 4,200` and the staged reorg retention 360, a notice at `a + 3,120` still fits T06
-/// (`4,200 + 2,016 + 360 + 1 = 6,577 ≤ 6,880`, slack 303 DAA).
-pub const PALW_X3_DECIDED_DELTA_TERMS_V1: PalwX3DeltaTermsV1 =
-    PalwX3DeltaTermsV1 { cold_fetch_daa: 512, check_daa: 512, localize_daa: 512, carrier_daa: 120, reorg_slack_daa: 360 };
-
-/// **V10: `c_retain` = 36,058 sompi per DAA — 目安 (provisional, user 2026-10-22: 「パラメーターは目安で決めていい　方針をあとから
-/// 変更にする」)**, lane P3, awaiting independent verification. Basis: `⌈R × p ÷ T⌉` with `R` = 2,250,000 B (the largest evidence one
-/// court close may carry, `DEFAULT_MAX_CLOSE_BYTES`, as the retained bytes of one claim), `p` = 50 sompi/B (the 49.96 sompi per
-/// transaction byte paid in `docs/measurements/2026-10-22-devnet-payload-carrier.md`, rounded up: the chain's own price of a byte),
-/// `T` = 3,120 DAA (the normal court window the byte is owed for). **Revision trigger:** the retained bytes per claim (measurement
-/// M-DA) or the material storage fee and TTL (V5, lane P2) are adopted — then `⌈M-DA bytes × V5 sompi/B ÷ V5 TTL⌉` replaces it.
-pub const PALW_X3_RETENTION_COST_PER_DAA_SOMPI_V1: Option<u64> = Some(36_058);
-
-/// **The decided X3 policy for a network at `activation`**: the window composition with [`PALW_X3_DECIDED_DELTA_TERMS_V1`] and
-/// [`PALW_X3_RETENTION_COST_PER_DAA_SOMPI_V1`]. `Err` if `c_retain` were undecided (`None`).
-pub fn palw_x3_decided_policy_v1(
-    params: &PalwStateParamsV2,
-    activation: ForkActivation,
-) -> Result<PalwClaimHardDeadlinePolicyV1, &'static str> {
-    let c_retain = PALW_X3_RETENTION_COST_PER_DAA_SOMPI_V1
-        .ok_or("X3: c_retain is not decided (needs the retained bytes per claim and the material storage fee)")?;
-    Ok(palw_x3_policy_with_terms_v1(params, activation, PALW_X3_DECIDED_DELTA_TERMS_V1, c_retain))
-}
-
-/// The X3 policy composed from the windows with explicit `Δ` terms and `c_retain` (pure; the decided policy and its tests).
-pub fn palw_x3_policy_with_terms_v1(
-    params: &PalwStateParamsV2,
-    activation: ForkActivation,
-    terms: PalwX3DeltaTermsV1,
-    c_retain: u64,
-) -> PalwClaimHardDeadlinePolicyV1 {
-    palw_x3_composed_policy_v1(
-        params,
-        activation,
-        PalwClaimHardDeadlinePolicyV1 {
-            version: PALW_CLAIM_HARD_DEADLINE_POLICY_VERSION_V1,
-            prepare_daa: 0,
-            observe_daa: 0,
-            resolve_daa: 0,
-            cold_fetch_daa: terms.cold_fetch_daa,
-            check_daa: terms.check_daa,
-            localize_daa: terms.localize_daa,
-            carrier_daa: terms.carrier_daa,
-            reorg_slack_daa: terms.reorg_slack_daa,
-            retention_cost_per_daa_sompi: c_retain,
-        },
-    )
-}
-
-/// **The X3 policy composed from the network's windows** (user decision 2026-10-18): `T_prepare = window_bind + window_receipt`,
-/// `T_observe = window_challenge_at(activation)`, `T_resolve = B_disclose + B_court + Δ` with
-/// `Δ = B_cold_fetch + B_check + B_localize + B_carrier + B_reorg_slack`. `base` supplies the five `B_*` terms and `c_retain`; its three
-/// spans are overwritten by the composition (a caller can never choose them apart from the windows).
-pub fn palw_x3_composed_policy_v1(
-    params: &PalwStateParamsV2,
-    activation: ForkActivation,
-    base: PalwClaimHardDeadlinePolicyV1,
-) -> PalwClaimHardDeadlinePolicyV1 {
-    let delta = [base.cold_fetch_daa, base.check_daa, base.localize_daa, base.carrier_daa, base.reorg_slack_daa]
-        .into_iter()
-        .fold(0u64, u64::saturating_add);
-    PalwClaimHardDeadlinePolicyV1 {
-        prepare_daa: params.window_bind().saturating_add(params.window_receipt()),
-        observe_daa: params.window_challenge_at(activation.daa_score()),
-        resolve_daa: palw_da_disclose_window_daa_v1(params).saturating_add(params.window_court()).saturating_add(delta),
-        ..base
-    }
-}
-
-/// **Refuses an X3 policy whose spans are not the composition of the windows read from `params` at `activation`** (asked by
-/// validation, so a mismatch between the policy and the network's windows is refused rather than silently used). `None` when they agree.
-pub fn palw_x3_composition_refusal_v1(
-    params: &PalwStateParamsV2,
-    activation: ForkActivation,
-    policy: &PalwClaimHardDeadlinePolicyV1,
-) -> Option<&'static str> {
-    let composed = palw_x3_composed_policy_v1(params, activation, *policy);
-    if (policy.prepare_daa, policy.observe_daa, policy.resolve_daa) != (composed.prepare_daa, composed.observe_daa, composed.resolve_daa) {
-        return Some(
-            "palw_claim_hard_deadline_v1: T_prepare, T_observe and T_resolve must be the composition of the windows read at activation (REQ-X3-1)",
-        );
-    }
-    None
-}
-
-/// **The X3 terms a policy leaves UNMEASURED** (0 is UNKNOWN, never free): the five `B_*` terms with no existing source and `c_retain`.
-/// The candidate ([`PalwClaimHardDeadlineFenceV1::candidate_from_horizons_v1`]) leaves all six; a policy the user approves names none.
-pub fn palw_x3_unmeasured_terms_v1(policy: &PalwClaimHardDeadlinePolicyV1) -> Vec<&'static str> {
-    [
-        ("B_cold_fetch", policy.cold_fetch_daa),
-        ("B_check", policy.check_daa),
-        ("B_localize", policy.localize_daa),
-        ("B_carrier", policy.carrier_daa),
-        ("B_reorg_slack", policy.reorg_slack_daa),
-        ("c_retain", policy.retention_cost_per_daa_sompi),
-    ]
-    .into_iter()
-    .filter(|(_, v)| *v == 0)
-    .map(|(n, _)| n)
-    .collect()
 }
 
 /// **The hard deadline as a function of acceptance alone** (REQ-X3-1): `d0 + T_prepare + T_observe + T_resolve`, saturating. Pure, so
@@ -416,13 +242,6 @@ pub fn palw_claim_hard_deadline_of_v1(params: &PalwStateParamsV2, claim: &PalwCl
     palw_claim_deadlines_v1(params, claim).map(|d| d.hard_deadline_daa)
 }
 
-/// **REQ-X3-3: the DA pause an X3 claim gives back.** The ADR-0062 pause return (`resume_claim_after_da_session_v2`) and the V6 verify
-/// credit move a claim's own anchors forward by the session's length; for an X3 claim that is a deadline extension, so the credit is
-/// ZERO. Under the old ruleset the pause passes through unchanged (every shipped ruleset, so the identity).
-pub fn palw_x3_pause_credit_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, paused_daa: u64) -> u64 {
-    if palw_claim_x3_governs_v1(params, claim) { 0 } else { paused_daa }
-}
-
 /// **Does X3 govern this claim?** (Accepted at/after the fence.) Every REQ-X3-3 guard asks this one question.
 pub fn palw_claim_x3_governs_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
     palw_claim_deadlines_v1(params, claim).is_some()
@@ -466,11 +285,6 @@ pub fn palw_claim_pursuit_budget_v1(params: &PalwStateParamsV2, policy: &PalwCla
 /// and only if `start + B_remaining <= hard` — a pursuit that could not finish inside the claim's fixed deadline is not begun.
 /// Boundaries: admitted at `d <= deadline`, refused at `d > deadline`.
 pub fn palw_claim_pursuit_may_start_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, start: u64) -> Result<(), &'static str> {
-    // G14 r5 (item 2): where `palw_court_clock_v2` governs the claim, clock v2 owns the cutoff (a + 3,120) and the hard deadline
-    // (a + 10,000); X3's `B_remaining` is kept as the budget (`crate::palw_court_clock_v2::palw_claim_pursuit_may_start_v2`).
-    if crate::palw_court_clock_v2::palw_court_clock_v2_governs(params, claim) {
-        return crate::palw_court_clock_v2::palw_claim_pursuit_may_start_v2(params, claim, start);
-    }
     let Some(deadlines) = palw_claim_deadlines_v1(params, claim) else { return Ok(()) };
     let policy = params.claim_hard_deadline_v1().expect("deadlines exist only under the mirror").policy;
     if start > deadlines.open_cutoff_daa {

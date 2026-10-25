@@ -231,6 +231,4 @@ pub mod git;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fd_budget;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod storage_budget;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod sysinfo;

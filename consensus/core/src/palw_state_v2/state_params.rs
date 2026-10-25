@@ -114,8 +114,6 @@ impl PalwStateParamsV2 {
             capacity_escrow_from_daa: None,
             rcore_conservative_classes: Vec::new(),
             final_lock_full_collateral_from_daa: None,
-            unresolved_bound_from_daa: None,
-            claim_local_settlement_from_daa: None,
             capacity_room_from_daa: None,
             capacity_batch_from_daa: None,
             capacity_audit_from_daa: None,
@@ -171,14 +169,12 @@ impl PalwStateParamsV2 {
             bond_formula_v2: None,
             reporter_income_from_daa: None,
             material_income_from_daa: None,
-            settlement_once_from_daa: None,
-            paid_claim_trap_from_daa: None,
-            native_liability_horizon_from_daa: None,
             monetary_material: None,
             material_release_recovery_v2: None,
             econ_contracts_v1: Default::default(),
             selected_source_bootstrap_v1: None,
             paid_bootstrap_source_v6: None,
+            source_economics_v1: None,
             paid_consumer_lifecycle: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
@@ -186,21 +182,8 @@ impl PalwStateParamsV2 {
             court_model_scope_from_daa: None,
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
-            g14_route_required_v1: None,
-            court_capacity_v1: None,
-            court_transport_v1: None,
-            detection_policy_v1: None,
-            reward_liability_horizon_from_daa: None,
-            court_outsider_lane_from_daa: None,
-            kernel_route_panel_one_from_daa: None,
-            court_clock_v2_from_daa: None,
             cell_coverage_closure_from_daa: None,
-            memory_routing_court_from_daa: None,
-            class_registration_origin_from_daa: None,
-            rfc0016_v1: None,
             model_eligibility_v1: None,
-            rfc0018_v1: None,
-            model_tier_v1: None,
         })
     }
 
@@ -672,110 +655,6 @@ impl PalwStateParamsV2 {
         self.claim_hard_deadline_v1
     }
 
-    /// **G-01 option (b)'s mirror** (`crate::palw_g14_gates_v1`) — written by `Params::sync_palw_g14_gates_v1` and by nothing else
-    /// (and by fixtures, which is how a test arms it); `None` where the fence is not armed.
-    pub fn with_g14_route_required_v1(mut self, mirror: Option<crate::palw_g14_gates_v1::PalwG14RouteMirrorV1>) -> Self {
-        self.g14_route_required_v1 = mirror;
-        self
-    }
-
-    /// **The court-capacity fence's mirror** (`crate::palw_court_capacity_v1`) — written by `Params::sync_palw_court_capacity_v1` and by
-    /// nothing else; `None` where the fence is not armed.
-    pub fn with_court_capacity_v1(mut self, mirror: Option<crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1>) -> Self {
-        self.court_capacity_v1 = mirror;
-        self
-    }
-
-    /// `Params::palw_court_capacity_v1`'s height and policy, if the network arms it.
-    pub fn court_capacity_v1(&self) -> Option<crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1> {
-        self.court_capacity_v1
-    }
-
-    /// The court-capacity policy in force at `daa_score`, if any.
-    pub fn court_capacity_at_v1(&self, daa_score: u64) -> Option<crate::palw_court_capacity_v1::PalwCourtCapacityPolicyV1> {
-        self.court_capacity_v1.filter(|m| m.active_at(daa_score)).map(|m| m.policy)
-    }
-
-    /// `Params::palw_g14_route_required_v1`'s height with the route fences it reads, if the network arms it.
-    pub fn g14_route_required_v1(&self) -> Option<crate::palw_g14_gates_v1::PalwG14RouteMirrorV1> {
-        self.g14_route_required_v1
-    }
-
-    /// **G14's detection-policy mirror** (`crate::palw_detection_policy_v1`) — written by `Params::sync_palw_detection_policy_v1` and
-    /// by fixtures; `None` where the fence is not armed.
-    pub fn with_detection_policy_v1(mut self, mirror: Option<crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1>) -> Self {
-        self.detection_policy_v1 = mirror;
-        self
-    }
-
-    /// `Params::palw_detection_policy_v1`, if the network arms it (`never()` collapses to `None`).
-    pub fn detection_policy_v1(&self) -> Option<&crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1> {
-        self.detection_policy_v1.as_ref()
-    }
-
-    /// **The reward liability horizon's mirror** (G-08 / G-15, `crate::palw_g14_gates_v1`), written likewise.
-    pub fn with_reward_liability_horizon_from_daa(mut self, from_daa: Option<u64>) -> Self {
-        self.reward_liability_horizon_from_daa = from_daa;
-        self
-    }
-
-    /// `Params::palw_reward_liability_horizon_v1`'s height, if the network arms it (the mirror).
-    pub fn reward_liability_horizon_from_daa(&self) -> Option<u64> {
-        self.reward_liability_horizon_from_daa
-    }
-
-    /// **G14 F03 outsider court lane / owner reclamation mirror** (`Params::palw_court_outsider_lane_v1`), written by
-    /// `Params::sync_palw_g14_gates_v1` (and by fixtures).
-    pub fn with_court_outsider_lane_from_daa(mut self, from_daa: Option<u64>) -> Self {
-        self.court_outsider_lane_from_daa = from_daa;
-        self
-    }
-
-    /// `Params::palw_court_outsider_lane_v1`'s height, if armed (the mirror).
-    pub fn court_outsider_lane_from_daa(&self) -> Option<u64> {
-        self.court_outsider_lane_from_daa
-    }
-
-    /// **G14 U06/U07 court clock v2 mirror** (`Params::palw_court_clock_v2`), written by `Params::sync_palw_g14_gates_v1` (and by
-    /// fixtures).
-    pub fn with_court_clock_v2_from_daa(mut self, from_daa: Option<u64>) -> Self {
-        self.court_clock_v2_from_daa = from_daa;
-        self
-    }
-
-    /// `Params::palw_court_clock_v2`'s height, if armed (the mirror).
-    pub fn court_clock_v2_from_daa(&self) -> Option<u64> {
-        self.court_clock_v2_from_daa
-    }
-
-    /// Is the G14 F03 outsider court lane / owner reclamation in force at `daa_score`? `false` on every shipped preset.
-    pub fn court_outsider_lane_active_v1(&self, daa_score: u64) -> bool {
-        self.court_outsider_lane_from_daa.is_some_and(|from| daa_score >= from)
-    }
-
-    /// **Kernel route Panel=1 seat policy mirror** (`Params::palw_kernel_route_panel_one_v1`, lane g14p/kernel-route U02), written by
-    /// `Params::sync_palw_g14_gates_v1` (and by fixtures).
-    pub fn with_kernel_route_panel_one_from_daa(mut self, from_daa: Option<u64>) -> Self {
-        self.kernel_route_panel_one_from_daa = from_daa;
-        self
-    }
-
-    /// `Params::palw_kernel_route_panel_one_v1`'s height, if armed (the mirror).
-    pub fn kernel_route_panel_one_from_daa(&self) -> Option<u64> {
-        self.kernel_route_panel_one_from_daa
-    }
-
-    /// **The kernel route's assigned seats and per-segment quorum for a draw at `daa_score`**: `(1, 1)` (Panel=1) past
-    /// `palw_kernel_route_panel_one_v1`, otherwise the interim `(3, 3)`. Every seat draw and committee reads this.
-    pub fn kernel_route_seats_and_quorum_v1(&self, daa_score: u64) -> (usize, u8) {
-        crate::palw_kernel_route_v1::palw_kernel_route_seats_and_quorum_v1(self.kernel_route_panel_one_from_daa, daa_score)
-    }
-
-    /// **Does the reward liability horizon govern a claim accepted at `accepted_daa`?** `false` on every shipped preset.
-    pub fn reward_liability_horizon_governs_v1(&self, accepted_daa: u64) -> bool {
-        self.reward_liability_horizon_from_daa.is_some_and(|from| accepted_daa >= from)
-    }
-
     /// **R6-CELL round 4's mirror** (`crate::palw_cell_coverage_closure_v1`) — written by `Params::sync_palw_cell_coverage_closure_v1`
     /// and by nothing else (and by fixtures); `None` where the fence is not armed.
     pub fn with_cell_coverage_closure_from_daa(mut self, from_daa: Option<u64>) -> Self {
@@ -786,38 +665,6 @@ impl PalwStateParamsV2 {
     /// `Params::palw_cell_coverage_closure_v1`'s height, if the network arms it (the mirror).
     pub fn cell_coverage_closure_from_daa(&self) -> Option<u64> {
         self.cell_coverage_closure_from_daa
-    }
-
-    /// **RFC-0006's memory/routing court mirror** (`crate::palw_gdn_court_v2`) — written by `Params::sync_palw_memory_routing_court_v2`
-    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
-    pub fn with_memory_routing_court_from_daa(mut self, from_daa: Option<u64>) -> Self {
-        self.memory_routing_court_from_daa = from_daa;
-        self
-    }
-
-    /// `Params::palw_memory_routing_court_v2_fence`'s height, if the network arms it (the mirror).
-    pub fn memory_routing_court_from_daa(&self) -> Option<u64> {
-        self.memory_routing_court_from_daa
-    }
-
-    /// **Is the memory/routing court consumer v2 in force for something dated `daa`** (a registration's block, a claim's
-    /// acceptance, a binding declaration's block)? `false` on every shipped preset.
-    pub fn memory_routing_court_active_at(&self, daa: u64) -> bool {
-        self.memory_routing_court_from_daa.is_some_and(|from| daa >= from)
-    }
-
-    /// **RFC06-8's registration origin mirror** (`crate::palw_class_registration_origin_v1`) — written by
-    /// `Params::sync_palw_class_registration_origin_v1` and by nothing else (and by fixtures).
-    pub fn with_class_registration_origin_from(mut self, from_daa: Option<u64>) -> Self {
-        self.class_registration_origin_from_daa = from_daa;
-        self
-    }
-    pub fn class_registration_origin_from(&self) -> Option<u64> {
-        self.class_registration_origin_from_daa
-    }
-    /// Does a registration folded at `daa` record its origin row? `false` on every shipped preset.
-    pub fn class_registration_origin_active_at(&self, daa: u64) -> bool {
-        self.class_registration_origin_from_daa.is_some_and(|from| daa >= from)
     }
 
     /// **RFC-0017's mirror** (`crate::palw_model_eligibility_v1`) — written by `Params::sync_palw_model_eligibility_v1` and by
@@ -838,18 +685,6 @@ impl PalwStateParamsV2 {
     /// The mirror if it governs `daa` (A-2: `None` below the fence and on every shipped network).
     pub fn model_eligibility_v1_at(&self, daa: u64) -> Option<&crate::palw_model_eligibility_v1::PalwModelEligibilityMirrorV1> {
         self.model_eligibility_v1.as_ref().filter(|m| m.governs(daa))
-    }
-
-    /// **RFC-0018's mirror** (`crate::palw_rfc0018_v1`) — written by `Params::sync_palw_rfc0018_v1` and by nothing else (and by
-    /// fixtures); `None` where none of its four state-level fences is armed.
-    pub fn with_rfc0018_v1(mut self, mirror: Option<crate::palw_rfc0018_v1::PalwRfc0018MirrorV1>) -> Self {
-        self.rfc0018_v1 = mirror;
-        self
-    }
-
-    /// RFC-0018's fences, if the network arms any (the mirror). Every reader asks the mirror's own `*_at` for its key.
-    pub fn rfc0018_v1(&self) -> Option<&crate::palw_rfc0018_v1::PalwRfc0018MirrorV1> {
-        self.rfc0018_v1.as_ref()
     }
 
     /// **RFC-0010: the permissionless Panel's mirror** — written by `Params::sync_palw_permissionless_panel_v1` and by nothing else
@@ -894,38 +729,6 @@ impl PalwStateParamsV2 {
     }
     pub fn material_income_active_at(&self, daa: u64) -> bool {
         self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
-    }
-
-    /// RFC-0008 once-only settlement registry mirror (`Params::palw_settlement_once_v1`).
-    pub fn with_settlement_once_from(mut self, from: Option<u64>) -> Self {
-        self.settlement_once_from_daa = from;
-        self
-    }
-    pub fn settlement_once_from(&self) -> Option<u64> {
-        self.settlement_once_from_daa
-    }
-    pub fn settlement_once_active_at(&self, daa: u64) -> bool {
-        self.settlement_once_from_daa.is_some_and(|from| daa >= from)
-    }
-
-    /// RFC-0007 §4.1 paid-claim trap mirror (`Params::palw_paid_claim_trap_v1`).
-    /// RFC08 08-B (ADR-0184 §1) mirror (`Params::palw_native_liability_horizon_v1`).
-    pub fn with_native_liability_horizon_from(mut self, from: Option<u64>) -> Self {
-        self.native_liability_horizon_from_daa = from;
-        self
-    }
-    pub fn native_liability_horizon_active_at(&self, daa: u64) -> bool {
-        self.native_liability_horizon_from_daa.is_some_and(|from| daa >= from)
-    }
-    pub fn with_paid_claim_trap_from(mut self, from: Option<u64>) -> Self {
-        self.paid_claim_trap_from_daa = from;
-        self
-    }
-    pub fn paid_claim_trap_from(&self) -> Option<u64> {
-        self.paid_claim_trap_from_daa
-    }
-    pub fn paid_claim_trap_active_at(&self, daa: u64) -> bool {
-        self.paid_claim_trap_from_daa.is_some_and(|from| daa >= from)
     }
 
     pub fn with_paid_consumer_lifecycle(
@@ -1728,29 +1531,6 @@ impl PalwStateParamsV2 {
         self
     }
 
-    /// RFC-0023 stage 1: the mirror's setter (`Params::sync_palw_unresolved_bound_v1` only, and fixtures).
-    pub fn with_unresolved_bound_from_daa(mut self, from_daa: Option<u64>) -> Self {
-        self.unresolved_bound_from_daa = from_daa;
-        self
-    }
-    /// RFC-0023 stage 1: `Params::palw_unresolved_bound_v1`'s height, if armed.
-    pub fn with_claim_local_settlement_from_daa(mut self, from: Option<u64>) -> Self {
-        self.claim_local_settlement_from_daa = from;
-        self
-    }
-    pub fn claim_local_settlement_from_daa(&self) -> Option<u64> { self.claim_local_settlement_from_daa }
-    pub fn claim_local_settlement_active_at(&self, daa: u64) -> bool {
-        self.claim_local_settlement_from_daa.is_some_and(|from| daa >= from)
-    }
-
-    pub fn unresolved_bound_from_daa(&self) -> Option<u64> {
-        self.unresolved_bound_from_daa
-    }
-    /// RFC-0023 stage 1 in force at `daa_score`?
-    pub fn unresolved_bound_active_at(&self, daa_score: u64) -> bool {
-        self.unresolved_bound_from_daa.is_some_and(|from| daa_score >= from)
-    }
-
     /// Lane V02: `Params::palw_final_lock_full_collateral`'s height, if the network arms it.
     pub fn final_lock_full_collateral_from_daa(&self) -> Option<u64> {
         self.final_lock_full_collateral_from_daa
@@ -2088,16 +1868,6 @@ impl PalwStateParamsV2 {
         if self.final_lock_life_active_at(now_daa) { PALW_FINAL_LOCK_LIFE_DAA_V1.min(self.window_court) } else { self.window_court }
     }
 
-    /// **Lane g14-close-legacy (audit G-13): the life a `Valid` seat's slashable lock on a claim accepted at `accepted_daa` gets when it
-    /// is dated at `now_daa`.** For a claim accepted at or past `palw_legacy_public_filer_v1` (keyed on the CLAIM's acceptance, as every
-    /// claim rule of the G14 lanes) it is `window_court` — the claim's liability horizon: the window in which a conviction may still
-    /// reverse its `Final` and its vesting row stays unmatured, which is also the window in which the public filer may reserve it — so a
-    /// conviction anywhere inside that horizon finds every relied-on `Valid` lock live, never lane V02's shorter
-    /// `PALW_FINAL_LOCK_LIFE_DAA_V1`. Every other claim: [`Self::final_lock_life_at`], byte for byte (`false` on every shipped preset).
-    pub fn valid_lock_life_for_claim_v1(&self, accepted_daa: u64, now_daa: u64) -> u64 {
-        if self.legacy_public_filer_active_at(accepted_daa) { self.window_court } else { self.final_lock_life_at(now_daa) }
-    }
-
     /// **Lane V02 (post-launch): is `Params::palw_final_lock_life` in force at `now_daa`?** The one
     /// key both halves of the fence read, each at its own block's DAA: the block that DATES a `Valid`
     /// lock ([`Self::final_lock_life_at`]) and the block that CONVICTS on one (a lock the fold no
@@ -2229,15 +1999,5 @@ impl PalwStateParamsV2 {
         self.palw_claim_compact_v4.as_ref()
             .filter(|f| f.activation.is_active(daa) && self.claim_challenge_v2_at(daa).is_some())
             .map(|f| &f.policy)
-    }
-}
-
-impl PalwStateParamsV2 {
-    pub fn with_court_transport_v1(mut self, mirror: Option<crate::palw_court_transport_v1::PalwCourtTransportMirrorV1>) -> Self {
-        self.court_transport_v1 = mirror;
-        self
-    }
-    pub fn court_transport_v1(&self) -> Option<crate::palw_court_transport_v1::PalwCourtTransportMirrorV1> {
-        self.court_transport_v1
     }
 }

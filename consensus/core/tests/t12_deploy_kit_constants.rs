@@ -8,7 +8,7 @@
 //! row, a re-ordered card list, a new held row — would pass `stage` and `switch` and fail later and
 //! quietly: a producer idling on a class the registry does not hold, a seat carrying with another
 //! card's float. This reads those files and fails, naming the file and the constant, when they
-//! disagree with this build. Run it at the re-pin (`docs/history/networks/testnet-12/t12-rcore-launch-checklist.md` §5):
+//! disagree with this build. Run it at the re-pin (`docs/t12-rcore-launch-checklist.md` §5):
 //!
 //! ```text
 //! cargo test --locked -p kaspa-consensus-core --test t12_deploy_kit_constants -- --nocapture
@@ -205,10 +205,8 @@ fn the_kit_names_the_int11_flag_day_height_and_offset_the_preset_arms() {
     );
 }
 
-/// **The kit's copy of the int-13 list's height is the core's** (the coordinator's brief of 2026-10-08 set DAA 9,000; the user cancelled
-/// that flag day the same day, so the height is `None` and the kit's copy is EMPTY): `fleet.env.example` names exactly what the core has,
-/// the preset arms no fence of the list, and the schedule an operator reads names no int-13 height. When the full-activation release
-/// takes a fresh height, both move together and this reads the height again.
+/// **The kit's copy of the int-13 list's height is the core's** (DAA 15,500, the user's decision of 2026-10-25; there is no
+/// DAA-9,000 flag day): `fleet.env.example` names exactly what the core has, and the preset arms every fence of the list there.
 #[test]
 fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     const FLEET: &str = "contrib/t12-deploy-kit/fleet.env.example";
@@ -216,40 +214,17 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     let kit = shell_value(FLEET, &fleet, "INT13_FLAG_DAY_DAA");
     let core = PALW_T12_INT13_DAA.map(|at| at.to_string()).unwrap_or_default();
     assert_eq!(kit, core, "{FLEET}: INT13_FLAG_DAY_DAA is the preset's (empty = no int-13 flag day)");
-    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
+    assert_eq!(PALW_T12_INT13_DAA, Some(15_500), "the user's decision of 2026-10-25");
     let p = Params::from(t12());
-    let expected = PALW_T12_FULL_ACTIVATION_DAA.or(PALW_T12_INT13_DAA);
     for fence in PALW_T12_INT13_FENCES_V1 {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
         assert_eq!(
-            armed, expected,
-            "{}: the int-13 entries ride the full-activation height when that height is set",
+            armed, PALW_T12_INT13_DAA,
+            "{}: the preset arms every fence of the list at the kit's height (none: dormant)",
             fence.name
         );
     }
     let schedule = p.fence_schedule_v1();
     assert!(!schedule.contains(&9_000), "the cancelled 9,000 is not on the public schedule: {schedule:?}");
-    assert_eq!(
-        schedule.last().copied(),
-        PALW_T12_FULL_ACTIVATION_DAA.or(PALW_T12_INT11_RHO1000_DAA),
-        "the schedule ends at the full-activation height when it is set: {schedule:?}"
-    );
-}
-
-/// **The kit's copy of the full-activation list's height is the core's** (user order 2026-10-25: DAA 15,400).
-/// 16,000 stays off the schedule. When the height changes, both move together and this reads it again.
-#[test]
-fn the_kit_names_the_full_activation_height_the_preset_arms() {
-    const FLEET: &str = "contrib/t12-deploy-kit/fleet.env.example";
-    let fleet = repo_file(FLEET);
-    let kit = shell_value(FLEET, &fleet, "FULL_ACTIVATION_FLAG_DAY_DAA");
-    let core = PALW_T12_FULL_ACTIVATION_DAA.map(|at| at.to_string()).unwrap_or_default();
-    assert_eq!(kit, core, "{FLEET}: FULL_ACTIVATION_FLAG_DAY_DAA is the preset's (empty = no full-activation flag day)");
-    assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, Some(15_400), "user order 2026-10-25");
-    let p = Params::from(t12());
-    for fence in PALW_T12_FULL_ACTIVATION_FENCES_V1 {
-        let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
-        assert_eq!(armed, PALW_T12_FULL_ACTIVATION_DAA, "{}: dormant on the preset", fence.name);
-    }
-    assert!(!p.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1), "16,000 is on no schedule yet");
+    assert_eq!(schedule.last().copied(), PALW_T12_INT13_DAA, "the schedule ends at the int-13 flag day: {schedule:?}");
 }

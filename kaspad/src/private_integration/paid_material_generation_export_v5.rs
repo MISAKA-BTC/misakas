@@ -78,7 +78,7 @@ impl PrivatePaidMaterialGenerationExportSpecV5 {
         let workspace = reserve_native_requests_v1(self.max_workspace_bytes).map_err(|e| e.to_string())?;
         let (raw, _raw) =
             read_bounded(&self.original_object_path, self.max_input_bytes.min(self.max_workspace_bytes.saturating_sub(1)))?;
-        let shape = preflight_native_value_v1::<PalwConsensusObjectV2>(&raw[..], raw.len() as u64).map_err(|e| e.to_string())?;
+        let shape = preflight_native_value_v1::<PalwConsensusObjectV2>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
         if shape.logical_requests_v1().checked_add(raw.len() as u64 + 65536).is_none_or(|n| n > self.max_workspace_bytes) {
             return Err("generation export original/decode/signature overlap exceeds explicit workspace".into());
         }

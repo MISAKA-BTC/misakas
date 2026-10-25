@@ -7,47 +7,6 @@ pub(super) fn apply_object(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
-    if builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty()) {
-        let saved = builder.try_checkpoint()?;
-        let previous = builder.court_end_evidence.clone();
-        let result = (|| {
-            builder.prepare_native_court_end_cause_v1(ctx, object)?;
-            apply_object_with_pair_v1(builder, ctx, object)
-        })();
-        builder.court_end_evidence = previous;
-        if result.is_err() { builder.restore(saved); }
-        return result;
-    }
-    apply_object_with_pair_v1(builder, ctx, object)
-}
-fn apply_object_with_pair_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, object: &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error> {
-    // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` every court operation is charged its deterministic cost
-    // against the block's court budget before its arm runs. A no-op below the fence.
-    palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
-    let paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
-        if builder.extras.tir_public_originals.contains_key(claim));
-    if !paired {
-        return apply_object_inner(builder, ctx, object);
-    }
-    // A prospective original is ONE native object. Failure after the ordinary
-    // FP reservation/budget writes cannot leave an accepted unprotected claim.
-    // `checkpoint()` is test-only on the integration line; production rollback goes through the native resource reservation.
-    let saved = builder.try_checkpoint()?;
-    let result = match palw_tir_public_fold_v1::check_paired_original_v1(builder, object) {
-        Ok(()) => apply_object_inner(builder, ctx, object),
-        Err(why) => Err(why),
-    };
-    if result.is_err() {
-        builder.restore(saved);
-    }
-    result
-}
-
-fn apply_object_inner(
-    builder: &mut TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    object: &PalwConsensusObjectV2,
-) -> Result<(), PalwStateV2Error> {
     object_preconditions_v1(&builder.state, builder.params, builder.extras, ctx, object, |class_id| {
         builder
             .entries
@@ -64,38 +23,7 @@ fn apply_object_inner(
         PalwConsensusObjectV2::TirShardReceiptLicensed { part } => check_receipt(&part.claim)?,
         _ => {}
     }
-    // Only the prospective original TIR frame adds this requirement. The
-    // ordinary acknowledgement/credit itself occurs atomically with grant and
-    // Ready in its separate handler, never by accepting an unqualified licence.
     match object {
-        PalwConsensusObjectV2::ReceiptLicensed { claim, receipts } => {
-            palw_tir_public_fold_v1::require_qualified_receipts_v1(&builder.state, *claim, receipts)?;
-        }
-        PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. } | PalwConsensusObjectV2::OptimisticLicensed { claim, .. } => {
-            palw_tir_public_fold_v1::require_qualified_typed_receipts_v1(&builder.state, *claim)?;
-        }
-        PalwConsensusObjectV2::ShardReceiptLicensed { part } => {
-            palw_tir_public_fold_v1::require_qualified_typed_receipts_v1(&builder.state, part.claim)?;
-        }
-        PalwConsensusObjectV2::TirShardReceiptLicensed { part } => {
-            palw_tir_public_fold_v1::require_qualified_typed_receipts_v1(&builder.state, part.claim)?;
-        }
-        _ => {}
-    }
-    match object {
-        PalwConsensusObjectV2::TirPublicControlV1 { control } => {
-            let network = builder.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
-            palw_tir_public_fold_v1::apply_control_v1(builder, ctx, network, control)?;
-        }
-        PalwConsensusObjectV2::TirPublicGrantReadyV1 { grant } => {
-            let network = builder.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
-            palw_tir_public_fold_v1::apply_grant_ready_v1(builder, ctx, network, grant)?;
-        }
-        // ---- G14 lane r5-f02-wire (tag 178): RFC-0029's shared court lifecycle. The acceptance gate routes it by
-        // `palw_tir_public_conviction_v1`; the dispatcher refuses (`ObjectiveOffenceDormant`) unless the outsider lane is in force too.
-        PalwConsensusObjectV2::SharedCourtOpV1 { op } => {
-            palw_court_service_lifecycle_fold_v1::apply_shared_court_wire_op_v1(builder, ctx, op)?;
-        }
         PalwConsensusObjectV2::SourceBootstrapV1 { actor, action, .. } => source_bootstrap_v1::apply(builder, ctx, *actor, action)?,
         // ---- RFC-0010: a certified epoch output (tag 120): queued; the V3 stage verifies it against the branch and drops it if
         // it does not verify, the block standing ----
@@ -110,7 +38,7 @@ fn apply_object_inner(
             builder.state.exec_v2_origin_witness_metadata_admissible_v1(builder.params, ctx.daa_score, witness)?;
             builder.exec_origin_budget.charge().map_err(|error| PalwStateV2Error::ExecV2Refused(error.to_string()))?;
             let row = builder.state.exec_v2_origin_witness_admissible_v1(builder.params, ctx.daa_score, witness)?;
-            builder.write_exec_origin(witness.claim, Some(row))?;
+            builder.write_exec_origin(witness.claim, Some(row));
         }
         // ---- RFC-0007 Part I: the verification vertex (tags 100, 101) ----
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
@@ -359,7 +287,7 @@ fn apply_object_inner(
                 if accusation.verdict != PalwCourtVerdictV2::ExecutorGuilty {
                     return Err(PalwStateV2Error::ShardCourt("an accusation that opens a dissection declares ExecutorGuilty".into()));
                 }
-                if builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim) {
+                if builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id) {
                     return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable { claim: claim_id, leaf, class: claim.class_id });
                 }
                 if open_session.is_some() {
@@ -378,9 +306,7 @@ fn apply_object_inner(
                     }
                     _ => crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
                 };
-                // Round 2: a cone accusation carries its whole refutation — a direct evidence-carrying accusation, exempt from the
-                // outsider lane's follow-on share (only the overall cap binds it, as before the fence).
-                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published, true)?;
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published)?;
             } else {
                 match accusation.verdict {
                     PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
@@ -456,9 +382,7 @@ fn apply_object_inner(
                     }
                     _ => crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
                 };
-                // Round 2: a cone accusation carries its whole refutation — a direct evidence-carrying accusation, exempt from the
-                // outsider lane's follow-on share (only the overall cap binds it, as before the fence).
-                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published, true)?;
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published)?;
             } else {
                 match accusation.verdict {
                     PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
@@ -556,7 +480,7 @@ fn apply_object_inner(
         }
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } => {
             apply_legacy_held_answer_v2(builder, ctx, answer)?;
-            palw_legacy_answer_chunks_fold_v2::sweep(builder, ctx)?;
+            palw_legacy_answer_chunks_fold_v2::sweep(builder, ctx);
         }
         PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration } => {
             palw_legacy_answer_chunks_fold_v2::declare(builder, ctx, declaration)?;
@@ -570,41 +494,6 @@ fn apply_object_inner(
         PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed } => palw_staged_court_fold_v1::open_native(builder, ctx, seed)?,
         PalwConsensusObjectV2::TirClassLayoutPublishedV1 { class_id, layout } => {
             palw_staged_court_fold_v1::publish_tir_layout(builder, ctx, *class_id, layout)?
-        }
-        // **RFC-0002 02-A (tag 175): a registered TIR class bound to its `PALWART3` container** — the opening recomputes the root,
-        // its one weight section's inner root is the class's artifact root and its program record is the class's program and
-        // tokenizer (`check_tir_container_binding_v1`). Bound once: the same container again folds to nothing, another is refused.
-        // The registrant's signature (while it is Active) is the acceptance layer's (as for `ClassSemanticsDeclaredV1`).
-        PalwConsensusObjectV2::TirClassContainerBoundV1 { binding, signature: _ } => {
-            use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
-            if !builder.extras.tir_container_identity_active {
-                return Err(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding before palw_tir_container_identity_v1"));
-            }
-            let class_id = binding.class_id;
-            // Audit C-01: a sentinel class (no registrant) or one whose registrant is no longer Active is bound openly — the
-            // acceptance layer requires the registrant's signature only while it is Active (`palw_tir_container_binding_signer_v1`);
-            // the identity check below is the same for every binder.
-            let artifact_root = builder
-                .state
-                .class(&class_id)
-                .map(|class| class.artifact_root)
-                .ok_or(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding names no registered class"))?;
-            let record = builder
-                .state
-                .tir_class_v1(&class_id)
-                .ok_or(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding names no registered TIR class"))?;
-            let row = crate::palw_tir_container_v1::check_tir_container_binding_v1(binding, &class_id, &artifact_root, record, ctx.daa_score)
-                .map_err(PalwStateV2Error::ImmutableModelUpdate)?;
-            match crate::palw_tir_container_v1::palw_tir_bound_container_v1(&builder.state, class_id).map(|bound| bound.container_root) {
-                Some(bound) if bound == row.container_root => {}
-                Some(_) => {
-                    return Err(PalwStateV2Error::ImmutableModelUpdate("a TIR class's bound container is immutable"));
-                }
-                None => builder.write_staged_row_v1(
-                    PalwStagedCourtKeyV1::TirContainer(class_id),
-                    Some(PalwStagedCourtRowV1::TirContainer(Box::new(row))),
-                )?,
-            }
         }
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => {
             palw_terminal_carriage_fold_v1::declare(builder, ctx, declaration)?;
@@ -694,152 +583,6 @@ fn apply_object_inner(
                     return Err(PalwStateV2Error::ShardCourt("GDN terminal must never invent an attention dissection".into()));
                 }
             }
-        }
-        // RFC-0006 consumer v2 (tag 244): the router binding and the checkpoint / routed accusations.
-        PalwConsensusObjectV2::MemoryRoutingV2 { object } => {
-            super::palw_memory_routing_fold_v2::apply_memory_routing_v2(builder, ctx, object)?;
-        }
-        // ADR-0191 step B (tag 245): the acceptance gate routes it by `palw_tir_designated_answers_v1`, so below that fence it never
-        // reaches this fold (A-2). Here it is folded only when the extras flag (the fence's mirror) is set; otherwise a strict no-op.
-        PalwConsensusObjectV2::TirDesignatedEventV1 { event } => {
-            apply_tir_designated_event_v1(builder, event)?;
-        }
-        // RFC-0024 §4 / §5 (tags 201-204): routed by `palw_tir_bounded_door_v1` at acceptance (A-2); here folded only where the
-        // extras flag (that fence's mirror) is set, otherwise a strict no-op, as tag 245.
-        PalwConsensusObjectV2::TirPositionDissectedV2 { dissection, .. } => {
-            if builder.extras.tir_bounded_door_active {
-                // No state: the round is re-checked inside the close that names a position. Bound to the terminal phase here too,
-                // so a block cannot carry a round the phase never asked for.
-                let phase = builder
-                    .state
-                    .tir_dissections
-                    .get(&dissection.session_id)
-                    .ok_or(PalwStateV2Error::NoDissection(dissection.session_id))?;
-                crate::palw_tir_position_terminal_v2::check_tir_position_dissection_v2(phase, dissection)
-                    .map_err(|e| PalwStateV2Error::DissectionRefused(dissection.session_id, e.to_string()))?;
-                // Lane r6-p2-shared: where the round is OWED (a new claim's terminal, `owe_tir_position_round_v2`) it is
-                // installed — `Terminal` with the positions pending and the challenger's per-turn deadline — so the
-                // position close is judged against the round ON CHAIN and the whole-tile close is retired. Elsewhere (a
-                // claim admitted before the fence) it stays stateless, as before.
-                if phase.awaits_position_round_v2() {
-                    let session_id = dissection.session_id;
-                    let session =
-                        builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
-                    let mut phase = phase.as_ref().clone();
-                    phase
-                        .apply_position_round_v2(&dissection.round, ctx.daa_score, builder.params.turn_deadline_daa())
-                        .map_err(|e| PalwStateV2Error::DissectionRefused(session_id, e.to_string()))?;
-                    cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-                    builder.write_tir_dissection(session_id, Some(phase))?;
-                    builder.write_court(session_id, Some(session))?;
-                }
-            }
-        }
-        PalwConsensusObjectV2::TirPositionClosedV2 { close } => {
-            if builder.extras.tir_bounded_door_active {
-                // One close path: the verdict the acceptance layer re-derived (`adjudicate_tir_position_close_v2`) is applied
-                // through the `CourtClosed` arm with the close's own dissection-bottom proof.
-                let as_close = PalwConsensusObjectV2::CourtClosed {
-                    session_id: close.session_id,
-                    verdict: close.verdict,
-                    proof: close.proof.clone(),
-                };
-                return apply_object_inner(builder, ctx, &as_close);
-            }
-        }
-        PalwConsensusObjectV2::TirLookaheadDisclosedV2 { body } => {
-            if builder.extras.tir_bounded_door_active {
-                let session_id = body.session_id;
-                let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
-                // Lane r6-p2-shared: a bundle ending on positions (version 3) only where this claim's position terminal
-                // applies — an older claim keeps the whole-tile close, which a disclosed position round would retire.
-                if body.disclosure.version == crate::palw_tir_dissect_v1::PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2
-                    && !builder
-                        .state
-                        .claims
-                        .get(&session.claim)
-                        .is_some_and(|claim| palw_tir_position_terminal_applies_v2(builder.extras, claim.accepted_daa))
-                {
-                    return Err(PalwStateV2Error::DissectionRefused(
-                        session_id,
-                        "a lookahead ending on positions for a claim whose position terminal does not apply".into(),
-                    ));
-                }
-                let mut phase =
-                    builder.state.tir_dissections.get(&session_id).ok_or(PalwStateV2Error::NoDissection(session_id))?.as_ref().clone();
-                phase
-                    .apply_lookahead_disclosure_v2(
-                        &body.disclosure,
-                        crate::palw_tir_position_terminal_v2::PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2,
-                        ctx.daa_score,
-                        builder.params.turn_deadline_daa(),
-                    )
-                    .map_err(|e| PalwStateV2Error::DissectionRefused(session_id, e.to_string()))?;
-                owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
-                cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-                builder.write_tir_dissection(session_id, Some(phase))?;
-                builder.write_court(session_id, Some(session))?;
-            }
-        }
-        PalwConsensusObjectV2::TirLookaheadChosenV2 { body } => {
-            if builder.extras.tir_bounded_door_active {
-                let session_id = body.path.session_id;
-                let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
-                let mut phase =
-                    builder.state.tir_dissections.get(&session_id).ok_or(PalwStateV2Error::NoDissection(session_id))?.as_ref().clone();
-                phase
-                    .apply_choice_path_v2(
-                        &body.disclosure,
-                        &body.path,
-                        crate::palw_tir_position_terminal_v2::PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2,
-                        ctx.daa_score,
-                        builder.params.turn_deadline_daa(),
-                    )
-                    .map_err(|e| PalwStateV2Error::DissectionRefused(session_id, e.to_string()))?;
-                owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
-                cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-                builder.write_tir_dissection(session_id, Some(phase))?;
-                builder.write_court(session_id, Some(session))?;
-            }
-        }
-        // R-D2-READY (tag 230, ADR-0188 B): the acceptance gate routes it by `palw_court_model_scope_v1`, so below that fence it never
-        // reaches this fold (A-2). Past it the fold admits against the ADOPTED draw cap, which is unadopted (`None`): a refusal, never a
-        // default. The persistent registry write (`palw_d2_readiness_root_fold_v1`) waits on that cap and on the C1 supply (ADR-0200).
-        // G14 item 6 (lane r5-d2-c1): the admitted root is RECORDED in the rooted registry (`d2_readiness`, delta 230) — which
-        // still refuses with the unadopted cap, so nothing is written on any network until the cap is adopted.
-        PalwConsensusObjectV2::SeatReadinessRootV1 { root, .. } => {
-            crate::palw_court_model_scope_routes_v1::readiness_root::palw_d2_readiness_root_admit_v1(
-                root,
-                crate::palw_court_model_scope_routes_v1::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1,
-            )
-            .map_err(PalwStateV2Error::ReadinessRootRefused)?;
-            builder.record_d2_readiness_root_v1(
-                root,
-                crate::palw_court_model_scope_routes_v1::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1,
-                ctx.daa_score,
-            )?;
-        }
-        // ADR-0200 C1 (tags 231/232): the disclosure court. Signatures were checked at acceptance (validator); the fold applies the
-        // court's typed rules against the rooted registry. Cap and fee schedule unadopted: every demand refuses, so no case exists
-        // for an answer to name.
-        PalwConsensusObjectV2::SeatReadinessDemandedV1 { demand, .. } => {
-            builder.open_d2_disclosure_v1(
-                demand,
-                crate::palw_court_model_scope_routes_v1::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1,
-                crate::palw_court_model_scope_routes_v1::readiness_disclosure::PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1,
-                ctx.daa_score,
-            )?;
-        }
-        PalwConsensusObjectV2::SeatReadinessAnsweredV1 { answer, .. } => {
-            builder.answer_d2_disclosure_v1(answer, ctx.daa_score)?;
-        }
-        // RFC-0032 A material intake (tag 255, lane r5-f03-ingress): the acceptance gate routes it by `palw_staged_tir_route_v1`, so
-        // below that fence it never reaches this fold (A-2). Past it the fold re-checks the fence's extras flag, the typed-missing
-        // storage schedule, the installed shared context, the submitter's Active bond and signature, and authenticates the
-        // material against the original — atomic (checkpoint/restore). Every effect (Begun/Retried/Part/Completed/AlreadyComplete)
-        // is an accepted object; a refusal is an error.
-        PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
-            super::palw_court_shared_material_intake_fold_v1::material_intake(builder, ctx, intake)?;
         }
         PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { answer } => {
             da_sessions::apply_routed_material_answer_v2(builder, ctx, answer)?;
@@ -1007,7 +750,7 @@ fn apply_object_inner(
                     // session could only freeze the claim's `Final` for a window and end in the
                     // mercy: the accusation is refused, and the class's residual is (C)'s bound (held
                     // to Final, `c_2M = 1`, RT#2). The answerable held class (8k) opens as before.
-                    if builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim) {
+                    if builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id) {
                         return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable {
                             claim: claim_id,
                             leaf: accusation.leaf_index,
@@ -1155,9 +898,9 @@ fn apply_object_inner(
                 &accusation.accuser,
                 false,
             )?;
-            builder.write_held_da_missing(claim_id, Some(accusation.missing))?;
+            builder.write_held_da_missing(claim_id, Some(accusation.missing));
             if let Some(demands) = demand {
-                builder.write_held_leaf_demands(claim_id, Some(demands))?;
+                builder.write_held_leaf_demands(claim_id, Some(demands));
             }
         }
         // **ADR-0103 Decision 4: the answer, and it is arithmetic.** The unit must be the one
@@ -1390,7 +1133,7 @@ fn apply_object_inner(
                     }
                     builder.slash_dissenting_seats(&claim_id, &claim, &seat_verdicts, true)?;
                     // ADR-0124 Decision 2: a shard's `Valid` seats are credited as the part lands.
-                    builder.credit_seat_receipts(claim_id, &part.receipts, ctx.daa_score)?;
+                    builder.credit_seat_receipts(claim_id, &part.receipts, ctx.daa_score);
                     if builder.extras.audit_2026_09_23_active {
                         builder.lock_valid_receipts(claim_id, &claim, &part.receipts, ctx.daa_score, door)?;
                     }
@@ -1399,7 +1142,7 @@ fn apply_object_inner(
                         // The claim licenses; `write_claim` drops the progress row with the phase.
                         builder.license_claim(claim_id, claim, ctx.daa_score)?;
                     } else {
-                        builder.write_shard_licensing(claim_id, Some(progress))?;
+                        builder.write_shard_licensing(claim_id, Some(progress));
                     }
                 }
                 crate::palw_shard_licensing_v1::PalwShardQuorumV1::ProducerUnavailable { .. } => {
@@ -1724,7 +1467,7 @@ fn apply_object_inner(
             }
             builder.write_tir_class(*class_id, Some(record))?;
             // **RFC-0007 Part II**: past `palw_witness_manifest_v1` the class pins its witness profile (infallible).
-            palw_mesh_fold_v1::record_witness_profile_v1(builder, ctx, class_id, &program, admission.class.layout.max_context)?;
+            palw_mesh_fold_v1::record_witness_profile_v1(builder, ctx, class_id, &program, admission.class.layout.max_context);
         }
         PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { declaration, .. } => {
             if !builder.extras.class_semantics_active {
@@ -1738,16 +1481,6 @@ fn apply_object_inner(
             if class.artifact_root != declaration.artifact_root || class.registrant_bond.is_none() {
                 return Err(PalwStateV2Error::ImmutableModelUpdate(
                     "semantic declaration must name the originally registered artifact and registrant",
-                ));
-            }
-            // Audit C-04: a TIR class's FIRST statement sets every field, so its tokenizer must be the one the class was admitted
-            // with (the TIR record's, which its container binding and every TIR court read). Below `palw_class_semantics_v1` no
-            // declaration folds at all.
-            if let Some(record) = builder.state.tir_class_v1(&declaration.class_id)
-                && record.tokenizer_id != declaration.tokenizer_id
-            {
-                return Err(PalwStateV2Error::ImmutableModelUpdate(
-                    "a TIR class's semantic tokenizer must be its registered TIR record's tokenizer",
                 ));
             }
             if let Some(relation) = declaration.prefix_state_relation {
@@ -1905,7 +1638,7 @@ fn apply_object_inner(
             if builder.state.certified_family(lane, &digest).is_some() {
                 return Err(PalwStateV2Error::FamilyAlreadyCertified { lane, digest });
             }
-            builder.write_certified_family(lane, digest, Some(PalwCertifiedFamilyStateV2 { family, certified_daa: ctx.daa_score }))?;
+            builder.write_certified_family(lane, digest, Some(PalwCertifiedFamilyStateV2 { family, certified_daa: ctx.daa_score }));
         }
         PalwConsensusObjectV2::ClassLaneCertified { class_id, lane, profile } => {
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
@@ -1962,7 +1695,7 @@ fn apply_object_inner(
                         )?;
                     }
                     if builder.extras.fp_derived_work_at(ctx.daa_score) {
-                        builder.write_fp_work_profile(*class_id, Some(profile.clone()))?;
+                        builder.write_fp_work_profile(*class_id, Some(profile.clone()));
                     }
                 }
                 PalwCertifiedLaneV1::Attempt => seat_attempt_lane_class_v1(builder, ctx, class_id)?,
@@ -2115,7 +1848,7 @@ fn apply_object_inner(
             // Its budgets move to the row's own `withheld` — never into `panel_reserve_sompi`, whose
             // number is ADR-0124's withheld escrow (the review's C10) — and nothing is refunded: a
             // top-up is a donation, so there is no race for the exit (A11).
-            builder.purge_activation_readiness_landed(class_id)?;
+            builder.purge_activation_readiness_landed(class_id);
             if let Some(mut pool) = builder.state.activation_pools.get(class_id).cloned()
                 && (pool.prep_sompi > 0 || pool.bonus_sompi > 0)
             {
@@ -2126,7 +1859,7 @@ fn apply_object_inner(
                     .ok_or(PalwStateV2Error::Overflow("activation pool withheld"))?;
                 pool.prep_sompi = 0;
                 pool.bonus_sompi = 0;
-                builder.write_activation_pool(*class_id, pool)?;
+                builder.write_activation_pool(*class_id, pool);
             }
         }
         PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats } => {
@@ -2160,11 +1893,6 @@ fn apply_object_inner(
             // state, for a 10,000-sompi relay fee. Past it the object is inert: the claim stays
             // `Provisional`, a later eligible `PanelBound` may still bind it, and otherwise
             // `window_bind` voids it exactly as if nobody had published a panel at all.
-            // **RFC-0016 (dormant)**: a claim waiting in a pending Final queue binds no panel — the object is inert, as above; its
-            // verification starts when it leaves the queue (its anchor slot then moves with its bind base).
-            if builder.state.rfc0016_claim_queued_v1(claim_id) {
-                return Ok(());
-            }
             match builder.require_panel_lock_eligible(*claim_id, &claim, seats, ctx.daa_score) {
                 Ok(()) => {}
                 Err(_) if builder.extras.audit_2026_09_23_active => return Ok(()),
@@ -2173,8 +1901,7 @@ fn apply_object_inner(
             // The 2026-09-25 sweep's V03(1): asked BEFORE the panel record exists, which is what
             // tells a `NoCapablePanel` retry from a redraw.
             let was_ncp_retry = palw_claim_awaits_ncp_retry_v1(&builder.state, builder.params, claim_id, &claim);
-            builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }))?;
-            palw_tir_public_fold_v1::bind_panel_v1(builder, ctx, *claim_id)?;
+            builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }));
             // RFC-0006: a panel drawn per shard writes the claim's per-shard record (the plan frozen, the outsider flag, each
             // seat's share of the work); a flat panel writes nothing. Dormant: no plan exists below `palw_tir_shard_v1`.
             palw_tir_shard_fold_v1::bind_record_v1(builder, ctx, claim_id, &claim, anchor, seats)?;
@@ -2204,10 +1931,10 @@ fn apply_object_inner(
             );
             builder.write_claim(*claim_id, Some(bound))?;
             // ADR-0164 F-K (K4's denominator): a claim that reached its anchor with a panel.
-            builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound)?;
+            builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
             builder.disarm_deadline(*claim_id);
             let deadline = ctx.daa_score.checked_add(sweep_window).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
-            builder.arm_deadline(deadline, *claim_id)?;
+            builder.arm_deadline(deadline, *claim_id);
         }
         PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts } => {
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
@@ -2264,7 +1991,7 @@ fn apply_object_inner(
                 builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
                 // ADR-0124 Decision 2: the seats whose `Valid` receipts this object carries are
                 // credited — the licensing object is the first carrier of who answered.
-                builder.credit_seat_receipts(*claim_id, receipts, ctx.daa_score)?;
+                builder.credit_seat_receipts(*claim_id, receipts, ctx.daa_score);
                 builder.lock_valid_receipts(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?;
                 // ADR-0152 S-SPEC §3.4: the set's R-core+ record (a V2 receipt attests the full cut).
                 let carried: Vec<_> = receipts.iter().map(|receipt| (receipt, None)).collect();
@@ -2298,15 +2025,15 @@ fn apply_object_inner(
             // as wide as it is, and this makes the promise it implies — every session reaches it
             // inside its own rung — true by construction. It is a pure state fact, so the fold,
             // the acceptance rehearsal and the sync walk all answer it the same way.
-            // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` court admission (the challenger's reservation, the
-            // escrow, the deadline-aware queue) replaces the fixed concurrency cap; below it, the cap as it always was.
-            let gated_claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
-            let gated_window =
-                builder.state.class_model_court_window_v1(&gated_claim.class_id).unwrap_or_else(|| builder.params.window_court());
-            // Lane r5-f03-ingress: the paid public ingress wraps the same admission (identical while its schedule is missing).
-            match palw_court_capacity_fold_v1::court_ingress_admission_v1(builder, ctx, *claim_id, *challenger_bond, false, gated_window)? {
-                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(()),
-                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open | palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {}
+            let open_sessions = builder.state.court_sessions.len() as u64;
+            let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
+            if open_sessions >= max_sessions {
+                return Err(PalwStateV2Error::CourtSessionsAtCapacity {
+                    open: open_sessions,
+                    max: max_sessions,
+                    turn_deadline_daa: builder.params.turn_deadline_daa(),
+                    per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+                });
             }
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             if claim.phase.is_terminal() {
@@ -2471,7 +2198,6 @@ fn apply_object_inner(
             // write is one write.
             cap_session_rung_deadline_v2(&mut opened, builder.params);
             builder.write_court(*session_id, Some(opened))?;
-            palw_court_capacity_fold_v1::court_opened_v1(builder, ctx, *claim_id, *challenger_bond, *session_id)?;
             // An open court freezes the path to Final: the claim keeps no deadline while any
             // session is open (void-by-timeout of the COURT is PR-07's deadline system).
             //
@@ -2542,7 +2268,7 @@ fn apply_object_inner(
                         session.ladder.terminal_index(),
                         before,
                         proof,
-                    )?;
+                    );
                 }
             }
         }
@@ -2684,8 +2410,7 @@ fn apply_object_inner(
                     deposit,
                     chunks: BTreeMap::new(),
                 }),
-            )?;
-            builder.retain_native_close_declaration_v1(ctx,object)?;
+            );
         }
         PalwConsensusObjectV2::SeatReadinessProved { bond, class_id, span, opening, signature: _ } => {
             // ADR-0133 §11.2: past readiness V2 the one-leaf proof is not evidence any more.
@@ -2821,7 +2546,7 @@ fn apply_object_inner(
             )?;
             builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
-            builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score)?;
+            builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
             builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)?;
             // ADR-0152 S-SPEC §3.4: an S2 set records its door and recount (Q-3: 1 for the full seat
             // and one partial), and S2 never releases the escrow (SR-1 cond. 1).
@@ -2862,21 +2587,12 @@ fn apply_object_inner(
                 // swap of the whole accumulated record. `group` here is the local clone the checks
                 // above were made against; the writer applies the same bit and bytes to the row in
                 // state, which is why nothing but the delta shape changes.
-                builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone())?;
+                builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone());
                 return Ok(());
-            }
-            let service_archive=builder.state.court_sessions.get(session_id)
-                .is_some_and(|s|builder.state.court_service_holds_claim_v1(&s.claim));
-            if service_archive {
-                // Unlike legacy delete-only endings, the archive must retain
-                // the final accepted bytes too. The outer checkpoint includes
-                // this arrival if decode/adjudication/archive later refuses.
-                builder.write_court_close_chunk((*session_id,*side),*index,bytes.clone())?;
             }
             // **W7: the chunk that COMPLETES a group assembles it, and the close happens here.**
             //
-            // Legacy: not written back first. The service archive branch above retains
-            // the final chunk. Every legacy path below removes the session, and `write_court`
+            // Not written back first: every path below removes the session, and `write_court`
             // removes its groups with it, so writing the completed row would be a state entry
             // whose only reader is the delete two lines later.
             //
@@ -2951,17 +2667,7 @@ fn apply_object_inner(
             // a session's removal, and the `CourtClosed` applied on the next line removes this
             // one — so an honest assembly that stayed in the table would be charged for the row it
             // just filed. This is the single ending that owes nothing.
-            if service_archive {
-                let previous=builder.court_fulfilled_group.clone();
-                let result=(||{
-                    builder.prepare_fulfilled_court_group_v1(*session_id,*side,&group)?;
-                    builder.end_close_group_delivered((*session_id,*side))?;
-                    apply_object(builder,ctx,&close)
-                })();
-                builder.court_fulfilled_group=previous;
-                return result;
-            }
-            builder.end_close_group_delivered((*session_id, *side))?;
+            builder.end_close_group_delivered((*session_id, *side));
             // **Through the arm, never beside it.** The decoded object is a `CourtClosed` and is
             // applied by re-entering this function, so a split close and a whole close are the same
             // state machine by construction rather than by two authors agreeing: a change to the
@@ -3056,7 +2762,7 @@ fn apply_object_inner(
             let class = builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.clone();
             // **ADR-0152 §4-ter H0/H1: the held form is an answerable held class's, past the fence,
             // over a held map.** `held_answerable` is also what makes the held form REQUIRED below.
-            let held_answerable = palw_held_claim_is_answerable_v2(&builder.state, builder.params, builder.extras, &claim);
+            let held_answerable = palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id);
             if held_sub_roots.is_some() {
                 if !held_answerable {
                     return Err(PalwStateV2Error::HeldRootClaimRefused {
@@ -3232,7 +2938,7 @@ fn apply_object_inner(
             // disclosure. Every later move is a response and takes the court's turn.
             let base = builder.params.turn_deadline_daa();
             let window = if phase.round() == 0
-                && palw_held_claim_is_answerable_v2(&builder.state, builder.params, builder.extras, &claim_of_session)
+                && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim_of_session.class_id)
             {
                 base.max(phase.last_deadline_daa().saturating_sub(ctx.daa_score))
             } else {
@@ -3297,9 +3003,8 @@ fn apply_object_inner(
                 builder.params.turn_deadline_daa(),
             )
             .map_err(|e| refused(e.to_string()))?;
-            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase))?;
+            builder.write_tir_dissection(*session_id, Some(phase));
             builder.write_court(*session_id, Some(session))?;
         }
         // **RFC-0003: a pipeline claim's root claim opens F7's phase** — the IR arm above over the
@@ -3335,9 +3040,8 @@ fn apply_object_inner(
                 builder.params.turn_deadline_daa(),
             )
             .map_err(|e| refused(e.to_string()))?;
-            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase))?;
+            builder.write_tir_dissection(*session_id, Some(phase));
             builder.write_court(*session_id, Some(session))?;
         }
         // **RFC-0004 A6: an evaluation claim's root claim opens F7's phase** — the generative arm above over the
@@ -3372,9 +3076,8 @@ fn apply_object_inner(
                 builder.params.turn_deadline_daa(),
             )
             .map_err(|e| refused(e.to_string()))?;
-            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase))?;
+            builder.write_tir_dissection(*session_id, Some(phase));
             builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::CourtTirDissected { session_id, round, signature: _ } => {
@@ -3384,9 +3087,8 @@ fn apply_object_inner(
             phase
                 .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
-            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase))?;
+            builder.write_tir_dissection(*session_id, Some(phase));
             builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::CourtTirChildChosen { session_id, choice, signature: _ } => {
@@ -3396,9 +3098,8 @@ fn apply_object_inner(
             phase
                 .apply_choice(choice, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
-            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase))?;
+            builder.write_tir_dissection(*session_id, Some(phase));
             builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
@@ -3524,12 +3225,10 @@ fn apply_object_inner(
             // that destroyed an honest producer's claim while it was merely restored.
             let paused = palw_da_paused_daa_v2(&claim.phase, ctx.daa_score);
             debug_assert_eq!(paused, ctx.daa_score.saturating_sub(accused_daa), "the pause is the session's own length");
-            // REQ-X3-3: no pause credit for an X3 claim (its deadlines are fixed at acceptance); old claims keep the pause.
-            let credit = crate::palw_ruling_fences_v1::palw_x3_pause_credit_v1(builder.params, &claim, paused);
-            let restored = resume_claim_after_da_session_v2(*claim_id, &claim, *resumed, credit)?;
+            let restored = resume_claim_after_da_session_v2(*claim_id, &claim, *resumed, paused)?;
             builder.write_claim(*claim_id, Some(restored.clone()))?;
             // §4-quater V6 on the ADR-0062 court (below `palw_rcore_plus`), before the re-arm reads `H`.
-            builder.credit_verify_pause_v6(*claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score)?;
+            builder.credit_verify_pause_v6(*claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score);
             // The session's own clock goes with the session — a claim holds at most one deadline,
             // and leaving the disclose entry behind would sweep a claim that is no longer disputed.
             builder.disarm_deadline(*claim_id);
@@ -3624,38 +3323,6 @@ fn apply_object_inner(
                     why: why.to_string(),
                 });
             }
-            // **G14 G-03: past `palw_tir_public_conviction_v1` a TIR original takes its ORIGINAL frame or nothing.** A commitment on
-            // a registered TIR class without its transaction-paired `TFP1` is refused here, before anything is priced or written —
-            // so no frameless TIR claim reaches a reward, weight or credit (it cannot route around the one public conviction door).
-            // `Ok` below the fence and for every non-TIR class: byte-identical there.
-            palw_tir_public_fold_v1::require_original_frame_v1(builder, *claim_id, *class_id)?;
-            // **RFC-0002 02-A: past `palw_tir_container_identity_v1` a TIR original's class must be bound to its `PALWART3`
-            // container** (tag 175), so the operands a court opens under the class's artifact root are the inner inventory of a
-            // registered container. Refused at the same door as G-03, before anything is priced or written. `Ok` below the fence and
-            // for every non-TIR class.
-            if builder.extras.tir_container_identity_active
-                && builder.state.tir_class_v1(class_id).is_some()
-                && crate::palw_tir_container_v1::palw_tir_bound_container_v1(&builder.state, *class_id).is_none()
-            {
-                return Err(PalwStateV2Error::ClassNotRewardable {
-                    class: *class_id,
-                    code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
-                    why: "past palw_tir_container_identity_v1 a TIR original's class must be bound to its PALWART3 container".into(),
-                });
-            }
-            // **G-01 option (b) / G-05 (`palw_g14_route_required_v1`)**: past the fence a free-prompt claim whose job needs a G14
-            // route that is not armed (selection: the TIR public frame on THIS commitment; constraint / prefix / tokenizer: the staged
-            // court with its legacy filer; never for non-public evidence) is not taken — no reward, weight or credit; its carrier pays
-            // the ordinary fee. The route is read from the fence state, so the job regains reward once its route is armed. `None`
-            // below the fence (every shipped network) and for a claim accepted before it.
-            if let Some((code, why)) = crate::palw_g14_gates_v1::palw_g14_route_fp_refusal_v1(
-                builder.params,
-                ctx.daa_score,
-                public_job.as_deref(),
-                builder.extras.tir_public_originals.contains_key(claim_id),
-            ) {
-                return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
-            }
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
@@ -3722,7 +3389,6 @@ fn apply_object_inner(
             if let Some(certified) = &builder.params.fp_certified_classes
                 && !certified.contains(class_id)
                 && !builder.state.fp_certified_classes.contains_key(class_id)
-                && !tir_fp_lane_covered_v1(builder, class_id)
             {
                 return Err(PalwStateV2Error::FreePromptLaneUncertified(*class_id));
             }
@@ -3774,25 +3440,7 @@ fn apply_object_inner(
             // state, which a node also answers a gateway with (`palw_fp_commitment_price_v1`), so the
             // exposure a gateway checks before an inference and the reservation written here are
             // the same number by construction rather than by two readings agreeing.
-            // **Compute-claim audit CX-01/CX-02 (`palw_fp_answer_accounting_v1`)**: past the fence the commitment's decoded answer
-            // rides beside it (`FPA1`, native ingress), one id per executed decode token, or the commitment is not taken — the price
-            // below credits only positions no paid claim of the class computed with the same tokens, and that needs the tokens.
-            // `None` below the fence: the price is the function it was, byte for byte.
-            let answer = if builder.extras.fp_answer_accounting_active {
-                match builder.extras.fp_claim_answers.get(claim_id) {
-                    Some(answer) if answer.len() == *decode_tokens_executed as usize => Some(answer.clone()),
-                    carried => {
-                        return Err(PalwStateV2Error::FreePromptAnswerNotAccountable {
-                            claim: *claim_id,
-                            carried: carried.map(Vec::len),
-                            decoded: *decode_tokens_executed,
-                        });
-                    }
-                }
-            } else {
-                None
-            };
-            let price = crate::palw_state_v2::palw_fp_commitment_price_answered_v1(
+            let price = palw_fp_commitment_price_from_state_v1(
                 &builder.state,
                 builder.params,
                 PalwFpPriceInputsV1 {
@@ -3800,8 +3448,6 @@ fn apply_object_inner(
                     canonical_work_daa: builder.extras.canonical_work_daa,
                     daa_score: ctx.daa_score,
                     receipt_rights: builder.fp_receipt_rights_inputs_v1(ctx),
-                    // RFC-0002 Phase H: the IR class lane is open exactly where the TIR public frame is (G-03 frames every IR original).
-                    tir_free_prompt_active: builder.extras.tir_public_conviction_active,
                 },
                 claim_id,
                 class_id,
@@ -3810,7 +3456,6 @@ fn apply_object_inner(
                 *decode_tokens_executed,
                 *work_leaves,
                 *consumed_prefix_state,
-                answer.as_deref(),
             )?;
             let (quanta, pwu, reserved, in_compute) = (price.quanta, price.pwu, price.reserved, price.priced_in_compute);
             // **2026-09-24 DoS audit review of #11: the gate holds the jobs this claim will count as.**
@@ -3824,40 +3469,6 @@ fn apply_object_inner(
                 builder.check_class_admits_claim(class_id, ctx.daa_score, PalwGatedClaimV1::FreePrompt { quanta: quanta as u64 })?;
             }
             let derived = price.derived_work;
-            // **G14 detection policy (`palw_detection_policy_v1`, keyed on the acceptance DAA)**: past the fence a commitment whose class
-            // has no detection policy, whose N is not bound to its priced work (the derived-work rule re-prices `work_leaves` from the
-            // class's graph and the two committed counts — without it the counts are the producer's word and the claim is refused),
-            // whose collectable collateral is below the deterrence bound, or that the policy cannot check within its resources, is not
-            // taken — option (b)'s refusal: no reward, weight or credit; its carrier pays the ordinary fee. Before any write. `None`
-            // below the fence.
-            if builder.params.detection_policy_v1().is_some() {
-                let collectable = builder.state.bonds.get(bond).map_or(0, |b| u128::from(b.collateral)).min(reserved);
-                let facts = crate::palw_detection_policy_v1::PalwDetectionClaimFactsV1 {
-                    attempt_lane: false,
-                    work_leaves: *work_leaves,
-                    context_priced_leaves: derived.is_some().then_some(*work_leaves),
-                    prompt_tokens: *prompt_tokens,
-                    decode_tokens_executed: *decode_tokens_executed,
-                    collateral_sompi: collectable,
-                };
-                if let Some((code, why)) =
-                    crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
-                        builder.params,
-                        class_id,
-                        ctx.daa_score,
-                        &facts,
-                        crate::palw_court_capacity_v1::palw_court_claim_budget_for_retention_v1(
-                            &builder.state,
-                            builder.params,
-                            class_id,
-                            ctx.daa_score,
-                            *trace_retention_daa,
-                        ),
-                    )
-                {
-                    return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
-                }
-            }
             // **Fail-closed on the one field the court cannot do without (audit C3).** A claim
             // carrying no execution root has nothing a refutation's binding can be tested
             // against; the shipped worker commits the binding's own root, so what this refuses
@@ -3951,10 +3562,7 @@ fn apply_object_inner(
                     *trace_chunk_count
                 },
                 trace_retention_daa: if builder.extras.fp_da_pins_active {
-                    // RFC-0018 Gate C (user decision 2026-10-17): plus the certification extension (0 below its fence).
-                    ctx.daa_score
-                        .saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_at_v2(builder.params, ctx.daa_score))
-                        .saturating_add(crate::palw_rfc0018_v1::palw_gate_c_retention_extension_daa_v1(builder.params, ctx.daa_score))
+                    ctx.daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(builder.params))
                 } else {
                     *trace_retention_daa
                 },
@@ -3981,19 +3589,7 @@ fn apply_object_inner(
             };
             let mut claim = claim;
             let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
-            let tir_original = palw_tir_public_fold_v1::prepare_paired_original_v1(builder, ctx, object, public_job.as_deref())?;
-            // **G14 item 1 (RFC-0035 A): the funded-original coordinator**, here — after native preparation, before the first
-            // reservation — so a funded TFO1 original is admitted whole (frame + escrow row, installed below) or refused whole by the
-            // paired checkpoint. A claim without a funded pairing keeps the TFP1 path unchanged.
-            let tir_original = palw_tir_public_fold_v1::admit_original_v1(builder, ctx, *claim_id, tir_original)?;
-            let staged_contract = if let Some(frame) = &tir_original {
-                // This is an ORIGINAL prospective allocation, not a repricing
-                // of an old claim or a second old required-family bundle.
-                claim.trace_retention_daa = claim.trace_retention_daa.max(frame.frame_v1().plan_v1().terms.material_until_daa);
-                None
-            } else {
-                builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?
-            };
+            let staged_contract = builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?;
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
             builder.state.require_native_monetary_material_scope_v1(builder.params, *claim_id, &claim)?;
@@ -4019,9 +3615,9 @@ fn apply_object_inner(
             }
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim))?;
-            builder.stamp_staged_claim_v1(*claim_id, staged_contract)?;
+            builder.stamp_staged_claim_v1(*claim_id, staged_contract);
             if let Some(wire) = public_job_wire {
-                builder.write_public_fp_job_v1(*claim_id, Some(wire))?;
+                builder.write_public_fp_job_v1(*claim_id, Some(wire));
             }
             if let Some(plan) = budget_plan {
                 builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
@@ -4035,46 +3631,34 @@ fn apply_object_inner(
             // and a row written before the claim exists would be swept by the drop of a claim that
             // was never there. Only past the fence: below it the map stays empty, which is what
             // keeps the state root where it was.
-            let prompt_row = PalwFpClaimPromptV1 {
-                prompt_tokens: *prompt_tokens,
-                prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(prompt_token_ids),
-                prompt_token_ids: prompt_token_ids.clone(),
-                expires_daa: palw_fp_prompt_row_expiry_v1(ctx.daa_score, builder.params.epoch_length),
-                consumed_state_root: consumed_prefix_state.state_root,
-                consumed_prefix_tokens: consumed_prefix_state.prefix_tokens,
-            };
             if derived.is_some() {
                 // ADR-0148: the first compute-priced commitment opens the lane's one target.
                 if in_compute {
                     builder.seed_fp_pooled_receipt_target()?;
                 }
-                builder.write_fp_claim_prompt((*class_id, *bond, *claim_id), Some(prompt_row.clone()))?;
-                // CX-01/CX-02: and what it DECODED, so neither a continuation of this answer nor a copy of this run under another
-                // bond is sold it again. A second row under its own key, beside the prompt row; swept with it at the same expiry.
-                if let Some(answer) = &answer {
-                    let sequence: Vec<u32> = prompt_token_ids.iter().chain(answer.iter()).copied().collect();
-                    let answer_row = PalwFpClaimPromptV1 {
-                        prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(&sequence),
-                        prompt_token_ids: sequence,
-                        ..prompt_row.clone()
-                    };
-                    builder.write_fp_claim_prompt(
-                        (*class_id, *bond, crate::palw_fp_answer_accounting_v1::palw_fp_answer_row_key_v1(claim_id)),
-                        Some(answer_row),
-                    )?;
-                }
+                builder.write_fp_claim_prompt(
+                    (*class_id, *bond, *claim_id),
+                    Some(PalwFpClaimPromptV1 {
+                        prompt_tokens: *prompt_tokens,
+                        prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(prompt_token_ids),
+                        prompt_token_ids: prompt_token_ids.clone(),
+                        expires_daa: palw_fp_prompt_row_expiry_v1(ctx.daa_score, builder.params.epoch_length),
+                        consumed_state_root: consumed_prefix_state.state_root,
+                        consumed_prefix_tokens: consumed_prefix_state.prefix_tokens,
+                    }),
+                );
             }
             // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is
             // attributed to the class's founding line's current root until the job's v6.
             if let Some(line) = builder.state.model_line_or_founding(class_id)
                 && let Some(current) = builder.state.model_version(class_id, line.current)
             {
-                builder.note_claim_usage(*claim_id, class_id, current.root, fp_pwu, false, ctx.daa_score)?;
+                builder.note_claim_usage(*claim_id, class_id, current.root, fp_pwu, false, ctx.daa_score);
             }
             let deadline = ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
             // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.
             if !builder.params.panel_v3_rule_at(ctx.daa_score) {
-                builder.arm_deadline(deadline, *claim_id)?;
+                builder.arm_deadline(deadline, *claim_id);
             }
             // No production census here: commitments are not blocks. The receipt lane's counters
             // move when a quantum is SPENT.
@@ -4082,31 +3666,9 @@ fn apply_object_inner(
                 palw_panel_lifetime_fold_v2::capture(builder, *claim_id, authorization)
                     .expect("a prevalidated native claim must have its immutable Panel consent fields");
             }
-            if let Some(frame) = tir_original {
-                // G14 G-T3: the frame keeps the claim's public prompt ids to its material horizon (derived work or not).
-                palw_tir_public_fold_v1::install_original_admission_v1(builder, ctx, frame, &prompt_row)?;
-            }
         }
     }
     Ok(())
-}
-
-/// **RFC-0002 Phase H: an IR class's free-prompt lane is authenticated by coverage** — past the TIR public frame's fence (the IR
-/// lane's), a registered IR class whose every reachable primitive one certified family covers (either lane: the generic interpreter
-/// court is the same court for an attempt and a free prompt; the free-prompt doors are the frame's, in consensus code). `false`
-/// below the fence and for every non-IR class, so the legacy gate is byte-identical there. No per-class drill, no model review.
-fn tir_fp_lane_covered_v1(builder: &TransitionBuilder<'_>, class_id: &Hash64) -> bool {
-    if !builder.extras.tir_public_conviction_active {
-        return false;
-    }
-    let Some(record) = builder.state.tir_class_v1(class_id) else { return false };
-    let families = builder
-        .state
-        .certified_family_records(PalwCertifiedLaneV1::Attempt)
-        .values()
-        .chain(builder.state.certified_family_records(PalwCertifiedLaneV1::FreePrompt).values())
-        .map(|record| &record.family);
-    crate::palw_tir_fp_lane_v1::palw_tir_fp_lane_covered_v1(record, families).is_ok()
 }
 
 /// **D2 on seat readiness (REQ-T6-3, restricted; `palw_court_model_scope_v1`)**: `SeatReadinessLeaves` publishes ~16 plaintext
@@ -4121,49 +3683,4 @@ fn check_readiness_model_scope_v1(
     let registered = builder.state.class(class_id).map(|class| class.registered_daa);
     crate::palw_ruling_fences_v1::palw_court_model_scope_admits_readiness_v1(builder.params, ctx.daa_score, registered)
         .map_err(|why| PalwStateV2Error::ReadinessProofRefused(why.to_string()))
-}
-
-/// **The one writer of the designated registry (tag 245, ADR-0191 step B).** Dormant: without `extras.tir_designated_answers_active`
-/// the event is a strict no-op, so the state (and its root) is byte-identical. In force, the registry's pure rules run on a
-/// one-record copy of the touched request, so a refused event writes nothing; an event that changes nothing (a repeat) journals
-/// nothing. Only the touched record is journaled (delta 215).
-pub(super) fn apply_tir_designated_event_v1(
-    builder: &mut TransitionBuilder<'_>,
-    event: &crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1,
-) -> Result<(), PalwStateV2Error> {
-    use crate::palw_tir_designated_answers_v1 as d;
-    if !builder.extras.tir_designated_answers_active {
-        return Ok(());
-    }
-    // Reserve the event copy before the working registry clones it, as the tag-244 and legacy writers reserve their copies.
-    let _event_copy = crate::palw_native_resource_v1::reserve_native_requests_v1(
-        crate::palw_native_resource_v1::native_value_requests_v1(event).map_err(PalwStateV2Error::NativeResource)?,
-    )
-    .map_err(PalwStateV2Error::NativeResource)?;
-    let key = match event {
-        d::PalwTirDesignatedEventV1::Open(request) => request.key,
-        d::PalwTirDesignatedEventV1::Answer { key, .. } | d::PalwTirDesignatedEventV1::FalseValid { key, .. } => *key,
-    };
-    let mut working = d::PalwTirDesignatedRegistryV1::default();
-    if let Some(record) = builder.state.tir_designated.records.get(&key) {
-        working.records.insert(key, record.clone());
-    }
-    d::palw_tir_apply_designated_event_v1(&mut working, true, event.clone()).map_err(|refusal| {
-        PalwStateV2Error::ImmutableModelUpdate(match refusal {
-            d::PalwTirDesignatedRegistryErrorV1::Rule(_) => "designated-answer event refused by its rules",
-            d::PalwTirDesignatedRegistryErrorV1::AlreadyOpen => "a designated request is open once",
-            d::PalwTirDesignatedRegistryErrorV1::UnknownRequest => "designated event names an unopened request",
-        })
-    })?;
-    let new = working.records.remove(&key);
-    let old = builder.state.tir_designated.records.get(&key).cloned();
-    if old == new {
-        return Ok(());
-    }
-    match &new {
-        Some(record) => builder.state.tir_designated.records.insert(key, record.clone()),
-        None => builder.state.tir_designated.records.remove(&key),
-    };
-    builder.entries.push(PalwDeltaEntryV2::TirDesignated { key, old, new });
-    Ok(())
 }

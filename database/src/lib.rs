@@ -7,7 +7,6 @@ mod key;
 mod writer;
 
 pub mod registry;
-pub mod storage_generations;
 mod set_access;
 pub mod utils;
 
@@ -20,6 +19,6 @@ pub mod prelude {
     pub use super::key::DbKey;
     pub use super::set_access::{CachedDbSetAccess, DbSetAccess, ReadLock};
     pub use super::writer::{BatchDbWriter, DbWriter, DirectDbWriter, DirectWriter, MemoryWriter};
-    pub use db::{ConnBuilder, DB, DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES, RocksDbPreset, StorageDbBounds, delete_db};
+    pub use db::{ConnBuilder, DB, DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES, RocksDbPreset, delete_db};
     pub use errors::{StoreError, StoreErrorPredicates, StoreResult, StoreResultExt, StoreResultUnitExt};
 }

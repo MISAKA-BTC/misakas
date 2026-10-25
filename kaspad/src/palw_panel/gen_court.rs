@@ -24,7 +24,6 @@
 //!
 //! **Logging (ADR-0079 SA-7):** nothing here logs prompt ids or image bytes; a refusal names the rule.
 
-use crate::palw_panel::court_outbox::CourtOutboxV1;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -458,7 +457,8 @@ impl super::PalwPanelService {
                         due,
                         current_daa,
                         &mut *books.held_chunks,
-                        &mut *books.court_outbox,
+                        &mut *books.court_pending,
+                        &mut *books.court_due,
                     );
                 } else {
                     warn!(
@@ -476,15 +476,15 @@ impl super::PalwPanelService {
                 );
                 continue;
             }
-            if books.court_outbox.pending().iter().any(|(sid, _, _, _)| *sid == session_id) {
+            if books.court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
                 continue;
             }
             info!(
                 "[{PALW_PANEL}] tensor claim {}: filing its one-move accusation ({label} close at leaf {leaf}, {bytes} bytes)",
                 target.claim_id
             );
-            books.court_outbox.set_due((session_id, 0, false), due);
-            books.court_outbox.push_pending((session_id, 0, false, object));
+            books.court_due.insert((session_id, 0, false), due);
+            books.court_pending.push((session_id, 0, false, object));
         }
     }
 }
@@ -495,7 +495,8 @@ pub(super) struct PalwGenOneMoveBooksV1<'a> {
     pub challenged: &'a mut HashSet<Hash64>,
     /// Claims this node has accused in one move (or found no accusation for): filed once.
     pub accused: &'a mut HashSet<Hash64>,
-    pub court_outbox: &'a mut CourtOutboxV1,
+    pub court_pending: &'a mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+    pub court_due: &'a mut HashMap<(Hash64, u32, bool), u64>,
     /// The held leaf challenges this node carries (decision 22): a close past one carrier is declared and
     /// delivered in chunks by [`super::held_chunks`].
     pub held_chunks: &'a mut Vec<super::held_chunks::PalwHeldChunksV1>,

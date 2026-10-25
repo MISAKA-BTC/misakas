@@ -34,75 +34,9 @@ impl StagePointFaultV32 {
 /// source/claim/own-seal and paid complete32 bound before any body decoding.
 pub fn verify_stage_point_fault_v32(invocation:&CheckedStageInvocationV32<'_>,maximum:&CheckedStageCourtScopeV32,base:FlatSegContextV5<'_>,f:&StagePointFaultV32)->Result<(),DismissalV1>{
     let bad=|s:&str|DismissalV1::NotAuthentic(s.into());
-    check_invocation_context_v32(invocation,&base)?;
     if f.version!=32||f.invocation!=invocation.invocation_root()||f.input_binding!=invocation.input_binding_root()||maximum.scope.source!=invocation.source().id()||maximum.scope.court!=ordinary_stage_court_id_v32()||invocation.positions()>maximum.scope.maximum_positions||base.claim.positions!=invocation.positions()||base.claim.program!=&invocation.actual_program().v1_view()||base.claim.encoder.is_some(){return Err(bad("stage32 court replaces original complete invocation/source/program/actual positions"));}
     let inner:FlatPointFaultV25=crate::flat_point25::parse_flat_point_fault_v25(&f.point25).map_err(|e|bad(&format!("{e:?}")))?;let position=inner.output.node.as_ref().ok_or_else(||bad("stage32 authenticated output coordinate absent"))?.position;
     let pc=invocation.combined_parameters_at(position).map_err(|e|bad(&e))?;if base.claim.params!=&pc{return Err(bad("stage32 court input PC is not the original position-specific Master binding"));}
     let pr=PreparedV1::without_stage_v32(base.claim.program,invocation.actual_program()).map_err(|e|bad(&e))?;
     crate::flat_point25::verify_point_prepared_v25(&PointContextV25{court_id:crate::flat_point25::ordinary_point_court_id_v25(),base},&inner,&pr)
-}
-
-
-/// Frozen special-court grammar under NEW, independently authenticated V2
-/// wiring. Existing v5/v7 entry points still prepare their original V1 wiring.
-pub fn verify_stage_special_fault_v32(invocation:&CheckedStageInvocationV32<'_>,maximum:&CheckedStageCourtScopeV32,base:FlatSegContextV5<'_>,raw:&[u8])->Result<(),DismissalV1>{
-    check_invocation_context_v32(invocation,&base)?;
-    let bad=|s:&str|DismissalV1::NotAuthentic(s.into());
-    if maximum.scope.source!=invocation.source().id()||maximum.scope.court!=ordinary_stage_court_id_v32()||invocation.positions()>maximum.scope.maximum_positions||base.claim.positions!=invocation.positions()||base.claim.program!=&invocation.actual_program().v1_view()||base.claim.encoder.is_some()||raw.len() as u64>maximum.scope.maximum_bytes{return Err(bad("stage32 special court changes original complete V2 binding"));}
-    let pr=PreparedV1::without_stage_v32(base.claim.program,invocation.actual_program()).map_err(|s|bad(&s))?;
-    match raw.get(..2).map(|v|u16::from_le_bytes(v.try_into().unwrap())) {
-        Some(7)=>{let f=crate::flat_topk7::TopKFaultV7::from_bytes(raw).map_err(|e|bad(&e.to_string()))?;let q=f.output.node.as_ref().ok_or_else(||bad("stage32 TopK output absent"))?.position;let pc=invocation.combined_parameters_at(q).map_err(|e|bad(&e))?;if base.claim.params!=&pc{return Err(bad("stage32 TopK actual-position input PC differs"));}crate::flat_topk7::verify_topk_prepared_v32(&crate::flat_topk7::TopKContextV7{court_id:crate::flat_topk7::topk_court_id_v7(),base},&f,&pr)},
-        Some(5)=>{let f=crate::flat_court5::FlatFaultV5::from_bytes(raw).map_err(|e|bad(&e.to_string()))?;
-            // All scalar ordinary/whole state relations must use the new32
-            // dependency-pricing path. Legacy is only Decode or type/header.
-            if !matches!(f,crate::flat_court5::FlatFaultV5::Decode(_)|crate::flat_court5::FlatFaultV5::Malformed(_)){return Err(bad("stage32 ordinary relation requires original V2 point32 court"));}
-            if matches!(f,crate::flat_court5::FlatFaultV5::Decode(_))&&!matches!(invocation.actual_program().output,misaka_palw_tir::program_v2::OutputDecl::Logits{..}){return Err(bad("stage32 Rows/Final has no decoder relation"));}
-            crate::flat_court5::verify_flat_fault_prepared_v32(&base,&f,&pr).map(|_|())},
-        _=>Err(bad("stage32 unknown special court grammar")),
-    }
-}
-
-/// Bounded public localization of ONE independently root-selected relation.
-/// Values/header replies keep their original v25 leaf framing; only source
-/// wiring, positional PC and terminal ordinary filing use explicit32 semantics.
-/// Caller prepays the complete independent reference and discovery session.
-#[derive(Clone,Debug,PartialEq,Eq)]
-pub enum StageFindingV32 {
-    Clean,Fault(Vec<u8>),Demand(crate::flat_detect5::FlatReadV5),
-    ValueDemand(crate::flat_detect25::FlatValueReadV25),HeaderDemand(crate::flat_detect25::FlatHeaderReadV25),Inconsistent(String),
-}
-pub fn locate_stage_relation_v32(invocation:&CheckedStageInvocationV32<'_>,maximum:&CheckedStageCourtScopeV32,base:FlatSegContextV5<'_>,public:&dyn crate::flat_detect25::FlatPublicReadsV25,unit:crate::flat_detect5::FlatReadV5,expected:&misaka_palw_tir::Tensor,own:&dyn Fn()->Result<Vec<misaka_palw_tir::Tensor>,String>,token:&dyn Fn()->Option<crate::seg::PromptTileOpeningV1>,scan:&mut crate::flat_topk7::TopKScanBudgetV7)->StageFindingV32{
-    use crate::{flat_detect25::FlatFindingV25 as F,flat_court25::FlatFaultV25};
-    if let Err(e)=check_invocation_context_v32(invocation,&base){return StageFindingV32::Inconsistent(format!("{e:?}"));}
-    let error=|s:&str|StageFindingV32::Inconsistent(s.into());
-    let derived=match derive_stage_court_scope_v32(invocation.class()){Ok(s)=>s,Err(e)=>return StageFindingV32::Inconsistent(e)};
-    if derived.root()!=maximum.root()||base.claim.positions!=invocation.positions()||base.claim.program!=&invocation.actual_program().v1_view()||unit.position>=invocation.positions()||unit.leaf.is_some(){return error("stage32 locator replaces original maximum/actual invocation");}
-    let pc=match invocation.combined_parameters_at(unit.position){Ok(pc)=>pc,Err(e)=>return StageFindingV32::Inconsistent(e)};
-    if base.claim.params!=&pc{return error("stage32 locator does not use the selected position's original Master inputs");}
-    let pr=match PreparedV1::without_stage_v32(base.claim.program,invocation.actual_program()){Ok(pr)=>pr,Err(e)=>return StageFindingV32::Inconsistent(e)};
-    if !pr.valid(unit.occurrence,unit.node){return error("stage32 selected node outside original graph");}
-    let c=crate::flat_court25::FlatContextV25{scope:invocation.job().scope().scope(),base};
-    let finding=if matches!(pr.w.node(unit.occurrence,unit.node).prim,misaka_palw_tir::Prim::TopK{..}){
-        crate::flat_topk_locator25::locate_selected_topk_prepared_v32(&c,public,unit,expected,own,scan,&pr,true)
-    }else{
-        crate::flat_detect25::ordinary_relation_checked_v32(&c,&c.scope.root(),&pr,public,unit,expected,own,token,&|f|crate::flat_detect25::checked_prepared_v32(&c,&pr,f))
-    };
-    match finding{
-        F::Clean=>StageFindingV32::Clean,F::Demand(r)=>StageFindingV32::Demand(r),F::ValueDemand(r)=>StageFindingV32::ValueDemand(r),F::HeaderDemand(r)=>StageFindingV32::HeaderDemand(r),F::Inconsistent(e)=>StageFindingV32::Inconsistent(e),
-        F::Fault(f)=>{
-            let bytes=match f{
-                FlatFaultV25::Ordinary(f)=>{let point25=match f.to_bytes(){Ok(b)=>b,Err(e)=>return StageFindingV32::Inconsistent(e.to_string())};borsh::to_vec(&StagePointFaultV32{version:32,invocation:invocation.invocation_root(),input_binding:invocation.input_binding_root(),point25}).map_err(|e|e.to_string())},
-                FlatFaultV25::TopK(f)=>f.to_bytes().map_err(|e|e.to_string()),
-                FlatFaultV25::Legacy(f)=>f.to_bytes().map_err(|e|e.to_string()),
-            };
-            match bytes{Ok(raw) if raw.len() as u64<=maximum.scope.maximum_bytes=>StageFindingV32::Fault(raw),Ok(_)=>error("stage32 terminal filing exceeds original maximum"),Err(e)=>StageFindingV32::Inconsistent(e)}
-        }
-    }
-}
-
-
-fn check_invocation_context_v32(invocation:&CheckedStageInvocationV32<'_>,base:&FlatSegContextV5<'_>)->Result<(),DismissalV1>{
-    let logits=matches!(invocation.actual_program().output,misaka_palw_tir::program_v2::OutputDecl::Logits{..});
-    let generated=if logits{invocation.generated()}else{&[0][..]};let prompt=invocation.prompt();
-    if base.profile!=crate::flat_court5::flat_trace_profile_id_v5()||base.claim.encoder.is_some()||base.claim.positions!=invocation.positions()||base.claim.program!=&invocation.actual_program().v1_view()||base.claim.prompt_len!=prompt.len() as u32||base.claim.prompt_root!=crate::seg::prompt_root_of_ids_v1(prompt)||base.claim.inline_prompt!=Some(prompt)||base.claim.generated!=generated||base.claim.decode!=crate::job::DecodeRuleV1::Greedy||base.claim.segment_roots.len()!=crate::seg::segment_count_v1(invocation.positions()) as usize{return Err(DismissalV1::NotAuthentic("stage32 court token/state/claim context differs from original actual Master invocation".into()));}Ok(())
 }

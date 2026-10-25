@@ -59,14 +59,10 @@ def validate_factory_manifest(bootstrap, profile):
                     raise ValueError('paid-v4 nested factory identity differs: ' + field)
             if nested.get('skipProofOfWork') is not False or nested.get('releaseApproval') is not False:
                 raise ValueError('paid-v4 nested factory must retain real PoW and no approval')
-            # PRINCIPLES §8 (2026-10-15): the paid-v4 profile never arms compact V4. Its manifest
-            # names the retirement; any other compact policy shape (an armed id) is refused.
-            compact = nested.get('compactClaimPolicy')
-            if not isinstance(compact, dict) or set(compact) != {'retired', 'reason'} or compact['retired'] is not True:
-                raise ValueError('paid-v4 must report compact V4 as retired (PRINCIPLES §8), never as an armed policy')
-            policy = nested.get('releaseRecoveryPolicy')
-            if not isinstance(policy, dict) or policy.get('approved') is not False or not policy.get('id'):
-                raise ValueError('paid-v4 requires its explicit unapproved policy: releaseRecoveryPolicy')
+            for field in ('compactClaimPolicy', 'releaseRecoveryPolicy'):
+                policy = nested.get(field)
+                if not isinstance(policy, dict) or policy.get('approved') is not False or not policy.get('id'):
+                    raise ValueError('paid-v4 requires its explicit unapproved policy: ' + field)
             if any(bootstrap.get(field) is not False for field in ('compactContractIncluded', 'recoveryEnrollmentIncluded')):
                 raise ValueError('offline paid-v4 bootstrap cannot assert compact or recovery admission')
     elif bootstrap.get('kind') != 'rfc12-private-complete-bootstrap-file-fixture':

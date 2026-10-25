@@ -199,10 +199,6 @@ async fn licensed_withheld_claim() -> (Chain, Vec<Funding>, Funding, PalwBondKey
 /// no unit demanded twice, the default collected, the reservation released.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn g14r_the_actual_public_filer_service_resumes_after_a_restart_and_on_a_fresh_database_without_duplicates() {
-    super::on_service_stack(g14r_resumes_after_a_restart_and_on_a_fresh_database_body).await
-}
-
-async fn g14r_resumes_after_a_restart_and_on_a_fresh_database_body() {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
     let mut keep: Vec<kaspa_database::utils::DbLifetime> = Vec::new();
     let (mut chain, premine, funding, bond, claim) = licensed_withheld_claim().await;

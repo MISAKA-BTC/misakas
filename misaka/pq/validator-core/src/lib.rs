@@ -72,12 +72,7 @@ pub const VALIDATOR_SEED_LEN: usize = 32;
 /// (`fees 30000 … under the required amount of 232600`), wedging any validator that hit the
 /// fallback. 250 000 sits above that observed minimum yet below every real mass-based fee, so it can
 /// never be the under-fee cause again without over-charging the normal path.
-pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = PALW_TX_FEE_FLOOR_SOMPI;
-
-/// **The same flat fee floor under its role-neutral name** (RFC-0012 §5: extract the shared helpers before the DNS-only service
-/// retires). PALW, wallet and operator transactions use this name; [`ATTESTATION_TX_FEE_FLOOR_SOMPI`] stays the DNS validator's
-/// spelling of the identical value, so nothing a validator or PALW caller pays changes.
-pub const PALW_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
+pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
 
 /// Convert a transaction's non-contextual **compute mass** into the node's minimum relay fee
 /// (sompi), matching `minimum_required_transaction_relay_fee` in
@@ -430,60 +425,6 @@ pub fn build_fp_commitment_tx_with_original_public_v1(
         funding_outpoint,
         funding,
         fee,
-    )
-}
-
-/// **G14 R1/R2: an ORIGINAL TIR frame's carrier (`TFP1`)** — the plain original FP commitment (signed and stateless-checked by
-/// [`build_fp_commitment_tx_with`], byte for byte), wrapped with its TIR binding header, the producer's signed source pledge and the
-/// exact native rent it declares. The declaration is burned from this carrier's fee by consensus, so `fee` must cover relay AND
-/// `declared_rent_sompi`; admission refuses a carrier that pays less or declares another amount than the native plan's rent.
-#[allow(clippy::too_many_arguments)]
-pub fn build_fp_commitment_tx_with_tir_public_original_v1(
-    signer: &dyn MessageSigner,
-    network_domain: Hash64,
-    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    commitment: PalwFreePromptCommitmentV3,
-    prompt_token_ids: Vec<u32>,
-    price: FpCommitmentPriceV1<'_>,
-    header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-    pledge: &kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
-    history_pledge: Option<&kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
-    declared_rent_sompi: u64,
-    funding_outpoint: TransactionOutpoint,
-    funding: &UtxoEntry,
-    fee: u64,
-) -> Result<Transaction, String> {
-    if fee <= declared_rent_sompi {
-        return Err(format!("carrier fee {fee} does not cover the original TIR rent {declared_rent_sompi} it declares"));
-    }
-    let plain = build_fp_commitment_tx_with(
-        signer,
-        network_domain,
-        prompt_ids_form,
-        commitment,
-        prompt_token_ids,
-        price,
-        funding_outpoint,
-        funding,
-        fee,
-    )?;
-    let mut envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::new_v1(
-        plain.payload.clone(),
-        header.clone(),
-        pledge.clone(),
-        declared_rent_sompi,
-    )?;
-    if let Some(history) = history_pledge {
-        envelope = envelope.with_history_pledge_v1(history.clone())?;
-    }
-    build_funded_overlay_tx_with(
-        signer,
-        SUBNETWORK_ID_PALW_FP_COMMITMENT,
-        envelope.encode_v1()?,
-        funding_outpoint,
-        funding,
-        fee,
-        false,
     )
 }
 
@@ -1991,38 +1932,6 @@ impl ValidatorKey {
             tx.inputs[i].signature_script = script;
         }
         Ok(tx)
-    }
-
-    /// **RFC-0012 acceptance (EVM lane §9.2): the signed refund of an unclaimed `EVM_DEPOSIT_LOCK`.** Spends `lock` (its outpoint and
-    /// the virtual UTXO entry read by outpoint) to its own embedded refund script, less `fee`. Refused unless the lock parses, its
-    /// refund script is this key's own ML-DSA P2PKH (the only key that can sign it), and `pov_daa >= timeout` — the node refuses an
-    /// earlier spend (`EvmDepositLockNotRefundableYet`: until then the lock is claimable and not spendable). The signature script is
-    /// the refund P2PKH's (the lock-data prefix is a push-and-drop no-op).
-    pub fn build_deposit_lock_refund_tx(
-        &self,
-        lock: (TransactionOutpoint, UtxoEntry),
-        prefix: Prefix,
-        pov_daa: u64,
-        fee: u64,
-        storage_mass_parameter: u64,
-    ) -> Result<Transaction, String> {
-        let fields = kaspa_txscript::script_class::parse_evm_deposit_lock(&lock.1.script_public_key)
-            .ok_or_else(|| "the outpoint is not an EVM deposit lock".to_string())?;
-        let own = pay_to_address_script(&self.funding_address(prefix));
-        if fields.refund_script_public_key.script() != own.script() {
-            return Err("the lock's refund script is not this key's funding script".to_string());
-        }
-        if pov_daa < fields.timeout_daa_score {
-            return Err(format!(
-                "the lock is not refundable yet: DAA {pov_daa} < refund timeout {} (it is claimable until then)",
-                fields.timeout_daa_score
-            ));
-        }
-        if lock.1.amount <= fee {
-            return Err(format!("the lock's {} sompi does not cover the fee {fee}", lock.1.amount));
-        }
-        let outputs = vec![TransactionOutput::new(lock.1.amount - fee, own)];
-        self.sign_native_multi(std::slice::from_ref(&lock), outputs, storage_mass_parameter)
     }
 
     /// Mass-based fee (sompi) for an `n_inputs`-funded deposit-lock tx — the
@@ -4458,40 +4367,5 @@ mod rfc9_sighash_audit {
         garbage.inputs[0].signature_script[10] ^= 0xFF;
         assert_eq!(fresh_id(&garbage), id);
         assert!(!verifies(&garbage, &entry), "…but a corrupted script does not validate, so it is a refusal, not a second tx");
-    }
-    #[test]
-    fn rfc12_refund_is_timeout_bound_owned_and_validates_with_the_real_script_engine() {
-        use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
-        use kaspa_txscript::{TxScriptEngine, caches::Cache};
-        let owner = key();
-        let other = ValidatorKey::from_seed([0x78; VALIDATOR_SEED_LEN]);
-        let refund = pay_to_address_script(&owner.funding_address(Prefix::Testnet));
-        let point = TransactionOutpoint::new(Hash64::from_u64_word(12012), 0);
-        let entry = UtxoEntry::new(10_000_000, evm_deposit_lock_script([3; 20], 1000, 100, refund.script()), 5, false);
-        let build =
-            |key: &ValidatorKey, daa, fee| key.build_deposit_lock_refund_tx((point, entry.clone()), Prefix::Testnet, daa, fee, 0);
-        assert!(build(&owner, 999, 1000).is_err());
-        assert!(build(&other, 1000, 1000).is_err());
-        assert!(build(&owner, 1000, entry.amount).is_err());
-        let tx = build(&owner, 1000, 1000).unwrap();
-        let valid = |tx: &Transaction, entry: &UtxoEntry| {
-            let populated = PopulatedTransaction::new(tx, vec![entry.clone()]);
-            let cache = Cache::new(0);
-            let reused = SigHashReusedValuesUnsync::new();
-            TxScriptEngine::from_transaction_input(&populated, &tx.inputs[0], 0, entry, &reused, &cache).execute().is_ok()
-        };
-        assert!(valid(&tx, &entry), "the signature spends the actual prefixed EVM lock script");
-        assert_eq!(tx.outputs.len(), 1);
-        assert_eq!(tx.outputs[0].script_public_key, refund);
-        assert_eq!(tx.outputs[0].value, entry.amount - 1000);
-        let mut changed_tx = tx.clone();
-        changed_tx.outputs[0].value -= 1;
-        assert!(!valid(&changed_tx, &entry), "the fee/output is signed");
-        let mut changed_entry = entry.clone();
-        changed_entry.amount += 1;
-        assert!(!valid(&tx, &changed_entry), "the input amount is signed");
-        changed_entry = entry.clone();
-        changed_entry.script_public_key = evm_deposit_lock_script([3; 20], 1001, 100, refund.script());
-        assert!(!valid(&tx, &changed_entry), "the original lock timeout is signed, not just the refund suffix");
     }
 }

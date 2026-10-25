@@ -21,27 +21,6 @@ pub struct PalwBeaconSourceCostBoundsV1 {
 
 impl PalwBeaconSourceCostBoundsV1 {
     pub fn minimum_gross_fee(&self, terms: &misaka_palw_kernel::beacon_source::BeaconSourceTermsV1) -> Result<u64, String> {
-        self.minimum_gross_fee_with_material(terms, self.material_sompi)
-    }
-
-    /// **The gross floor of an X3 source** (REQ-X3-6, 2026-10-18): the same floor with the material term `material_sompi + extra_daa ×
-    /// c_retain`. The zero check on the measured `material_sompi` itself still applies, so an unmeasured material term is refused.
-    pub fn minimum_gross_fee_x3(
-        &self,
-        terms: &misaka_palw_kernel::beacon_source::BeaconSourceTermsV1,
-        x3_policy: &crate::palw_ruling_fences_v1::PalwClaimHardDeadlinePolicyV1,
-        extension: Option<&crate::palw_ruling_fences_v1::PalwX3RetentionExtensionV1>,
-    ) -> Result<u64, String> {
-        let material = crate::palw_ruling_fences_v1::palw_x3_material_term_with_retention_v1(self.material_sompi, x3_policy, extension)
-            .map_err(str::to_owned)?;
-        self.minimum_gross_fee_with_material(terms, material)
-    }
-
-    fn minimum_gross_fee_with_material(
-        &self,
-        terms: &misaka_palw_kernel::beacon_source::BeaconSourceTermsV1,
-        material_sompi: u64,
-    ) -> Result<u64, String> {
         terms.validate()?;
         let span =
             terms.hold_until.checked_sub(terms.seal_start).and_then(|d| d.checked_add(1)).ok_or("source cost horizon overflow")?;
@@ -65,7 +44,7 @@ impl PalwBeaconSourceCostBoundsV1 {
         [
             self.execution_sompi,
             self.carrier_sompi,
-            material_sompi,
+            self.material_sompi,
             self.public_court_sompi,
             self.locked_capital_sompi,
             self.minimum_net_receipt_sompi,
@@ -127,21 +106,12 @@ impl PalwBeaconSourceFeeFenceV1 {
 }
 impl Params {
     pub fn validate_palw_beacon_source_fee_v1(&self) -> Result<(), PalwModeV2Error> {
-        let Some(f) = self.palw_beacon_source_fee_v1.filter(|f| f.activation != ForkActivation::never()) else {
-            return Ok(());
-        };
-        // Fees are charged on opt-in sources and on paid-claim targets: both armed at or below.
-        let at_or_below = |a: Option<ForkActivation>| a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score());
-        if !at_or_below(self.palw_beacon_source_opt_in_v1.map(|o| o.activation))
-            || !at_or_below(self.palw_claim_challenge_v2.map(|c| c.activation))
-        {
+        if self.palw_beacon_source_fee_v1.is_some_and(|f| f.activation != ForkActivation::never()) {
             return Err(PalwModeV2Error::Invalid(
-                "palw_beacon_source_fee_v1 requires the opt-in source and the paid claim challenge fences at or below it",
+                "palw_beacon_source_fee_v1 cannot be armed: mandatory funded source policy, measured economic floors and public security/resource approval are incomplete",
             ));
         }
-        // The economic floors (d_src, N_max) and public security/resource approval are measured and reviewed: a pinned record
-        // for this exact policy (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
-        self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::BeaconSourceFeeV1, &f.policy)
+        Ok(())
     }
 }
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
@@ -419,61 +389,5 @@ mod tests {
             p.validate_palw_beacon_source_fee_v1().unwrap();
             assert_eq!(p.consensus_identity_id(), original.consensus_identity_id());
         }
-    }
-}
-
-/// REQ-X3-6 (econ): the X3 gross floor adds `extra_daa × c_retain` to the material term, and refuses an unmeasured one.
-#[cfg(test)]
-mod x3_gross_fee_tests {
-    use super::*;
-    use crate::palw_ruling_fences_v1::{PalwClaimHardDeadlineFenceV1, PalwX3RetentionExtensionV1};
-
-    fn terms() -> misaka_palw_kernel::beacon_source::BeaconSourceTermsV1 {
-        misaka_palw_kernel::beacon_source::BeaconSourceTermsV1 {
-            context: [1; 64],
-            seal_start: 10,
-            seal_end: 20,
-            reveal_end: 30,
-            final_by: 40,
-            hold_until: 100,
-            deposit: 100,
-            max_per_producer: 1,
-            max_total: 2,
-        }
-    }
-
-    fn bounds() -> PalwBeaconSourceCostBoundsV1 {
-        let mut b = PalwBeaconSourceFeeFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy.cost_bounds.unwrap();
-        b.execution_sompi = 200;
-        b.carrier_sompi = 20;
-        b.material_sompi = 30;
-        b.public_court_sompi = 40;
-        b.locked_capital_sompi = 50;
-        b.minimum_net_receipt_sompi = 60;
-        b
-    }
-
-    #[test]
-    fn x3_gross_floor_equals_the_old_floor_without_an_extension_and_adds_the_priced_extension() {
-        let b = bounds();
-        let mut x3 = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy;
-        x3.retention_cost_per_daa_sompi = 0;
-        assert_eq!(b.minimum_gross_fee(&terms()).unwrap(), 400);
-        assert_eq!(b.minimum_gross_fee_x3(&terms(), &x3, None).unwrap(), 400);
-        x3.retention_cost_per_daa_sompi = 5;
-        let ext = PalwX3RetentionExtensionV1 { base_retention_daa: 100, retention_daa: 110, extra_daa: 10 };
-        assert_eq!(b.minimum_gross_fee_x3(&terms(), &x3, Some(&ext)).unwrap(), 400 + 50);
-    }
-
-    #[test]
-    fn x3_gross_floor_refuses_an_unmeasured_positive_extension_and_an_unmeasured_material_term() {
-        let mut x3 = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy;
-        x3.retention_cost_per_daa_sompi = 0;
-        let ext = PalwX3RetentionExtensionV1 { base_retention_daa: 100, retention_daa: 110, extra_daa: 10 };
-        assert!(bounds().minimum_gross_fee_x3(&terms(), &x3, Some(&ext)).is_err(), "a positive extension at c_retain 0 is UNKNOWN");
-        let zero_ext = PalwX3RetentionExtensionV1 { base_retention_daa: 100, retention_daa: 100, extra_daa: 0 };
-        assert!(bounds().minimum_gross_fee_x3(&terms(), &x3, Some(&zero_ext)).is_ok());
-        let unmeasured_material = PalwBeaconSourceCostBoundsV1 { material_sompi: 0, ..bounds() };
-        assert!(unmeasured_material.minimum_gross_fee_x3(&terms(), &x3, None).is_err(), "the zero check on material still applies");
     }
 }

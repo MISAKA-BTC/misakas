@@ -1,6 +1,6 @@
 //! **RFC-0012 D1 — attacks on the maturity offset, through the REAL fold on testnet-12's own `Params`.**
 //!
-//! The question (docs/design/palw/execution/rfc-0012-policy-proposal.md §10): what would `safe` do if the evidence rule counted work at
+//! The question (docs/design/palw/rfc-0012-policy-proposal.md §10): what would `safe` do if the evidence rule counted work at
 //! `Final + 3,000`, `Final + 1,000` or `Final + 600` instead of v1's 5,400 after acceptance? Nothing here changes the shipped rule.
 //! v1 is the only rule in the tree; the three alternatives exist **only in this file**, as a function that re-times the fact the real
 //! conversion produced (`native_facts_of_block_v1`) and moves the lifecycle closure to the same instant.

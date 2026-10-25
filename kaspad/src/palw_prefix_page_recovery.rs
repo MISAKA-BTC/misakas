@@ -109,17 +109,6 @@ impl Records {
                 return Ok(true);
             };
             let entry = entry.map_err(|e| e.to_string())?;
-            if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
-                return Err("non-file in public record cache".into());
-            }
-            // put() may leave this disposable file after a crash or failed sync.
-            // It is not an accepted record and must not exhaust the paid CAS quota
-            // before native/public retrieval can repair a missing canonical file.
-            // Inventory and put run under the serialized replay worker lock.
-            if is_record_temporary_v1(&entry.file_name()) {
-                fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
-                continue;
-            }
             self.count += 1;
             if self.count > self.maximum_count {
                 return Err("public record cache exceeds admitted file budget".into());
@@ -166,11 +155,6 @@ impl Records {
             self.held.checked_sub(old).and_then(|n| n.checked_add(raw.len() as u64)).ok_or("record cache accounting overflow")?;
         Ok(())
     }
-}
-fn is_record_temporary_v1(name: &std::ffi::OsStr) -> bool {
-    let Some(name) = name.to_str() else { return false };
-    let Some(encoded) = name.strip_prefix("record-").and_then(|s| s.strip_suffix(".tmp")) else { return false };
-    encoded.parse::<Hash64>().is_ok_and(|head| name == format!("record-{head}.tmp"))
 }
 fn put(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let temp = path.with_extension("tmp");
@@ -626,65 +610,6 @@ mod tests {
         assert!(rebuilt.inventory().unwrap());
         rebuilt.save(&req, &first).unwrap();
         assert_eq!(rebuilt.read(&req), Some(first));
-    }
-    #[test]
-    fn crash_temporary_does_not_exhaust_maximum_paid_cas_on_restart_or_cache_loss() {
-        let dir = tempfile::tempdir().unwrap();
-        let directory = dir.path().join("records");
-        let first = record(81);
-        let req = wanted(&first);
-        let mut records = Records::open(directory.clone(), 1).unwrap();
-        assert!(records.inventory().unwrap());
-        records.save(&req, &first).unwrap();
-        let canonical = records.path(req.head);
-        let original = fs::read(&canonical).unwrap();
-        let abandoned = canonical.with_extension("tmp");
-        fs::write(&abandoned, vec![0; PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1]).unwrap();
-        drop(records);
-
-        // The original alone fills the admitted file count; the abandoned write
-        // also puts combined bytes beyond the one-record quota. Neither quota
-        // permits discarding the still-paid canonical accepted record.
-        let mut restarted = Records::open(directory.clone(), 1).unwrap();
-        assert!(restarted.inventory().unwrap());
-        assert!(!abandoned.exists());
-        assert_eq!((restarted.count, restarted.held), (1, original.len() as u64));
-        assert_eq!(fs::read(&canonical).unwrap(), original);
-        assert_eq!(restarted.read(&req), Some(first.clone()));
-        drop(restarted);
-
-        // A crash before the very first rename must likewise leave room for a
-        // fresh authenticated public/native fetch, rather than block inventory.
-        fs::remove_file(&canonical).unwrap();
-        fs::write(&abandoned, vec![0; PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1]).unwrap();
-        let mut rebuilt = Records::open(directory, 1).unwrap();
-        assert!(rebuilt.inventory().unwrap());
-        assert_eq!((rebuilt.count, rebuilt.held), (0, 0));
-        rebuilt.save(&req, &first).unwrap();
-        assert_eq!(rebuilt.read(&req), Some(first));
-    }
-    #[test]
-    fn crash_temporary_cleanup_uses_existing_scan_bound_and_exact_owned_names_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let directory = dir.path().join("records");
-        let mut records = Records::open(directory.clone(), 1).unwrap();
-        assert!(records.inventory().unwrap());
-        let first = record(82);
-        let req = wanted(&first);
-        records.save(&req, &first).unwrap();
-        for n in 100..170 {
-            fs::write(records.path(Hash64::from_u64_word(n)).with_extension("tmp"), [0u8]).unwrap();
-        }
-        drop(records);
-        let mut restarted = Records::open(directory, 1).unwrap();
-        assert!(!restarted.inventory().unwrap(), "one poll scans no more than 64 entries, including disposable files");
-        assert!(fs::read_dir(&restarted.directory).unwrap().count() >= 7);
-        assert!(restarted.inventory().unwrap());
-        assert_eq!(fs::read_dir(&restarted.directory).unwrap().count(), 1);
-        assert_eq!(restarted.read(&req), Some(first));
-        assert!(!is_record_temporary_v1(std::ffi::OsStr::new("record-not-a-hash.tmp")));
-        assert!(!is_record_temporary_v1(std::ffi::OsStr::new(&format!("other-{}.tmp", req.head))));
-        assert!(!is_record_temporary_v1(std::ffi::OsStr::new(&format!("record-{}", req.head))));
     }
     #[test]
     fn bounded_references_authenticate_every_sequence_and_reject_reorg_or_disk_substitution() {

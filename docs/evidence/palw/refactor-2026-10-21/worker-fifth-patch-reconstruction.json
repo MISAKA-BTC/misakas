@@ -1,8 +1,0 @@
-{
-  "base": "fd3c74aef",
-  "patch": "worker-fifth-source.patch",
-  "patch_sha256": "9ed5c6e175aac2acc5d3fd7946c9599e7169ddc7828c3d4609a11f4ce9083f28",
-  "source_files_reconstructed_exactly": 33,
-  "all_current_source_bytes_match": true,
-  "temporary_directory": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-worker-fifth-patch-wejtp5fv"
-}

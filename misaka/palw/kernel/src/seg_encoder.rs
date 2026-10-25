@@ -1,4 +1,4 @@
-//! **K2-TIR-v5: encoders and heads as ONE position whose ids are the job's** — `docs/design/palw/models/k2-real-scale.md` §12.
+//! **K2-TIR-v5: encoders and heads as ONE position whose ids are the job's** — `docs/design/palw/k2-real-scale.md` §12.
 //!
 //! A bidirectional encoder is lowered as one position over a padded token axis (`misaka-palw-tir-lower::lower::bidir`): every value
 //! is a `[L, …]` tensor of all rows at once, and the program reads the job's ids and their count as two params. In the version-1 view

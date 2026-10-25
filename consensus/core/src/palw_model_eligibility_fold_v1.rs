@@ -13,7 +13,7 @@
 //!                              REQ-ELIG-2: a Probation class's claim admitted inside the lineage / network budgets, planned with F = 0
 //!                              (`PalwBudgetPlanV1::without_final_weight_v1`) and pinned
 //! eligibility_final_weight_v1  REQ-ELIG-2/6: a pinned probation claim's Final adds no weight; the pin retires at Final / void
-//! apply_commit_eligibility_exam_v1   inner 74 (REQ-ELIG-3/4; GAP-E3: the attempt fee burned from free collateral)
+//! apply_commit_eligibility_exam_v1   inner 74 (REQ-ELIG-3/4)
 //! apply_attest_eligibility_exam_v1   inner 75 (REQ-ELIG-3)
 //! sweep_model_eligibility_v1   anchor → draw → verdict → outcome; lapse (REQ-ELIG-5); old exams retire
 //! ```
@@ -31,16 +31,6 @@ pub const PALW_ELIGIBILITY_NOT_ELIGIBLE_CODE_V1: &str = "ELIG_NOT_ELIGIBLE";
 /// The code a probation claim over its budget is refused with.
 pub const PALW_ELIGIBILITY_PROBATION_BUDGET_CODE_V1: &str = "ELIG_PROBATION_BUDGET";
 
-/// **Round 5 (user decision 2026-10-15): model-level review is ABOLISHED for every model.** Past `palw_model_tier_v1` (ADR-0179) this
-/// whole review — the stages Registered → Probation → Eligible → Lapsed, the exam (inner 74/75), the draws, the attempt fee, the attempt
-/// caps and the fair queue, renewal and lapse, the probation grant and pin — is unreachable: every read answers "not governed" (the
-/// old rule), exam objects are refused and the sweep does nothing. A registered model is the tier system's fixed 0.3 from its
-/// registration; per-claim safety is RFC-0018 Gate C's alone. (Validation arms `palw_model_eligibility_v1` only with the tier fence at
-/// or below it, so the review never runs on any valid network; below the tier fence the code stays the dormant RFC-0017 rule.)
-pub(super) fn eligibility_review_retired_v1(params: &PalwStateParamsV2, daa: u64) -> bool {
-    params.model_tier_v1().is_some_and(|mirror| mirror.active_at(daa))
-}
-
 /// How long a decided exam row is kept before it retires (its counters live on in the lineage / principal / network rows).
 fn exam_retention_daa(policy: &PalwModelEligibilityPolicyV1) -> u64 {
     policy.attempt_epoch_daa
@@ -50,13 +40,12 @@ fn row_of<T: borsh::BorshDeserialize>(state: &PalwChainStateV2, key: &[u8]) -> O
     state.kernel_route.as_ref()?.aux_row::<T>(PALW_MODEL_ELIGIBILITY_TABLE_V1, key)
 }
 
-fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) -> Result<(), PalwStateV2Error> {
+fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) {
     builder.write_kernel_row(
         PALW_MODEL_ELIGIBILITY_TABLE_V1,
         key,
         row.map(|r| borsh::to_vec(r).expect("an eligibility row serializes")),
-    )?;
-    Ok(())
+    );
 }
 
 /// **What the gates know about a class**: its facts, its lineage (artifact root), its registrant's operator id (all-zero for a
@@ -68,11 +57,7 @@ pub(super) struct PalwEligibilityClassViewV1 {
     pub row: Option<PalwEligibilityModelRowV1>,
 }
 
-pub(super) fn eligibility_class_view_v1(
-    state: &PalwChainStateV2,
-    params: &PalwStateParamsV2,
-    class_id: &Hash64,
-) -> Option<PalwEligibilityClassViewV1> {
+pub(super) fn eligibility_class_view_v1(state: &PalwChainStateV2, class_id: &Hash64) -> Option<PalwEligibilityClassViewV1> {
     let class = state.class(class_id)?;
     let principal = class
         .registrant_bond
@@ -86,8 +71,6 @@ pub(super) fn eligibility_class_view_v1(
             genesis: class.registrant_bond.is_none(),
             registered_daa: class.registered_daa,
             registry_admits,
-            // U-6 (user decision 2026-10-15): the BASE-0 floor alone is exempt.
-            base_floor: *class_id == params.base_class_id(),
         },
         lineage: class.artifact_root.as_bytes(),
         principal,
@@ -103,11 +86,8 @@ pub(super) fn eligibility_of_v1(
     class_id: &Hash64,
     daa: u64,
 ) -> Option<(PalwEligibilityStageV1, PalwEligibilityRightsV1)> {
-    if eligibility_review_retired_v1(params, daa) {
-        return None;
-    }
     let mirror = params.model_eligibility_v1_at(daa)?;
-    let view = eligibility_class_view_v1(state, params, class_id)?;
+    let view = eligibility_class_view_v1(state, class_id)?;
     let stage = palw_eligibility_effective_stage_v1(Some(mirror), &view.facts, view.row.as_ref(), daa)?;
     Some((stage, palw_eligibility_rights_of_stage_v1(stage, &mirror.policy)))
 }
@@ -167,11 +147,8 @@ pub(super) fn eligibility_probation_preview_v1(
     request_units: u64,
 ) -> Result<Option<PalwEligibilityProbationTicketV1>, PalwStateV2Error> {
     let now = ctx.daa_score;
-    if eligibility_review_retired_v1(builder.params, now) {
-        return Ok(None);
-    }
     let Some(mirror) = builder.params.model_eligibility_v1_at(now).copied() else { return Ok(None) };
-    let Some(view) = eligibility_class_view_v1(&builder.state, builder.params, class_id) else { return Ok(None) };
+    let Some(view) = eligibility_class_view_v1(&builder.state, class_id) else { return Ok(None) };
     let Some(stage) = palw_eligibility_effective_stage_v1(Some(&mirror), &view.facts, view.row.as_ref(), now) else {
         return Ok(None);
     };
@@ -182,25 +159,6 @@ pub(super) fn eligibility_probation_preview_v1(
     let lineage_key = eligibility_lineage_key_v1(&view.lineage);
     let mut lineage: PalwEligibilityLineageRowV1 = row_of(&builder.state, &lineage_key).unwrap_or_default();
     let mut network: PalwEligibilityNetworkRowV1 = row_of(&builder.state, &eligibility_network_key_v1()).unwrap_or_default();
-    // RFC-0016 V3 (user decision 2026-10-15): past V+ the Probation blocks draw on the ONE shared new-model pool (the entrant
-    // reserve, netted against its entrant grants) — refused whole when the pool cannot take the ask.
-    if let Some(pool_left) = super::palw_rfc0016_fold_v1::palw_rfc0016_shared_pool_left_v1(
-        &builder.state,
-        builder.params,
-        builder.extras.artifact_root_ownership_active,
-        now,
-    ) {
-        let blocks = request_units.div_ceil(crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1);
-        if blocks > pool_left {
-            return Err(PalwStateV2Error::ClassNotRewardable {
-                class: *class_id,
-                code: PALW_ELIGIBILITY_PROBATION_BUDGET_CODE_V1,
-                why: format!(
-                    "RFC-0017 / RFC-0016 V3: a probation claim asks {blocks} block(s); the shared new-model pool has {pool_left} left"
-                ),
-            });
-        }
-    }
     let units = palw_probation_admit_v1(&policy, &lineage, &network, now, request_units).map_err(|(model_left, network_left)| {
         PalwStateV2Error::ClassNotRewardable {
             class: *class_id,
@@ -235,17 +193,6 @@ pub(super) fn eligibility_probation_preview_v1(
     }))
 }
 
-/// **RFC-0016 V3: the Probation blocks admitted in the probation epoch of `daa`** (the network row; 0 below the fence). With both
-/// fences armed the probation epoch IS the V+ rights epoch (validation), so this is the pool's Probation draw this epoch.
-pub(super) fn eligibility_probation_used_blocks_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, daa: u64) -> u64 {
-    let Some(mirror) = params.model_eligibility_v1_at(daa) else { return 0 };
-    let network: PalwEligibilityNetworkRowV1 = row_of(state, &eligibility_network_key_v1()).unwrap_or_default();
-    if network.probation_epoch != palw_probation_epoch_v1(&mirror.policy, daa) {
-        return 0;
-    }
-    network.probation_units_used.div_ceil(crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1)
-}
-
 /// **Commit a previewed probation admission** (after the claim is written): the charge on the model, lineage, principal and
 /// network rows, and the claim's pin (`'C' ‖ claim`).
 pub(super) fn eligibility_probation_commit_v1(
@@ -255,23 +202,23 @@ pub(super) fn eligibility_probation_commit_v1(
     ticket: PalwEligibilityProbationTicketV1,
 ) -> Result<(), PalwStateV2Error> {
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    write_row(builder, ticket.model_key, Some(&ticket.model))?;
-    write_row(builder, ticket.lineage_key, Some(&ticket.lineage))?;
-    write_row(builder, ticket.principal_key, Some(&ticket.principal))?;
-    write_row(builder, eligibility_network_key_v1(), Some(&ticket.network))?;
-    write_row(builder, eligibility_probation_claim_key_v1(&claim_id.as_bytes()), Some(&ticket.pin))?;
+    write_row(builder, ticket.model_key, Some(&ticket.model));
+    write_row(builder, ticket.lineage_key, Some(&ticket.lineage));
+    write_row(builder, ticket.principal_key, Some(&ticket.principal));
+    write_row(builder, eligibility_network_key_v1(), Some(&ticket.network));
+    write_row(builder, eligibility_probation_claim_key_v1(&claim_id.as_bytes()), Some(&ticket.pin));
     Ok(())
 }
 
 /// **The Final hook** (REQ-ELIG-2/6): a pinned probation claim's Final. Its weight is already 0 through its ADR-0176 reservation
 /// (planned with F = 0, [`PalwEligibilityProbationTicketV1::weightless`]) — the number every re-derivation (`bond_budget_weight_or`,
-/// `retire_claim`, the consistency check) reads back — so this returns `contribution` unchanged (which is that 0). Its Final completes
-/// the job and settles its escrow; it adds no chain-choice weight. Below the fence there are no pins.
-///
-/// The pin outlives the Final (retired when the claim leaves the state or is voided — [`sweep_model_eligibility_v1`]). Round 5 (user
-/// decision 2026-10-15): with model review abolished no pin is ever written past `palw_model_tier_v1`.
-pub(super) fn eligibility_final_weight_v1(_builder: &mut TransitionBuilder<'_>, _claim_id: &Hash64, contribution: u128) -> u128 {
-    // The contribution is the budget's F = 0 grant already (every re-derivation reads the same number); nothing is written here.
+/// `retire_claim`, the consistency check) reads back — so this returns `contribution` unchanged (which is that 0) and only retires
+/// the pin. Its Final completes the job and settles its escrow; it adds no chain-choice weight. Below the fence there are no pins.
+pub(super) fn eligibility_final_weight_v1(builder: &mut TransitionBuilder<'_>, claim_id: &Hash64, contribution: u128) -> u128 {
+    let key = eligibility_probation_claim_key_v1(&claim_id.as_bytes());
+    if row_of::<PalwEligibilityProbationClaimRowV1>(&builder.state, &key).is_some() {
+        write_row::<PalwEligibilityProbationClaimRowV1>(builder, key, None);
+    }
     contribution
 }
 
@@ -284,11 +231,6 @@ pub(super) fn apply_commit_eligibility_exam_v1(
     commit: &PalwEligibilityExamCommitV1,
 ) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
-    if eligibility_review_retired_v1(builder.params, now) {
-        return Err(refuse(
-            "model-level review is abolished (palw_model_tier_v1, user decision 2026-10-15 round 5): no exam is taken",
-        ));
-    }
     let mirror = *builder.params.model_eligibility_v1_at(now).ok_or_else(|| refuse("palw_model_eligibility_v1 is not in force"))?;
     let policy = mirror.policy;
     policy.validate().map_err(refuse)?;
@@ -301,10 +243,6 @@ pub(super) fn apply_commit_eligibility_exam_v1(
         return Err(refuse("an eligibility exam commit needs an Active bond"));
     }
     let committer_principal = record.operator_id.as_bytes();
-    let collateral = record.collateral;
-    // The route's header, created on first use (a refusal below drops the whole object, header included: the processor folds each
-    // object alone before the block's fold).
-    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
     {
         let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("the kernel route is missing"))?;
         if commit.network != route.header.policy.network_domain {
@@ -312,10 +250,9 @@ pub(super) fn apply_commit_eligibility_exam_v1(
         }
     }
     let class_id = Hash64::from_bytes(commit.class_id);
-    let view = eligibility_class_view_v1(&builder.state, builder.params, &class_id)
-        .ok_or_else(|| refuse("the exam names no registered class"))?;
+    let view = eligibility_class_view_v1(&builder.state, &class_id).ok_or_else(|| refuse("the exam names no registered class"))?;
     let stage = palw_eligibility_effective_stage_v1(Some(&mirror), &view.facts, view.row.as_ref(), now)
-        .ok_or_else(|| refuse("the BASE-0 liveness floor takes no eligibility exam (U-6: its dedicated exception)"))?;
+        .ok_or_else(|| refuse("a genesis class takes no eligibility exam"))?;
     let mut model = match view.row.clone() {
         Some(row) => row,
         // A pre-fence class's first renewal: its grandfathered standing becomes a row.
@@ -338,21 +275,7 @@ pub(super) fn apply_commit_eligibility_exam_v1(
     let mut network: PalwEligibilityNetworkRowV1 = row_of(&builder.state, &eligibility_network_key_v1()).unwrap_or_default();
     palw_eligibility_commit_admits_v1(&policy, commit, &model, stage, &lineage, &principal, &network, now)
         .map_err(|why| refuse(format!("RFC-0017: the exam commit is refused: {why:?}")))?;
-    // GAP-E3 / U-4 (user decision 2026-10-15): the attempt cost, from the committer's FREE collateral (what its claims, courts and
-    // accusations do not hold), in two parts: (a) the spam-burn fee, burned whole at the commit — the same write as a registration
-    // burn (`collateral` falls, `slashed` rises, the release destroys it) — and (b) the inspection escrow (fee per position × m),
-    // taken the same way and paid out from the payout queue to the attesting positions at the decision (the rest returned): a
-    // transfer from the applicant, never new issuance.
-    let fee = policy.attempt_fee_sompi;
-    let escrow = palw_eligibility_inspection_escrow_v1(&policy);
-    let free = (collateral as u128)
-        .saturating_sub(builder.committed_at(signer, now))
-        .saturating_sub(builder.read().accuser_ledger_v1(signer, now));
-    if !palw_eligibility_attempt_cost_affordable_v1(free, &policy) {
-        return Err(refuse("RFC-0017: the committing bond's free collateral does not cover the burn fee and the inspection escrow"));
-    }
     palw_eligibility_count_attempt_v1(&policy, now, &mut lineage, &mut principal, &mut network);
-    palw_eligibility_record_fee_v1(fee, &mut lineage, &mut principal, &mut network);
     model.open_exam = Some(exam_id);
     // The anchor floor: the latest seed anchor recorded when the exam was committed — the draw waits for a strictly later one.
     let committed_span = builder.state.round_seed_anchor.as_ref().map(|anchor| anchor.span).unwrap_or(0);
@@ -368,18 +291,13 @@ pub(super) fn apply_commit_eligibility_exam_v1(
         deadline_daa: 0,
         attestations: Vec::new(),
         outcome: None,
-        inspection_escrow_sompi: escrow,
-        inspection_settled: escrow == 0,
     };
-    builder.burn_registration_fee(*signer, fee)?;
-    if escrow > 0 {
-        builder.burn_registration_fee(*signer, escrow)?;
-    }
-    write_row(builder, exam_key, Some(&exam))?;
-    write_row(builder, eligibility_model_key_v1(&commit.class_id), Some(&model))?;
-    write_row(builder, lineage_key, Some(&lineage))?;
-    write_row(builder, principal_key, Some(&principal))?;
-    write_row(builder, eligibility_network_key_v1(), Some(&network))?;
+    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+    write_row(builder, exam_key, Some(&exam));
+    write_row(builder, eligibility_model_key_v1(&commit.class_id), Some(&model));
+    write_row(builder, lineage_key, Some(&lineage));
+    write_row(builder, principal_key, Some(&principal));
+    write_row(builder, eligibility_network_key_v1(), Some(&network));
     Ok(())
 }
 
@@ -393,9 +311,6 @@ pub(super) fn apply_attest_eligibility_exam_v1(
     attestation: &PalwEligibilityAttestationV1,
 ) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
-    if eligibility_review_retired_v1(builder.params, now) {
-        return Err(refuse("model-level review is abolished (palw_model_tier_v1): no exam attestation is taken"));
-    }
     builder.params.model_eligibility_v1_at(now).ok_or_else(|| refuse("palw_model_eligibility_v1 is not in force"))?;
     attestation.validate().map_err(refuse)?;
     if attestation.verifier != palw_kernel_bond_id_v1(signer) {
@@ -405,7 +320,6 @@ pub(super) fn apply_attest_eligibility_exam_v1(
     if !matches!(record.status, PalwBondStatusV2::Active) {
         return Err(refuse("an eligibility attestation needs an Active bond"));
     }
-    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
     {
         let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("the kernel route is missing"))?;
         if attestation.network != route.header.policy.network_domain {
@@ -435,7 +349,8 @@ pub(super) fn apply_attest_eligibility_exam_v1(
         transcript: attestation.transcript,
         attested_daa: now,
     });
-    write_row(builder, key, Some(&exam))?;
+    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+    write_row(builder, key, Some(&exam));
     Ok(())
 }
 
@@ -477,20 +392,12 @@ pub(super) fn sweep_model_eligibility_v1(
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
-    if eligibility_review_retired_v1(builder.params, now) {
-        return Ok(());
-    }
     let Some(mirror) = builder.params.model_eligibility_v1_at(now).copied() else { return Ok(()) };
     let policy = mirror.policy;
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let anchor = builder.state.round_seed_anchor;
     let mut exam_writes: Vec<(Vec<u8>, Option<PalwEligibilityExamRowV1>)> = Vec::new();
     let mut model_writes: Vec<(Vec<u8>, PalwEligibilityModelRowV1)> = Vec::new();
-    // U-4 (b): the inspection settlements this sweep writes (payout key, payout).
-    let mut payout_writes: Vec<(Hash64, PalwPayoutV2)> = Vec::new();
-    let payload_of = |kernel_id: &EligDigestV1| {
-        builder.state.bonds.iter().find(|(key, _)| palw_kernel_bond_id_v1(key) == *kernel_id).map(|(_, record)| record.payout_payload)
-    };
     let mut pin_retirements: Vec<Vec<u8>> = Vec::new();
     let table = PALW_MODEL_ELIGIBILITY_TABLE_V1;
     let rows: Vec<(Vec<u8>, Vec<u8>)> =
@@ -500,45 +407,6 @@ pub(super) fn sweep_model_eligibility_v1(
             Some(ELIGIBILITY_EXAM_PREFIX_V1) => {
                 let mut exam: PalwEligibilityExamRowV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                 if let Some((_, decided)) = exam.outcome {
-                    // U-4 (b): settle a decided exam's inspection escrow before anything retires it (retried while the payout queue
-                    // lacks room; the row is kept until it is settled).
-                    if !exam.inspection_settled {
-                        let (paid, refund) = palw_eligibility_inspection_settlement_v1(&exam);
-                        let exam_id = exam.commit.id();
-                        let mut legs: Vec<(Hash64, PalwPayoutV2)> = Vec::new();
-                        let mut returned = refund;
-                        for (verifier, amount) in paid {
-                            match payload_of(&verifier) {
-                                Some(payload) => legs.push((
-                                    Hash64::from_bytes(palw_eligibility_inspection_payout_key_v1(&exam_id, &verifier)),
-                                    PalwPayoutV2 { payload, amount },
-                                )),
-                                // A verifier bond gone since it attested: its part returns to the applicant.
-                                None => returned = returned.saturating_add(amount),
-                            }
-                        }
-                        if returned > 0
-                            && let Some(payload) = payload_of(&exam.commit.committer)
-                        {
-                            legs.push((
-                                Hash64::from_bytes(palw_eligibility_inspection_payout_key_v1(&exam_id, &exam.commit.committer)),
-                                PalwPayoutV2 { payload, amount: returned },
-                            ));
-                        }
-                        // (An applicant bond gone too: its part stays destroyed with its collateral — never minted.)
-                        let room = PALW_V2_MAX_PENDING_PAYOUTS
-                            .saturating_sub(builder.state.pending_payouts.len())
-                            .saturating_sub(payout_writes.len());
-                        let fresh = legs.iter().all(|(k, _)| {
-                            !builder.state.pending_payouts.contains_key(k) && !payout_writes.iter().any(|(w, _)| w == k)
-                        });
-                        if legs.len() <= room && fresh {
-                            payout_writes.extend(legs);
-                            exam.inspection_settled = true;
-                            exam_writes.push((key.clone(), Some(exam)));
-                        }
-                        continue;
-                    }
                     if now > decided.saturating_add(exam_retention_daa(&policy)) {
                         exam_writes.push((key.clone(), None));
                     }
@@ -593,17 +461,12 @@ pub(super) fn sweep_model_eligibility_v1(
                 }
             }
             Some(ELIGIBILITY_PROBATION_CLAIM_PREFIX_V1) if key.len() == 65 => {
-                // A pin whose claim is gone (retired from the state) or voided retires; its units stay charged (consumption is
-                // history). U-2: a `Final` claim KEEPS its pin while it is in the state (it still carries no security credit until
-                // certified — RFC-0018 Gate C; round 5: no pin is written past `palw_model_tier_v1`).
+                // A pin whose claim is gone or terminal without passing the Final hook (a void, a retirement) retires; its units stay
+                // charged (consumption is history).
                 let mut id = [0u8; 64];
                 id.copy_from_slice(&key[1..]);
-                let kept = builder
-                    .state
-                    .claims
-                    .get(&Hash64::from_bytes(id))
-                    .is_some_and(|claim| !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. }));
-                if !kept {
+                let live = builder.state.claims.get(&Hash64::from_bytes(id)).is_some_and(|claim| !claim.phase.is_terminal());
+                if !live {
                     pin_retirements.push(key.clone());
                 }
             }
@@ -620,16 +483,13 @@ pub(super) fn sweep_model_eligibility_v1(
         }
     }
     for (key, exam) in exam_writes {
-        write_row(builder, key, exam.as_ref())?;
+        write_row(builder, key, exam.as_ref());
     }
     for (key, model) in model_writes {
-        write_row(builder, key, Some(&model))?;
+        write_row(builder, key, Some(&model));
     }
     for key in pin_retirements {
-        write_row::<PalwEligibilityProbationClaimRowV1>(builder, key, None)?;
-    }
-    for (key, payout) in payout_writes {
-        builder.write_payout(key, Some(payout))?;
+        write_row::<PalwEligibilityProbationClaimRowV1>(builder, key, None);
     }
     Ok(())
 }
@@ -642,20 +502,7 @@ pub fn palw_eligibility_status_of_v1(
     class_id: &Hash64,
     daa: u64,
 ) -> PalwEligibilityStatusReadV1 {
-    let Some(view) = eligibility_class_view_v1(state, params, class_id) else { return PalwEligibilityStatusReadV1::default() };
-    // ADR-0179: the model's tier and its allocation coefficient (`not-governed` / 1000 below `palw_model_tier_v1`).
-    let tier_mirror = params.model_tier_v1();
-    let tier = crate::palw_model_tier_v1::palw_model_tier_at_v1(state, params, class_id, daa);
-    let model_tier = if tier_mirror.is_some_and(|m| m.active_at(daa)) { tier.name() } else { "not-governed" };
-    let model_tier_permille = crate::palw_model_tier_v1::palw_model_tier_coefficient_permille_v1(tier_mirror, tier, daa);
-    // Round 5: past the tier fence there is no model review — the stage reads `not-governed` with the old rule's rights.
-    if eligibility_review_retired_v1(params, daa) {
-        return PalwEligibilityStatusReadV1 {
-            model_tier: model_tier.to_string(),
-            model_tier_permille,
-            ..PalwEligibilityStatusReadV1::default()
-        };
-    }
+    let Some(view) = eligibility_class_view_v1(state, class_id) else { return PalwEligibilityStatusReadV1::default() };
     let mirror = params.model_eligibility_v1();
     let (stage, next_renewal_daa, subsidy, block_right, final_weight) =
         palw_eligibility_status_v1(mirror, &view.facts, view.row.as_ref(), daa);
@@ -668,7 +515,5 @@ pub fn palw_eligibility_status_of_v1(
         final_weight,
         exams_passed: view.row.map(|r| r.exams_passed).unwrap_or(0),
         lineage_attempts: lineage.attempts_total,
-        model_tier: model_tier.to_string(),
-        model_tier_permille,
     }
 }

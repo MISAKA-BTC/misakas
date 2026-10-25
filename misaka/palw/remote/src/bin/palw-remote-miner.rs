@@ -6,7 +6,6 @@
 //!     --key-file <seed> --checkpoint <daa>:<block hash> [--pin <block hash>] \
 //!     --executor-cmd <program> [--executor-arg <arg> …] --state-dir <dir> [--steps N] [--poll-secs N]
 //!     [--verify-headers [--fork-choice-issuer <label>=<pubkey file> … --fork-choice-attestations <dir>]]
-//!     [--pin <block hash> --native-provider <txid>:<index>=tcp://<host>:<port>=<pubkey hex|@file> … [--native-max-body-mib N]]
 //! ```
 //!
 //! **RFC-0009 L2 by attestation (option D).** With `--verify-headers`, `--fork-choice-issuer` names an issuer YOU chose (its label and
@@ -283,7 +282,6 @@ impl RemoteNode for WrpcNode<'_> {
             .runtime
             .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
                 block_hashes: blocks.iter().map(|b| b.to_string()).collect(),
-                ..Default::default()
             }))
             .map_err(|e| format!("getPalwForkChoiceOpening: {e}"))?;
         if !served.available {
@@ -294,44 +292,6 @@ impl RemoteNode for WrpcNode<'_> {
             .iter()
             .filter(|e| e.available)
             .filter_map(|e| misaka_palw_remote::l2::opening_from_wire_v1(&e.leaf, &e.inner_root))
-            .collect())
-    }
-
-    /// RFC09: op 203 v2's committed leaves (untrusted; `misaka_palw_remote::l2_rule_e` verifies each with the full node's readers).
-    fn fork_choice_committed_v2(
-        &self,
-        blocks: &[Hash64],
-        window_above_blue: Option<u64>,
-        bonds: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
-    ) -> Result<Vec<misaka_palw_remote::l2_rule_e::CommittedServedV2>, String> {
-        let registry_bonds: Vec<String> =
-            bonds.iter().map(|b| faster_hex::hex_string(&borsh::to_vec(b).expect("a bond key serializes"))).collect();
-        let served = self
-            .runtime
-            .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
-                block_hashes: blocks.iter().map(|b| b.to_string()).collect(),
-                rule_e_window_above_blue: window_above_blue,
-                registry_bonds,
-            }))
-            .map_err(|e| format!("getPalwForkChoiceOpening: {e}"))?;
-        if !served.available {
-            return Err(format!("{} serves no fork-choice opening: {}", self.endpoint, served.reason));
-        }
-        Ok(served
-            .entries
-            .iter()
-            .filter(|e| e.available)
-            .filter_map(|e| {
-                misaka_palw_remote::l2_rule_e::committed_entry_from_wire_v2(
-                    &e.block_hash,
-                    &e.committed_leaf,
-                    &e.inner_root,
-                    window_above_blue,
-                    &e.rule_e_window,
-                    &e.registry_openings,
-                    bonds,
-                )
-            })
             .collect())
     }
 
@@ -465,10 +425,6 @@ struct Args {
     fork_choice_issuers: Vec<(Vec<u8>, Vec<u8>)>,
     fork_choice_dir: Option<PathBuf>,
     fork_choice_limits: misaka_palw_remote::l2::L2LimitsV1,
-    /// **RFC-0008 PAV3 / RFC-0009: the providers of this miner's native custody sessions** (`--native-provider`, repeatable). Each key is
-    /// proven against `--pin` before use; without providers, a step where the native custody form is in force holds by name.
-    native_providers: Vec<misaka_palw_remote::native_custody_exchange_v3::ProviderFlagV3>,
-    native_max_body: u64,
 }
 
 fn parse_args() -> Args {
@@ -482,7 +438,6 @@ fn parse_args() -> Args {
     let (mut drill_salt, mut drill_ruleset) = (None, None);
     let (mut fork_choice_issuers, mut fork_choice_dir, mut fork_choice_limits) =
         (Vec::new(), None, misaka_palw_remote::l2::L2LimitsV1::default());
-    let (mut native_providers, mut native_max_body) = (Vec::new(), 64u64 << 20);
     while let Some(flag) = it.next() {
         let mut value = |name: &str| it.next().unwrap_or_else(|| die(format!("{name} needs a value")));
         match flag.as_str() {
@@ -569,16 +524,6 @@ fn parse_args() -> Args {
                 }
                 fork_choice_limits.min_peers = n;
             }
-            "--native-provider" => native_providers.push(
-                misaka_palw_remote::native_custody_exchange_v3::parse_provider_flag_v3(&value("--native-provider")).unwrap_or_else(|e| die(e)),
-            ),
-            "--native-max-body-mib" => {
-                let mib: u64 = value("--native-max-body-mib").parse().unwrap_or_else(|_| die("--native-max-body-mib is not a number"));
-                if mib == 0 || mib > 1024 {
-                    die("--native-max-body-mib must be 1..=1024");
-                }
-                native_max_body = mib << 20;
-            }
             other => die(format!("unknown flag {other}")),
         }
     }
@@ -594,9 +539,6 @@ fn parse_args() -> Args {
         die(
             "--palw-drill-ruleset needs --palw-drill-genesis-salt: a stated ruleset is accepted only on a drill, whose genesis no real network shares",
         );
-    }
-    if !native_providers.is_empty() && pin.is_none() {
-        die("--native-provider needs --pin: a provider's key and operator are used only after they are proven against your pinned bond table");
     }
     let network = network.unwrap_or_else(|| die("--network is required"));
     let (daa, block_hash) =
@@ -629,8 +571,6 @@ fn parse_args() -> Args {
         fork_choice_issuers,
         fork_choice_dir,
         fork_choice_limits,
-        native_providers,
-        native_max_body,
     }
 }
 
@@ -702,7 +642,6 @@ fn main() {
     let refs: Vec<&dyn RemoteNode> = nodes.iter().map(|n| n as &dyn RemoteNode).collect();
 
     // The bond: PROVEN against a block you pinned, or what the nodes say (and labelled so).
-    let mut native_endpoints: Vec<misaka_palw_remote::native_custody_exchange_v3::ProviderEndpointV3> = Vec::new();
     match args.pin {
         Some(pin) => {
             use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
@@ -730,24 +669,6 @@ fn main() {
                 ),
                 Err(e) => die(format!("the bond is not proven against your pin: {e}")),
             }
-            // The native custody providers: each configured key must be its bond's REGISTERED key at the same pin.
-            for flag in &args.native_providers {
-                use misaka_palw_remote::native_custody_exchange_v3::{ProviderEndpointV3, ProviderKeySourceV3, decode_hex_v3};
-                let key = match &flag.pubkey {
-                    ProviderKeySourceV3::Hex(k) => k.clone(),
-                    ProviderKeySourceV3::File(path) => std::fs::read_to_string(path)
-                        .map_err(|e| format!("{path}: {e}"))
-                        .and_then(|t| decode_hex_v3(&t))
-                        .unwrap_or_else(|e| die(format!("--native-provider key: {e}"))),
-                };
-                match misaka_palw_remote::proof::verify_bond_against_pin(&header, pin, &fact, &flag.bond, &key) {
-                    Ok(state) => {
-                        say("native-provider-proven", serde_json::json!({ "bond": format!("{}:{}", flag.bond.0.transaction_id, flag.bond.0.index), "url": flag.url }));
-                        native_endpoints.push(ProviderEndpointV3 { bond: flag.bond, url: flag.url.clone(), pubkey: key, operator_id: state.operator_id });
-                    }
-                    Err(e) => die(format!("native provider {}:{} is not proven against your pin: {e}", flag.bond.0.transaction_id, flag.bond.0.index)),
-                }
-            }
         }
         None => say(
             "bond-unverified",
@@ -760,29 +681,6 @@ fn main() {
         kaspa_pq_validator_core::PalwAttemptJournalStore::load_or_empty(args.state_dir.join("attempt-journal.json"), key.validator_id)
             .unwrap_or_else(|e| die(e));
     let signer = JournaledSigner { key, journal: RefCell::new(journal) };
-    // RFC-0008 PAV3: the provider exchange (session open / manifest fetch+verify / signature exchange). The seal is made with the same
-    // bond key as the attempt signature (a second handle on the same seed; the journal guards the attempt signature, not the seal).
-    let network_domain_for_exchange = palw_network_domain_v2_for(args.network.as_bytes(), Some(params.genesis.hash));
-    let mut native_exchange = (!native_endpoints.is_empty()).then(|| {
-        use misaka_palw_remote::native_custody_exchange_v3::{ProviderExchangeV3, TcpProviderLinkV3};
-        let seal_key = ValidatorKey::from_seed(load_validator_seed(&args.key_file).unwrap_or_else(|e| die(e)));
-        ProviderExchangeV3::new(
-            network_domain_for_exchange,
-            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(args.bond),
-            pubkey.clone(),
-            native_endpoints.clone(),
-            args.native_max_body,
-            Box::new(TcpProviderLinkV3 { max_response: args.native_max_body, timeout: std::time::Duration::from_secs(600) }),
-            Box::new(move |message: &[u8], context: &[u8]| Ok(seal_key.sign_with_context(message, context).to_vec())),
-            Box::new(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)),
-        )
-        .unwrap_or_else(|e| die(e))
-        // Audit C-02: consensus filters sessions by their release-recovery enrollment past this fence; the row view cannot.
-        .with_recovery_fence({
-            let fence = params.palw_material_release_recovery_v2.as_ref().map(|f| f.activation);
-            Box::new(move |daa| fence.is_some_and(|a| a.is_active(daa)))
-        })
-    });
     let mut executor = CommandExecutor { program: args.executor.clone(), args: args.executor_args.clone() };
 
     let network_domain = palw_network_domain_v2_for(args.network.as_bytes(), Some(params.genesis.hash));
@@ -845,7 +743,6 @@ fn main() {
                         Ok(found)
                     }),
                     verify_signature: misaka_palw_remote::l2::verify_attestation_mldsa87_v1,
-                    params: Some(std::sync::Arc::new(params.clone())),
                 }),
             }),
             accept_unverified: args.accept_unverified,
@@ -889,8 +786,8 @@ fn main() {
         if let Some(t) = refs.iter().find_map(|r| r.fetch_template().ok()) {
             cfg_step.attempt.class_target = t.facts.class_target;
         }
-        // RFC-0008 PAV3: where this build's compiled params put the native custody form in force, the provider exchange mounts the
-        // PAV3 carriage; without configured providers this binary holds by name rather than drawing a PAV2 attempt every peer refuses.
+        // RFC-0008 PAV3: where this build's compiled params put the native custody form in force, this binary (no provider
+        // exchange) holds by name rather than drawing a PAV2 attempt every peer refuses.
         let custody_in_force = |daa: u64, class: &kaspa_hashes::Hash64| {
             params.palw_monetary_material_v1.as_ref().is_some_and(|fence| fence.activation.is_active(daa))
                 && match &params.palw_consensus_mode {
@@ -898,35 +795,7 @@ fn main() {
                     _ => true,
                 }
         };
-        // Session open: refresh the AUTHENTICATED row view (op 242 pages, finished by the proof pager) at the current sink each step.
-        // A failed read leaves no rows, so no session is selected and nothing is mounted (fail closed, never a PAV2 fallback).
-        if let Some(exchange) = native_exchange.as_mut() {
-            let rows = runtime
-                .block_on(nodes[0].client.get_block_dag_info())
-                .map_err(|e| e.to_string())
-                .and_then(|info| {
-                    let daa = info.virtual_daa_score;
-                    runtime
-                        .block_on(misaka_palw_remote::monetary_material_rpc::fetch_monetary_material_contracts_v1(
-                            &nodes[0].client,
-                            info.sink,
-                            params.palw_monetary_material_v1.as_ref().map(|f| f.activation),
-                            1 << 20,
-                            64 << 20,
-                            4096,
-                        ))
-                        .map(|rows| (rows, daa))
-                });
-            match rows {
-                Ok((rows, daa)) => exchange.set_rows(rows, daa),
-                Err(e) => {
-                    say("native-session-view-unavailable", serde_json::json!({ "reason": e }));
-                    exchange.set_rows(Vec::new(), 0);
-                }
-            }
-        }
-        let custody = native_exchange.as_mut().map(|x| x as &mut dyn misaka_palw_remote::attempt::NativeCustodyV3);
-        let outcome = step_with_custody(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw, &custody_in_force, custody);
+        let outcome = step_with_custody(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw, &custody_in_force, None);
         if let Some(mode) = state.last_mode {
             say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim(), "l2": state.last_l2 }));
         }

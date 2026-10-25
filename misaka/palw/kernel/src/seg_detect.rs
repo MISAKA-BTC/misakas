@@ -1,4 +1,4 @@
-//! **Detection at real scale: the re-execution check (K2-TIR-v4)** — `docs/design/palw/models/k2-real-scale.md` §11 (SOUND's SG-06).
+//! **Detection at real scale: the re-execution check (K2-TIR-v4)** — `docs/design/palw/k2-real-scale.md` §11 (SOUND's SG-06).
 //!
 //! The element courts bound what a prosecution costs once a fault is known (two positions of material, one filing). Finding the fault
 //! is a separate question. Sampling positions and reading their material finds a one-element lie with probability `m / P` for `m`

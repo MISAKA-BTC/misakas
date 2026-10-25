@@ -1,8 +1,0 @@
-{
-  "added-source/consensus/core/src/palw_tir_court_v1/source_geometry.rs": "9bf9e1781e63220a640116975bce79529d32a23f5ce8f4e5998073bb185704da",
-  "core-build.log": "0fde9204a0b1fb108c3b6cff15a6fd85f2e23392327d0c02eef197973299cf4e",
-  "failed-source/consensus/core/src/palw_tir_public_fold_v1.rs": "6b53518dd390aa1c79371185bf822217d9a80972b4462351acd23d9cca824b4c",
-  "failed-source/consensus/core/src/palw_tir_public_parameter_cover_v1.rs": "8a9783ea42ac00849da4c0acb3c5388e1489af89931e5f5fe45ab6f9cb93dd19",
-  "source.patch": "eff366f556e56675cf785f676e5cfe34cd9814bef8d8deba348bb636e42b1b75",
-  "verification.json": "76c0c8d0df188e07575af27c545eedf125a2be00cd2758bf3ab98a3f2e598846"
-}

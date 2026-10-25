@@ -312,15 +312,6 @@ pub fn palw_exec_v2_claim_outcome_v1(row: &ClaimRowV1, daa: u64) -> PalwSliceVer
 
 pub(crate) const PALW_EXEC_APPROVAL_KEY_BYTES_V1: usize = std::mem::size_of::<misaka_palw_kernel::hash::Digest>() + 1;
 
-/// **The selected approval EXEC credit accepts** — [`palw_exec_v2_selected_approval_v1`] minus a bootstrap-locked paid claim
-/// (user decision 2026-10-17, dormant): a claim whose checkers were drawn from the network's pinned bootstrap seed (no work beacon
-/// existed yet) had a PREDICTABLE draw, so it may seed the beacon (its event is exported) but earns no EXEC credit. This is the
-/// smallest form of "reduced reward": EXEC credit is the one reward selected approval unlocks; the kernel claim's own Final payment
-/// is the payer's escrow (GAP-5), not an issued reward, and is unchanged.
-pub(crate) fn palw_exec_v2_credit_approval_v1(route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1, claim: &Hash64) -> bool {
-    palw_exec_v2_selected_approval_v1(route, claim) && !route.paid_claim_bootstrap_locked_v2(&claim.as_bytes())
-}
-
 /// Credit view of an already authenticated native route, never a snapshot
 /// validator. The normal Panel-licensed lifecycle is fed by the native selected
 /// receipt tally. An optimistic lifecycle is not that tally: paid claims must

@@ -112,7 +112,7 @@ pub(super) fn fund_panel_sources_v2(
         (crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5, borsh::to_vec(&cost).unwrap()),
         (PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2, borsh::to_vec(&authority).unwrap()),
     ] {
-        builder.write_kernel_row(table, key.clone(), Some(bytes))?;
+        builder.write_kernel_row(table, key.clone(), Some(bytes));
     }
     let object = misaka_palw_kernel::route::KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms };
     let result = super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(builder, ctx, &object.encode(), signer);

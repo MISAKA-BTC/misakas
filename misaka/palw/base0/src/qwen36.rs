@@ -1519,9 +1519,7 @@ const DATA_ALIGNMENT: usize = 16384;
 /// from the shape, so the offsets are arithmetic — and the tensors then arrive in the order the
 /// plan declared them.
 pub struct Qwen36Writer {
-    /// Where the bytes go: the artifact file ([`Qwen36Writer::create`]), or any sink ([`Qwen36Writer::create_to`] — a pipe into
-    /// the PALWART3 packer, or nothing at all for a measuring pass).
-    file: Box<dyn std::io::Write + Send>,
+    file: std::io::BufWriter<std::fs::File>,
     plan: Vec<(String, usize)>,
     next: usize,
     written: usize,
@@ -1534,40 +1532,13 @@ pub struct Qwen36Writer {
     /// triples are patched in place at the end. The layout does not change: only the seventeen
     /// bytes of each triple do, which is what makes this a patch rather than a second format.
     param_offsets: std::collections::BTreeMap<String, (usize, usize)>,
-    /// The file to patch the measured parameters into ([`Qwen36Writer::finish_with_params`]); `None` for a sink, whose header
-    /// must be built with the measured parameters already in it.
-    path: Option<std::path::PathBuf>,
-    /// The header's length (the data region's start).
-    data_start: usize,
-    /// BLAKE2b-256 of every tensor's codes as pushed, by name.
-    digests: BTreeMap<String, [u8; 32]>,
-    /// The digests a previous pass recorded: a push whose codes differ is refused before a byte of it is written.
-    expect: Option<BTreeMap<String, [u8; 32]>>,
+    path: std::path::PathBuf,
 }
 
 impl Qwen36Writer {
     /// `plan` is every tensor in the order it will be supplied, with its length in codes.
     pub fn create(
         path: &std::path::Path,
-        shape: &Qwen36ShapeV1,
-        rope: &RopeTableV1,
-        params: &BTreeMap<String, Vec<u8>>,
-        plan: Vec<(String, usize)>,
-    ) -> std::io::Result<Self> {
-        let file = std::io::BufWriter::with_capacity(1 << 22, std::fs::File::create(path)?);
-        let mut w = Self::create_to(Box::new(file), shape, rope, params, plan)?;
-        w.path = Some(path.to_path_buf());
-        Ok(w)
-    }
-
-    /// [`create`](Self::create) into any sink, written strictly in order: the header with `params` as given, then every tensor's
-    /// codes. A sink cannot be patched, so a converter that measures its parameters builds this header with the measured
-    /// values (a first pass measured them): the bytes are then exactly the ones `create` + [`finish_with_params`] leaves in a
-    /// file, because the patch replaces each row's value bytes in place and nothing else in the header depends on them.
-    ///
-    /// [`finish_with_params`]: Self::finish_with_params
-    pub fn create_to(
-        mut sink: Box<dyn std::io::Write + Send>,
         shape: &Qwen36ShapeV1,
         rope: &RopeTableV1,
         params: &BTreeMap<String, Vec<u8>>,
@@ -1609,34 +1580,9 @@ impl Qwen36Writer {
         out[start_field..start_field + 8].copy_from_slice(&(data_start as u64).to_le_bytes());
         out.resize(data_start, 0);
 
-        sink.write_all(&out)?;
-        Ok(Self {
-            file: sink,
-            plan,
-            next: 0,
-            written: 0,
-            param_offsets,
-            path: None,
-            data_start,
-            digests: BTreeMap::new(),
-            expect: None,
-        })
-    }
-
-    /// Refuse any tensor whose codes differ from what a previous pass recorded ([`digests`](Self::digests)).
-    pub fn with_expected_digests(mut self, expect: BTreeMap<String, [u8; 32]>) -> Self {
-        self.expect = Some(expect);
-        self
-    }
-
-    /// The whole file's length: the header and every planned tensor.
-    pub fn file_bytes(&self) -> usize {
-        self.data_start + self.plan.iter().map(|(_, n)| n).sum::<usize>()
-    }
-
-    /// BLAKE2b-256 of every tensor pushed so far, by name.
-    pub fn digests(&self) -> &BTreeMap<String, [u8; 32]> {
-        &self.digests
+        let mut file = std::io::BufWriter::with_capacity(1 << 22, std::fs::File::create(path)?);
+        file.write_all(&out)?;
+        Ok(Self { file, plan, next: 0, written: 0, param_offsets, path: path.to_path_buf() })
     }
 
     /// Append the next tensor. Refuses a name or a length the plan did not declare — the
@@ -1655,16 +1601,6 @@ impl Qwen36Writer {
         }
         // SAFETY-free reinterpretation: `i8` and `u8` have the same layout, and this is a write.
         let bytes: &[u8] = unsafe { std::slice::from_raw_parts(codes.as_ptr() as *const u8, codes.len()) };
-        let mut digest = [0u8; 32];
-        digest.copy_from_slice(blake2b_simd::Params::new().hash_length(32).hash(bytes).as_bytes());
-        if let Some(expect) = &self.expect
-            && expect.get(name) != Some(&digest)
-        {
-            return Err(std::io::Error::other(format!(
-                "{name}: the codes differ from the measuring pass's (the conversion is not deterministic across passes)"
-            )));
-        }
-        self.digests.insert(name.to_string(), digest);
         self.file.write_all(bytes)?;
         self.next += 1;
         self.written += codes.len();
@@ -1692,14 +1628,9 @@ impl Qwen36Writer {
         if self.next != self.plan.len() {
             return Err(std::io::Error::other(format!("the plan declared {} tensors and {} arrived", self.plan.len(), self.next)));
         }
-        let Some(path) = self.path.clone() else {
-            return Err(std::io::Error::other(
-                "a streamed artifact cannot be patched: build its header with the measured parameters (create_to) and finish()",
-            ));
-        };
         self.file.flush()?;
         drop(self.file);
-        let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+        let mut file = std::fs::OpenOptions::new().write(true).open(&self.path)?;
         for (name, bytes) in measured {
             let Some((offset, len)) = self.param_offsets.get(name) else {
                 return Err(std::io::Error::other(format!("the header does not declare a parameter row {name}")));

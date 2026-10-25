@@ -16,16 +16,8 @@ repository.workspace = true
 misaka-palw-tir = { path = "../core" }
 borsh.workspace = true
 blake2b_simd.workspace = true
-# PALWART3 segments carry their SHA-256 (the Hugging Face LFS object id), so a remote copy is checked
-# without downloading it.
-sha2.workspace = true
 thiserror.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
-
-# Genesis 8: the one PALWART3 container's packer, inspector, verifier and legacy extractor (no consensus crate).
-[[bin]]
-name = "palwart"
-path = "src/bin/palwart.rs"
 
 [dev-dependencies]
 serde_json.workspace = true

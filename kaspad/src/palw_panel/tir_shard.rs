@@ -1075,7 +1075,7 @@ impl super::PalwPanelService {
                 }
                 continue;
             }
-            let tir = match self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) {
+            let tir = match self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) {
                 None => continue,
                 Some(Ok(tir)) => std::sync::Arc::new(tir),
                 Some(Err(why)) => {
@@ -1854,7 +1854,7 @@ impl super::PalwPanelService {
                 }
                 continue;
             };
-            let Some(Ok(tir)) = self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { continue };
+            let Some(Ok(tir)) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) else { continue };
             let (s_l, s_p) = plans
                 .iter()
                 .find(|(c, _)| *c == duty.class_id)
@@ -2022,7 +2022,7 @@ impl super::PalwPanelService {
         let claim = duty.claim_id;
         let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
         if let std::collections::hash_map::Entry::Vacant(e) = books.run_pursuits.entry(claim) {
-            let Ok(backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { return };
+            let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return };
             let Some((ctx, prompt)) = self.attempt_job_for_claim(
                 session,
                 backend.as_ref(),
@@ -2300,7 +2300,7 @@ impl super::PalwPanelService {
                 }) {
                     continue;
                 }
-                let Some(Ok(tir)) = self.resolve_tir_registered_v1(session, class_id, class.artifact_root) else { continue };
+                let Some(Ok(tir)) = self.backends().resolve_tir_v1(class_id, class.artifact_root) else { continue };
                 // **Per-segment pricing (`palw_tir_shard_segment_v2`, dormant; agent SHARD): readiness is the shard's heaviest cell.**
                 // Past the fence a node proves a shard only when its host can hold the shard's heaviest cell (its last segment's
                 // history), so every ready seat can host every cell of its shard and the draw needs no tier. Below it nothing changes.

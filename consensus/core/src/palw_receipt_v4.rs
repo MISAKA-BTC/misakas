@@ -464,7 +464,6 @@ pub fn check_palw_receipt_spend_admission_v5(
     beacon: &PalwBeaconFactV3,
     envelope: &PalwReceiptSpendEnvelopeV4,
     pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
-    gate_c: Option<&crate::palw_state_v2::PalwStateParamsV2>,
 ) -> Result<Hash64, PalwFpAdmissionV3Error> {
     let spend = &envelope.spend;
     let facts = ReceiptSpendFacts {
@@ -473,7 +472,7 @@ pub fn check_palw_receipt_spend_admission_v5(
         quantum_index: spend.quantum_index,
         beacon_block: spend.beacon_block,
     };
-    let claim = receipt_items_1_to_5(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, &facts, pricing, gate_c)?;
+    let claim = receipt_items_1_to_5(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, &facts, pricing)?;
 
     // 6'. The authorization is the claim's executor's: same bond, still standing, its registered key.
     let executor_key = PalwBondKeyV2(spend.executor_bond);
@@ -527,14 +526,13 @@ pub fn check_palw_receipt_spend_admission_full_v5<V>(
     envelope: &PalwReceiptSpendEnvelopeV4,
     verify_mldsa87: V,
     pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
-    gate_c: Option<&crate::palw_state_v2::PalwStateParamsV2>,
 ) -> Result<Hash64, PalwFpAdmissionV3Error>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
     envelope.validate_stateless_v4(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signatures_v4(verify_mldsa87)?;
-    check_palw_receipt_spend_admission_v5(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope, pricing, gate_c)
+    check_palw_receipt_spend_admission_v5(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope, pricing)
 }
 
 /// **The reward split of a V4 receipt block.** `subsidy_part` is the worker-base share derived from the block's subsidy; the

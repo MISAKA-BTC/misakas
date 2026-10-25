@@ -773,8 +773,6 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         vesting_eta_estimated: item.vesting_eta_estimated,
         committed_sompi: item.committed_sompi.clone(),
         reservation_split: item.reservation_split.clone(),
-        security_certification: item.security_certification.clone(),
-        claim_local_settlement: item.claim_local_settlement.clone(),
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -945,9 +943,6 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwSettlementResponse>, protowire::Ge
         depth_is_lower_bound: item.depth_is_lower_bound,
         safe_frontier_blue_score: item.safe_frontier_blue_score,
         safe_frontier_daa: item.safe_frontier_daa,
-        // RFC-0018 Gate C (fields 13/14).
-        uncertified_final_anchors: item.uncertified_final_anchors,
-        security_certification_premise: item.security_certification_premise.clone(),
         error: None,
     }
 });
@@ -1874,11 +1869,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, protowire::GetPalwForkChoiceOpeningRequestMessage, {
-    Self {
-        block_hashes: item.block_hashes.clone(),
-        rule_e_window_above_blue: item.rule_e_window_above_blue,
-        registry_bonds: item.registry_bonds.clone(),
-    }
+    Self { block_hashes: item.block_hashes.clone() }
 });
 from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoiceEntry, {
     Self {
@@ -1890,9 +1881,6 @@ from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoic
         inner_root: item.inner_root.clone(),
         committed_root: item.committed_root.clone(),
         committed_form: item.committed_form,
-        committed_leaf: item.committed_leaf.clone(),
-        rule_e_window: item.rule_e_window.clone(),
-        registry_openings: item.registry_openings.clone(),
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, protowire::GetPalwForkChoiceOpeningResponseMessage, {
@@ -2069,8 +2057,6 @@ from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifec
         eligibility_final_weight: item.eligibility_final_weight,
         eligibility_exams_passed: item.eligibility_exams_passed,
         eligibility_lineage_attempts: item.eligibility_lineage_attempts,
-        model_tier: item.model_tier.clone(),
-        model_tier_permille: item.model_tier_permille,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -2127,33 +2113,6 @@ from!(item: &kaspa_rpc_core::RpcPalwClassSeating, protowire::RpcPalwClassSeating
         licensable_share_permille: item.licensable_share_permille.into(),
     }
 });
-// RFC-0019: the annual catalog (registry response v4 / proto field 41).
-from!(item: &kaspa_rpc_core::RpcPalwAnnualCatalogEdition, protowire::RpcPalwAnnualCatalogEdition, {
-    Self {
-        edition: item.edition,
-        activation_daa: item.activation_daa,
-        previous_root: item.previous_root.clone(),
-        root: item.root.clone(),
-        models: item.models,
-        state: item.state.clone(),
-    }
-});
-from!(item: &kaspa_rpc_core::RpcPalwAnnualCatalogStatus, protowire::RpcPalwAnnualCatalogStatus, {
-    Self {
-        scheduled: item.scheduled,
-        fence_daa: item.fence_daa,
-        active: item.active,
-        current_edition: item.current_edition,
-        current_root: item.current_root.clone(),
-        has_next: item.has_next,
-        next_edition: item.next_edition,
-        next_activation_daa: item.next_activation_daa,
-        next_root: item.next_root.clone(),
-        editions: item.editions.iter().map(protowire::RpcPalwAnnualCatalogEdition::from).collect(),
-        kernel_version_max: item.kernel_version_max,
-        readiness: item.readiness.clone(),
-    }
-});
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire::GetPalwModelRegistryResponseMessage, {
     Self {
         available: item.available,
@@ -2196,7 +2155,6 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire:
         final_work_epochs: item.final_work_epochs,
         blocking: item.blocking.iter().map(protowire::RpcPalwClassBlocking::from).collect(),
         seating: item.seating.iter().map(protowire::RpcPalwClassSeating::from).collect(),
-        annual_catalog: Some((&item.annual_catalog).into()),
         error: None,
     }
 });
@@ -3302,8 +3260,6 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         vesting_eta_estimated: item.vesting_eta_estimated,
         committed_sompi: item.committed_sompi.clone(),
         reservation_split: item.reservation_split.clone(),
-        security_certification: item.security_certification.clone(),
-        claim_local_settlement: item.claim_local_settlement.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {
@@ -3488,9 +3444,6 @@ try_from!(item: &protowire::GetPalwSettlementResponseMessage, RpcResult<kaspa_rp
         depth_is_lower_bound: item.depth_is_lower_bound,
         safe_frontier_blue_score: item.safe_frontier_blue_score,
         safe_frontier_daa: item.safe_frontier_daa,
-        // RFC-0018 Gate C (proto fields 13/14).
-        uncertified_final_anchors: item.uncertified_final_anchors,
-        security_certification_premise: item.security_certification_premise.clone(),
     }
 });
 try_from!(item: &protowire::GetPrecommitDutyRequestMessage, kaspa_rpc_core::GetPrecommitDutyRequest, {
@@ -4403,11 +4356,7 @@ try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kasp
     }
 });
 try_from!(item: &protowire::GetPalwForkChoiceOpeningRequestMessage, kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, {
-    Self {
-        block_hashes: item.block_hashes.clone(),
-        rule_e_window_above_blue: item.rule_e_window_above_blue,
-        registry_bonds: item.registry_bonds.clone(),
-    }
+    Self { block_hashes: item.block_hashes.clone() }
 });
 try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkChoiceEntry, {
     Self {
@@ -4419,9 +4368,6 @@ try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkC
         inner_root: item.inner_root.clone(),
         committed_root: item.committed_root.clone(),
         committed_form: item.committed_form,
-        committed_leaf: item.committed_leaf.clone(),
-        rule_e_window: item.rule_e_window.clone(),
-        registry_openings: item.registry_openings.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwForkChoiceOpeningResponseMessage, RpcResult<kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, {
@@ -4612,9 +4558,6 @@ try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelL
         eligibility_final_weight: item.eligibility_final_weight || item.eligibility_stage.is_empty(),
         eligibility_exams_passed: item.eligibility_exams_passed,
         eligibility_lineage_attempts: item.eligibility_lineage_attempts,
-        // ADR-0179: a peer that sends no tier (an older node) is untiered — every model 1.0.
-        model_tier: if item.model_tier.is_empty() { "not-governed".to_string() } else { item.model_tier.clone() },
-        model_tier_permille: if item.model_tier.is_empty() { 1_000 } else { item.model_tier_permille },
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -4717,43 +4660,6 @@ try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa
         final_work_epochs: item.final_work_epochs,
         blocking: item.blocking.iter().map(kaspa_rpc_core::RpcPalwClassBlocking::from).collect(),
         seating: item.seating.iter().map(kaspa_rpc_core::RpcPalwClassSeating::try_from).collect::<Result<Vec<_>, _>>()?,
-        // RFC-0019 (proto field 41): absent from a node before it — read as not scheduled.
-        annual_catalog: item
-            .annual_catalog
-            .as_ref()
-            .map(kaspa_rpc_core::RpcPalwAnnualCatalogStatus::try_from)
-            .transpose()?
-            .unwrap_or_default(),
-    }
-});
-try_from!(item: &protowire::RpcPalwAnnualCatalogEdition, kaspa_rpc_core::RpcPalwAnnualCatalogEdition, {
-    Self {
-        edition: item.edition,
-        activation_daa: item.activation_daa,
-        previous_root: item.previous_root.clone(),
-        root: item.root.clone(),
-        models: item.models,
-        state: item.state.clone(),
-    }
-});
-try_from!(item: &protowire::RpcPalwAnnualCatalogStatus, kaspa_rpc_core::RpcPalwAnnualCatalogStatus, {
-    Self {
-        scheduled: item.scheduled,
-        fence_daa: item.fence_daa,
-        active: item.active,
-        current_edition: item.current_edition,
-        current_root: item.current_root.clone(),
-        has_next: item.has_next,
-        next_edition: item.next_edition,
-        next_activation_daa: item.next_activation_daa,
-        next_root: item.next_root.clone(),
-        editions: item
-            .editions
-            .iter()
-            .map(kaspa_rpc_core::RpcPalwAnnualCatalogEdition::try_from)
-            .collect::<Result<Vec<_>, _>>()?,
-        kernel_version_max: item.kernel_version_max,
-        readiness: item.readiness.clone(),
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);
@@ -6069,155 +5975,6 @@ mod palw_state_proof_grpc_tests {
     }
 }
 
-from!(item: &kaspa_rpc_core::GetPalwRfc0016ReportRequest, protowire::GetPalwRfc0016ReportRequestMessage, {
-    Self { class_hex: item.class_hex.clone() }
-});
-try_from!(item: &protowire::GetPalwRfc0016ReportRequestMessage, kaspa_rpc_core::GetPalwRfc0016ReportRequest, {
-    Self { class_hex: item.class_hex.clone() }
-});
-from!(item: RpcResult<&kaspa_rpc_core::GetPalwRfc0016ReportResponse>, protowire::GetPalwRfc0016ReportResponseMessage, {
-    Self {
-        available: item.available,
-        armed: item.armed,
-        now_daa: item.now_daa,
-        report_json: item.report_json.clone(),
-        error: None,
-    }
-});
-try_from!(item: &protowire::GetPalwRfc0016ReportResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRfc0016ReportResponse>, {
-    Self { available: item.available, armed: item.armed, now_daa: item.now_daa, report_json: item.report_json.clone() }
-});
-
-// Tooling lane (ops 225-228): the user views.
-from!(item: &kaspa_rpc_core::GetPalwClaimDetailRequest, protowire::GetPalwClaimDetailRequestMessage, {
-    Self { claim_hex: item.claim_hex.clone() }
-});
-try_from!(item: &protowire::GetPalwClaimDetailRequestMessage, kaspa_rpc_core::GetPalwClaimDetailRequest, {
-    Self { claim_hex: item.claim_hex.clone() }
-});
-from!(item: &kaspa_rpc_core::GetPalwCourtStateRequest, protowire::GetPalwCourtStateRequestMessage, {
-    Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone() }
-});
-try_from!(item: &protowire::GetPalwCourtStateRequestMessage, kaspa_rpc_core::GetPalwCourtStateRequest, {
-    Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone() }
-});
-from!(_item: &kaspa_rpc_core::GetPalwFenceScheduleRequest, protowire::GetPalwFenceScheduleRequestMessage, {
-    Self {}
-});
-try_from!(_item: &protowire::GetPalwFenceScheduleRequestMessage, kaspa_rpc_core::GetPalwFenceScheduleRequest, {
-    Self {}
-});
-from!(item: &kaspa_rpc_core::GetPalwBondDetailRequest, protowire::GetPalwBondDetailRequestMessage, {
-    Self { bond: item.bond.clone() }
-});
-try_from!(item: &protowire::GetPalwBondDetailRequestMessage, kaspa_rpc_core::GetPalwBondDetailRequest, {
-    Self { bond: item.bond.clone() }
-});
-from!(item: RpcResult<&kaspa_rpc_core::GetPalwClaimDetailResponse>, protowire::GetPalwClaimDetailResponseMessage, {
-    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone(), error: None }
-});
-try_from!(item: &protowire::GetPalwClaimDetailResponseMessage, RpcResult<kaspa_rpc_core::GetPalwClaimDetailResponse>, {
-    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone() }
-});
-from!(item: RpcResult<&kaspa_rpc_core::GetPalwCourtStateResponse>, protowire::GetPalwCourtStateResponseMessage, {
-    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone(), error: None }
-});
-try_from!(item: &protowire::GetPalwCourtStateResponseMessage, RpcResult<kaspa_rpc_core::GetPalwCourtStateResponse>, {
-    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone() }
-});
-from!(item: RpcResult<&kaspa_rpc_core::GetPalwFenceScheduleResponse>, protowire::GetPalwFenceScheduleResponseMessage, {
-    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone(), error: None }
-});
-try_from!(item: &protowire::GetPalwFenceScheduleResponseMessage, RpcResult<kaspa_rpc_core::GetPalwFenceScheduleResponse>, {
-    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone() }
-});
-from!(item: RpcResult<&kaspa_rpc_core::GetPalwBondDetailResponse>, protowire::GetPalwBondDetailResponseMessage, {
-    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone(), error: None }
-});
-try_from!(item: &protowire::GetPalwBondDetailResponseMessage, RpcResult<kaspa_rpc_core::GetPalwBondDetailResponse>, {
-    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone() }
-});
-
-from!(item: &kaspa_rpc_core::GetPalwRouterBindingV2Request, protowire::GetPalwRouterBindingV2RequestMessage, {
-    Self { class_hex: item.class_hex.clone() }
-});
-try_from!(item: &protowire::GetPalwRouterBindingV2RequestMessage, kaspa_rpc_core::GetPalwRouterBindingV2Request, {
-    Self { class_hex: item.class_hex.clone() }
-});
-from!(item: RpcResult<&kaspa_rpc_core::GetPalwRouterBindingV2Response>, protowire::GetPalwRouterBindingV2ResponseMessage, {
-    Self {
-        available: item.available,
-        armed: item.armed,
-        now_daa: item.now_daa,
-        found: item.found,
-        bound_from_daa: item.bound_from_daa,
-        row_hex: item.row_hex.clone(),
-        error: None,
-    }
-});
-try_from!(item: &protowire::GetPalwRouterBindingV2ResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRouterBindingV2Response>, {
-    Self {
-        available: item.available,
-        armed: item.armed,
-        now_daa: item.now_daa,
-        found: item.found,
-        bound_from_daa: item.bound_from_daa,
-        row_hex: item.row_hex.clone(),
-    }
-});
-
-from!(item: &kaspa_rpc_core::GetPalwPaidClaimRequest, protowire::GetPalwPaidClaimRequestMessage, {
-    Self { base_claim: item.base_claim.clone(), round: item.round }
-});
-try_from!(item: &protowire::GetPalwPaidClaimRequestMessage, kaspa_rpc_core::GetPalwPaidClaimRequest, {
-    Self { base_claim: item.base_claim.clone(), round: item.round }
-});
-from!(item: RpcResult<&kaspa_rpc_core::GetPalwPaidClaimResponse>, protowire::GetPalwPaidClaimResponseMessage, {
-    Self {
-        available: item.available,
-        found: item.found,
-        sink: item.sink.clone(),
-        tip_daa: item.tip_daa,
-        base_claim: item.base_claim.clone(),
-        enrollment: item.enrollment.clone(),
-        class_id: item.class_id.clone(),
-        job_id: item.job_id.clone(),
-        producer_bond: item.producer_bond.clone(),
-        material_consent: item.material_consent.clone(),
-        state: item.state.clone(),
-        round: item.round,
-        round_found: item.round_found,
-        seats: item.seats.clone(),
-        quorum: item.quorum,
-        receipts: item.receipts.clone(),
-        final_reached: item.final_reached,
-        final_daa: item.final_daa,
-        error: None,
-    }
-});
-try_from!(item: &protowire::GetPalwPaidClaimResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPaidClaimResponse>, {
-    Self {
-        available: item.available,
-        found: item.found,
-        sink: item.sink.clone(),
-        tip_daa: item.tip_daa,
-        base_claim: item.base_claim.clone(),
-        enrollment: item.enrollment.clone(),
-        class_id: item.class_id.clone(),
-        job_id: item.job_id.clone(),
-        producer_bond: item.producer_bond.clone(),
-        material_consent: item.material_consent.clone(),
-        state: item.state.clone(),
-        round: item.round,
-        round_found: item.round_found,
-        seats: item.seats.clone(),
-        quorum: item.quorum,
-        receipts: item.receipts.clone(),
-        final_reached: item.final_reached,
-        final_daa: item.final_daa,
-    }
-});
-
 from!(item: &kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest, protowire::GetPalwStagedPreclaimQuoteRequestMessage, {
     Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
 });
@@ -6493,65 +6250,3 @@ mod monetary_material_grpc_tests {
         assert_eq!((back.available, back.total_bytes, back.offset, back.bytes), (true, 9000, 4096, vec![5; 7]));
     }
 }
-
-// RFC-0012 acceptance (op 246).
-from!(item: &kaspa_rpc_core::GetPalwAcceptanceReadsRequest, protowire::GetPalwAcceptanceReadsRequestMessage, {
-    Self { reserve_blocks: item.reserve_blocks.clone(), outpoints: item.outpoints.clone() }
-});
-try_from!(item: &protowire::GetPalwAcceptanceReadsRequestMessage, kaspa_rpc_core::GetPalwAcceptanceReadsRequest, {
-    Self { reserve_blocks: item.reserve_blocks.clone(), outpoints: item.outpoints.clone() }
-});
-from!(item: RpcResult<&kaspa_rpc_core::GetPalwAcceptanceReadsResponse>, protowire::GetPalwAcceptanceReadsResponseMessage, {
-    Self {
-        available: item.available,
-        sink: item.sink.clone(),
-        virtual_daa: item.virtual_daa,
-        reserve_balances: item
-            .reserve_balances
-            .iter()
-            .map(|r| protowire::RpcPalwReserveBalance { block_hash: r.block_hash.clone(), known: r.known, balance_sompi: r.balance_sompi })
-            .collect(),
-        outpoints: item
-            .outpoints
-            .iter()
-            .map(|o| protowire::RpcPalwOutpointEntry {
-                outpoint: o.outpoint.clone(),
-                present: o.present,
-                amount: o.amount,
-                script_version: o.script_version as u32,
-                script_hex: o.script_hex.clone(),
-                block_daa_score: o.block_daa_score,
-                is_coinbase: o.is_coinbase,
-            })
-            .collect(),
-        error: None,
-    }
-});
-try_from!(item: &protowire::GetPalwAcceptanceReadsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwAcceptanceReadsResponse>, {
-    Self {
-        available: item.available,
-        sink: item.sink.clone(),
-        virtual_daa: item.virtual_daa,
-        reserve_balances: item
-            .reserve_balances
-            .iter()
-            .map(|r| kaspa_rpc_core::RpcPalwReserveBalance { block_hash: r.block_hash.clone(), known: r.known, balance_sompi: r.balance_sompi })
-            .collect(),
-        outpoints: item
-            .outpoints
-            .iter()
-            .map(|o| {
-                Ok(kaspa_rpc_core::RpcPalwOutpointEntry {
-                    outpoint: o.outpoint.clone(),
-                    present: o.present,
-                    amount: o.amount,
-                    script_version: u16::try_from(o.script_version)
-                        .map_err(|_| kaspa_rpc_core::RpcError::General("script version out of range".into()))?,
-                    script_hex: o.script_hex.clone(),
-                    block_daa_score: o.block_daa_score,
-                    is_coinbase: o.is_coinbase,
-                })
-            })
-            .collect::<RpcResult<Vec<_>>>()?,
-    }
-});

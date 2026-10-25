@@ -29,7 +29,7 @@
 //! * the quote's expiry and the ruleset id are bound by a signed-nothing client check: the bundle (and the signed-registration file)
 //!   names them, the signer recomputes the ruleset id from its own build, and `submit` refuses past the expiry. They are NOT enforced
 //!   by consensus — a leaked signed carrier stays valid until its funding input is spent elsewhere. This is recorded as
-//!   `CODE_GAP` G-EXPIRY / G-RULESET in `docs/evidence/palw/implementation-records/rfc-0009-remote-record.md` for the Lead; the registration wire is unchanged.
+//!   `CODE_GAP` G-EXPIRY / G-RULESET in `docs/design/palw/rfc-0009-remote-record.md` for the Lead; the registration wire is unchanged.
 //! * every unproven fact the builder reports (the bond's backing, the wallet's UTXO, the registry rows) is labelled
 //!   [`UNVERIFIED_REMOTE_STATE`]: several RPCs agreeing is an operational defence, not a proof.
 

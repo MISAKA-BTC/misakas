@@ -1,36 +1,21 @@
 # RFC-0016 — bond加重のブロック生成機会と弾力的Final容量: 物理ブロック機会をbondへ接続する
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 > **設計前提:** [PRINCIPLES](../PRINCIPLES.md) §0（2026-10-14、モデルの非公開を経済的に不利にする。不正は排除ではなく有界化）を最上位とする。
 > [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)（bond単位のQ/B/R/F上限と共通拘束）、
 > [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)（モデル入手への合意不介入とモデル別配分）、
 > [RFC-0015 §8.3–8.5](0015-panel-free-permissionless-verification.md)（2026-10-14確定: `α = 1.5`、30日平均、Miner＋Verifier元本、ブロック機会にも適用）を前提とし、変更しない。
 > 本RFCは、bondの多いモデルが**物理的に**多くのブロック生成機会を得る設計と、人気モデルが検証容量の不足でFinal待ちにならない設計を扱う。
 
-> **改訂(2026-10-16 ユーザー決定)— 本文中の「30 日平均」「Panel=0 は 7 日、Panel=1 は 1 日」は、この改訂で置き換える。**
->
-> 1. **平均期間を 30 日から 7 日に変更する。** モデル別配分 `A_m = c_m · S̄_m^1.5` の `S̄_m` は、Miner と claim に拘束された Verifier の元本の 7 日平均とする(コード `PALW_ALLOCATION_AVERAGE_DAYS_V1 = 7`)。
-> 2. **拘束期間は Panel=0・Panel=1 とも 1 日に固定する**(コード `PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1 = PALW_BOND_HOLD_PANEL_ONE_DAYS_V1 = 1`)。mode による差は無くなり、mode を切り替えて発行能力を取り戻すことはできない。
-> 3. **1 日あたりの上限で計算する。** miner bond から生じるブロックと報酬には上限がある。不正をして高速に claim しても、実際に計算して claim しても、どちらも上限に当たる。つまり bond が時間内にできる claim の量は変わらない。この前提の計算を 1 日単位に固定する(Q/B/R/F は 1 日あたりの `q, b, r, f`)。
-> 4. **RFC-0017 の階層係数との関係。** 追加モデル(add model)は 0.3 倍で不利になる、という前提は本 RFC の後にできた(RFC-0017 → [ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md))。
->    上限が共通なので、0.3 倍の追加モデルで攻撃を成立させるには、より多くの bond が要る。本 RFC の bond 加重は、この前提と合わせて評価する。
-> 5. **肝心な条件。** claim を 1 回不正すれば slash される。その slash による損失が、不正によって得られる利益を上回ること。上限によって不正の速度の利点を消すことと、この損失条件の両方がそろって、初めて抑止が成り立つ。
->
-> 下の表と節に残る「30 日平均」「Panel=0 の 7 日」「`7q, 7b, 7r, 7f`」は、改訂前の記録である。
-
 **トークンの表示名は Misaka、ticker は BILI。** 既存のprotocol/CLI/API識別子は維持する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
-* **Status:** Accepted design (V+), values pending measurement — 2026-10-15。物理層の設計としてV+を採用した（第3回のユーザー判断）。
-  値（`σ`、`k`ほか）は測定で決める。**有効化は§14のgateで止めたまま**であり、下の3つの「ユーザー判断」表は本番値の承認でも有効化の承認でもない。
-* **Implementation status:** **implemented dormant, not activated, unbuilt**（branch `integ/rfc0016-impl`、§16。ADR-0176/0177とRFC-0017のbranchをmerge済み）。
-  * P4: `eee1710ce`。
-  * V+・弾力的Final容量・quote・report・test source・simulation: §16と
-    [rfc-0016-implementation-status-2026-10-15.md](../design/palw/rfc-0016-implementation-status-2026-10-15.md)（行 → file:line）。
-  * build・test・実node試験は未実施で、PASSではない。値はすべてplaceholderで、測定記録がないため、validationはどちらのfenceのarmも拒否する。
+* **Status:** Draft, 2026-10-15。同日のユーザーreview 2回で改定した。
+  下の2つの「ユーザー判断」表は**設計上の決定**である。本番値の承認でも、有効化の承認でもない。
+  §8の先行候補は採用されていない。
+* **Implementation status:**
+  * P4のcode修正だけを`eee1710ce`で休眠codeに入れた。build・test・実node試験は未実施で、PASSではない。
+  * それ以外の設計（物理層、権利、容量）は未実装である。
 * **Source baseline:** `origin/pre` `4fb381a87`と、統合branch `integ/rfc02-rfc06-12-g14` HEAD `7dd86f2a0`。
-* **Activation:** なし。fenceは`Params::palw_model_block_rights_v1`と`Params::palw_elastic_final_capacity_v1`（休眠）。
-  全presetで`None`、Some-onlyでhash、`Some(never())`は`None`へ畳む。armすると拒否される（測定値記録のgateと、未有効化のgate）。
+* **Activation:** なし。設計用の未割当fence名として`palw_model_block_rights_v1`と`palw_elastic_final_capacity_v1`を使う。既存Paramsのfieldではない。
   高さ・wire tag・RPC op・署名domainは割り当てない。
 * **Not activated by:** 本RFCやcodeのmerge、test PASS、本表の設計判断。
 * **Normative language:** MUST / MUST NOTは、その設計を採る場合の要件である。採用を意味しない。
@@ -57,14 +42,6 @@
 | D-Q1 | **bondに基づく物理ブロック生成機会を優先する。** 全モデルで1計算あたりの当選確率と報酬が完全に等しいこと（ADR-0137）は絶対条件ではない。物理抽選または事前発行権への接続を設計目標とする。B+だけで物理目標を達成したと扱わない。総発行予算、個別cap、検証条件、時計・heartbeatの保護は維持する | §7・§8 |
 | D-H | **拘束期間: Panel=0は7日相当DAA、Panel=1は1日相当DAA。** modeを切り替えても発行能力を再取得できないこと（予算のreset・二重取得の禁止）は必須。件数・予約額・burstは、正直な最小構成の連続REAL生産と、高速偽造側の上限を同時に測って決める | §3 |
 
-## ユーザー判断 2026-10-15（第3回: 設計採用、本番値・有効化の承認ではない）
-
-| # | 決定 | 本文 |
-| --- | --- | --- |
-| D-V1 | **V+を、RFC-0016の物理層の設計として採用する**（旧V1を決定）。ほかの物理層の手段とB+は「検討した代替案」に下げる | §7・§8・§9 |
-| D-σk | `σ`と`k`は**測定で**適切な値に決める。codeでは名前付きのfence定数として置き、測定値記録のgate（未測定・placeholderの値ではarmを拒否）を付ける | §8.6、code `palw_rfc0016_v1::values` |
-| D-impl | 指示どおり実装を続ける。実装は採用・有効化を意味しない | §16 |
-
 ## 0. 要約
 
 1. **二つの「ブロック生成機会」**
@@ -73,10 +50,10 @@
    * 現行コードでは、物理blockは計算量だけで決まり、bondは入力にない（§1）。
 2. **D-Q1により、物理層をbondへ接続することが設計目標になった。**
    §7で物理層の手段（ticketの傾き、採掘前の抑制、モデル別sub-target、beacon slot、事前発行権）を比較した。
-   **採用した設計は「事前発行のモデル別ブロック権利（σ上限付きの途中再発行つき）を、抽選前のquoteとadmissionで要求する」V+である**（§8、D-V1。値は測定待ちで、未有効化）。
+   **先行候補は「事前発行のモデル別ブロック権利（σ上限付きの途中再発行つき）を、抽選前のquoteとadmissionで要求する」案V+である**（§8、Draft、未採用）。
    これにより、bondの多いモデルは物理blockの**上限**を事前に保証される。実際に物理blockを生むには、そのモデルを掘る計算が要る。
    **計算のないモデルに物理blockを生ませる規則はない**（反例E1）。
-3. **B+（報酬権利だけ）** とV+以外の物理層の手段は、検討した代替案である。B+は物理目標を達成しない（§9）。
+3. **B+（報酬権利だけ）** は比較用に残す。物理目標は達成しない（§9）。
 4. **Panel=0のKernel claim**
    * 抽選も物理モデルblockもなく、報酬は利用者払いescrowだけである。
    * `B = F = 0`とcoinbase legなしは決定済みである。
@@ -276,7 +253,7 @@ ADR-0142（時計はcursorで、heartbeatがslotを消費する）、ADR-0165 re
 
 **結論:** 物理層を変えなければG1pは保証されない。これがD-Q1の理由である。
 
-## 7. 物理層の設計空間（D-Q1）— V+以外は検討した代替案（D-V1）
+## 7. 物理層の設計空間（D-Q1の主設計）
 
 ### 7.1 手段
 
@@ -311,7 +288,7 @@ ADR-0142（時計はcursorで、heartbeatがslotを消費する）、ADR-0165 re
 **どの手段もE1を解けない。** 計算のないモデルは物理blockを生めない。
 物理層でできるのは、bondの多いモデルが**計算を持っているときに**、その計算が当選しやすくなるか、他のモデルの当選を抑えることだけである。
 
-## 8. 採用設計 V+: 事前発行権 ＋ σ上限付きの途中再発行 ＋ 抽選前のquote（D-V1で採用、値は測定待ち）
+## 8. 先行候補 V+: 事前発行権 ＋ σ上限付きの途中再発行 ＋ 抽選前のquote（Draft、未採用）
 
 ### 8.1 規則案
 
@@ -322,14 +299,10 @@ ADR-0142（時計はcursorで、heartbeatがslotを消費する）、ADR-0165 re
    消費はproducer bondのB/R予約（ADR-0176）の中で行い、個別capを超えない（K2）。
    権利がないモデルの当選は受理しない。quoteで事前に知らせるので、計算を使わせない。
 3. **抽選:** 権利を持つモデルの間では、共通`W_work`抽選のまま（G2は権利を持つモデル間で保たれる）。
-4. **途中再発行（σ）:** epochの割合`φ`を過ぎると、需要の超過したモデルは自分の権利を超えて、解放された権利を使える。
-   * 上限: そのepochの合計が`Rt_m · (1 + σ)`以下（MUST）。
-   * 他のモデルの保護: 各モデルの残りの見込み`min(未使用, ⌈used · remaining / elapsed · pace margin⌉)`は使えない。
-   * 全体: epochの合計`Σ Rt`は超えない（MUST）。
-   * 実装の形（2026-10-15）: 状態を持たない形にした。checkpointでのsnapshotを置かず、epochのカウンタとDAAの位置だけから決まる。
-     超過したモデルの間の配分は`A_m`加重ではなく、抽選の順（先着）である。`A_m`加重には新しい状態が要るため、加重にするかは測定後の判断とする（V2）。
-   * 残りは失効し、そのcadenceはfloor（BASE-0）とheartbeatが埋める。発行はしない。
-   * `σ`はE2（急増）の罰とcadenceの損失を緩める調整値である（`σ = ∞`ならADR-0137に近く、`σ = 0`なら厳密な`P_m`）。
+4. **途中再発行（σ）:** epochの途中の決定的なcheckpoint（割合`φ`）で、消費の見込みが残りを下回るモデルの未使用権利をpoolへ戻す。
+   poolは需要の超過したモデルへ、`A_m`の重みと`(1+σ) · Rt_m`の上限で再発行する。
+   残りは失効し、そのcadenceはfloor（BASE-0）とheartbeatが埋める。発行はしない。
+   `σ`はE2（急増）の罰とcadenceの損失を緩める調整値である（`σ = ∞`ならADR-0137に近く、`σ = 0`なら厳密な`P_m`）。
 5. **新規モデル:** entrant reserveの権利を線形・上限付きで配る（登録から`N_30`未満、報酬gateを通過、`S_m ≥ S_entry`）。
 6. **Final・支払:** 権利付きのモデルblockのclaimは、既存の検証条件（K3）でFinalになり、claim自身のcarveの全額を受け取る（`ψ`は不要）。
    有罪・voidの場合は払わず、権利は戻らない（`W_hold`と同じ扱い）。
@@ -360,64 +333,12 @@ ADR-0142（時計はcursorで、heartbeatがslotを消費する）、ADR-0165 re
 * DAAと`bits`: 権利はDAA・`bits`・難易度・`W_work`の調整式（`palw_work_target_step_v1`）を変えない。`W_work`の入力（実現したモデルblock数）は既存のとおり。
 * 必須試験: 全モデルの権利を0にしたnetworkで、heartbeatとfloorが目標cadenceを維持し、DAAが崩れない（§12.4のH1–H4）。
 
-### 8.5 その他の手段の位置付け（検討した代替案）
+### 8.5 その他の手段の位置付け
 
-* **`k`の正確な意味:** V+の補助としての、モデル別ticketの有界な傾き（P-i）`τ_m = clamp(P_m / c_m, 1/k, k)`の上限である。
-  `c_m`はモデルの実現した物理シェアである。
-  * `k = 1`（`tilt_k_permille = 1000`）で無効になる。これが既定である。
-  * 権利を持つモデルの間に残る計算の偏り（同じ権利数のモデル間の当選速度）だけを調整する。
-  * 計算単位の公平性（G2）を最大`k²`倍まで崩す。
-  * 抽選への組込みは未実装である（純関数`palw_rights_tilt_permille_v1`のみ）。値の測定と別途の判断が要る。
-* P-ii、P-iii、P-ivは、§7の評価から採らない（検討した代替案）。
+* P-iは、V+の権利の下で残る計算偏り（同じ権利数のモデル間の当選速度）を調整する補助として、`k`の上限付きで後から足せる。既定は使わない。
+* P-ii、P-iii、P-ivは、§7の評価から先行候補にしない。
 
-### 8.6 `σ`と`k`の導出（D-σk）
-
-**何を制御するか**
-
-* `σ`: `φ`を過ぎたあと、需要の超過したモデルが使える再発行権利の上限（`Rt_m · σ`）。
-  * 大きいほどADR-0137（計算比例）に近づき、E2（急増）の罰と未使用権利の失効が減る。
-  * 小さいほど`P_m`に厳密になる。
-* `k`: §8.5の補助ticket傾きの上限。
-  * 大きいほど、bondの多いモデルの1計算あたりの当選を増やせる。
-  * その分G2を崩し、人気（計算）モデルを罰する。
-* 同時に決める従属の値: `φ`（再発行の開始割合）と`pace margin`（他モデルの保護の強さ）。
-
-**測定ハーネス**
-
-* モデル: 基準のQwen2.5-1.5B A16の固定profileと、CCUの異なる追加モデル（少なくとも重いものと軽いもの）。
-* 機材: 基準機材。
-* 構成:
-  * 正直な最小構成（producer最小bond、1 miner）。
-  * 複数miner構成（同一モデルの複数miner、モデル間を移動できるminerとできないminerの混在）。
-* シナリオ: E1–E6（移れないminer、需要急増、資本≫計算、計算≫資本、`W_work`の吊り上げ、`W₀`領域）と、敵対的試験A1–A12。
-* 測る量: §11の全列。特に、モデル別の物理block数・実際の支払・既存minerの個人収入・未使用権利・queue待ち・heartbeat依存のDAA。
-* 道具:
-  * `scripts/sim/palw-rfc0016-vplus-sim.py`: 測定する領域を選ぶためのモデルで、測定ではない。
-  * 実node・実機の測定: 未作成（evidence-only）。
-
-**目的**
-
-* bondが多く計算を持つモデルについて、物理blockと支払が`P_m`を追う度合いを最大にする。
-* 失効する権利（unminted）を有界にする。
-* 未使用の権利を使った妨害（griefing）ができない。
-* heartbeat・時計の規則は変えない（測るだけ）。
-* 人気モデル（急増）を停止させない。
-
-**掃引範囲（初期案、測定の前提で変えてよい）**
-
-* `σ` ∈ {0, 0.1, 0.25, 0.5, 1, 2}
-* `k` ∈ {1, 1.25, 1.5, 2}
-* `φ` ∈ {0.25, 0.5, 0.75}
-* `pace margin` ∈ {1.0, 1.2, 1.5}
-
-**選択規則**
-
-* すべての合格条件を満たす領域から選ぶ。合格条件は、上の目的のそれぞれについて事前に決めた閾値（V6）である。
-* 満たす領域がなければ、衝突する制約を報告し、値を作らない（MUST NOT）。
-* 選んだ値は`PalwRfc0016MeasuredRecordV1`（evidenceとindependent reviewのdigest）として`PALW_RFC0016_MEASURED_RECORDS_V1`に固定する。
-  それまでvalidationはarmを拒否する。
-
-## 9. B+（報酬権利だけ）— 検討した代替案（D-V1）
+## 9. B+（報酬権利だけ、比較用）
 
 * B+は物理抽選を変えず、`P_m`で報酬権利と支払を配る（epoch closeの`ψ`、carry、σ上限付きspill、entrant reserve）。
 * **B+だけでは物理目標を達成しない**（D-Q1）。V+との比較基準として残す。
@@ -523,7 +444,7 @@ ADR-0142（時計はcursorで、heartbeatがslotを消費する）、ADR-0165 re
 
 ~~~text
 ACTIVATION_ALLOWED
-    = V+ が採用されている（D-V1、済）
+    = §8 の先行候補（または別案）がユーザーに採用されている
       AND §14.1 の値が §3.6 の3段階導出に基づいて決まっている
       AND §13 の C1–C5 が完了している
       AND §12 の全試験が物理・支払の列で独立review付きPASS
@@ -536,8 +457,8 @@ ACTIVATION_ALLOWED
 
 | ID | 値・判断 |
 | --- | --- |
-| V1 | **決定済み（D-V1）: V+を採用。** `k`の値と、P-iを抽選へ組み込むかは§8.6の測定の後 |
-| V2 | `σ`、`φ`、pace margin（§8.6の測定で決める）。再発行を`A_m`加重にするか（新しい状態が要る） |
+| V1 | 先行候補V+を採るか（P-iを補助に足すか、`k`の値） |
+| V2 | `σ`、再発行checkpointの`φ`、再発行の重み |
 | V3 | `ε`、`S_entry`、1モデル上限 |
 | V4 | bond額 × 期間あたりQ/B/R/F × 1 claimの予約額 × burst・rate上限の組合せ（§3.6の3段階で導出） |
 | V5 | epochの長さ（`N_30`と`W_hold`は確定済み） |
@@ -549,86 +470,7 @@ ACTIVATION_ALLOWED
 | V11 | coinbase経路をPanel=1へ移すか（D-P5: 別途確認） |
 
 確定事項（`α = 1.5`、30日平均、`W_hold` 7日（Panel=0）・1日（Panel=1）、`B = F = 0`、Kernel claimへのcoinbase legなし、escrowのclip禁止）は判断対象ではない。
-
-> **整合性注記（2026-10-22、lane rfcgap-b）:** 平均期間は2026-10-16のユーザー決定（10-22再確認）で**7日相当DAA**に変わった（旧30日）。コードは既に7日（`PALW_ALLOCATION_AVERAGE_DAYS_V1 = 7`、`PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1 = 5,040`）。§14の`ACTIVATION_ALLOWED`は、固定拒否ではなく§14 arm-readiness record（`PALW_RFC0016_ARMING_RECORDS_V1`、空）で検査する。recordは(fence, network, 高さ)と値の組に一致し、上の各conjunctに1つずつ証拠digestを持つ。空なのでどの高さでもarmは拒否される（`consensus/core/src/palw_rfc0016_v1/values.rs`）。
 個別capを引き上げて配分を使い切らせる選択肢は設けない。
-
-### 14.2 ユーザー判断 2026-10-15（V2〜V11）の実装状況
-
-数値は校正・受入試験の出発点で本番値ではない。休眠・未build・未試験（PASSではない）。行番号は[実装状況](../design/palw/integration/rfc-0016-implementation-status-2026-10-15.md) §8。
-
-| ID | 状態 |
-| --- | --- |
-| V1 | 決定済み（D-V1）→ 実装済み（§16） |
-| V2 | 2026-10-15決定 → 実装: 校正初期値 σ=0.25・φ=0.5・pace 1.2・k=1（`PALW_RFC0016_CALIBRATION_START_V1`）、`A_m`欠損時は再発行なし（`ReissueUnavailable`、先着なし）。本番値は測定待ち |
-| V3 | 2026-10-15決定 → 実装: entrant reserve ≤ 20‰、RFC-0017 Probationと一つのpool（明示的netting）、Probationモデル上限2‰、`S_entry` = 適格な最低producer bond |
-| V4 | 測定待ち |
-| V5 | 2026-10-15決定 → 実装: 1 epoch = 720 DAA、30日窓 = 21,600 DAA（校正）、DAAと実時間のずれをRPCとharnessで報告（「24 h」と表示しない） |
-| V6 | 2026-10-15決定 → 測定・選択toolに実装（不変条件違反0、正直cap利用率≥80 %、V+なし比REAL劣化≤5 %暫定）。測定は未実施 |
-| V7 | 2026-10-15決定 → 実装: bond資本比例のqueue取り分、quoteは権利でない（決定論的な再検査）、TTL超過は中立終了。`L_queue`・`T_queue`・`h`は測定待ち |
-| V8 | 2026-10-15決定 → 実装: 署名対象を固定した容量attestationの型・検査、verifierのモデル間二重計上なし、`sigma_cap` ≤ 1、計算量・メモリ・DA・court負荷の一体評価。attestationのcarriage（object種別）は未割当 |
-| V9 | 2026-10-15決定 → 実装: 10〜30 %・基準20 %、`checked_share`と期限内完了率を別計測。傾き・`N/m`は測定待ち |
-| V10 | 2026-10-15決定 → 実装（構造上そうなっていることを試験sourceで固定）: 留保分は他へ再配分せず未発行、後日追加発行しない |
-| V11 | 2026-10-15決定 → 実装: coinbaseのPanel移行なし（`PALW_RFC0016_COINBASE_PANEL_MIGRATION_V1 = false`と試験） |
-
-## 16. 実装（休眠、未有効化、未build）
-
-実装は採用・有効化を意味しない。行ごとのfile:lineと試験IDの対応は、[実装状況](../design/palw/integration/rfc-0016-implementation-status-2026-10-15.md)にある。
-すべての行は、実装済み、test source作成済み、evidence-onlyのどれかである。
-
-### 16.1 lead decision（2026-10-15、ユーザーreview待ち）
-
-| # | 内容 |
-| --- | --- |
-| L1 | blockへの`P_m`の適用は1回だけで、V+の権利が行う。V+をarmするとき、ADR-0177 V3の`block_opportunity`は必ずoffにする（validationが拒否する）。V+がreleaseのブロック機会の仕組みである。coinbase側の`P_m`は既存のcoinbase配分が1回だけ適用する（ADR laneのC4もこれで解決する）。単一適用のtest sourceがある |
-| L2 | 途中再発行（V2）は`A_m`加重で行う。新しいrooted状態（aux 132）を持ち、reorg・IBDで一貫する。~~`A_m`が得られないときだけ、先着をfallbackとして残す~~ → **ユーザー判断 2026-10-15（V2）で置換: `A_m`が無ければ再発行しない（先着で権利を与えない）** |
-| L3 | RPCはop 255、proto 1330–1331を使う（確定済み） |
-
-### 16.2 実装の範囲
-
-* **fence:** `palw_model_block_rights_v1`と`palw_elastic_final_capacity_v1`（Params、identity、validation、fork-id probe、V2 mirror）。
-  * どちらもkernel route（`palw_probabilistic_constraints_v1`）が同じ高さ以下にあることを要求する。
-  * 孤立calibration networkだけは、buildに入れた`MISAKA_RFC0016_CALIBRATION_VALUES`でarmできる（σ/k測定用）。
-* **aux table 132–135**（131はRFC-0017が使う）: 再発行snapshot、pending queue、queue membership、telemetry。
-  native scannerのarmは、generatorと生成fileの両方にある。
-* **V+:**
-  * 発行は`⌊(N_exp − Ent) · A_m / ΣA⌋`で、entrant reserveは固定総額から先に差し引く。
-  * 消費は、既存の`epoch_counters`をそのまま使う。
-  * admissionは、自分の権利か、`φ`後の`A_m`加重snapshotか（ない場合は先着σのfallback）で決まる。epoch総額は超えない。
-  * quoteは、権利・容量・実際のqueue長を示す。
-  * RFC-0017のeligibilityをmerge済みで、次のように読む。
-    * 発行は、probation外のblock rightを持つモデルだけに行う。
-    * Probationのclassは、RFC-0017のprobation grantを権利とするので、V+の検査を通す。
-    * Registered/Lapsedは、RFC-0017自身のgateが拒否する。
-* **弾力的容量:**
-  * 検証者単位のwater-fillingで、容量0の場合は受理しない。
-  * C7上限は、容量から導出する。
-  * **queueはclaimのlifecycleに組み込み済み**:
-    * 待機中はbind期限がない。
-    * 待機中は`PanelBound`が効かない。
-    * FIFOでdequeueし、そのとき`rebound_daa = now`とする。これでbind窓とanchor slotが、queueを出た時点から始まる。
-    * TTLを過ぎるとBindTimeoutでvoidとする。producerへの課金はない。
-    * 1 claimが予約する権利は1本だけである。
-    * bondごとの取り分は資本比例で、受理前に拒否する。
-  * OPV経路の検査容量gate。
-  * M\*-49の検証者取り分の傾き（10–30 %の範囲内）。
-* **計測:**
-  * consensus-derived: 目標、物理block、権利、Final、coinbase支払、既存minerの個人収入、escrow支払、queue待ち、REAL gap、heartbeat依存DAA。
-  * node-local（そう表示する）: 拒否件数。
-* **RPC op 255 `GetPalwRfc0016Report`**（proto 1330/1331）: JSONで返す。目標と結果を分け、node-localの観測を区別する。
-* **ツール:**
-  * `scripts/sim/palw-rfc0016-vplus-sim.py`: モデルであり、測定ではない。
-  * `scripts/drills/rfc0016_sigma_k_measure.py`: 実node測定のharness。
-  * `scripts/sim/palw-rfc0016-report.py`: 目標の増加だけでは改善と表示しない。
-* **test source（未実行）:**
-  * `consensus/core/tests/rfc0016_v1.rs`
-  * `consensus/src/pipeline/virtual_processor/tests/rfc0016_e2e.rs`（H1–H4、A8）
-  * 各moduleのunit test
-* **evidence-only:**
-  * σ/kの測定値と測定値記録。
-  * V+のcalibration測定。ADR laneの配分fenceがcalibrationでarm可能になることが前提である。
-  * A11（検査しないverifier）。
-  * M6/M7の実測。
 
 ## 15. 参照
 
@@ -638,37 +480,11 @@ ACTIVATION_ALLOWED
   [0165](../adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md)、[0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)、
   [0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)
 * RFC: [0008](0008-palw-claim-backed-consensus-blocks.md) R8-BUDGET・L134、[0015](0015-panel-free-permissionless-verification.md) §8.3–8.5.5
-* 設計: [bond-budget-and-model-allocation](../design/palw/economics/bond-budget-and-model-allocation.md) §3.4–3.6、
-  [rfc-0015-implementation-status-2026-10-15](../design/palw/integration/rfc-0015-implementation-status-2026-10-15.md)、
-  [activation-readiness-matrix](../design/palw/integration/activation-readiness-matrix.md) §3f・§3g・§3k
+* 設計: [bond-budget-and-model-allocation](../design/palw/bond-budget-and-model-allocation.md) §3.4–3.6、
+  [rfc-0015-implementation-status-2026-10-15](../design/palw/rfc-0015-implementation-status-2026-10-15.md)、
+  [activation-readiness-matrix](../design/palw/activation-readiness-matrix.md) §3f・§3g・§3k
 * code: [`palw_admission_v2.rs`](../../consensus/core/src/palw_admission_v2.rs)、[`palw_work_target_v1.rs`](../../consensus/core/src/palw_work_target_v1.rs)、
   [`fold_read.rs`](../../consensus/core/src/palw_state_v2/fold_read.rs)、[`palw_bond_budget_v1.rs`](../../consensus/core/src/palw_bond_budget_v1.rs)、
   [`palw_bond_budget_fold_v1.rs`](../../consensus/core/src/palw_bond_budget_fold_v1.rs)、[`palw_kernel_route_fold_v1.rs`](../../consensus/core/src/palw_kernel_route_fold_v1.rs)、
   [`ledger.rs`](../../misaka/palw/kernel/src/ledger.rs)、[`palw_verifier_pay_v1.rs`](../../consensus/core/src/palw_verifier_pay_v1.rs)、
   [`palw_producer_v2.rs`](../../consensus/core/src/palw_producer_v2.rs)、[`config/params.rs`](../../consensus/core/src/config/params.rs)
-
-## ユーザー方針 2026-10-15 による改定
-
-* V+のblock権利は生成機会であり合意creditではない。権利を消費したclaimも、`SecurityCertified`になるまで合意creditを持たない。
-* 同じmergesetのsibling間で、権利の消費はmerge順に依存してはならない([RFC-0018](0018-dag-parallel-multi-model-consensus.md) §4のcanonical順と同じ集合関数)。
-
-**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
-
-* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
-* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
-* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
-* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
-* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
-
-## ユーザー方針 2026-10-15 第4回 — `P_m` は階層係数 `c_m` を含み、一度だけ適用する
-
-> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
-
-* V+ が発行に使う `P_m = A_m / ΣA` は、`A_m = c_m · S̄_m^1.5` である。
-  * genesis・年次フォーク指定モデルは `c_m = 1.0`、登録モデルは固定の `0.3`(ADR-0177 の改定)。
-  * 係数は配分の重みで一度だけ適用し、物理ブロック権利と coinbase 配分が同じ `P_m` を使う。
-  * 受理ブロックの報酬に重ねて掛けない。
-* **entrant reserve(V3)と RFC-0017 の Probation 予算は、fence `palw_model_tier_v1` の下では無意味になる。**
-  * モデル単位の審査は全廃した(第 5 回)。審査も昇格もなく、entrant が存在しない。
-  * そのため `ε = 0` とし(`palw_rfc0016_rights_epoch_v1`)、登録 tier 全体の発行上限 `κ`(配分の重みで適用)を tier の唯一の上限とする。
-  * fence 未満の V3 の規則(entrant reserve ≤ 20‰、Probation との明示的 netting)は、休眠のまま残る。

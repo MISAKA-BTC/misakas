@@ -1,4 +1,4 @@
-//! **RFC-0004 Part II — computation specifications with typed roots** (`docs/design/palw/models/rfc-0004-part2-typed-roots.md`).
+//! **RFC-0004 Part II — computation specifications with typed roots** (`docs/design/palw/rfc-0004-part2-typed-roots.md`).
 //!
 //! A class binds a versioned [`ComputationSpecV1`]: its verification mode and a list of [`TypedRootV1`]s. MISAKA registers, executes
 //! and settles independently verifiable useful AI computation, not weight files; the kinds are
@@ -39,7 +39,7 @@ use crate::plan::VerificationPlanV1;
 use crate::public::TensorWireV1;
 use crate::trace::ParamCommitmentsV1;
 
-use composite::{ComponentV1, CompositeClaimV1, CompositeJobV1, CompositeRootV1, StageClaimV1, StageInputV1};
+pub use composite::{ComponentV1, CompositeClaimV1, CompositeJobV1, CompositeRootV1, StageClaimV1, StageInputV1, TokenSourceV1};
 use memory::{MemoryClaimV1, MemoryJobV1, MemoryLineV1, MemoryRootV1, locate_v1};
 use retrieval::{RetrievalClaimV1, RetrievalFaultV1, RetrievalItemV1, RetrievalJobV1, RetrievalRootV1, depth_v1};
 

@@ -52,6 +52,6 @@ impl TirError {
 
 pub type TirResult<T> = Result<T, TirError>;
 
-pub fn err<T>(kind: TirErrorKind, msg: impl Into<String>) -> TirResult<T> {
+pub(crate) fn err<T>(kind: TirErrorKind, msg: impl Into<String>) -> TirResult<T> {
     Err(TirError::new(kind, msg))
 }

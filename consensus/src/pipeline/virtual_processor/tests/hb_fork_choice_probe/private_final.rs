@@ -21,7 +21,7 @@ async fn wait_for_phase(chain: &mut T12Chain, id: BlockHash, expected: impl Fn(&
     assert!(expected(&chain.tip_state().1.claim(&id).unwrap().phase), "branch lifecycle did not reach its phase in 400 heartbeats");
 }
 
-pub(super) async fn own_final(chain: &mut T12Chain, card: usize, payment: Transaction, float: (TransactionOutpoint, UtxoEntry)) -> BlockHash {
+async fn own_final(chain: &mut T12Chain, card: usize, payment: Transaction, float: (TransactionOutpoint, UtxoEntry)) -> BlockHash {
     let (_, id) = chain.attempt(card, 1_000, vec![payment], &|_| true).await;
     chain.attempt_at_the_anchor_slot(id, 7).await;
     let (_, state) = chain.tip_state();

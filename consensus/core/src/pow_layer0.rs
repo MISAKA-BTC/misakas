@@ -682,14 +682,12 @@ pub enum PalwHeaderFormFenceV1 {
     /// RFC-0008 v2's `PXE2` EXEC envelope on an algo-10 header — `Params::palw_exec_payload_v2` (only on a `ConsensusV2` network).
     ExecPayloadV2,
     NativeMaterialV3,
-    /// RFC-0002 §II.14's `PNR9` native receipt-block carriage on an algo-7 header — `Params::palw_native_mining_v39`.
-    NativeReceiptV39,
 }
 
 impl PalwHeaderFormFenceV1 {
     /// Every owned form. A form added here needs its `HeaderForm` row in
     /// `crate::palw_lifecycle_objects_v2::PALW_A2_KIND_FENCE_TABLE_V1`, which the table test reconciles.
-    pub const ALL: [Self; 4] = [Self::ReceiptSpendV4, Self::ExecPayloadV2, Self::NativeMaterialV3, Self::NativeReceiptV39];
+    pub const ALL: [Self; 3] = [Self::ReceiptSpendV4, Self::ExecPayloadV2, Self::NativeMaterialV3];
 
     /// The `Params` field the form's fence is resolved from.
     pub const fn params_field(self) -> &'static str {
@@ -697,7 +695,6 @@ impl PalwHeaderFormFenceV1 {
             Self::ReceiptSpendV4 => "palw_receipt_spend_v4",
             Self::ExecPayloadV2 => "palw_exec_payload_v2",
             Self::NativeMaterialV3 => "palw_monetary_material_v1",
-            Self::NativeReceiptV39 => "palw_native_mining_v39",
         }
     }
 }
@@ -711,9 +708,6 @@ pub fn palw_header_form_owner_v1(algo_id: u8, palw_commitment: &[u8]) -> Option<
     if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
         return Some(PalwHeaderFormFenceV1::ReceiptSpendV4);
     }
-    if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_native_receipt_v39::palw_native_receipt_carriage_is_v39(palw_commitment) {
-        return Some(PalwHeaderFormFenceV1::NativeReceiptV39);
-    }
     (algo_id == POW_ALGO_ID_PALW_ROUND_V1 && crate::palw_exec_v2::PalwExecV2Envelope::is_v2_carriage(palw_commitment))
         .then_some(PalwHeaderFormFenceV1::ExecPayloadV2)
 }
@@ -726,7 +720,6 @@ pub struct PalwHeaderFormFencesV1 {
     pub receipt_spend_v4: Option<crate::config::params::ForkActivation>,
     pub exec_payload_v2: Option<crate::config::params::ForkActivation>,
     pub native_material_v3: Option<crate::config::params::ForkActivation>,
-    pub native_receipt_v39: Option<crate::config::params::ForkActivation>,
 }
 
 impl PalwHeaderFormFencesV1 {
@@ -736,7 +729,6 @@ impl PalwHeaderFormFencesV1 {
             PalwHeaderFormFenceV1::ReceiptSpendV4 => self.receipt_spend_v4,
             PalwHeaderFormFenceV1::ExecPayloadV2 => self.exec_payload_v2,
             PalwHeaderFormFenceV1::NativeMaterialV3 => self.native_material_v3,
-            PalwHeaderFormFenceV1::NativeReceiptV39 => self.native_receipt_v39,
         }
         .is_some_and(|activation| activation != crate::config::params::ForkActivation::never() && activation.is_active(daa_score))
     }
@@ -749,7 +741,6 @@ impl crate::config::params::Params {
             receipt_spend_v4: self.palw_receipt_spend_v4_fence(),
             exec_payload_v2: self.palw_exec_payload_v2_fence(),
             native_material_v3: self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
-            native_receipt_v39: self.palw_native_mining_v39.as_ref().map(|f| f.activation),
         }
     }
 }
@@ -839,13 +830,6 @@ pub fn check_palw_commitment_shape_with_forms_at(
             return crate::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(palw_commitment)
                 .map(|_| ())
                 .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
-        }
-        // RFC-0002 §II.14 (A2U): a `PNR9` native receipt carriage only where `palw_native_mining_v39` is in force; below it the
-        // live build's `PFS3` decode refuses it for its magic.
-        if form == Some(PalwHeaderFormFenceV1::NativeReceiptV39) {
-            return crate::palw_native_receipt_v39::PalwNativeReceiptSpendEnvelopeV39::decode(palw_commitment)
-                .map(|_| ())
-                .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e });
         }
         return crate::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(palw_commitment)
             .map(|_| ())

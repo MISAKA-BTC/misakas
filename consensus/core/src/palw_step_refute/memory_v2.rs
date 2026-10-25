@@ -13,43 +13,9 @@ use crate::palw_state_chunk_map as maps;
 use crate::palw_step_leg as leg;
 
 mod capture;
-pub use capture::{PalwGdnCaptureV2, gdn_refutation_from_capture_v2, gdn_refutation_from_leaves_v2};
-// RFC-0006 consumer v2: the checkpoint's own two facts (delta transition, convolution window), the court that keeps an anchored
-// replay sound — see the module's docs. Public so the generated native scanners can name its wire types by their owner path.
-pub mod transition;
-pub use transition::{
-    PALW_GDN_CHECKPOINT_EVIDENCE_VERSION_V2, PALW_GDN_CONV_WINDOW_EVIDENCE_KIND_V2, PALW_GDN_TRANSITION_EVIDENCE_KIND_V2,
-    PalwGdnCheckpointVerdictV2, PalwGdnConvWindowRefutationV2, PalwGdnMismatchV2, PalwGdnTransitionRefutationV2,
-    check_gdn_conv_window_refutation_v2, check_gdn_transition_refutation_v2, gdn_checkpoint_witness_from_disclosures_v2,
-    gdn_conv_window_demands_v2, gdn_conv_window_refutation_from_capture_v2, gdn_conv_window_refutation_with_accused_v2,
-    gdn_conv_window_required_v2, gdn_transition_demands_v2, gdn_transition_refutation_from_capture_v2,
-    gdn_transition_refutation_with_accused_v2,
-};
+pub use capture::gdn_refutation_from_capture_v2;
 
 pub const PALW_GDN_STEP_EVIDENCE_VERSION_V2: u16 = 2;
-
-/// **RFC-0006 consumer v2: the canonical chunk count of a recurrence checkpoint the legacy dispatcher cannot count** — a solo gdn
-/// v1/v2 map or a composed hybrid map, at the checkpoint covering `positions` (`capture::gdn_recurrence_section_v2`). `None` for
-/// every other map (those are `palw_state_chunk_count_at_v1`'s) and where the layout does not derive. Read by the structural step
-/// check only under consumer v2's closure mode.
-pub fn gdn_checkpoint_chunk_count_v2(profile: &crate::palw_step::PalwShapeProfileV3, positions: u32) -> Option<u64> {
-    let map = profile.state_chunk_map_id;
-    if !palw_gdn_solo_map_v2(&map) && !maps::palw_map_is_hybrid_composed_v2(&map) {
-        return None;
-    }
-    capture::gdn_recurrence_section_v2(profile, positions).ok().map(|(_, count, _)| count)
-}
-
-/// **The solo recurrence maps consumer v2 captures and judges**: gdn v1 (full window), v2 (head window) and v3 (the key-head gather,
-/// `PalwGdnStateGeometryV2::of`'s `KeyHeadConvV3`, which also demands the signed version-3 profile). One predicate for the court
-/// gate, the checkpoint count and the executor's capture geometry, so they cannot disagree about which solo map is served.
-///
-/// A solo v3 class cannot REGISTER today: `PalwShapeProfileV3::validate_shape` lets a version-3 profile carry only the held hybrid
-/// composition v5 or no map, and relaxing that unconditional rule would change every binary's shape verdict below any fence. So the
-/// v3 arm here is ready and unreachable until a fenced registration path exists (RFC06 GDN lane report).
-pub fn palw_gdn_solo_map_v2(map: &Hash64) -> bool {
-    *map == maps::gdn_state_chunk_map_id_v1() || *map == maps::gdn_state_chunk_map_id_v2() || *map == maps::gdn_state_chunk_map_id_v3()
-}
 
 /// Merkle membership of existing state bytes. This is not a proof of the
 /// correctness of any model computation. Index/address/count are rederived.
@@ -120,11 +86,10 @@ pub fn gdn_replay_start_v2(
     let p = &binding.shape_profile;
     let id = p.state_chunk_map_id;
     // Legacy hybrid1/2 name a composition but do not serialize its recurrence.
-    // RFC-0006 consumer v2's composed hybrid maps (new ids) DO serialize both halves (`capture::gdn_recurrence_section_v2`), and
-    // the solo maps — v3's key-head gather included — have the executor's capture (`palw_gdn_solo_map_v2`).
-    if !palw_gdn_solo_map_v2(&id)
+    // Solo key-head v3 likewise has no production capture consumer yet.
+    if id != maps::gdn_state_chunk_map_id_v1()
+        && id != maps::gdn_state_chunk_map_id_v2()
         && id != maps::hybrid_state_chunk_map_id_v3()
-        && !maps::palw_map_is_hybrid_composed_v2(&id)
         && !maps::palw_profile_is_held_v4(p)
     {
         return Err(evidence("this map has no authentic recurrence capture consumer"));
@@ -218,9 +183,31 @@ fn authenticate_anchor_v2<'a>(
     }
     let (_, layer) = binding.shape_profile.resolve_node_slot(coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
     let layer = layer.ok_or(PalwStepRefuteError::Unadjudicable)?;
-    // One spelling of "where the recurrence half lives" (held, v3 composition, consumer v2's composed maps, solo), shared with the
-    // assembler and the checkpoint terminals.
-    let (offset, expected_count, layout) = capture::gdn_recurrence_section_v2(&binding.shape_profile, start.first_position)?;
+    let held = maps::palw_profile_is_held_v4(&binding.shape_profile);
+    let composition = binding.shape_profile.state_chunk_map_id == maps::hybrid_state_chunk_map_id_v3() || held;
+    let layout = if held {
+        Some(
+            maps::palw_state_layout_v4(&binding.shape_profile, start.first_position)
+                .map_err(|_| evidence("held checkpoint has no recurrence layout"))?,
+        )
+    } else {
+        None
+    };
+    let (offset, expected_count) = if let Some(layout) = &layout {
+        if layout.gdn_layers.is_empty() {
+            return Err(evidence("this held checkpoint does not carry recurrence state"));
+        }
+        (layout.attn.chunk_count(), layout.chunk_count())
+    } else if composition {
+        let layout = maps::hybrid_state_geometry_for_covered_v1(&binding.shape_profile, start.first_position)
+            .map_err(|_| evidence("hybrid checkpoint has no recurrence layout"))?;
+        if layout.gdn_layers.is_empty() {
+            return Err(evidence("this hybrid checkpoint does not carry recurrence state"));
+        }
+        (layout.attn.chunk_count(), layout.chunk_count())
+    } else {
+        (0, geometry.chunk_count())
+    };
     if expected_count != u64::from(leaf.state_chunk_count) {
         return Err(evidence("checkpoint count differs from its registered state layout"));
     }
@@ -506,7 +493,6 @@ pub fn check_gdn_step_refutation_v2(
         program,
         false,
         Some(start.first_position),
-        None,
     )
     .ok_or(PalwStepRefuteError::Unadjudicable)?;
     let mut inputs = verified_input_rows_v2(binding, &r.step.inputs, &required, max_leaves)?;
@@ -561,7 +547,6 @@ pub fn check_gdn_step_refutation_v2(
                     ) + 1,
                     (&coord, prompt, &[]),
                     initial_head,
-                    None,
                 )?,
                 coord.tile_index as usize * node.tile_len as usize,
             )

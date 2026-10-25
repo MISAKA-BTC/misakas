@@ -1,8 +1,0 @@
-{
-  "base": "dfb380caee48a6c366e5e733908ce98a0a97ac09",
-  "patch": "readiness-root-final.patch",
-  "source_sha256_match": {
-    "consensus/core/src/palw_court_model_scope_routes_v1.rs": true,
-    "consensus/core/src/palw_court_model_scope_routes_v1/readiness_root.rs": true
-  }
-}

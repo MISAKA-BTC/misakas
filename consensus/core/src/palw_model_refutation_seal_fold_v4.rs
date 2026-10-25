@@ -76,7 +76,7 @@ pub(super) fn seal(
         MODEL_REFUTATION_SEAL_TABLE_V4,
         model_refutation_seal_key_v4(signer, slot),
         Some(borsh::to_vec(&row).expect("a seal row serializes")),
-    )?;
+    );
     Ok(())
 }
 
@@ -123,7 +123,7 @@ pub(super) fn reveal(
         _ => super::palw_flat_model_vector_fold_v3::refute_outcome(builder, ctx, signer, target, proof)?,
     };
     if outcome != ModelRefutationOutcomeV4::NotRun {
-        builder.write_kernel_row(MODEL_REFUTATION_SEAL_TABLE_V4, model_refutation_seal_key_v4(signer, slot), None)?;
+        builder.write_kernel_row(MODEL_REFUTATION_SEAL_TABLE_V4, model_refutation_seal_key_v4(signer, slot), None);
     }
     Ok(())
 }

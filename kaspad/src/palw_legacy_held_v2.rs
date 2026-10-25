@@ -1,5 +1,5 @@
 //! **Lane LG14-B: the legacy V2 route's public localizer and the producer's responder** (node policy; consensus-inert). Design:
-//! `docs/design/palw/verification/legacy-route-g14-held-da.md`; the rules are [`kaspa_consensus_core::palw_legacy_held_da_v2`]'s.
+//! `docs/design/palw/legacy-route-g14-held-da.md`; the rules are [`kaspa_consensus_core::palw_legacy_held_da_v2`]'s.
 //!
 //! **The verifier's half** — a bonded verifier OUTSIDE the claim's Panel, with its own copy of the registered model (ADR-0177: G14 is
 //! conditional on it), reading only the chain:
@@ -365,53 +365,6 @@ impl PalwLegacyReplicaV2 {
                 _ => Err("the court does not find the located leaf guilty: nothing filed".into()),
             }
         })
-    }
-}
-
-impl PalwLegacyReplicaV2 {
-    /// **R-D2-NODE: the claim-part terminal** (ADR-0177 D2 / ADR-0188, REQ-T6-4's `HeldStepLeaf` replacement): on a claim accepted
-    /// past `palw_court_model_scope_v1` the producer is never compelled to supply model rows, so the located leaf is convicted from the
-    /// claim-only committed kernel witness the chain already authenticated (tag 157/158 `KernelWitness`) plus THIS verifier's own rows,
-    /// through `palw_d2_one_move_on_claim_part_v1`. Filed as `ShardCourtAccused` only when the court's own predicate finds the
-    /// executor guilty (a fused site's `NeedsDissection` is the existing fused terminal's, [`Self::terminal`]); an own replica that
-    /// agrees, or rows it cannot open, file nothing.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn claim_part_terminal(
-        &self,
-        witness: &PalwCommittedKernelWitnessV2,
-        leaf: u64,
-        claim: Hash64,
-        bound_to: &kaspa_consensus_core::palw_shard_court_v1::PalwOneMoveClaimV2,
-        trace_root: Hash64,
-        producer: PalwBondKeyV2,
-        accuser: PalwBondKeyV2,
-        ladder: u64,
-    ) -> Result<PalwConsensusObjectV2, String> {
-        use kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1;
-        if witness.refutation.output_opening.leaf_index != leaf {
-            return Err("the public witness is not the located leaf of this claim".into());
-        }
-        let claim_part = PalwLeafEvidenceV1 {
-            refutation: witness.refutation.clone(),
-            artifact_openings: Vec::new(),
-            prompt_ids_opening: witness.prompt_ids_opening.clone(),
-        };
-        let rows = self.backend.operand_openings_for(&claim_part.refutation)?;
-        match kaspa_consensus_core::palw_court_model_scope_routes_v1::palw_d2_one_move_on_claim_part_v1(
-            &claim_part,
-            &rows,
-            bound_to,
-            ladder,
-        )
-        .map_err(|e| format!("the claim-part route does not adjudicate: {e}"))?
-        {
-            PalwShardCourtVerdictV1::ExecutorGuilty => {}
-            _ => return Err("the court does not find the claim part guilty with this verifier's rows: nothing filed".into()),
-        }
-        let evidence = PalwLeafEvidenceV1 { artifact_openings: rows, ..claim_part };
-        let accusation = evidence.into_accusation_v1(claim, bound_to.execution_root, trace_root, producer, accuser);
-        accusation.validate_shape(ladder).map_err(|e| format!("the claim-part accusation's shape: {e}"))?;
-        Ok(PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(accusation) })
     }
 }
 

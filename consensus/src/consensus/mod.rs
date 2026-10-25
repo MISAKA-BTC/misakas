@@ -8,7 +8,20 @@ pub mod test_consensus;
 mod palw_material_hold;
 mod utxo_set_override;
 
-use kaspa_consensus_core::Hash64;
+fn import_context_fault(
+    error: kaspa_consensus_core::errors::pruning::PruningImportError,
+) -> kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 {
+    use kaspa_consensus_core::errors::pruning::PruningImportError as E;
+    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
+    match error {
+        E::PruningPointImportContextUnavailable(_, _)
+        | E::PruningImportSessionRefused { .. }
+        | E::ImportedPalwStateHeaderMissing(_)
+        | E::MissingPointedPruningPoint
+        | E::PruningPointsWrongGenesis(_, _) => F::HistoryUnavailable,
+        _ => F::StoreUnreadable,
+    }
+}
 
 use crate::{
     config::Config,
@@ -48,7 +61,7 @@ use crate::{
     },
 };
 use kaspa_consensus_core::{
-    BlockHashSet, BlueWorkType, ChainPath, HashMapCustomHasher,
+    BlockHashSet, BlueWorkType, ChainPath, Hash64, HashMapCustomHasher,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     api::{
         BlockValidationFutures, ConsensusApi, ConsensusStats,
@@ -1638,18 +1651,7 @@ impl ConsensusApi for Consensus {
         }
         observed.state.source_bootstrap_check_work_authority_v1(work).map_err(fault)?;
         let after = self.lkg_virtual_state.load();
-        let import_fault = |error: kaspa_consensus_core::errors::pruning::PruningImportError| {
-            use kaspa_consensus_core::errors::pruning::PruningImportError as I;
-            match error {
-                I::PruningPointImportContextUnavailable(_, _)
-                | I::PruningImportSessionRefused { .. }
-                | I::ImportedPalwStateHeaderMissing(_)
-                | I::MissingPointedPruningPoint
-                | I::PruningPointsWrongGenesis(_, _) => F::HistoryUnavailable,
-                _ => F::StoreUnreadable,
-            }
-        };
-        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(import_fault)?;
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(import_context_fault)?;
         if !stable
             || import.active.is_some()
             || import.epoch != observed.import_epoch
@@ -1675,17 +1677,6 @@ impl ConsensusApi for Consensus {
             kaspa_database::prelude::StoreError::LocalResourceUnavailable(_) => F::CapacityUnavailable,
             _ => F::StoreUnreadable,
         };
-        let import_fault = |error: kaspa_consensus_core::errors::pruning::PruningImportError| {
-            use kaspa_consensus_core::errors::pruning::PruningImportError as I;
-            match error {
-                I::PruningPointImportContextUnavailable(_, _)
-                | I::PruningImportSessionRefused { .. }
-                | I::ImportedPalwStateHeaderMissing(_)
-                | I::MissingPointedPruningPoint
-                | I::PruningPointsWrongGenesis(_, _) => F::HistoryUnavailable,
-                _ => F::StoreUnreadable,
-            }
-        };
         let state_fault = |e: E| match e {
             E::NativeResource(why) => F::Capacity(why),
             E::NativeContextUnavailable(why) => why,
@@ -1703,7 +1694,7 @@ impl ConsensusApi for Consensus {
             .as_ref()
             .filter(|f| f.at != kaspa_consensus_core::config::params::ForkActivation::never() && f.at.is_active(before.daa_score))
             .ok_or(F::HistoryUnavailable)?;
-        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(import_fault)?;
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(import_context_fault)?;
         if !stable || import.active.is_some() {
             return Err(F::HistoryUnavailable);
         }
@@ -1718,7 +1709,7 @@ impl ConsensusApi for Consensus {
         }
         state.source_bootstrap_check_epoch_authority_v1().map_err(state_fault)?;
         let after = self.lkg_virtual_state.load();
-        let (after_import, stable) = self.virtual_processor.pruning_import_status().map_err(import_fault)?;
+        let (after_import, stable) = self.virtual_processor.pruning_import_status().map_err(import_context_fault)?;
         if !stable
             || after_import.active.is_some()
             || import.epoch != after_import.epoch
@@ -1994,11 +1985,7 @@ impl ConsensusApi for Consensus {
         }
         Ok(prepared)
     }
-    fn palw_kernel_material_consent_accepted_v4(
-        &self,
-        root: kaspa_hashes::Hash64,
-        consent: kaspa_hashes::Hash64,
-    ) -> Result<bool, String> {
+    fn palw_kernel_material_consent_accepted_v4(&self, root: Hash64, consent: Hash64) -> Result<bool, String> {
         use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
         let before = self.lkg_virtual_state.load();
         let now = self.get_virtual_daa_score();
@@ -2069,7 +2056,7 @@ impl ConsensusApi for Consensus {
         if now > monetary.terms.enrollment_until_daa {
             return Err("kernel funded enrollment expired before claim admission".into());
         }
-        let rid = kaspa_hashes::Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2", terms));
+        let rid = Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2", terms));
         let matches = |state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| {
             state
                 .monetary_material_row_v1(monetary.terms.root)
@@ -2177,8 +2164,8 @@ impl ConsensusApi for Consensus {
     }
     fn palw_material_generation_authority_v4(
         &self,
-        root: kaspa_hashes::Hash64,
-        consent: kaspa_hashes::Hash64,
+        root: Hash64,
+        consent: Hash64,
         provider: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         scope: &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
     ) -> Result<(), String> {
@@ -2351,19 +2338,6 @@ impl ConsensusApi for Consensus {
             return Err("material query native point/clock/import changed".into());
         }
         Ok(authority)
-    }
-    fn palw_exec_origin_coverage_v1(
-        &self,
-        listed: usize,
-    ) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
-        let before = self.lkg_virtual_state.load();
-        let state = self
-            .virtual_processor
-            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
-            .map_err(|e| format!("historical header census state unavailable: {e:?}"))?;
-        Ok(kaspa_consensus_core::palw_work_slice_v2::palw_exec_origin_coverage_v1(&state, listed.min(4096), |block| {
-            self.headers_store.get_header(block).ok().and_then(|header| borsh::object_length(&*header).ok()).map(|n| n as u64)
-        }))
     }
     fn palw_native_recovery_session_quote_v4(
         &self,
@@ -2866,10 +2840,6 @@ impl ConsensusApi for Consensus {
         }
 
         let sink = self.get_sink();
-        // RFC-0012: past the retirement no attestation is admitted, so no deficit can be cured — report none (lane R12, 2026-10-11).
-        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.config.params.palw_dns_retired_at(daa)) {
-            return Vec::new();
-        }
         let anchors = self.virtual_processor.canonical_anchors_in_window(sink, dns_params, dns_params.stake_score_window_blue_score);
         if anchors.is_empty() {
             return Vec::new();
@@ -3371,45 +3341,6 @@ impl ConsensusApi for Consensus {
         iter.map(|item| item.unwrap()).collect()
     }
 
-    fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
-        let _guard = self.pruning_lock.blocking_read();
-        self.dns_reserve_balance_checked_v1(block).ok().flatten()
-    }
-
-    fn get_palw_acceptance_reads_v1(
-        &self,
-        blocks: Vec<BlockHash>,
-        outpoints: Vec<TransactionOutpoint>,
-    ) -> ConsensusResult<kaspa_consensus_core::api::PalwAcceptanceReadsV1> {
-        use crate::model::stores::virtual_state::VirtualStateStoreReader;
-        if blocks.len() > 64 || outpoints.len() > 64 {
-            return Err(ConsensusError::General("at most 64 reserve blocks and 64 outpoints per acceptance read"));
-        }
-        let _pruning = self.pruning_lock.blocking_read();
-        let virtual_stores = self.virtual_stores.read();
-        let unavailable = |e| ConsensusError::GeneralOwned(format!("PALW acceptance read: {e}"));
-        let state = virtual_stores.state.get().map_err(unavailable)?;
-        let reserve_balances = blocks
-            .into_iter()
-            .map(|block| self.dns_reserve_balance_checked_v1(block).map(|balance| (block, balance)))
-            .collect::<ConsensusResult<Vec<_>>>()?;
-        let outpoints = outpoints
-            .into_iter()
-            .map(|outpoint| {
-                UtxoSetStoreReader::get(&virtual_stores.utxo_set, &outpoint)
-                    .optional()
-                    .map(|entry| (outpoint, entry.map(|entry| entry.as_ref().clone())))
-                    .map_err(unavailable)
-            })
-            .collect::<ConsensusResult<Vec<_>>>()?;
-        Ok(kaspa_consensus_core::api::PalwAcceptanceReadsV1 {
-            sink: state.ghostdag_data.selected_parent,
-            virtual_daa: state.daa_score,
-            reserve_balances,
-            outpoints,
-        })
-    }
-
     fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
         // Seek to the first entry at-or-after `outpoint`; it is the requested
         // entry iff the key matches exactly (the outpoint is unspent).
@@ -3758,37 +3689,6 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_staged_tir_prefix_v1_impl(key)
     }
 
-    fn palw_tir_public_frame_v1(
-        &self,
-        claim: kaspa_consensus_core::Hash64,
-    ) -> Result<Option<kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
-        self.virtual_processor.palw_tir_public_frame_v1_impl(claim)
-    }
-
-    fn palw_tir_public_conviction_preflight_v1(
-        &self,
-        filer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        claim: kaspa_consensus_core::Hash64,
-        evidence: kaspa_consensus_core::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
-    ) -> Result<Option<Result<(), String>>, String> {
-        self.virtual_processor.palw_tir_public_conviction_preflight_v1_impl(filer, claim, evidence)
-    }
-
-    fn palw_tir_public_read_v1(
-        &self,
-        read: &mut dyn FnMut(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
-    ) -> Result<bool, String> {
-        self.virtual_processor.palw_tir_public_read_v1_impl(read)
-    }
-
-    fn palw_tir_public_original_quote_v1(
-        &self,
-        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
-        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-    ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
-        self.virtual_processor.palw_tir_public_original_quote_v1_impl(original, header)
-    }
-
     fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
@@ -3995,42 +3895,6 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_shared_claim_cache_gc_ack_v1_impl(lease)
     }
 
-    fn palw_rfc0016_report_v1(&self, class: Option<kaspa_consensus_core::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
-        self.virtual_processor.palw_rfc0016_report_v1_impl(class)
-    }
-
-    fn palw_claim_detail_v1(&self, claim: kaspa_consensus_core::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
-        self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, anchor_delay| {
-            kaspa_consensus_core::palw_user_views_v1::palw_claim_detail_json_v1(state, params, &claim, clock, anchor_delay)
-                .map(|doc| doc.to_string())
-        })
-    }
-
-    fn palw_court_state_v1(
-        &self,
-        target: kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1,
-    ) -> Result<Option<(u64, Option<String>)>, String> {
-        self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, _| {
-            kaspa_consensus_core::palw_user_views_v1::palw_court_state_json_v1(state, params, target, clock).map(|doc| doc.to_string())
-        })
-    }
-
-    fn palw_bond_detail_v1(
-        &self,
-        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-    ) -> Result<Option<(u64, Option<String>)>, String> {
-        self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, _| {
-            kaspa_consensus_core::palw_user_views_v1::palw_bond_detail_json_v1(state, params, &bond, clock).map(|doc| doc.to_string())
-        })
-    }
-
-    fn palw_router_binding_v2(
-        &self,
-        class: kaspa_consensus_core::Hash64,
-    ) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
-        self.virtual_processor.palw_router_binding_v2_impl(class)
-    }
-
     fn palw_staged_preclaim_quote_v1(
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
@@ -4077,30 +3941,6 @@ impl ConsensusApi for Consensus {
         claim: kaspa_consensus_core::Hash64,
     ) -> Option<kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1> {
         kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_target_v1(self.palw_state_v2_tip()?.as_ref(), &claim)
-    }
-
-    fn palw_gdn_step_candidates_v1(
-        &self,
-        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        after: Option<(u64, kaspa_consensus_core::Hash64)>,
-        limit: usize,
-    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwGdnStepCandidateV1> {
-        self.virtual_processor.palw_gdn_step_candidates_v1_impl(me, after, limit)
-    }
-
-    fn palw_gdn_step_candidate_v1(
-        &self,
-        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        claim: kaspa_consensus_core::Hash64,
-    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwGdnStepCandidateV1> {
-        self.virtual_processor.palw_gdn_step_candidate_v1_impl(me, claim)
-    }
-
-    fn palw_gdn_court_limits_v2(
-        &self,
-        class_id: kaspa_consensus_core::Hash64,
-    ) -> Option<kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2> {
-        self.virtual_processor.palw_gdn_court_limits_v2_impl(class_id)
     }
 
     fn palw_legacy_disputes_v1(
@@ -4638,18 +4478,7 @@ impl ConsensusApi for Consensus {
         let sink = self.get_sink();
         let mut tips = self.get_tips();
         tips.sort();
-        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips, &Default::default())
-    }
-
-    fn palw_fork_choice_openings_v2(
-        &self,
-        blocks: &[BlockHash],
-        extras: &kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2,
-    ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
-        let sink = self.get_sink();
-        let mut tips = self.get_tips();
-        tips.sort();
-        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips, extras)
+        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips)
     }
 
     fn import_pruning_point_overlay_snapshot(
@@ -4687,7 +4516,7 @@ impl ConsensusApi for Consensus {
     // max_blocks has to be greater than the merge set size limit
     fn get_hashes_between(&self, low: BlockHash, high: BlockHash, max_blocks: usize) -> ConsensusResult<(Vec<BlockHash>, BlockHash)> {
         let _guard = self.pruning_lock.blocking_read();
-        assert!(max_blocks as u64 > self.services.sync_manager.mergeset_capacity_for(high));
+        assert!(max_blocks as u64 > self.config.mergeset_size_limit());
         self.validate_block_exists(low)?;
         self.validate_block_exists(high)?;
 
@@ -4737,7 +4566,8 @@ impl ConsensusApi for Consensus {
         kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
     > {
         let Some(point) = self.virtual_processor.palw_weighing_point_v2_checked(self.get_sink())? else { return Ok(None) };
-        let Some(state) = self.virtual_processor.palw_candidate_state_for_selection_v2(point)? else { return Ok(None) };
+        let Some(retained) = self.virtual_processor.palw_candidate_state_for_selection_v2(point)? else { return Ok(None) };
+        let state = retained.into_unreserved_legacy_v1()?;
         let Ok(daa_score) = self.headers_store.get_daa_score(point) else { return Ok(None) };
         Ok(Some(kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1 { state, block: point, daa_score }))
     }
@@ -5648,39 +5478,6 @@ pub fn palw_derived_claim_view_v1(
 }
 
 impl Consensus {
-    /// Missing reserve rows encode zero only for a retained, UTXO-validated
-    /// block (or genesis). A matching imported snapshot also establishes the
-    /// balance. Unknown/pruned history remains unknown; storage errors remain
-    /// errors for the checked acceptance reader.
-    fn dns_reserve_balance_checked_v1(&self, block: BlockHash) -> ConsensusResult<Option<u64>> {
-        use crate::model::stores::pruning_overlay_snapshot::PruningPointOverlaySnapshotStoreReader;
-        let unavailable = |e| ConsensusError::GeneralOwned(format!("DNS reserve read: {e}"));
-        // Candidate commit stages acceptance/reserve cache writes before the DB
-        // batch is durable. Its status write guard stays exclusive through that
-        // commit; acquire it first so staged rows cannot establish a post-state.
-        let statuses = self.statuses_store.read();
-        if statuses.get(block).optional().map_err(unavailable)? == Some(BlockStatus::StatusUTXOValid) {
-            if let Some(balance) = self.storage.reserve_balance_store.get(block).optional().map_err(unavailable)? {
-                return Ok(Some(balance));
-            }
-            if block == self.config.params.genesis.hash
-                || self.acceptance_data_store.get(block).optional().map_err(unavailable)?.is_some()
-            {
-                return Ok(Some(0));
-            }
-        }
-        drop(statuses);
-        Ok(self
-            .storage
-            .pruning_overlay_snapshot_store
-            .read()
-            .get()
-            .optional()
-            .map_err(unavailable)?
-            .filter(|snapshot| snapshot.pruning_point == block)
-            .map(|snapshot| snapshot.snapshot.reserve_balance))
-    }
-
     fn palw_finalized_material_recovery_state_v2(
         &self,
     ) -> Result<Option<(BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1)>, String> {

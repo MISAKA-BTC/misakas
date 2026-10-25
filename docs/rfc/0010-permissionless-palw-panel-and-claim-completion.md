@@ -1,7 +1,5 @@
 # RFC-0010: Permissionless PALW Panel binding and claim completion
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -16,11 +14,11 @@
 
 * Status: Revised Draft, 2026-10-10後続改定 — off-chain model acquisition; model-bond coinbase allocation and conditional prosecution; historical implementation/measurements retain scope; new economics/implementation/activation pending.
 * Scope: testnet-12 PALW claims, their Panel binding, verification and reward completion. An RFC merge does not change the live rules.
-* Related: [RFC-0009](0009-palw-remote-miner.md), [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md), [RFC-0008](0008-palw-claim-backed-consensus-blocks.md), [ADR-0141](../adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md), and the [testnet-12 Panel-seed incident and lane A](../history/networks/testnet-12/t12-panel-seed-2026-09-25.md).
+* Related: [RFC-0009](0009-palw-remote-miner.md), [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md), [RFC-0008](0008-palw-claim-backed-consensus-blocks.md), [ADR-0141](../adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md), and the [testnet-12 Panel-seed incident and lane A](../t12-panel-seed-2026-09-25.md).
 
 ## 0. Decision proposed
 
-**Dormant implementation — audited against integration `3730cc90f`, 2026-10-10:** the transition engine, production virtual-state fold, receipt/court handoff, per-shard draw and RPC/CLI observation exist behind `palw_permissionless_panel_v1`. All networks remain `None`; attempted activation is refused. No production Panel beacon policy is approved; objective seal finality, frozen source-profile eligibility, numeric economics and the operator-free end-to-end release drill remain open. See [implementation, audit fixes, tests and release blockers](../design/palw/integration/rfc-0010-dormant-implementation.md). This does not assign an activation or remove the historical lane-A rule.
+**Dormant implementation — audited against integration `3730cc90f`, 2026-10-10:** the transition engine, production virtual-state fold, receipt/court handoff, per-shard draw and RPC/CLI observation exist behind `palw_permissionless_panel_v1`. All networks remain `None`; attempted activation is refused. No production Panel beacon policy is approved; objective seal finality, frozen source-profile eligibility, numeric economics and the operator-free end-to-end release drill remain open. See [implementation, audit fixes, tests and release blockers](0010-dormant-implementation.md). This does not assign an activation or remove the historical lane-A rule.
 
 **A claim's Panel MUST be selected by public consensus rules without naming a genesis bond, an operator fleet, or another privileged identity.** The claim, the eligible Panel population, and the randomness commitment must be fixed in that order. A binding block only records the result; its producer, hash, signature, timestamp, execution commitment, lane, and arrival order MUST NOT change the Panel seed or the eligible population. Any valid selected-chain block that reaches the prescribed binding point may complete that transition, including a heartbeat if the new rule admits it.
 
@@ -69,7 +67,7 @@ non-interference、distinct-capital、三層予算、公開/閉鎖比較、回�
 
 ## 1. Current rule and trust boundary
 
-On testnet-12, lane F1 derives a Panel seed from `H(anchor attempt execution_commitment_v3 || claim_id)`. Lane A then lets only an attempt from one of the eight genesis operator bonds anchor a claim's Panel. A chain block that merges such an attempt may carry the bind, but the operator attempt supplies the seed. The [incident note](../history/networks/testnet-12/t12-panel-seed-2026-09-25.md) explains the price: an attacker could obtain fresh valid attempt wins with cheap junk work while P0-10 remained open, preview the Panel, and publish a favourable candidate. Lane A prevents an untrusted participant from controlling that source by trusting the operator position instead.
+On testnet-12, lane F1 derives a Panel seed from `H(anchor attempt execution_commitment_v3 || claim_id)`. Lane A then lets only an attempt from one of the eight genesis operator bonds anchor a claim's Panel. A chain block that merges such an attempt may carry the bind, but the operator attempt supplies the seed. The [incident note](../t12-panel-seed-2026-09-25.md) explains the price: an attacker could obtain fresh valid attempt wins with cheap junk work while P0-10 remained open, preview the Panel, and publish a favourable candidate. Lane A prevents an untrusted participant from controlling that source by trusting the operator position instead.
 
 The privilege is consensus-visible in [`palw_operator_anchor_v1.rs`](../../consensus/core/src/palw_operator_anchor_v1.rs) and the post-launch testnet-12 fence in [`params.rs`](../../consensus/core/src/config/params.rs). [`VirtualStateProcessor::palw_chain_block_as_anchor_v1`](../../consensus/src/pipeline/virtual_processor/processor.rs), its anchor walk, SW-8 step 4c, the draw gate, and the one-state pre-check all consume that answer. If no operator attempt reaches a claim before its bind deadline, `BindTimeout` voids it. New public bonds do not become lane-A operators by maturing.
 
@@ -121,7 +119,7 @@ panel_seed_v3 = H(
 )
 ```
 
-These names describe the required binding; the exact encoding and hash function belong to a versioned wire specification. `anchor_slot` is derived by consensus at seal time. The beacon must not be selected *because* this seed yields a desired Panel. A last contributor's ability to suppress an output is part of the security budget, even when the output is unique if published. Hashing, a single VRF, unpenalized commit–reveal, a later raw block hash, or a VDF claim does not by itself establish the required property; the [incident analysis](../history/networks/testnet-12/t12-panel-seed-2026-09-25.md) already identifies their relevant last-mover or claim-grinding failures.
+These names describe the required binding; the exact encoding and hash function belong to a versioned wire specification. `anchor_slot` is derived by consensus at seal time. The beacon must not be selected *because* this seed yields a desired Panel. A last contributor's ability to suppress an output is part of the security budget, even when the output is unique if published. Hashing, a single VRF, unpenalized commit–reveal, a later raw block hash, or a VDF claim does not by itself establish the required property; the [incident analysis](../t12-panel-seed-2026-09-25.md) already identifies their relevant last-mover or claim-grinding failures.
 
 Until a source meets these requirements, the new fence stays `None` and lane A continues under its existing rule. `BeaconUnavailable` after a bounded deadline ends a claim without a fraud slash; silently substituting a cheap seed is forbidden.
 
@@ -237,7 +235,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 
 ## 改定 — 2026-10-12（Panel=1暫定mode・有界の交代・正の証拠を必須にしたFinal：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
 
 - **§0追記:** 通常の新reward-bearing modeは、1 claimにつき同時に有効なassigned verification seatを1つ持つ。Panel=0へのtimeout fallbackを禁止する。候補集合には複数の参加者を認め、non-seatの検査・反証権限を制限しない。Minerとassigned Panelは適用scopeの正しい登録モデルを保有し、実行/検査と認証に必要な能力を備える（ADR-0177 D1補足）。モデル登録者に一般第三者への提供義務は導入しない。合意判定は認証済み状態と証拠に基づき、特定nodeのHTTP結果・model取得速度を直接入力にしない。Panelは承認済みの確率的checker、固定scope、commit済みstatementへの適正なchallenge、必要な正の検証証拠に基づくreceiptを提出し、署名数1だけを計算正当性の証明としない。producer/registrantとの同一bond・operatorを除外する（同一実質所有者でないことの証明ではない）。
 - **有界の交代:** snapshot、claim seal、選出policy、代替候補順序、最大交代数はclaimの規則に固定し、交代のために新しい乱数・候補集合・採掘枠・絶対期限を得ない。健全な検査に必要な残り時間がなければ交代を開始せず、候補か時間が尽きれば非不正・無報酬で終了する。検査不一致が出たら、bounded pursuitまたは完成したobjective proofへ進む。

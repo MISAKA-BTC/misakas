@@ -289,12 +289,9 @@ fn the_backend_commits_the_same_roots_at_every_prefill_run_width() {
                 assert_eq!(resumed.leaf_hashes, by_default.leaf_hashes, "{at} segment {segment}: the same leaf hashes");
             }
             let priced = b.resource_profile_v1(Some(&job), PalwResourceRoleV1::FullSeat).expect("a profile");
-            // The trace scratch is the prefill run's committed rows (proportional to the width) plus the run's output
-            // material (logits, ids, the serialized Vec), which RFC06's structural bound adds and no width changes.
-            let output = kaspa_consensus_core::palw_resource_profile_v1::palw_output_material_bytes_v1(&profile, &job);
             assert_eq!(
-                (priced.trace_scratch_bytes - output) * u64::from(A16_PREFILL_RUN_POSITIONS as u32),
-                (want_profile.trace_scratch_bytes - output) * u64::from(width),
+                priced.trace_scratch_bytes * u64::from(A16_PREFILL_RUN_POSITIONS as u32),
+                want_profile.trace_scratch_bytes * u64::from(width),
                 "{at}: the trace scratch is the width's"
             );
             assert_eq!(
@@ -456,9 +453,7 @@ fn a_held_classs_attempt_folds_and_stays_adjudicable() {
     let profile = backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::Producer).expect("derives");
     assert!(matches!(profile.capture, PalwCaptureRetentionV1::Fold { .. }), "{:?}", profile.capture);
     assert_eq!(profile.leaves, leaves);
-    // The structural host bound (RFC06 native resources) prices the in-flight block at four 64-B hashes a leaf
-    // (`palw_fold_capture_bytes_v1`: 256 B, was 64 B), so a 4,096-leaf block alone is 1 MiB: small is 2 MiB now.
-    assert!(profile.capture_retained_bytes < 2 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
+    assert!(profile.capture_retained_bytes < 1 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
 
     // A class outside the regime keeps its tiles, priced as such.
     let dense_backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), v2, (6, 3)).expect("servable");

@@ -234,7 +234,7 @@ pub(super) fn apply_gen_tensor_commitment_v1(
         output_root: *c.output_root,
         execution_root: *c.execution_root,
         trace_chunk_count: 1,
-        trace_retention_daa: daa.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_at_v2(builder.params, daa)),
+        trace_retention_daa: daa.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(builder.params)),
         reserved,
         immature_contribution: 0,
         escrowed_reward: 0,
@@ -263,7 +263,7 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     let deadline = daa.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
     // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.
     if !builder.params.panel_v3_rule_at(daa) {
-        builder.arm_deadline(deadline, *c.claim_id)?;
+        builder.arm_deadline(deadline, *c.claim_id);
     }
     Ok(())
 }

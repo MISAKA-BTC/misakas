@@ -196,17 +196,12 @@ impl<T: NativeHeapV1> NativeHeapV1 for Arc<T> {
 /// This is allocation-request accounting under the repository's pinned std;
 /// allocator arenas, committed pages and physical overhead are separate coverage.
 #[allow(dead_code)]
-pub(crate) struct BTreeNodeEnvelopeV1<K, V> {
+pub struct BTreeNodeEnvelopeV1<K, V> {
     parent: usize,
     metadata: [usize; 4],
     keys: [K; 16],
     values: [V; 16],
     edges: [usize; 17],
-}
-/// The request bytes one [`BTreeNodeEnvelopeV1`] of `BTreeMap<K, V>` stands for: what an outside consumer (the remote's metadata
-/// RAM budget) charges per map entry, without naming the crate-private envelope.
-pub const fn btree_node_envelope_bytes_v1<K, V>() -> usize {
-    std::mem::size_of::<BTreeNodeEnvelopeV1<K, V>>()
 }
 impl<K: NativeHeapV1, V: NativeHeapV1> NativeHeapV1 for BTreeMap<K, V> {
     fn native_members_v1(&self) -> Option<u64> {
@@ -256,26 +251,22 @@ tuple_native!(A:0,B:1,C:2);
 tuple_native!(A:0,B:1,C:2,D:3);
 tuple_native!(A:0,B:1,C:2,D:3,E:4);
 tuple_native!(A:0,B:1,C:2,D:3,E:4,F:5);
-tuple_native!(A:0,B:1,C:2,D:3,E:4,F:5,G:6);
 
-// A field may carry its `#[cfg(..)]`: the destructure stays exhaustive in every build (the field exists only in that build).
-macro_rules! native_struct { ($ty:ty; $($(#[$attr:meta])* $field:ident),* $(,)?) => {
+macro_rules! native_struct { ($ty:ty; $($field:ident),* $(,)?) => {
     impl $crate::palw_native_resource_v1::NativeHeapV1 for $ty {
         fn native_heap_v1(&self,path:&str)->$crate::palw_native_resource_v1::NativeCoverageV1 {
-            let Self { $($(#[$attr])* $field),* } = self;
+            let Self { $($field),* } = self;
             let mut sum=$crate::palw_native_resource_v1::NativeCoverageV1::zero();
-            $($(#[$attr])* { sum=sum.add::<Self>($crate::palw_native_resource_v1::NativeHeapV1::native_heap_v1($field,path),path); })* sum
+            $(sum=sum.add::<Self>($crate::palw_native_resource_v1::NativeHeapV1::native_heap_v1($field,path),path);)* sum
         }
         fn native_members_v1(&self)->Option<u64> {
-            let Self { $($(#[$attr])* $field),* } = self;
+            let Self { $($field),* } = self;
             #[allow(unused_mut)] let mut n=0u64;
-            $($(#[$attr])* { n=n.checked_add($crate::palw_native_resource_v1::NativeHeapV1::native_members_v1($field)?)?; })* Some(n)
+            $(n=n.checked_add($crate::palw_native_resource_v1::NativeHeapV1::native_members_v1($field)?)?;)* Some(n)
         }
         fn native_components_v1(&self)->Vec<$crate::palw_native_resource_v1::NativeFieldInventoryV1> {
-            let Self { $($(#[$attr])* $field),* }=self;
-            #[allow(unused_mut)] let mut fields=Vec::new();
-            $($(#[$attr])* { fields.push($crate::palw_native_resource_v1::NativeFieldInventoryV1::of(concat!(stringify!($ty),".",stringify!($field)), $field)); })*
-            fields
+            let Self { $($field),* }=self;
+            vec![$($crate::palw_native_resource_v1::NativeFieldInventoryV1::of(concat!(stringify!($ty),".",stringify!($field)), $field)),*]
         }
     }
 }; }
@@ -303,11 +294,14 @@ macro_rules! native_unit {
     };
 }
 macro_rules! native_enum {
-    // An uninhabited enum (a reserved object kind): a reference to it is never empty to the checker, its value is.
-    ($ty:ty; ) => {
+    ($ty:ty;) => {
         impl NativeHeapV1 for $ty {
-            fn native_members_v1(&self)->Option<u64> { match *self {} }
-            fn native_heap_v1(&self,_:&str)->NativeCoverageV1 { match *self {} }
+            fn native_members_v1(&self) -> Option<u64> {
+                match *self {}
+            }
+            fn native_heap_v1(&self, _: &str) -> NativeCoverageV1 {
+                match *self {}
+            }
         }
     };
     ($ty:ty; $($variant:ident $( { $($named:ident),* } )? $( ( $($tuple:ident),* ) )?),* $(,)?) => {
@@ -442,34 +436,5 @@ mod tests {
 impl NativeHeapV1 for misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26 {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         self.native_inventory_parts_v1().native_heap_v1(path)
-    }
-}
-/// G14 int: the funded-original pairing holds a whole carrier `Transaction` (whose private `TransactionMass`/`SmallVec` script
-/// layouts the generator cannot visit), so its heap is hand-counted: input/output vector capacities, each input's signature
-/// script, each output's script bytes (conservatively counted as heap whether or not the SmallVec spilled), the payload, and the
-/// TFO1 envelope's three byte vectors.
-impl NativeHeapV1 for crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1 {
-    fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        let tx = self.carrier();
-        let env = self.envelope();
-        let mut heap = allocation::<crate::tx::TransactionInput>(tx.inputs.capacity(), path)
-            .add::<Self>(allocation::<crate::tx::TransactionOutput>(tx.outputs.capacity(), path), path)
-            .add::<Self>(allocation::<u8>(tx.payload.capacity(), path), path)
-            .add::<Self>(allocation::<u8>(env.original_envelope.capacity(), path), path)
-            .add::<Self>(allocation::<u8>(env.payer_pubkey.capacity(), path), path)
-            .add::<Self>(allocation::<u8>(env.funding.signature.capacity(), path), path);
-        for input in &tx.inputs {
-            heap = heap.add::<Self>(allocation::<u8>(input.signature_script.capacity(), path), path);
-        }
-        for output in &tx.outputs {
-            heap = heap.add::<Self>(allocation::<u8>(output.script_public_key.script().len(), path), path);
-        }
-        heap
-    }
-}
-/// G14 int: the test-only funded-original schedule is all `Copy` scalars and fixed budgets: no owned heap.
-impl NativeHeapV1 for crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1 {
-    fn native_heap_v1(&self, _path: &str) -> NativeCoverageV1 {
-        NativeCoverageV1::zero()
     }
 }

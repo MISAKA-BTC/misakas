@@ -1,8 +1,0 @@
-
-running 3 tests
-test palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_repeated_liveness_edges_are_linear_and_reject_dead_node ... ok
-test palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_malformed_wire_rank_and_duplicate_carry_release_quota ... ok
-test palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_profile_real_program_and_exact_quota_lifetime ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4776 filtered out; finished in 0.09s
-

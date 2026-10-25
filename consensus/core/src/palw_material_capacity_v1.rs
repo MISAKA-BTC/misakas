@@ -44,16 +44,8 @@ pub struct PalwMaterialManifestV1 {
 pub enum PalwMaterialCapacityErrorV1 {
     #[error("local native material resource: {0}")]
     LocalResource(crate::palw_native_resource_v1::NativeCoverageV1),
-    /// The SIGNED per-consent byte/unit/scope cap (a property of the material and its signed terms; not retryable locally).
     #[error("material exceeds its signed byte/unit/scope capacity")]
     Capacity,
-    /// RFC-0008: the provider's LOCAL raw-material store total (`total_capacity`) is full — a local raw-material cap, distinct
-    /// from the signed cap above and from typed RAM, metadata, DB/history and worker capacity (`palw_capacity_classes_v1`).
-    #[error("the provider's local raw material store capacity is exhausted")]
-    LocalRawMaterialCapacity,
-    /// RFC-0008: the provider's LOCAL retained contract/manifest count is full — a local metadata cap.
-    #[error("the provider's local material metadata capacity (retained contracts) is exhausted")]
-    LocalMetadataCapacity,
     #[error("material is missing a required original/continuation/unit")]
     Incomplete,
     #[error("material substituted a signed scope, codec or canonical byte digest")]
@@ -826,8 +818,7 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         if !self.contracts.contains_key(&consent)
             && self.contracts.len() >= crate::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_MAX_CONTRACTS_V1 as usize
         {
-            // RFC-0008: the retained-contract count is the store's metadata cap, never the signed material cap.
-            return Err(E::LocalMetadataCapacity);
+            return Err(E::Capacity);
         }
         let total = manifest.validate(max_bytes)?;
         let mut data = BTreeMap::new();
@@ -848,13 +839,10 @@ impl PalwMonetaryMaterialProviderStoreV1 {
             .contracts
             .iter()
             .filter(|(id, _)| **id != consent)
-            .try_fold(total.checked_add(4).ok_or(E::LocalRawMaterialCapacity)?, |sum, (_, (_, m, _))| {
-                sum.checked_add(m.validate(u64::MAX).ok()?)
-            })
-            .ok_or(E::LocalRawMaterialCapacity)?;
-        // RFC-0008: the provider's local raw byte store total, never the signed per-consent cap (validated above) nor typed RAM.
+            .try_fold(total.checked_add(4).ok_or(E::Capacity)?, |sum, (_, (_, m, _))| sum.checked_add(m.validate(u64::MAX).ok()?))
+            .ok_or(E::Capacity)?;
         if used > total_capacity {
-            return Err(E::LocalRawMaterialCapacity);
+            return Err(E::Capacity);
         }
         if self
             .contracts
@@ -1058,7 +1046,6 @@ mod native_resource_inventory_v1;
 #[path = "palw_material_capacity_owner_v1.rs"]
 mod material_capacity_owner_v1;
 
-pub use material_capacity_owner_v1::PalwLiabilityMaterialArchiveV1;
 pub use material_capacity_owner_v1::prospective_kernel_bundle_auth_requests_v4;
 pub use material_capacity_owner_v1::prospective_kernel_bundle_requests_v4;
 

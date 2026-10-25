@@ -190,12 +190,6 @@ impl PalwChainStateV2 {
             if record.live.keys().any(|bond| *bond == claim.bond) {
                 return bad(format!("claim {claim_id}'s producer holds a reservation on it"));
             }
-            // Lane g14-court-capacity: a court row only beside its reserver's live reservation, and only past its fence.
-            if record.courts.keys().any(|bond| !record.live.contains_key(bond))
-                || (!record.courts.is_empty() && params.court_capacity_v1().is_none())
-            {
-                return bad(format!("claim {claim_id}'s court rows name no live reservation, or exist below palw_court_capacity_v1"));
-            }
             for bond in record.live.keys() {
                 *live_per_bond.entry(*bond).or_default() += 1;
             }
@@ -240,8 +234,7 @@ impl TransitionBuilder<'_> {
     }
 
     /// The original accepted commitment, journaled for the claim's entire retained lifetime (delta 201).
-    pub(super) fn write_public_fp_job_v1(&mut self, key: Hash64, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.fp_public_jobs, false, "native fp_public_jobs writer")?;
+    pub(super) fn write_public_fp_job_v1(&mut self, key: Hash64, new: Option<Vec<u8>>) {
         let old = match &new {
             Some(wire) => self.state.fp_public_jobs.insert(key, wire.clone()),
             None => self.state.fp_public_jobs.remove(&key),
@@ -249,20 +242,16 @@ impl TransitionBuilder<'_> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::PublicFpJob { key, old, new });
         }
-        Ok(())
     }
 
     /// **The one writer of `legacy_disputes`** (delta 200): the record, its two indexes, journaled.
-    pub(super) fn write_legacy_dispute(&mut self, claim_id: Hash64, new: Option<PalwDisputeClaimV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&claim_id, &new, |s| &s.legacy_disputes, false, "native legacy_disputes writer")?;
-        self.reserve_index_members_v1::<(u64, Hash64), ()>(u64::from(new.is_some()), "native legacy_dispute_deadlines index")?;
-        self.reserve_index_members_v1::<(PalwBondKeyV2, Hash64), ()>(new.as_ref().map_or(0, |record| (record.live.len() + record.closed.len()) as u64), "native legacy_disputes_by_reserver index")?;
+    pub(super) fn write_legacy_dispute(&mut self, claim_id: Hash64, new: Option<PalwDisputeClaimV1>) {
         let old = match &new {
             Some(record) => self.state.legacy_disputes.insert(claim_id, record.clone()),
             None => self.state.legacy_disputes.remove(&claim_id),
         };
         if old == new {
-            return Ok(());
+            return;
         }
         if let Some(previous) = &old {
             self.state.legacy_dispute_deadlines.remove(&(previous.hard_deadline_daa, claim_id));
@@ -279,7 +268,6 @@ impl TransitionBuilder<'_> {
             }
         }
         self.entries.push(PalwDeltaEntryV2::LegacyDispute { key: claim_id, old, new });
-        Ok(())
     }
 
     /// **The deposit a reservation of `claim_id` holds at `now`**: DA-6's session exposure at the claim's stage —
@@ -305,43 +293,20 @@ impl TransitionBuilder<'_> {
     }
 
     /// **A reserved DA session opened** (`open_da_session_rcore_v1`): counted on its reservation's own budget.
-    pub(super) fn legacy_dispute_count_session_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
-        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
-        let Some(row) = record.live.get_mut(&bond) else { return Ok(()) };
+    pub(super) fn legacy_dispute_count_session_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) {
+        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return };
+        let Some(row) = record.live.get_mut(&bond) else { return };
         row.sessions_opened = row.sessions_opened.saturating_add(1);
-        self.write_legacy_dispute(claim_id, Some(record))?;
-        Ok(())
+        self.write_legacy_dispute(claim_id, Some(record));
     }
 
     /// **Lane G14-L: a lane joined a reserved session** (`join_da_session_lane_legacy_held_v1`): counted on its reservation's own lane
     /// budget (the join check refused a lane past it).
-    pub(super) fn legacy_dispute_count_lane_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
-        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
-        let Some(row) = record.live.get_mut(&bond) else { return Ok(()) };
+    pub(super) fn legacy_dispute_count_lane_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) {
+        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return };
+        let Some(row) = record.live.get_mut(&bond) else { return };
         row.lanes_joined = row.lanes_joined.saturating_add(1);
-        self.write_legacy_dispute(claim_id, Some(record))?;
-        Ok(())
-    }
-
-    /// **Lane g14-court-capacity-r2: withhold a Final claim's unpaid vesting** (the unserved rule's post-Final branch): every leg's
-    /// recipient cancelled, the row burned (`vesting_burned`), noted `UnservedBurned` — accusing nobody. A no-op without a row.
-    pub(super) fn withhold_unserved_vesting_v1(&mut self, claim_id: Hash64) -> Result<(), PalwStateV2Error> {
-        let Some(row) = self.state.vesting.get(&claim_id).cloned() else { return Ok(()) };
-        for (bond, _) in &row.seats {
-            self.cancel_native_recipient_v1(claim_id, *bond, 1)?;
-        }
-        self.cancel_native_recipient_v1(claim_id, row.producer_bond, 0)?;
-        let mut counters = self.state.vesting_counters;
-        counters.burned =
-            counters.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("unserved vesting burned"))?;
-        self.write_vesting(claim_id, None)?;
-        self.write_vesting_counters(counters)?;
-        super::palw_exec_v2_rewards_v1::burn(self, claim_id)?;
-        self.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::UnservedBurned {
-            claim_id,
-            sompi: row.total_sompi(),
-            legs: row.legs().collect(),
-        })
+        self.write_legacy_dispute(claim_id, Some(record));
     }
 
     /// **The hold ended** (the last live reservation closed): DL-1 re-derives the claim's deadline from its own anchors — no time
@@ -363,14 +328,8 @@ impl TransitionBuilder<'_> {
                 record.closed.insert(*bond);
                 record.dismissed_held.push((*bond, row.deposit));
             }
-            // Lane g14-court-capacity: its court row settles with it — an open session is charged to its backstop (the slot stays
-            // held for it), anything else to now. Empty below `palw_court_capacity_v1`.
-            if let Some(court) = record.courts.remove(bond) {
-                let until = super::palw_court_capacity_fold_v1::court_row_held_until_v1(&self.state, &court, now_daa);
-                super::palw_court_capacity_fold_v1::settle_court_row_v1(self, &claim_id, *bond, &court, until, false)?;
-            }
         }
-        self.write_legacy_dispute(claim_id, Some(record))?;
+        self.write_legacy_dispute(claim_id, Some(record));
         if held {
             self.legacy_dispute_hold_ended_v1(claim_id, now_daa)?;
         }
@@ -389,12 +348,6 @@ impl TransitionBuilder<'_> {
         let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
         let held = record.holds();
         let live: Vec<PalwBondKeyV2> = record.live.keys().copied().collect();
-        // Lane g14-court-capacity: every court row settles to now with the claim's outcome — on a conviction or a DA default the
-        // producer reimburses the prosecution's occupancy from its own collateral first. Empty below `palw_court_capacity_v1`.
-        let courts = std::mem::take(&mut record.courts);
-        for (reserver, court) in &courts {
-            super::palw_court_capacity_fold_v1::settle_court_row_v1(self, &claim_id, *reserver, court, now_daa, convicted)?;
-        }
         record.live.clear();
         record.reacquiring.clear();
         record.closed.extend(live);
@@ -402,7 +355,7 @@ impl TransitionBuilder<'_> {
             record.dismissed_held.clear();
         }
         let keep = !record.dismissed_held.is_empty();
-        self.write_legacy_dispute(claim_id, keep.then_some(record))?;
+        self.write_legacy_dispute(claim_id, keep.then_some(record));
         if held {
             self.legacy_dispute_hold_ended_v1(claim_id, now_daa)?;
         }
@@ -424,7 +377,7 @@ impl TransitionBuilder<'_> {
                 self.slash_seat(*bond, *amount, self.params.min_collateral_sompi())?;
             }
         }
-        self.write_legacy_dispute(claim_id, None)?;
+        self.write_legacy_dispute(claim_id, None);
         Ok(())
     }
 }
@@ -496,50 +449,11 @@ pub(super) fn apply_dispute_reserved_v1(
         return Err(PalwStateV2Error::BondBelowFloor { bond: reserver, collateral: bond.collateral, floor });
     }
     let w_disclose = palw_da_disclose_window_daa_v1(builder.params);
-    // G14 U07 (`palw_court_clock_v2`): for a claim accepted past the fence, creating this record IS the dispute extension — its hard
-    // deadline becomes `a + 10,000` and every clock derived from it (collect, disclosure, retention, Final hold, bond release) moves
-    // in this one write. The first reservation must land in `a <= now <= a + 3,120` (ADR-0198 A). Old claims: the old formula.
-    // G14 r5 (item 3, F07): the extension must not outrun ANY dependency — the claim's own trace, plus the staged route's custody
-    // horizon when the claim carries one. The reorg-retention term comes from the staged court config (0 on the legacy route).
-    let reorg_retention = crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(builder.extras.staged_public_court.as_ref());
-    let mut dependencies: Vec<crate::palw_court_clock_v2::PalwCourtDependencyV2> = builder
-        .state
-        .staged_claim_contract_v1(&claim_id)
-        .map(|c| crate::palw_court_clock_v2::PalwCourtDependencyV2 {
-            kind: crate::palw_court_clock_v2::PalwCourtDependencyKindV2::Custody,
-            signed_horizon_daa: c.terms.material_until_daa,
-        })
-        .into_iter()
-        .collect();
-    // G14 r6 (item 2): the EXEC root / kernel-claim liability horizons and the provider-lease quorum horizons the claim rests on, read
-    // from the rooted rows that hold them. Only when a NEW record is created under clock v2 (the extension); an existing record, or a
-    // claim clock v2 does not govern, reads none of this (the old formula ignores dependencies), so below the fence nothing changes.
-    if !builder.state.legacy_disputes.contains_key(&claim_id)
-        && crate::palw_court_clock_v2::palw_court_clock_v2_governs(builder.params, &claim)
-    {
-        dependencies.extend(super::palw_exec_v2_rewards_v1::court_clock_v2_exec_provider_dependencies_v2(
-            &builder.state,
-            builder.params,
-            &claim_id,
-            now,
-        )?);
-    }
-    let mut record = match builder.state.legacy_disputes.get(&claim_id).cloned() {
-        Some(record) => record,
-        None => PalwDisputeClaimV1 {
-            opened_daa: now,
-            hard_deadline_daa: crate::palw_court_clock_v2::palw_dispute_record_hard_deadline_v2(
-                builder.params,
-                &claim,
-                w_disclose,
-                reorg_retention,
-                &dependencies,
-                now,
-            )
-            .map_err(refused)?,
-            ..Default::default()
-        },
-    };
+    let mut record = builder.state.legacy_disputes.get(&claim_id).cloned().unwrap_or_else(|| PalwDisputeClaimV1 {
+        opened_daa: now,
+        hard_deadline_daa: palw_dispute_hard_deadline_v1(&claim, w_disclose),
+        ..Default::default()
+    });
     if now > record.hard_deadline_daa {
         return Err(refused("the claim's hard deadline has passed: no data-availability session could still open on it"));
     }
@@ -565,7 +479,7 @@ pub(super) fn apply_dispute_reserved_v1(
     let until = hard.saturating_add(builder.params.window_challenge_at(now));
     super::palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, &claim_id, until)?;
     record.live.insert(reserver, PalwDisputeReservationRowV1 { reserved_daa: now, deposit, sessions_opened: 0, lanes_joined: 0 });
-    builder.write_legacy_dispute(claim_id, Some(record))?;
+    builder.write_legacy_dispute(claim_id, Some(record));
     // The hold: DL-1 gives the claim no deadline while the record holds it (`palw_rcore_deadline_v1`, `arm_deadline`).
     if !held_before {
         builder.disarm_deadline(claim_id);
@@ -601,12 +515,7 @@ pub(super) fn apply_dispute_reacquired_v1(
         .state
         .legacy_dispute_reservation_v1(&claim_id, &request.reserver)
         .ok_or_else(|| refused("reacquisition requires this bond's live reservation"))?;
-    let hard = crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
-        builder.params,
-        builder.state.legacy_disputes.get(&claim_id),
-        &claim,
-        palw_da_disclose_window_daa_v1(builder.params),
-    );
+    let hard = palw_dispute_hard_deadline_v1(&claim, palw_da_disclose_window_daa_v1(builder.params));
     if row.reserved_daa != request.reserved_daa
         || row.sessions_opened.checked_add(1) != Some(request.session_number)
         || request.valid_until_daa > hard
@@ -626,21 +535,6 @@ pub(super) fn apply_dispute_reacquired_v1(
     let session_binding = match (&request.unit, &request.binding) {
         (U::Event { .. }, None) => None,
         (U::Held(_), Some(binding)) => Some(binding),
-        (U::TirStepLeaf { .. } | U::TirStepNode { .. } | U::TirStepRun { .. } | U::TirRowNode { .. }, None) => {
-            if !builder.params.tir_fence2_active_at(now) {
-                return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
-            }
-            if request.unit.is_tir_shard_v1() && !builder.params.tir_shard_active_at(now) {
-                return Err(PalwStateV2Error::TirShardDormant);
-            }
-            if !builder.state.tir_classes.contains_key(&claim.class_id) {
-                return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" });
-            }
-            let ladder = builder.tir_da_ladder_v1(&claim.class_id, now);
-            crate::palw_da_rcore_v1::palw_tir_step_unit_is_admissible_v1(&request.unit, ladder)
-                .map_err(PalwStateV2Error::TirFence2Refused)?;
-            None
-        }
         (U::LegacyHeldV2(unit), Some(binding)) => {
             if !builder.extras.legacy_held_da_v2_active || builder.state.tir_classes.contains_key(&claim.class_id) {
                 return Err(refused("this claim has no legacy held reacquisition route"));
@@ -677,7 +571,7 @@ pub(super) fn apply_dispute_reacquired_v1(
     open_da_session_rcore_mode_v1(builder, ctx, claim_id, request.reserver, request.unit, session_binding, true)?;
     let mut record = builder.state.legacy_disputes.get(&claim_id).cloned().expect("the session counted its live reservation");
     record.reacquiring.insert(request.reserver, request.unit);
-    builder.write_legacy_dispute(claim_id, Some(record))?;
+    builder.write_legacy_dispute(claim_id, Some(record));
     Ok(())
 }
 
@@ -729,35 +623,6 @@ pub(super) fn sweep_legacy_disputes(builder: &mut TransitionBuilder<'_>, ctx: &P
             builder.state.legacy_dispute_deadlines.remove(&(deadline, claim_id));
             continue;
         }
-        // **Lane g14-court-capacity-r2: unserved = unpaid.** A pre-Final claim whose live reservation still has a court row WAITING
-        // (queued or ticketed) though it was admitted a whole service window before the hard deadline is voided `PanelUnavailable`
-        // (no reward, weight or credit; nobody slashed; every deposit and escrow returned) instead of released toward Final — a court
-        // that could not serve a prosecution in time never lets the claim it accuses be paid. `false` below the fence.
-        let unserved = builder.state.legacy_disputes.get(&claim_id).is_some_and(|record| {
-            super::palw_court_capacity_fold_v1::court_unserved_at_lapse_v1(builder.params, record, ctx.daa_score)
-        });
-        if unserved && let Some(claim) = builder.state.claims.get(&claim_id).cloned() {
-            match claim.phase {
-                PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. } => {
-                    builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::PanelUnavailable)?;
-                }
-                // **The post-Final branch** (a reservation filed in the claim's open post-Final stage — its unmatured vesting is
-                // what held it): the Final is reversed (its safe weight, Gate C credit and usage taken back, the claim `Voided`
-                // `PanelUnavailable`, so kind 3 names it against no signer), its minted round rights forfeited, and every unpaid
-                // vesting leg withheld (burned, `UnservedBurned` — no offence, nobody slashed). What a coinbase already paid stays
-                // paid (the rule withholds, it does not claw back).
-                PalwClaimPhaseV2::Final { .. } => {
-                    builder.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::PanelUnavailable)?;
-                    builder.forfeit_minted_round_rights_of_claim(&claim_id)?;
-                    builder.withhold_unserved_vesting_v1(claim_id)?;
-                    builder.da_release_all_v1(claim_id, false, ctx.daa_score)?;
-                }
-                _ => {}
-            }
-            if !builder.state.legacy_dispute_deadlines.contains(&(deadline, claim_id)) {
-                continue;
-            }
-        }
         let x3 = builder
             .state
             .claims
@@ -776,9 +641,6 @@ pub(super) fn sweep_legacy_disputes(builder: &mut TransitionBuilder<'_>, ctx: &P
         }
         builder.legacy_dispute_dismiss_v1(claim_id, &live, ctx.daa_score)?;
     }
-    // Lane g14-court-capacity (audit G-07): ended sessions and expired tickets settle, then freed capacity is granted to the queue —
-    // before any object of the block. A no-op below `palw_court_capacity_v1`.
-    super::palw_court_capacity_fold_v1::sweep_court_capacity_v1(builder, ctx)?;
     Ok(())
 }
 
@@ -807,12 +669,7 @@ impl PalwChainStateV2 {
             registered_semantics: self.claim_semantics_v1(claim_id).cloned(),
             work_leaves: claim.work_leaves,
             deadline_daa: self.deadline_of(claim_id),
-            hard_deadline_daa: crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
-                params,
-                self.legacy_disputes.get(claim_id),
-                claim,
-                palw_da_disclose_window_daa_v1(params),
-            ),
+            hard_deadline_daa: palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)),
             record: self.legacy_disputes.get(claim_id).cloned(),
             sessions: self.da_sessions_of(claim_id).map(|(accuser, session)| (*accuser, session.clone())).collect(),
             answered: self.da_claims.get(claim_id).map(|record| record.answered.iter().copied().collect()).unwrap_or_default(),
@@ -1147,13 +1004,7 @@ impl PalwChainStateV2 {
                 let final_open = palw_final_public_dispute_open_v1(self, params, &claim_id, claim, now_daa);
                 if !known
                     && (!palw_dispute_phase_reservable_v1(&claim.phase, final_open)
-                        || now_daa
-                            > crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
-                                params,
-                                self.legacy_disputes.get(&claim_id),
-                                claim,
-                                palw_da_disclose_window_daa_v1(params),
-                            ))
+                        || now_daa > palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)))
                 {
                     return None;
                 }
@@ -1212,120 +1063,4 @@ impl PalwChainStateV2 {
             retained_cap: PALW_DISPUTE_RETAINED_RECORDS_PER_BOND_V1 as u32,
         })
     }
-}
-
-// ---- G14 ③ (lane gdn-filer round 2): the GDN step filer's discovery -----------------------------------------------------------
-
-/// **A claim the GDN step filer (tag 243) may still accuse**, with the window facts its admission reads. Node-side discovery only:
-/// nothing here is folded, rooted or carried.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PalwGdnStepCandidateV1 {
-    pub claim: crate::palw_producer_v2::PalwDisputableClaimV2,
-    /// `(accepted_daa, claim_id)`: the discovery cursor's key.
-    pub accepted_daa: u64,
-    pub phase: PalwClaimPhaseV2,
-    /// The claim's public post-Final stage is open (`palw_final_public_dispute_open_v1`: unmatured vesting, or FP liability past the
-    /// public-filer fence) — a `Final` claim a reservation may still hold, so tag 243 can still land behind one.
-    pub final_row_open: bool,
-    /// `me` holds a live dispute reservation on the claim (`legacy_dispute_reservation_v1`).
-    pub own_reservation_live: bool,
-}
-
-/// **Is `claim_id` inside tag 243's accusation window for `me` at `now_daa`?** The fold's own admission (`objects.rs`,
-/// `GdnStepAccusedV2`): a non-terminal claim, or a `Final` one the accuser's live reservation holds — read one step ahead: a `Final`
-/// claim whose post-Final stage is still open and that `me` may still reserve (past the public-filer fence, never reserved before,
-/// inside the hard deadline) is in the window too, because the filer reserves first (tag 154) and then files. Also mirrors the fold's
-/// two claim-side refusals that do not depend on the evidence: the executor is never `me`, and below `palw_offence_attribution` a
-/// claim already under a court session is refused.
-pub fn palw_gdn_step_candidate_v1(
-    state: &PalwChainStateV2,
-    params: &PalwStateParamsV2,
-    me: &PalwBondKeyV2,
-    claim_id: &Hash64,
-    now_daa: u64,
-    offence_attribution_active: bool,
-) -> Option<PalwGdnStepCandidateV1> {
-    let claim = state.claims.get(claim_id)?;
-    if claim.bond == *me {
-        return None;
-    }
-    let own_reservation_live = state.legacy_dispute_reservation_v1(claim_id, me).is_some();
-    let final_row_open = palw_final_public_dispute_open_v1(state, params, claim_id, claim, now_daa);
-    let in_window = match &claim.phase {
-        PalwClaimPhaseV2::Voided { .. } => false,
-        PalwClaimPhaseV2::Final { .. } => {
-            own_reservation_live
-                || (final_row_open
-                    && params.legacy_public_filer_active_at(now_daa)
-                    && !state.legacy_disputes.get(claim_id).is_some_and(|record| record.knows(me))
-                    && now_daa
-                        <= crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
-                            params,
-                            state.legacy_disputes.get(claim_id),
-                            claim,
-                            palw_da_disclose_window_daa_v1(params),
-                        ))
-        }
-        _ => true,
-    };
-    if !in_window {
-        return None;
-    }
-    if !offence_attribution_active && state.court_sessions_iter().any(|(_, s)| s.claim == *claim_id) {
-        return None;
-    }
-    let artifact_root = state.class(&claim.class_id).map(|c| c.artifact_root)?;
-    Some(PalwGdnStepCandidateV1 {
-        claim: crate::palw_producer_v2::PalwDisputableClaimV2 {
-            accepted_block: claim.accepted_block,
-            claim_id: *claim_id,
-            class_id: claim.class_id,
-            artifact_root,
-            executor_bond: claim.bond,
-            trace_root: claim.trace_root,
-            execution_root: claim.execution_root,
-            // Only a `ReceiptLicensed` claim has a licence DAA; every other phase carries 0 (the step filer never reads it).
-            licensed_daa: match claim.phase {
-                PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => licensed_daa,
-                _ => 0,
-            },
-            free_prompt: matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }),
-        },
-        accepted_daa: claim.accepted_daa,
-        phase: claim.phase.clone(),
-        final_row_open,
-        own_reservation_live,
-    })
-}
-
-/// **The next page of [`palw_gdn_step_candidate_v1`]**: claims in `(accepted_daa, claim_id)` order strictly after `after`, at most
-/// `limit`. The caller keeps the cursor (the last key it saw) and starts over (`None`) when a page comes back short — so a claim
-/// first seen after `Final` (or past any phase) is still reached, and one tick never reads more than `limit` candidates. The scan
-/// itself walks the claim table once (no allocation beyond the matching keys).
-pub fn palw_gdn_step_candidates_v1(
-    state: &PalwChainStateV2,
-    params: &PalwStateParamsV2,
-    me: &PalwBondKeyV2,
-    now_daa: u64,
-    offence_attribution_active: bool,
-    after: Option<(u64, Hash64)>,
-    limit: usize,
-) -> Vec<PalwGdnStepCandidateV1> {
-    let mut keys: Vec<(u64, Hash64)> = state
-        .claims
-        .iter()
-        .filter(|(claim_id, claim)| after.is_none_or(|cursor| (claim.accepted_daa, **claim_id) > cursor))
-        .map(|(claim_id, claim)| (claim.accepted_daa, *claim_id))
-        .collect();
-    keys.sort_unstable();
-    let mut out = Vec::new();
-    for (_, claim_id) in keys {
-        if out.len() >= limit {
-            break;
-        }
-        if let Some(candidate) = palw_gdn_step_candidate_v1(state, params, me, &claim_id, now_daa, offence_attribution_active) {
-            out.push(candidate);
-        }
-    }
-    out
 }

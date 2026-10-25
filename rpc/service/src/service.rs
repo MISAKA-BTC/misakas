@@ -254,10 +254,10 @@ pub struct PalwClassLedgerContext {
     pub max_context_tokens: u32,
 }
 
-/// **When an IR class takes a free prompt** (RFC-0002 Phase H): only where the TIR public frame is in force — the same words the
-/// node's IR backend refuses with.
+/// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
+/// Phase H — the same words the node's IR backend and the CLI refuse with.
 const PALW_TIR_FREE_PROMPT_CLOSED_V1: &str =
-    "free-prompt claims of an IR class open only with the TIR public frame (palw_tir_public_conviction_v1, RFC-0002 Phase H)";
+    "free-prompt claims of an IR class are closed until RFC-0002 Phase H — an IR class serves attempts only";
 
 /// The numbers a class declaration the chain registered fixes: its graph's `n_ctx` and its canonical
 /// job's token counts.
@@ -969,15 +969,6 @@ impl RpcApi for RpcCoreService {
             return Err(RpcError::ConsensusInTransitionalIbdState);
         }
 
-        // G14 capacity lane: no new block is taken in while node storage is in the low-space pause.
-        // The block is not judged (the miner may resubmit once the node resumes).
-        if !kaspa_utils::storage_budget::global_writable() {
-            return Err(RpcError::General(
-                "block not submitted: node storage is in the low-space pause (--storage-cap-bytes); retry once space is reclaimed"
-                    .into(),
-            ));
-        }
-
         // TODO: consider adding an error field to SubmitBlockReport to document both the report and error fields
         let is_synced = self.mining_rule_engine.should_mine(sink_daa_score_timestamp);
 
@@ -1150,7 +1141,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
         // We use +1 because low_hash is also returned
         // max_blocks MUST be >= mergeset_size_limit + 1
-        let max_blocks = self.config.mergeset_size_limit_history().upper_bound() as usize + 1;
+        let max_blocks = self.config.mergeset_size_limit() as usize + 1;
         let (block_hashes, high_hash) = session.async_get_hashes_between(low_hash, sink_hash, max_blocks).await?;
 
         // If the high hash is equal to sink it means get_hashes_between didn't skip any hashes, and
@@ -1739,13 +1730,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     committed_sompi: row.committed.map(|c| c.to_string()).unwrap_or_default(),
                     // ADR-0176 amendment (ユーザー判断 2026-10-15 item 3): the decomposition, not only the total.
                     reservation_split: row.reservation_split.map(|split| split.audit_json()).unwrap_or_default(),
-                    // RFC-0018 Gate C: empty below the fence (the row's version stays 5).
-                    security_certification: match row.security_certification {
-                        "not-governed" => String::new(),
-                        other => other.to_string(),
-                    },
-                    // RFC-0023 stage 2: empty below the fence (the row's version is then unchanged).
-                    claim_local_settlement: row.claim_local_settlement.clone(),
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,
@@ -2133,11 +2117,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 depth_is_lower_bound: dns_retired_at.is_some() || settlement.depth_is_lower_bound,
                 safe_frontier_blue_score: settlement.safe_frontier_blue_score,
                 safe_frontier_daa: settlement.safe_frontier_daa,
-                // RFC-0018: the premise-based SecurityCertified reading (integ/rfc0018-dag).
-                uncertified_final_anchors: settlement.uncertified_final,
-                security_certification_premise: settlement
-                    .gate_c_in_force
-                    .then(|| kaspa_consensus_core::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_PREMISE_V1.to_string()),
             }
         } else {
             GetPalwSettlementResponse {
@@ -2324,9 +2303,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     eligibility_final_weight: class.eligibility.final_weight,
                     eligibility_exams_passed: class.eligibility.exams_passed,
                     eligibility_lineage_attempts: class.eligibility.lineage_attempts,
-                    // ADR-0179: "not-governed" below `palw_model_tier_v1` (every shipped network).
-                    model_tier: class.eligibility.model_tier.clone(),
-                    model_tier_permille: class.eligibility.model_tier_permille,
                 }
             })
             .collect();
@@ -2408,36 +2384,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     })
                 })
                 .collect(),
-            // RFC-0019: the annual model catalog this binary carries, read at the tip (pure: Params and a height). Not scheduled on
-            // every shipped network. Readiness is never a node field (it is measured off-chain and is never a vote).
-            annual_catalog: {
-                let s = kaspa_consensus_core::palw_annual_catalog_v1::palw_annual_catalog_status_v1(&self.config.params, read.tip_daa);
-                kaspa_rpc_core::RpcPalwAnnualCatalogStatus {
-                    scheduled: s.scheduled,
-                    fence_daa: s.fence_daa,
-                    active: s.active,
-                    current_edition: s.current_edition,
-                    current_root: if s.scheduled { s.current_root.to_string() } else { String::new() },
-                    has_next: s.next_activation_daa.is_some(),
-                    next_edition: s.next_edition.unwrap_or(0),
-                    next_activation_daa: s.next_activation_daa.unwrap_or(0),
-                    next_root: s.next_root.map(|r| r.to_string()).unwrap_or_default(),
-                    editions: s
-                        .editions
-                        .iter()
-                        .map(|e| kaspa_rpc_core::RpcPalwAnnualCatalogEdition {
-                            edition: e.edition,
-                            activation_daa: e.activation_daa,
-                            previous_root: e.previous_root.to_string(),
-                            root: e.root.to_string(),
-                            models: e.models,
-                            state: e.state.name().to_string(),
-                        })
-                        .collect(),
-                    kernel_version_max: s.kernel_version_max as u32,
-                    readiness: "off-chain".to_string(),
-                }
-            },
         };
         // RFC-0002 Part II §II.7.4: what blocks each class and at which stage, read off the response the node just built
         // (one pure function, shared with the CLI, which derives the same reading for a node that serves none).
@@ -2595,10 +2541,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let GetPalwFreePromptPriceRequest { prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, .. } = request;
         let session = self.consensus_manager.consensus().unguarded_session();
-        // RFC-0002 Phase H: an IR class's free-prompt lane opens with the TIR public frame. The price is the fold's own (one
-        // function of the state): below the fence it refuses an IR class by name (no work profile), past it it prices the run from
-        // the admitted program. An IR class's refusal carries the lane's sentence beside the fold's.
-        let tir_class = session.clone().spawn_blocking(move |c| c.palw_tir_class_record_v1(class_id)).await.is_some();
+        // RFC-0002: an IR class's free-prompt lane stays closed until Phase H — refused by name here,
+        // before a gateway prices a commitment the transition refuses (`FreePromptLaneUncertified`).
+        if session.clone().spawn_blocking(move |c| c.palw_tir_class_record_v1(class_id)).await.is_some() {
+            return Err(RpcError::General(format!("class {class_id}: {PALW_TIR_FREE_PROMPT_CLOSED_V1}")));
+        }
         let answer = session
             .spawn_blocking(move |c| {
                 c.palw_fp_commitment_price_v1(class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond)
@@ -2627,11 +2574,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 available: true,
                 daa_score: answer.daa_score,
                 priced: false,
-                refusal: if tir_class {
-                    format!("{refusal:?} (class {class_id}: {PALW_TIR_FREE_PROMPT_CLOSED_V1})")
-                } else {
-                    format!("{refusal:?}")
-                },
+                refusal: format!("{refusal:?}"),
                 bond_room_sompi,
                 ..Default::default()
             },
@@ -3281,11 +3224,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     ) -> RpcResult<GetPalwStateProofResponse> {
         // Everything the caller sent is parsed before a byte of chain state is read: a malformed request is free, and an error.
         let collection = request.collection.trim().to_ascii_lowercase();
-        let page39 = collection.starts_with(kaspa_consensus_core::palw_native_audit_page_v39::AUX_PAGE_PREFIX_V39);
-        if page39 {
-            kaspa_consensus_core::palw_native_audit_page_v39::parse_aux_cursor_v39(request.collection.as_bytes())
-                .map_err(RpcError::General)?;
-        }
         let redemption = collection.starts_with("native-redemption-v33:");
         let audit_job = collection
             .strip_prefix("native-audit-v27:")
@@ -3293,8 +3231,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .map(|id| parse_hash64(id, "nativeAuditJob"))
             .transpose()?;
         if audit_job.is_none()
-            && !page39
-            && collection.as_bytes() != kaspa_consensus_core::palw_native_state_anchor_v39::NATIVE_ANCHOR_LABEL_V39
             && !matches!(collection.as_str(), "bonds" | "classes" | "claims" | "kernel-aux-v32" | "pending-payouts-v32")
         {
             return Err(RpcError::General(format!("collection '{}' is not one of bonds, classes, claims", request.collection)));
@@ -3345,13 +3281,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 block_hash: block.to_string(),
                 header: Some(RpcHeader::from(&header)),
                 state_preimage: proof.state.preimage,
-                collection: if audit.is_some() {
-                    "kernel-aux-v32".into()
-                } else if page39 {
-                    String::from_utf8(proof.collection.label).map_err(|e| RpcError::General(e.to_string()))?
-                } else {
-                    collection
-                },
+                collection: if audit.is_some() { "kernel-aux-v32".into() } else { collection },
                 rows: proof.collection.rows.into_iter().map(|(key, value)| RpcPalwProofRow { key, value }).collect(),
                 native_audit_record: audit,
                 native_coinbase_proof: coinbase,
@@ -3372,13 +3302,55 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwForkChoiceOpeningRequest,
     ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
-        use kaspa_rpc_core::convert::palw_fork_choice::{parse_request, response};
-        let (blocks, extras) = parse_request(&request)?;
+        use kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1;
+        // Parsed before a byte of chain state is read: a malformed hash, or too many, is an error.
+        if request.block_hashes.len() > PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1 {
+            return Err(RpcError::General(format!(
+                "at most {PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1} block hashes per request (got {})",
+                request.block_hashes.len()
+            )));
+        }
+        let blocks =
+            request.block_hashes.iter().map(|text| parse_hash64(text.trim(), "blockHashes")).collect::<RpcResult<Vec<_>>>()?;
+        let unavailable = |reason: String| GetPalwForkChoiceOpeningResponse { available: false, reason, ..Default::default() };
         if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(response(Err("this network has no PALW V2 state".into())));
+            return Ok(unavailable("this network has no PALW V2 state".to_string()));
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        Ok(response(session.spawn_blocking(move |c| c.palw_fork_choice_openings_v2(&blocks, &extras)).await))
+        match session.spawn_blocking(move |c| c.palw_fork_choice_openings_v1(&blocks)).await {
+            Err(reason) => Ok(unavailable(reason)),
+            Ok(served) => Ok(GetPalwForkChoiceOpeningResponse {
+                available: true,
+                reason: String::new(),
+                sink: served.sink.to_string(),
+                tips: served.tips.iter().map(|t| t.to_string()).collect(),
+                entries: served
+                    .entries
+                    .into_iter()
+                    .map(|(block, entry)| match entry {
+                        Ok(e) => RpcPalwForkChoiceEntry {
+                            block_hash: block.to_string(),
+                            available: true,
+                            reason: String::new(),
+                            header: Some(RpcHeader::from(&e.header)),
+                            leaf: e.opening.leaf.encode(),
+                            inner_root: e.opening.inner_root.to_string(),
+                            committed_root: e.committed_root.to_string(),
+                            committed_form: e.committed_form,
+                        },
+                        Err(reason) => RpcPalwForkChoiceEntry { block_hash: block.to_string(), reason, ..Default::default() },
+                    })
+                    .collect(),
+                dns_overlay: served.dns_gate.is_some(),
+                dns_stage_active: served.dns_gate.is_some_and(|d| d.stage_active),
+                dns_confirmed_anchor: served
+                    .dns_gate
+                    .and_then(|d| d.confirmed_anchor)
+                    .map(|(anchor, _)| anchor.to_string())
+                    .unwrap_or_default(),
+                dns_confirmed_anchor_daa: served.dns_gate.and_then(|d| d.confirmed_anchor).map(|(_, daa)| daa).unwrap_or(0),
+            }),
+        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -3740,263 +3712,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 bytes: page.bytes,
             }),
         }
-    }
-
-    async fn get_palw_router_binding_v2_call(
-        &self,
-        _connection: Option<&DynRpcConnection>,
-        request: GetPalwRouterBindingV2Request,
-    ) -> RpcResult<GetPalwRouterBindingV2Response> {
-        // Bounded before any decode: a class id is 64 bytes (128 hex digits).
-        if request.class_hex.len() != 128 {
-            return Err(RpcError::General("class hex must be 128 hex digits (a 64-byte class id)".into()));
-        }
-        let mut bytes = [0u8; 64];
-        faster_hex::hex_decode(request.class_hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("class hex: {e}")))?;
-        let class = kaspa_consensus_core::Hash64::from_bytes(bytes);
-        if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(GetPalwRouterBindingV2Response::default());
-        }
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let answer = session.spawn_blocking(move |c| c.palw_router_binding_v2(class)).await;
-        Ok(match answer {
-            Ok(Some((now_daa, armed, row))) => GetPalwRouterBindingV2Response {
-                available: true,
-                armed,
-                now_daa,
-                found: row.is_some(),
-                bound_from_daa: row.as_ref().map_or(0, |(from, _)| *from),
-                row_hex: row.map(|(_, bytes)| faster_hex::hex_string(&bytes)).unwrap_or_default(),
-            },
-            Ok(None) => GetPalwRouterBindingV2Response::default(),
-            Err(refusal) => return Err(RpcError::General(refusal)),
-        })
-    }
-
-    async fn get_palw_acceptance_reads_call(
-        &self,
-        _connection: Option<&DynRpcConnection>,
-        request: GetPalwAcceptanceReadsRequest,
-    ) -> RpcResult<GetPalwAcceptanceReadsResponse> {
-        // Bounded and parsed before any read: at most 64 of each, 128-hex block hashes and `txid:index` outpoints.
-        if request.reserve_blocks.len() > 64 || request.outpoints.len() > 64 {
-            return Err(RpcError::General("at most 64 reserve blocks and 64 outpoints per request".into()));
-        }
-        let blocks = request.reserve_blocks.iter().map(|t| parse_hash64(t.trim(), "reserveBlocks")).collect::<RpcResult<Vec<_>>>()?;
-        let outpoints = request
-            .outpoints
-            .iter()
-            .map(|text| {
-                let (txid, index) =
-                    text.trim().rsplit_once(':').ok_or_else(|| RpcError::General(format!("outpoint {text}: not txid:index")))?;
-                let txid = <kaspa_consensus_core::tx::TransactionId as std::str::FromStr>::from_str(txid)
-                    .map_err(|e| RpcError::General(format!("outpoint {text}: {e}")))?;
-                let index = index.parse::<u32>().map_err(|e| RpcError::General(format!("outpoint {text}: {e}")))?;
-                Ok(kaspa_consensus_core::tx::TransactionOutpoint::new(txid, index))
-            })
-            .collect::<RpcResult<Vec<_>>>()?;
-        let session = self.consensus_manager.consensus().unguarded_session();
-        // The consensus method owns pruning protection and one virtual read
-        // lock; do not compose individually stamped convenience readers here.
-        let answer = session
-            .spawn_blocking(move |c| c.get_palw_acceptance_reads_v1(blocks, outpoints))
-            .await
-            .map_err(|e| RpcError::General(format!("PALW acceptance reads: {e}")))?;
-        Ok(GetPalwAcceptanceReadsResponse {
-            available: true,
-            sink: answer.sink.to_string(),
-            virtual_daa: answer.virtual_daa,
-            reserve_balances: answer
-                .reserve_balances
-                .into_iter()
-                .map(|(b, balance)| RpcPalwReserveBalance {
-                    block_hash: b.to_string(),
-                    known: balance.is_some(),
-                    balance_sompi: balance.unwrap_or(0),
-                })
-                .collect(),
-            outpoints: answer
-                .outpoints
-                .into_iter()
-                .map(|(outpoint, entry)| match entry {
-                    Some(e) => RpcPalwOutpointEntry {
-                        outpoint: format!("{}:{}", outpoint.transaction_id, outpoint.index),
-                        present: true,
-                        amount: e.amount,
-                        script_version: e.script_public_key.version(),
-                        script_hex: faster_hex::hex_string(e.script_public_key.script()),
-                        block_daa_score: e.block_daa_score,
-                        is_coinbase: e.is_coinbase,
-                    },
-                    None => RpcPalwOutpointEntry {
-                        outpoint: format!("{}:{}", outpoint.transaction_id, outpoint.index),
-                        ..Default::default()
-                    },
-                })
-                .collect(),
-        })
-    }
-
-    async fn get_palw_paid_claim_call(
-        &self,
-        _connection: Option<&DynRpcConnection>,
-        request: GetPalwPaidClaimRequest,
-    ) -> RpcResult<GetPalwPaidClaimResponse> {
-        // Bounded before any decode: a claim id is 64 bytes (128 hex digits).
-        if request.base_claim.len() != 128 {
-            return Err(RpcError::General("base claim hex must be 128 hex digits (a 64-byte claim id)".into()));
-        }
-        let mut base = [0u8; 64];
-        faster_hex::hex_decode(request.base_claim.as_bytes(), &mut base)
-            .map_err(|e| RpcError::General(format!("base claim hex: {e}")))?;
-        if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(GetPalwPaidClaimResponse::default());
-        }
-        let round = request.round;
-        let session = self.consensus_manager.consensus().unguarded_session();
-        // One read of the tip state; the caller brackets it with its own generation stamps (it is not an atomic snapshot of the
-        // sink and the route).
-        let answer = session
-            .spawn_blocking(move |c| {
-                let sink = c.get_sink();
-                let tip_daa = c.get_virtual_daa_score();
-                let Some(route) = c.palw_kernel_route_v1() else { return Ok(None) };
-                kaspa_consensus_core::palw_paid_claim_read_v1::palw_paid_claim_read_v1(&route, &base, round)
-                    .map(|read| Some((sink, tip_daa, read)))
-            })
-            .await;
-        let bond = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
-        Ok(match answer {
-            Ok(None) => GetPalwPaidClaimResponse::default(),
-            Ok(Some((sink, tip_daa, read))) => {
-                let mut response = GetPalwPaidClaimResponse {
-                    available: true,
-                    sink: sink.to_string(),
-                    tip_daa,
-                    base_claim: faster_hex::hex_string(&base),
-                    round,
-                    ..Default::default()
-                };
-                if let Some(read) = read {
-                    response.found = true;
-                    response.enrollment = faster_hex::hex_string(&read.enrollment);
-                    response.class_id = faster_hex::hex_string(&read.class_id);
-                    response.job_id = faster_hex::hex_string(&read.job_id);
-                    response.producer_bond = bond(&read.producer);
-                    response.material_consent = faster_hex::hex_string(&read.material_consent);
-                    response.state = read.state.to_string();
-                    response.round_found = read.round_found;
-                    response.seats = read.seats.iter().map(bond).collect();
-                    response.quorum = read.quorum;
-                    response.receipts = read.receipts.iter().map(bond).collect();
-                    response.final_reached = read.final_daa.is_some();
-                    response.final_daa = read.final_daa.unwrap_or_default();
-                }
-                response
-            }
-            Err(refusal) => return Err(RpcError::General(refusal)),
-        })
-    }
-
-    async fn get_palw_claim_detail_call(
-        &self,
-        _connection: Option<&DynRpcConnection>,
-        request: GetPalwClaimDetailRequest,
-    ) -> RpcResult<GetPalwClaimDetailResponse> {
-        // Parsed before any state is read: a malformed id is an error, never an empty answer.
-        let claim = palw_user_view_hash64("claim", &request.claim_hex)?;
-        if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(GetPalwClaimDetailResponse::default());
-        }
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let answer = session.spawn_blocking(move |c| c.palw_claim_detail_v1(claim)).await.map_err(RpcError::General)?;
-        let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
-        Ok(GetPalwClaimDetailResponse { available, found, now_daa, view_json })
-    }
-
-    async fn get_palw_court_state_call(
-        &self,
-        _connection: Option<&DynRpcConnection>,
-        request: GetPalwCourtStateRequest,
-    ) -> RpcResult<GetPalwCourtStateResponse> {
-        use kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1;
-        let target = match (request.claim_hex.is_empty(), request.session_hex.is_empty()) {
-            (false, true) => PalwCourtTargetV1::Claim(palw_user_view_hash64("claim", &request.claim_hex)?),
-            (true, false) => PalwCourtTargetV1::Session(palw_user_view_hash64("session", &request.session_hex)?),
-            _ => return Err(RpcError::General("name exactly one of a claim id or a court session id".into())),
-        };
-        if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(GetPalwCourtStateResponse::default());
-        }
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let answer = session.spawn_blocking(move |c| c.palw_court_state_v1(target)).await.map_err(RpcError::General)?;
-        let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
-        Ok(GetPalwCourtStateResponse { available, found, now_daa, view_json })
-    }
-
-    async fn get_palw_fence_schedule_call(
-        &self,
-        _connection: Option<&DynRpcConnection>,
-        _request: GetPalwFenceScheduleRequest,
-    ) -> RpcResult<GetPalwFenceScheduleResponse> {
-        // The node's own ruleset, judged at the virtual DAA — `ForkActivation::is_active`, the predicate every fold site reads.
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let now_daa = session.get_virtual_daa_score();
-        let doc = kaspa_consensus_core::palw_user_views_v1::palw_fence_schedule_json_v1(&self.config.params, now_daa);
-        Ok(GetPalwFenceScheduleResponse { available: true, found: true, now_daa, view_json: doc.to_string() })
-    }
-
-    async fn get_palw_bond_detail_call(
-        &self,
-        _connection: Option<&DynRpcConnection>,
-        request: GetPalwBondDetailRequest,
-    ) -> RpcResult<GetPalwBondDetailResponse> {
-        let (txid, index) =
-            request.bond.split_once(':').ok_or_else(|| RpcError::General(format!("bond '{}' is not <txid>:<index>", request.bond)))?;
-        let transaction_id = txid
-            .parse::<kaspa_consensus_core::tx::TransactionId>()
-            .map_err(|_| RpcError::General(format!("bond transaction id '{txid}' is not a transaction id")))?;
-        let index: u32 = index.parse().map_err(|_| RpcError::General(format!("bond index '{index}' is not an output index")))?;
-        let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint {
-            transaction_id,
-            index,
-        });
-        if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(GetPalwBondDetailResponse::default());
-        }
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let answer = session.spawn_blocking(move |c| c.palw_bond_detail_v1(bond)).await.map_err(RpcError::General)?;
-        let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
-        Ok(GetPalwBondDetailResponse { available, found, now_daa, view_json })
-    }
-
-    async fn get_palw_rfc_0016_report_call(
-        &self,
-        _connection: Option<&DynRpcConnection>,
-        request: GetPalwRfc0016ReportRequest,
-    ) -> RpcResult<GetPalwRfc0016ReportResponse> {
-        // Bounded before any decode: a class id is 64 bytes (128 hex digits); empty asks for no quote.
-        let class = if request.class_hex.is_empty() {
-            None
-        } else {
-            if request.class_hex.len() != 128 {
-                return Err(RpcError::General("class hex must be 128 hex digits (a 64-byte class id)".into()));
-            }
-            let mut bytes = [0u8; 64];
-            faster_hex::hex_decode(request.class_hex.as_bytes(), &mut bytes)
-                .map_err(|e| RpcError::General(format!("class hex: {e}")))?;
-            Some(kaspa_consensus_core::Hash64::from_bytes(bytes))
-        };
-        if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(GetPalwRfc0016ReportResponse::default());
-        }
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let answer = session.spawn_blocking(move |c| c.palw_rfc0016_report_v1(class)).await;
-        Ok(match answer {
-            Ok(Some((now_daa, armed, report_json))) => GetPalwRfc0016ReportResponse { available: true, armed, now_daa, report_json },
-            Ok(None) => GetPalwRfc0016ReportResponse::default(),
-            Err(refusal) => return Err(RpcError::General(refusal)),
-        })
     }
 
     async fn get_palw_staged_preclaim_quote_call(
@@ -4834,7 +4549,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // this bounds by number of merged blocks, if include_accepted_transactions = true
         // else it returns the batch_size amount on pure chain blocks.
         // Note: batch_size does not bound removed chain blocks, only added chain blocks.
-        let batch_size = (self.config.mergeset_size_limit_history().upper_bound() * 10) as usize;
+        let batch_size = (self.config.mergeset_size_limit() * 10) as usize;
         let mut virtual_chain_batch = session.async_get_virtual_chain_from_block(request.start_hash, Some(batch_size)).await?;
 
         if let Some(min_confirmation_count) = request.min_confirmation_count
@@ -5564,7 +5279,7 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
         // sets to full by default
         let data_verbosity_level = request.data_verbosity_level.or(Some(RpcDataVerbosityLevel::Full));
         let verbosity: RpcAcceptanceDataVerbosity = data_verbosity_level.map(RpcAcceptanceDataVerbosity::from).unwrap_or_default();
-        let batch_size = (self.config.mergeset_size_limit_history().upper_bound() * 10) as usize;
+        let batch_size = (self.config.mergeset_size_limit() * 10) as usize;
 
         let mut chain_path = session.async_get_virtual_chain_from_block(request.start_hash, Some(batch_size)).await?;
 
@@ -5909,25 +5624,6 @@ pub fn palw_capacity_shadow_response_v1(
                 q_measured_permille: row.q_measured_permille.map(u32::from),
             })
             .collect(),
-    }
-}
-
-/// A 64-byte id named in a user-view request: exactly 128 hex digits, checked before any state is read.
-fn palw_user_view_hash64(what: &str, hex: &str) -> RpcResult<kaspa_consensus_core::Hash64> {
-    if hex.len() != 128 {
-        return Err(RpcError::General(format!("{what} id must be 128 hex digits (a 64-byte id), got {}", hex.len())));
-    }
-    let mut bytes = [0u8; 64];
-    faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("{what} id: {e}")))?;
-    Ok(kaspa_consensus_core::Hash64::from_bytes(bytes))
-}
-
-/// `(available, found, now_daa, view_json)` of a consensus user-view answer (`None`: no PALW tip).
-fn palw_user_view_answer(answer: Option<(u64, Option<String>)>) -> (bool, bool, u64, String) {
-    match answer {
-        None => (false, false, 0, String::new()),
-        Some((now_daa, None)) => (true, false, now_daa, String::new()),
-        Some((now_daa, Some(json))) => (true, true, now_daa, json),
     }
 }
 

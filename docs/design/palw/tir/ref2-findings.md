@@ -15,15 +15,6 @@
 
 ## 概要(日本語)
 
-- **int-8(4ca695b98、DAA 2,000 リリース)上で F7 の H1/H2 修正を独立検証**(tir/ref2 を fast-forward、
-  int-8 には commit せず): dissect vector **40/40**(H1/H2 の inline program 各 4/4、`value_bound` も一致)、
-  ×25 差分は court 6,787 局・phase 層 68,583 局・cone 関数 127,889 commit 点で**不一致 0**。H1 は court が
-  空リストの claim を受理(自前 builder の claim も)、H2 は `V` が全件一致。本文の O-2 免除も ref2 に実装し一致。
-- **新 H7(本文の欠陥・両実装一致・分岐なし)**: §10.3 の box demand の TopK 行 `⌈d/k⌉·n` は、タイルが TopK の
-  行を `⌈d/k⌉` より多くまたぐと(軸が最内でない/行に揃わない)過少。O-5 の `V` がそれを継ぎ、§9.5.6 の
-  「`V` は claim の閉包を下回らない」が崩れる: 14,580 組中 24 組、court 自身の正直な claim が `V = 4` で 12 値を
-  運び受理される。上限付近で正直な claim/round が `V` の見積りを超えうる(正直者の敗北)。corpus・Qwen 形は該当なし。
-
 - **H dissection(§9.5)を本文だけから独立実装**: `H` 上の縮約とサイト、`eval_range`(supplied と範囲)、
   root claim の finalize と要素閉包(1 index の probe を不動点まで)、受理手順 2〜5、cut・round 予算・部分和、
   厳密な fold、最下層の最初の不一致 index、義務 O-1〜O-3 と O-5 の `V`。**dissect vector 32/32 を再現**。
@@ -103,45 +94,7 @@ against the ROOT's totals; exact `Sum` (256-bit) and `Max` folds; the bottom's f
 Run: `cargo test --release -p misaka-palw-tir-ref2 --test dissect_golden --test dissect_differential --test dissect_court`
 (`TIR_REF2_CASES=25`: ≈ 1 min; the first build of `kaspa-consensus-core` takes ≈ 3 min).
 
-### On int-8 (4ca695b98): F7's H1–H6 fixes checked, and H7
-
-`tir/ref2` fast-forwarded to `rcore/int-8` 4ca695b98 (the DAA-2,000 release; nothing committed on
-int-8). The text (read as `git diff` of 04b) now admits empty lists (H1), counts `d · K` through any
-`MatMul` operand in `V` and states "`V` is never below the closure a claim carries" (H2), exempts a
-`Select` whose condition is a `Compare` reading the value operand itself (O-2), and takes H3–H6
-(the layout rules cited, a malformed supplied set `Malformed`, O-3 from §2.2, the court-window
-formula). ref2 follows from the text: the O-2 exemption added to `obligations`; the golden harness
-reads inline programs and checks each case's `value_bound`.
-
-| check | result |
-| --- | --- |
-| `dissect/*.json` | **40/40** — the H1 and H2 files (inline programs) 4/4 each, `value_bound` included |
-| the court, ×25 | 6,787 games, 0 disagreements (4,126 lies convicted at their value, 471 honest acquittals) |
-| the phase and `eval_demanded_range`, ×25 | attention 22,610 games, generated 45,973 games (43 sites with an empty list), 0 disagreements |
-| cone functions, ×25 (O-2 exempt variants included) | 127,889 commit points: reductions, obligations, `V` at 3 tile lengths identical |
-| H1 on the court | the court's own claims `[[0], []]` and `[[], [0]]` are now admitted |
-
-#### H7 — the TopK row of the box demand, and `V` below the closure (§10.3, §9.5.6) — both implementations follow the text; the text is wrong
-
-> §10.3: "`TopK` along `ax`, `k` | `⌈d(i) / k⌉ · x.shape[ax]`" · §9.5.6: "`V` is never below the
-> closure a claim carries"
-
-The row assumes `d` demanded output elements fill `⌈d / k⌉` TopK rows. A tile is a run of `d`
-consecutive flat indices: along a TopK axis that is not the innermost, consecutive indices lie in
-different TopK rows (up to `d` of them), and even along the last axis a run not aligned to rows
-touches `⌈d / k⌉ + 1`. Example (generated seed 3552): `TopK{axis 0, k 4}` of a `[4, 3]` `MatMul`
-reducing over `H`, tiles of 4 lanes — each tile touches 3 TopK rows, the closure is 12 elements, `V`
-= 4 in both implementations, and the court's own `build_tir_root_claim_v1` builds a 12-value claim
-that `check_tir_root_claim_v1` admits (`h7_topk_tile_exceeds_v`). At ×25, 24 of 14,580 (commit
-point, tile length) pairs have `V` below a real closure, all TopK commit points. No consensus split
-(both compute the same `V`), but O-5 sizes the value cap, the round and the root claim by `V`: a
-class admitted near the caps can need claims or rounds past them, which the honest executor cannot
-post (it loses by silence), and a TopK tile's §10.3 terminal cost is understated likewise. The
-corpus and the Qwen2.5-1.5B-shaped decoder have no dissected TopK tile. Fix: count the TopK rows a
-run of `d` elements can touch — `min(rows, d)` along a non-innermost axis, `min(rows, ⌈d / k⌉ + 1)`
-along the last — times `x.shape[ax]`.
-
-### Findings (H-series, as found at c0d826a1b; H1–H6 resolved by 9cd971104)
+### Findings (H-series)
 
 | id | § | severity | first impl | ref2 | text supports |
 | --- | --- | --- | --- | --- | --- |

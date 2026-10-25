@@ -115,22 +115,6 @@ pub const PALW_KERNEL_CHUNK_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/chunk-
 /// The most seats one claim's interim assignment draws, and the per-segment quorum the tally needs.
 pub const PALW_KERNEL_ROUTE_INTERIM_SEATS_V1: usize = 3;
 pub const PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1: u8 = 3;
-/// **Panel=1** (PRINCIPLES §5, RFC-0010 §0 addendum): one assigned seat per claim, quorum 1 — selected by
-/// `Params::palw_kernel_route_panel_one_v1` (dormant; USER DECISION PENDING between this and the interim 3-of-3). The seat's receipt
-/// is one input to the claim-level verification; the public court, the challenge window and bond/slash decide a dispute exactly as
-/// under 3-of-3 (a seat's signature never justifies a fault, PRINCIPLES §5).
-pub const PALW_KERNEL_ROUTE_PANEL_ONE_SEATS_V1: usize = 1;
-pub const PALW_KERNEL_ROUTE_PANEL_ONE_QUORUM_V1: u8 = 1;
-
-/// **The seat policy at `daa_score`**: `(seats, quorum)`, Panel=1 from `panel_one_from` (the mirror of
-/// `Params::palw_kernel_route_panel_one_v1`), the interim 3-of-3 otherwise (and always when `None`).
-pub fn palw_kernel_route_seats_and_quorum_v1(panel_one_from: Option<u64>, daa_score: u64) -> (usize, u8) {
-    if panel_one_from.is_some_and(|from| daa_score >= from) {
-        (PALW_KERNEL_ROUTE_PANEL_ONE_SEATS_V1, PALW_KERNEL_ROUTE_PANEL_ONE_QUORUM_V1)
-    } else {
-        (PALW_KERNEL_ROUTE_INTERIM_SEATS_V1, PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1)
-    }
-}
 
 /// **What one kernel route object can be, in encoded bytes** — the bound a node with the real carriers can honour: an object rides
 /// one `0x4b` carrier directly, or in `ObjectChunk`s ([`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES`] ×
@@ -207,10 +191,6 @@ pub struct PalwKernelRouteExtrasV1 {
     pub native_final: Option<crate::palw_native_final_v27::PalwNativeFinalFenceV27>,
     /// New stage book and full-source/temporal/court contract, independent of14.
     pub stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
-    pub native_execution39: Option<crate::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
-    /// Owning39 mining (stage actions 73–79), where `Params::palw_native_mining_v39` is in force at the block (with native39 and
-    /// Final27). `None` on every preset: below it actions 73–79 ride unjudged and fold nothing.
-    pub native_mining39: Option<crate::palw_native_mining_v39::PalwNativeMiningFenceV39>,
     /// Actual physical mass constants, resolved from Params only where a new
     /// native namespace is active. They do not assert reserved-lane readiness.
     pub native_carriage_mass: Option<crate::palw_native_carriage_v22::NativeCarriageMassParamsV22>,
@@ -354,7 +334,7 @@ pub fn palw_kernel_route_template_typed_v1(policy: LedgerPolicyV1, opv: Option<O
 /// The ledger configuration the fold starts every block from (policy, the schedule that arms the K2 descriptors, the descriptors
 /// this binary implements). Rows are loaded over it.
 pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
-    // K2-TIR-v4 (lane K2S, `docs/design/palw/models/k2-real-scale.md`): the real-scale suite — segmented claims, element courts, per-position
+    // K2-TIR-v4 (lane K2S, `docs/design/palw/k2-real-scale.md`): the real-scale suite — segmented claims, element courts, per-position
     // DA, prompt tiles; its classes register only under OptimisticPublicVerification. Like v1–v3 it is armed here and nowhere else:
     // the fence refuses every real height.
     // K2-TIR-v5 (§12 of the same design): K2-TIR-v4 for encoders and heads, ONE position whose ids are the job's; armed here only.
@@ -459,7 +439,7 @@ impl KernelLedgerCacheV1 {
         self.0.as_ref().map(|ledger| ledger.try_clone_v1()).transpose()
     }
     pub(crate) fn set_native_projection(&mut self, mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
-        ledger.clear_flat_conformance_classes_v9();
+        ledger.flat_conformance_classes_v9.clear();
         self.0 = Some(std::sync::Arc::new(ledger));
         self.1 = true;
     }
@@ -558,9 +538,9 @@ impl PalwKernelRouteStateV1 {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
         let commitment_scope = self.commitment_scope_checked_v1()?;
         let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
-            ledger.set_commitment_scope_from_daa_v1(commitment_scope);
+            ledger.commitment_scope_from_daa = commitment_scope;
             ledger.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(ledger.paid_consumer_projection_mut_v1()).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_checked_v6(&mut ledger)?;
             Ok(ledger)
         };
         if let Some(cached) = self.ledger_cache.get_reserved_v1().map_err(E::Resource)? {
@@ -601,43 +581,7 @@ impl PalwKernelRouteStateV1 {
     /// What the route holds against a V2 bond — the ledger's reservations (a claim's collateral, a demand bond) and the deposits of
     /// its open chunk groups: the term V2's committed-collateral ledger adds, so no V2 gate counts it as free.
     pub fn reserved_of(&self, bond: &PalwBondKeyV2) -> u64 {
-        self.ledger_reserved_of(bond).saturating_add(self.chunk_deposits_of_v1(bond)).saturating_add(self.signer_locks_of_v1(bond))
-    }
-
-    /// **G14 lane closure G-K4: the lowest blue score the pruning point may reach** — the first block that served material of a
-    /// segmented claim that is still convictable (aux 143, `0x02`). `None`: no such material (every network below the route's fence).
-    pub fn served_material_pruning_ceiling_v1(&self) -> Option<u64> {
-        use crate::palw_g14_lane_closure_v1::*;
-        self.aux
-            .range((PALW_G14_LANE_CLOSURE_TABLE_V1, vec![PALW_SERVED_MATERIAL_PREFIX_V1])..)
-            .take_while(|((table, key), _)| {
-                *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.first() == Some(&PALW_SERVED_MATERIAL_PREFIX_V1)
-            })
-            .filter_map(|(_, bytes)| borsh::from_slice::<PalwServedMaterialRowV1>(bytes).ok())
-            .map(|row| row.first_blue_score)
-            .min()
-    }
-
-    /// **G14 lane closure G-K1: the signer liability locks `bond` holds** (aux 143, `0x01 ‖ seat ‖ claim`; [`crate::palw_g14_lane_closure_v1`])
-    /// — outside the ledger, like a chunk deposit, so the ledger is synced net of them and never lends them to a claim; in V2's committed
-    /// ledger, so the bond cannot exit while one is held. 0 below the route's fence (no row is ever written there).
-    pub fn signer_locks_of_v1(&self, bond: &PalwBondKeyV2) -> u64 {
-        use crate::palw_g14_lane_closure_v1::*;
-        let id = palw_kernel_bond_id_v1(bond);
-        // G-K1 seat locks (`0x01`) and G-N2 native attestor locks (`0x03`): no `0x03` row exists below the mining fence.
-        let mut attestor = vec![PALW_NATIVE_ATTESTOR_LOCK_PREFIX_V1];
-        attestor.extend_from_slice(&id);
-        [palw_kernel_signer_lock_seat_prefix_v1(&id), attestor]
-            .into_iter()
-            .map(|prefix| {
-                self.aux
-                    .range((PALW_G14_LANE_CLOSURE_TABLE_V1, prefix.clone())..)
-                    .take_while(|((table, key), _)| *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.starts_with(&prefix))
-                    .filter_map(|(_, bytes)| borsh::from_slice::<PalwKernelSignerLockRowV1>(bytes).ok())
-                    .map(|row| row.amount)
-                    .fold(0u64, u64::saturating_add)
-            })
-            .fold(0u64, u64::saturating_add)
+        self.ledger_reserved_of(bond).saturating_add(self.chunk_deposits_of_v1(bond))
     }
 
     /// What the kernel LEDGER has reserved against a V2 bond (its `BondRowV1::reserved`). The ledger is synced net of everything
@@ -804,8 +748,7 @@ pub struct KernelFinalReadV1 {
     /// timeout has no randomly selected verifier approval and exports no beacon event.
     pub final_path: &'static str,
     /// Borsh of `misaka_palw_challenge::AttributedWorkV1` (the event, then producer and recorded job payer; `Absent` only for a
-    /// historical job without a payer row). `Some` only for a `PaidClaimV2` Final with authenticated selected approval (the RFC07
-    /// adapter, `selected_approval_event_v1`); `None` for an optimistic timeout, a Panel-licensed Final, or an unapproved paid claim.
+    /// historical job without a payer row). `None` unless an authenticated selected-approval adapter supplies an event.
     pub event: Option<Vec<u8>>,
     pub statement: &'static str,
     /// **RFC-0015 §9 (GAP-B3)**: the claim's standing under the one kernel settlement predicate
@@ -813,135 +756,30 @@ pub struct KernelFinalReadV1 {
     /// beacon event's `claim_final` / `da_satisfied` are derived from it, so RFC-0010 V3 (`ChainPanelBeaconHistoryV1`), the v3
     /// sealed sources and every other reader see exactly what the EXEC slice and the RPC see.
     pub settlement: &'static str,
-    /// **RFC07 record-only event of a Panel-licensed Final** (user decision 2026-10-17, ADR-0184): Borsh of
-    /// `(FinalReceiptV1, settlement label, producer, job payer)` read from the rooted ledger rows — authenticated by the route's
-    /// committed root, NEVER a beacon source and never credit (it is not in `event`, which every collector and the EXEC gate read).
-    /// `None` for every other path.
-    pub panel_record: Option<Vec<u8>>,
-}
-
-/// The beacon event of a selected-approved Final (RFC07 adapter): the kernel's `WorkFinalEventV1`, read through the ONE kernel
-/// settlement predicate (RFC-0015 §9, GAP-B3) — a conviction withdraws the fact (`claim_final = false`), a default withdraws its
-/// availability (`da_satisfied = false`) — and attributed from authenticated ledger rows (producer, and the job's permanent payer, so
-/// one payer cannot fill the distinct-consumer quorum through several producers). No weight or reward: kernel claims reserve
-/// B = F = 0; the event is a beacon fact only.
-///
-/// **A paid claim over a Panel-licensed base class exports no event (`Ok(None)`), not an error.** Its receipt is
-/// `VerificationModeV1::PanelLicensed`, and `FinalReceiptV1::to_work_final_event` refuses a Panel-licensed Final that does not name
-/// its Panel (`final_path(None)` is `Err`): the route does not know the licensing Panel's seed and epoch (remaining work). Before
-/// this arm the `?` below turned that refusal into an `Err` of the WHOLE `finals_read_v1`, so one approved paid claim over a
-/// Panel-licensed class would have failed op 212 and every beacon-source read that goes through it.
-fn selected_approval_event_v1(
-    ledger: &KernelLedgerV1,
-    receipt: &misaka_palw_kernel::opv::FinalReceiptV1,
-    settlement: crate::palw_kernel_settlement_v1::PalwKernelSettlementV1,
-) -> Result<Option<Vec<u8>>, String> {
-    use crate::palw_kernel_settlement_v1::PalwKernelSettlementV1 as S;
-    use misaka_palw_kernel::mode::VerificationModeV1;
-    use misaka_palw_kernel::opv::WorkFinalContextV1;
-    if receipt.mode == VerificationModeV1::PanelLicensed {
-        return Ok(None);
-    }
-    let work = ledger.claims.get(&receipt.claim).map(|r| (r.class_binding_id, r.job_id));
-    // The earliest acceptance of the work identity: the earliest commitment of any claim of the same job (a convicted or defaulted
-    // earlier holder counts).
-    let earliest = ledger
-        .claims
-        .values()
-        .filter(|row| Some((row.class_binding_id, row.job_id)) == work)
-        .map(|row| row.committed_daa)
-        .min()
-        .unwrap_or(receipt.accepted_daa);
-    let ctx = WorkFinalContextV1 {
-        accepted_position: earliest,
-        settlement_position: receipt.final_daa,
-        occurrence_index: 0,
-        // Selected checkers are drawn independently of any Panel.
-        validity_independent: true,
-        depends_on_profiles: Vec::new(),
-        panel: None,
-    };
-    let mut event = receipt.to_work_final_event(&ctx)?;
-    match settlement {
-        S::Convicted => event.claim_final = false,
-        S::Defaulted => event.da_satisfied = false,
-        S::FinalRevocable { .. } | S::Settled { .. } => {}
-        S::Pending => event.claim_final = false,
-    }
-    let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
-    let consumer = work
-        .and_then(|(_, job)| ledger.job_poster(&job))
-        .map_or(misaka_palw_challenge::RootV1::Absent, misaka_palw_challenge::RootV1::Present);
-    let attributed = misaka_palw_challenge::AttributedWorkV1 {
-        event,
-        attribution: misaka_palw_challenge::SourceAttributionV1 { producer_id: producer, consumer_id: consumer },
-    };
-    borsh::to_vec(&attributed).map(Some).map_err(|e| e.to_string())
-}
-
-/// **RFC07 record-only event of a Panel-licensed Final** (ADR-0184 §2): Borsh of `(FinalReceiptV1, settlement label, producer,
-/// job payer)` from the rooted ledger rows, `Some` only for the `PanelLicensed` path. It is never a beacon event (`event` stays
-/// `None` on that path) and never EXEC credit.
-pub(crate) fn panel_record_v1(
-    ledger: &KernelLedgerV1,
-    receipt: &misaka_palw_kernel::opv::FinalReceiptV1,
-    final_path: &'static str,
-    settlement: crate::palw_kernel_settlement_v1::PalwKernelSettlementV1,
-) -> Option<Vec<u8>> {
-    if final_path != "PanelLicensed" {
-        return None;
-    }
-    let work = ledger.claims.get(&receipt.claim).map(|r| (r.producer, r.job_id));
-    let payer = work.and_then(|(_, job)| ledger.job_poster(&job));
-    borsh::to_vec(&(receipt, settlement.label(), work.map(|(p, _)| p), payer)).ok()
 }
 
 impl PalwKernelRouteStateV1 {
-    /// **The path label and the beacon event of one Final** (the RFC07 adapter's decision, apart from the ledger walk so it can be
-    /// asserted on its own): an event only for a `PaidClaimV2` Final that `palw_exec_v2_selected_approval_v1` admits, never for an
-    /// optimistic timeout, a Panel-licensed Final or a paid claim without its canonical approved Final.
-    pub(crate) fn final_export_v1(
-        &self,
-        ledger: &KernelLedgerV1,
-        receipt: &misaka_palw_kernel::opv::FinalReceiptV1,
-        settlement: crate::palw_kernel_settlement_v1::PalwKernelSettlementV1,
-    ) -> Result<(&'static str, Option<Vec<u8>>), String> {
-        use misaka_palw_kernel::mode::VerificationModeV1;
-        // A historical OPV Final states only that its dispute window expired.
-        // Neither zero direct payout nor a matching local replay establishes
-        // the selected-validator approval required for entropy/consensus credit.
-        // Keep the receipt and settlement available for payment/history readers;
-        // do not manufacture PanelIndependent identity from lifecycle state.
-        //
-        // **RFC07 selected-approval adapter.** The one authenticated source of a beacon event is a paid claim whose canonical
-        // paid Final the native acceptance/restore checks admitted with the ASSIGNED positive quorum — randomly selected
-        // checkers, a bound source and completed rounds (`palw_exec_v2_selected_approval_v1`, the same gate EXEC credit
-        // uses). That approval rests on the selection rule and its explicit honest-fraction premise, never on a timeout, a
-        // zero payout, a matching replay or an operator identity. A Panel-licensed Final still exports nothing: the route
-        // does not know the licensing Panel's seed and epoch.
-        Ok(match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
-            (_, true) => {
-                let approved =
-                    crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(self, &Hash64::from_bytes(receipt.claim));
-                ("PaidClaimV2", if approved { selected_approval_event_v1(ledger, receipt, settlement)? } else { None })
-            }
-            (VerificationModeV1::OptimisticPublicVerification, false) => ("OptimisticUnapproved", None),
-            (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
-        })
-    }
-
     /// Every historical Final in canonical order. A lifecycle timeout is readable,
     /// but cannot authorize beacon influence or substitute for selected approval.
     pub fn finals_read_v1(&self) -> Result<Vec<KernelFinalReadV1>, String> {
+        use misaka_palw_kernel::mode::VerificationModeV1;
         let ledger = self.ledger_native_projection_v9()?;
         let mut out = Vec::new();
         for receipt in ledger.final_receipts() {
             let settlement = crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(&ledger, &receipt.claim, ledger.daa)
                 .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
-            let (final_path, event) = self.final_export_v1(&ledger, &receipt, settlement)?;
+            // A historical OPV Final states only that its dispute window expired.
+            // Neither zero direct payout nor a matching local replay establishes
+            // the selected-validator approval required for entropy/consensus credit.
+            // Keep the receipt and settlement available for payment/history readers;
+            // do not manufacture PanelIndependent identity from lifecycle state.
+            let (final_path, event) = match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
+                (_, true) => ("PaidClaimV2", None),
+                (VerificationModeV1::OptimisticPublicVerification, false) => ("OptimisticUnapproved", None),
+                (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
+            };
             let statement = receipt.assurance.statement();
-            let panel_record = panel_record_v1(&ledger, &receipt, final_path, settlement);
-            out.push(KernelFinalReadV1 { receipt, final_path, event, statement, settlement: settlement.label(), panel_record });
+            out.push(KernelFinalReadV1 { receipt, final_path, event, statement, settlement: settlement.label() });
         }
         Ok(out)
     }
@@ -1636,10 +1474,9 @@ impl PalwKernelRouteStateV1 {
             );
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut cached = cached;
-            // RFC-0006: the reserved ledger is mutated only through its typed methods (no `DerefMut`).
-            cached.set_commitment_scope_from_daa_v1(commitment_scope);
+            cached.commitment_scope_from_daa = commitment_scope;
             cached.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(cached.paid_consumer_projection_mut_v1()).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_checked_v6(&mut cached)?;
             return Ok(cached);
         }
         let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(E::Resource)?;
@@ -1999,7 +1836,3 @@ mod tests {
 #[cfg(test)]
 #[path = "palw_kernel_projection_capacity_tests.rs"]
 mod projection_capacity_tests;
-
-#[cfg(test)]
-#[path = "palw_kernel_route_selected_approval_tests.rs"]
-mod selected_approval_tests;

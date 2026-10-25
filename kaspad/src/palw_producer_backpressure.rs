@@ -1,6 +1,6 @@
 //! **Producer backpressure: stop adding claims while this bond's own claims are not getting licensed**
 //! — node policy, never validity (the 2026-10-01 panel backlog,
-//! `docs/design/palw/verification/t12-panel-backlog-1001.md`, F3).
+//! `docs/design/palw/t12-panel-backlog-1001.md`, F3).
 //!
 //! # Why
 //!
@@ -162,9 +162,6 @@ mod tests {
             work_leaves: 0,
             open_courts: 0,
             exec_lane: None,
-            // RFC-0018 Gate C is dormant on every shipped network.
-            security_certification: "not-governed",
-            claim_local_settlement: String::new(),
         }
     }
 

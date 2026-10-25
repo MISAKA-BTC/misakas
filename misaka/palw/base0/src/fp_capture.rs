@@ -1911,10 +1911,7 @@ pub fn base0_gdn_state_geometry_for_class_v1(
     head_dim: u32,
     conv_kernel: u32,
 ) -> Result<Base0GdnStateGeometryV2, Base0GdnStateError> {
-    // The held v5 composition, or (RFC-0006 consumer v2) the solo key-head map v3 — both gather over the class's key heads.
-    let key_head_map = kaspa_consensus_core::palw_state_chunk_map::palw_profile_spells_key_heads_v1(profile)
-        || profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v3();
-    if !key_head_map {
+    if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_spells_key_heads_v1(profile) {
         return base0_gdn_state_geometry_v2(layers, heads, head_dim, head_dim, conv_kernel);
     }
     let class = kaspa_consensus_core::palw_step::palw_gdn_key_heads_v1(profile)
@@ -1923,53 +1920,6 @@ pub fn base0_gdn_state_geometry_for_class_v1(
         return Err(Base0GdnStateError::KeyHeadsAreNotTheClasss { engine: key_heads, class });
     }
     base0_gdn_state_geometry_v3(layers, key_heads, heads, head_dim, head_dim, conv_kernel)
-}
-
-/// **RFC-0006 consumer v2: does THIS class's recurrence ride gdn v1's full-window enumeration?** The solo gdn v1 map and the
-/// composed hybrid map whose `gdn=` half is v1. Every other recurrence map is head-windowed (v2, or v3's key-head gather).
-pub fn base0_gdn_full_window_v2(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> bool {
-    use kaspa_consensus_core::palw_state_chunk_map as map;
-    let declared = profile.state_chunk_map_id;
-    declared == map::gdn_state_chunk_map_id_v1() || declared == map::hybrid_composed_state_chunk_map_id_v1()
-}
-
-/// **The recurrence's chunks under THIS class's map** (RFC-0006 consumer v2) — the one capture dispatch the producer, the seat's
-/// recompute and the composed checkpoint share: gdn v1's full-window enumeration where [`base0_gdn_full_window_v2`], the class's
-/// head-window enumeration ([`base0_gdn_state_geometry_for_class_v1`]) otherwise. Reading a v1 map's window at v2's head layout
-/// (or the reverse) is a state the producer never held, so the map, never the call site, decides.
-pub fn base0_gdn_state_chunks_for_map_v2(
-    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
-    layers: &[u16],
-    states: &[Base0GdnLayerStateV1],
-    key_heads: u32,
-    heads: u32,
-    head_dim: u32,
-    conv_kernel: u32,
-) -> Result<Vec<Vec<u8>>, Base0GdnStateError> {
-    if base0_gdn_full_window_v2(profile) {
-        let geometry = base0_gdn_state_geometry_v1(layers, heads, head_dim, head_dim, conv_kernel)?;
-        return base0_gdn_state_chunks_v1(&geometry, states);
-    }
-    let geometry = base0_gdn_state_geometry_for_class_v1(profile, layers, key_heads, heads, head_dim, conv_kernel)?;
-    base0_gdn_state_chunks_v2(&geometry, states)
-}
-
-/// **The restore twin of [`base0_gdn_state_chunks_for_map_v2`]** — scatter under the gather the capture used.
-pub fn base0_gdn_state_from_chunks_for_map_v2(
-    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
-    layers: &[u16],
-    chunks: &[Vec<u8>],
-    key_heads: u32,
-    heads: u32,
-    head_dim: u32,
-    conv_kernel: u32,
-) -> Result<Vec<Base0GdnLayerStateV1>, Base0GdnStateError> {
-    if base0_gdn_full_window_v2(profile) {
-        let geometry = base0_gdn_state_geometry_v1(layers, heads, head_dim, head_dim, conv_kernel)?;
-        return base0_gdn_state_from_chunks_v1(&geometry, chunks);
-    }
-    let geometry = base0_gdn_state_geometry_for_class_v1(profile, layers, key_heads, heads, head_dim, conv_kernel)?;
-    base0_gdn_state_from_chunks_v2(&geometry, chunks)
 }
 
 /// The v2 entry at `chunk_index`, or `None` past the end of the map — the enumeration itself.

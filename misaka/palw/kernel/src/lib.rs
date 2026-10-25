@@ -1,10 +1,10 @@
 //! **ADR-0172 — model extensibility through versioned kernels, not a universal VM.**
 //!
-//! This crate is the reference implementation of the route `docs/design/palw/models/versioned-kernels.md` §§K.0–K.8, RFC-0011 §§15–16 and
+//! This crate is the reference implementation of the route `docs/design/palw/versioned-kernels.md` §§K.0–K.8, RFC-0011 §§15–16 and
 //! RFC-0004 §0 specify, for the semantics MISAKA already has: PALW-TIR v1 programs and RFC-0003 pipelines of TIR v2 programs.
 //! Three descriptors of one kernel line: K2-TIR-v1 (every TIR v1 family up to an `i64` accumulator), K2-TIR-v2 (the
 //! multi-modulus dense relation for `i128` accumulators) and K2-TIR-v3 (the media-pipeline family). The completion matrix is
-//! `docs/design/palw/models/kernel-k2-tir-v1.md`.
+//! `docs/design/palw/kernel-k2-tir-v1.md`.
 //!
 //! ```text
 //!   pinned model → active kernel + declarative VerificationPlan → committed node values →
@@ -51,7 +51,7 @@
 //!   validated policy, job holding from the first reveal, Final receipts for RFC-0010's Panel-independent beacon sources, and a
 //!   state root that stays the historical one until an OPV policy is set.
 //! * [`merkle3`], [`seg`], [`element`], [`seg_da`], [`seg_ledger`] — **K2-TIR-v4, the real-scale suite**
-//!   (`docs/design/palw/models/k2-real-scale.md`): tiled dual-root commitments, position / segment / claim roots with only the segment roots on
+//!   (`docs/design/palw/k2-real-scale.md`): tiled dual-root commitments, position / segment / claim roots with only the segment roots on
 //!   chain, element courts bounded by the tile, per-position demands served in parts, prompts posted in tiles, and the per-prosecution
 //!   bounds of `PUBLIC_PROSECUTION_COMPLETE`. [`seg_detect`] is the detector that pairs with them at real scale: re-execute the claim,
 //!   compare roots, descend the first divergent segment and check two positions. [`seg_encoder`] is K2-TIR-v5: an encoder or a head
@@ -93,41 +93,42 @@ pub mod evidence;
 pub mod exec_reward;
 pub mod family;
 pub mod field;
-pub mod flat_component_source28;
-pub mod flat_court25;
 /// Staged flat-profile dependency-leaf courts; no shipping descriptor selects them.
 pub mod flat_court4;
 /// Staged flat-v5 complete court-kind set, not selected by a shipping route.
 pub mod flat_court5;
 pub mod flat_court7;
 pub mod flat_court9;
-pub mod flat_detect25;
+pub mod flat_court25;
 pub mod flat_detect5;
 pub mod flat_detect7;
 pub mod flat_detect9;
+pub mod flat_detect25;
 pub mod flat_execution11;
 pub mod flat_history8;
 pub mod flat_inputs12;
-pub mod flat_lengths36;
 pub mod flat_lengths7;
-pub mod flat_point25;
+pub mod flat_lengths36;
+pub mod flat_window37;
 pub mod flat_point9;
+pub mod flat_point25;
 pub mod flat_price15;
 pub mod flat_price20;
 /// RFC-0002 item 3 (RFC02-T): a flat-v5 candidate's worst-case public pursuit on G14-B's clock and carriage.
 pub mod flat_pursuit5;
 pub mod flat_quota11;
-pub mod flat_replay25;
 pub mod flat_replay6;
 pub mod flat_replay7;
 pub mod flat_replay9;
+pub mod flat_replay25;
 pub mod flat_resources10;
 pub mod flat_resources29;
-pub mod flat_scope25;
 /// Staged complete flat-v5 court resource admission.
 pub mod flat_scope5;
 pub mod flat_scope7;
 pub mod flat_scope9;
+pub mod flat_scope25;
+pub mod flat_component_source28;
 /// Staged actor-bound sealed flat evidence; not a consensus route or payout.
 pub mod flat_seal6;
 pub mod flat_seal7;
@@ -136,7 +137,6 @@ pub mod flat_seal7;
 pub mod flat_topk7;
 pub mod flat_topk_locator21;
 pub mod flat_topk_locator25;
-pub mod flat_window37;
 pub mod gate;
 pub mod hash;
 pub mod hide;
@@ -195,49 +195,17 @@ pub use verify::{
 
 pub mod flat_seal9;
 
-// `claim_circuit_v5` (Codex e34b201c9 / beba0dba4 / ee8757fd5 / 82daa585e / ac19fe860: Boolean/hash circuits and R1CS
-// "required by a polynomial IOP" for a future proof contract) is EXCLUDED from the integration line by the permanent user
-// decision of 2026-10-15 (docs/PRINCIPLES.md §8: no cryptographic proofs of computation). Removed in the 2026-10-15 merge sweep.
+pub mod claim_paid_v2;
+pub mod claim_interactive_v3;
+/// R7-RELATION: direct probabilistic checks and historical wire decoding; PRINCIPLES §8 prohibits computation proofs.
+pub mod claim_compact_v1;
+pub mod panel_lifetime_v2;
+/// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
+pub mod econ_contracts_v1;
 /// N3 (2026-10-15 round 3): BootstrapExact source contributions (inner 73), consumer-owned past `palw_beacon_bootstrap_v1`.
 pub mod beacon_bootstrap_v1;
 /// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
 /// `palw_model_eligibility_v1`; dormant.
 pub mod model_eligibility_v1;
-/// RFC-0016 V8 (inner 76): a verifier's capacity attestation, judged by the native consumer past `palw_capacity_attestation_v1`;
-/// dormant.
-pub mod capacity_attestation_v1;
-/// R7-RELATION (2026-10-15 round 3): compact relation proof compilers under the dormant ClaimV2 contract; unreviewed.
-pub mod claim_compact_v1;
-pub mod claim_interactive_v3;
-pub mod claim_paid_v2;
-/// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
-pub mod econ_contracts_v1;
-pub mod panel_lifetime_v2;
-
-/// Owning full source39 grammar; no legacy source promotion.
-pub mod flat_source39;
-
-pub mod flat_prepared39;
-
-pub mod flat_resources39;
-
-pub mod flat_detect39;
-pub mod flat_point39;
-pub mod flat_public39;
-
-pub mod flat_material39;
-pub mod flat_material_output39;
-
-pub mod flat_job39;
-
-mod flat_codec39;
-
-pub mod flat_pipeline39;
-
-pub mod flat_component_source39;
-
-pub mod flat_trace39;
-
-pub mod flat_invocation39;
 
 pub mod claim_paid_bootstrap_source_v6;

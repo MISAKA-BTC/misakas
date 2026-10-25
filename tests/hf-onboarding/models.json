@@ -90,7 +90,7 @@
    "full": "downloaded (Lead GO 2026-10-08 ~18:35, 19,306,310,880 B, hash-verified)",
    "calib_len": 8192,
    "calib_chunks": 1,
-   "calib_docs": "docs/design/evm/misaka-prea-design-v1.1.md",
+   "calib_docs": "docs/misaka-prea-design-v1.1.md",
    "declare": ":tile=64:h-chunk=32:logits-tile=256",
    "hfref_streamed": true,
    "note": "text decoder only (vision tower 456M and MTP head 243M not converted); layout tile 64 / logits 256 / h_tile 32 / C 298 (COV-P1P2 a0f914b27 pin)"

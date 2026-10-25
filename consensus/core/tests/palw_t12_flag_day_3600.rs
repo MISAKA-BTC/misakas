@@ -239,7 +239,7 @@ fn the_flag_day_holds_its_prerequisites_by_name() {
 /// Finite, never below the network window, non-decreasing in the history, and bounded by the court's structure
 /// (`(2·(ladder + history) + terminal + 1)·turn_deadline + the assembly reserve + 1`) — there is no shared
 /// ceiling, and none is needed: a hostile shape cannot push it past what the structure allows. The numbers are
-/// printed (`--nocapture`) for `docs/design/palw/verification/t12-int10-court-window-review.md`.
+/// printed (`--nocapture`) for `docs/design/palw/t12-int10-court-window-review.md`.
 #[test]
 fn a_models_window_is_finite_floored_at_the_network_window_and_bounded_by_the_courts_structure() {
     use kaspa_consensus_core::palw_class_admission_v2::palw_court_window_for_history_v1;

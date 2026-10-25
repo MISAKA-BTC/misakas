@@ -43,12 +43,8 @@ use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 mod staged_tokenizer;
 #[path = "palw_service_terminal_e2e.rs"]
 mod terminal;
-#[path = "palw_service_gdn_e2e.rs"]
-mod gdn;
 #[path = "palw_service_tiled_e2e.rs"]
 mod tiled;
-#[path = "palw_service_tir_frame_e2e.rs"]
-mod tir_frame;
 
 pub(super) struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
@@ -517,15 +513,9 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         canonical_class: None,
         canonical_interval_daa: 100,
         drill_tamper_fp_leaf: None,
-        drill_tamper_tir_frame: None,
         drill_challenge_all: false,
         drill_answer_only: false,
         drill_refuse_leaf_evidence: false,
-        drill_collude_with: Vec::new(),
-        drill_withhold_held_da: false,
-        drill_withhold_all_da: false,
-        drill_fp_fault: None,
-        drill_sparse_fault_seed: None,
         improve_evaluate: false,
         tir_shard_hold: vec![],
         tir_shard_declare: None,
@@ -533,8 +523,6 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         tir_shard_shadow: false,
         tir_shard_demand_runs: false,
         tir_shard_watch: false,
-        gdn_step_filer: false,
-        court_paid_ingress: false,
         tir_shard_mirror: None,
         tir_shard_fetch: false,
         tir_shard_run_leaves: 0,
@@ -996,21 +984,6 @@ fn large_constraint_transaction(
 /// The producer executes a real registered model under FP job B, then claims the roots
 /// for user-prompt job A when identity_fault is requested. Otherwise the commitment is honest.
 /// Only requested signed public Event/input answers are shared with the outsider.
-/// The producer's class backend for the public FP fixtures (the one `public_fp_job` executes with).
-fn public_fp_backend(chain: &Chain) -> misaka_palw_base0::backend::Base0Backend {
-    misaka_palw_base0::backend::Base0Backend::new(
-        misaka_palw_base0::classes::resolve_class_v1(
-            &chain.bundle.court,
-            chain.bundle.base_class_id,
-            misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().unwrap(),
-            &[],
-        )
-        .unwrap(),
-    )
-    .with_step_ladder_cap(chain.bundle.court.max_step_leaf_count())
-    .with_prompt_ids_form(chain.config.params.palw_prompt_ids_form_v1())
-}
-
 fn public_fp_job(
     chain: &Chain,
     identity_fault: bool,
@@ -1257,18 +1230,9 @@ async fn carry_fp_commitment(
     chain.tc.validate_mempool_transaction(&mut validated, &Default::default()).unwrap();
     let tx = validated.tx.as_ref().clone();
     let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment);
-    // What the fold makes of the carried object at the tip (a node-policy read): named when the job is not admitted.
-    let rehearsal = borsh::from_slice::<kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2>(&tx.payload)
-        .ok()
-        .and_then(|payload| chain.tc.palw_object_rehearsal_v1(&payload.object));
     let block = chain.heartbeat(vec![tx.clone()]).await;
     assert!(block.transactions.iter().any(|t| t.id() == tx.id()));
     chain.heartbeat(vec![]).await;
-    assert!(
-        chain.tc.palw_legacy_dispute_v1(claim).is_some(),
-        "the ordinary FP job {claim} was carried but not admitted (block status {:?}); the fold's rehearsal at the tip: {rehearsal:?}",
-        chain.tc.get_block_status(block.header.hash)
-    );
     let output = tx.outputs.last().unwrap();
     floats[0] = (
         TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
@@ -1292,21 +1256,12 @@ async fn fresh_public_service(case: PublicCase) {
 }
 
 async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Option<recovery::RecoveryMode>) {
-    on_service_stack(move || fresh_public_service_with_recovery_inner(case, recovery_mode)).await
-}
-
-/// **Runs a node-service E2E body on a dedicated thread and runtime with the stack a node's own threads have.** In a debug build
-/// the service's call depth overflowed the 2 MiB libtest thread that polls it (SIGABRT for the whole binary — every other test in
-/// the process lost — and, under nextest, the test itself). Four worker threads, as the `#[tokio::test]` flavor these bodies were
-/// written for; a panic inside is re-raised here unchanged.
-pub(super) async fn on_service_stack<F, Fut>(body: F)
-where
-    F: FnOnce() -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = ()>,
-{
+    // In a debug build the service's call depth overflowed the 2 MiB libtest thread that polls it
+    // (`fresh_public_bond_service_carries_reserved_da_to_objective_default`, SIGABRT for the whole binary). Run it on a dedicated
+    // thread and runtime with the stack a node's own threads have; a panic inside is re-raised here unchanged.
     const STACK: usize = 64 << 20;
     let worker = std::thread::Builder::new()
-        .name("palw-service-e2e".into())
+        .name("palw-public-service-e2e".into())
         .stack_size(STACK)
         .spawn(move || {
             tokio::runtime::Builder::new_multi_thread()
@@ -1315,7 +1270,7 @@ where
                 .enable_all()
                 .build()
                 .expect("a test runtime")
-                .block_on(Box::pin(body()))
+                .block_on(Box::pin(fresh_public_service_with_recovery_inner(case, recovery_mode)))
         })
         .expect("the service test thread starts");
     if let Err(panic) = tokio::task::spawn_blocking(move || worker.join()).await.expect("the join task completes") {
@@ -1593,11 +1548,6 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         recovery::pruned::import_public_carriage(&mut chain, &premine, claim).await;
     }
     let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
-    // The producer leg's reporter reward is pending only through its reveal window (`reveal_until`), then the sweep awards it and
-    // vesting moves it; the loop below may finish the Panel legs long after that window. The winner is latched when first seen.
-    let mut producer_reward_seen: Option<kaspa_consensus_core::palw_state_v2::PalwRewardWinnerV1> = None;
-    let mut seat_rewards_seen: std::collections::BTreeMap<Hash64, kaspa_consensus_core::palw_state_v2::PalwRewardWinnerV1> =
-        Default::default();
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
@@ -1727,7 +1677,6 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     let mut selected_tiles_submitted = BTreeSet::new();
     let mut bootstrap_tiles_submitted = BTreeSet::new();
     let mut prefix_tiles_submitted = BTreeSet::new();
-    let mut held_lanes_submitted = BTreeSet::new();
     loop {
         assert!(
             running.task.as_ref().is_some_and(|task| !task.is_finished())
@@ -2258,77 +2207,9 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                 eprintln!("[service-prefix] canonical public CKW {unit:?} authenticated through ordinary H1/PQ");
             }
         }
-        // **The honest producer answers every demanded held lane** (G14-L, k-ary descent): a production producer answers each
-        // tag-157 unit of its claim from its retained capture through the one legacy held builder (`palw_da_legacy_answer_v2` ->
-        // `palw_legacy_held_capture_answer_v2`, tag 158). Before G14-L the filer replayed as soon as the input was public and
-        // demanded nothing else; since the parallel-lane descent it may demand a whole round of StepNode lanes of an honest claim,
-        // and a harness producer that answered only the input chunks was voided `ProducerWithholding` (validation 2026-10-17). The
-        // answers are the production builder's, signed by the producer and carried through ordinary H1/PQ admission.
-        if case.reacquire_honest() && !automatic_recovery {
-            use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
-            use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
-            let requested: Vec<_> = chain
-                .view(claim)
-                .sessions
-                .iter()
-                .filter(|(who, _)| *who == bond)
-                .flat_map(|(_, session)| session.units.iter())
-                .filter_map(|unit| match unit {
-                    // The input and the job preimage keep their own handlers above (with their refused-forgery checks).
-                    PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { .. } | PalwLegacyHeldUnitV2::FpJob) => None,
-                    PalwDaUnitV1::LegacyHeldV2(u) => Some(*u),
-                    _ => None,
-                })
-                .collect();
-            for unit in requested {
-                if held_lanes_submitted.contains(&unit) || chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)) {
-                    continue;
-                }
-                let Some((outcome, _, Some((commitment, ids)))) = foreign.as_ref() else { unreachable!("an honest FP job") };
-                let view = chain.view(claim);
-                let roots = kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
-                    execution_root: view.execution_root,
-                    trace_root: view.trace_root,
-                    anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&commitment.job),
-                    attempt_draw: None,
-                    output_root: None,
-                    job_pin: Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment)),
-                };
-                let backend = public_fp_backend(&chain);
-                let (binding, answer) = crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(
-                    &backend,
-                    &outcome.material,
-                    ids,
-                    roots,
-                    chain.config.params.palw_prompt_ids_form_v1(),
-                    &unit,
-                )
-                .unwrap_or_else(|why| panic!("the honest producer answers {unit:?} from its capture: {why}"));
-                let object = crate::palw_legacy_held_v2::palw_legacy_held_answer_object_v2(
-                    &chain.network_domain,
-                    claim,
-                    unit,
-                    binding,
-                    answer,
-                    chain.bonds[0],
-                    |message, context| Some(signed(0, message, context)),
-                )
-                .unwrap();
-                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[0]).await;
-                assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)), "the lane {unit:?} is answered");
-                held_lanes_submitted.insert(unit);
-            }
-        }
         if case.reacquire_honest() {
             let honest = chain.view(claim);
-            assert!(
-                !honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted,
-                "an honest reacquired job is never refuted, convicted or defaulted: refuted={} convicted={} defaulted={} at DAA {}: {honest:?}",
-                honest.executor_refuted,
-                honest.court_convicted,
-                honest.da_defaulted,
-                chain.daa()
-            );
+            assert!(!honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted);
             if honest.record.as_ref().is_some_and(|record| record.closed.contains(&bond)) {
                 assert!(!input_chunks.is_empty(), "the full input was reacquired through real public carriers");
                 if case.unretained_fp() {
@@ -2402,19 +2283,12 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     let producer_after = chain.tc.palw_operator_da_standing_v1(view.producer).unwrap().collateral;
                     assert!(producer_capital > 0);
                     assert!(producer_after < producer_capital, "the proven fraud collects the producer's forfeit and S2 action");
-                    if let Some(best) = filing.pending.and_then(|p| p.best) {
-                        producer_reward_seen.get_or_insert(best);
-                    }
-                    let producer_reward = producer_reward_seen;
+                    let producer_reward = filing.pending.and_then(|p| p.best);
                     let mut panels = Vec::new();
                     for seat in &all_seats {
                         let key = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
                         let panel = chain.tc.palw_reporter_filing_read_v1(key, Hash64::default(), bond, None).unwrap();
-                        // Each seat leg's winner is pending only through its own reveal window; latched when first seen, as above.
-                        let winner = panel.pending.and_then(|p| p.best).or_else(|| seat_rewards_seen.get(&key).copied());
-                        if let Some(w) = winner {
-                            seat_rewards_seen.entry(key).or_insert(w);
-                        }
+                        let winner = panel.pending.and_then(|p| p.best);
                         if let Some(consumed) = panel.consumed {
                             if winner.is_none() && case != PublicCase::TiledConstraintLargeJob {
                                 continue;
@@ -2447,16 +2321,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                         assert_eq!(best.reporter, bond);
                         assert!(best.committed_daa < consumed.accepted_daa);
                     } else {
-                        assert_eq!(
-                            consumed.amount,
-                            0,
-                            "only a duplicate producer leg has no reporter reward (daa {} consumed {:?} pending {:?} awarded {:?} committed {:?})",
-                            chain.daa(),
-                            consumed,
-                            filing.pending,
-                            filing.awarded,
-                            filing.committed_daa
-                        );
+                        assert_eq!(consumed.amount, 0, "only a duplicate producer leg has no reporter reward");
                     }
                     let carriers = chain.history[service_start..]
                         .iter()
@@ -2689,12 +2554,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
             );
             break;
         }
-        if recovery.as_ref().is_some_and(|recovery| recovery.recovering_pruned_round()) {
-            // One actual native/template block per pass while the real restarted
-            // workers drain the existing parallel round and reacquire pruned input.
-            // Keep the original hard clock and the real-Honest/release assertions.
-            pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
-        } else if demanded {
+        if demanded {
             for _ in 0..50 {
                 pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
             }

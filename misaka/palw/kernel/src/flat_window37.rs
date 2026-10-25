@@ -124,11 +124,9 @@ impl WindowGraphV37 {
             }
         }
         // KV/state binding of the selection: it must read a continuity-bound image.
-        if !self
-            .appends
-            .iter()
-            .any(|a| a.history == self.selection.source && a.dtype == self.selection.dtype && a.row_shape == self.selection.row_shape)
-        {
+        if !self.appends.iter().any(|a| {
+            a.history == self.selection.source && a.dtype == self.selection.dtype && a.row_shape == self.selection.row_shape
+        }) {
             return Err("window37 selection reads a history no append relation builds".into());
         }
         Ok(())
@@ -367,14 +365,9 @@ pub fn check_window_step_v37(
 /// positions (first, last-before-full, first-full, last). A graph that names a
 /// node the program does not compute that way cannot be attached to a job.
 pub fn check_window_graph_program_v37(graph: &WindowGraphV37, program: &misaka_palw_tir::TirProgramV1) -> Result<(), String> {
-    use crate::trace::SourceV1;
-    use misaka_palw_tir::{Prim, program::StateKind};
     graph.validate()?;
     let pr = crate::element::PreparedV1::without_scope(program, None)?;
-    if graph.program_root != crate::public::program_root_v1(&program.encode())
-        || pr.node_count != graph.nodes_per_position
-        || graph.max_positions > program.history_bound
-    {
+    if pr.node_count != graph.nodes_per_position || graph.max_positions > program.history_bound {
         return Err("window37 graph node count or extent differs from the actual program".into());
     }
     let at = |n: HistoryNodeV8| -> Result<(), String> {
@@ -392,22 +385,6 @@ pub fn check_window_graph_program_v37(graph: &WindowGraphV37, program: &misaka_p
     for a in &graph.appends {
         at(a.history)?;
         at(a.writer)?;
-        let node = pr.w.node(a.history.occurrence, a.history.node);
-        let Prim::HistAppend { state } = node.prim else {
-            return Err("window37 history must be the actual HistAppend, not a same-shaped value".into());
-        };
-        let declaration = program.states.get(state as usize).ok_or("window37 original history state absent")?;
-        if declaration.kind != (StateKind::Hist { window: graph.window })
-            || declaration.dtype != a.dtype
-            || declaration.shape != a.row_shape
-        {
-            return Err("window37 state/window/row differs from the actual HistAppend".into());
-        }
-        if pr.w.input_source(&[], 0, a.history.occurrence, a.history.node, 0).map_err(|e| e.to_string())?
-            != (SourceV1::Node { position: 0, occurrence: a.writer.occurrence, node: a.writer.node })
-        {
-            return Err("window37 writer is not the actual HistAppend input".into());
-        }
         let row: Vec<usize> = a.row_shape.iter().map(|d| *d as usize).collect();
         for &p in &probes {
             if pr.declared(a.history.occurrence, a.history.node, p) != (a.dtype, graph.history_shape(a, p)?)
@@ -415,21 +392,6 @@ pub fn check_window_graph_program_v37(graph: &WindowGraphV37, program: &misaka_p
             {
                 return Err("window37 history/writer node is not computed with the declared window shape".into());
             }
-        }
-    }
-    let selected = pr.w.node(graph.selection.output.occurrence, graph.selection.output.node);
-    if selected.prim != (Prim::TopK { axis: 0, k: graph.selection.selection_cap })
-        || pr.w.input_source(&[], 0, graph.selection.output.occurrence, graph.selection.output.node, 0).map_err(|e| e.to_string())?
-            != (SourceV1::Node { position: 0, occurrence: graph.selection.source.occurrence, node: graph.selection.source.node })
-    {
-        return Err("window37 selection must use the actual source and declared bounded history-selection semantics".into());
-    }
-    for p in probes {
-        let (source, output) = graph.selection.shapes(p)?;
-        if pr.declared(graph.selection.source.occurrence, graph.selection.source.node, p) != (graph.selection.dtype, source)
-            || pr.declared(graph.selection.output.occurrence, graph.selection.output.node, p) != (DType::Idx, output)
-        {
-            return Err("window37 selection source/output dtype or position-specific shape differs from its court".into());
         }
     }
     Ok(())

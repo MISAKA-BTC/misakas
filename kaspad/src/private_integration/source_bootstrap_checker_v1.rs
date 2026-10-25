@@ -146,7 +146,7 @@ impl PreparedSourceBootstrapCheckerV1 {
         use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
         let id = hash(&self.spec.work)?;
         let (raw, _raw) = read_bounded(&self.spec.model, self.spec.maximum_input_bytes)?;
-        let shape = preflight_native_value_v1::<Parameters>(&raw[..], raw.len() as u64).map_err(|e| e.to_string())?;
+        let shape = preflight_native_value_v1::<Parameters>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
         if shape.logical_requests_v1() > self.spec.maximum_workspace_bytes {
             return Err("source checker model decode exceeds explicit workspace".into());
         }

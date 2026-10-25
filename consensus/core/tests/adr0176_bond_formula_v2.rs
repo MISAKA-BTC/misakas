@@ -28,7 +28,7 @@ const KAS: u64 = 100_000_000;
 const DAY: u64 = PALW_BOND_HOLD_DAA_PER_DAY_V1;
 
 fn bond(n: u8) -> PalwBondKeyV2 {
-    PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_bytes([n; 64]), 0))
+    PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes([n; 32]), 0))
 }
 
 fn id(n: u64) -> Hash64 {
@@ -98,19 +98,8 @@ fn rotation_by_early_valid_is_blocked() {
     let mut j = Vec::new();
     s.release_due(10, &mut j);
     for n in 0..5 {
-        s.reserve_claim_moded_v1(
-            &b,
-            capital,
-            id(n),
-            bond(1),
-            None,
-            10,
-            ask,
-            PalwBudgetOriginV1::Attempt,
-            PalwHoldModeV1::PanelOne,
-            &mut j,
-        )
-        .expect("five claims of 100 BILI fill φ·C");
+        s.reserve_claim_moded_v1(&b, capital, id(n), bond(1), None, 10, ask, PalwBudgetOriginV1::Attempt, PalwHoldModeV1::PanelOne, &mut j)
+            .expect("five claims of 100 BILI fill φ·C");
     }
     assert_eq!(
         s.preview_claim_moded_v1(&b, capital, bond(1), None, ask, PalwHoldModeV1::PanelOne),
@@ -159,21 +148,10 @@ fn the_decomposition_is_consistent() {
             assert_eq!(s.capacity_recovery_daa, 1_000 + b.hold.unwrap().window_daa(t.mode()), "fixed at acceptance");
             assert_eq!(s.mode, t.mode());
             let json = s.audit_json();
-            for key in [
-                "\"weight\"",
-                "\"right\"",
-                "\"penalty\"",
-                "\"other\"",
-                "\"total\"",
-                "\"weightHold\"",
-                "\"otherHold\"",
-                "\"capacityRecoveryDaa\"",
-            ] {
+            for key in ["\"weight\"", "\"right\"", "\"penalty\"", "\"other\"", "\"total\"", "\"weightHold\"", "\"otherHold\"", "\"capacityRecoveryDaa\""] {
                 assert!(json.contains(key), "{key} in {json}");
             }
-            assert!(
-                matches!(s.other_hold, PalwComponentHoldV2::RetentionAndCourtClosed { not_before_daa } if not_before_daa == 1_000 + 2 * DAY)
-            );
+            assert!(matches!(s.other_hold, PalwComponentHoldV2::RetentionAndCourtClosed { not_before_daa } if not_before_daa == 1_000 + 2 * DAY));
         }
     }
 }
@@ -193,19 +171,15 @@ fn the_reservation_is_never_below_the_collectable_loss_at_any_rho() {
             assert!(s.collectable_loss_sompi >= f.pricing(t).loss_floor_sompi as u128, "the floor never shrinks with ρ");
             assert!(s.weight_sompi >= (24 * KAS) as u128, "the PWU slash exposure is never divided by ρ");
             if t == PalwClaimTypeV2::Attempt {
-                // The weight VALUE `⌈f_c · v_F⌉` is the part of the gain beyond the reward right.
-                floors.push((rho, s.total(), s.rights.reward_sompi, s.gain_sompi - s.rights.reward_sompi as u128));
+                floors.push((rho, s.total(), s.rights.reward_sompi));
             }
         }
     }
-    // Rights shrink with ρ (the period total split over more claims); the reservation never falls below the floor — never "the same
-    // reward at 1/1000 of the reservation". It does not fall with ρ either: per the formula (`L_penalty = L_coll − (L_right +
-    // ⌈f_c·v_F⌉)`, the PWU part of `L_weight` never divided by ρ) only the weight VALUE offsets the collectable loss, so when the PWU
-    // slash exposure dominates `L_weight` and `L_coll` sits at its floor, the reservation grows by exactly the weight value ρ took away.
+    // Rights shrink with ρ (the period total split over more claims); the reservation follows the rights, never below the floor —
+    // never "the same reward at 1/1000 of the reservation".
     for w in floors.windows(2) {
-        let ((_, t0, r0, v0), (_, t1, r1, v1)) = (w[0], w[1]);
-        assert!(r1 <= r0 && v1 <= v0, "rights by rho: {floors:?}");
-        assert!(t1 <= t0 + (v0 - v1), "the reservation grows at most by the weight value no longer offsetting the loss: {floors:?}");
+        let ((_, t0, r0), (_, t1, r1)) = (w[0], w[1]);
+        assert!(r1 <= r0 && t1 <= t0);
         if r1 < r0 {
             assert!(t1 >= f.attempt.loss_floor_sompi as u128);
         }
@@ -256,24 +230,8 @@ fn the_concurrent_check_and_the_period_caps_both_bind() {
     let f = formula();
     let capital = 13_000 * KAS;
     // (a) u = 500 ‰: open + locks + accusation reserves + outstanding + new ≤ 6,500 BILI — each ledger counted once.
-    assert!(palw_bond_formula_concurrent_admits_v2(
-        &f,
-        capital,
-        3_000 * KAS as u128,
-        2_000 * KAS as u128,
-        1_000 * KAS as u128,
-        0,
-        500 * KAS as u128
-    ));
-    assert!(!palw_bond_formula_concurrent_admits_v2(
-        &f,
-        capital,
-        3_000 * KAS as u128,
-        2_000 * KAS as u128,
-        1_000 * KAS as u128,
-        1,
-        500 * KAS as u128
-    ));
+    assert!(palw_bond_formula_concurrent_admits_v2(&f, capital, 3_000 * KAS as u128, 2_000 * KAS as u128, 1_000 * KAS as u128, 0, 500 * KAS as u128));
+    assert!(!palw_bond_formula_concurrent_admits_v2(&f, capital, 3_000 * KAS as u128, 2_000 * KAS as u128, 1_000 * KAS as u128, 1, 500 * KAS as u128));
     // (b) the period caps bind with collateral to spare: tiny reservations, the day view refuses at the daily count.
     let b = budget(1);
     let small = PalwBudgetAskV1 { block_units: 0, reward_sompi: 1, final_weight: 1, liability_sompi: 1 };
@@ -284,20 +242,7 @@ fn the_concurrent_check_and_the_period_caps_both_bind() {
     for n in 0..10 * daily {
         let now = 1 + n; // one per DAA: the burst view spreads them, the day view caps them
         s.release_due(now, &mut j);
-        if s.reserve_claim_moded_v1(
-            &b,
-            capital,
-            id(n),
-            bond(2),
-            None,
-            now,
-            small,
-            PalwBudgetOriginV1::Attempt,
-            PalwHoldModeV1::PanelOne,
-            &mut j,
-        )
-        .is_ok()
-        {
+        if s.reserve_claim_moded_v1(&b, capital, id(n), bond(2), None, now, small, PalwBudgetOriginV1::Attempt, PalwHoldModeV1::PanelOne, &mut j).is_ok() {
             admitted += 1;
         }
         if now >= DAY {
@@ -325,8 +270,7 @@ fn a_model_class_takes_the_reduced_reservation_only_with_a_measured_capacity_rec
 
 #[test]
 fn the_fence_is_dormant_hashed_some_only_and_refused() {
-    let p =
-        Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12));
+    let p = Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12));
     assert!(p.palw_bond_formula_v2.is_none());
     assert!(!p.palw_bond_formula_v2_active_at(u64::MAX));
     assert!(p.validate_palw_bond_formula_v2().is_ok());

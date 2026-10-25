@@ -3,7 +3,7 @@
 //! Everything here runs through the same harness as the lane's own E2E (the parent module): signed `0x4b` carriers, the mempool,
 //! the node's template, the chain block's fold, the read API. A test whose name says `observation` pins behaviour that is by design
 //! or already a named GAP, quantified; a test `#[ignore = "FAIL F-C4R3-nn …"]` asserts the SAFE property and fails on this
-//! revision (run it with `-- --ignored`). Findings and numbers: `docs/evidence/palw/implementation-records/adversarial-e2e-record.md`, round 3.
+//! revision (run it with `-- --ignored`). Findings and numbers: `docs/design/palw/adversarial-e2e-record.md`, round 3.
 //!
 //! **The node-less path.** The user's mandatory test 3 asks that the false claim arrive as a signed object relayed by a third party
 //! (`misaka-palw-remote`), not only from inside the producer's process. [`relay`] builds the producer's carrier with the producer's
@@ -124,60 +124,11 @@ async fn g14_c4r3_mandatory_3_a_relayed_lie_covered_by_every_seat_is_convicted_b
     assert!(w.net.ledger().claims[&lie.id].convicted, "convicted from public material alone");
     assert_eq!(w.net.collateral(0), before - pol.claim_collateral, "the real producer bond pays the whole reservation");
     assert_eq!(w.net.owed(outsider), pol.claim_collateral * u64::from(pol.accuser_reward_permille) / 1000);
-    // G14 lane closure G-K1 (2026-10-16, T-N11): wherever the kernel route exists — it exists only past
-    // `palw_probabilistic_constraints_v1`, the fence this harness arms — every counted passing receipt locked its signer's
-    // liability, and the conviction charges each interim seat exactly that lock (burned). This assert said the opposite ("the interim
-    // seats are not the route's to slash") and predates G-K1; the rule is G-K1's (g14-completeness-proof §1 I5, appendix C), the test
-    // follows it. Without the fence there is no kernel route, hence no seat to lock or charge:
-    // `g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged`.
-    let lock = kaspa_consensus_core::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(
-        pol.claim_reward,
-        kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1,
-    );
-    assert!(lock > 0);
     for (s, c) in seats.iter().zip(seat_collateral) {
-        assert_eq!(w.net.collateral(*s), c - lock, "G-K1: each interim seat that passed the lie is charged its signer lock");
+        assert_eq!(w.net.collateral(*s), c, "the interim seats are not the route's to slash (G14 does not rest on them)");
     }
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
-}
-
-/// **The other half of the reconciliation: below `palw_probabilistic_constraints_v1` the kernel route does not exist**, so no interim
-/// seat is drawn, locked or charged (and the G-K1 charge cannot reach anyone). testnet-12 as launched with the harness cards and the
-/// route's fence NOT armed: the class registration carrier lands nowhere — the route has no class, no claim, no receipt.
-#[tokio::test]
-async fn g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged() {
-    kaspa_core::log::try_init_logger("warn");
-    let (config, bundle, premine, floats) = t12_with_harness_cards();
-    let mut params = config.params.clone();
-    params.palw_probabilistic_constraints_v1 = None;
-    params.skip_proof_of_work = true;
-    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
-    let fx = fixture();
-    let register = K::RegisterClass {
-        descriptor: k2_tir_v2_descriptor().digest(),
-        program_bytes: fx.program.encode(),
-        plan: fx.plan.clone(),
-        param_commitments: fx.pc.clone(),
-    };
-    let o = net.route(1, &register);
-    let tx = net.carrier(1, &o);
-    let ttpb = net.ttpb();
-    if net.mempool(&tx).is_ok() {
-        net.chain.heartbeat(ttpb, vec![tx]).await;
-        net.chain.heartbeat(ttpb, Vec::new()).await;
-    }
-    let route = net.api();
-    assert!(
-        route.as_ref().and_then(|api| api.ledger().ok().map(|ledger| ledger.classes.is_empty())).unwrap_or(true),
-        "no kernel class below the fence"
-    );
-    assert!(
-        route.as_ref().is_none_or(|api| !api.aux.keys().any(|(table, _)| {
-            *table == kaspa_consensus_core::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1
-        })),
-        "no signer lock exists below the fence"
-    );
 }
 
 /// **Mandatory test 3, OPV (Panel = 0), node-less, before and after Final.** Two lies relayed by their producer: one is convicted
@@ -617,59 +568,3 @@ async fn g14_c4r3_control_a_chunked_proof_convicts_when_the_chunk_lane_is_free()
     w.net.send(chunks.into_iter().map(|c| (outsider, c)).collect()).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "a chunked proof convicts when the lane is free");
 }
-
-/// **Lane g14-court-capacity-r2: the kernel route's claim door reads `palw_detection_policy_v1`** (g14-detection-policy §10 item 2).
-/// The route's harness with the detection fence armed at genesis and NO policy for the class (armed without its validation, as the
-/// route's own fence): the class registers and its job posts, but a claim's sealed reveal is dropped at the route's door — no claim,
-/// so no reward, weight or consensus credit, and nothing for a seat to sign. Below the fence (every other test here) claims commit.
-#[tokio::test]
-async fn g14r2_a_kernel_claim_of_a_class_without_a_detection_policy_is_dropped() {
-    kaspa_core::log::try_init_logger("warn");
-    let (config, _, premine, floats) = kernel_config();
-    let mut params = config.params.clone();
-    params.palw_detection_policy_v1 = Some(kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyFenceV1 {
-        activation: ForkActivation::new(0),
-        policies: Vec::new(),
-    });
-    params.sync_palw_detection_policy_v1();
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
-        unreachable!("testnet-12 is ConsensusV2")
-    };
-    let bundle = bundle.clone();
-    assert!(bundle.state.detection_policy_v1().is_some(), "the fold reads the mirror");
-    let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
-    let job = w.job().await;
-    let claim = w.claim_with(0, &job, false, Delivery::Direct).await;
-    assert!(!w.net.ledger().claims.contains_key(&claim.id), "past the detection fence a class with no policy takes no kernel claim");
-}
-
-/// **Lane g14-court-capacity-r2: a plain kernel claim meets the policy's FULL plan, its N from its priced structure** (its evaluated
-/// positions: `commitments.len()`, at its job's stream `prompt + generated − 1`). The same job and claim, three networks: a policy
-/// whose honest cost the route's per-claim collateral covers — the claim commits; a policy whose deterrence bound the collateral does
-/// not meet — dropped (no claim); a policy whose `n_max` is below the claim's N — dropped.
-#[tokio::test]
-async fn g14r2_a_plain_kernel_claim_meets_its_policys_full_plan() {
-    kaspa_core::log::try_init_logger("warn");
-    // The class id and the claim's facts on a network without the fence (the fixture is deterministic).
-    let probe = World::new().await;
-    let class = Hash64::from_bytes(probe.class);
-    let collateral = probe.policy().claim_collateral;
-    drop(probe);
-    let run = |policy: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1| async move {
-        let mut w = World::on(Net::over_cfg(with_detection_policies(kernel_config(), vec![policy]), TestConsensus::new)).await;
-        let job = w.job().await;
-        let claim = w.claim_with(0, &job, false, Delivery::Direct).await;
-        let positions = (job.prompt.len() + job.max_new_tokens as usize).saturating_sub(1);
-        (w.net.ledger().claims.contains_key(&claim.id), positions)
-    };
-    let (committed, n) = run(kernel_detection_policy(class, 1)).await;
-    eprintln!("[g14r2 kernel] plain claim: N = {n} positions, route collateral {collateral}");
-    assert!(committed, "a policy the collateral meets admits the claim");
-    let (committed, _) = run(kernel_detection_policy(class, collateral)).await;
-    assert!(!committed, "collateral below the deterrence bound: dropped");
-    let mut narrow = kernel_detection_policy(class, 1);
-    narrow.n_max = u32::try_from(n).unwrap() - 1;
-    let (committed, _) = run(narrow).await;
-    assert!(!committed, "N above n_max: dropped");
-}
-

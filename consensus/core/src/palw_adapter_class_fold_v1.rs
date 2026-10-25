@@ -46,7 +46,7 @@ pub(super) fn apply_adapter_class_listed_v1(
     if builder.state.improvement_composite_class(&payload.class_id).is_some() {
         return Err(refused("the class is already listed as a composite"));
     }
-    builder.write_improvement_composite_class(payload.class_id, Some(payload.artifact))?;
+    builder.write_improvement_composite_class(payload.class_id, Some(payload.artifact));
     Ok(())
 }
 

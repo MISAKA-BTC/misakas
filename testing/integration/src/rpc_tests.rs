@@ -1011,19 +1011,6 @@ async fn sanity_test() {
                     assert!(response.seats.is_empty());
                 })
             }
-            KaspadPayloadOps::GetPalwAcceptanceReads => {
-                let rpc_client = client.clone();
-                tst!(op, {
-                    // An empty read is within the 64/64 bound and must be answered.
-                    rpc_client
-                        .get_palw_acceptance_reads_call(
-                            None,
-                            GetPalwAcceptanceReadsRequest { reserve_blocks: Vec::new(), outpoints: Vec::new() },
-                        )
-                        .await
-                        .unwrap();
-                })
-            }
             KaspadPayloadOps::GetPalwPanelStatus => {
                 let rpc_client = client.clone();
                 tst!(op, {
@@ -1260,89 +1247,6 @@ async fn sanity_test() {
                     assert!(!read.available && read.bytes.is_empty() && read.header.is_none() && read.total_bytes == 0);
                 })
             }
-            KaspadPayloadOps::GetPalwRfc0016Report => {
-                let rpc_client = client.clone();
-                tst!(op, {
-                    // RFC-0016 (op 255): a malformed class id is an error before any state is read; this test network runs no
-                    // ConsensusV2 bundle, so a well-formed read answers `available: false`.
-                    let odd = GetPalwRfc0016ReportRequest { class_hex: "0".into() };
-                    assert!(rpc_client.get_palw_rfc_0016_report_call(None, odd).await.is_err());
-                    let empty = GetPalwRfc0016ReportRequest { class_hex: String::new() };
-                    let read = rpc_client.get_palw_rfc_0016_report_call(None, empty).await.unwrap();
-                    assert!(!read.available && !read.armed);
-                })
-            }
-            KaspadPayloadOps::GetPalwClaimDetail => {
-                let rpc_client = client.clone();
-                tst!(op, {
-                    // Tooling lane (op 225): a malformed claim id is an error before any state is read; this test network runs no
-                    // ConsensusV2 bundle, so a well-formed read answers `available: false`.
-                    let odd = GetPalwClaimDetailRequest { claim_hex: "0".into() };
-                    assert!(rpc_client.get_palw_claim_detail_call(None, odd).await.is_err());
-                    let well = GetPalwClaimDetailRequest { claim_hex: "00".repeat(64) };
-                    let read = rpc_client.get_palw_claim_detail_call(None, well).await.unwrap();
-                    assert!(!read.available && !read.found && read.view_json.is_empty());
-                })
-            }
-            KaspadPayloadOps::GetPalwCourtState => {
-                let rpc_client = client.clone();
-                tst!(op, {
-                    // Tooling lane (op 226): exactly one of claim / session.
-                    let both = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), session_hex: "00".repeat(64) };
-                    assert!(rpc_client.get_palw_court_state_call(None, both).await.is_err());
-                    let neither = GetPalwCourtStateRequest::default();
-                    assert!(rpc_client.get_palw_court_state_call(None, neither).await.is_err());
-                    let well = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), session_hex: String::new() };
-                    let read = rpc_client.get_palw_court_state_call(None, well).await.unwrap();
-                    assert!(!read.available && !read.found);
-                })
-            }
-            KaspadPayloadOps::GetPalwFenceSchedule => {
-                let rpc_client = client.clone();
-                tst!(op, {
-                    // Tooling lane (op 227): read from the node's own ruleset, on every network.
-                    let read = rpc_client.get_palw_fence_schedule_call(None, GetPalwFenceScheduleRequest {}).await.unwrap();
-                    assert!(read.available && read.found);
-                    let doc: serde_json::Value = serde_json::from_str(&read.view_json).unwrap();
-                    assert_eq!(doc["version"], 1);
-                    assert!(doc["fences"].as_array().is_some_and(|f| !f.is_empty()));
-                })
-            }
-            KaspadPayloadOps::GetPalwBondDetail => {
-                let rpc_client = client.clone();
-                tst!(op, {
-                    // Tooling lane (op 228): a malformed outpoint is an error before any state is read.
-                    let odd = GetPalwBondDetailRequest { bond: "nope".into() };
-                    assert!(rpc_client.get_palw_bond_detail_call(None, odd).await.is_err());
-                    let well = GetPalwBondDetailRequest { bond: format!("{}:0", "00".repeat(64)) };
-                    let read = rpc_client.get_palw_bond_detail_call(None, well).await.unwrap();
-                    assert!(!read.available && !read.found);
-                })
-            }
-            KaspadPayloadOps::GetPalwRouterBindingV2 => {
-                let rpc_client = client.clone();
-                tst!(op, {
-                    // RFC-0006 consumer v2 (op 245): a malformed class id is an error before any state is read; this test network runs
-                    // no ConsensusV2 bundle, so a well-formed read answers `available: false` and finds nothing.
-                    let odd = GetPalwRouterBindingV2Request { class_hex: "0".into() };
-                    assert!(rpc_client.get_palw_router_binding_v2_call(None, odd).await.is_err());
-                    let well = GetPalwRouterBindingV2Request { class_hex: "00".repeat(64) };
-                    let read = rpc_client.get_palw_router_binding_v2_call(None, well).await.unwrap();
-                    assert!(!read.available && !read.found);
-                })
-            }
-            KaspadPayloadOps::GetPalwPaidClaim => {
-                let rpc_client = client.clone();
-                tst!(op, {
-                    // RFC-0012 acceptance (op 247): a malformed claim id is an error before any state is read; this test network runs
-                    // no ConsensusV2 bundle, so a well-formed read answers `available: false` and finds nothing.
-                    let odd = GetPalwPaidClaimRequest { base_claim: "0".into(), round: 0 };
-                    assert!(rpc_client.get_palw_paid_claim_call(None, odd).await.is_err());
-                    let well = GetPalwPaidClaimRequest { base_claim: "00".repeat(64), round: 0 };
-                    let read = rpc_client.get_palw_paid_claim_call(None, well).await.unwrap();
-                    assert!(!read.available && !read.found);
-                })
-            }
             KaspadPayloadOps::GetPalwStagedPreclaimQuote => {
                 let rpc_client = client.clone();
                 tst!(op, {
@@ -1530,7 +1434,7 @@ async fn sanity_test() {
                         rpc_client
                             .get_palw_fork_choice_opening_call(
                                 None,
-                                GetPalwForkChoiceOpeningRequest { block_hashes: vec!["zz".to_string()], ..Default::default() }
+                                GetPalwForkChoiceOpeningRequest { block_hashes: vec!["zz".to_string()] }
                             )
                             .await
                             .is_err()

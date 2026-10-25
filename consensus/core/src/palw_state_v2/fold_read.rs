@@ -196,7 +196,7 @@ impl PalwFoldReadV1<'_> {
             }
         } else if let Some(row) = reserved {
             if !lane && row.sessions_opened >= crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 {
-                return exhausted("the dispute reservation exhausted its own session budget on this claim");
+                return exhausted("a dispute reservation opens at most sixteen sessions on its claim");
             }
         } else if lane {
             return exhausted("a lane joins only a reserved session of a non-seat bond");
@@ -318,7 +318,7 @@ impl PalwFoldReadV1<'_> {
     /// The work target's floor at this block (ADR-0132/0137) — the value the class target is read
     /// against — `None` where the work target is dormant. (The builder's `work_target_floor`.)
     pub(super) fn work_target_floor(&self, ctx: &PalwBlockContextV2) -> Option<u128> {
-        if !self.extras.rules_at(ctx).work_target_active() {
+        if !self.extras.work_target_active {
             return None;
         }
         let rate = self
@@ -330,7 +330,7 @@ impl PalwFoldReadV1<'_> {
         let floor = palw_work_floor_for_block_v1(self.params, ctx.subsidy, self.extras.escrow_carve, rate);
         // ADR-0132 S: with the network draw gone the stepped `W` is what holds the cadence, and it
         // is never below the block's `W₀`.
-        if self.extras.rules_at(ctx).single_lottery_active() {
+        if self.extras.single_lottery_active {
             return Some(floor.max(self.state.work_target.map(|target| target.work).unwrap_or(0)));
         }
         Some(floor)
@@ -355,7 +355,7 @@ impl PalwFoldReadV1<'_> {
         let target =
             crate::palw_admission_v2::palw_effective_class_target_v1(self.state, self.params, &class_id, self.work_target_floor(ctx))
                 .ok();
-        let past_the_unit = self.extras.rules_at(ctx).canonical_work_active();
+        let past_the_unit = self.extras.canonical_work_daa.is_some_and(|height| ctx.daa_score >= height);
         let pwu = if past_the_unit {
             let draw = self.state.palw_attempt_per_draw_v1(
                 &self.params.base_class_id,
@@ -938,53 +938,13 @@ impl PalwFoldReadV1<'_> {
         if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = self.reward_gate_v1(class_id, now_daa) {
             return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
         }
-        // **G-01 option (b) (`palw_g14_route_required_v1`)**: past the fence a V2 Attempt — the legacy Panel route, whatever its class
-        // (floor, model, TIR v1, gen v1, shard) — is taken only while that route's G14 public-conviction route (LG14-A + LG14-B) is
-        // armed; otherwise it earns no reward, weight or consensus credit (a refused own attempt is skipped, the block stands, and the
-        // producer's pre-check answers this before an inference). Read from the fence state: the route's arming restores the reward.
-        // `None` below the fence (every shipped network). The free-prompt lane asks its own question with the job in hand
-        // (`palw_g14_route_fp_refusal_v1`, the commitment arm).
-        // Lane g14-court-capacity (user direction 2026-10-16): a class with fused-attention leaves also needs the court-capacity
-        // guarantee (`palw_court_capacity_v1`) before its fused-leaf route counts.
-        if incoming == PalwGatedClaimV1::Attempt
-            && let Some(why) = crate::palw_g14_gates_v1::palw_g14_route_attempt_refusal_for_class_v1(
-                self.params,
-                now_daa,
-                self.state.classes.get(class_id).is_some_and(|class| class.fused_attention),
-            )
-        {
-            return Err(PalwStateV2Error::ClassNotRewardable {
-                class: *class_id,
-                code: crate::palw_g14_gates_v1::PALW_G14_ROUTE_ABSENT_CODE_V1,
-                why,
-            });
-        }
-        // **RFC-0002 02-A (`palw_tir_container_identity_v1`)**: past the fence an attempt of a registered TIR class that is not bound
-        // to its `PALWART3` container (tag 175) is not taken — a court opens an attempt's operands under the class's artifact root just
-        // as it opens a free-prompt claim's, so the attempt lane needs the same binding. The free-prompt lane asks it at its own door
-        // (beside G-03), so its refusal order is unchanged. `Ok` below the fence and for every non-TIR class: byte for byte.
-        if incoming == PalwGatedClaimV1::Attempt
-            && self.extras.tir_container_identity_active
-            && self.state.tir_class_v1(class_id).is_some()
-            && crate::palw_tir_container_v1::palw_tir_bound_container_v1(self.state, *class_id).is_none()
-        {
-            return Err(PalwStateV2Error::ClassNotRewardable {
-                class: *class_id,
-                code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
-                why: "past palw_tir_container_identity_v1 a TIR class's attempt needs the class bound to its PALWART3 container".into(),
-            });
-        }
         // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1b)**: past the fence, a class whose graph the
         // fold holds and whose cell coverage has a gap takes no claim on any lane — explicitly uncovered and unrewarded.
         // Where the fold does not hold the graph, the court close convicts instead (REQ-CELL-2). Below the fence `None`.
-        // RFC-0006 consumer v2 (`palw_memory_routing_court_v2`): past its fence the same gate reads what that consumer reaches, with
-        // the class's router binding (aux 139) in hand; below it, the round-4 answer byte for byte.
-        let router_binding = super::palw_router_binding_row_of_v2(self.state, class_id);
-        if let Some(refusal) = crate::palw_cell_coverage_closure_v1::palw_cell_closure_claim_refusal_v2(
+        if let Some(refusal) = crate::palw_cell_coverage_closure_v1::palw_cell_closure_claim_refusal_v1(
             self.params,
             now_daa,
             self.state.fp_work_profile_of(class_id),
-            router_binding.as_ref(),
         ) {
             return Err(PalwStateV2Error::ClassNotRewardable {
                 class: *class_id,
@@ -995,16 +955,8 @@ impl PalwFoldReadV1<'_> {
         // **RFC-0017 (`palw_model_eligibility_v1`, REQ-ELIG-1)**: past the fence, a class whose eligibility stage carries no
         // reward-bearing block right (`Registered`, `Lapsed`) takes no attempt and no free-prompt commitment — both lanes carry a
         // subsidy-carved block. Its user-paid kernel / funded jobs never meet this gate. Below the fence, and for a genesis class,
-        // `None`: the rules below, byte for byte. GAP-E4 (2026-10-15): the RFC-0004 evaluation lane is gated alike — it earns no
-        // coinbase, block or Final weight, but its executor and credited seats are paid and its score decides a line's promotion, so an
-        // unexamined class is not one an evaluation may run on.
-        // U-9 (user decision 2026-10-15): the gated lanes are RFC-0017's one list; user-paid kernel / funded jobs stay open.
-        let lane = match incoming {
-            PalwGatedClaimV1::Attempt => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::Attempt,
-            PalwGatedClaimV1::FreePrompt { .. } => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::FreePrompt,
-            PalwGatedClaimV1::Evaluation => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::Evaluation,
-        };
-        if crate::palw_model_eligibility_v1::palw_eligibility_lane_gated_v1(lane)
+        // `None`: the rules below, byte for byte. (The evaluation lane is RFC-0004's and is not gated here: RFC-0017 §3 GAP-E4.)
+        if matches!(incoming, PalwGatedClaimV1::Attempt | PalwGatedClaimV1::FreePrompt { .. })
             && let Some((_, why)) =
                 super::palw_model_eligibility_fold_v1::eligibility_claim_refusal_v1(self.state, self.params, class_id, now_daa)
         {
@@ -1029,12 +981,6 @@ impl PalwFoldReadV1<'_> {
             }
         };
         self.check_class_verify_admits_v1(class_id, now_daa, shape, false)?;
-        // **RFC-0016 V+ (`palw_model_block_rights_v1`, dormant)**: a model-class Attempt needs one of its model's pre-issued block
-        // rights. Asked here, so the producer's pre-check (`palw_class_admits_claim_v1`) answers it before the forward. `Ok` below
-        // the fence and for the floor class.
-        if incoming == PalwGatedClaimV1::Attempt {
-            self.rfc0016_rights_admit_v1(class_id, now_daa)?;
-        }
         // What the lifecycle let through without a row to read — the base class, and a class
         // without a row below the work target — has no room to check either.
         if *class_id == self.params.base_class_id() {
@@ -1064,12 +1010,6 @@ impl PalwFoldReadV1<'_> {
             // every gated object in step 3 is refused rather than taking it (below). Step 4 then
             // asks only the lifecycle for it. The re-charges take effect for the next block.
             let exempt = audited && incoming == PalwGatedClaimV1::Attempt && self.room_exempt_class == Some(*class_id);
-            // **RFC-0016 elastic Final capacity (`palw_elastic_final_capacity_v1`, dormant)**: past it the per-verifier water-filled
-            // room (each verifier counted once, no cross-model subtraction; capacity 0 admits nothing; C7 concurrency derived from
-            // capacity) decides instead of the rate room and the static C7 cap below. `None` below the fence.
-            if !exempt && let Some(verdict) = self.rfc0016_elastic_room_v1(class_id, row, fold, now_daa, whole, incoming) {
-                return verdict;
-            }
             // **A class held to Final is held to its static cap past the fence too** (the review's
             // item 1, ADR-0152 T-2(b)): c_2M = 1 until ADR-0153. The rate room alone lets such a
             // class run as many claims as the panel's replay holds, which is exactly what the hold
@@ -1673,10 +1613,7 @@ impl PalwFoldReadV1<'_> {
             .unwrap_or(u128::MAX)
             .saturating_mul(crate::palw_verify_capacity_v1::PALW_FLOOR_ROOM_ANCHOR_RESERVE_V1 as u128);
         let floor = if self.extras.panel_economy_active {
-            crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
-                self.params.min_collateral_sompi,
-                self.params.legacy_public_filer_active_at(now_daa),
-            )
+            crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi)
         } else {
             self.params.min_collateral_sompi
         };

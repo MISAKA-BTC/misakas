@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_step_leg::range_from_edges_tests::mixed_roots_invalid_boundaries_and_bad_paths_refuse ... ok
-test palw_step_leg::range_from_edges_tests::boundary_openings_reconstruct_every_ragged_range ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 4696 filtered out; finished in 0.35s
-

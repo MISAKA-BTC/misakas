@@ -37,7 +37,7 @@ def paid_v4():
         fundingKeyFile='base-material/funding.seed')
     manifest['privateProbeProfile'] = dict(privatePaidProfileVersion=4, genesis=manifest['genesis'],
         consensusParamsId=manifest['consensusParamsId'], skipProofOfWork=False, releaseApproval=False,
-        compactClaimPolicy=dict(retired=True, reason='PRINCIPLES §8'), releaseRecoveryPolicy=dict(id='44' * 64, approved=False))
+        compactClaimPolicy=dict(id='33' * 64, approved=False), releaseRecoveryPolicy=dict(id='44' * 64, approved=False))
     return manifest
 
 
@@ -52,10 +52,8 @@ class NativeProviderPlan(unittest.TestCase):
         for field in ('compactContractIncluded', 'recoveryEnrollmentIncluded'):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 driver.validate_factory_manifest(dict(original, **{field: True}), 'paid-v4')
-        # PRINCIPLES §8: compact V4 is retired, so an armed (id/approved) compact policy is refused like any other substitution.
         for field, value in [('consensusParamsId', '55' * 64), ('skipProofOfWork', True),
-                ('releaseRecoveryPolicy', dict(id='44' * 64, approved=True)),
-                ('compactClaimPolicy', dict(id='33' * 64, approved=False))]:
+                ('releaseRecoveryPolicy', dict(id='44' * 64, approved=True))]:
             changed = dict(original, privateProbeProfile=dict(original['privateProbeProfile'], **{field: value}))
             with self.subTest(field=field), self.assertRaises(ValueError):
                 driver.validate_factory_manifest(changed, 'paid-v4')

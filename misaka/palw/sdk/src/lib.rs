@@ -66,8 +66,6 @@ pub mod bootstrap_check;
 pub mod census;
 /// Bounded complete-check builder and verifier over a rooted public snapshot.
 pub mod complete_check;
-/// RFC07/RFC08 signed economic contracts (inner 39, 67–69): offline drafts and signing; dormant.
-pub mod econ_contracts_v1;
 /// Protected native candidate preparation and private actor-bound seal/reveal material.
 pub mod flat_candidate_v6;
 /// Explicit v7 mixed-court candidate metadata registration.
@@ -88,27 +86,22 @@ pub mod kernel_params;
 pub mod kernel_rows;
 pub mod native_audit_io_v32;
 pub mod native_audit_v32;
-pub mod native_invocation_replay_v32;
-pub mod native_lifecycle_v32;
-pub mod native_master_v32;
 pub mod native_params_v34;
 pub mod native_payload_v29;
 pub mod native_redemption_v33;
 pub mod native_spend_v35;
+pub mod native_master_v32;
+pub mod native_lifecycle_v32;
 /// Same native derivation for full25 / first-EOS29 maximum contracts.
 pub mod native_text_v29;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
-pub mod onboarding_snapshot;
-/// Genesis 8 (2026-10-15): the `PALWART3` checks that need the consensus crate — the A16 section's
-/// `artifact_digest` recomputed by the BASE-0 decoder, the TIR section's inventory root by the
-/// consensus function (pinning the light packer's twin).
-pub mod palwart_deep;
-/// RFC-0002 02-A: a TIR class's `PALWART3` container binding (tag 175, dormant), built from the container's header.
-pub mod tir_container;
-pub mod panel_lifetime_v2;
 pub mod panel_source_fee_v2;
+pub mod panel_lifetime_v2;
+/// RFC07/RFC08 signed economic contracts (inner 39, 67–69): offline drafts and signing; dormant.
+pub mod econ_contracts_v1;
+pub mod onboarding_snapshot;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
 pub mod preflight;
 /// RFC-0002 Part II: runtime packs — the manifest that makes an artifact reproducible and its claims checkable.
@@ -483,7 +476,6 @@ mod tests {
             legal_job_bound: false,
             offence_attribution: false,
             gdn_key_heads: false,
-            memory_routing_court: false,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         };
         let err = s.preflight_admission(bundle, &row, root, &dormant).expect_err("no court, no fused row");
@@ -552,7 +544,6 @@ mod tests {
             legal_job_bound: false,
             offence_attribution: false,
             gdn_key_heads: false,
-            memory_routing_court: false,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         };
         let priced = s.preflight_admission(bundle, &row, root, &with_rules).expect("the same row, the rules stated");
@@ -631,29 +622,3 @@ pub mod flat_vector_v9;
 pub mod real_checkpoint_fixture11;
 
 pub mod claim_paid_v2;
-
-pub mod native_receipt_windows_v1;
-
-pub mod native_master_witness_v1;
-
-pub mod native_receipt_cas_v1;
-
-pub mod native_archive_v39;
-pub mod native_audit_io_v39;
-pub mod native_tensor_store_v39;
-pub mod native_trace_archive_v39;
-
-pub mod native_params_v39;
-
-pub mod native_material_v39;
-
-pub mod native_producer_v39;
-pub mod native_public_data_v39;
-pub mod native_q36_differential_v40;
-pub mod native_receipt_windows_v39;
-pub mod native_redemption_v39;
-pub mod native_request_composer_v39;
-pub mod native_upstream_material_v39;
-
-#[cfg(feature = "native-rpc")]
-pub mod state_carriage_rpc;

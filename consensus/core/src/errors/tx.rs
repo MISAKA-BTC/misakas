@@ -151,7 +151,7 @@ pub enum TxRuleError {
     #[error("fee rate per contextual mass gram is not greater than the fee rate of the replaced transaction")]
     FeerateTooLow,
 
-    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/design/pq/kaspa-pq-design-mldsa87.md): on a
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): on a
     /// PQ-active network a transaction (native, coinbase, or DNS overlay) created
     /// an output whose script is not the sole standard ML-DSA-87 P2PKH class.
     /// Enforced with no exemptions so non-PQ, signature-free UTXOs (e.g. OP_TRUE)
@@ -245,13 +245,6 @@ pub enum TxRuleError {
     #[error("a released bond's spend must burn {owed} sompi and leaves only {left}")]
     BondBurnNotPaid { owed: u64, left: u64 },
 
-    /// **G14 lane escrow-rfc08 (RFC-0035 A): a spend of a locked funded-escrow outpoint that is not qualified** — a rooted row's
-    /// outpoint spent outside `palw_escrow_qualified_spend_v1`, or a TFO1 carrier's own funding output spent later in the same
-    /// mergeset (`palw_tfo1_provisional_lock_v1`). Skipped like a bond spend; the carrying block stays valid. Inert below
-    /// `palw_tir_public_conviction_v1`.
-    #[error("transaction input spends a locked PALW funded-escrow outpoint without a qualified settlement (outpoint {0})")]
-    SpendsLockedPalwEscrow(TransactionOutpoint),
-
     /// **ADR-0119 Decision 6: a free-prompt commitment past the structural work-leaves cap, before
     /// the held regime.** Isolation admits up to the regime's `2^40` on a ruleset that declares the
     /// regime, because it holds no height; this is the height-indexed half, asked where the
@@ -288,21 +281,6 @@ pub enum TxRuleError {
     /// the carrier would land in, so the fold still judges what slips through.
     #[error("an H-1 lifecycle carrier the fold would refuse: {0}")]
     PalwH1CarrierRefused(String),
-
-    /// **Liveness hotfix (L-LC-02 / L-COURT-01): an H-1 carrier refused for a reason that holds at EVERY tip** — node-local admission
-    /// policy, never a block rule. The same refusal as [`Self::PalwH1CarrierRefused`], classified as the object's own fault: a split
-    /// close whose completing chunk assembles a close that does not adjudicate to its declaration, or a possession proof whose shape,
-    /// challenge opening or (immutable) root is wrong. No honest node ahead of or behind this one relays it, so the relay flow treats a
-    /// peer that sends one as misbehaving. Refusals that can move with the next block (a stale tip, a span one block ahead, a missing
-    /// row) stay [`Self::PalwH1CarrierRefused`] and are never penalised.
-    #[error("an H-1 lifecycle carrier that is invalid at every tip: {0}")]
-    PalwH1CarrierInvalid(String),
-
-    /// **Liveness hotfix (L-LC-02 / L-COURT-01): the node's H-1 rehearsal budget is spent** — node-local admission policy, never a
-    /// block rule, and never a peer fault (an honest carrier can meet a full budget during someone else's storm). The carrier is not
-    /// judged; it may be relayed again later.
-    #[error("the node's H-1 carrier rehearsal budget is spent for now: {0}")]
-    PalwH1CarrierThrottled(String),
 
     /// **G14 GAP 10 (lane K2S): a kernel route carrier the acceptance gate refuses at this node's tip** — the
     /// `palw_probabilistic_constraints_v1` fence, an Active signer, its ML-DSA-87 signature, the kernel's strict decode and the OPV

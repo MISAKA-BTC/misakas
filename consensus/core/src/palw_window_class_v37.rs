@@ -62,15 +62,6 @@ impl NativeWindowClassV37 {
     }
 }
 impl NativeWindowClassRegisterV37 {
-    /// The token axis counts positions actually evaluated (prompt plus every
-    /// generated token fed back into the decoder). The final returned token is
-    /// not evaluated again. Both the original maximum and the stopped extent
-    /// pass the SAME versioned length relation; a positions ceiling alone does
-    /// not constrain a smaller declared token maximum.
-    pub fn check_text_extent(&self, program_history_bound: u32, positions: u32) -> Result<Digest, String> {
-        let checked = self.length.check(program_history_bound, Some(&self.graph.selection))?;
-        checked.check_actual(misaka_palw_kernel::flat_lengths7::FlatJobLengthsV7 { token: positions, patch: 0, audio: 0 }, positions)
-    }
     /// Bounded canonical decode BEFORE any derivation.
     pub fn from_bytes(raw: &[u8]) -> Result<Self, String> {
         if raw.len() > WINDOW_CLASS_MAX_BODY_BYTES_V37 || raw.get(..2) != Some(&37u16.to_le_bytes()[..]) {
@@ -141,8 +132,8 @@ mod tests {
     use super::*;
     use misaka_palw_kernel::{
         flat_history8::{HistoryNodeV8, HistorySelectionPlanV8},
-        flat_lengths7::FlatLengthAxisV7,
         flat_lengths36::ModalityLengthV36,
+        flat_lengths7::FlatLengthAxisV7,
         flat_window37::WindowAppendV37,
     };
     use misaka_palw_tir::DType;
@@ -201,18 +192,6 @@ mod tests {
             },
             graph,
         }
-    }
-    #[test]
-    fn token_axis_limits_both_requested_and_stopped_positions() {
-        let mut r = register();
-        r.length.token.maximum = 1;
-        let history = misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
-        assert!(r.check_text_extent(history, 1).is_ok());
-        assert!(r.check_text_extent(history, 2).is_err(), "a positions ceiling does not replace the token ceiling");
-        r.length.token.maximum = 1024;
-        assert!(r.check_text_extent(history, 1024).is_ok());
-        assert!(r.check_text_extent(history, 1025).is_err());
-        assert!(r.check_text_extent(history, 0).is_err());
     }
     #[test]
     fn window_class_rederives_from_its_text_source_and_stays_dormant() {

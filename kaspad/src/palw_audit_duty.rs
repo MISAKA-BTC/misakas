@@ -27,7 +27,6 @@
 //! **What a restart loses**: the book (the queued batch is re-built from the chain's read next DAA).
 
 use super::*;
-use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::palw_audit_door_v1::{
     PALW_AUDIT_RECEIPT_BATCH_MAX_ENTRIES_V1, PALW_AUDIT_RECEIPT_V1_MLDSA87_CONTEXT, PalwAuditCandidateV1, PalwAuditEntryV1,
     palw_audit_on_turn_v1, palw_audit_receipt_batch_message_v1,
@@ -112,7 +111,8 @@ impl PalwPanelService {
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
         seat_replay_room: bool,
-        court_outbox: &mut CourtOutboxV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
     ) {
         if self.config.fee_outpoint.is_none() {
             return;
@@ -122,7 +122,7 @@ impl PalwPanelService {
             duty.refresh(candidates, current_daa);
         }
         if duty.candidates.is_empty() && duty.replaying.is_none() {
-            court_outbox.retain_pending(|(_, round, responder, object)| !palw_audit_queued_v1(*round, *responder, object));
+            court_pending.retain(|(_, round, responder, object)| !palw_audit_queued_v1(*round, *responder, object));
             return;
         }
         // The replay in flight, polled every tick until it returns.
@@ -177,8 +177,7 @@ impl PalwPanelService {
             self.audit_duty_start_replay_v1(session, duty, &candidate, current_daa, network_domain, bond_key);
         }
         // One batch of the owed entries, signed, on the court queue.
-        let queued =
-            court_outbox.pending().iter().any(|(_, round, responder, object)| palw_audit_queued_v1(*round, *responder, object));
+        let queued = court_pending.iter().any(|(_, round, responder, object)| palw_audit_queued_v1(*round, *responder, object));
         let entries = duty.due_entries(current_daa);
         if queued || entries.is_empty() {
             return;
@@ -195,8 +194,8 @@ impl PalwPanelService {
                 *queued = Some(current_daa);
             }
         }
-        court_outbox.set_due(key, current_daa);
-        court_outbox.push_pending((
+        court_due.insert(key, current_daa);
+        court_pending.push((
             key.0,
             key.1,
             key.2,

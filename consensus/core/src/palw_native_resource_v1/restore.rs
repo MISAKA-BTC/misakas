@@ -59,15 +59,8 @@ fn restore_with_reservation_v1(
     let mut canonical = Vec::new();
     if enabled {
         let bytes = borsh::object_length(&carriage).map_err(|e| NativeDecodeErrorV1::Resource(restore_fault_v1(e)))?;
-        // RFC-0006: the consistency recount AND the root recomputation's own serialization workspace (entry key/value buffers
-        // and the preimage) live until `into_state_v3` returns; both are derived from the actual carriage before it allocates.
         let consistency =
             super::restore_workspace::native_restore_consistency_requests_v1(&carriage).map_err(NativeDecodeErrorV1::Resource)?;
-        let root_workspace =
-            super::restore_workspace::native_restore_root_workspace_requests_v1(bytes as u64).map_err(NativeDecodeErrorV1::Resource)?;
-        let consistency = consistency.checked_add(root_workspace).ok_or_else(|| {
-            NativeDecodeErrorV1::Resource(NativeCoverageV1::overflow::<PalwStateCarriageV2>("restore consistency and root workspace"))
-        })?;
         let heap = carriage.native_heap_v1("existing direct carriage ownership");
         let requests = heap
             .bytes()

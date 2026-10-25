@@ -2,7 +2,7 @@
 //! `tools/drills/tir/README.md` names; it reads class files, so it runs only when they are named).
 //!
 //! `palw-class declare-layout` judges a layout at the IR fence's height, where the release's element twin and box demand
-//! rules are in force, not palw_tir_fence2's (R4 of `docs/design/palw/verification/t12-int10-court-window-review.md`). The drill registers
+//! rules are in force, not palw_tir_fence2's (R4 of `docs/design/palw/t12-int10-court-window-review.md`). The drill registers
 //! the small class PAST the fence, where admission v10 sizes with the range twin under the H7 demand rules and refuses a
 //! canonical job past one seat's reach. This asks the registration preflight — the one the node's registrant runs, admission
 //! v10 under the rules in force at the DAA — of each class file at the last DAA below the fence and at the fence, and prints

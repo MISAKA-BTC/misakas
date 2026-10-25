@@ -257,8 +257,6 @@ pub struct StateLayer0 {
     /// RFC-0009: the V4 (public redemption) spend on an algo-7 header whose carriage is `PFS4`. Exactly one of this and
     /// `palw_spend_v3` is ever `Some`; whether a V4 header is VALID at this height is the header processor's fence check, not the tag's.
     pub(crate) palw_spend_v4: Option<kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4>,
-    /// RFC-0002 §II.14: the owning39 native receipt spend on an algo-7 header whose carriage is `PNR9` (at most one of the three).
-    pub(crate) palw_spend_native_v39: Option<kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendEnvelopeV39>,
     /// PRE_POW_HASH || TIME || 32 zero byte padding; without NONCE.
     /// Seeded with the derived `l1_seed32` (not the 64-byte pre-PoW
     /// hash) so the kHeavyHash interface stays 32-byte-input. `Some` only for
@@ -348,17 +346,12 @@ impl StateLayer0 {
                 })
                 .flatten(),
             palw_spend_v3: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
-                && !kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment)
-                && !kaspa_consensus_core::palw_native_receipt_v39::palw_native_receipt_carriage_is_v39(&header.palw_commitment))
+                && !kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment))
             .then(|| kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).ok())
             .flatten(),
             palw_spend_v4: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
                 && kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment))
             .then(|| kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment).ok())
-            .flatten(),
-            palw_spend_native_v39: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
-                && kaspa_consensus_core::palw_native_receipt_v39::palw_native_receipt_carriage_is_v39(&header.palw_commitment))
-            .then(|| kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendEnvelopeV39::decode(&header.palw_commitment).ok())
             .flatten(),
             pre_pow_hash_64,
             network_id: network_id.to_vec(),
@@ -469,13 +462,6 @@ impl StateLayer0 {
                 if let Some(envelope) = self.palw_spend_v4.as_ref() {
                     let id = kaspa_consensus_core::palw_receipt_v4::fp_spend_id_v4(&envelope.spend);
                     let tag = kaspa_consensus_core::palw_receipt_v4::fp_spend_l1_tag_v4(id);
-                    buf[..tag.len()].copy_from_slice(&tag);
-                    return Ok(tag.len());
-                }
-                // RFC-0002 §II.14: a `PNR9` carriage expands its own native spend id under its own domain.
-                if let Some(envelope) = self.palw_spend_native_v39.as_ref() {
-                    let id = kaspa_consensus_core::palw_native_receipt_v39::native_receipt_spend_id_v39(&envelope.spend);
-                    let tag = kaspa_consensus_core::palw_native_receipt_v39::native_receipt_l1_tag_v39(id);
                     buf[..tag.len()].copy_from_slice(&tag);
                     return Ok(tag.len());
                 }
@@ -1159,7 +1145,7 @@ mod tests_pq {
         );
     }
 
-    /// **The audit's P0-1 / C1 red test, by its registered name** (`docs/security/palw/palw-rc-threat-model.md`):
+    /// **The audit's P0-1 / C1 red test, by its registered name** (`docs/palw-rc-threat-model.md`):
     /// the finalizer arm, the wire carrier and this test land together, and together they make
     /// "mutating any one bit of the commitment fails the PoW" (ADR-0042 Decision 3a) a checked
     /// property instead of an intention.

@@ -9,7 +9,7 @@
 //! the fold (the consensus crate's tests hold the set it builds to what the door credits:
 //! `palw_rcore_q5_gate`, `t12_rcore_sr10_door_gate`).
 use super::{
-    COURT_MOVE_REPLAN_DAA, PALW_SEAT_SAMPLED_LEAD_DAA_V1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1, PalwSeatS3SampleV1,
+    COURT_MOVE_REPLAN_DAA, MARKER_SEAT_S, PALW_SEAT_SAMPLED_LEAD_DAA_V1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1, PalwSeatS3SampleV1,
     palw_receipt_pools_sweep_v1, palw_seat_receipt_forms_v1, palw_seat_s3_sample_v1, palw_seat_sampled_due_v1,
     palw_supplementary_candidates_fingerprint_v1, palw_supplementary_idle_v1, palw_supplementary_offer_order_v1, palw_v1_offer_v1,
 };
@@ -218,22 +218,22 @@ fn the_collector_carries_a_release_then_an_upgrade_then_pay_soonest_first() {
 /// disagrees is noted as the seat's fault (the court's), never filed.
 #[test]
 fn the_collector_follows_the_licences_and_sampled_precedes_the_memory_check() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
-    let source = crate::palw_panel::source_support::former_parent_production_source_v1();
-    let licences = source.find_code("kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(").expect("the licence collector");
+    let whole = include_str!("../palw_panel.rs");
+    let source = &whole[..whole.find(MARKER_SEAT_S).expect("the production code")];
+    let licences = source.find("kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(").expect("the licence collector");
     let licence_call = &source[licences..licences + 1_200];
     let (coverage, quorum, optimistic) = (
-        licence_call.find_code(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("coverage"),
-        licence_call.find_code("session.palw_v2_receipt_quorum_assemble(claim, set)").expect("V1"),
-        licence_call.find_code(".palw_v2_optimistic_assemble(claim, v3.clone())").expect("S2"),
+        licence_call.find(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("coverage"),
+        licence_call.find("session.palw_v2_receipt_quorum_assemble(claim, set)").expect("V1"),
+        licence_call.find(".palw_v2_optimistic_assemble(claim, v3.clone())").expect("S2"),
     );
     assert!(coverage < quorum && quorum < optimistic, "the doors handed over as coverage, V1, S2");
     assert!(
-        licence_call.contains_code("self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"),
+        licence_call.contains("self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"),
         "X22's order is the fence's"
     );
-    let collector = source.find_code("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
-    let own = source.find_code("session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt])").expect("the own V2 receipt");
+    let collector = source.find("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
+    let own = source.find("session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt])").expect("the own V2 receipt");
     assert!(licences < collector && collector < own, "licences, then the collector, then the seat's own receipt");
     let gated = &source[..collector];
     assert!(
@@ -241,27 +241,27 @@ fn the_collector_follows_the_licences_and_sampled_precedes_the_memory_check() {
         "the collector runs only past the fence"
     );
     let asked = &source[gated.rfind("for claim in claims {").expect("the collector's claims")..collector];
-    assert!(asked.contains_code("palw_supplementary_idle_v1(supplementary_idle.get(&claim), fingerprint, current_daa)"));
+    assert!(asked.contains("palw_supplementary_idle_v1(supplementary_idle.get(&claim), fingerprint, current_daa)"));
     let claims = &source[gated.rfind("let mut claims = receipt_pool_v3.claim_ids();").expect("the V3 pool's claims")..collector];
-    assert!(claims.contains_code("claims.extend(receipt_pool_v2.claim_ids());"), "and the V2 pool's");
+    assert!(claims.contains("claims.extend(receipt_pool_v2.claim_ids());"), "and the V2 pool's");
     assert!(
-        source.contains_code("Ok(PalwSeatS3SampleV1::Faulted) => self.note_seat_fault_v1(duty.claim_id, 0, 0),"),
+        source.contains("Ok(PalwSeatS3SampleV1::Faulted) => self.note_seat_fault_v1(duty.claim_id, 0, 0),"),
         "a disagreeing site is the court's"
     );
-    let sweep = source.find_code("let pools_sweep = palw_receipt_pools_sweep_v1(").expect("one sweep rule");
-    assert_eq!(source[sweep..].find_code(
-        "let pools_sweep = palw_receipt_pools_sweep_v1(self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"
-    ), Some(0), "the fence is passed to this sweep call");
+    let sweep = source.find("let pools_sweep = palw_receipt_pools_sweep_v1(").expect("one sweep rule");
+    assert!(source[sweep..].starts_with(
+            "let pools_sweep = palw_receipt_pools_sweep_v1(\n                self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"
+        ));
     let after = &source[sweep..sweep + 400];
-    assert!(after.contains_code("receipt_pool_v2.sweep(&pools_sweep);") && after.contains_code("receipt_pool_v3.sweep(&pools_sweep);"));
-    let duty_loop = &source[source.find_code("for index in order {").expect("the duty loop")..];
-    let due = duty_loop.find_code("palw_seat_sampled_due_v1(").expect("the Sampled decision");
-    let memory = duty_loop.find_code("self.replay_memory_budget_v1(").expect("the memory check");
-    let verdict = duty_loop.find_code("let verdict = 'verdict: {").expect("the verdict block");
-    let answers = duty_loop.find_code("break 'verdict Some(PalwReceiptVerdictV2::Sampled);").expect("the Sampled answer");
+    assert!(after.contains("receipt_pool_v2.sweep(&pools_sweep);") && after.contains("receipt_pool_v3.sweep(&pools_sweep);"));
+    let duty_loop = &source[source.find("for index in order {").expect("the duty loop")..];
+    let due = duty_loop.find("palw_seat_sampled_due_v1(").expect("the Sampled decision");
+    let memory = duty_loop.find("self.replay_memory_budget_v1(").expect("the memory check");
+    let verdict = duty_loop.find("let verdict = 'verdict: {").expect("the verdict block");
+    let answers = duty_loop.find("break 'verdict Some(PalwReceiptVerdictV2::Sampled);").expect("the Sampled answer");
     assert!(due < memory && memory < verdict && verdict < answers, "decided before the memory check, answered first");
     assert!(
-        answers < duty_loop.find_code("if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {").unwrap(),
+        answers < duty_loop.find("if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {").unwrap(),
         "ahead of every arm"
     );
 }

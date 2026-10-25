@@ -252,9 +252,6 @@ mod tests {
             depth_is_lower_bound: lower_bound,
             safe_frontier_blue_score: if settled { 4_100 } else { 3_900 },
             safe_frontier_daa: if settled { 4_200 } else { 3_950 },
-            // RFC-0018: no SecurityCertified fence on this fixture — no uncertified anchors and no premise line.
-            uncertified_final_anchors: 0,
-            security_certification_premise: None,
         }
     }
 

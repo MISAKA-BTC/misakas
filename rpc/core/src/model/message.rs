@@ -2559,19 +2559,6 @@ pub use palw_model_registry::*;
 mod palw_operator_reads;
 pub use palw_operator_reads::*;
 
-mod palw_rfc0016_report;
-pub use palw_rfc0016_report::*;
-
-mod palw_user_views;
-pub use palw_user_views::*;
-
-mod palw_router_binding_v2;
-pub use palw_router_binding_v2::*;
-mod palw_paid_claim_read;
-pub use palw_paid_claim_read::*;
-mod palw_acceptance_reads;
-pub use palw_acceptance_reads::*;
-
 mod palw_vesting;
 pub use palw_vesting::*;
 

@@ -22,9 +22,7 @@ fn fixture_for(fx: misaka_palw_tir_sketch::fixture::TirSketchFixtureV1, complete
     let z = Hash64::from_bytes([0; 64]);
     let policy = palw_kernel_route_policy_v1(z, z);
     let mut route = PalwKernelRouteStateV1::new(policy, None, Default::default());
-    let mut ledger_owner = route.ledger().unwrap();
-    // RFC-0006: an off-chain fixture mutates the reserved ledger explicitly (there is no `DerefMut`).
-    let ledger = ledger_owner.preview_mut_v1();
+    let mut ledger = route.ledger().unwrap();
     let program = fx.program.encode();
     let d = if complete { k2_tir_v2_descriptor() } else { k2_tir_v1_descriptor() };
     let plan = plan_for_tir_program_v1(&d, &fx.program, misaka_palw_kernel::public::program_root_v1(&program), 2).unwrap();

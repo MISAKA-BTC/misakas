@@ -1,4 +1,4 @@
-//! **Tensor commitment v3 — tiled dual-root Merkle commitments** (K2-TIR-v4, `docs/design/palw/models/k2-real-scale.md` §1.1).
+//! **Tensor commitment v3 — tiled dual-root Merkle commitments** (K2-TIR-v4, `docs/design/palw/k2-real-scale.md` §1.1).
 //!
 //! v2's commitment ([`crate::merkle`]) binds a row tree and a column tree over the same elements; a leaf is a whole row or column,
 //! so one leaf of a `[1, 248,320]` logits vector is the whole vector. v3 keeps both trees and **tiles every line**: a leaf holds at
@@ -200,7 +200,7 @@ pub(crate) fn tree_path(mut level: Vec<Digest>, mut index: usize, node: fn(&Dige
 }
 
 /// Recompute a root from a leaf, its index among `count`, and its siblings (`None`: a path that fits no tree).
-pub fn tree_root_from_path(
+pub(crate) fn tree_root_from_path(
     leaf: Digest,
     mut index: u64,
     mut count: u64,

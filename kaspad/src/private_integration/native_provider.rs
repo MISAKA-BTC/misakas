@@ -28,10 +28,8 @@
 //! selected-chain finality of the release block), with a write-ahead intent marker; every failed read retains.
 use crate::palw_native_custody_v3::{
     NativeReadyExchangeV3, PALW_NATIVE_READY_EXCHANGE_VERSION_V3, PalwNativeCustodyContextV3, PalwNativeCustodyHookV3,
-    PalwNativeExchangeHandleV3, PalwNativeManifestResponseV3, PalwNativeReadyRequestV3, PalwNativeReadyResponseV3,
-    palw_native_bundle_v3, palw_native_prompt_v3,
+    PalwNativeExchangeHandleV3, PalwNativeReadyRequestV3, PalwNativeReadyResponseV3, palw_native_bundle_v3, palw_native_prompt_v3,
 };
-use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1;
 use kaspa_consensus_core::{
     palw_material_capacity_v1::PalwMaterialNativeAuthorityV1,
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
@@ -460,14 +458,13 @@ impl LoopbackNativeProviderV3 {
     fn authenticate(
         &self,
         request: &ProviderTransportRequestV1,
-        purpose: ProviderTransportPurposeV1,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwNativeReadyRequestV3>, String> {
         let local_daa = Some(self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score());
         {
             let mut replay = self.replay.lock().map_err(|_| "replay guard poisoned")?;
             provider_transport_verify_request_v1(
                 request,
-                purpose,
+                ProviderTransportPurposeV1::NativeReadyV3,
                 &self.transport,
                 now_unix_ms(),
                 local_daa,
@@ -475,7 +472,7 @@ impl LoopbackNativeProviderV3 {
             )?;
         }
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyRequestV3>(
-            &request.body[..],
+            request.body.as_slice(),
             request.body.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -506,11 +503,6 @@ impl LoopbackNativeProviderV3 {
         request: &ProviderTransportRequestV1,
         body: &PalwNativeReadyResponseV3,
     ) -> Result<ProviderTransportResponseV1, String> {
-        self.respond_bytes(request, borsh::to_vec(body).map_err(|e| e.to_string())?)
-    }
-
-    /// [`Self::respond`] over an already encoded body (the manifest answer, audit C-03).
-    fn respond_bytes(&self, request: &ProviderTransportRequestV1, body: Vec<u8>) -> Result<ProviderTransportResponseV1, String> {
         let signers: Vec<_> = self
             .providers
             .iter()
@@ -523,7 +515,7 @@ impl LoopbackNativeProviderV3 {
             .collect();
         let responders: Vec<(PalwBondKeyV2, ProviderTransportSignerV1<'_>)> =
             signers.iter().map(|(bond, sign)| (*bond, sign as ProviderTransportSignerV1<'_>)).collect();
-        provider_transport_response_v1(&request.header, now_unix_ms(), body, responders)
+        provider_transport_response_v1(&request.header, now_unix_ms(), borsh::to_vec(body).map_err(|e| e.to_string())?, responders)
     }
 
     /// **One janitor round per served bond** over this node's Consensus API (see the module comment). Logged, never fatal.
@@ -843,63 +835,6 @@ impl LoopbackNativeProviderV3 {
     }
 
     /// One request, every roster bond this service holds: each signature only after its own durable publication.
-    /// **The manifest a backend-less producer asks for** (audit C-03, purpose `NativeManifestV3`): the same authority read, the
-    /// same prompt derivation and the same bundle rebuild as [`Self::sign_request`], over the DRAW envelope — and nothing
-    /// published, recorded or signed over a Ready. The producer then sends the exact Ready with this manifest and prompt to be
-    /// signed, which re-runs every check here.
-    pub fn manifest_request(&self, request: &PalwNativeReadyRequestV3) -> Result<(PalwMaterialManifestV1, Vec<u32>), String> {
-        if request.version != PALW_NATIVE_READY_EXCHANGE_VERSION_V3 {
-            return Err("unknown native exchange version".into());
-        }
-        let ready = &request.envelope.ready;
-        let attempt = &request.envelope.base.attempt;
-        let ours: Vec<&ServedProviderV3> = self.providers.iter().filter(|p| ready.providers.contains(&p.bond)).collect();
-        if ours.is_empty() {
-            return Err("none of this service's provider bonds is on the session roster".into());
-        }
-        if ours.iter().any(|p| p.operator == attempt.operator_id) {
-            return Err("the executor is one of this service's provider operators; self-custody is refused".into());
-        }
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let authority = session.palw_native_material_provider_authority_v3(request.checkpoint, &request.header, &request.envelope)?;
-        let params = &self.config.params;
-        let registry = crate::palw_backends::PalwBackendRegistry::for_node_v1(
-            params,
-            self.court,
-            params.palw_prompt_ids_form_v1(),
-            self.holdings.clone(),
-            params.net.to_string().into_bytes(),
-            self.chain_classes,
-        );
-        let backend = registry.resolve_or_chain(attempt.class_id, attempt.artifact_root, |id| {
-            if self.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None }
-        })?;
-        drop(session);
-        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(
-            attempt.network_domain,
-            kaspa_consensus_core::hashing::header::pre_pow_hash_64(&request.header),
-            attempt.class_id,
-            &attempt.executor_bond,
-            request.header.nonce,
-        );
-        let prompt = palw_native_prompt_v3(backend.as_ref(), anchor)?;
-        if !request.prompt.is_empty() && prompt != request.prompt {
-            return Err("the request's prompt is not the one its anchor implies".into());
-        }
-        let prefill_draw = params.palw_prefill_draw_active_at(request.header.daa_score);
-        let (_, manifest) = palw_native_bundle_v3(
-            backend.as_ref(),
-            &authority.row,
-            attempt,
-            anchor,
-            &request.capture,
-            &prompt,
-            prefill_draw,
-            authority.material,
-        )?;
-        Ok((manifest, prompt))
-    }
-
     pub fn sign_request(
         &self,
         request: &PalwNativeReadyRequestV3,
@@ -1004,7 +939,7 @@ impl LoopbackNativeProviderV3 {
         }
         let encoded = borsh::to_vec(&signatures).map_err(|e| e.to_string())?;
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<Vec<(PalwBondKeyV2, Vec<u8>)>>(
-            &encoded[..],
+            encoded.as_slice(),
             encoded.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -1156,6 +1091,15 @@ fn request_nonce_v3(body: &[u8]) -> [u8; 32] {
 }
 
 impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
+    fn replace_kernel_material_v4(
+        &self,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+        grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+    ) -> Result<(), String> {
+        self.replace_kernel_v4(context, bundle, intent, grant)
+    }
     fn fetch_kernel_material_unit_classified_v4(
         &self,
         query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
@@ -1165,15 +1109,6 @@ impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
         kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4,
     > {
         self.fetch_kernel_classified_v4(query, authority)
-    }
-    fn replace_kernel_material_v4(
-        &self,
-        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
-        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
-        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
-        grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
-    ) -> Result<(), String> {
-        self.replace_kernel_v4(context, bundle, intent, grant)
     }
     fn fetch_kernel_material_unit_v4(
         &self,
@@ -1245,7 +1180,7 @@ impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
         .map_err(|e| e.to_string())?;
         let responders = provider_transport_verify_response_v1(&response, &signed.header, roster_keys, &self.policy, now_unix_ms())?;
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyResponseV3>(
-            &response.body[..],
+            response.body.as_slice(),
             response.body.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -1327,38 +1262,7 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
         kernel_replacement_v4::handle_replacement_v4(&mut stream, service, &request);
         return;
     }
-    // Audit C-03: a backend-less producer's manifest query — authenticated exactly as a Ready request, answered with the
-    // rebuilt manifest and prompt only.
-    if request.header.purpose == ProviderTransportPurposeV1::NativeManifestV3 {
-        let native = match service.authenticate(&request, ProviderTransportPurposeV1::NativeManifestV3) {
-            Ok(native) => native,
-            Err(reason) => {
-                kaspa_core::warn!("RFC12 PRIVATE: PAV3 native provider dropped an unauthenticated manifest query: {reason}");
-                return;
-            }
-        };
-        let body = match service.manifest_request(&native) {
-            Ok((manifest, prompt)) => {
-                PalwNativeManifestResponseV3::Manifest { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, manifest, prompt }
-            }
-            Err(reason) => {
-                kaspa_core::warn!("RFC12 PRIVATE: PAV3 native provider refused a manifest query: {reason}");
-                PalwNativeManifestResponseV3::Refused { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, reason }
-            }
-        };
-        match borsh::to_vec(&body)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| service.respond_bytes(&request, bytes))
-            .and_then(|response| borsh::to_vec(&response).map_err(|e| e.to_string()))
-        {
-            Ok(bytes) => {
-                let _ = write_frame_v3(&mut stream, &bytes);
-            }
-            Err(reason) => kaspa_core::warn!("RFC12 PRIVATE: PAV3 native provider could not sign its manifest answer: {reason}"),
-        }
-        return;
-    }
-    let native = match service.authenticate(&request, ProviderTransportPurposeV1::NativeReadyV3) {
+    let native = match service.authenticate(&request) {
         Ok(native) => native,
         Err(reason) => {
             kaspa_core::warn!("RFC12 PRIVATE: PAV3 native provider dropped an unauthenticated request: {reason}");
@@ -1788,5 +1692,6 @@ mod recovery_runtime_v4;
 
 #[path = "native_kernel_material_query_v4.rs"]
 mod kernel_query_v4;
+
 #[path = "native_kernel_material_replacement_v4.rs"]
 mod kernel_replacement_v4;

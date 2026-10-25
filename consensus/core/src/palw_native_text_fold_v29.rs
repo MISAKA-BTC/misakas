@@ -78,18 +78,7 @@ fn original_book(r: &PalwKernelRouteStateV1, h: &JobHeader) -> Result<NativeText
     }
     Ok(b)
 }
-/// **V6 (lane P3, 2026-10-22): the reserve a conviction of this held text29 Final collects** — the signed
-/// `maximum.producer_reserve` of the header-anchored book, the same amount `convict_after_final` is bounded by. Refused (never a
-/// default) when the header, the book or the Final is not readable as recorded.
-pub(super) fn held_final_reserve_v29(r: &PalwKernelRouteStateV1, job: &Digest) -> Result<u64, PalwStateV2Error> {
-    let h = original_header(r, *job)?;
-    let b = original_book(r, &h)?;
-    if b.terminal() != NativeTextTerminalV29::Final {
-        return Err(refused("text29 held reserve: the anchored book is not Final"));
-    }
-    Ok(b.funding().maximum.producer_reserve)
-}
-fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, b: &NativeTextBookV29) -> Result<(), PalwStateV2Error> {
+fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, b: &NativeTextBookV29) {
     let raw = key(b);
     h.book = b.root();
     h.book_bytes = raw.len() as u32;
@@ -99,40 +88,12 @@ fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, b: &Native
     } else {
         0
     };
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, k(1, &h.job), Some(raw))?;
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, k(0, &h.job), Some(key(h)))?;
-    Ok(())
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, k(1, &h.job), Some(raw));
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, k(0, &h.job), Some(key(h)));
 }
 pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128 {
     let Some(ids) = read::<Vec<Digest>>(r, EXECUTION_JOB_OWNER_TABLE_V11, 1, bond, 4 + 8 * 64) else { return 0 };
-    ids.iter()
-        .take(8)
-        .filter_map(|id| original_header(r, *id).ok())
-        .filter(|h| h.producer == *bond)
-        .fold(0u128, |n, h| n.saturating_add(h.reserved as u128).saturating_add(held_final_reserve(r, &h)))
-}
-/// **audit A-1: a HELD Final keeps its signed producer reserve committed** (as native39 does). `write_book` writes `reserved = 0`
-/// at every terminal but Funded / Challengeable (unchanged, so the rows below the liability-horizon fence stay byte-identical);
-/// while the job's fee is held in aux 144 the producer is accusable to H and a post-Final conviction collects
-/// `min(collateral, maximum.producer_reserve)`, so the reader re-adds that signed reserve from the header-anchored book until the
-/// held row leaves (released at H, or refunded/convicted). Unreadable anchored book under a live hold: fail closed (all committed).
-fn held_final_reserve(r: &PalwKernelRouteStateV1, h: &JobHeader) -> u128 {
-    if h.terminal != NativeTextTerminalV29::Final
-        || !super::super::palw_native_liability_hold_fold_v1::native_fee_held_for_v1(
-            r,
-            crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29,
-            &h.job,
-            &h.producer,
-        )
-    {
-        return 0;
-    }
-    r.aux
-        .get(&(EXECUTION_JOB_TABLE_V11, k(1, &h.job)))
-        .filter(|raw| raw.len() == h.book_bytes as usize && raw.len() <= TEXT_STOP_BOOK_BYTES_V29)
-        .and_then(|raw| borsh::from_slice::<NativeTextBookV29>(raw).ok())
-        .filter(|b| b.root() == h.book && b.terminal() == NativeTextTerminalV29::Final)
-        .map_or(u64::MAX as u128, |b| b.funding().maximum.producer_reserve as u128)
+    ids.iter().take(8).filter_map(|id| original_header(r, *id).ok()).filter(|h| h.producer == *bond).map(|h| h.reserved as u128).sum()
 }
 fn class(builder: &TransitionBuilder<'_>, id: Digest) -> Result<(ClassHeader, NativeTextRegisterV29, TirProgramV1), PalwStateV2Error> {
     let r = builder.state.kernel_route.as_ref().unwrap();
@@ -174,11 +135,11 @@ fn paid_restore(
     };
     let bytes =
         wire.checked_add(body as u64).and_then(|n| n.checked_add(32768)).ok_or_else(|| refused("text29 restore extent overflow"))?;
-    // G14 lane closure (2026-10-17, defect found by the text29 harness): the quadratic tariff `bytes² · 64 + bytes · 1024` with its
-    // 32-KiB floor is at least 6.9e10 work, above the route's whole per-block court-work limit (2^30), so NO text29 action could
-    // ever be carried — the lane was unreachable, its courts included. The restore is a bounded linear decode of `bytes`; it is
-    // charged linearly at the same per-byte rates (64 + 1024). Dormant lane; recorded in ADR-0187.
-    let work = bytes.checked_mul(64 + 1024).ok_or_else(|| refused("text29 original restore tariff overflow"))?;
+    let work = bytes
+        .checked_mul(bytes)
+        .and_then(|n| n.checked_mul(64))
+        .and_then(|n| n.checked_add(bytes * 1024))
+        .ok_or_else(|| refused("text29 original restore tariff overflow"))?;
     if !prepay(builder, ctx, signer, work)? {
         return Ok(false);
     }
@@ -193,7 +154,7 @@ fn paid_restore(
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut q = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), [0; 64])?;
     q.debit_ordinary(&p.quota, &epoch, &cost).map_err(refused)?;
-    write_shard(builder, &q, [0; 64])?;
+    write_shard(builder, &q, [0; 64]);
     Ok(true)
 }
 fn decode_register(raw: &[u8]) -> Result<NativeTextRegisterV29, PalwStateV2Error> {
@@ -256,14 +217,13 @@ fn register(
     }
     ids.push(id);
     let h = ClassHeader { class: record, owner: *signer, wire_bytes: body.len() as u32, registered: ctx.daa_score,original_source:s };
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(0, &id), Some(key(&h)))?;
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(1, &id), Some(body.to_vec()))?;
-    builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, k(0, signer), Some(key(&ids)))?;
-    builder.note_kernel_bond(signer)?;
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(0, &id), Some(key(&h)));
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(1, &id), Some(body.to_vec()));
+    builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, k(0, signer), Some(key(&ids)));
+    builder.note_kernel_bond(signer);
     Ok(())
 }
 struct Quote {
-    original_history_bound:u32,
     maximum: CheckedNativeTextMaximumV29,
     basis: NativeFinalClassBasisV27,
     quota: CheckedTextQuotaV29,
@@ -514,7 +474,7 @@ fn quote(
         &conditions,
     )
     .map_err(refused)?;
-    Ok(Quote { original_history_bound:program.history_bound,maximum, basis, quota, source, paged, queue, conditions, caller, complete_path: complete, proof_window })
+    Ok(Quote { maximum, basis, quota, source, paged, queue, conditions, caller, complete_path: complete, proof_window })
 }
 fn prepare(
     builder: &mut TransitionBuilder<'_>,
@@ -565,8 +525,8 @@ fn prepare(
         return Err(refused("text29 finite own preparation catalog or exact preparation exists"));
     }
     ids.push(id);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(1, &id), Some(key(&prepared)))?;
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(0, signer), Some(key(&ids)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(1, &id), Some(key(&prepared)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(0, signer), Some(key(&ids)));
     Ok(())
 }
 fn accept(
@@ -624,8 +584,8 @@ fn accept(
         return Err(refused("text29 producer-only finite consent catalog exhausted"));
     }
     ids.push(a.root());
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(3, &a.root()), Some(key(&a)))?;
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(2, signer), Some(key(&ids)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(3, &a.root()), Some(key(&a)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(2, signer), Some(key(&ids)));
     Ok(())
 }
 fn fund(
@@ -814,8 +774,8 @@ fn fund(
     if builder.slash_bond(*signer, w.reward as u128)? != w.reward {
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original authorized escrow changed after full preflight".into()));
     }
-    write_shard(builder, &baseline, id)?;
-    write_source_shard(builder, &source, id)?;
+    write_shard(builder, &baseline, id);
+    write_source_shard(builder, &source, id);
     for (kk, raw) in [
         (key(&(16u8, id, 1u8)), key(&q.source.record())),
         (key(&(26u8, id, 0u8)), key(q.caller.record())),
@@ -835,7 +795,7 @@ fn fund(
             key(&(slots.root(), slots))
         }),
     ] {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, Some(raw))?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, Some(raw));
     }
     let mut h = JobHeader {
         job: id,
@@ -855,20 +815,20 @@ fn fund(
         quota_record: q.quota.plan().record(),
         quota_root: q.quota.plan().record().root(),
     };
-    write_book(builder, &mut h, &book)?;
+    write_book(builder, &mut h, &book);
     requester_ids.push(id);
     producer_ids.push(id);
     consents.retain(|v| *v != consent.root());
     preparations.retain(|v| *v != prep.id());
-    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&w.requester_operator), Some(key(&next)))?;
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, signer), Some(key(&requester_ids)))?;
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &producer_key), Some(key(&producer_ids)))?;
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(2, &producer_key), Some(key(&consents)))?;
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(0, signer), Some(key(&preparations)))?;
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(3, &consent.root()), None)?;
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(3, &consent.root()), Some(key(&(id, funded.root(), consent.root()))))?;
-    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, k(0, &id), Some(key(&prep)))?;
-    builder.note_kernel_bond(&producer_key)?;
+    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&w.requester_operator), Some(key(&next)));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, signer), Some(key(&requester_ids)));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &producer_key), Some(key(&producer_ids)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(2, &producer_key), Some(key(&consents)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(0, signer), Some(key(&preparations)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(3, &consent.root()), None);
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(3, &consent.root()), Some(key(&(id, funded.root(), consent.root()))));
+    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, k(0, &id), Some(key(&prep)));
+    builder.note_kernel_bond(&producer_key);
     Ok(())
 }
 fn cached_subject(
@@ -928,7 +888,7 @@ fn commit(
     let mut shard = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), id)?;
     let action = plan.action(QuotaActionKindV11::Metadata, body).map_err(refused)?;
     shard.debit_reserved(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
-    write_shard(builder, &shard, id)?; // BEFORE every body/class/max/actual scope decode and restore.
+    write_shard(builder, &shard, id); // BEFORE every body/class/max/actual scope decode and restore.
     let r = builder.state.kernel_route.as_ref().unwrap();
     let mut book = original_book(r, &h)?;
     let prep: Prepared = read(r, EXECUTION_POLICY_TABLE_V11, 0, &id, (1 << 20) + 8192)
@@ -954,7 +914,6 @@ fn commit(
         return Err(refused("text29 stopped post rebinds original producer/nonce/max/source/evidence identity"));
     }
     let actual = q.maximum.check_actual(&program, &registered.real_parameters, &b.request, &post.generated).map_err(refused)?;
-    check_bound_window_lengths(r,&h,program.history_bound,actual.positions())?;
     if actual.scope_root() != post.actual_scope25
         || actual.resource_root() != post.actual_resource29
         || actual.positions() != post.evidence.positions
@@ -980,8 +939,8 @@ fn commit(
     )
     .map_err(refused)?;
     h.post_bytes = body.len() as u32;
-    write_book(builder, &mut h, &book)?;
-    builder.write_kernel_row(EXECUTION_PROTECTED_TABLE_V11, k(0, &id), Some(body.to_vec()))?;
+    write_book(builder, &mut h, &book);
+    builder.write_kernel_row(EXECUTION_PROTECTED_TABLE_V11, k(0, &id), Some(body.to_vec()));
     let claim = book.claim().unwrap();
     let status = NativePagedJobStatusV29 {
         version: 29,
@@ -1001,7 +960,7 @@ fn commit(
         deadline: b.deadline,
         challenge_end: claim.challenge_end,
     };
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, 0u8)), Some(key(&(status.root(), status))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, 0u8)), Some(key(&(status.root(), status))));
     Ok(())
 }
 fn h_original_program(w: &NativeTextRegisterV29) -> Digest {
@@ -1044,15 +1003,14 @@ fn paid_status(r: &PalwKernelRouteStateV1, id: Digest) -> Result<NativePagedJobS
 fn write_caller(
     builder: &mut TransitionBuilder<'_>,
     s: &misaka_palw_kernel::flat_quota11::stage14::source26::StageSourceCallerShardV26,
-) -> Result<(), PalwStateV2Error> {
+) {
     let g = s.global_row();
     let a = s.actor_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
     if let Some(row) = s.caller_row() {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, row.job, row.owner)), Some(key(&(row.root(), row))))?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, row.job, row.owner)), Some(key(&(row.root(), row))));
     }
-    Ok(())
 }
 fn own(
     builder: &mut TransitionBuilder<'_>,
@@ -1195,25 +1153,11 @@ fn own(
         remaining: paid.guarantee.clone(),
     };
     let mut owner_ids: Vec<Digest> = read(r, EXECUTION_SEAL_ACTOR_TABLE_V11, 0, &id, 4 + 4 * 64).unwrap_or_default();
-    // G14 F03 round 2 (lane g14p/court-owner): past `palw_court_outsider_lane_v1` a full lifetime catalogue may reclaim the slot of
-    // an owner that expired WITHOUT progress (mirror of v39's expired-owner reclamation, G-N1). Cap stays 4. Below the fence the
-    // closure is never consulted and the rule is byte for byte the old one.
-    let reclaim_active = builder.params.court_outsider_lane_active_v1(ctx.daa_score);
-    let evicted = text29_owner_catalogue_admit_v29(&owner_ids, own.id(), reclaim_active, |member| {
-        text29_owner_reclaimable_v29(r, id, *member, ctx.daa_score)
-    })
-    .map_err(refused)?;
-    if let Some(gone) = evicted {
-        owner_ids.retain(|v| *v != gone);
+    if owner_ids.len() >= 4 || owner_ids.contains(&own.id()) {
+        return Err(refused("text29 original lifetime owner catalogue exhausted"));
     }
     owner_ids.push(own.id());
-    let mut status = paid_status(r, id)?;
-    if evicted.is_some() {
-        // The evicted owner holds no paid slot (it expired: `expire_owner` zeroed it), so `owners_admitted` — the LIFETIME count the
-        // admission token refuses at 4 — becomes the live-plus-progressed count, as v39's `admitted` does at expiry.
-        status.owners_admitted =
-            status.owners_admitted.checked_sub(1).ok_or_else(|| refused("text29 reclaimed owner count absent"))?;
-    }
+    let status = paid_status(r, id)?;
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let shard = quota_shard(builder, p, &epoch, actor, id)?;
     let token = CheckedNativePagedAdmissionV29::from_current_native(status.clone(), own.clone(), &q.paged, &p.quota, &epoch)
@@ -1295,74 +1239,12 @@ fn own(
     if builder.slash_bond(*signer, fee as u128)? != fee {
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original fee changed after complete preflight".into()));
     }
-    super::paged::write(builder, &projection)?;
-    write_caller(builder, &caller)?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, id, 2u8)), Some(key(&(slots.root(), slots))))?;
-    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id), Some(key(&owner_ids)))?;
-    if let Some(gone) = evicted {
-        // The evicted owner leaves the lifetime catalogue, so collection (kind 2) will no longer iterate it: retire its archival rows
-        // now, exactly the two rows collection deletes per catalogued owner — nothing is orphaned.
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, gone)), None)?;
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, id, gone)), None)?;
-    }
-    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, nonce_key, Some(key(&(next + 1))))?;
+    super::paged::write(builder, &projection);
+    write_caller(builder, &caller);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, id, 2u8)), Some(key(&(slots.root(), slots))));
+    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id), Some(key(&owner_ids)));
+    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, nonce_key, Some(key(&(next + 1))));
     Ok(())
-}
-
-/// **G14 F03 round 2: the text29 lifetime owner catalogue's admission (cap 4).** `Ok(None)`: the newcomer takes a free entry.
-/// `Ok(Some(member))`: the catalogue is full, the reclamation is in force, and `member` — the FIRST catalogued owner (in catalogue
-/// order, a rooted fact) that `reclaimable` says expired without progress — gives up its entry. Otherwise the old refusal. Below the
-/// fence (`reclaim_active == false`) `reclaimable` is never called. An owner that made progress is never reclaimable, so it is never
-/// evicted.
-pub(crate) fn text29_owner_catalogue_admit_v29(
-    catalogue: &[Digest],
-    newcomer: Digest,
-    reclaim_active: bool,
-    reclaimable: impl Fn(&Digest) -> bool,
-) -> Result<Option<Digest>, &'static str> {
-    const EXHAUSTED: &str = "text29 original lifetime owner catalogue exhausted";
-    if catalogue.contains(&newcomer) {
-        return Err(EXHAUSTED);
-    }
-    if catalogue.len() < 4 {
-        return Ok(None);
-    }
-    if !reclaim_active || catalogue.len() > 4 {
-        return Err(EXHAUSTED);
-    }
-    catalogue.iter().find(|member| reclaimable(member)).copied().map(Some).ok_or(EXHAUSTED)
-}
-
-/// **An owner that made no progress before its deadline** (pure on its archival seal). Expired and retired (`expire_owner` ran, past
-/// its horizon), and it never advanced the proof: no part attempt, no accepted part, no assembly, no court move, no discovery
-/// conversion.
-pub(crate) fn text29_owner_made_no_progress_v29(seal: &NativePagedSealV29, now: u64) -> bool {
-    seal.retired
-        && now > seal.horizon
-        && seal.part_attempts.iter().all(|n| *n == 0)
-        && seal.accepted == [0; 64]
-        && seal.assembly_attempts == 0
-        && seal.court_attempts == 0
-        && seal.conversion_attempts == 0
-}
-
-/// [`text29_owner_made_no_progress_v29`] on the chain rows, plus every liability collection would demand of it already retired:
-/// its caller row (26) retired with nothing remaining, and no open public request on the owner.
-fn text29_owner_reclaimable_v29(r: &PalwKernelRouteStateV1, job: Digest, member: Digest, now: u64) -> bool {
-    use misaka_palw_kernel::flat_quota11::stage14::source26::StageSourceCallerRowV26;
-    let Some(seal) = r.native_paged_seal_original_v29(job, member) else { return false };
-    if seal.namespace != 29 || !text29_owner_made_no_progress_v29(&seal, now) {
-        return false;
-    }
-    let Some((root, caller)) = r.aux_row::<(Digest, StageSourceCallerRowV26)>(EXECUTION_QUOTA_TABLE_V11, &key(&(26u8, job, member)))
-    else {
-        return false;
-    };
-    caller.root() == root
-        && caller.retired
-        && caller.owner == member
-        && caller.remaining == Default::default()
-        && public::owner_open(r, job, member).is_ok_and(|n| n == 0)
 }
 /// A producer Final credit uses the shared unique original-credit queue identity
 /// (job, funding, exact settlement, payout), so the independent audit32 /
@@ -1437,41 +1319,12 @@ fn settle(
     if s.actual_collected_slash > 0 && builder.slash_bond(h.producer, s.actual_collected_slash as u128)? != s.actual_collected_slash {
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original collected collateral changed after final preflight".into()));
     }
-    // RFC08 08-B (ADR-0184 §1, dormant `palw_native_liability_horizon_v1`): the producer's Final fee of a claim committed past the
-    // fence is held to its liability horizon (signed deadline + window_court) instead of queued; the quota subject and the budget
-    // reservation stay open with it, and the job stays accusable by public filing (`court`) through the horizon.
-    let held = s.terminal == NativeTextTerminalV29::Final
-        && s.producer > 0
-        && b.claim().is_some_and(|c| {
-            super::super::palw_native_liability_hold_fold_v1::native_fee_needs_hold_v1(builder.params, c.committed_daa, ctx.daa_score, b.funding().deadline)
-        });
-    if held {
-        let horizon = super::super::palw_native_liability_hold_fold_v1::native_horizon_v1(builder.params, b.funding().deadline);
-        super::super::palw_native_liability_hold_fold_v1::hold_native_fee_v1(
-            builder,
-            &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1 {
-                version: crate::palw_native_liability_hold_v1::PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1,
-                family: crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29,
-                job: h.job,
-                claim: s.claim.unwrap_or([0; 64]),
-                producer: h.producer,
-                queue: queue.as_bytes(),
-                payload: h.producer_payout.as_bytes(),
-                amount: s.producer,
-                income_root: h.job,
-                income_kind: 11,
-                budget: super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job).as_bytes(),
-                refund_payload: h.requester_payout.as_bytes(),
-                final_daa: ctx.daa_score,
-                horizon_daa: horizon,
-            },
-        )?;
-    } else if s.producer > 0 {
+    if s.producer > 0 {
         builder.pay_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11, ctx.daa_score, s.producer, queue, true)?;
-        builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.producer_payout, amount: s.producer }))?;
+        builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.producer_payout, amount: s.producer }));
     } else {
-        builder.cancel_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11)?;
-        builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: s.requester }))?;
+        builder.cancel_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11);
+        builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: s.requester }));
     }
     if s.finder_credit > 0 {
         let (f, payout) = paid_finder.unwrap();
@@ -1485,105 +1338,17 @@ fn settle(
             builder.add_kernel_payout(payout, s.finder_credit)?;
         }
     }
-    // A held Final keeps its subject open (closed when the held fee leaves: `held_fee_left_v29`).
-    subject.closed = !held;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &h.job), Some(key(&(subject.row_root(), subject))))?;
-    write_book(builder, h, b)?;
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job), Some(key(&(s, queue, ctx.daa_score))))?;
-    if !held {
-        builder.bond_budget_close_v1(&super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job), ctx.daa_score)?;
-    }
+    subject.closed = true;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &h.job), Some(key(&(subject.row_root(), subject))));
+    write_book(builder, h, b);
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job), Some(key(&(s, queue, ctx.daa_score))));
+    builder.bond_budget_close_v1(&super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job), ctx.daa_score);
     if let Ok(mut status) = paid_status(builder.state.kernel_route.as_ref().unwrap(), h.job) {
         status.active = false;
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, 0u8)), Some(key(&(status.root(), status))))?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, 0u8)), Some(key(&(status.root(), status))));
     }
     let _ = p;
     Ok(())
-}
-/// The queue a text29 post-Final conviction refunded its held fee through (re-derived after the held row is gone).
-fn held_refund_queue(h: &JobHeader, s: &NativeTextSettlementV29) -> Hash64 {
-    super::super::palw_native_liability_hold_fold_v1::native_refund_queue_of_v1(crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29, h.job, s.claim.unwrap_or([0; 64]), h.requester_payout.as_bytes())
-}
-/// **RFC08 08-B (ADR-0184 §1): the settlement of a conviction of a held Final** (public filing within its liability horizon). The
-/// Final's fee was held (aux 144), never queued: it is refunded to the requester whole, the producer's reserve is collected as a
-/// pre-Final conviction collects it, the finder is paid as [`settle`] pays it, and the job's credit row is replaced by the
-/// conviction's (its queue is the held row's refund queue). Refused without a held fee inside its horizon.
-fn settle_after_final(
-    builder: &mut TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    h: &mut JobHeader,
-    b: &NativeTextBookV29,
-    s: &NativeTextSettlementV29,
-    finder: &PalwBondKeyV2,
-) -> Result<(), PalwStateV2Error> {
-    let r = builder.state.kernel_route.as_ref().unwrap();
-    if s.terminal != NativeTextTerminalV29::Convicted
-        || b.settlement() != Some(s)
-        || b.escrow() != 0
-        || s.job != h.job
-        || s.original_funding != h.funding
-        || s.producer != 0
-        || s.requester != b.funding().request.reward
-        || !r.aux.contains_key(&(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job)))
-    {
-        return Err(refused("text29 post-Final conviction settlement differs"));
-    }
-    let v = builder.state.bonds.get(finder).ok_or_else(|| refused("text29 post-Final finder absent"))?;
-    if palw_kernel_bond_id_v1(finder) != s.finder || v.operator_id.as_bytes() == b.funding().request.producer_operator {
-        return Err(refused("text29 post-Final finder is not an independent court owner"));
-    }
-    let payout = v.payout_payload;
-    if s.actual_collected_slash > 0 && builder.state.bonds.get(&h.producer).is_none_or(|v| v.collateral < s.actual_collected_slash) {
-        return Err(refused("text29 post-Final producer collateral no longer collectible"));
-    }
-    let row = super::super::palw_native_liability_hold_fold_v1::refund_native_fee_v1(builder, crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29, &h.job, ctx.daa_score)?;
-    if row.amount != s.requester || held_refund_queue(h, s) != super::super::palw_native_liability_hold_fold_v1::native_refund_queue_v1(&row) {
-        return Err(refused("text29 held fee differs from the original escrow"));
-    }
-    if s.actual_collected_slash > 0 && builder.slash_bond(h.producer, s.actual_collected_slash as u128)? != s.actual_collected_slash {
-        return Err(refused("text29 post-Final collected collateral changed"));
-    }
-    if s.finder_credit > 0 {
-        if builder.params.reporter_income_active_at(ctx.daa_score) {
-            let award = Hash64::from_bytes(object_id(
-                b"misaka-palw/native/text-post-final-collected-finder-award/v29",
-                &(h.job, h.funding, s.proof, s.finder),
-            ));
-            builder.stage_reporter_recipient_v1(award, *finder, ctx.daa_score, s.finder_credit, Hash64::from_bytes(h.job))?;
-        } else {
-            builder.add_kernel_payout(payout, s.finder_credit)?;
-        }
-    }
-    write_book(builder, h, b)?;
-    let queue = super::super::palw_native_liability_hold_fold_v1::native_refund_queue_v1(&row);
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job), Some(key(&(s, queue, ctx.daa_score))))?;
-    Ok(())
-}
-/// RFC08 08-B: the text29 post-Final accusation is one atomic public filing, so a held fee has no multi-step dispute; only an
-/// unreadable or no-longer-Final job keeps it held (fail closed).
-pub(super) fn held_dispute_open_v29(
-    builder: &TransitionBuilder<'_>,
-    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
-) -> bool {
-    let Some(r) = builder.state.kernel_route.as_ref() else { return true };
-    let Ok(h) = original_header(r, row.job) else { return true };
-    original_book(r, &h).map_or(true, |b| b.terminal() != NativeTextTerminalV29::Final || h.producer != row.producer)
-}
-/// RFC08 08-B: a held text29 fee left (paid or refunded): close the quota subject the Final kept open.
-pub(super) fn held_fee_left_v29(
-    builder: &mut TransitionBuilder<'_>,
-    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
-) -> Result<(), PalwStateV2Error> {
-    let r = builder.state.kernel_route.as_ref().ok_or_else(|| refused("text29 held subject route absent"))?;
-    let Some((root, mut subject)) = r.aux_row::<(Digest, QuotaSubjectSummaryV11)>(EXECUTION_QUOTA_TABLE_V11, &quota_key(2, &row.job))
-    else {
-        return Ok(());
-    };
-    if root != subject.row_root() || subject.binding.job_id != row.job {
-        return Err(refused("text29 held subject root/job differs"));
-    }
-    subject.closed = true;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &row.job), Some(key(&(subject.row_root(), subject))))
 }
 /// Called only by original common paid Part/Assembly/Court path. No ordinary
 /// reveal action may allocate this file or borrow another actor's prepaid work.
@@ -1592,51 +1357,6 @@ pub(super) fn reveal_paged(
     ctx: &PalwBlockContextV2,
     signer: &PalwBondKeyV2,
     seal: &NativePagedSealV29,
-    file: &[u8],
-) -> Result<(), PalwStateV2Error> {
-    court(builder, ctx, signer, seal.job, Some(seal), file)
-}
-/// **G14 lane closure G-N1 (text29): a self-contained public filing needs no paid owner.** `job ‖ u32 n ‖ filing` (the paged
-/// court's filing grammar: v25 kinds 0 / 1 / 2, or a window-bound job's v37 envelope) from any Active bond whose operator is not
-/// the producer's, while the book is Challengeable. The lifetime owner catalogue (≤ 4) bounds the producer's prepaid answers to
-/// owners — material an owner may compel; a filer that already holds the material (every public answer is on chain) compels
-/// nothing, so it takes no owner place and adds no producer obligation, and four colluding owners that never reveal cannot lock it
-/// out. It pays its restoration up front (kept if the filing is wrong) and runs exactly the paged court's verification and
-/// conviction. In force where the text29 actions are (`palw_funded_execution_v11` + Final27; dormant on every preset).
-pub(super) fn public_file(
-    builder: &mut TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    signer: &PalwBondKeyV2,
-    p: &NativeExecutionPoliciesV11,
-    raw: &[u8],
-) -> Result<(), PalwStateV2Error> {
-    if raw.len() < 68 || u32::from_le_bytes(raw[64..68].try_into().unwrap()) as usize != raw.len() - 68 {
-        return Err(refused("text29 public filing exact job and count"));
-    }
-    if !builder.extras.kernel_route.as_ref().and_then(|e| e.native_final.as_ref()).is_some_and(|f| f.activation.is_active(ctx.daa_score))
-    {
-        return Err(refused("text29 public filing is below Final27"));
-    }
-    let job: Digest = raw[..64].try_into().unwrap();
-    let r = builder.state.kernel_route.as_ref().unwrap();
-    let h = original_header(r, job)?;
-    let bond = builder.state.bonds.get(signer).ok_or_else(|| refused("text29 public filer bond absent"))?;
-    if !matches!(bond.status, PalwBondStatusV2::Active) || *signer == h.producer {
-        return Err(refused("text29 public filer is not an Active bond other than the producer"));
-    }
-    if !paid_restore(builder, ctx, signer, p, Some(h.class), raw.len() + h.book_bytes as usize)? {
-        return Ok(());
-    }
-    court(builder, ctx, signer, job, None, raw)
-}
-/// The paged court a paid owner's reveal and a public filing share: the owner's checks (`seal`), the filing's verification against
-/// the committed post, the conviction (G-14: never refused for short collateral) and the settlement.
-fn court(
-    builder: &mut TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    signer: &PalwBondKeyV2,
-    job: Digest,
-    seal: Option<&NativePagedSealV29>,
     file: &[u8],
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_native_source_proof_v25::*;
@@ -1648,31 +1368,11 @@ fn court(
     };
     let p = policies(builder, ctx)?;
     let r = builder.state.kernel_route.as_ref().unwrap();
-    let mut h = original_header(r, job)?;
+    let mut h = original_header(r, seal.job)?;
     let mut b = original_book(r, &h)?;
     let f = b.funding().clone();
     let claim = b.claim().ok_or_else(|| refused("text29 court original claim absent"))?.clone();
-    // RFC08 08-B (ADR-0184 §1): a Final whose fee is held stays accusable by public filing (never a paid owner's seal: a Final
-    // had none live) through its liability horizon.
-    let held_horizon = if b.terminal() == NativeTextTerminalV29::Final && seal.is_none() {
-        super::super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(&builder.state, crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29, &job, ctx.daa_score).map(|row| row.horizon_daa)
-    } else {
-        None
-    };
-    if b.terminal() != NativeTextTerminalV29::Challengeable && held_horizon.is_none() {
-        return Err(refused("text29 court original book is not challengeable"));
-    }
-    let filer_operator = builder.state.bonds.get(signer).ok_or_else(|| refused("text29 court filer bond absent"))?.operator_id.as_bytes();
-    let (proof_root, finder, finder_operator) = match seal {
-        Some(seal) => (seal.proof_root, seal.actor, seal.operator),
-        None => (
-            object_id(b"misaka-palw/native/g14-public-filing/v29", &(job, &file[68..])),
-            palw_kernel_bond_id_v1(signer),
-            filer_operator,
-        ),
-    };
-    if let Some(seal) = seal
-        && (seal.namespace != 29
+    if seal.namespace != 29
         || seal.spent
         || seal.retired
         || seal.discovery
@@ -1688,7 +1388,8 @@ fn court(
         || seal.producer_operator != f.request.producer_operator
         || ctx.daa_score < seal.matures
         || ctx.daa_score >= seal.reveal_until
-        || builder.state.bonds.get(signer).is_none_or(|v| v.operator_id.as_bytes() != seal.operator))
+        || b.terminal() != NativeTextTerminalV29::Challengeable
+        || builder.state.bonds.get(signer).is_none_or(|v| v.operator_id.as_bytes() != seal.operator)
     {
         return Err(refused("text29 original paid court source/scope/operator/claim/time differs"));
     }
@@ -1792,30 +1493,18 @@ fn court(
         _ => return Err(refused("text29 paid court unrecognized kind")),
     };
     }
-    // G14 lane closure G-14: the conviction collects what the producer's bond still holds of the reserve, never refused for less.
-    let collectible = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
-        builder.state.bonds.get(&h.producer).map(|v| v.collateral),
-        f.maximum.producer_reserve,
-    );
-    if let Some(horizon) = held_horizon {
-        let settlement =
-            b.convict_after_final(proof_root, finder, finder_operator, collectible, ctx.daa_score, horizon).map_err(refused)?;
-        settle_after_final(builder, ctx, &mut h, &b, &settlement, signer)?;
-    } else {
-        let settlement = b.convict(proof_root, finder, finder_operator, collectible, ctx.daa_score).map_err(refused)?;
-        settle(builder, ctx, &p, &mut h, &b, &settlement, Some(signer))?;
-    }
-    if let Some(seal) = seal {
-        let mut paid = seal.clone();
-        paid.spent = true;
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, paid.id())), Some(key(&(paid.root(), paid))))?;
-    }
+    let settlement =
+        b.convict(seal.proof_root, seal.actor, seal.operator, f.maximum.producer_reserve, ctx.daa_score).map_err(refused)?;
+    settle(builder, ctx, &p, &mut h, &b, &settlement, Some(signer))?;
+    let mut paid = seal.clone();
+    paid.spent = true;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, paid.id())), Some(key(&(paid.root(), paid))));
     if refutes_source {
         builder.write_kernel_row(
             EXECUTION_SOURCE_FACT_TABLE_V11,
             k(0, &source_relation(&ch.class)),
-            Some(key(&(h.job, proof_root, ctx.daa_score))),
-        )?;
+            Some(key(&(h.job, seal.proof_root, ctx.daa_score))),
+        );
     }
     Ok(())
 }
@@ -1846,7 +1535,6 @@ fn close(
     let q = quote(builder, p, &prep.wire)?;
     let f = b.funding().clone();
     let claim = b.claim().unwrap();
-    check_bound_window_lengths(r,&h,q.original_history_bound,claim.actual_positions)?;
     let status = paid_status(r, id)?;
     let (open, latest) = public::open(r, id)?;
     if q.maximum.record() != &f.maximum
@@ -2007,11 +1695,11 @@ fn expire_owner(
         return Err(refused("text29 original expiry stream root differs"));
     }
     slots.retire_owner(id, ctx.daa_score).map_err(refused)?;
-    super::paged::write(builder, &projection)?;
-    write_caller(builder, &caller)?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))))?;
+    super::paged::write(builder, &projection);
+    write_caller(builder, &caller);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))));
     for index in 0..own.count {
-        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(29u8, job, id, index)), None)?;
+        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(29u8, job, id, index)), None);
     }
     Ok(())
 }
@@ -2112,17 +1800,17 @@ fn convert(
     let mut owners: Vec<Digest> = read(r, EXECUTION_SEAL_ACTOR_TABLE_V11, 0, &job, 4 + 4 * 64)
         .ok_or_else(|| refused("text29 original discovery lifetime catalogue absent"))?;
     *owners.iter_mut().find(|v| **v == old).ok_or_else(|| refused("text29 original discovery lifetime member absent"))? = new;
-    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &job), Some(key(&owners)))?;
-    super::paged::write(builder, &projection)?;
-    write_caller(builder, &caller)?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, job, old)), None)?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, job, old)), None)?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))))?;
+    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &job), Some(key(&owners)));
+    super::paged::write(builder, &projection);
+    write_caller(builder, &caller);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, job, old)), None);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, job, old)), None);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))));
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
         k(4, &old),
         Some(key(&(job, new, own.original_paid_receipt, own.original_ticket, own.horizon))),
-    )?;
+    );
     Ok(())
 }
 
@@ -2204,11 +1892,9 @@ fn collect_terminal(
         .ok_or_else(|| refused("text29 collection immutable original credit receipt absent"))?;
     if !matches!(b.terminal(), NativeTextTerminalV29::Final | NativeTextTerminalV29::Convicted | NativeTextTerminalV29::Refunded)
         || credited != s
-        || (queue != terminal_queue(&h, &s) && queue != held_refund_queue(&h, &s))
+        || queue != terminal_queue(&h, &s)
         || b.escrow() != 0
         || ctx.daa_score <= f.deadline
-        // RFC08 08-B: a held Final's material stays until its fee leaves (accusable to its liability horizon).
-        || super::super::palw_native_liability_hold_fold_v1::held_native_fee_v1(&builder.state, crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29, &id).is_some()
         || b.claim().is_some_and(|c| ctx.daa_score <= c.retained_until)
     {
         return Err(refused("text29 collection lacks genuine expired original terminal and single credit"));
@@ -2398,13 +2084,13 @@ fn collect_terminal(
     producer_ids.retain(|v| *v != id);
     // ---- every fallible check is above; journal writes only below ----
     if let Some(src) = &producer_source {
-        write_source_shard(builder, src, id)?;
+        write_source_shard(builder, src, id);
     }
-    write_shard(builder, &shard, id)?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))))?;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, 0u8)), Some(key(&(physical.root(), physical))))?;
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, &h.requester), Some(key(&requester_ids)))?;
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &h.producer), Some(key(&producer_ids)))?;
+    write_shard(builder, &shard, id);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, 0u8)), Some(key(&(physical.root(), physical))));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, &h.requester), Some(key(&requester_ids)));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &h.producer), Some(key(&producer_ids)));
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
         k(4, &id),
@@ -2414,10 +2100,10 @@ fn collect_terminal(
             source_retired,
             ctx.daa_score,
         ))),
-    )?;
+    );
     for owner in &owners {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, *owner)), None)?;
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, id, *owner)), None)?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, *owner)), None);
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, id, *owner)), None);
     }
     for kk in [
         quota_key(2, &id),
@@ -2433,7 +2119,7 @@ fn collect_terminal(
         key(&(22u8, id)),
         key(&(22u8, id, 2u8)),
     ] {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, None)?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, None);
     }
     for (table, kk) in [
         (EXECUTION_JOB_TABLE_V11, k(0, &id)),
@@ -2445,10 +2131,10 @@ fn collect_terminal(
         (EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id)),
         (EXECUTION_DEMAND_COUNT_TABLE_V11, k(0, &id)),
     ] {
-        builder.write_kernel_row(table, kk, None)?;
+        builder.write_kernel_row(table, kk, None);
     }
-    builder.note_kernel_bond(&h.requester)?;
-    builder.note_kernel_bond(&h.producer)?;
+    builder.note_kernel_bond(&h.requester);
+    builder.note_kernel_bond(&h.producer);
     Ok(())
 }
 /// Independent audit extraction of one genuine Text29 producer Final from
@@ -2491,7 +2177,6 @@ pub(super) fn audit_record_from_rows_v29(
         .map_err(|_| "text29 audit original class grammar")?;
     let f = b.funding();
     let claim = b.claim().ok_or("text29 audit Final lacks claim")?;
-    check_bound_window_lengths_from_rows(rows, &h, &b, None, claim.actual_positions)?;
     let s = b.settlement().ok_or("text29 audit Final lacks settlement")?;
     let credit_key = k(0, &id);
     let (credited, queue, established): (NativeTextSettlementV29, Hash64, u64) =
@@ -2685,7 +2370,6 @@ pub(super) fn register_window37(
     }
     let wire = NativeWindowClassRegisterV37::from_bytes(body).map_err(refused)?;
     let (h, _, program) = class(builder, text_class)?;
-    misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph, &program).map_err(refused)?;
     let record = wire.derive(&h.class, program.history_bound).map_err(refused)?;
     let id = record.id();
     let r = builder.state.kernel_route.as_ref().unwrap();
@@ -2700,10 +2384,10 @@ pub(super) fn register_window37(
         return Err(refused("window37 class already registered or finite owner catalogue full"));
     }
     ids.push(id);
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 0u8, id)), Some(key(&(record, *signer, ctx.daa_score))))?;
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 1u8, id)), Some(body.to_vec()))?;
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, catalog_key, Some(key(&ids)))?;
-    builder.note_kernel_bond(signer)?;
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 0u8, id)), Some(key(&(record, *signer, ctx.daa_score))));
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 1u8, id)), Some(body.to_vec()));
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, catalog_key, Some(key(&ids)));
+    builder.note_kernel_bond(signer);
     Ok(())
 }
 /// Funded action 46 (`palw_window_class_v37`): the job's PRODUCER opts its Funded,
@@ -2752,8 +2436,6 @@ pub(super) fn attach_window37(
         return Err(refused("window37 attach needs the producer's own Funded uncommitted job of the window's Text29 class"));
     }
     misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph, &program).map_err(refused)?;
-    wire.check_text_extent(program.history_bound,b.funding().request.maximum_positions().map_err(refused)?)
-        .map_err(refused)?;
     // Both window courts must fit the job's ORIGINAL paid filing bound.
     let prep: Prepared = read(builder.state.kernel_route.as_ref().unwrap(), EXECUTION_POLICY_TABLE_V11, 0, &job, (1 << 20) + 8192)
         .ok_or_else(|| refused("window37 attach original preparation absent"))?;
@@ -2761,70 +2443,14 @@ pub(super) fn attach_window37(
     let cap = q.paged.record().maximum_bytes as u64;
     let gs = wire.graph.scope().map_err(refused)?;
     let ss = wire.graph.selection.scope().map_err(refused)?;
-    let paid = q.paged.record();
-    let extra_restore = raw.len() as u64 + 512;
-    let extra_work = extra_restore.checked_mul(extra_restore).and_then(|n| n.checked_mul(64))
-        .ok_or_else(|| refused("window37 court restore work overflow"))?;
-    if gs.filing_bytes + 7 > cap || ss.filing_bytes + 7 > cap
-        || gs.court_work.max(ss.court_work).checked_add(extra_work).is_none_or(|n| n > paid.court_work)
-        || gs.court_scratch_bytes.max(ss.court_scratch_bytes).checked_add(extra_restore)
-            .is_none_or(|n| n > paid.court_scratch)
-    {
-        return Err(refused("window37 full court/restore envelope exceeds the job's original paid maximum"));
+    if gs.filing_bytes + 7 > cap || ss.filing_bytes + 7 > cap {
+        return Err(refused("window37 courts exceed the job's original paid filing bound"));
     }
     let binding = NativeWindowJobBindingV37 { version: 37, job, window_class: window, graph: wire.graph.root(), attached_daa: ctx.daa_score };
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&(37u8, 3u8, job)), Some(key(&binding)))?;
-    builder.note_kernel_bond(signer)?;
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&(37u8, 3u8, job)), Some(key(&binding)));
+    builder.note_kernel_bond(signer);
     Ok(())
 }
-/// Re-derive both maximum and actual length commitments from the original
-/// registered window class. The job header/book already commits the request
-/// and stopped positions; no caller-supplied actual length or quote is used.
-fn check_bound_window_lengths(
-    r:&PalwKernelRouteStateV1,h:&JobHeader,program_history_bound:u32,actual_positions:u32,
-)->Result<(),PalwStateV2Error>{
-    if !r.aux.contains_key(&(EXECUTION_JOB_TABLE_V11,key(&(37u8,3u8,h.job)))){return Ok(());}
-    let book=original_book(r,h)?;
-    check_bound_window_lengths_from_rows(&r.aux,h,&book,Some(program_history_bound),actual_positions)
-        .map_err(refused)
-}
-/// Shared with independent Final/receipt extraction. When a window is present,
-/// the history bound comes from the original canonical class, never a report.
-fn check_bound_window_lengths_from_rows(
-    rows:&std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,h:&JobHeader,book:&NativeTextBookV29,
-    program_history_bound:Option<u32>,actual_positions:u32,
-)->Result<(),String>{
-    use crate::palw_window_class_v37::*;
-    let original_key=key(&(37u8,3u8,h.job));
-    let Some(raw_binding)=rows.get(&(EXECUTION_JOB_TABLE_V11,original_key)) else{return Ok(());};
-    if raw_binding.len()>512{return Err("window37 original binding byte cap".into());}
-    let binding:NativeWindowJobBindingV37=borsh::from_slice(raw_binding)
-        .map_err(|_|"window37 original binding grammar")?;
-    let raw=rows.get(&(EXECUTION_CLASS_TABLE_V11,key(&(37u8,1u8,binding.window_class))))
-        .ok_or("window37 original length contract absent")?;
-    let wire=NativeWindowClassRegisterV37::from_bytes(raw)?;
-    if binding.version!=37||binding.job!=h.job||binding.graph!=wire.graph.root()||wire.text_class!=h.class{
-        return Err("window37 original length/graph/job binding differs".into());
-    }
-    let history=match program_history_bound{
-        Some(n)=>n,
-        None=>{
-            let raw=rows.get(&(EXECUTION_CLASS_TABLE_V11,k(1,&h.class)))
-                .ok_or("window37 original canonical text registration absent")?;
-            let original=decode_register(raw).map_err(|e|format!("{e:?}"))?;
-            let program=TirProgramV1::decode_canonical(&original.program_bytes).map_err(|e|e.to_string())?;
-            if misaka_palw_kernel::public::program_root_v1(&program.encode())!=wire.graph.program_root{
-                return Err("window37 original canonical program root differs".into());
-            }
-            misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph,&program)?;
-            program.history_bound
-        }
-    };
-    wire.check_text_extent(history,book.funding().request.maximum_positions()?)?;
-    wire.check_text_extent(history,actual_positions)?;
-    Ok(())
-}
-
 /// Window court verification for a paid paged filing of a window-bound job. Returns
 /// Ok(()) only on an objective continuity/append (kind 3) or v8 selection (kind 4) fault.
 fn window_court(
@@ -2871,149 +2497,3 @@ fn window_court(
         _ => Err(refused("window37 unknown court")),
     }
 }
-
-// Readonly receipt-window projection. Only audit32-authenticated original rows
-// enter this adapter; no returned observation is a consensus authority.
-impl crate::palw_state_v2::PalwChainStateV2 {
-    pub(crate) fn native_text_receipt_from_rows_v1(
-        rows:&std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,id:Digest,
-    )->Result<crate::palw_native_receipt_windows_v1::NativeReceiptJobV1,String>{
-        use crate::palw_native_audit_proof_v32::NativeLifecycleStageV32;
-        let a=Self::native_text_lifecycle_from_rows_v29(rows,NativeLifecycleStageV32::Seat,id)?;
-        let header=rows.get(&(EXECUTION_JOB_TABLE_V11,k(0,&id))).ok_or("receipt original text header absent")?;
-        if header.len()>8192{return Err("receipt original text header cap".into());}
-        let h:JobHeader=borsh::from_slice(header).map_err(|_|"receipt original text header grammar")?;
-        let raw=rows.get(&(EXECUTION_JOB_TABLE_V11,k(1,&id))).ok_or("receipt original text book absent")?;
-        if raw.len()!=h.book_bytes as usize||raw.len()>TEXT_STOP_BOOK_BYTES_V29{return Err("receipt original text book cap".into());}
-        let b=NativeTextBookV29::restore(raw,h.funding,h.book)?;let f=b.funding();
-        let actual_positions=match b.claim(){Some(c)=>c.actual_positions,None=>f.request.maximum_positions()?};
-        check_bound_window_lengths_from_rows(rows,&h,&b,None,actual_positions)?;
-        if b.terminal()!=h.terminal{return Err("receipt text original terminal mismatch".into());}
-        Ok(crate::palw_native_receipt_windows_v1::NativeReceiptJobV1{
-            namespace:29,complete_model:true,job:id,class:a.class,source:a.source,inventory:f.maximum.inventory,real_parameter:f.maximum.parameter,
-            funding:a.funding,consent:a.consent,maximum_contract:f.maximum.root(),maximum_scope:a.maximum_scope,maximum_resource:a.maximum_resource,
-            queue_plan:f.maximum.queue_plan,queue_policy:f.maximum.queue_policy,source_plan:f.maximum.source_acquisition,
-            physical_plan:f.maximum.physical_lease_plan,carriage_version:29,
-            physical_service:{let raw=rows.get(&(EXECUTION_QUOTA_TABLE_V11,key(&(29u8,id,22u8)))).ok_or("receipt text original physical journal absent")?;
-                if raw.len()>2048{return Err("receipt physical journal cap".into());}
-                let(root,j):(Digest,NativePagedLeaseJournalV29)=borsh::from_slice(raw).map_err(|_|"receipt physical journal grammar")?;
-                if j.root()!=root||j.job!=id||j.funding!=f.root(){return Err("receipt physical journal original differs".into());}j.service},
-            requester_operator:a.requester_operator,producer_operator:a.producer_operator,nonce:f.request.nonce,
-            admitted:f.admitted_daa,commit_deadline:f.commit_deadline,deadline:f.deadline,
-            claim:b.claim().map(|c|c.root()),committed:b.claim().map(|c|c.committed_daa),challenge_end:b.claim().map(|c|c.challenge_end),terminal:a.terminal,
-        })
-    }
-}
-
-/// G14 F03 round 2 (lane g14p/court-owner): the text29 lifetime owner catalogue's reclamation, on the pure admission.
-#[cfg(test)]
-mod g14_f03_owner_reclaim_tests {
-    use super::*;
-
-    fn d(n: u8) -> Digest {
-        [n; 64]
-    }
-
-    /// Four owners that stalled (expired, no progress) and an outsider after their deadline: past the fence the outsider gets the
-    /// first stalled owner's entry; the cap stays 4.
-    #[test]
-    fn g14_f03_r2_four_stalled_owners_yield_a_slot_to_an_outsider_after_the_deadline() {
-        let catalogue = [d(1), d(2), d(3), d(4)];
-        let got = text29_owner_catalogue_admit_v29(&catalogue, d(9), true, |_| true).expect("a stalled owner yields");
-        assert_eq!(got, Some(d(1)), "catalogue order picks the first stalled owner");
-        let mut after: Vec<Digest> = catalogue.to_vec();
-        after.retain(|v| Some(*v) != got);
-        after.push(d(9));
-        assert_eq!(after.len(), 4, "the cap stays 4");
-        // A fifth newcomer reclaims the next stalled owner; a duplicate is still refused.
-        assert_eq!(text29_owner_catalogue_admit_v29(&after, d(10), true, |m| *m != d(9)), Ok(Some(d(2))));
-        assert!(text29_owner_catalogue_admit_v29(&after, d(9), true, |_| true).is_err());
-    }
-
-    /// Owners that made progress are never evicted: with none reclaimable the full catalogue refuses exactly as before; only the
-    /// stalled one among progressing owners yields.
-    #[test]
-    fn g14_f03_r2_progressing_owners_are_never_evicted() {
-        let catalogue = [d(1), d(2), d(3), d(4)];
-        assert!(text29_owner_catalogue_admit_v29(&catalogue, d(9), true, |_| false).is_err());
-        assert_eq!(text29_owner_catalogue_admit_v29(&catalogue, d(9), true, |m| *m == d(3)), Ok(Some(d(3))));
-        // The progress predicate: any part attempt, accepted part, assembly, court move or conversion is progress; an unexpired or
-        // unretired owner is never reclaimable.
-        let mut seal = probe_seal();
-        seal.retired = true;
-        seal.horizon = 100;
-        assert!(text29_owner_made_no_progress_v29(&seal, 101));
-        assert!(!text29_owner_made_no_progress_v29(&seal, 100), "not past its deadline");
-        for touch in 0..5 {
-            let mut s = seal.clone();
-            match touch {
-                0 => s.part_attempts[7] = 1,
-                1 => s.accepted[0] = 1,
-                2 => s.assembly_attempts = 1,
-                3 => s.court_attempts = 1,
-                _ => s.conversion_attempts = 1,
-            }
-            assert!(!text29_owner_made_no_progress_v29(&s, 101), "progress {touch} is never evicted");
-        }
-        seal.retired = false;
-        assert!(!text29_owner_made_no_progress_v29(&seal, 101), "a live owner is never evicted");
-    }
-
-    /// Below the fence the rule is unchanged: a full catalogue refuses and the reclamation predicate is never consulted.
-    #[test]
-    fn g14_f03_r2_below_the_fence_the_catalogue_is_unchanged() {
-        let catalogue = [d(1), d(2), d(3), d(4)];
-        let refused = text29_owner_catalogue_admit_v29(&catalogue, d(9), false, |_| panic!("never consulted below the fence"));
-        assert_eq!(refused, Err("text29 original lifetime owner catalogue exhausted"));
-        assert_eq!(text29_owner_catalogue_admit_v29(&catalogue[..3], d(9), false, |_| panic!("not full")), Ok(None));
-        assert!(text29_owner_catalogue_admit_v29(&catalogue[..3], d(1), false, |_| false).is_err(), "duplicate refused");
-    }
-
-    fn probe_seal() -> NativePagedSealV29 {
-        NativePagedSealV29 {
-            version: 29,
-            namespace: 29,
-            job: d(0x11),
-            claim: d(0x12),
-            original_funding: d(0x13),
-            maximum_contract: d(0x14),
-            original_plan: d(0x15),
-            original_service: d(0x16),
-            original_lease: d(0x17),
-            maximum_scope: d(0x18),
-            real_parameter: d(0x19),
-            inventory: d(0x1A),
-            bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), 0)),
-            actor: d(0x1B),
-            operator: d(0x1C),
-            producer_operator: d(0x1D),
-            proof_root: d(0x1E),
-            seal_root: d(0x1F),
-            original_paid_receipt: d(0x20),
-            count: 1,
-            total_bytes: 68,
-            posted: 10,
-            matures: 20,
-            reveal_until: 30,
-            horizon: 40,
-            admitted_interval: 0,
-            admitted_block: d(0x21),
-            part_attempts: [0; 512],
-            accepted: [0; 64],
-            assembly_attempts: 0,
-            court_attempts: 0,
-            discovery: false,
-            original_ticket: d(0x22),
-            conversion_attempts: 0,
-            retired: false,
-            spent: false,
-            committed: Default::default(),
-            consumed: Default::default(),
-            remaining: Default::default(),
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "palw_native_text_fold_v29_audit_a_tests.rs"]
-mod audit_a_tests;

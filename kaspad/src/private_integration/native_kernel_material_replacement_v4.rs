@@ -79,7 +79,7 @@ fn workspace(grant: &Grant) -> Result<Option<NativeDemandLeaseV1>, String> {
 }
 impl LoopbackNativeProviderV3 {
     fn replacement_request_v4(&self, request: &ProviderTransportRequestV1) -> Result<(Response, Option<NativeDemandLeaseV1>), String> {
-        preflight_native_value_v1::<Request>(&request.body[..], request.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Request>(request.body.as_slice(), request.body.len() as u64).map_err(|e| e.to_string())?;
         let r =
             retain_native_value_decode_v1(&request.body, || borsh::from_slice::<Request>(&request.body)).map_err(|e| e.to_string())?;
         let api = self.consensus_manager.consensus().unguarded_session_blocking();
@@ -235,7 +235,7 @@ impl AuthenticatedSocketExchangeV3 {
         if responders.iter().ne(intent.providers.iter()) {
             return Err("replacement response omits/substitutes native providers".into());
         }
-        preflight_native_value_v1::<Response>(&response.body[..], response.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Response>(response.body.as_slice(), response.body.len() as u64).map_err(|e| e.to_string())?;
         retain_native_value_decode_v1(&response.body, || borsh::from_slice::<Response>(&response.body)).map_err(|e| e.to_string())
     }
     pub(super) fn replace_kernel_v4(&self, context: &Context, bundle: &Bundle, intent: &Intent, grant: &Grant) -> Result<(), String> {

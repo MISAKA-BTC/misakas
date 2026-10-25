@@ -18,10 +18,10 @@ Addresses keep the `misaka` prefix (`misaka…` mainnet, `misakatest…` testnet
 kaspad --testnet --netsuffix=12
 ```
 
-Verify the consensus params fingerprint **`5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6`**, genesis
-`a27f8f44fe4d91a5…` and schedule id `1678e07359f6727e…`. Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the
+Verify the consensus params fingerprint **`ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e`**, genesis
+`a27f8f44fe4d91a5…` and schedule id `9ef2b1a795c74d6f…`. Read the [launch note](docs/t12-launch-2026-09-25.md) before relying on the
 chain — **never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor.
-New consensus rules wait, dormant, for a single full-activation release ([readiness matrix](docs/design/palw/integration/activation-readiness-matrix.md)).
+New consensus rules wait, dormant, for a single full-activation release ([readiness matrix](docs/design/palw/activation-readiness-matrix.md)).
 
 ## Quick start
 

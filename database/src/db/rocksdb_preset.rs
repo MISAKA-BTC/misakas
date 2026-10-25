@@ -86,7 +86,7 @@ impl RocksDbPreset {
         // **A block cache that can hold the largest block this database writes** — when the caller names one
         // (`cache_budget`: `--rocksdb-cache-size`, or the consensus factory's default,
         // [`DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES`]) (the 2026-10-03 panel
-        // starvation, docs/design/palw/verification/t12-panel-backlog-1003.md §4). RocksDB's own default is a 32 MB LRU cache of
+        // starvation, docs/design/palw/t12-panel-backlog-1003.md §4). RocksDB's own default is a 32 MB LRU cache of
         // 64 shards of 512 KB, and a cache never keeps an entry bigger than ONE shard: the PALW chain state's tip row is rewritten
         // at every virtual commit and is ~57 MB, so the data block that carries it (and the small rows that sort
         // beside it) was read from disk, 57 MB at a time, on EVERY point read that fell in it — measured at ten

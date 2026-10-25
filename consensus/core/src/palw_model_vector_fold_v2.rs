@@ -139,8 +139,8 @@ pub(super) fn post(
         post: bytes.to_vec(),
     };
     ids.push(id);
-    builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
-    builder.write_kernel_row(MODEL_VECTOR_BOND_INDEX_TABLE_V2, borsh::to_vec(signer).unwrap(), Some(borsh::to_vec(&ids).unwrap()))?;
+    builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()));
+    builder.write_kernel_row(MODEL_VECTOR_BOND_INDEX_TABLE_V2, borsh::to_vec(signer).unwrap(), Some(borsh::to_vec(&ids).unwrap()));
     Ok(())
 }
 
@@ -215,7 +215,7 @@ pub(super) fn refute_outcome(
     builder.add_kernel_payout(payout, slashed.saturating_mul(PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1) / 1000)?;
     row.header.refuted = true;
     row.header.reserved = 0;
-    builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()));
     Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::Proven)
 }
 
@@ -335,15 +335,15 @@ pub(super) fn demand(
         .checked_add(1)
         .ok_or_else(|| refused("vector pending request count overflows"))?;
     if let Some(prior) = prior_slot {
-        builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(&prior).unwrap(), None)?;
+        builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(&prior).unwrap(), None);
     }
-    builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(&demand).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(&demand).unwrap(), Some(borsh::to_vec(&row).unwrap()));
     builder.write_kernel_row(
         MODEL_VECTOR_DEMAND_SLOT_TABLE_V2,
         borsh::to_vec(&(*signer, slot)).unwrap(),
         Some(borsh::to_vec(&demand).unwrap()),
-    )?;
-    builder.write_kernel_row(MODEL_VECTOR_DEMAND_COUNT_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&count).unwrap()))?;
+    );
+    builder.write_kernel_row(MODEL_VECTOR_DEMAND_COUNT_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&count).unwrap()));
     Ok(())
 }
 
@@ -357,12 +357,12 @@ fn close_demand(builder: &mut TransitionBuilder<'_>, id: &Hash64, mut d: ModelVe
         .checked_sub(1)
         .ok_or_else(|| refused("vector request count does not cover close"))?;
     d.settled = true;
-    builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(id).unwrap(), Some(borsh::to_vec(&d).unwrap()))?;
+    builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(id).unwrap(), Some(borsh::to_vec(&d).unwrap()));
     builder.write_kernel_row(
         MODEL_VECTOR_DEMAND_COUNT_TABLE_V2,
         borsh::to_vec(&d.vector).unwrap(),
         Some(borsh::to_vec(&count).unwrap()),
-    )?;
+    );
     Ok(())
 }
 
@@ -402,7 +402,7 @@ pub(super) fn answer(
         answered_daa: ctx.daa_score,
         answer_root: misaka_palw_kernel::hash::object_id(b"misaka-palw/model-vector/answer/v2", &bytes),
     };
-    builder.write_kernel_row(MODEL_VECTOR_SERVED_TABLE_V2, d.unit.key(&d.vector), Some(borsh::to_vec(&served).unwrap()))?;
+    builder.write_kernel_row(MODEL_VECTOR_SERVED_TABLE_V2, d.unit.key(&d.vector), Some(borsh::to_vec(&served).unwrap()));
     let paid = builder.slash_bond(d.requester, d.bond as u128)?;
     builder.add_kernel_payout(d.poster_payout, paid)?;
     close_demand(builder, &id, d)
@@ -443,6 +443,6 @@ pub(super) fn settle_demand(
     let mut row = builder.state.kernel_route.as_ref().unwrap().model_vector_v2(&d.vector).unwrap();
     row.header.unavailable = true;
     row.header.reserved = 0;
-    builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&d.vector).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&d.vector).unwrap(), Some(borsh::to_vec(&row).unwrap()));
     close_demand(builder, &id, d)
 }

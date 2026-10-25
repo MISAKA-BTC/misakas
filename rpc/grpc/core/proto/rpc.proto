@@ -1826,10 +1826,6 @@ message RpcPalwClaimRow {
   string committedSompi = 37;
   // Version 5 (ADR-0176 amendment, user ruling 2026-10-15): the reservation's decomposition, JSON; empty below palw_bond_formula_v2.
   string reservationSplit = 38;
-  // RFC-0018 Gate C: the claim's certification state; empty below the fence.
-  string securityCertification = 39;
-  // RFC-0023 stage 2: the claim's own settlement state from its dependency closure; empty below the fence.
-  string claimLocalSettlement = 40;
 }
 
 // Testnet-12 lifecycle audit T12-058: one live Valid lock on a bond.
@@ -2033,10 +2029,6 @@ message GetPalwSettlementResponseMessage {
   optional string nativeSettlementJson = 11;
   // RFC-0012 D1: the `safe` readiness explanation (`NativeSafeReadinessV1`) as JSON; absent before the retirement fence.
   optional string nativeReadinessJson = 12;
-  // RFC-0018 Gate C: `Final` attempts at or after `daaScore` that are not SecurityCertified (no consensus or settlement credit).
-  uint64 uncertifiedFinalAnchors = 13;
-  // RFC-0018 Gate C: present where Gate C is in force — certification is premise-based, not an unconditional proof.
-  optional string securityCertificationPremise = 14;
   RPCError error = 1000;
 }
 
@@ -2248,10 +2240,6 @@ message RpcPalwModelLifecycle {
   bool eligibilityFinalWeight = 43;
   uint32 eligibilityExamsPassed = 44;
   uint32 eligibilityLineageAttempts = 45;
-  // ADR-0179 (dormant `palw_model_tier_v1`): the model's tier ("not-governed" below the fence; "approved" = genesis or an annual
-  // fork listing, 1.0; "registered" = fixed 0.3 from registration) and its allocation coefficient in permille. Local field numbers.
-  string modelTier = 46;
-  uint32 modelTierPermille = 47;
 }
 
 message RpcPalwSeatReadiness {
@@ -2286,34 +2274,6 @@ message RpcPalwClassSeating {
   uint32 neededIndependent = 5;
   uint32 baseOperators = 6;
   uint32 licensableSharePermille = 7;
-}
-
-// RFC-0019: one annual catalog edition this node's binary carries (state SCHEDULED or ACTIVE; the release lifecycle
-// PROPOSED … LOCKED_IN lives in the signed release manifest, never in a node read).
-message RpcPalwAnnualCatalogEdition {
-  uint32 edition = 1;
-  uint64 activationDaa = 2;
-  string previousRoot = 3;
-  string root = 4;
-  uint32 models = 5;
-  string state = 6;
-}
-
-// RFC-0019: the annual model catalog at this node's tip. `readiness` is always "off-chain": readiness is
-// measured by operators' tooling, never voted and never a consensus input.
-message RpcPalwAnnualCatalogStatus {
-  bool scheduled = 1;
-  uint64 fenceDaa = 2;
-  bool active = 3;
-  uint32 currentEdition = 4;
-  string currentRoot = 5;
-  bool hasNext = 6;
-  uint32 nextEdition = 7;
-  uint64 nextActivationDaa = 8;
-  string nextRoot = 9;
-  repeated RpcPalwAnnualCatalogEdition editions = 10;
-  uint32 kernelVersionMax = 11;
-  string readiness = 12;
 }
 
 message GetPalwModelRegistryResponseMessage {
@@ -2361,8 +2321,6 @@ message GetPalwModelRegistryResponseMessage {
   repeated RpcPalwClassBlocking blocking = 39;
   // RFC-0002 Part II §II.7.5 Proposal A: the seating of every class the fence reads.
   repeated RpcPalwClassSeating seating = 40;
-  // RFC-0019: the annual model catalog (editions carried, root in force, next activation).
-  RpcPalwAnnualCatalogStatus annualCatalog = 41;
   RPCError error = 1000;
 }
 
@@ -3414,9 +3372,6 @@ message GetPalwStateProofResponseMessage {
 // RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203).
 message GetPalwForkChoiceOpeningRequestMessage {
   repeated string blockHashes = 1;
-  // RFC09 (v2): open each entry's v3 rule-E window above this blue score; the bonds (hex borsh) whose registry openings it carries.
-  optional uint64 ruleEWindowAboveBlue = 2;
-  repeated string registryBonds = 3;
 }
 
 message RpcPalwForkChoiceEntry {
@@ -3428,10 +3383,6 @@ message RpcPalwForkChoiceEntry {
   string innerRoot = 6;
   string committedRoot = 7;
   bool committedForm = 8;
-  // RFC09 (v2): the committed leaf in its own form, the v3 rule-E window, the v3 registry openings.
-  bytes committedLeaf = 9;
-  bytes ruleEWindow = 10;
-  repeated bytes registryOpenings = 11;
 }
 
 message GetPalwForkChoiceOpeningResponseMessage {
@@ -3444,112 +3395,6 @@ message GetPalwForkChoiceOpeningResponseMessage {
   bool dnsStageActive = 7;
   string dnsConfirmedAnchor = 8;
   uint64 dnsConfirmedAnchorDaa = 9;
-  RPCError error = 1000;
-}
-
-// RFC-0016 (op 255): the per-model report as JSON; targets apart from outcomes, node-local observations labelled.
-message GetPalwRfc0016ReportRequestMessage {
-  string classHex = 1;
-}
-
-message GetPalwRfc0016ReportResponseMessage {
-  bool available = 1;
-  bool armed = 2;
-  uint64 nowDaa = 3;
-  string reportJson = 4;
-  RPCError error = 1000;
-}
-
-// Tooling lane (ops 225-228): consolidated read-only PALW user views as versioned JSON (`viewJson`).
-message GetPalwClaimDetailRequestMessage {
-  string claimHex = 1;
-}
-
-message GetPalwCourtStateRequestMessage {
-  string claimHex = 1;
-  string sessionHex = 2;
-}
-
-message GetPalwFenceScheduleRequestMessage {
-}
-
-message GetPalwBondDetailRequestMessage {
-  string bond = 1;
-}
-
-message GetPalwClaimDetailResponseMessage {
-  bool available = 1;
-  bool found = 2;
-  uint64 nowDaa = 3;
-  string viewJson = 4;
-  RPCError error = 1000;
-}
-
-message GetPalwCourtStateResponseMessage {
-  bool available = 1;
-  bool found = 2;
-  uint64 nowDaa = 3;
-  string viewJson = 4;
-  RPCError error = 1000;
-}
-
-message GetPalwFenceScheduleResponseMessage {
-  bool available = 1;
-  bool found = 2;
-  uint64 nowDaa = 3;
-  string viewJson = 4;
-  RPCError error = 1000;
-}
-
-message GetPalwBondDetailResponseMessage {
-  bool available = 1;
-  bool found = 2;
-  uint64 nowDaa = 3;
-  string viewJson = 4;
-  RPCError error = 1000;
-}
-
-// RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding; rowHex is the borsh hex of the stored row.
-message GetPalwRouterBindingV2RequestMessage {
-  string classHex = 1;
-}
-
-message GetPalwRouterBindingV2ResponseMessage {
-  bool available = 1;
-  bool armed = 2;
-  uint64 nowDaa = 3;
-  bool found = 4;
-  uint64 boundFromDaa = 5;
-  string rowHex = 6;
-  RPCError error = 1000;
-}
-
-// RFC-0012 acceptance (op 247): one paid claim at the tip — enrollment, one round's seats/quorum/receipts and Final.
-// Read-only, never an approval. Bond keys are txid:index; ids are lowercase hex of their 64 bytes.
-message GetPalwPaidClaimRequestMessage {
-  string baseClaim = 1;
-  uint32 round = 2;
-}
-
-message GetPalwPaidClaimResponseMessage {
-  bool available = 1;
-  bool found = 2;
-  string sink = 3;
-  uint64 tipDaa = 4;
-  string baseClaim = 5;
-  string enrollment = 6;
-  string classId = 7;
-  string jobId = 8;
-  string producerBond = 9;
-  string materialConsent = 10;
-  string state = 11;
-  uint32 round = 12;
-  bool roundFound = 13;
-  repeated string seats = 14;
-  uint32 quorum = 15;
-  repeated string receipts = 16;
-  bool finalReached = 17;
-  uint64 finalDaa = 18;
   RPCError error = 1000;
 }
 
@@ -3668,35 +3513,4 @@ message GetPalwStateCarriageResponseMessage {
  uint64 offset=8;
  bytes bytes=9;
  RPCError error=1000;
-}
-
-// RFC-0012 acceptance (op 246): the DNS security reserve balance per block and virtual UTXO reads by outpoint (txid:index).
-message GetPalwAcceptanceReadsRequestMessage {
-  repeated string reserveBlocks = 1;
-  repeated string outpoints = 2;
-}
-
-message RpcPalwReserveBalance {
-  string blockHash = 1;
-  bool known = 2;
-  uint64 balanceSompi = 3;
-}
-
-message RpcPalwOutpointEntry {
-  string outpoint = 1;
-  bool present = 2;
-  uint64 amount = 3;
-  uint32 scriptVersion = 4;
-  string scriptHex = 5;
-  uint64 blockDaaScore = 6;
-  bool isCoinbase = 7;
-}
-
-message GetPalwAcceptanceReadsResponseMessage {
-  bool available = 1;
-  string sink = 2;
-  uint64 virtualDaa = 3;
-  repeated RpcPalwReserveBalance reserveBalances = 4;
-  repeated RpcPalwOutpointEntry outpoints = 5;
-  RPCError error = 1000;
 }

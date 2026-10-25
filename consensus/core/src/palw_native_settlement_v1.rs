@@ -131,30 +131,11 @@ pub struct NativeDeltaEvidenceV1 {
     /// Claims that entered `Voided` in this block. Evidence recorded for them anywhere on the chain is retracted
     /// (a conviction after `Final` reverses it, `reverse_convicted_final`).
     pub voided: Vec<Hash64>,
-    /// **RFC-0018 §7 (Gate C, adopted 2026-10-15)**: claims whose certification row (kernel-route aux 136) turned
-    /// `SecurityCertified` in this block. Past the fence THIS — not the `Final` transition — is what native settlement takes as
-    /// mature useful work, so no DNS-free settlement finality ever rests on an uncertified claim. Empty below the fence.
-    pub certified_claims: Vec<Hash64>,
 }
 
-/// The evidence of a block that finalized, spent, voided or certified nothing: what a cached chain row without evidence reads (the row
-/// keeps no allocation for it).
-pub static NATIVE_DELTA_EVIDENCE_EMPTY_V1: NativeDeltaEvidenceV1 = NativeDeltaEvidenceV1 {
-    exec_liability_until: std::collections::BTreeMap::new(),
-    finalized_attempts: Vec::new(),
-    fp_spends: Vec::new(),
-    voided: Vec::new(),
-    certified_claims: Vec::new(),
-};
-
 impl NativeDeltaEvidenceV1 {
-    /// Nothing at all, the frozen liabilities included (`is_empty` asks only the four claim lists).
-    pub fn is_blank(&self) -> bool {
-        self.is_empty() && self.exec_liability_until.is_empty()
-    }
-
     pub fn is_empty(&self) -> bool {
-        self.finalized_attempts.is_empty() && self.fp_spends.is_empty() && self.voided.is_empty() && self.certified_claims.is_empty()
+        self.finalized_attempts.is_empty() && self.fp_spends.is_empty() && self.voided.is_empty()
     }
 }
 
@@ -170,23 +151,6 @@ pub fn native_delta_evidence_v1(delta: &PalwStateDeltaV2) -> NativeDeltaEvidence
         {
             let until = out.exec_liability_until.entry(id).or_default();
             *until = (*until).max(row.liability_until);
-        }
-        // RFC-0018: a certification row that now certifies, where it did not before.
-        if let PalwDeltaEntryV2::KernelRouteRow { table, old, new: Some(bytes), .. } = entry
-            && *table == crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1
-        {
-            let certifies = |bytes: &[u8]| {
-                borsh::from_slice::<crate::palw_security_certification_v1::PalwClaimCertificationRowV1>(bytes)
-                    .ok()
-                    .filter(|row| row.outcome.is_some_and(|(outcome, _)| outcome.certifies()))
-                    .map(|row| Hash64::from_bytes(row.claim))
-            };
-            if let Some(claim) = certifies(bytes)
-                && old.as_deref().and_then(certifies).is_none()
-            {
-                out.certified_claims.push(claim);
-            }
-            continue;
         }
         let PalwDeltaEntryV2::Claim { key, old, new: Some(new) } = entry else {
             continue;
@@ -295,10 +259,6 @@ pub struct SkippedEvidenceV1 {
     pub unpriced: u64,
     /// The bond is no longer in the sink's state: the operator cannot be named.
     pub bond_not_held: u64,
-    /// **RFC-0018 Gate C**: a `Final` claim past the fence that is not (yet) SecurityCertified — no settlement evidence; its
-    /// certification, if it comes, is the evidence (`certified_claims`).
-    #[serde(default)]
-    pub uncertified: u64,
 }
 
 impl SkippedEvidenceV1 {
@@ -308,7 +268,6 @@ impl SkippedEvidenceV1 {
             .saturating_add(self.open_da)
             .saturating_add(self.unpriced)
             .saturating_add(self.bond_not_held)
-            .saturating_add(self.uncertified)
     }
     pub fn add(&mut self, other: &SkippedEvidenceV1) {
         self.voided = self.voided.saturating_add(other.voided);
@@ -316,7 +275,6 @@ impl SkippedEvidenceV1 {
         self.open_da = self.open_da.saturating_add(other.open_da);
         self.unpriced = self.unpriced.saturating_add(other.unpriced);
         self.bond_not_held = self.bond_not_held.saturating_add(other.bond_not_held);
-        self.uncertified = self.uncertified.saturating_add(other.uncertified);
     }
 }
 
@@ -346,22 +304,7 @@ pub fn native_facts_and_skips_v1(
     let base = rules.params.base_class_id();
     let retirement = rules.params.claim_retirement_daa();
     let mut facts = Vec::new();
-    // RFC-0018 Gate C: a governed attempt's `Final` is no evidence; its certification is (read from the state, which still holds it —
-    // certification decides before retirement). Below the fence every `Final` attempt, as released.
-    let mut candidates: Vec<(Hash64, PalwClaimStateV2)> = Vec::new();
     for (id, claim) in &evidence.finalized_attempts {
-        if crate::palw_rfc0018_v1::palw_gate_c_governs_v1(rules.params, claim) {
-            skipped.uncertified += 1;
-        } else {
-            candidates.push((*id, claim.clone()));
-        }
-    }
-    for id in &evidence.certified_claims {
-        if let Some(claim) = rules.state.claim(id).filter(|c| matches!(c.source, PalwClaimSourceV2::Attempt)) {
-            candidates.push((*id, claim.clone()));
-        }
-    }
-    for (id, claim) in &candidates {
         let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
             continue;
         };
@@ -415,17 +358,6 @@ pub fn native_facts_and_skips_v1(
         let PalwClaimSourceV2::FreePrompt { quanta, .. } = &claim.source else {
             continue;
         };
-        // RFC-0018 Gate C: a governed free-prompt claim's spends are evidence only once the claim is SecurityCertified.
-        if crate::palw_rfc0018_v1::palw_gate_c_governs_v1(rules.params, claim)
-            && !crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
-                id,
-                claim,
-                &crate::palw_rfc0018_v1::PalwGateCViewV1::of(rules.params, rules.state),
-            )
-        {
-            skipped.uncertified += 1;
-            continue;
-        }
         if voided.contains(id) {
             skipped.voided += 1;
             continue;

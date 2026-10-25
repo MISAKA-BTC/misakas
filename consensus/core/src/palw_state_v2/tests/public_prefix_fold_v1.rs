@@ -409,7 +409,7 @@ fn targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound
     for n in 1..=65 {
         let mut contract = builder.state.staged_claim_contract_v1(&claim).unwrap().clone();
         contract.terms.bond_exit_after_daa = deadline;
-        builder.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(h64(10_000 + n)), Some(PalwStagedCourtRowV1::Claim(contract))).unwrap();
+        builder.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(h64(10_000 + n)), Some(PalwStagedCourtRowV1::Claim(contract)));
     }
     palw_staged_court_fold_v1::sweep(&mut builder, &ctx(3, deadline + 1, deadline + 1)).unwrap();
     assert!(builder.state.consumed_offences.is_empty(), "maintenance deliberately has not reached the target");
@@ -530,7 +530,7 @@ fn public_collection_can_finish_after_stream_horizon_but_not_at_collection_expir
 }
 
 #[test]
-fn already_charged_public_claim_keeps_paid_material_without_a_second_collection() {
+fn independently_voided_public_claim_keeps_paid_material_without_a_second_collection() {
     let (state, p, extras, claim, owner) = state();
     let key = PalwStagedCourtKeyV1::Owner(claim, owner);
     let PalwStagedCourtRowV1::PublicPrefix(row) = &state.staged_courts[&key] else { unreachable!() };
@@ -550,22 +550,9 @@ fn already_charged_public_claim_keeps_paid_material_without_a_second_collection(
     let demand_id = Hash64::from_bytes(movement.signing_message().try_into().unwrap());
     let mut builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
     palw_staged_court_fold_v1::movement(&mut builder, &ctx(2, 101, 101), &movement).unwrap();
-    let live = builder.state.claim(&claim).unwrap().clone();
-    let closed_daa = live.accepted_daa.max(102);
-    assert!(closed_daa < deadline);
-    let unpaid = (8..=12).map(bond).chain(std::iter::once(producer())).collect();
-    builder.staged_selected_default_charge_v1(&ctx(3, closed_daa, closed_daa), claim, &live, producer(), &unpaid, owner).unwrap();
-    assert!(builder.state.claim(&claim).unwrap().phase.is_terminal());
-    let producer_offence = crate::palw_da_rcore_v1::palw_da_offence_id_v1(&producer().0, &claim);
-    assert!(builder.state.consumed_offences.contains_key(&producer_offence));
-    for signer in 8..=12 {
-        assert!(
-            builder
-                .state
-                .consumed_offences
-                .contains_key(&crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&bond(signer).0, &claim))
-        );
-    }
+    let mut live = builder.state.claim(&claim).unwrap().clone();
+    live.phase = PalwClaimPhaseV2::Voided { voided_daa: 102, reason: PalwVoidReasonV2::CourtFraud };
+    builder.write_claim(claim, Some(live)).unwrap();
     let before = builder.state.clone();
     palw_staged_court_fold_v1::sweep(&mut builder, &ctx(3, deadline, deadline)).unwrap();
     assert_eq!(builder.state.bonds, before.bonds, "another conviction does not collect this owner's default");
@@ -598,232 +585,6 @@ fn already_charged_public_claim_keeps_paid_material_without_a_second_collection(
     assert_eq!(replayed.staged_due, state.staged_due);
     palw_staged_court_fold_v1::sweep(&mut builder, &ctx(5, material, material)).unwrap();
     assert!(!builder.state.staged_courts.contains_key(&key));
-}
-
-#[test]
-fn producer_only_history_default_does_not_discharge_other_paid_prefix_valid_signers() {
-    use crate::palw_history_custody_v1::{
-        PalwHistoryCustodyContractV1, PalwHistoryCustodyPledgeV1, PalwHistoryRecoveryActionV1 as HistoryAction,
-        PalwHistoryRecoveryEffectV1, PalwHistoryRecoveryV1,
-    };
-    use crate::palw_prefix_public_source_v1::{PalwPrefixPublicAnswerActionV1 as AnswerAction, PalwPrefixPublicAnswerV1};
-    let (mut state, p, extras, claim, owner) = state();
-    state.claims.get_mut(&claim).unwrap().accepted_daa = 100;
-    let other = bond(6);
-    let (other_row, tiles) = crate::palw_prefix_public_owned_v1::tests::fixture_for_owner(other);
-    let other_seed = other_row.seed_id();
-    let other_demand = other_row.next_demand_v1(101).unwrap().unwrap();
-    let reservation = state.legacy_disputes[&claim].live[&owner].clone();
-    state.legacy_disputes.get_mut(&claim).unwrap().live.insert(other, reservation);
-    state
-        .staged_courts
-        .insert(PalwStagedCourtKeyV1::Owner(claim, other), PalwStagedCourtRowV1::PublicPrefix(Box::new(other_row).into()));
-    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([219; 32]);
-    state.bonds.get_mut(&producer()).unwrap().pubkey = keypair.verification_key.as_ref().to_vec();
-    palw_staged_court_fold_v1::rebuild_indices(&mut state);
-    let mut builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
-    let mut movement = PalwConstraintStreamMoveV1 {
-        version: 1,
-        claim,
-        reserver: other,
-        reserved_daa: 100,
-        seed_id: other_seed,
-        phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt,
-        action: Action::PrefixPublicDemand(other_demand.clone()),
-        signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
-    };
-    let demand_id = Hash64::from_bytes(movement.signing_message().try_into().unwrap());
-    palw_staged_court_fold_v1::movement(&mut builder, &ctx(2, 101, 101), &movement).unwrap();
-    // Root a genuine successful original-source history, without leaving that
-    // owner's earlier prefix demand unresolved while the history clock runs.
-    for (n, action) in [
-        AnswerAction::Begin { opening: tiles[0].opening.clone() },
-        AnswerAction::Part { offset: 0, bytes: tiles[0].preimage.values_le.clone() },
-        AnswerAction::Finish,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        movement.action = Action::PrefixPublicAnswer(PalwPrefixPublicAnswerV1 {
-            answerer: producer(),
-            cursor_id: other_demand.cursor_id,
-            demand_id,
-            action,
-        });
-        palw_staged_court_fold_v1::movement(&mut builder, &ctx(3 + n as u64, 102 + n as u64, 102 + n as u64), &movement).unwrap();
-    }
-    let PalwStagedCourtRowV1::PublicPrefix(other_row) = builder.state.staged_owned_row_v1(claim, other).unwrap() else {
-        unreachable!()
-    };
-    let (sequence, head) = other_row.history_cursor_v1();
-    let terms = other_row.terms;
-    let request = crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1 {
-        claim,
-        owner: other,
-        reserved_daa: 100,
-        seed_id: other_seed,
-        head,
-        sequence,
-        material_until_daa: terms.material_until_daa,
-    };
-    let live = builder.state.claim(&claim).unwrap().clone();
-    let ruleset = builder.state.claim_semantics_v1(&claim).unwrap().cu_ruleset_id;
-    let mut pledge = PalwHistoryCustodyPledgeV1 {
-        version: 1,
-        claim,
-        producer: producer(),
-        execution_root: live.execution_root,
-        job_identity: live.job_identity,
-        cu_ruleset_id: ruleset,
-        resource_plan_id: h64(0xced1),
-        maximum_records: sequence,
-        maximum_custodians: 6,
-        accept_until_daa: 101,
-        material_until_daa: terms.material_until_daa,
-        signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
-    };
-    pledge.signature = libcrux_ml_dsa::ml_dsa_87::sign(
-        &keypair.signing_key,
-        pledge.pledge_id_v1().as_byte_slice(),
-        crate::palw_history_custody_v1::PALW_HISTORY_PLEDGE_CONTEXT_V1,
-        [0; 32],
-    )
-    .unwrap()
-    .as_ref()
-    .to_vec();
-    pledge
-        .validate_signature_v1(
-            &keypair.verification_key.as_ref().to_vec(),
-            crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
-        )
-        .unwrap();
-    // Accepted original-pledge fixture: semantic Valid receipts do not implicitly
-    // sign the distinct history grant. All five history grants are absent.
-    let mut custody =
-        crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(live.execution_root, live.job_identity, ruleset, &terms);
-    custody.expected_panel = (8..=12).map(bond).collect();
-    let contract =
-        PalwHistoryCustodyContractV1 { pledge, producer: producer(), maximum_records: sequence, maximum_custodians: 6, custody };
-    contract.check_v1(&(8..=12).map(bond).collect()).unwrap();
-    let custodians = contract.current_signed_custodians_v1();
-    assert_eq!(custodians, [producer()].into_iter().collect());
-    let history_opened = 105;
-    let history_span = extras.staged_public_court.unwrap().acquisition_daa;
-    let history_deadline = history_opened + history_span;
-    let mut recovery = PalwHistoryRecoveryV1::new_v1(
-        request,
-        history_opened,
-        terms.stream_until_daa,
-        terms.collect_until_daa,
-        history_span,
-        6,
-        custodians,
-    )
-    .unwrap();
-    recovery.apply_v1(&HistoryAction::Demand, history_opened).unwrap();
-    let key = PalwStagedCourtKeyV1::Owner(claim, owner);
-    let PalwStagedCourtRowV1::PublicPrefix(row) = &builder.state.staged_courts[&key] else { unreachable!() };
-    let source_demand = row.next_demand_v1(history_deadline - 1).unwrap().unwrap();
-    let seed = row.seed_id();
-    let mut collect = PalwConstraintStreamMoveV1 {
-        version: 1,
-        claim,
-        reserver: owner,
-        reserved_daa: 100,
-        seed_id: seed,
-        phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt,
-        action: Action::PrefixPublicDemand(source_demand.clone()),
-        signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
-    };
-    let source_demand_id = Hash64::from_bytes(collect.signing_message().try_into().unwrap());
-    palw_staged_court_fold_v1::movement(&mut builder, &ctx(6, history_deadline - 1, history_deadline - 1), &collect).unwrap();
-    let PalwHistoryRecoveryEffectV1::Default(default) = recovery.apply_v1(&HistoryAction::Collect, history_deadline).unwrap() else {
-        unreachable!()
-    };
-    builder.staged_history_default_charge_v1(&ctx(7, history_deadline, history_deadline), &live, &contract, &default, other).unwrap();
-    assert!(builder.state.claim(&claim).unwrap().phase.is_terminal());
-    assert!(builder.state.legacy_dispute_reservation_v1(&claim, &owner).is_none());
-    for signer in 8..=12 {
-        assert!(builder.state.slashable_locks.contains_key(&(bond(signer), claim)));
-        assert!(
-            !builder
-                .state
-                .consumed_offences
-                .contains_key(&crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&bond(signer).0, &claim))
-        );
-    }
-    let after_history = builder.state.clone();
-    let producer_offence = crate::palw_da_rcore_v1::palw_da_offence_id_v1(&producer().0, &claim);
-    assert!(after_history.consumed_offences.contains_key(&producer_offence));
-    // A separate branch can still consume authenticated material and advance
-    // its semantic cursor after the unrelated default, on the original clock.
-    let mut semantic = TransitionBuilder::new(&after_history, &p, false, false, false, true, &extras);
-    for action in [
-        AnswerAction::Begin { opening: tiles[0].opening.clone() },
-        AnswerAction::Part { offset: 0, bytes: tiles[0].preimage.values_le.clone() },
-        AnswerAction::Finish,
-    ] {
-        let mut answer = collect.clone();
-        answer.action = Action::PrefixPublicAnswer(PalwPrefixPublicAnswerV1 {
-            answerer: owner,
-            cursor_id: source_demand.cursor_id,
-            demand_id: source_demand_id,
-            action,
-        });
-        palw_staged_court_fold_v1::movement(&mut semantic, &ctx(8, history_deadline + 1, history_deadline + 1), &answer).unwrap();
-    }
-    let PalwStagedCourtRowV1::PublicPrefix(row) = &semantic.state.staged_courts[&key] else { unreachable!() };
-    assert!(row.pending_progress_v1().is_none());
-    assert_eq!(semantic.state.bonds, after_history.bonds);
-    collect.action = Action::PrefixPublicCollect { cursor_id: source_demand.cursor_id, demand_id: source_demand_id };
-    for targeted in [false, true] {
-        let mut later = TransitionBuilder::new(&after_history, &p, false, false, false, true, &extras);
-        assert!(
-            palw_staged_court_fold_v1::movement(
-                &mut later,
-                &ctx(8, source_demand.deadline_daa - 1, source_demand.deadline_daa - 1),
-                &collect
-            )
-            .is_err()
-        );
-        assert_eq!(later.state.state_root(), after_history.state_root());
-        let point = ctx(9, source_demand.deadline_daa, source_demand.deadline_daa);
-        if targeted {
-            palw_staged_court_fold_v1::movement(&mut later, &point, &collect).unwrap();
-        } else {
-            palw_staged_court_fold_v1::sweep(&mut later, &point).unwrap();
-        }
-        assert_eq!(later.state.bonds[&producer()], after_history.bonds[&producer()], "no second producer leg");
-        assert_eq!(later.state.consumed_offences[&producer_offence], after_history.consumed_offences[&producer_offence]);
-        for signer in 8..=12 {
-            assert!(later.state.bonds[&bond(signer)].collateral < after_history.bonds[&bond(signer)].collateral);
-            assert!(
-                later
-                    .state
-                    .consumed_offences
-                    .contains_key(&crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&bond(signer).0, &claim))
-            );
-        }
-        let after = later.state.state_root();
-        assert!(palw_staged_court_fold_v1::movement(&mut later, &point, &collect).is_err());
-        palw_staged_court_fold_v1::sweep(&mut later, &point).unwrap();
-        assert_eq!(later.state.state_root(), after);
-        let PalwStagedCourtRowV1::PublicPrefix(row) = &later.state.staged_courts[&key] else { unreachable!() };
-        assert!(row.pending_progress_v1().is_some() && row.joint_default_v1(point.daa_score).unwrap().is_none());
-        let encoded = borsh::to_vec(&later.state.staged_courts[&key]).unwrap();
-        assert_eq!(borsh::from_slice::<PalwStagedCourtRowV1>(&encoded).unwrap(), later.state.staged_courts[&key]);
-        let mut replayed = after_history.clone();
-        for entry in &later.entries {
-            apply_delta_entry(&mut replayed, entry, false).unwrap();
-        }
-        assert_eq!(replayed.state_root(), after);
-        for entry in later.entries.iter().rev() {
-            apply_delta_entry(&mut replayed, entry, true).unwrap();
-        }
-        assert_eq!(replayed.state_root(), after_history.state_root());
-        assert_eq!(replayed.staged_due, after_history.staged_due);
-        assert_eq!(replayed.staged_prefix_responders, after_history.staged_prefix_responders);
-    }
 }
 
 #[test]
@@ -885,8 +646,8 @@ fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflo
     extras.history_custody_pledges.insert(seed.claim, pledge.clone());
     let builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
     let mut admitted = live.clone();
-    let contract_row = builder.prepare_staged_claim_with_job_v1(seed.claim, &mut admitted, Some(&commit)).unwrap().unwrap();
-    let contract = match &contract_row {
+    let contract = builder.prepare_staged_claim_with_job_v1(seed.claim, &mut admitted, Some(&commit)).unwrap().unwrap();
+    let contract = match &contract {
         PalwStagedCourtRowV1::Claim(contract) => contract,
         PalwStagedCourtRowV1::ClaimBundle(contract) => &contract.claim,
         _ => unreachable!(),
@@ -916,7 +677,6 @@ fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflo
     assert!(admitted.trace_retention_daa >= contract.terms.material_until_daa);
     assert_eq!(builder.state.state_root(), state.state_root());
     assert!(builder.entries.is_empty());
-    assert_funded_prospective_prefix_bundle_opens_v1(&state, &p, &extras, &seed, &admitted, &contract_row);
     for bad in 0..4 {
         let mut altered = extras.clone();
         match bad {
@@ -952,134 +712,6 @@ fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflo
     assert_eq!(unchanged, live);
 }
 
-fn assert_funded_prospective_prefix_bundle_opens_v1(
-    state: &PalwChainStateV2,
-    p: &PalwStateParamsV2,
-    extras: &PalwTransitionExtrasV1,
-    original_seed: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1,
-    admitted: &PalwClaimStateV2,
-    prepared: &PalwStagedCourtRowV1,
-) {
-    use crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1 as Auxiliary;
-    let claim = original_seed.claim;
-    let owner = original_seed.reserver;
-    let PalwStagedCourtRowV1::ClaimBundle(prepared) = prepared else {
-        panic!("prospective prefix needs its original required-family Bundle")
-    };
-    let plan = prepared.plan.clone();
-    let descriptor = plan.stages[0].terms;
-    assert_eq!(plan.stages[0].family, crate::palw_staged_bundle_v1::PalwStagedFamilyV1::PublicPrefix);
-    for signed in [0, 1, 5] {
-        let mut parent = state.clone();
-        let mut contract = prepared.clone();
-        let held: BTreeSet<_> = (8..=12).map(bond).collect();
-        contract.claim.panel = held.clone();
-        let mut custody = crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(
-            admitted.execution_root,
-            admitted.job_identity,
-            original_seed.binding.job_context.cu_ruleset_id,
-            &contract.claim.terms,
-        );
-        custody.expected_panel = held.clone();
-        for n in 0..signed {
-            assert!(custody.qualify(
-                claim,
-                &crate::palw_panel_v2::PalwSeatReceiptV2 {
-                    claim,
-                    seat_bond: bond(8 + n),
-                    signed_daa: 100,
-                    verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
-                    signature: vec![n as u8; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]
-                },
-                100
-            ));
-        }
-        contract.claim.prefix_custody = Some(custody);
-        contract.history_custody.custody.expected_panel = held;
-        let contract_row = PalwStagedCourtRowV1::ClaimBundle(contract);
-        contract_row.check(&PalwStagedCourtKeyV1::Claim(claim)).unwrap();
-        parent.claims.insert(claim, admitted.clone());
-        parent.staged_courts.insert(PalwStagedCourtKeyV1::Claim(claim), contract_row);
-        palw_staged_court_fold_v1::rebuild_indices(&mut parent);
-        let frame = PalwConstraintStreamMoveV1 {
-            version: 1,
-            claim,
-            reserver: owner,
-            reserved_daa: original_seed.reserved_daa,
-            seed_id: plan.id_v1(claim),
-            phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt,
-            action: Action::BundleOpen { plan: plan.clone() },
-            signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
-        };
-        let mut insolvent = parent.clone();
-        insolvent.bonds.get_mut(&owner).unwrap().collateral = 0;
-        let mut refused = TransitionBuilder::new(&insolvent, p, false, false, false, true, extras);
-        assert!(palw_staged_court_fold_v1::movement(&mut refused, &ctx(2, 101, 101), &frame).is_err());
-        assert_eq!(refused.state.state_root(), insolvent.state_root());
-        assert!(refused.entries.is_empty());
-        let mut altered = frame.clone();
-        let Action::BundleOpen { plan: altered_plan } = &mut altered.action else { unreachable!() };
-        altered_plan.stages[0].terms.plan.rent_sompi -= 1;
-        altered_plan.terms.plan.rent_sompi -= 2;
-        altered_plan.check_v1().unwrap();
-        altered.seed_id = altered_plan.id_v1(claim);
-        let mut refused = TransitionBuilder::new(&parent, p, false, false, false, true, extras);
-        assert!(palw_staged_court_fold_v1::movement(&mut refused, &ctx(2, 101, 101), &altered).is_err());
-        assert_eq!(refused.state.state_root(), parent.state_root());
-        assert!(refused.entries.is_empty());
-        let mut builder = TransitionBuilder::new(&parent, p, false, false, false, true, extras);
-        palw_staged_court_fold_v1::movement(&mut builder, &ctx(2, 101, 101), &frame).unwrap();
-        let mut seed = original_seed.clone();
-        let Some(Auxiliary::PublicPrefix { slots, .. }) = &mut seed.auxiliary else { unreachable!() };
-        *slots = signed as u32 + 2;
-        palw_staged_court_fold_v1::open(&mut builder, &ctx(3, 102, 102), &seed).unwrap();
-        let key = PalwStagedCourtKeyV1::Owner(claim, owner);
-        let PalwStagedCourtRowV1::OwnerBundle(bundle) = &builder.state.staged_courts[&key] else { unreachable!() };
-        bundle.check_v1().unwrap();
-        let PalwStagedCourtRowV1::PublicPrefix(row) = &bundle.opened[0].row.0 else { unreachable!() };
-        assert_eq!(row.terms, descriptor, "the original complete stage allocation is never narrowed to actual custody");
-        assert!(descriptor.plan.covers_v1(row.execution_plan_v1().envelope));
-        assert_ne!(descriptor.plan, row.execution_plan_v1().envelope, "the independent recovery allowance remains reserved");
-        assert_eq!(row.custodian_bonds_v1().len(), signed as usize + 1);
-        assert_eq!(builder.state.staged_courts[&key].owner_accounting_v1().unwrap().2, plan.terms.plan.deposit_sompi);
-        let activate = PalwConstraintStreamMoveV1 {
-            action: Action::ActivateStage { previous_seed: plan.id_v1(claim), next_seed: row.seed_id() },
-            ..frame.clone()
-        };
-        palw_staged_court_fold_v1::movement(&mut builder, &ctx(4, 103, 103), &activate).unwrap();
-        let PalwStagedCourtRowV1::OwnerBundle(bundle) = &builder.state.staged_courts[&key] else { unreachable!() };
-        let Some(PalwStagedCourtRowV1::PublicPrefix(row)) = bundle.active_v1() else { unreachable!() };
-        let demand = row.next_demand_v1(104).unwrap().unwrap();
-        let movement = PalwConstraintStreamMoveV1 {
-            claim,
-            reserver: owner,
-            reserved_daa: seed.reserved_daa,
-            seed_id: row.seed_id(),
-            action: Action::PrefixPublicDemand(demand),
-            ..frame.clone()
-        };
-        palw_staged_court_fold_v1::movement(&mut builder, &ctx(5, 104, 104), &movement).unwrap();
-        let encoded = borsh::to_vec(&builder.state.staged_courts[&key]).unwrap();
-        let restored: PalwStagedCourtRowV1 = borsh::from_slice(&encoded).unwrap();
-        restored.check(&key).unwrap();
-        assert_eq!(restored, builder.state.staged_courts[&key]);
-        let after = builder.state.state_root();
-        let mut replayed = parent.clone();
-        for entry in &builder.entries {
-            apply_delta_entry(&mut replayed, entry, false).unwrap();
-        }
-        assert_eq!(replayed.state_root(), after);
-        assert_eq!(replayed.staged_due, builder.state.staged_due);
-        assert_eq!(replayed.staged_prefix_responders, builder.state.staged_prefix_responders);
-        for entry in builder.entries.iter().rev() {
-            apply_delta_entry(&mut replayed, entry, true).unwrap();
-        }
-        assert_eq!(replayed.state_root(), parent.state_root());
-        assert_eq!(replayed.staged_due, parent.staged_due);
-        assert_eq!(replayed.staged_prefix_responders, parent.staged_prefix_responders);
-    }
-}
-
 #[test]
 fn public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows() {
     use crate::palw_prefix_public_owned_v1::tests::fixture_for_owner;
@@ -1104,7 +736,7 @@ fn public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal
         builder.write_staged_row_v1(
             PalwStagedCourtKeyV1::Owner(claim, owner),
             Some(PalwStagedCourtRowV1::PublicPrefix(Box::new(row).into())),
-        ).unwrap();
+        );
         palw_staged_court_fold_v1::movement(&mut builder, &ctx(2, 101, 101), &movement).unwrap();
     }
     let indexed = builder.state.staged_prefix_responders.clone();
@@ -1230,7 +862,7 @@ fn flat_response_index_pages_literal_phase_deadlines_and_roundtrips_seed_journal
         builder.write_staged_row_v1(
             PalwStagedCourtKeyV1::Owner(claim, owner),
             Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(row).into())),
-        ).unwrap();
+        );
     }
     let indexed = builder.state.staged_flat_responders.clone();
     assert_eq!(indexed.len(), 130);

@@ -289,9 +289,6 @@ struct PalwChainAnchorV1 {
     /// where the anchor block keys the seed itself. The seed's source among them is
     /// [`VirtualStateProcessor::palw_operator_seed_source_v1`]'s.
     operator_attempts: Option<Vec<(u64, BlockHash)>>,
-    /// **RFC-0018 §5 (`palw_panel_anchor_permissionless_v1`)**: past it, every bonded, matured attempt the block is or merges (blue or
-    /// red) — the permissionless anchor's contributions; `None` below it.
-    permissionless: Option<Vec<kaspa_consensus_core::palw_rfc0018_v1::PalwAnchorContributionV1>>,
 }
 
 /// **G14 lane D, TEST ONLY: the artifact attestations a kernel route E2E supplies.** There is no on-chain artifact availability or
@@ -417,8 +414,8 @@ pub struct VirtualStateProcessor {
 
     // Config
     pub(super) genesis: GenesisBlock,
-    pub(super) max_block_parents: kaspa_consensus_core::config::params::ForkedParam<u16>,
-    pub(super) mergeset_size_limit: kaspa_consensus_core::config::params::ForkedParam<u64>,
+    pub(super) max_block_parents: u8,
+    pub(super) mergeset_size_limit: u64,
     /// ADR-0068 Phase 1 (F3a): the heartbeat width bound's fence (same activation as the lane —
     /// `Params::palw_heartbeat_width_fence`). `Some` = templates keep their mergesets within
     /// `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeat members, chunking sibling floods exactly as
@@ -426,9 +423,6 @@ pub struct VirtualStateProcessor {
     pub(super) palw_heartbeat_width_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The deepest reorg the sink search will ever offer — ADR-0065 D2's ancestor horizon.
     pub(super) finality_depth: u64,
-    /// **G14 r5 (lane r5-escrow-settlement):** the network's pruning depth, read only to date the retirement of settled funded-escrow
-    /// rows (`PalwTransitionExtrasV1::funded_escrow_retention_daa`).
-    pub(super) palw_escrow_pruning_depth: u64,
     /// kaspa-pq Phase 3 PoW (ADR-0007): BLAKE2b-512 ∥ SHA3-512 (`algo_id = 3`) activation — sets the
     /// block template's `pow_algo_id` so miners produce the network-correct Layer-1 algorithm.
     pub(super) pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
@@ -610,14 +604,6 @@ pub struct VirtualStateProcessor {
     pub(super) palw_court_commitment_scope_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_staged_public_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_staged_tir_route_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_tir_public_conviction_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// RFC-0002 02-A: the TIR container identity's effective fence; `None` on every shipped preset.
-    pub(super) palw_tir_container_identity_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// Compute-claim audit CX-01/CX-02: `palw_fp_answer_accounting_v1` (dormant; refused when armed until its carriage is built).
-    pub(super) palw_fp_answer_accounting_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// The TIR frame's measured cost model (G14 audit §10); `None` on every shipped preset, so the frame route resolves no rules.
-    pub(super) palw_tir_frame_cost_v1: Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
-    pub(super) palw_tir_bounded_door_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_staged_float_constraint_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -666,12 +652,6 @@ pub struct VirtualStateProcessor {
     /// refusing a heavier, fully validated candidate on the PALW deep-reorg rule
     /// ([`Self::palw_partition_refusal_v1`]). Memory only; node-local; no verdict reads it.
     pub(super) palw_refusal_streak: parking_lot::Mutex<Option<kaspa_consensus_core::api::PalwPartitionRefusalV1>>,
-    /// **Liveness hotfix (L-LC-02 / L-COURT-01): the H-1 gate's guard** — verdict / refused-txid / invalid-object memories and the
-    /// rehearsal budget (`palw_h1_guard`). Memory only; node-local; no verdict of any block reads it.
-    pub(super) palw_h1_guard: parking_lot::Mutex<palw_h1_guard::PalwH1GateGuardV1>,
-    /// Every scheduled fence height (`Params::palw_fences_v1`): within one DAA of one the guard classifies no refusal as invalid at
-    /// every tip (a flag-day race).
-    pub(super) palw_h1_fence_heights_v1: Vec<u64>,
     /// Test-only: the clock the TEMPLATE BUILDER reads in place of the wall clock (milliseconds; 0 = the wall clock). On an EVM-active
     /// network the builder executes the lane against the stamp it chooses, so a harness cannot re-stamp afterwards; with this it can
     /// make the builder choose a simulated stamp, and `build == validate` holds with a simulated clock. Never set outside a test.
@@ -809,8 +789,6 @@ pub struct VirtualStateProcessor {
     /// must get the same answer for the same block.
     pub(super) palw_shard_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_memory_routing_court_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// ADR-0191 step B: `palw_tir_designated_answers_v1`'s mirror (None on every shipped network).
-    pub(super) palw_tir_designated_answers_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_selected_source_bootstrap_v1:
         Option<kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1>,
     /// `Params::palw_shard_licensing` (ADR-0100 Decision 4). Resolved in ONE place,
@@ -834,10 +812,6 @@ pub struct VirtualStateProcessor {
     pub(super) palw_stage_execution_v14: Option<kaspa_consensus_core::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
     pub(super) palw_native_final_v27: Option<kaspa_consensus_core::palw_native_final_v27::PalwNativeFinalFenceV27>,
     pub(super) palw_stage_execution_v28: Option<kaspa_consensus_core::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
-    /// `Params::palw_native_execution_v39` (owning39 source/class/job lanes, stage actions 41–72).
-    pub(super) palw_native_execution_v39: Option<kaspa_consensus_core::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
-    /// `Params::palw_native_mining_v39` (stage actions 73–79 and the `PNR9` receipt-block carriage). Dormant everywhere.
-    pub(super) palw_native_mining_v39: Option<kaspa_consensus_core::palw_native_mining_v39::PalwNativeMiningFenceV39>,
     pub(super) native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22,
     /// Immutable owning ruleset for independent native proof exporters.
     pub(super) native_redemption_params_v33: Arc<Params>,
@@ -924,8 +898,6 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// The liveness fix L-COURT-01's fence, resolved once in [`Self::palw_court_completion_attempt_at`].
-    pub(super) palw_court_completion_attempt: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit DEEP fence (B-1/C-01/B-4/court cluster), resolved once in
     /// [`Self::palw_audit_2026_09_11_deep_at`]; the fold's extras read it there. A later flag day
     /// than the shallow fence above.
@@ -1211,7 +1183,7 @@ pub struct VirtualStateProcessor {
 /// absent, never as "the carrier underpaid".
 pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 
-/// One accepted object with its carrier fee available for rent after mandatory bond burn.
+/// One object a block's acceptance produced, with what its carrier paid (ADR-0075 SA-1/SA-2).
 ///
 /// The pairing exists because `AcceptanceData` cannot express it: it records a transaction id and
 /// an index and nothing about value, so before this the object walk had no way to read the fee
@@ -1219,14 +1191,9 @@ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 /// the map `calculate_utxo_state` filled, and spent in `palw_v2_accepted_objects`.
 pub(super) struct PalwCarriedObjectV1 {
     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
-    /// Internal only: fee available for rent after mandatory bond burn, or the unpriced sentinel.
     pub(super) carrier_fee: u64,
     /// Original transaction-local companion, never borrowed from another carrier.
     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
-    pub(super) tir_public_original: Option<kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
-    /// **G14 item 1 (RFC-0035 A): the same carrier's funded TFO1 pairing** (its own actual transaction). `Some` only for a TFO1
-    /// carrier past `palw_tir_public_conviction_v1`; its object is admitted only through the funded-original coordinator.
-    pub(super) funded_original: Option<kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1>,
     pub(super) original_binding: Option<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
     /// The same carrier's optional producer custody delegation (HFP1 version 2).
     pub(super) custody_delegation: Option<kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
@@ -1279,16 +1246,10 @@ mod dns;
 mod evm;
 mod palw;
 mod palw_accept;
-pub(crate) mod palw_h1_guard;
 mod palw_validate;
 mod template;
 
 impl VirtualStateProcessor {
-    #[cfg(test)]
-    pub(crate) fn set_template_time_for_test(&self, now: u64) {
-        self.template_clock.fetch_max(now, std::sync::atomic::Ordering::Relaxed);
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -1376,8 +1337,8 @@ impl VirtualStateProcessor {
             palw_maturity_warn_last_band: std::sync::atomic::AtomicU64::new(0),
             palw_beacon_fold: params.palw_beacon_fold,
             palw_chunk_cap_charge: params.palw_chunk_cap_charge,
-            max_block_parents: params.max_block_parents_history(),
-            mergeset_size_limit: params.mergeset_size_limit_history(),
+            max_block_parents: params.max_block_parents(),
+            mergeset_size_limit: params.mergeset_size_limit(),
             palw_heartbeat_width_fence: params.palw_heartbeat_width_fence(),
 
             db,
@@ -1491,11 +1452,6 @@ impl VirtualStateProcessor {
             palw_court_commitment_scope_v1: params.palw_court_commitment_scope_v1_fence(),
             palw_staged_public_court_v1: params.palw_staged_public_court_v1_fence(),
             palw_staged_tir_route_v1: params.palw_staged_tir_route_v1_fence(),
-            palw_tir_public_conviction_v1: params.palw_tir_public_conviction_v1_fence(),
-            palw_tir_container_identity_v1: params.palw_tir_container_identity_v1_fence(),
-            palw_fp_answer_accounting_v1: params.palw_fp_answer_accounting_v1_fence(),
-            palw_tir_frame_cost_v1: params.palw_tir_frame_cost_v1,
-            palw_tir_bounded_door_v1: params.palw_tir_bounded_door_v1_fence(),
             palw_staged_float_constraint_v1: params.palw_staged_float_constraint_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
@@ -1511,14 +1467,6 @@ impl VirtualStateProcessor {
             pruning_import_session_lock: Default::default(),
             palw_reader_snapshot: Default::default(),
             palw_refusal_streak: Default::default(),
-            palw_h1_guard: Default::default(),
-            palw_h1_fence_heights_v1: params
-                .palw_fences_v1()
-                .into_iter()
-                .filter_map(|(_, fence)| fence.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()).map(|f| f.daa_score()))
-                // A genesis-armed fence has no other side to race across.
-                .filter(|at| *at > 0)
-                .collect(),
             #[cfg(test)]
             template_clock: Default::default(),
             #[cfg(test)]
@@ -1565,7 +1513,6 @@ impl VirtualStateProcessor {
             palw_da_court: params.palw_da_court,
             palw_shard_court: params.palw_shard_court_fence(),
             palw_memory_routing_court_v2: params.palw_memory_routing_court_v2_fence(),
-            palw_tir_designated_answers_v1: params.palw_tir_designated_answers_v1_fence(),
             palw_selected_source_bootstrap_v1: params.palw_selected_source_bootstrap_v1,
             palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_token_lift: params.palw_token_lift_fence(),
@@ -1576,8 +1523,6 @@ impl VirtualStateProcessor {
             palw_stage_execution_v14: params.palw_stage_execution_v14.clone(),
             palw_native_final_v27: params.palw_native_final_v27.clone(),
             palw_stage_execution_v28: params.palw_stage_execution_v28.clone(),
-            palw_native_execution_v39: params.palw_native_execution_v39.clone(),
-            palw_native_mining_v39: params.palw_native_mining_v39.clone(),
             native_redemption_params_v33: Arc::new(params.clone()),
             native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(
                 params,
@@ -1610,9 +1555,6 @@ impl VirtualStateProcessor {
             palw_fp_constraint_v2: params.palw_fp_constraint_v2_fence(),
             palw_fp_tokenizer_match: params.palw_fp_tokenizer_match_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
-            palw_court_completion_attempt: params
-                .palw_court_completion_attempt_v1
-                .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
@@ -1639,7 +1581,6 @@ impl VirtualStateProcessor {
             palw_exec_v2: params.palw_exec_payload_v2_fence(),
             palw_exec_v2_virtual_anchor: parking_lot::Mutex::new(None),
             finality_depth: params.blockrate.finality_depth,
-            palw_escrow_pruning_depth: params.blockrate.pruning_depth,
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
@@ -2461,9 +2402,6 @@ impl VirtualStateProcessor {
                     // Audit C-08 part three: and what a released bond's spend must destroy.
                     ctx.palw_v2_bond_burns =
                         palw_state.as_ref().map(|s| self.palw_v2_bond_burn_obligations(s, pov_daa_score)).unwrap_or_default();
-                    // G14 lane escrow-rfc08 (RFC-0035 A): and which funded-escrow outpoints are locked, from the same parent state.
-                    ctx.palw_escrow_locks.rows =
-                        palw_state.as_ref().map(|s| self.palw_escrow_locked_rows_v1(s, pov_daa_score)).unwrap_or_default();
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts = palw_state
                         .as_ref()
@@ -2472,11 +2410,6 @@ impl VirtualStateProcessor {
                     if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                         self.palw_record_round_verdicts(verdicts);
                     }
-                    // Funded-original candidate inspection remains disabled here:
-                    // no native shared-service/profile activation contract exists.
-                    // Native integration tests exercise its synchronous entry with
-                    // real validated inputs; ordinary production processing adds
-                    // no unfunded decode/signature/graph work.
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
@@ -2606,7 +2539,7 @@ impl VirtualStateProcessor {
                                     header.daa_score,
                                     // ADR-0075 SA-1/SA-2: what each 0x4b carrier paid, collected
                                     // by the UTXO walk two frames up, where the fee is knowable.
-                                    &ctx.palw_v2_rent_available_fees,
+                                    &ctx.palw_v2_accepted_tx_fees,
                                 )?;
                                 let history_custody_pledges = objects
                                     .iter()
@@ -2663,7 +2596,7 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
-                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals) = self.palw_v2_accepted_objects_and_originals(
+                                let (objects, folded, carrier_refunds) = self.palw_v2_accepted_objects_and_refunds(
                                     state,
                                     state_params,
                                     &point,
@@ -2671,7 +2604,6 @@ impl VirtualStateProcessor {
                                     current,
                                     own_attempt_class,
                                     &ctx.palw_round_fee_incomes,
-                                    &ctx.palw_escrow_settlements,
                                 )?;
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
@@ -2689,7 +2621,7 @@ impl VirtualStateProcessor {
                                 // so the registration still has to arrive in somebody else's
                                 // block. See ADR-0064's correction.
                                 let bootstrap =
-                                    self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &*folded);
+                                    self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &**&folded);
                                 let attempt =
                                     match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
                                         Ok(attempt) => attempt,
@@ -2826,10 +2758,8 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
-                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
+                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
                                         extras.history_custody_pledges = history_custody_pledges;
-                                        extras.tir_public_originals = tir_public_originals;
-                                        extras.tir_funded_originals = tir_funded_originals;
                                         extras.public_original_bindings = public_original_bindings;
                                         extras.producer_custody_delegations = producer_custody_delegations;
                                         if state_params.exec_v2_active_at(point.daa_score)
@@ -2859,9 +2789,6 @@ impl VirtualStateProcessor {
                                             extras.round_permit_uses = verdicts.uses.clone();
                                         }
                                         extras.round_fee_incomes = ctx.palw_round_fee_incomes.clone();
-                                        // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
-                                        // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
-                                        extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
                                         // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
                                         // re-judged by the fold against its own running state) and the covered set itself.
                                         if let Some(resolved) = exec_resolved.as_ref() {
@@ -3732,11 +3659,6 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|(_, state)| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))
             .unwrap_or_default();
-        // G14 lane escrow-rfc08: virtual locks the funded-escrow rows exactly as the chain walk does.
-        ctx.palw_escrow_locks.rows = virtual_palw_state
-            .as_ref()
-            .map(|(_, state)| self.palw_escrow_locked_rows_v1(state, virtual_daa_window.daa_score))
-            .unwrap_or_default();
         // ADR-0125: virtual accepts exactly the round blocks the block built on it will accept.
         ctx.palw_round_verdicts = virtual_palw_state
             .as_ref()
@@ -4033,11 +3955,8 @@ impl VirtualStateProcessor {
                 if rule_e {
                     let mut states = super::palw_rule_e::PalwRuleEStatesV1::default();
                     let (pair, counts) = self.palw_rule_e_pair_v1(&mut states, refused, sink)?;
-                    // RFC-0018 §6: the v2 order past its fence at the sink's DAA (the v1 order exactly below it).
-                    let capital_v2 = self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.palw_rule_e_participation_v2_at(daa));
-                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v2(
-                        &pair.a, &pair.b, counts, capital_v2,
-                    ) != std::cmp::Ordering::Greater)
+                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v1(&pair.a, &pair.b, counts)
+                        != std::cmp::Ordering::Greater)
                         .then_some(refused);
                 }
                 let (incumbent, challenger) = (self.palw_candidate_order_v2(sink)?, self.palw_candidate_order_v2(refused)?);
@@ -4080,8 +3999,6 @@ impl VirtualStateProcessor {
                 object,
                 carrier_fee: PALW_RENT_UNPRICED,
                 history_pledge: None,
-                tir_public_original: None,
-                funded_original: None,
                 original_binding: None,
                 custody_delegation: None,
                 refund: None,
@@ -4095,9 +4012,6 @@ impl VirtualStateProcessor {
     }
 
     fn native_base_withheld_at(&self, carrier: BlockHash, paying_daa: u64, recorded: u64) -> u64 {
-        // ADR-0176 C1 (user decision 2026-10-15): past a V3 bond budget the attempt-lane carrier's whole subsidy-derived worker base
-        // is withheld (the claim's R-capped escrow is the only subsidy it is ever paid). `recorded` unchanged on every shipped network.
-        let recorded = self.palw_r_cap_base_withheld_at(carrier, paying_daa, recorded);
         if !self.dns_retired_at(paying_daa) {
             return recorded;
         }
@@ -5351,9 +5265,8 @@ impl VirtualStateProcessor {
         // we might touch such data prior to validating the bounded merge rule. All in all, this function is short
         // enough so we avoid making further optimizations
         let _prune_guard = self.pruning_lock.blocking_read();
-        let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
-        let max_block_parents = self.max_block_parents.get(parent_daa) as usize;
-        let mergeset_size_limit = self.mergeset_size_limit.get(parent_daa);
+        let max_block_parents = self.max_block_parents as usize;
+        let mergeset_size_limit = self.mergeset_size_limit;
         let max_candidates = self.max_virtual_parent_candidates(max_block_parents);
 
         // Prioritize half the blocks with highest blue work and pick the rest randomly to ensure diversity between nodes
@@ -5589,18 +5502,12 @@ impl VirtualStateProcessor {
             virtual_daa_score,
             args,
             bond_gate.as_ref().map(|gate| &gate.burns),
-            bond_gate.as_ref().map(|gate| &gate.escrow),
         )?;
         // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
         // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
         // rehearsal — and the template asks again (`validate_block_template_transaction`).
-        //
-        // **Liveness hotfix (L-LC-02 / L-COURT-01):** at admission the gate (`palw_mempool_h1_carrier_refusal`'s layers) runs behind the
-        // guard — a refused txid or object is not rehearsed again on the same tip, an every-tip-invalid object not again within its
-        // window, and every rehearsal the memories do not answer takes from a work budget — and a refusal that holds at every tip is
-        // `PalwH1CarrierInvalid`, which the relay flow penalises (`palw_h1_guard`).
-        if let Some(refusal) = self.palw_mempool_h1_admission_refusal_v1(&mutable_tx.tx, virtual_daa_score) {
-            return Err(refusal);
+        if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
         }
         // **G14 GAP 10:** a kernel route carrier the acceptance gate refuses is refused here too (and at the template).
         if let Some(refusal) = self.palw_mempool_kernel_route_refusal(&mutable_tx.tx, virtual_daa_score) {
@@ -6027,10 +5934,9 @@ impl VirtualStateProcessor {
         self.db.write_opt(batch, &options).expect("persisting a pruning import recovery barrier cannot fail");
     }
 
-    /// Test-only OS-kill rendezvous — and (RFC-0012 acceptance, checkbox 3) in the unpublished private-integration build the drill
-    /// runs (`private-integration-config`): exact crash points between the pruning import's WAL barriers. Production builds contain
-    /// no environment switch or pause path. The exact child process owns the rendezvous directory.
-    #[cfg(any(test, feature = "private-integration-config"))]
+    /// Test-only OS-kill rendezvous. Production builds contain no environment
+    /// switch or pause path. The exact child process owns the rendezvous directory.
+    #[cfg(test)]
     fn pruning_import_crash_checkpoint(&self, label: &str) {
         if std::env::var("MISAKA_RFC12_IMPORT_CRASH_STAGE").ok().as_deref() != Some(label) {
             return;
@@ -6206,10 +6112,10 @@ impl VirtualStateProcessor {
         }
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
         self.write_pruning_import_barrier(batch);
-        #[cfg(any(test, feature = "private-integration-config"))]
+        #[cfg(test)]
         self.pruning_import_crash_checkpoint("utxo-before-clear");
         meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
-        #[cfg(any(test, feature = "private-integration-config"))]
+        #[cfg(test)]
         self.pruning_import_crash_checkpoint("utxo-after-clear");
         Ok(())
     }
@@ -6293,19 +6199,19 @@ impl VirtualStateProcessor {
         }
         {
             // Copy the pruning-point UTXO set into virtual's UTXO set.
-            #[cfg(any(test, feature = "private-integration-config"))]
+            #[cfg(test)]
             self.pruning_import_crash_checkpoint("utxo-before-virtual-copy");
             virtual_write.utxo_set.clear().unwrap();
-            #[cfg(any(test, feature = "private-integration-config"))]
+            #[cfg(test)]
             self.pruning_import_crash_checkpoint("utxo-after-virtual-clear");
             for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
                 virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
-                #[cfg(any(test, feature = "private-integration-config"))]
+                #[cfg(test)]
                 self.pruning_import_crash_checkpoint("utxo-mid-virtual-copy");
             }
             // ADR-0109 Decision 1: the set was replaced wholesale; the index follows it wholesale.
             self.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
-            #[cfg(any(test, feature = "private-integration-config"))]
+            #[cfg(test)]
             self.pruning_import_crash_checkpoint("utxo-after-virtual-copy");
         }
 
@@ -6431,10 +6337,10 @@ impl VirtualStateProcessor {
         // Store writers update caches as they stage the batch. A failed durable
         // commit is fatal, like the other consensus writes; returning would expose
         // the cached true marker without its durable completion.
-        #[cfg(any(test, feature = "private-integration-config"))]
+        #[cfg(test)]
         self.pruning_import_crash_checkpoint("import-before-complete");
         self.write_pruning_import_barrier(batch);
-        #[cfg(any(test, feature = "private-integration-config"))]
+        #[cfg(test)]
         self.pruning_import_crash_checkpoint("import-after-complete");
         Ok(())
     }
@@ -7375,7 +7281,6 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
         O::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
         O::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
-        O::TirClassContainerBoundV1 { .. } => "TirClassContainerBoundV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::MonetaryMaterialEnrolledV1 { .. } => "MonetaryMaterialEnrolledV1",
@@ -7420,16 +7325,6 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
         O::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
-        O::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
-        O::TirDesignatedEventV1 { .. } => "TirDesignatedEventV1",
-        O::SeatReadinessRootV1 { .. } => "SeatReadinessRootV1",
-        O::SeatReadinessDemandedV1 { .. } => "SeatReadinessDemandedV1",
-        O::SeatReadinessAnsweredV1 { .. } => "SeatReadinessAnsweredV1",
-        O::MaterialIntakeV1 { .. } => "MaterialIntakeV1",
-        O::TirPositionDissectedV2 { .. } => "TirPositionDissectedV2",
-        O::TirPositionClosedV2 { .. } => "TirPositionClosedV2",
-        O::TirLookaheadDisclosedV2 { .. } => "TirLookaheadDisclosedV2",
-        O::TirLookaheadChosenV2 { .. } => "TirLookaheadChosenV2",
         O::ReaderRouterDeclaredV2 { .. } => "ReaderRouterDeclaredV2",
         O::SourceBootstrapV1 { .. } => "SourceBootstrapV1",
         O::RoutedStepAccusedV2 { .. } => "RoutedStepAccusedV2",
@@ -7483,10 +7378,6 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
         // ADR-0152-adjacent — a sink-bound top-up of a class's Activation Pool (tag 58).
         O::ActivationPoolFunded { .. } => "ActivationPoolFunded",
-        // G14 — the original paid TIR control (tag 170) and its atomic Valid grant / Ready (tag 171).
-        O::TirPublicControlV1 { .. } => "TirPublicControlV1",
-        O::SharedCourtOpV1 { .. } => "SharedCourtOpV1",
-        O::TirPublicGrantReadyV1 { .. } => "TirPublicGrantReadyV1",
     }
 }
 
@@ -7513,9 +7404,6 @@ pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_c
 pub(super) struct PalwMempoolBondGate {
     pub(super) locked: std::collections::HashSet<TransactionOutpoint>,
     pub(super) burns: std::collections::HashMap<TransactionOutpoint, u64>,
-    /// **G14 lane escrow-rfc08 round 2: the funded-escrow locks at the tip** (rooted rows only — a mempool has no mergeset, so no
-    /// provisional lock; a chained spend of a not-yet-accepted TFO1 output is refused at the merge by the provisional lock).
-    pub(super) escrow: super::utxo_validation::PalwEscrowSpendLocksV1,
 }
 
 /// ADR-0109 Decision 3: the first input of `tx` that spends a locked PALW bond, if any.

@@ -135,7 +135,7 @@ fn price(chain: &Chain, b: &BondBundleV1) -> Result<u64, CliError> {
     let probe =
         bond_carrier_body_v1(&probe_b, &probe_obj, placeholder_funding_script_v1()).map_err(|e| err(exit::FUNDS, e.to_string()))?;
     let compute = calc.calc_non_contextual_masses(&probe).compute_mass;
-    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
+    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
     let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute).max(floor);
     let entry = kaspa_consensus_core::tx::UtxoEntry::new(
         b.funding.amount,
@@ -248,7 +248,7 @@ pub(crate) async fn export(ctx: &crate::node::Ctx, args: ExportArgs) -> CliResul
         )
         .map_err(|e| err(exit::FUNDS, e.to_string()))
     };
-    let draft = build(kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI)?;
+    let draft = build(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI)?;
     let fee = price(&chain, &draft)?;
     let bundle = build(fee)?;
     if args.out.exists() {

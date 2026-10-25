@@ -1,5 +1,5 @@
 //! PALW v2 agent monitor — the kaspad end of `--compute-endpoint`
-//! (docs/history/withdrawn-designs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md §10.3, §12.3).
+//! (docs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md §10.3, §12.3).
 //!
 //! Land stage, and deliberately so: this module OBSERVES a `palw-agent` and maintains a
 //! capability state; nothing consensus-visible consumes that state yet. What it already

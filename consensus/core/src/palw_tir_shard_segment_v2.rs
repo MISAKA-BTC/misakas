@@ -1,4 +1,4 @@
-//! **RFC-0006 per-segment pricing (agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §4)** — the dormant fence
+//! **RFC-0006 per-segment pricing (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §4)** — the dormant fence
 //! `Params::palw_tir_shard_segment_v2` (`None` on every preset, **refused when armed** until the full-activation release names its
 //! height) and the pure rules it puts in force.
 //!
@@ -243,7 +243,7 @@ impl Params {
         }
         Err(PalwModeV2Error::Invalid(
             "palw_tir_shard_segment_v2 cannot be armed yet: per-segment pricing changes the lock and the pay of every sharded cell, and \
-             its height is the full-activation release's to name (agent SHARD, docs/design/palw/verification/shard-rfc6-10.md §4)",
+             its height is the full-activation release's to name (agent SHARD, docs/design/palw/shard-rfc6-10.md §4)",
         ))
     }
 }

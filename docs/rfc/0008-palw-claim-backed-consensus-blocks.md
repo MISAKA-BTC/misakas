@@ -1,7 +1,5 @@
 # RFC-0008: PALW EXEC lane — claim-backed work slices and transaction execution
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
-
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -23,7 +21,7 @@ Spec closure 2026-10-15: R8-* requirement groups are closed or parameterized in 
 
 旧RFC8の「sliceを新しいalgo-11のselected-parent / consensus BLUE / DAA候補にする」「sliceでchain clockを進める」「floorのmerge admissionを変更してモデルBLUE shareを上げる」という方針は撤回する。本改定はheartbeatの条件・重み・頻度、BASE-0の資格・fallback・anchor duty、120秒chain cadence、現行mainのclock cursor・REAL tick・GHOSTDAGを変更しない。slice到着数や実行中sessionの存在を、heartbeatやBASE-0を止める根拠にしない。
 
-旧algo-11設計本文は削除し、試験結果・未実施項目だけを[v0試験記録](../evidence/palw/implementation-records/rfc-0008-v0-test-record.md)に残す。[ADR-0169](../adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md)は新設計への参照に置き換える。新しい実装対象は[EXEC統合仕様v1](../design/palw/execution/rfc-0008-implementation-spec.md)である。旧試験結果をEXEC sliceの合格実績として引き継がない。
+旧algo-11設計本文は削除し、試験結果・未実施項目だけを[v0試験記録](../design/palw/rfc-0008-v0-test-record.md)に残す。[ADR-0169](../adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md)は新設計への参照に置き換える。新しい実装対象は[EXEC統合仕様v1](../design/palw/rfc-0008-implementation-spec.md)である。旧試験結果をEXEC sliceの合格実績として引き継がない。
 
 ## 1. mainを基準とする4役
 
@@ -230,7 +228,7 @@ activation前に、少なくとも以下を独立に実証する。
 - ADR-0140/0142/0165のmain上のactive heartbeat・clock・BASE-0構造を維持する。旧RFC8のfuture slice-clock/class-aware floor変更を、この改定の前提にしない。
 - ADR-0173 / RFC14の公開prosecutionと、RFC15のdeferred activationは維持する。
 
-本RFCと[EXEC統合仕様v1](../design/palw/execution/rfc-0008-implementation-spec.md)が2026-10-08以降のRFC8実装対象である。既存の実測・旧分岐実装の記録を、現行mainの実装状態や新設計の合格実績として扱わない。
+本RFCと[EXEC統合仕様v1](../design/palw/rfc-0008-implementation-spec.md)が2026-10-08以降のRFC8実装対象である。既存の実測・旧分岐実装の記録を、現行mainの実装状態や新設計の合格実績として扱わない。
 
 ## Bond予算・総影響保存の改定 — 2026-10-10
 
@@ -249,7 +247,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 
 ## 改定 — 2026-10-12（モデル配分とブロック生成機会の接続：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A.5。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A.5。
 
 ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bondと1.3〜2倍の係数、提案）をブロック生成機会へ接続する場合、coinbase配分だけの変更として済ませず、ブロック機会の帰属・上限・移行を本RFCで明示する。物理blockの総頻度、DAA/難易度、fork choice、Final weightを同時に変更するとは決定しておらず、特にFinal weightへ係数を自動乗算しない。必要な変更は別のversioned review・試験・activationを要する。
 
@@ -257,7 +255,7 @@ ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bond�
 
 ## 仕様閉鎖 — 2026-10-15（設計監査の要件索引 R8-* に対する規範文）
 
-**状態と読み方:** 本節は[設計監査の要件索引](../audit/palw/design-reviews/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引)のR8-*群について、本RFC本文に欠けていた規範規則・未定義パラメータ・後続設計記録との矛盾を閉じる文書改定である。上位は[PRINCIPLES](../PRINCIPLES.md)とADR-0173/0176/0177/0178であり、衝突時はそれらと後続のユーザー判断を優先する。本節は実装完了・検証PASS・activationを意味しない。公開fenceは全て不在のまま、release高さを変更しない。dormant codeに入っている数値はmechanics/fixture値であり、政策承認ではない。mechanicsの成功やprivate acceptanceを独立review・経済証拠として扱わない。詳細は[EXEC統合仕様v1](../design/palw/execution/rfc-0008-implementation-spec.md) §§12–15と各設計記録に置き、本節はその規範的要約である。
+**状態と読み方:** 本節は[設計監査の要件索引](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引)のR8-*群について、本RFC本文に欠けていた規範規則・未定義パラメータ・後続設計記録との矛盾を閉じる文書改定である。上位は[PRINCIPLES](../PRINCIPLES.md)とADR-0173/0176/0177/0178であり、衝突時はそれらと後続のユーザー判断を優先する。本節は実装完了・検証PASS・activationを意味しない。公開fenceは全て不在のまま、release高さを変更しない。dormant codeに入っている数値はmechanics/fixture値であり、政策承認ではない。mechanicsの成功やprivate acceptanceを独立review・経済証拠として扱わない。詳細は[EXEC統合仕様v1](../design/palw/rfc-0008-implementation-spec.md) §§12–15と各設計記録に置き、本節はその規範的要約である。
 
 「USER DECISION REQUIRED」は、値の決定にユーザー判断を要する名前付きパラメータを示す。推奨値は既存記録から根拠を示せる場合だけ記す。
 
@@ -274,7 +272,7 @@ ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bond�
 
 ### R8-WORK — 同単位のwork、prefix/suffix scope
 
-[実装仕様 §12](../design/palw/execution/rfc-0008-implementation-spec.md#12-work-design-correction--execution-cost-is-not-lottery-weight-2026-10-10-audit)を規範とする。
+[実装仕様 §12](../design/palw/rfc-0008-implementation-spec.md#12-work-design-correction--execution-cost-is-not-lottery-weight-2026-10-10-audit)を規範とする。
 
 1. REALの抽選込みweightとexecution costは別の量である。credited workは、登録IR、一つのwhole-job facts、絶対positionから求める10次元execution cost vectorとし、prefixと各suffixを同じ単位・同じplanから導出する（MUST）。自己申告CCU/PWU、slice数、carrier数からcreditを導出しない。
 2. class登録DAAがcost policyのsnapshotを固定する。登録後のcost table変更は既存classへ遡及しない。
@@ -297,7 +295,7 @@ ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bond�
 2. **root Final精算:** root Finalで一つのallocationのexecutor share内から実際のfeeを支払い、同額のnative issuanceを減らし、未使用escrowをposterへ返す（MUST）。actual debit、payout、root marker、refundを同じdeltaに記録する。void/expiry（ready rootの有限expiryを含む）は全holdを無支払で閉じる。既払prefix/sliceの後付けは拒否する。
 3. **受理前予約:** accepted claim、fee、bondの書込みより前に共有Q/R claim budgetを予約する（MUST）。standalone kernel claimはQ/Rだけを予約し、BとFを与えない。round drawは各bondの残存権利から候補を作り、一つでも予約が失敗すればdraw全体を取り消す（原子的）。
 4. **fee-only Round（2026-10-11ユーザー判断）:** fee-only Roundは`B_max`に数えず、資本比例の独立`ExecutionCap`で権利割当時に制限・課金する。失敗・未実行で権利を回復させない（MUST NOT）。`ExecutionCap`の資本比率: **value: USER DECISION REQUIRED**。
-5. **market fee（2026-10-11ユーザー判断）:** v1ではmarket feeを`R_max`に含めない。ただし期待手数料収入（fee利得）は経済安全性・抑止条件の計算に含める。fee額そのものの上限を証明したとはしない。（設計監査「追加受入条件と政策判断」の「market feeとissuanceの合計を`R_max`に含め、約定前にfee最大額を予約する」という記述は、[readiness matrix](../design/palw/integration/activation-readiness-matrix.md)に記録されたこのユーザー判断と矛盾するため、v1については本項で置き換える。）
+5. **market fee（2026-10-11ユーザー判断）:** v1ではmarket feeを`R_max`に含めない。ただし期待手数料収入（fee利得）は経済安全性・抑止条件の計算に含める。fee額そのものの上限を証明したとはしない。（設計監査「追加受入条件と政策判断」の「market feeとissuanceの合計を`R_max`に含め、約定前にfee最大額を予約する」という記述は、[readiness matrix](../design/palw/activation-readiness-matrix.md)に記録されたこのユーザー判断と矛盾するため、v1については本項で置き換える。）
 6. **予算window `W_budget`（ADR-0176 D4）:** 400 DAAはdrill暫定値である（2026-10-11）。条件は対象profileが`L <= W_budget`とslot上限を満たすこと。長いG14 staged経路へそのまま適用しない。RFC12のwork量`W`とは別物である。本番値: **value: USER DECISION REQUIRED**（推奨: 400 DAA、上記条件付き。理由: ユーザーがdrill用に採用した値であり、それより長い経路には別の値が必要）。
 7. **allocation freeze:** retained EXEC rootがleadを名指しした後、riderによるescrow再配分を拒否する（§15.7）。
 8. **状態（2026-10-15、lead記録）: closed-as-provisional。** R8-BUDGETの仕様は次の値を**drill暫定（ユーザー判断10-11）、本番値はcensus/実測待ち**として閉じる: 予算window `W_budget` = 400 DAA（対象profileが`L <= W_budget`とslot上限を満たす場合のみ。長いG14 staged経路には適用しない）。fee-only Roundは`B_max`の外で、資本比例の独立`ExecutionCap`に従う（比率の値は未決）。v1のmarket feeは`R_max`の外。presetは変えず、fenceは武装しない。
@@ -340,7 +338,7 @@ ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bond�
 
 ### R8-ECON — 収支基準
 
-1. [§15.7](../design/palw/execution/rfc-0008-implementation-spec.md#157-worker-price-criterion-and-allocation-freeze)の基準を規範とする: `p_collect_lower * M_net_min >= C_upper`。`p_collect_lower`はnative Finalとrelease時の回収可能性の**同時**事象の証明済み下限であり、独立性の根拠なしに周辺確率を掛けない（二つの周辺下限a, bからは`max(0, a+b-1)`）。資本は各時点で一度だけ数える。
+1. [§15.7](../design/palw/rfc-0008-implementation-spec.md#157-worker-price-criterion-and-allocation-freeze)の基準を規範とする: `p_collect_lower * M_net_min >= C_upper`。`p_collect_lower`はnative Finalとrelease時の回収可能性の**同時**事象の証明済み下限であり、独立性の根拠なしに周辺確率を掛けない（二つの周辺下限a, bからは`max(0, a+b-1)`）。資本は各時点で一度だけ数える。
 2. 費用・回収floor・funded minimumの証拠が欠ける場合の判定はUNKNOWNであり、肯定判定にしない（MUST NOT）。未実装の上限を実装済みとして比較しない。
 3. 名前付きパラメータ `capital_rate`、class別`C_upper`の測定値、`M_net_min`を拘束する最低価格契約: **value: USER DECISION REQUIRED**（既存記録に推奨値なし。最低価格契約は未実装）。
    （2026-10-15補足: 最低価格契約は休眠fence `palw_minimum_price_v1`（kernel inner 69、aux 127）で実装した。workerとposterが同一termsへ署名し、jobのGAP-5 escrowが`M_net_min`を賄い、まだworkerが予約されていない時だけ受理する。`C_upper` = class別測定値 + `capital_rate`×資本時間面積（一度だけ）、`required_M = ⌈C_upper / p_collect_lower⌉`未満の申出、未測定class、`p_collect_lower = 0`（UNKNOWN）、u64を越える見積りを拒否する。契約が支配するjobは契約workerのclaimだけを受理期限内に受理する。名前付きパラメータ`PalwMinimumPricePolicyV1 {capital_rate_ppm, capital_rate_period_daa, p_collect_lower_ppm, class_cost_upper, maximum_contracts, maximum_contract_daa, cost_report_root, economic_review_scope}`: **value: USER DECISION REQUIRED**。精算時の最低額強制（settlement enforcement）は未実装。)
@@ -353,9 +351,4 @@ ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bond�
 
 ### 本文との関係
 
-§4の会計表と§7のgateは本節で補完される。旧記述を削除せず、衝突する場合は本節と[実装仕様](../design/palw/execution/rfc-0008-implementation-spec.md) §§12–15を優先する。設計監査の旧記述「実際に回収可能なmarket feeとissuanceの合計を`R_max`に含める」は、v1では2026-10-11のユーザー判断（market feeは`R_max`外）で置き換えられたものとして扱う。
-
-## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
-
-- R8-WINDOW(依存 path の最短の署名済み horizon を越えて延長しない)は維持する。RFC-0014 2026-10-19 改定の係争延長(最大 `a + 10,000`)とは、**新しい original claim の受付時に、依存契約が `a + 10,000` と必要な後続責任を既に覆っていることを検査し、覆わない claim を受け付けない**ことで両立させる([RFC-0026](0026-court-policy-master-contract.md) §3.3、F07)。延長のたびに依存先の同意を取り直さない。
-- clock machinery が court 停止中も進むこと自体は、応答機会があった証明にならない(RFC-0026 §4.1)。
+§4の会計表と§7のgateは本節で補完される。旧記述を削除せず、衝突する場合は本節と[実装仕様](../design/palw/rfc-0008-implementation-spec.md) §§12–15を優先する。設計監査の旧記述「実際に回収可能なmarket feeとissuanceの合計を`R_max`に含める」は、v1では2026-10-11のユーザー判断（market feeは`R_max`外）で置き換えられたものとして扱う。

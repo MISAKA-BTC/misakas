@@ -8,7 +8,7 @@ use crate::{Hash64, config::params::ForkActivation, palw_state_v2::PalwBondKeyV2
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_challenge::bootstrap_epoch_v1::{BootstrapCandidateV1, BootstrapEpochV1, BootstrapPolicyV1, BootstrapSeatV1};
 
-pub const PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1: u8 = 148;
+pub const PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1: u8 = 137;
 
 /// A runtime observation obtained only through this node's coherent own-state
 /// getter. The retained native state owns all epoch/work/cohort allocations;

@@ -143,7 +143,7 @@ artifact_key() { printf '%s|%s|%s|%s|%s' "$REPO@$REV" "$(shasum -a 256 "$PALW_CL
 # Per-model calibration / layout / reference options (models.json: calib_len, calib_chunks, calib_docs, declare, hfref_streamed).
 CALIB_LEN=$(mf calib_len); CALIB_LEN=${CALIB_LEN:-512}
 CALIB_CHUNKS=$(mf calib_chunks); CALIB_CHUNKS=${CALIB_CHUNKS:-1}
-CALIB_DOCS=$(mf calib_docs); CALIB_DOCS=${CALIB_DOCS:-"docs/operations/node/archival.md docs/history/upstream/crescendo-guide.md CONTRIBUTING.md SECURITY.md"}
+CALIB_DOCS=$(mf calib_docs); CALIB_DOCS=${CALIB_DOCS:-"docs/archival.md docs/crescendo-guide.md CONTRIBUTING.md SECURITY.md"}
 DECLARE_EXTRA=$(mf declare); DECLARE_EXTRA=${DECLARE_EXTRA:-":logits-tile=$CTX"}
 HFREF_STREAMED=$(mf hfref_streamed)
 CALIB_SPEC="len${CALIB_LEN}x${CALIB_CHUNKS}:$CALIB_DOCS"

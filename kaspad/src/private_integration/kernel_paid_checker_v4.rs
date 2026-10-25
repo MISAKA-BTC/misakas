@@ -18,6 +18,7 @@ use kaspa_consensus_core::{
     tx::TransactionOutpoint,
 };
 use misaka_palw_kernel::{
+    claim_compact_v1::native_v4::NativeCompactProofV4,
     claim_paid_v2::{PaidClaimObjectV2, PaidClaimReceiptV2},
     hash::Digest,
     route::KernelRouteObjectV1,
@@ -41,6 +42,7 @@ use std::{
 pub struct PrivateKernelPaidCheckSpecV4 {
     version: u16,
     work_path: PathBuf,
+    compact_record_path: Option<PathBuf>,
     enrollment: String,
     round: u32,
     checker_bond: String,
@@ -58,9 +60,6 @@ pub struct PrivateKernelPaidCheckSpecV4 {
     max_total_fetch_bytes: u64,
     max_workspace_bytes: u64,
     max_requests: u32,
-    /// Explicit permission for a funded answer obligation after a classified
-    /// remote acquisition failure. No value is inferred from a local timeout.
-
     /// Explicit admission upper bound for funded availability obligations.
     /// Each signature uses min(this bound, own DAA + native response window).
     /// No authorization is inferred from a local timeout.
@@ -95,6 +94,9 @@ impl PrivateKernelPaidCheckSpecV4 {
         regular(&spec.work_path)?;
         regular(&spec.checker_key)?;
         regular(&spec.payer_key)?;
+        if let Some(path) = &spec.compact_record_path {
+            regular(path)?;
+        }
         hash(&spec.enrollment)?;
         spec.provider_address.parse::<SocketAddr>().map_err(|e| e.to_string())?;
         spec._owner = owner;
@@ -284,12 +286,14 @@ fn validate_saved_object(
         if *signer != actor
             || *root != Hash64::from_bytes(base)
             || *dependency != Hash64::from_bytes(base)
-            || *consent != Hash64::from_bytes(source.authority().enrollment.material_consent)
-            || material_consent.is_some_and(|expected| *consent != expected)
+            || Some(*consent) != material_consent
             || *p != provider
             || valid_until.is_none_or(|bound| *valid_until_daa > bound)
         {
-            return Err("checker material challenge WAL differs from explicit exact generation/actor/deadline".into());
+            return Err(
+                "checker material challenge WAL differs from current native generation/actor/deadline; retained without rebinding"
+                    .into(),
+            );
         }
         return Ok(());
     }
@@ -318,31 +322,6 @@ fn validate_saved_object(
         _ => return Err("checker WAL is not this actor's exact claim receipt/objective filing".into()),
     }
     Ok(())
-}
-/// RFC07-6: is the saved court action a legacy FileDemand (one unit of a Demand finding)?
-fn saved_is_file_demand(object: &PalwConsensusObjectV2, actor: PalwBondKeyV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. })
-        && saved_kernel_object(object, actor).is_ok_and(|o| matches!(&*o, KernelRouteObjectV1::FileDemand { .. }))
-}
-/// The accepted demands this checker already archived for this enrollment/round (restart: the count is the next index).
-fn archived_demands(outbox: &Path) -> Result<u32, String> {
-    let mut n = 0u32;
-    for entry in fs::read_dir(outbox).map_err(|e| e.to_string())? {
-        let name = entry.map_err(|e| e.to_string())?.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("demand-") && name.ends_with(".borsh") && !name.ends_with("-transaction.borsh") {
-            n = n.checked_add(1).ok_or("archived demand count overflow")?;
-        }
-    }
-    Ok(n)
-}
-/// Move an accepted demand's WAL aside (transaction first, so a crash in between re-archives the same index on restart).
-fn archive_demand_wal(outbox: &Path, object: &Path, transaction: &Path, index: u32) -> Result<(), String> {
-    if transaction.exists() {
-        fs::rename(transaction, outbox.join(format!("demand-{index:05}-transaction.borsh"))).map_err(|e| e.to_string())?;
-    }
-    fs::rename(object, outbox.join(format!("demand-{index:05}.borsh"))).map_err(|e| e.to_string())?;
-    fs::File::open(outbox).and_then(|d| d.sync_all()).map_err(|e| e.to_string())
 }
 fn court_action_accepted(
     route: &PalwKernelRouteStateV1,
@@ -407,7 +386,7 @@ impl PreparedKernelPaidCheckV4 {
         use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
         let enrollment = hash(&self.spec.enrollment)?.as_bytes();
         let (raw, _raw) = read_bounded(&self.spec.work_path, self.spec.max_input_bytes)?;
-        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(&raw[..], raw.len() as u64).map_err(|e| e.to_string())?;
+        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
         if shape.logical_requests_v1() > self.spec.max_workspace_bytes {
             return Err("checker canonical opening exceeds explicit workspace".into());
         }
@@ -417,10 +396,19 @@ impl PreparedKernelPaidCheckV4 {
             return Err("checker refuses unknown canonical work version".into());
         }
         let base = kaspa_consensus_core::palw_prospective_kernel_material_v4::commit_identity_v4(&work.commit).0;
+        let audit = if let Some(path) = &self.spec.compact_record_path {
+            let (raw, _raw) = read_bounded(path, self.spec.max_input_bytes)?;
+            let shape = preflight_native_value_v1::<NativeCompactProofV4>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
+            if shape.logical_requests_v1() > self.spec.max_workspace_bytes {
+                return Err("checker direct-check record exceeds workspace".into());
+            }
+            Some(retain_native_value_decode_v1(&raw, || borsh::from_slice::<NativeCompactProofV4>(&raw)).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
-        let mut demands_filed = archived_demands(&self.outbox)?;
         let mut reader_key = Some(self.reader_key);
         let mut client = None;
         loop {
@@ -499,25 +487,10 @@ impl PreparedKernelPaidCheckV4 {
             if a.enrollment.base_claim != base {
                 return Err("checker opening belongs to another enrolled claim".into());
             }
-            if let Some(signed) = &object {
-                if court_action_accepted(&route, signed, self.checker, base)? && saved_is_file_demand(signed, self.checker) {
-                    archive_demand_wal(&self.outbox, &object_path, &tx_path, demands_filed)?;
-                    demands_filed = demands_filed.checked_add(1).ok_or("checker demand count overflow")?;
-                    kaspa_core::info!(
-                        "private checker demand accepted: {} demand {} (not a conviction)",
-                        self.spec.enrollment,
-                        demands_filed
-                    );
-                    continue;
-                }
-            }
             match receipt_accepted(&route, &a, self.spec.round, palw_kernel_bond_id_v1(&self.checker)) {
                 Ok(true) => {
-                    kaspa_core::info!(
-                        "private selected checker receipt accepted: {} round {} (not aggregate Final)",
-                        self.spec.enrollment,
-                        self.spec.round
-                    );
+                    // Native seat receipt remains subject to reorg. It is not
+                    // aggregate Final or permission to retire the immutable WAL.
                     continue;
                 }
                 Ok(false) => {}
@@ -589,15 +562,27 @@ impl PreparedKernelPaidCheckV4 {
                     max_workspace_bytes: self.spec.max_workspace_bytes,
                     max_units: self.spec.max_requests,
                 };
-                if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
-                    return Err(misaka_palw_kernel::claim_paid_v2::COMPACT_V4_RETIRED_REASON.into());
-                }
-                let checked_result = source.verify_using_provider_v4(&work.material, limits, query);
+                let checked_result = if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
+                    let policy =
+                        self.config.params.palw_claim_compact_v4.as_ref().ok_or("checker compact private policy absent")?.policy;
+                    source.verify_compact_using_provider_v4(
+                        &work.material,
+                        audit.as_ref().ok_or("V4 checker requires exact native direct-check record")?,
+                        &policy,
+                        limits,
+                        query,
+                    )
+                } else {
+                    source.verify_using_provider_v4(&work.material, limits, query)
+                };
                 let signed = match checked_result {
                     Ok(checked) => {
                         let Some(index) =
                             source.next_provider_objective_action_index_v4(&checked, self.checker).map_err(|e| e.to_string())?
                         else {
+                            // All actual missing units have a native own demand
+                            // or public answer. This does not make the check
+                            // Clean; wait for answers and perform the check anew.
                             continue;
                         };
                         let action = objective_action_from_provider_check_v4(

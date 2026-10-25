@@ -5,8 +5,7 @@ use crate::palw_mode_v2::PalwModeV2Error;
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::beacon_source::{BeaconSourceTargetV1, BeaconSourceTermsV1};
 
-/// Unapproved source economics/timing limits. The fence arms only with a pinned measured-value record
-/// ([`crate::palw_rfc0608_measured_v1`], EMPTY: dormant in this binary).
+/// Unapproved source economics/timing limits. The fence is never armable in this binary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwBeaconSourcePolicyV1 {
     pub deposit_sompi: u64,
@@ -98,13 +97,11 @@ impl Params {
     }
 
     pub fn validate_palw_beacon_source_opt_in_v1(&self) -> Result<(), PalwModeV2Error> {
-        // Funded fees, public timing/resource bounds and security approval are measured and reviewed: arming needs a pinned
-        // record for this exact fence (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
-        match (self.palw_beacon_source_opt_in_activation(), self.palw_beacon_source_opt_in_v1) {
-            (Some(_), Some(f)) => {
-                self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::BeaconSourceOptInV1, &f.policy)
-            }
-            _ => Ok(()),
+        match self.palw_beacon_source_opt_in_activation() {
+            Some(_) => Err(PalwModeV2Error::Invalid(
+                "palw_beacon_source_opt_in_v1 cannot be armed: funded fees, public timing/resource bounds and security approval are incomplete",
+            )),
+            None => Ok(()),
         }
     }
 }
@@ -203,15 +200,13 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         use misaka_palw_kernel::lifecycle::ClaimStateV1 as C;
         let target = self.beacon_source_target_v4(context)?;
         let ledger = self.ledger()?;
-        // The one source of a beacon event is the RFC07 adapter: `finals_read_v1` exports an event only for a paid claim whose
-        // canonical paid Final the ASSIGNED quorum approved (selected checkers, validity independent of any Panel); every other
-        // Final — an optimistic timeout, a Panel-licensed Final, an unapproved paid claim — exports none and so cannot be a source.
-        // User decision 2026-10-17: approved paid claims ARE sources (the earlier exclusion of every paid claim left the pool with
-        // no possible member once the adapter landed).
+        // A prospective OPV claim which depends on paid Panel checking cannot
+        // re-enter the Panel-independent source pool through its old base codec.
         let finals: std::collections::BTreeMap<_, _> = self
             .finals_read_v1()?
             .into_iter()
             .filter_map(|f| {
+                if ledger.paid_claim_consumers_v2.contains_key(&f.receipt.claim) { return None; }
                 let bytes = f.event?;
                 let w: misaka_palw_challenge::AttributedWorkV1 = borsh::from_slice(&bytes).ok()?;
                 Some((f.receipt.claim, w.event))

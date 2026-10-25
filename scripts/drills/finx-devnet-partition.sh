@@ -3,7 +3,7 @@
 #
 # Designed for H1's harness (tests/hf-onboarding on branch onboard/h1-hf-closed-loop: lib.sh's node layout, the ISOLATED mark,
 # start_node/stop_node, rpc/tip). It starts no devnet itself: run it against one `devnet.sh up` already brought up, and only when
-# the Lead schedules it. Record: docs/design/palw/consensus/finality-palw-consistency.md §6.
+# the Lead schedules it. Record: docs/design/palw/finality-palw-consistency.md §6.
 #
 #   finx-devnet-partition.sh split <ticks> [group]   isolate <group> (default "B D6") for <ticks> DAA on A, rejoin, watch the sinks
 #                                                     for WATCH_S seconds (default 1800); writes $OUT/split-<ticks>.json

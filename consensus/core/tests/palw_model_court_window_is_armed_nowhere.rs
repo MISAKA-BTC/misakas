@@ -73,7 +73,7 @@ fn shipped_testnet_12() -> Vec<(&'static str, Params)> {
 
 #[test]
 fn no_shipped_ruleset_arms_the_model_court_window() {
-    for (name, p) in rulesets().into_iter().chain(shipped_testnet_12()) {
+    for (name, p) in rulesets() {
         assert!(p.palw_model_court_window.is_none(), "{name}: the window is dormant");
         assert!(!p.palw_model_court_window_active_at(u64::MAX), "{name}: and answers no at every height");
         assert!(
@@ -82,13 +82,19 @@ fn no_shipped_ruleset_arms_the_model_court_window() {
         );
         assert!(p.validate_palw_model_court_window().is_ok(), "{name}: nothing to refuse");
     }
+    let at = PALW_T12_INT13_DAA.expect("the int-13 flag day");
+    for (name, p) in shipped_testnet_12() {
+        assert_eq!(p.palw_model_court_window, Some(ForkActivation::new(at)), "{name}: armed at the flag day");
+        assert!(!p.palw_model_court_window_active_at(at - 1) && p.palw_model_court_window_active_at(at), "{name}");
+        assert!(p.validate_palw_model_court_window().is_ok(), "{name}");
+    }
 }
 
 /// **The int-13 list, armed explicitly at a test height on testnet-12, arms the window in force from it and not below, and validates.**
 /// (Testnet-12 as shipped does not: the list has no height — [`PALW_T12_INT13_DAA`] is `None`.)
 #[test]
 fn armed_through_the_int13_list_at_a_test_height_the_window_is_in_force_from_it_and_not_below() {
-    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
+    assert_eq!(PALW_T12_INT13_DAA, Some(15_500), "the shipped list is 15,500; this test re-arms at its own height");
     let at = 9_000;
     for (name, mut p) in shipped_testnet_12() {
         palw_t12_arm_int13_flag_day_at_v1(&mut p, Some(at));

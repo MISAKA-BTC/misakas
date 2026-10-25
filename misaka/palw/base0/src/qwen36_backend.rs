@@ -20,8 +20,6 @@
 //! rides as ordinary step openings, which is also the required set the court derives for a
 //! class with zero checkpoints.
 
-mod held_attention_v1;
-
 use crate::qwen36::{Qwen36ArtifactV1, Qwen36Cache, Qwen36Engine, Qwen36ShapeV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES as LEG_MAX_LEAVES;
@@ -164,8 +162,8 @@ pub struct Qwen36Backend {
     /// output root. Set by the node from its params (`set_attempt_rules_v1`); `Legacy` by default.
     attempt_rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1,
     /// **ADR-0152 §4-ter N4's selector**, as the dense tier's
-    /// (`Qwen25A16Backend::with_held_answerability_v1`): past `palw_offence_attribution` held
-    /// hybrid answerability remains conservative until every prosecution path is qualified.
+    /// (`Qwen25A16Backend::with_held_answerability_v1`): past `palw_offence_attribution` no held class
+    /// this family serves answers a dissection — it has no windowed builder (the review's F4).
     held_answerability: bool,
     /// Supplied only by SDK resolution of an actual verified holding.
     resolved_artifact_identity_v2: Option<(Hash64, Hash64)>,
@@ -553,22 +551,20 @@ fn qwen36_push_checkpoint_v1(
     let needs_recurrence = match &geometry {
         crate::legs::Base0CaptureGeometryV1::Hybrid(g) => g.gdn_chunk_count() > 0,
         crate::legs::Base0CaptureGeometryV1::Flat(_) => false,
-        // RFC-0006 consumer v2: a solo / composed map's per-call leaf always carries the recurrence.
-        crate::legs::Base0CaptureGeometryV1::Composed { gdn, .. } => !gdn.is_empty(),
     };
     let gdn_chunks = if needs_recurrence {
         let (layers, states) = crate::fp_recompute::qwen36_recurrence_state_v1(shape, cache);
-        // P0a / RFC-0006 consumer v2: the map decides the enumeration — v1's full window, v2's head window, v3's key-head gather.
-        crate::fp_capture::base0_gdn_state_chunks_for_map_v2(
+        // P0a: v3's window (cut at the key heads) for a class whose map spells them, v2's otherwise.
+        let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_for_class_v1(
             profile,
             &layers,
-            &states,
             shape.linear_k_heads as u32,
             shape.linear_v_heads as u32,
             shape.linear_head_dim as u32,
             shape.conv_kernel as u32,
         )
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+        crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, &states).map_err(|e| e.to_string())?
     } else {
         Vec::new()
     };
@@ -1074,16 +1070,6 @@ impl Qwen36Backend {
         &self,
         material: &crate::produce::Base0FpMaterialV2,
     ) -> Result<crate::produce::Base0ExecutionV1, String> {
-        self.dense_capture_from_fold_for_checkpoint_dispute_v2(material, false)
-    }
-
-    // Only the GDN accuser may read a checkpoint-mismatching capture. Its step tiles must
-    // still reproduce the committed step tree; ordinary verification keeps full equality.
-    fn dense_capture_from_fold_for_checkpoint_dispute_v2(
-        &self,
-        material: &crate::produce::Base0FpMaterialV2,
-        checkpoint_dispute: bool,
-    ) -> Result<crate::produce::Base0ExecutionV1, String> {
         let (Some(plan), Some(_)) = (&self.plan, &self.profile) else {
             return Err("this backend serves no registered graph, so it cannot re-execute a folded capture".to_string());
         };
@@ -1120,12 +1106,7 @@ impl Qwen36Backend {
                 id
             },
         )?;
-        let mut expected = run.binding.clone();
-        if checkpoint_dispute {
-            expected.checkpoint_merkle_root = material.binding.checkpoint_merkle_root;
-            expected.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&expected);
-        }
-        if expected != material.binding {
+        if run.binding.committed_execution_root != material.binding.committed_execution_root {
             return Err("the retained fold and its re-execution are not one execution".to_string());
         }
         Ok(run)
@@ -1248,188 +1229,6 @@ impl Qwen36Backend {
         )
         .map_err(|e| format!("{e:?}"))
     }
-
-    /// **RFC-0006 consumer v2, the hybrid tier's accuser: the anchored GDN step evidence for leaf `index`** of a served capture
-    /// (`carried`: a free-prompt lane's ids, as [`Self::refutation_with_prompt`] takes them). The predecessor checkpoint is this
-    /// node's OWN recompute of the job's prefix (`crate::gdn_evidence_v2`), authenticated against the producer's committed leaf;
-    /// `ForgedCheckpoint` names the checkpoint to accuse with the transition terminal instead. Built for every map this tier
-    /// captures — the genesis held hybrids (v4 / key-head v5), the v3 composition, consumer v2's composed maps and the solo maps.
-    pub fn gdn_step_evidence_v2(
-        &self,
-        material: &[u8],
-        carried: Option<&[u32]>,
-        index: u64,
-    ) -> Result<crate::gdn_evidence_v2::Base0GdnEvidenceV2, String> {
-        let plan =
-            self.plan.as_ref().ok_or_else(|| "this backend serves no registered plan, so it recomputes no state".to_string())?;
-        let prepared = self.prepare_whole_capture_v1(material, carried, Some(index))?;
-        let retention =
-            crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
-        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(
-            &prepared.binding.shape_profile,
-            &prepared.binding.job_context,
-            index,
-        )
-        .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
-        let leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2] = match &retention {
-            crate::produce::Base0RetentionV1::Folded(m) => m.checkpoint_leaves.as_slice(),
-            crate::produce::Base0RetentionV1::Dense(_) => &[],
-        };
-        let evidence = crate::gdn_evidence_v2::Base0GdnMaterialV2 {
-            binding: &prepared.binding,
-            tiles: &prepared.step_tiles,
-            checkpoint_leaves: leaves,
-            served_chunks: retention.checkpoint_chunks(),
-            prompt_token_ids: &prepared.prompt_token_ids,
-            output_token_ids: retention.generated_token_ids(),
-            prompt_ids_form: self.prompt_ids_form,
-            max_leaves: self.network_ladder,
-        };
-        crate::gdn_evidence_v2::base0_gdn_step_evidence_v2(&evidence, coord, || {
-            crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan)
-        })
-    }
-
-    /// **The checkpoint-transition evidence against checkpoint `index`** of a served capture (the recurrence at `node_slot`,
-    /// `head`'s slice) — the producer's served bytes, which only a per-decode-call class serves (`crate::gdn_evidence_v2`).
-    pub fn gdn_transition_evidence_v2(
-        &self,
-        material: &[u8],
-        carried: Option<&[u32]>,
-        node_slot: u32,
-        head: u32,
-        index: u32,
-    ) -> Result<kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnTransitionRefutationV2, String> {
-        self.with_gdn_material_v2(material, carried, |evidence, plan| {
-            crate::gdn_evidence_v2::base0_gdn_transition_evidence_v2(evidence, node_slot, head, index, || {
-                crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan)
-            })
-        })
-    }
-
-    /// **The held DA units to demand for a forged checkpoint `index`** of a served capture — the per-position (held) route of the
-    /// genesis hybrids, whose retention serves no checkpoint state (`crate::gdn_evidence_v2::base0_gdn_forged_checkpoint_demands_v2`).
-    pub fn gdn_forged_checkpoint_demands_v2(
-        &self,
-        material: &[u8],
-        carried: Option<&[u32]>,
-        court: crate::gdn_evidence_v2::Base0GdnCheckpointCourtV2,
-        index: u32,
-    ) -> Result<Vec<kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1>, String> {
-        self.with_gdn_material_v2(material, carried, |evidence, plan| {
-            crate::gdn_evidence_v2::base0_gdn_forged_checkpoint_demands_v2(evidence, court, index, || {
-                crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan)
-            })
-        })
-    }
-
-    /// **The transition evidence against a forged checkpoint `index`, from the producer's held DA answers** (`answers[i]` answers
-    /// `demands[i]`, as accepted on chain) — the end of the held route.
-    #[allow(clippy::too_many_arguments)]
-    pub fn gdn_transition_evidence_from_disclosures_v2(
-        &self,
-        material: &[u8],
-        carried: Option<&[u32]>,
-        node_slot: u32,
-        head: u32,
-        index: u32,
-        demands: &[kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1],
-        answers: &[kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1],
-    ) -> Result<kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnTransitionRefutationV2, String> {
-        self.with_gdn_material_v2(material, carried, |evidence, plan| {
-            crate::gdn_evidence_v2::base0_gdn_transition_evidence_from_disclosures_v2(
-                evidence,
-                node_slot,
-                head,
-                index,
-                demands,
-                answers,
-                || crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan),
-            )
-        })
-    }
-
-    /// **The accuser's decoded view of a served capture** — the claim's binding, its committed step tiles (a fold re-executed by
-    /// this tier and checked against the binding), the leg as served, the ids and this network's form and ladder. Owned, so a
-    /// caller can hold it across several evidence builds (`crate::gdn_evidence_v2`).
-    pub fn gdn_accuser_view_v2(
-        &self,
-        material: &[u8],
-        carried: Option<&[u32]>,
-    ) -> Result<crate::gdn_evidence_v2::Base0GdnOwnedMaterialV2, String> {
-        let retention =
-            crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
-        let (binding, tiles, prompt_token_ids) = match &retention {
-            crate::produce::Base0RetentionV1::Folded(m) => {
-                let prompt = carried.unwrap_or(&m.prompt_token_ids);
-                if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
-                    self.prompt_ids_form,
-                    prompt,
-                    &m.binding.job_context.prompt_token_ids_hash,
-                ) {
-                    return Err("the GDN capture's prompt is not the committed job's".into());
-                }
-                let mut replay = m.clone();
-                replay.prompt_token_ids = prompt.to_vec();
-                let run = self.dense_capture_from_fold_for_checkpoint_dispute_v2(&replay, true)?;
-                (m.binding.clone(), run.tiles, prompt.to_vec())
-            }
-            crate::produce::Base0RetentionV1::Dense(_) => {
-                let prepared = self.prepare_whole_capture_v1(material, carried, None)?;
-                (prepared.binding, prepared.step_tiles, prepared.prompt_token_ids)
-            }
-        };
-        let checkpoint_leaves = match &retention {
-            crate::produce::Base0RetentionV1::Folded(m) => m.checkpoint_leaves.clone(),
-            crate::produce::Base0RetentionV1::Dense(_) => Vec::new(),
-        };
-        Ok(crate::gdn_evidence_v2::Base0GdnOwnedMaterialV2 {
-            binding,
-            tiles,
-            checkpoint_leaves,
-            served_chunks: retention.checkpoint_chunks().to_vec(),
-            prompt_token_ids,
-            output_token_ids: retention.generated_token_ids().to_vec(),
-            prompt_ids_form: self.prompt_ids_form,
-            max_leaves: self.network_ladder,
-        })
-    }
-
-    /// **The class inventory's operand openings and its root** (RFC-0006 06-A): what a GDN accusation carries and its oracle checks
-    /// against the class's registered artifact root. Public data of the registered artifact; never a proof of computation.
-    pub fn gdn_inventory_openings_v2(
-        &self,
-    ) -> Result<(Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_hashes::Hash64), String> {
-        let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered profile".to_string())?;
-        let inventory = crate::inventory::qwen36_inventory_v1(&self.artifact, profile).map_err(|e| format!("{e:?}"))?;
-        let openings = (0..inventory.operands().len())
-            .map(|i| {
-                kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32)
-                    .ok_or_else(|| format!("inventory row {i} has no opening"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((openings, inventory.root()))
-    }
-
-    /// **Fresh recompute kernels over this tier's registered plan** — what the accuser's own anchor states are computed with.
-    pub fn gdn_recompute_kernels_v2(&self) -> Result<crate::fp_recompute::Qwen36RecomputeKernelsV1<'_>, String> {
-        let plan =
-            self.plan.as_ref().ok_or_else(|| "this backend serves no registered plan, so it recomputes no state".to_string())?;
-        Ok(crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan))
-    }
-
-    /// Decode a served capture once into the accuser's view of it and run `f` over it with this tier's registered plan.
-    fn with_gdn_material_v2<R>(
-        &self,
-        material: &[u8],
-        carried: Option<&[u32]>,
-        f: impl FnOnce(&crate::gdn_evidence_v2::Base0GdnMaterialV2<'_>, &crate::qwen36_plan::Qwen36ProfilePlanV1) -> Result<R, String>,
-    ) -> Result<R, String> {
-        let plan =
-            self.plan.as_ref().ok_or_else(|| "this backend serves no registered plan, so it recomputes no state".to_string())?;
-        let owned = self.gdn_accuser_view_v2(material, carried)?;
-        f(&owned.view(), plan)
-    }
 }
 
 /// **A whole capture, decoded and laid out once** — the hybrid tier's twin of the dense tier's
@@ -1520,18 +1319,17 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
         let heads = shape.linear_v_heads as u32;
         let dim = shape.linear_head_dim as u32;
         let kernel = shape.conv_kernel as u32;
-        // P0a / RFC-0006 consumer v2: the restore scatters under the gather the capture used — the MAP's (a gdn v1 map's full
-        // window was read at v2's head layout here before; the dispatch below is the capture's own).
-        let states = crate::fp_capture::base0_gdn_state_from_chunks_for_map_v2(
+        // P0a: the restore scatters under the gather the capture used — the class's.
+        let geometry = crate::fp_capture::base0_gdn_state_geometry_for_class_v1(
             profile,
             &layers,
-            gdn_chunks,
             shape.linear_k_heads as u32,
             heads,
             dim,
             kernel,
         )
         .map_err(|e| e.to_string())?;
+        let states = crate::fp_capture::base0_gdn_state_from_chunks_v2(&geometry, gdn_chunks).map_err(|e| e.to_string())?;
         for (i, layer) in layers.iter().enumerate() {
             let li = *layer as usize;
             cache.gdn[li] = states[i].heads.clone();
@@ -1539,20 +1337,8 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
         }
         Ok(())
     };
-    // The solo maps (gdn v1 / v2 / v3's key-head gather): the court's own predicate.
-    if kaspa_consensus_core::palw_step_refute::memory_v2::palw_gdn_solo_map_v2(&declared) {
+    if declared == map::gdn_state_chunk_map_id_v2() || declared == map::gdn_state_chunk_map_id_v1() {
         apply_gdn(&mut cache, chunks)?;
-        return Ok(cache);
-    }
-    // RFC-0006 consumer v2's composed hybrid maps: the integer-kv v2 cache half, then the recurrence's own enumeration.
-    if map::palw_map_is_hybrid_composed_v2(&declared) {
-        let attn = map::integer_kv_state_geometry_v2(profile, positions).map_err(|e| format!("{e:?}"))?;
-        let attn_n = attn.chunk_count() as usize;
-        if chunks.len() < attn_n {
-            return Err(format!("the composed checkpoint names {attn_n} attention chunks and the opening carried {}", chunks.len()));
-        }
-        apply_attn(&mut cache, &attn, &chunks[..attn_n])?;
-        apply_gdn(&mut cache, &chunks[attn_n..])?;
         return Ok(cache);
     }
     if declared == map::hybrid_state_chunk_map_id_v3() || map::palw_map_is_hybrid_held_for_version_v1(&declared, profile.version) {
@@ -1671,9 +1457,6 @@ impl Qwen36Backend {
 }
 
 impl PalwExecutionBackendV1 for Qwen36Backend {
-    fn as_any_v1(&self) -> Option<&dyn std::any::Any> {
-        Some(self)
-    }
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -1962,14 +1745,11 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     /// one: a figure for fewer decode calls than the attempt makes would under-state it.
     fn attempt_working_set_bytes(&self, prefill_tokens: usize) -> Option<u64> {
         let profile = self.profile.as_ref()?;
-        let mut job = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+        let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(
             profile,
             u32::try_from(prefill_tokens).ok()?,
             self.canonical_job.1.max(1),
         );
-        // The attempt carries THIS backend's network id, and the run's output material prices the job's network identity
-        // (`palw_output_material_bytes_v1`): the gate's figure is the attempt's own, as the dense tier's `resource_job_v1` gives.
-        job.network_id = self.network_id.clone();
         self.resource_profile_v1(Some(&job), kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer)
             .map(|p| p.working_set_bytes())
     }
@@ -3321,53 +3101,17 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         .map_err(|e| crate::attn_responder::base0_attn_name_the_missing_anchor_v1(e, filing))
     }
 
-    /// Held evidence builders exist, but that alone does not establish end-to-end
-    /// answerability. Keep the existing advertisement and C5 admission rule until
-    /// attention, recurrence, liability and node/P2P tests qualify the whole path.
+    /// **ADR-0152 §4-ter N4 (the review's F4):** past `palw_offence_attribution` EVERY held class this
+    /// family serves says `false` — it has no windowed builder (`attn_site_evidence_held_v1` is the
+    /// trait's `Err`), and its dense builder answers a held job only under the materialization cap.
+    /// The consensus predicate agrees: a recurrent held class is unanswerable
+    /// (`PalwHeldUnanswerableV1::Recurrent`), so C1 lists it and C5 refuses to register it. Below the
+    /// fence, byte for byte what it was.
     fn supports_dissection(&self) -> bool {
         self.plan.is_some()
             && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1)
             && !(self.held_answerability
                 && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4))
-    }
-
-    fn supports_dissection_with_memory_routing_v2(&self, active: bool) -> bool {
-        self.supports_dissection()
-            || (active
-                && self.plan.is_some()
-                && self.profile.as_ref().is_some_and(|profile| {
-                    kaspa_consensus_core::palw_class_admission_v2::palw_held_hybrid_route_covered_v2(profile)
-                        && kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v2(profile, true).is_none()
-                }))
-    }
-
-    fn attn_site_evidence_held_v1(
-        &self,
-        material: &[u8],
-        narrowed: u64,
-        carried_prompt: Option<&[u32]>,
-        filing: Option<&kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1>,
-    ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
-        let profile = self.profile.as_ref().ok_or("no registered hybrid profile")?;
-        if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
-            return Err("the windowed hybrid builder requires a held profile".into());
-        }
-        match filing {
-            None => self.attn_held_responder_v1(material, narrowed, carried_prompt),
-            Some(filing) => self.attn_held_challenger_v1(filing, narrowed, carried_prompt),
-        }
-    }
-
-    fn attn_held_cache_write_rows_v1(
-        &self,
-        filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1,
-        narrowed: u64,
-        carried_prompt: Option<&[u32]>,
-        kind: kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1,
-        attn_layer: u16,
-        history_position: u32,
-    ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
-        self.attn_held_cache_write_rows_of_v1(filing, narrowed, carried_prompt, kind, attn_layer, history_position)
     }
 
     fn has_fused_site(&self) -> bool {
@@ -5205,9 +4949,7 @@ mod tests {
         assert!(matches!(profile.capture, PalwCaptureRetentionV1::Fold { .. }), "{:?}", profile.capture);
         assert_eq!(profile.leaves, leaves);
         assert!(profile.recurrence_layers >= 1 && profile.gdn_state_bytes > 0, "a hybrid prices its recurrence state");
-        // The structural host bound (RFC06 native resources) prices the in-flight block at four 64-B hashes a leaf
-        // (`palw_fold_capture_bytes_v1`: 256 B, was 64 B), so a 4,096-leaf block alone is 1 MiB: small is 2 MiB now.
-        assert!(profile.capture_retained_bytes < 2 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
+        assert!(profile.capture_retained_bytes < 1 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
         assert_eq!(backend.runtime_profile_v1().map(|p| p.name()), Some("Q36-KV-i32"));
         assert_eq!(
             backend.attempt_working_set_bytes(job.declared_prefill_tokens as usize),
@@ -5230,7 +4972,7 @@ mod tests {
     }
 
     /// **ADR-0152 §4-ter N4 (the review's F4): past `palw_offence_attribution` no held hybrid class
-    /// takes a dissection's turn** — until the complete hybrid path is qualified its held (graph-v7) row
+    /// takes a dissection's turn** — this family has no windowed builder, so its held (graph-v7) row
     /// says `false` there, while it says `true` below the fence and its non-held (graph-v6) row is
     /// unchanged on either side. The consensus predicate agrees (the class is `Recurrent`).
     #[test]

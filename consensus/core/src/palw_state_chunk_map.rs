@@ -1178,69 +1178,6 @@ pub fn hybrid_state_chunk_map_id_v2() -> Hash64 {
     state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v2())
 }
 
-// -------------------------------------------------------------------------------------------------
-// RFC-0006 memory court consumer v2: the COMPOSED hybrid maps (new ids; the v1/v2 compositions are untouched)
-// -------------------------------------------------------------------------------------------------
-
-/// **The hybrid v1 composition's two halves, actually composed — under a NEW id.**
-///
-/// [`palw_hybrid_state_chunk_map_name_v1`] names an attention half and a recurrence half, but no side of the tree ever enumerated
-/// them together: its classes' checkpoint roots hold the attention cache alone, and `fp_recompute` refuses the composition by
-/// name. Those roots must not silently gain recurrence chunks, so the composition that DOES serialize both halves is a different
-/// string and therefore a different id — a class that registers it is a different class, and every historical v1/v2 root keeps
-/// the meaning it had.
-///
-/// The name spells the composition completely: the attention half verbatim (`integer-kv` v2, `i32` rows, chunked at the leg's
-/// cap), then the recurrence half verbatim (the gdn v1 full-window enumeration, its own chunking), in that order, one flat
-/// chunk tree (`state_chunk_leaf_hash_v1(map, flat index, bytes)`), the per-decode-call cadence the attention half runs at.
-pub fn palw_hybrid_composed_state_chunk_map_name_v1() -> String {
-    format!(
-        "palw-hybrid-composed/attn={PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2}/gdn={PALW_GDN_STATE_CHUNK_MAP_NAME_V1}/\
-         order=attn-then-gdn/tree=flat/cadence=per-decode-call/v1"
-    )
-}
-
-/// `state_chunk_map_id` of [`palw_hybrid_composed_state_chunk_map_name_v1`].
-pub fn hybrid_composed_state_chunk_map_id_v1() -> Hash64 {
-    state_chunk_map_id_v1(&palw_hybrid_composed_state_chunk_map_name_v1())
-}
-
-/// The hybrid v2 composition's halves composed under a NEW id — [`palw_hybrid_composed_state_chunk_map_name_v1`] with the
-/// recurrence half at gdn v2's head-window enumeration.
-pub fn palw_hybrid_composed_state_chunk_map_name_v2() -> String {
-    format!(
-        "palw-hybrid-composed/attn={PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2}/gdn={PALW_GDN_STATE_CHUNK_MAP_NAME_V2}/\
-         order=attn-then-gdn/tree=flat/cadence=per-decode-call/v2"
-    )
-}
-
-/// `state_chunk_map_id` of [`palw_hybrid_composed_state_chunk_map_name_v2`].
-pub fn hybrid_composed_state_chunk_map_id_v2() -> Hash64 {
-    state_chunk_map_id_v1(&palw_hybrid_composed_state_chunk_map_name_v2())
-}
-
-/// Is `map` one of consumer v2's composed hybrid maps?
-pub fn palw_map_is_hybrid_composed_v2(map: &Hash64) -> bool {
-    *map == hybrid_composed_state_chunk_map_id_v1() || *map == hybrid_composed_state_chunk_map_id_v2()
-}
-
-/// **The attention half's chunk count of a composed checkpoint at `positions`** — `None` for a profile that does not register a
-/// composed map (so a caller can dispatch on it), `Some(Err)` where the attention half is not derivable. The recurrence half
-/// follows at this offset with `palw_gdn_state_map_v2`'s solo enumeration.
-///
-/// **Deliberately NOT an arm of [`palw_state_chunk_count_at_v1`]**: that dispatcher is the legacy step court's, which reads `None`
-/// as "not decidable here" below every fence. A composed class is judged by consumer v2 (`crate::palw_step_refute::memory_v2`)
-/// past `palw_memory_routing_court_v2`; adding it there would change a legacy verdict below that fence.
-pub fn hybrid_composed_attention_chunks_v2(
-    profile: &PalwShapeProfileV3,
-    positions: u32,
-) -> Option<Result<u64, PalwStateChunkMapError>> {
-    if !palw_map_is_hybrid_composed_v2(&profile.state_chunk_map_id) {
-        return None;
-    }
-    Some(integer_kv_state_geometry_v2(profile, positions).map(|g| g.chunk_count()))
-}
-
 /// **P0a: the recurrence map whose gather is written over the KEY-head count (v3).**
 ///
 /// v2's gather — `[q:h*k, k:heads*k+h*k, v:2*heads*k+h*v]` — spells one head count for q, k and v,
@@ -1312,18 +1249,12 @@ pub fn gdn_state_terms_for_map_v1(profile: &PalwShapeProfileV3) -> Option<(u64, 
     // anchor charged at ZERO — the direction that admits a class whose disputes nobody can carry.
     // Dormant until ADR-0082 Decision 4 made the v3 composition the map a graph-v5 hybrid
     // registers, which is what turned a documented gap into a live one.
-    // RFC-0006 consumer v2's composed hybrid maps price at their `gdn=` half's opening (v2's head window, v1's full window): a new
-    // id, so no historical class's price moves; pricing it at zero would admit a class whose disputes nobody can carry.
     if declared == gdn_state_chunk_map_id_v2()
         || declared == hybrid_state_chunk_map_id_v2()
         || declared == hybrid_state_chunk_map_id_v3()
-        || declared == hybrid_composed_state_chunk_map_id_v2()
     {
         Some((delta, gdn_conv_head_slice_bytes_v2(profile)?))
-    } else if declared == gdn_state_chunk_map_id_v1()
-        || declared == hybrid_state_chunk_map_id_v1()
-        || declared == hybrid_composed_state_chunk_map_id_v1()
-    {
+    } else if declared == gdn_state_chunk_map_id_v1() || declared == hybrid_state_chunk_map_id_v1() {
         Some((delta, gdn_conv_window_bytes_v1(profile)?))
     } else {
         None

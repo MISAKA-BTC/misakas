@@ -21,14 +21,6 @@ fn shipped_sp() -> PalwStateParamsV2 {
     }
 }
 
-/// An X3 fence whose spans are the composition of testnet-12's windows at [`FENCE`] and whose five `B_*` terms and `c_retain` are the
-/// probe's NON-ZERO fixture values (stand-ins for measurements in this test only; no shipped value is measured).
-fn composed_fence() -> PalwClaimHardDeadlineFenceV1 {
-    let activation = ForkActivation::new(FENCE);
-    let base = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(activation).policy;
-    PalwClaimHardDeadlineFenceV1 { activation, policy: palw_x3_composed_policy_v1(&shipped_sp(), activation, base) }
-}
-
 fn policy() -> PalwClaimHardDeadlinePolicyV1 {
     PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(FENCE)).policy
 }
@@ -295,8 +287,7 @@ fn req_x3_3_no_extension_or_regrant_for_a_new_claim_and_the_old_rules_stay_for_o
             include_str!("../palw_state_v2/transition_builder.rs"),
             &[
                 "if credit_pause && !crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, &claim) {",
-                // `credit_verify_pause_v6` returns its writer's Result since the RFC06 typed-capacity writers (b496ee2ba).
-                "if crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, claim) {\n            return Ok(());\n        }",
+                "if crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, claim) {\n            return;\n        }",
             ],
         ),
         (
@@ -544,95 +535,4 @@ fn req_t6_3_restricted_the_armed_model_byte_routes_close_for_new_claims_only() {
         include_str!("../palw_state_v2/objects.rs").matches("check_readiness_model_scope_v1(builder, ctx, class_id)?;").count(),
         3
     );
-}
-
-// ---- the arm-readiness records (2026-10-18, lane d2-x3-finish): D2 and X3 refused without a record, admitted only by one ----------
-
-/// A well-formed arm-readiness record for `fence` on the network `genesis` at `daa` (distinct non-zero digests, one per requirement).
-fn arm_record(fence: crate::palw_g14_gates_v1::PalwG14GatedFenceV1, genesis: Hash64, daa: u64) -> crate::palw_g14_gates_v1::PalwG14ArmingRecordV1 {
-    let n = fence.requirements().len();
-    let evidence: Vec<[u8; 32]> = (0..n).map(|i| [i as u8 + 1; 32]).collect();
-    crate::palw_g14_gates_v1::PalwG14ArmingRecordV1 {
-        version: crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORD_VERSION_V1,
-        fence,
-        genesis,
-        activation_daa: daa,
-        source_commit: [7u8; 20],
-        evidence: Box::leak(evidence.into_boxed_slice()),
-        review: [0xEE; 32],
-    }
-}
-
-#[test]
-fn d2_and_x3_are_refused_without_a_record_and_admitted_exactly_at_the_records_network_and_height() {
-    use crate::palw_g14_gates_v1::PalwG14GatedFenceV1 as G;
-    let mut p = t12();
-    p.palw_legacy_held_da_v2 = Some(ForkActivation::new(FENCE - 1));
-    p.palw_court_model_scope_v1 = Some(ForkActivation::new(FENCE));
-    p.palw_claim_hard_deadline_v1 = Some(composed_fence());
-    p.sync_palw_2026_10_12_ruling_fences_v1();
-    let genesis = p.genesis.hash;
-
-    // Refused with no record, and the refusal names the fence.
-    let none = p.validate_palw_2026_10_12_ruling_fences_in_v1(&[]).expect_err("no record: refused");
-    assert!(format!("{none:?}").contains("palw_court_model_scope_v1"), "{none:?}");
-    // Each fence on its own, as a record for the other one does not admit it.
-    let d2_only = [arm_record(G::CourtModelScopeV1, genesis, FENCE)];
-    let x3_refusal = p.validate_palw_2026_10_12_ruling_fences_in_v1(&d2_only).expect_err("the X3 record is missing");
-    assert!(format!("{x3_refusal:?}").contains("palw_claim_hard_deadline_v1"), "{x3_refusal:?}");
-    // Both records, at exactly the fence's height on this network: admitted.
-    let both = [arm_record(G::CourtModelScopeV1, genesis, FENCE), arm_record(G::ClaimHardDeadlineV1, genesis, FENCE)];
-    p.validate_palw_2026_10_12_ruling_fences_in_v1(&both).expect("both records name this network and height");
-    // A record one DAA off, or for another network, does not admit it.
-    let off_by_one = [arm_record(G::CourtModelScopeV1, genesis, FENCE + 1), arm_record(G::ClaimHardDeadlineV1, genesis, FENCE)];
-    assert!(p.validate_palw_2026_10_12_ruling_fences_in_v1(&off_by_one).is_err(), "one DAA off: refused");
-    let other_net = Hash64::from_u64_word(0x9999);
-    let other = [arm_record(G::CourtModelScopeV1, other_net, FENCE), arm_record(G::ClaimHardDeadlineV1, other_net, FENCE)];
-    assert!(p.validate_palw_2026_10_12_ruling_fences_in_v1(&other).is_err(), "another network: refused");
-    // The shipped list stays empty, so the binary's own validation still refuses both on testnet-12.
-    assert!(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1.is_empty());
-    assert!(p.validate_palw_2026_10_12_ruling_fences_v1().is_err());
-    // A record of the wrong form (zero review digest) is refused even when it names the right network and height.
-    let mut bad = both;
-    bad[1].review = [0; 32];
-    assert!(p.validate_palw_2026_10_12_ruling_fences_in_v1(&bad).is_err(), "a record must be well formed");
-}
-
-#[test]
-fn x3_refuses_an_unmeasured_policy_term_even_with_a_record() {
-    use crate::palw_g14_gates_v1::PalwG14GatedFenceV1 as G;
-    let mut p = t12();
-    // The candidate derived from the horizons leaves six terms unmeasured (0): refused whatever records exist.
-    let candidate = PalwClaimHardDeadlineFenceV1::candidate_from_horizons_v1(ForkActivation::new(FENCE), &shipped_sp());
-    assert_eq!(palw_x3_unmeasured_terms_v1(&candidate.policy).len(), 6);
-    p.palw_claim_hard_deadline_v1 = Some(candidate);
-    p.sync_palw_2026_10_12_ruling_fences_v1();
-    let genesis = p.genesis.hash;
-    let records = [arm_record(G::ClaimHardDeadlineV1, genesis, FENCE)];
-    let why = p.validate_palw_2026_10_12_ruling_fences_in_v1(&records).expect_err("unmeasured terms");
-    assert!(format!("{why:?}").contains("unmeasured"), "{why:?}");
-    // With every term measured (the probe's nonzero values stand in for measurements in this fixture), the record admits it.
-    let mut measured = t12();
-    measured.palw_claim_hard_deadline_v1 = Some(composed_fence());
-    measured.sync_palw_2026_10_12_ruling_fences_v1();
-    measured.validate_palw_2026_10_12_ruling_fences_in_v1(&[arm_record(G::ClaimHardDeadlineV1, genesis, FENCE)]).expect("measured and recorded");
-}
-
-#[test]
-fn x3_spans_are_the_composition_of_the_windows_read_at_activation() {
-    let sp = shipped_sp();
-    let activation = ForkActivation::new(FENCE);
-    let fence = composed_fence();
-    assert_eq!(palw_x3_composition_refusal_v1(&sp, activation, &fence.policy), None, "the composed policy agrees with the windows");
-    // The probe's spans are not the windows' composition: refused at activation.
-    let probe = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(activation).policy;
-    assert!(palw_x3_composition_refusal_v1(&sp, activation, &probe).is_some());
-    // Δ is part of T_resolve: a policy whose resolve omits Δ is refused.
-    let no_delta = PalwClaimHardDeadlinePolicyV1 { resolve_daa: fence.policy.resolve_daa - fence.policy.cold_fetch_daa, ..fence.policy };
-    assert!(palw_x3_composition_refusal_v1(&sp, activation, &no_delta).is_some(), "resolve must include the five B_* terms");
-    // The material term with a positive extension and an unmeasured c_retain is refused, never priced at zero.
-    let unmeasured = PalwClaimHardDeadlinePolicyV1 { retention_cost_per_daa_sompi: 0, ..fence.policy };
-    assert!(palw_x3_material_term_with_retention_v1(10, &unmeasured, Some(&palw_x3_retention_extension_at_v1(&unmeasured, 100, 0))).is_err());
-    let priced = palw_x3_retention_extension_at_v1(&fence.policy, 100, 0);
-    assert_eq!(palw_x3_material_term_with_retention_v1(10, &fence.policy, Some(&priced)), Ok(10 + priced.extra_daa * fence.policy.retention_cost_per_daa_sompi));
 }

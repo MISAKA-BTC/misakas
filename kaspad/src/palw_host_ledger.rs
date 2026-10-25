@@ -1,5 +1,5 @@
 //! **The host ledger: every kaspad on one host reserves against the host's memory TOGETHER**
-//! (int-10.2 D1; `docs/design/palw/consensus/t12-replay-memory-1001.md` §5).
+//! (int-10.2 D1; `docs/design/palw/t12-replay-memory-1001.md` §5).
 //!
 //! # The failure a per-process ledger cannot see
 //!

@@ -1161,47 +1161,13 @@ pub fn palw_gen_check_dissect_bottom_with_v1(
     limits: &DemandLimits,
 ) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
-    let range = phase.whole_tile_terminal_range_v2().ok_or(R::Unadjudicable("the dissection has not narrowed to one tile".into()))?;
-    palw_gen_check_dissect_bottom_range_with_v1(case, close, phase, range, phase.claim(), params, limits)
-}
-
-/// **RFC-0024 A: the generative bottom over ONE history position** — the terminal tile narrowed by a
-/// checked position round ([`crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1`]): every reduction is
-/// evaluated over `[p, p+1)` only (the others supplied from the ROOT, no per-position renormalisation)
-/// and compared with the named position's claim. Dormant behind `palw_tir_bounded_door_v1`.
-pub fn palw_gen_check_dissect_position_bottom_with_v1(
-    case: &PalwGenCourtCaseV1<'_>,
-    close: &PalwGenCloseV1,
-    phase: &PalwTirDissectPhaseV1,
-    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
-    params: PalwGenParamsV1<'_>,
-    limits: &DemandLimits,
-) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
-    use PalwGenCloseRefusalV1 as R;
-    if narrowing.tile() != phase || phase.terminal_range() != Some(narrowing.tile_range()) {
-        return Err(R::Unadjudicable("the position narrowing is not this phase's terminal tile".into()));
-    }
-    let range = narrowing
-        .terminal_position_range()
-        .ok_or(R::Unadjudicable("the terminal tile has not narrowed to one position".into()))?;
-    palw_gen_check_dissect_bottom_range_with_v1(case, close, phase, range, narrowing.claim(), params, limits)
-}
-
-fn palw_gen_check_dissect_bottom_range_with_v1(
-    case: &PalwGenCourtCaseV1<'_>,
-    close: &PalwGenCloseV1,
-    phase: &PalwTirDissectPhaseV1,
-    range: (usize, usize),
-    claim: &crate::palw_tir_dissect_v1::PalwTirRangeClaimV1,
-    params: PalwGenParamsV1<'_>,
-    limits: &DemandLimits,
-) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
+    let range = phase.terminal_range().ok_or(R::Unadjudicable("the dissection has not narrowed to one tile".into()))?;
     let partials = match palw_gen_dissect_partials_with_v1(case, close, phase, range, params, limits)? {
         Ok(partials) => partials,
         Err(verdict) => return Ok(verdict),
     };
     let computed: Vec<i128> = partials.partials.iter().flatten().copied().collect();
-    let claimed: Vec<i128> = claim.partials.iter().flatten().copied().collect();
+    let claimed: Vec<i128> = phase.claim().partials.iter().flatten().copied().collect();
     match computed.iter().zip(&claimed).position(|(a, b)| a != b).or((computed.len() != claimed.len()).then_some(0)) {
         Some(i) => Ok(PalwGenVerdictV1::Convicted {
             leaf: close.disputed.coord,

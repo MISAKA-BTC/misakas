@@ -5,7 +5,7 @@ use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
 use kaspa_consensus_core::palw_step_refute::{
     PalwStepRefuteError,
-    memory_v2::{PalwGdnCourtErrorV2, PalwGdnStepRefutationV2, gdn_refutation_from_leaves_v2, gdn_replay_start_v2},
+    memory_v2::{PalwGdnCourtErrorV2, PalwGdnStepRefutationV2, gdn_refutation_from_capture_v2, gdn_replay_start_v2},
 };
 
 /// Build from the executor's actual captured leaves, tiles and checkpoint leg.
@@ -42,7 +42,7 @@ pub fn base0_gdn_refutation_from_capture_v2(
         }
         &[]
     };
-    gdn_refutation_from_leaves_v2(
+    gdn_refutation_from_capture_v2(
         binding,
         target,
         &tiles.leaves,

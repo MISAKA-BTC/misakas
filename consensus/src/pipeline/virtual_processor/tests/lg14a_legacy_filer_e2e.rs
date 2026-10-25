@@ -9,11 +9,9 @@
 //! floor's registered model (ADR-0177: the property is conditional on that copy). It never reads the producer's capture, heap or
 //! keys. The producer's answers are built from the producer's own capture — its obligation, not the verifier's material.
 //!
-//! **Historical LG14-A tests arm the fence WITHOUT its validation.** `palw_legacy_public_filer_v1` is refused on every real height
+//! **The fence is armed WITHOUT its validation.** `palw_legacy_public_filer_v1` is refused on every real height
 //! (`Params::validate_palw_legacy_public_filer_v1`), so nothing here runs on a network; the config is the harness's testnet-12 with the
 //! fence and its bundle mirror set directly (as `g14_kernel_route_e2e` arms its own fence).
-//! The two D2 pursuit tests instead use the existing marked isolated G14 genesis and normal validation;
-//! they exercise the claim-only KernelWitness and the verifier-supplied model rows on the real node.
 //!
 //! **Harness differences, none of them a rule**: testnet-12 as launched with harness keys on the eight genesis cards
 //! (`t12_round_lane_e2e`); the main premine output re-addressed to the newcomer's harness key (the genesis commitment recomputed, as
@@ -66,10 +64,6 @@ use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionInput, Tra
 use kaspa_hashes::Hash64;
 use kaspa_muhash::MuHash;
 use misaka_palw_base0::backend::Base0Backend;
-use kaspa_consensus_core::palw_ruling_fences_v1::{
-    PalwClaimHardDeadlineFenceV1, palw_claim_deadlines_v1, palw_claim_effective_deadline_v1, palw_claim_hard_deadline_of_v1,
-    palw_claim_pursuit_may_start_v1, palw_x3_hard_deadline_at_v1,
-};
 use std::collections::BTreeMap;
 
 type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
@@ -88,11 +82,6 @@ const COLLATERAL_INDEX: u32 = 1;
 /// testnet-12 as launched, harness cards, the main premine on the newcomer's key; the public filer armed from genesis (on its mirror,
 /// WITHOUT its validation) when `armed`.
 fn lg14a_config(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine, (TransactionOutpoint, UtxoEntry)) {
-    lg14a_config_with(armed, false, false)
-}
-
-/// `d2` / `x3`: the 2026-10-12 ruling fences armed from genesis on their mirror, WITHOUT their validation. D2 is `palw_court_model_scope_v1`.
-fn lg14a_config_with(armed: bool, d2: bool, x3: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine, (TransactionOutpoint, UtxoEntry)) {
     let (config, _, mut premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
     let main = premine_outpoint_for(params.net, MAIN_PREMINE_INDEX);
@@ -112,28 +101,6 @@ fn lg14a_config_with(armed: bool, d2: bool, x3: bool) -> (Config, PalwConsensusP
         params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
         params.sync_palw_legacy_public_filer_v1();
         assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
-    }
-    if d2 || x3 {
-        use kaspa_consensus_core::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1;
-        if d2 {
-            params.palw_court_model_scope_v1 = Some(ForkActivation::new(0));
-        }
-        if x3 {
-            // The composition (ADR-0188): resolve = B_disclose + B_court + Delta, i.e. the pursuit budget. The probe's own resolve (200)
-            // is shorter than that budget, so no pursuit is admitted at all; the test sets resolve to the composed value.
-            let mut fence = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(0));
-            let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };
-            fence.policy.resolve_daa = kaspa_consensus_core::palw_ruling_fences_v1::palw_claim_pursuit_budget_v1(&bundle.state, &fence.policy);
-            params.palw_claim_hard_deadline_v1 = Some(fence);
-            // X3 governs the held-DA pursuit too (REQ-X3-5's open session is a reserved held session): arm LG14-B with it.
-            if armed {
-                params.palw_legacy_held_da_v2 = Some(ForkActivation::new(0));
-            }
-        }
-        params.sync_palw_2026_10_12_ruling_fences_v1();
-        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };
-        assert_eq!(bundle.state.claim_hard_deadline_v1().is_some(), x3, "the X3 mirror");
-        assert_eq!(bundle.state.court_model_scope_from_daa().is_some(), d2, "the D2 mirror");
     }
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
@@ -196,44 +163,7 @@ impl Lg {
     }
 
     fn over(armed: bool, make: impl FnOnce(&Config) -> TestConsensus) -> Lg {
-        Lg::over_with(armed, false, false, make)
-    }
-
-    fn over_with(armed: bool, d2: bool, x3: bool, make: impl FnOnce(&Config) -> TestConsensus) -> Lg {
-        Self::from_config(lg14a_config_with(armed, d2, x3), make)
-    }
-
-    /// Exercise D2 and LG14-B on the existing, explicitly isolated G14 network. Normal validation
-    /// must accept the configuration; no readiness record or shipped-network fence is bypassed.
-    fn over_d2_isolated(make: impl FnOnce(&Config) -> TestConsensus) -> Lg {
-        let (config, _, premine, floats, funding) = lg14a_config_with(false, false, false);
-        let mut params = config.params.clone();
-        params.genesis =
-            kaspa_consensus_core::palw_g14_gates_v1::palw_isolated_g14_genesis_v1(&params.genesis, Hash64::from_bytes([0xd2; 64]))
-                .expect("an isolated D2 test genesis");
-        params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
-        params.palw_legacy_held_da_v2 = Some(ForkActivation::new(0));
-        params.palw_court_model_scope_v1 = Some(ForkActivation::new(0));
-        params.sync_palw_legacy_public_filer_v1();
-        params.sync_palw_2026_10_12_ruling_fences_v1();
-        assert!(params.has_isolated_g14_genesis_v1());
-        params.validate_palw_v2().expect("normal validation accepts only the isolated G14 configuration");
-        let config = Config::new(params);
-        let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
-        let bundle = bundle.clone();
-        Self::from_config((config, bundle, premine, floats, funding), make)
-    }
-
-    fn from_config(
-        (config, bundle, premine, floats, newcomer_funding): (
-            Config,
-            PalwConsensusParamsV2,
-            Premine,
-            Premine,
-            (TransactionOutpoint, UtxoEntry),
-        ),
-        make: impl FnOnce(&Config) -> TestConsensus,
-    ) -> Lg {
+        let (config, bundle, premine, floats, newcomer_funding) = lg14a_config(armed);
         let chain = t12_genesis_chain_on(make(&config), &config, &bundle, &premine, &floats);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
@@ -562,47 +492,13 @@ impl Lg {
 
     /// **The colluding producer answers every unit it owes** (it cannot do otherwise without defaulting): the duty list its node
     /// reads (`palw_disclosure_duties_v1`), each unit opened from ITS capture by the node's builders. `withhold` names units it keeps
-    /// silent on. Returns the signed response objects before any carrier is funded.
-    fn signed_producer_answer_objects(&mut self, produced: &Produced, withhold: &dyn Fn(&PalwDaUnitV1) -> bool) -> Vec<(usize, Obj)> {
+    /// silent on. Returns whether anything was sent.
+    async fn producer_answers(&mut self, produced: &Produced, withhold: &dyn Fn(&PalwDaUnitV1) -> bool) -> bool {
         let duties = self.chain.ctx.consensus.palw_disclosure_duties_v1(vec![self.chain.bonds[EXECUTOR]]);
         let form = self.config.params.palw_prompt_ids_form_v1();
         let work_leaves = self.view(produced.claim_id).work_leaves;
         let mut objects = Vec::new();
         for duty in duties.duties.iter().filter(|d| d.claim_id == produced.claim_id && !withhold(&d.unit)) {
-            if let PalwDaUnitV1::LegacyHeldV2(
-                unit @ kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::KernelWitness { leaf },
-            ) = duty.unit
-            {
-                use kaspa_consensus_core::palw_legacy_held_da_v2::*;
-                let (binding, disclosure) = palw_da_held_disclosure_from_capture_v1(
-                    &self.backend,
-                    &produced.material,
-                    &produced.prompt,
-                    produced.roots,
-                    work_leaves,
-                    PalwHeldMissingV1::StepLeaf { leaf },
-                    form,
-                    || self.backend.disclose_trace_event(&produced.material, u32::MAX, u8::MAX).map(|d| d.binding().clone()),
-                )
-                .expect("the producer opens its own committed leaf");
-                let PalwHeldDisclosureV1::StepLeaf { evidence } = disclosure else { unreachable!() };
-                // No artifact rows go on this defendant's answer. D2 never demands its model copy.
-                let witness =
-                    PalwCommittedKernelWitnessV2 { refutation: evidence.refutation, prompt_ids_opening: evidence.prompt_ids_opening };
-                let mut carriage = PalwLegacyHeldAnswerCarriageV2 {
-                    version: PALW_LEGACY_HELD_VERSION_V2,
-                    claim: produced.claim_id,
-                    unit,
-                    binding,
-                    answer: PalwLegacyHeldAnswerV2::KernelWitness(Box::new(witness)),
-                    discloser: duty.discloser,
-                    signature: Vec::new(),
-                };
-                let message = palw_legacy_held_answer_message_v2(self.domain.as_byte_slice(), &carriage);
-                carriage.signature = self.signed(EXECUTOR, message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
-                objects.push((EXECUTOR, Obj::LegacyHeldAnsweredV2 { answer: Box::new(carriage) }));
-                continue;
-            }
             let answer = match duty.unit {
                 PalwDaUnitV1::Event { row, tile } => PalwDaAnswerV1::Event(
                     self.backend.disclose_trace_event(&produced.material, row, tile).expect("the capture opens the event"),
@@ -637,11 +533,6 @@ impl Lg {
             .unwrap_or_else(|e| panic!("the node's builder builds the answer: {e}"));
             objects.push((EXECUTOR, object));
         }
-        objects
-    }
-
-    async fn producer_answers(&mut self, produced: &Produced, withhold: &dyn Fn(&PalwDaUnitV1) -> bool) -> bool {
-        let objects = self.signed_producer_answer_objects(produced, withhold);
         if objects.is_empty() {
             return false;
         }
@@ -850,11 +741,6 @@ impl Verifier {
             PalwFilerActionV1::Demand(probe) => {
                 // **Shared progress (RFC-0014 §7.4)**: a unit the chain already holds the answer to — this verifier's before a
                 // restart, or anybody's — is read, never demanded again.
-                if let PalwLegacyProbeV1::Terminal { leaf } = probe
-                    && lg.bundle.state.court_model_scope_from_daa().is_some_and(|from| lg.view(self.claim).accepted_daa >= from)
-                {
-                    return self.d2_terminal(lg, produced, leaf, withhold).await;
-                }
                 if self.learn(lg, probe) {
                     return None;
                 }
@@ -878,86 +764,6 @@ impl Verifier {
                 panic!("leaf {leaf} is fused: LG14-B's route (the fixture picks a non-fused lie)")
             }
         }
-    }
-
-    /// D2: read the accepted claim-only witness, then supply rows from this verifier's own model.
-    /// This runs existing tags 157/158 and ShardCourtAccused through the real paid carrier path.
-    async fn d2_terminal(
-        &mut self,
-        lg: &mut Lg,
-        produced: &Produced,
-        leaf: u64,
-        withhold: &dyn Fn(&PalwDaUnitV1) -> bool,
-    ) -> Option<PalwFilerPhaseV1> {
-        use kaspa_consensus_core::palw_legacy_held_da_v2::*;
-        use kaspa_consensus_core::palw_shard_court_v1::*;
-        let unit = PalwLegacyHeldUnitV2::KernelWitness { leaf };
-        let da_unit = PalwDaUnitV1::LegacyHeldV2(unit);
-        let view = lg.view(self.claim);
-        let witness = if view.answered.contains(&da_unit) {
-            lg.recent_objects(512).into_iter().find_map(|object| match object {
-                Obj::LegacyHeldAnsweredV2 { answer } if answer.claim == self.claim && answer.unit == unit => {
-                    palw_legacy_held_check_answer_v3(
-                        &view.execution_root,
-                        &unit,
-                        &answer.binding,
-                        &answer.answer,
-                        lg.bundle.court.max_step_leaf_count(),
-                        lg.config.params.palw_prompt_ids_form_at(lg.daa()),
-                    )
-                    .ok()?;
-                    match answer.answer {
-                        PalwLegacyHeldAnswerV2::KernelWitness(w) => Some(w),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            })
-        } else {
-            None
-        };
-        if let Some(witness) = witness {
-            let claim_part = PalwLeafEvidenceV1 {
-                refutation: witness.refutation,
-                artifact_openings: Vec::new(),
-                prompt_ids_opening: witness.prompt_ids_opening,
-            };
-            let rows = lg.backend.operand_openings_for(&claim_part.refutation).expect("the verifier's own model opens its rows");
-            let bound = PalwOneMoveClaimV2 {
-                execution_root: view.execution_root,
-                class_id: view.class_id,
-                artifact_root: misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the fixture's pinned class root"),
-            };
-            assert_eq!(
-                kaspa_consensus_core::palw_court_model_scope_routes_v1::palw_d2_one_move_on_claim_part_v1(
-                    &claim_part,
-                    &rows,
-                    &bound,
-                    lg.bundle.court.max_step_leaf_count(),
-                )
-                .expect("the bound one-move court reads the witness and our own rows"),
-                PalwShardCourtVerdictV1::ExecutorGuilty
-            );
-            let evidence = PalwLeafEvidenceV1 { artifact_openings: rows, ..claim_part };
-            let mut accusation =
-                evidence.into_accusation_v1(self.claim, view.execution_root, view.trace_root, view.producer, lg.bond(self.card));
-            let message = palw_shard_court_session_id_v1(lg.domain.as_byte_slice(), &accusation);
-            accusation.signature = lg.signed(self.card, message.as_byte_slice(), PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT);
-            lg.send(vec![(self.card, Obj::ShardCourtAccused { accusation: Box::new(accusation) })]).await;
-        } else {
-            // The supported replacement does not weaken the original D2 veto, on this same node.
-            let forbidden = self.demand(lg, PalwLegacyProbeV1::Terminal { leaf });
-            let funding = lg.funding[&self.card].clone();
-            let tx = lg.carrier(self.card, &forbidden);
-            let refusal = lg.mempool(&tx).expect_err("D2 must still refuse the old held StepLeaf demand");
-            lg.funding.insert(self.card, funding);
-            assert!(refusal.to_string().contains("no court compels them"), "{refusal}");
-            let object = self.demand(lg, PalwLegacyProbeV1::HeldNode { unit });
-            lg.send(vec![(self.card, object)]).await;
-            self.demands += 1;
-            lg.producer_answers(produced, withhold).await;
-        }
-        None
     }
 
     /// The engine run to its verdict, at most `cap` steps.
@@ -997,80 +803,6 @@ async fn licensed_claim(lg: &mut Lg, lie: bool) -> (Produced, Vec<usize>, u64) {
     (produced, seats, licensed)
 }
 
-/// Funded third-party relay on the legacy route, not complete TIR-original T08.
-/// The producer signs its answer before the newcomer pays for and submits it.
-#[tokio::test]
-async fn lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer() {
-    kaspa_core::log::try_init_logger("warn");
-    let mut lg = Lg::new(true);
-    let (produced, _, _) = licensed_claim(&mut lg, false).await;
-    let id = produced.claim_id;
-    let newcomer = lg.bond(NEWCOMER);
-    let producer = lg.bond(EXECUTOR);
-    let reservation = palw_fraud_filer_reservation_v1(&lg.view(id), newcomer);
-    let object = palw_dispute_reserved_object_v1(lg.domain, reservation, |m| {
-        sign(NEWCOMER, m, kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1, 0x71)
-    });
-    lg.send(vec![(NEWCOMER, object)]).await;
-    let mut verifier = Verifier::check(&lg, NEWCOMER, id);
-    let probe = PalwLegacyProbeV1::Binding { row: 0, tile: 0 };
-    let demand = verifier.demand(&mut lg, probe);
-    lg.send(vec![(NEWCOMER, demand)]).await;
-    let prepared = lg.signed_producer_answer_objects(&produced, &|_| false);
-    assert!(!prepared.is_empty(), "the actual node exposes the producer's duty");
-    for (signer, object) in &prepared {
-        assert_eq!(*signer, EXECUTOR);
-        let Obj::MaterialDisclosedV2 { discloser, claim, .. } = object else { panic!("signed disclosure") };
-        assert_eq!((*discloser, *claim), (producer, id));
-    }
-    let producer_funding = lg.funding[&EXECUTOR].clone();
-    let producer_collateral = lg.collateral(EXECUTOR);
-    let newcomer_input = lg.funding[&NEWCOMER].0;
-    let bytes: Vec<_> = prepared.iter().map(|(_, object)| borsh::to_vec(&PalwLifecycleTxPayloadV2 {
-        version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap()).collect();
-    // After preparation, send only constructs/signs NEWCOMER's outer UTXO
-    // carriers. It does not ask the producer to re-sign a court response.
-    let (carrying, _) = lg.send(prepared.into_iter().map(|(_, object)| (NEWCOMER, object)).collect()).await;
-    let mut seen = 0;
-    for block in carrying {
-        for tx in block.transactions.iter() {
-            if bytes.contains(&tx.payload) {
-                if seen == 0 { assert_eq!(tx.inputs[0].previous_outpoint, newcomer_input); }
-                assert_ne!(tx.inputs[0].previous_outpoint, producer_funding.0);
-                seen += 1;
-            }
-        }
-    }
-    assert_eq!(seen, bytes.len(), "the node template included every unchanged signed answer");
-    assert_eq!(lg.funding[&EXECUTOR], producer_funding, "producer's funding UTXO was not spent");
-    assert_eq!(lg.collateral(EXECUTOR), producer_collateral, "a correct relayed answer does not slash its signer");
-    assert!(!lg.chain.ctx.consensus.palw_disclosure_duties_v1(vec![producer]).duties.iter().any(|d| d.claim_id == id),
-        "native fold discharged the producer's answered duty");
-    assert!(verifier.learn(&lg, probe), "the independent verifier learns the authenticated binding");
-    assert!(verifier.binding.is_some());
-    // Query the real ledger, independently of the helper's funding map.
-    let relay_change = lg.funding[&NEWCOMER].clone();
-    let check_utxos = |chain: &T12Chain| {
-        let original = chain.ctx.consensus.get_virtual_utxo_entry(producer_funding.0).expect("producer's actual UTXO remains");
-        assert_eq!((original.amount, &original.script_public_key), (producer_funding.1.amount, &producer_funding.1.script_public_key));
-        assert!(chain.ctx.consensus.get_virtual_utxo_entry(newcomer_input).is_none(), "relayer's actual input is spent");
-        let change = chain.ctx.consensus.get_virtual_utxo_entry(relay_change.0).expect("relayer's actual change exists");
-        assert_eq!((change.amount, &change.script_public_key), (relay_change.1.amount, &relay_change.1.script_public_key));
-    };
-    check_utxos(&lg.chain);
-    // Full block replay into a fresh node, carrying no verifier-local cache.
-    // This is full IBD in the in-process harness, not pruned import/process restart.
-    let imported = lg.ibd().await;
-    check_utxos(&imported);
-    assert_eq!(imported.tip_state().1.state_root(), lg.chain.tip_state().1.state_root());
-    assert!(!imported.ctx.consensus.palw_disclosure_duties_v1(vec![producer]).duties.iter().any(|d| d.claim_id == id));
-    let resumed = lg.on_chain(imported, lg.funding.clone());
-    let mut fresh_verifier = Verifier::check(&resumed, NEWCOMER, id);
-    assert!(fresh_verifier.binding.is_none());
-    assert!(fresh_verifier.learn(&resumed, probe), "fresh verifier relearns only accepted relay evidence");
-    assert!(fresh_verifier.binding.is_some());
-}
-
 /// **G14 C1 / C5 / C7 / C8, before Final**: a non-seat bond registered after genesis convicts a self-consistent computation lie that
 /// every seat signed `Valid`. It reserves before the panel is bound (the bind, receipt and challenge clocks are then held), reads the
 /// claim's binding off the producer's answer, compares consecutive authenticated ranges with its own replay, and demands the
@@ -1078,20 +810,8 @@ async fn lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer() {
 /// window passes many times over; every deposit and refuted exposure is returned; a node replaying the chain reaches the same roots.
 #[tokio::test]
 async fn lg14a_a_non_seat_newcomer_convicts_a_computation_lie_before_final() {
-    conviction_before_final(false).await
-}
-
-/// **D2 (REQ-T6-4) on the isolated node**: D2 and LG14-B pass normal configuration validation.
-/// Every seat signs `Valid`; the outsider obtains only the committed witness and supplies its own model rows.
-/// X3 and real-network activation are outside this test.
-#[tokio::test]
-async fn d2_a_full_collusion_on_a_new_claim_is_convicted_before_final_on_the_node() {
-    conviction_before_final(true).await
-}
-
-async fn conviction_before_final(d2: bool) {
     kaspa_core::log::try_init_logger("warn");
-    let mut lg = if d2 { Lg::over_d2_isolated(TestConsensus::new) } else { Lg::over(true, TestConsensus::new) };
+    let mut lg = Lg::new(true);
     lg.beat(3).await;
     lg.register_newcomer().await;
     let produced = lg.real_attempt(EXECUTOR, true).await;
@@ -1126,16 +846,6 @@ async fn conviction_before_final(d2: bool) {
         lg.daa()
     );
     assert_eq!(verdict, PalwFilerPhaseV1::Convicted);
-    if d2 {
-        let accepted = lg.recent_objects(512);
-        assert!(accepted.iter().any(|o| matches!(o, Obj::LegacyHeldDemandedV2 { demand }
-            if demand.claim == id && matches!(demand.unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::KernelWitness { .. }))));
-        assert!(accepted.iter().any(|o| matches!(o, Obj::LegacyHeldAnsweredV2 { answer } if answer.claim == id)));
-        assert!(accepted.iter().any(|o| matches!(o, Obj::ShardCourtAccused { accusation } if accusation.claim == id)));
-        assert!(!accepted.iter().any(|o| matches!(o, Obj::DefaultAccusedHeld { accusation }
-            if accusation.claim == id && matches!(accusation.missing, PalwHeldMissingV1::StepLeaf { .. }))),
-            "no forbidden held StepLeaf demand reached the accepted chain");
-    }
     assert!(view.court_convicted || view.executor_refuted, "a recorded conviction");
     assert_eq!(v.bisect.located(), produced.lie_leaf, "the located leaf is the lie");
     assert!(lg.daa() > licensed + lg.bundle.state.window_challenge_at(licensed) + 1, "past the Final floor, never Final");
@@ -1306,38 +1016,13 @@ async fn lg14a_a_sybil_reservation_and_sessions_pre_empt_nothing() {
 /// the same database; the engine re-derives its case from the chain alone and convicts; every delta row survived.
 #[tokio::test]
 async fn lg14a_the_pursuit_survives_a_node_restart() {
-    restart_mid_pursuit(false).await
-}
-
-/// The X3 order: the engine reserves while the claim is still Provisional (before its open cutoff), then binds and licenses it.
-async fn reserved_then_licensed(lg: &mut Lg, lie: bool) -> (Produced, u64) {
-    lg.beat(3).await;
-    lg.register_newcomer().await;
-    let produced = lg.real_attempt(EXECUTOR, lie).await;
-    let id = produced.claim_id;
-    let mut v = Verifier::check(&*lg, NEWCOMER, id);
-    assert_eq!(v.step(lg, &produced, &|_| false).await, None, "the engine reserves before the bind");
-    let seats = lg.bind(id).await;
-    let licensed = lg.license(id, &seats).await;
-    (produced, licensed)
-}
-
-/// **D2 restart identity on the node (2026-10-18)**: the same stop-and-reopen with D2 armed; the pursuit survives and a fresh node
-/// replays the same roots.
-#[tokio::test]
-async fn d2_the_pursuit_survives_a_restart() {
-    restart_mid_pursuit(true).await
-}
-
-async fn restart_mid_pursuit(d2: bool) {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     kaspa_core::log::try_init_logger("warn");
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
-    let make = |c: &Config| TestConsensus::with_db(db.clone(), c, sender);
-    let mut lg = if d2 { Lg::over_d2_isolated(make) } else { Lg::over(true, make) };
+    let mut lg = Lg::over(true, |c| TestConsensus::with_db(db.clone(), c, sender));
     lg._keep.push(Box::new(receiver));
-    let produced = licensed_claim(&mut lg, true).await.0;
+    let (produced, _, _) = licensed_claim(&mut lg, true).await;
     let id = produced.claim_id;
     let mut v = Verifier::check(&lg, NEWCOMER, id);
     for _ in 0..4 {
@@ -1367,32 +1052,14 @@ async fn restart_mid_pursuit(d2: bool) {
     let mut v = Verifier::check(&lg, NEWCOMER, id);
     let verdict = v.pursue(&mut lg, &produced, &|_| false, 400).await;
     assert_eq!(verdict, PalwFilerPhaseV1::Convicted, "convicted after the restart");
-    if d2 {
-        let fresh = t12_genesis_chain_on(TestConsensus::new(&lg.config), &lg.config, &lg.bundle, &lg.premine, &lg.floats);
-        for block in chain_blocks(&lg.chain, lg.chain.sink()) {
-            let hash = block.header.hash;
-            arrive(&fresh, block, "D2 block after restart").await;
-            assert_eq!(root_at(&fresh, hash), root_at(&lg.chain, hash), "fresh node reproduces restarted D2 root at {hash}");
-        }
-    }
 }
 
 /// **G14 C8, reorg**: an admissible shallow fork omits a post-Final reservation; switching back restores its exact rows and hold.
 /// Both forks are judged under the shipped strict-economic-win rule, with roots checked against independent replay.
 #[tokio::test]
 async fn lg14a_a_reorg_undoes_and_returns_the_reservation_exactly() {
-    reorg_undoes_the_reservation(false).await
-}
-
-/// **D2 reorg identity on the node (2026-10-18)**: the same reorg with D2 armed.
-#[tokio::test]
-async fn d2_a_reorg_undoes_and_returns_the_reservation_exactly() {
-    reorg_undoes_the_reservation(true).await
-}
-
-async fn reorg_undoes_the_reservation(d2: bool) {
     kaspa_core::log::try_init_logger("warn");
-    let mut lg = Lg::over_with(true, d2, false, TestConsensus::new);
+    let mut lg = Lg::new(true);
     let (produced, _, licensed) = licensed_claim(&mut lg, true).await;
     let id = produced.claim_id;
     // Reserve in the post-Final stage. Both branches retain the same Final work, so a shallow GHOSTDAG win may reorg either
@@ -1488,275 +1155,3 @@ async fn lg14a_unarmed_the_reservation_is_dropped_by_name_and_the_bystander_is_o
 // Lane G14-R: the pursuit resumes across a reorg that removes the reservation, a full IBD node mid-descent and a pruned import:
 // `lg14a_legacy_filer_e2e/g14r_resume.rs`.
 mod g14r_resume;
-
-// Lane g14-close-legacy (2026-10-16): LG14-A + LG14-B + option (b) armed through `Params` that pass the whole validation with test
-// arm-readiness records (never a mirror-only bypass): full collusion convicted by an outside bond, held-DA withholding defaulted.
-mod g14_close_legacy;
-
-// ---- X3 on the node (REQ-X3-1..5, 2026-10-18): the probe policy, armed from genesis, on claims accepted under it -------------------
-
-/// **REQ-X3-1, 2, 3 on the node**: acceptance fixes the hard deadline at the composed windows; the effective deadline is the minimum
-/// of the proposed and the hard one; no later block (no extension, no regrant) moves a claim's deadline.
-#[tokio::test]
-async fn x3_req_1_2_3_the_hard_deadline_is_fixed_at_acceptance_on_the_node() {
-    kaspa_core::log::try_init_logger("warn");
-    let mut lg = Lg::over_with(false, false, true, TestConsensus::new);
-    let (produced, _, _) = licensed_claim(&mut lg, false).await;
-    let id = produced.claim_id;
-    let claim = lg.chain.tip_state().1.claim(&id).expect("the claim is on the tip").clone();
-    let policy = lg.bundle.state.claim_hard_deadline_v1().expect("armed").policy;
-    let hard = palw_claim_hard_deadline_of_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
-    assert_eq!(hard, palw_x3_hard_deadline_at_v1(&policy, claim.accepted_daa), "REQ-X3-1: fixed at acceptance by the composed windows");
-    assert_eq!(palw_claim_effective_deadline_v1(hard + 500, Some(hard)), hard, "REQ-X3-2: min(proposed, hard)");
-    assert_eq!(palw_claim_effective_deadline_v1(hard - 1, Some(hard)), hard - 1, "REQ-X3-2: a proposed deadline inside the hard one stands");
-    lg.beat(30).await;
-    let later = lg.chain.tip_state().1.claim(&id).expect("still on the tip").clone();
-    assert_eq!(later.accepted_daa, claim.accepted_daa);
-    assert_eq!(palw_claim_hard_deadline_of_v1(&lg.bundle.state, &later), Some(hard), "REQ-X3-3: no extension by later blocks");
-}
-
-/// **REQ-X3-4 on the node**: a pursuit starts only at or before the open cutoff and only if `start + B_remaining <= hard`, so the set of
-/// admissible starts is an interval from acceptance to a latest start; a node block flow past that start opens no reservation.
-#[tokio::test]
-async fn x3_req_4_a_pursuit_starts_only_inside_its_budget_on_the_node() {
-    kaspa_core::log::try_init_logger("warn");
-    let mut lg = Lg::over_with(true, false, true, TestConsensus::new);
-    lg.beat(3).await;
-    lg.register_newcomer().await;
-    let produced = lg.real_attempt(EXECUTOR, true).await;
-    let id = produced.claim_id;
-    let claim = lg.chain.tip_state().1.claim(&id).expect("on the tip").clone();
-    let deadlines = palw_claim_deadlines_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
-    let admitted: Vec<u64> = (claim.accepted_daa..=deadlines.open_cutoff_daa + 1)
-        .filter(|s| palw_claim_pursuit_may_start_v1(&lg.bundle.state, &claim, *s).is_ok())
-        .collect();
-    let latest = *admitted.last().expect("some start is admitted");
-    assert_eq!(admitted, (claim.accepted_daa..=latest).collect::<Vec<_>>(), "admitted starts form an interval");
-    assert!(latest <= deadlines.open_cutoff_daa, "never past the open cutoff");
-    lg.beat_to(latest + 1).await;
-    let mut v = Verifier::check(&lg, NEWCOMER, id);
-    v.step(&mut lg, &produced, &|_| false).await;
-    assert!(lg.view(id).record.is_none(), "REQ-X3-4 on the node: no reservation opens past the admitted start");
-}
-
-/// **REQ-X3-5 on the node**: an unresolved claim whose DA session is OPEN (the session holds the claim's Final under X3) is not Final
-/// at its hard deadline; reaching the deadline alone never Finals it. (Test premise corrected 2026-10-19, ADR-0188 §3.1.2: a plain
-/// reservation without a session does not hold under X3 — see `x3_req_5b_a_reservation_without_a_session_finals_at_its_effective_deadline`.)
-#[tokio::test]
-async fn x3_req_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim_on_the_node() {
-    kaspa_core::log::try_init_logger("warn");
-    let mut lg = Lg::over_with(true, false, true, TestConsensus::new);
-    let (produced, licensed) = reserved_then_licensed(&mut lg, true).await;
-    let id = produced.claim_id;
-    let newcomer = lg.bond(NEWCOMER);
-    // The reserved outsider reads the binding (answered), then demands the descent's first held unit; the producer withholds it, so
-    // a reserved DA session stays open on the claim (the same pursuit as `legacy_v2_attempt_held_da_withholding_ends_in_da_default`).
-    let mut v = Verifier::check(&lg, NEWCOMER, id);
-    let withhold = |unit: &PalwDaUnitV1| matches!(unit, PalwDaUnitV1::LegacyHeldV2(_));
-    for _ in 0..8 {
-        if v.binding.is_some() {
-            break;
-        }
-        v.step(&mut lg, &produced, &withhold).await;
-    }
-    let binding = v.binding.clone().expect("the binding, read off the producer's authenticated answer");
-    let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
-    let unit = kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 };
-    let object = v.demand(&mut lg, PalwLegacyProbeV1::HeldNode { unit });
-    lg.send(vec![(NEWCOMER, object)]).await;
-    assert!(
-        lg.view(id).sessions.iter().any(|(accuser, session)| *accuser == newcomer && session.units.contains(&PalwDaUnitV1::LegacyHeldV2(unit))),
-        "the reserved held session is open"
-    );
-    let claim = lg.chain.tip_state().1.claim(&id).expect("on the tip").clone();
-    let hard = palw_claim_hard_deadline_of_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
-    assert!(hard > licensed, "the hard deadline lies past the license");
-    // Walk past the hard deadline one beat at a time: while the session is open the claim is never Final; the withheld unit ends in
-    // the objective DA default (Voided), never in a deadline-made Final.
-    let mut daa = lg.daa();
-    while daa <= hard + 2 {
-        let phase = lg.view(id).phase.clone();
-        assert!(!matches!(phase, PalwClaimPhaseV2::Final { .. }), "REQ-X3-5: an unresolved claim is never Final by a deadline (daa {daa}, hard {hard}, phase {phase:?})");
-        if matches!(phase, PalwClaimPhaseV2::Voided { .. }) {
-            break;
-        }
-        lg.beat(1).await;
-        daa = lg.daa();
-    }
-}
-
-/// **REQ-X3-2 on the node (premise of REQ-X3-5, 2026-10-19)**: a plain reservation with NO DA session does not hold a claim under X3;
-/// it Finals at the effective deadline min(proposed, hard), which is the claim's window floor here (below the hard deadline).
-#[tokio::test]
-async fn x3_req_5b_a_reservation_without_a_session_finals_at_its_effective_deadline() {
-    kaspa_core::log::try_init_logger("warn");
-    let mut lg = Lg::over_with(true, false, true, TestConsensus::new);
-    let (produced, _licensed) = reserved_then_licensed(&mut lg, true).await;
-    let id = produced.claim_id;
-    let claim = lg.chain.tip_state().1.claim(&id).expect("on the tip").clone();
-    let hard = palw_claim_hard_deadline_of_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
-    assert!(lg.view(id).record.is_some(), "the reservation is live");
-    assert!(lg.chain.tip_state().1.da_claim(&id).map_or(0, |r| r.open_sessions()) == 0, "no DA session");
-    lg.beat_to(hard + 2).await;
-    match lg.view(id).phase {
-        // REQ-X3-2: effective = min(proposed, hard); a plain reservation (no session) does not hold the claim past it.
-        PalwClaimPhaseV2::Final { final_daa } => assert!(final_daa <= hard, "never past the hard deadline ({final_daa} > {hard})"),
-        other => panic!("a plain reservation without a session does not hold under X3: {other:?} (hard {hard})"),
-    }
-}
-
-/// **REQ-X3-1 across a restart (2026-10-18)**: the claim's fixed hard deadline is the same after the stop and the reopen, the PALW tip
-/// and every delta row are the same, and a fresh node replays the chain to the same roots.
-#[tokio::test]
-async fn x3_the_fixed_deadline_survives_a_restart_and_replays() {
-    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
-    kaspa_core::log::try_init_logger("warn");
-    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
-    let (sender, receiver) = async_channel::unbounded();
-    let mut lg = Lg::over_with(false, false, true, |c| TestConsensus::with_db(db.clone(), c, sender));
-    lg._keep.push(Box::new(receiver));
-    let (produced, _, _) = licensed_claim(&mut lg, false).await;
-    let id = produced.claim_id;
-    let claim = lg.chain.tip_state().1.claim(&id).expect("on the tip").clone();
-    let hard = palw_claim_hard_deadline_of_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
-    let (sink, root) = (lg.chain.sink(), lg.chain.tip_state().1.state_root());
-    let deltas: Vec<Hash64> = chain_blocks(&lg.chain, sink).iter().map(|b| root_at(&lg.chain, b.header.hash)).collect();
-    // ---- stop, reopen on the same database ----
-    let Lg { chain, config, bundle, premine, floats, funding, domain, backend, newcomer, nonce, rnd, _keep } = lg;
-    let (simulated_time, heartbeat_nonce) = (chain.ctx.simulated_time, chain.nonce_for_reopen());
-    drop(chain);
-    let mut resumed = config.clone();
-    resumed.process_genesis = false;
-    let (sender, receiver) = async_channel::unbounded();
-    let second = TestConsensus::with_db(db.clone(), &resumed, sender);
-    let chain = t12_reopened_chain(second, &resumed, &bundle, simulated_time, heartbeat_nonce);
-    let mut keep = _keep;
-    keep.push(Box::new(receiver));
-    let lg = Lg { chain, config, bundle, premine, floats, funding, domain, backend, newcomer, nonce, rnd, _keep: keep };
-    assert_eq!(lg.chain.sink(), sink);
-    assert_eq!(lg.chain.tip_state().1.state_root(), root, "the PALW tip, off disk");
-    for (b, want) in chain_blocks(&lg.chain, sink).iter().zip(&deltas) {
-        assert_eq!(root_at(&lg.chain, b.header.hash), *want, "the delta row of {} survived", b.header.hash);
-    }
-    let after = lg.chain.tip_state().1.claim(&id).expect("the claim survives the restart").clone();
-    assert_eq!(palw_claim_hard_deadline_of_v1(&lg.bundle.state, &after), Some(hard), "REQ-X3-1: the fixed deadline survives the restart");
-    // A fresh node replays the chain and reaches the same roots, block by block.
-    let z = t12_genesis_chain_on(TestConsensus::new(&lg.config), &lg.config, &lg.bundle, &lg.premine, &lg.floats);
-    for block in chain_blocks(&lg.chain, lg.chain.sink()) {
-        let hash = block.header.hash;
-        arrive(&z, block, "A's block").await;
-        assert_eq!(root_at(&z, hash), root_at(&lg.chain, hash), "the replaying node's root at {hash}");
-    }
-}
-
-/// REQ-X3-5: roll back and restore an open session across a LEGAL shallow tie.
-/// The reservation and authenticated binding are common history; only the held
-/// demand is on A. A pre-Final hold cannot beat a Final branch by heartbeat work.
-#[tokio::test]
-async fn x3_req_5c_a_reorg_moves_the_open_session_hold_exactly_with_the_branch() {
-    x3_shallow_hold_reorg(true).await;
-}
-
-/// The reservation itself is rolled back separately, within the same 2-DAA
-/// shallow-tie rule. No attempt-work race or relaxed reorg bound is used.
-#[tokio::test]
-async fn x3_req_5d_a_reorg_moves_the_reservation_exactly_with_the_branch() {
-    x3_shallow_hold_reorg(false).await;
-}
-
-async fn x3_shallow_hold_reorg(with_session: bool) {
-    use kaspa_consensus_core::sortable_block::SortableBlock;
-    kaspa_core::log::try_init_logger("warn");
-    let mut lg = Lg::over_with(true, false, true, TestConsensus::new);
-    lg.chain.ctx.consensus.set_validation_time_for_test(lg.chain.ctx.simulated_time);
-    let (produced, _, _) = licensed_claim(&mut lg, true).await;
-    let id = produced.claim_id;
-    let mut v = Verifier::check(&lg, NEWCOMER, id);
-    let withhold = |unit: &PalwDaUnitV1| matches!(unit, PalwDaUnitV1::LegacyHeldV2(_));
-    if with_session {
-        // Binding acquisition is common to both branches, so the disputed
-        // transition itself occupies at most the existing shallow-tie window.
-        for _ in 0..8 {
-            if v.binding.is_some() { break; }
-            v.step(&mut lg, &produced, &withhold).await;
-        }
-        assert!(v.binding.is_some(), "binding acquired from authenticated public answers");
-    }
-    let fork = lg.chain.sink();
-    let fork_time = lg.chain.ctx.consensus.get_block(fork).unwrap().header.timestamp;
-    let deadlines = palw_claim_deadlines_v1(&lg.bundle.state,
-        lg.chain.tip_state().1.claim(&id).unwrap()).unwrap();
-    assert!(lg.chain.daa_of(fork) <= deadlines.open_cutoff_daa);
-    if with_session {
-        let binding = v.binding.clone().unwrap();
-        let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
-        let unit = kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 };
-        let object = v.demand(&mut lg, PalwLegacyProbeV1::HeldNode { unit });
-        lg.send(vec![(NEWCOMER, object)]).await;
-    } else {
-        v.step(&mut lg, &produced, &withhold).await;
-    }
-    let hold = |c: &T12Chain| {
-        let state = c.tip_state().1;
-        (state.legacy_dispute_v1(&id).is_some_and(|r| r.holds()),
-         state.da_claim(&id).map_or(0, |r| r.open_sessions()),
-         std::mem::discriminant(&state.claim(&id).unwrap().phase))
-    };
-    let a_hold = hold(&lg.chain);
-    assert!(a_hold.0);
-    assert_eq!(a_hold.1, u32::from(with_session));
-    let shallow = kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1;
-    let span = lg.chain.daa_of(lg.chain.sink()) - lg.chain.daa_of(fork);
-    assert!(span > 0 && span <= shallow, "A's changed state is within the REAL shallow window");
-    let z = t12_genesis_chain_on(TestConsensus::new(&lg.config), &lg.config, &lg.bundle, &lg.premine, &lg.floats);
-    for block in chain_blocks(&lg.chain, lg.chain.sink()) {
-        z.ctx.consensus.set_validation_time_for_test(block.header.timestamp);
-        arrive(&z, block, "A's block").await;
-    }
-    assert_eq!(hold(&z), a_hold);
-    let a_header = lg.chain.ctx.consensus.get_block(lg.chain.sink()).unwrap().header;
-    let a_order = SortableBlock { hash: a_header.hash, blue_work: a_header.blue_work };
-    // Both branches have the SAME DAA span and work. Search the normal hash
-    // tie-break with independent nonces; never mine beyond the shallow bound.
-    let mut winner = None;
-    for trial in 0..256u64 {
-        let mut b = t12_genesis_chain_on(TestConsensus::new(&lg.config), &lg.config, &lg.bundle, &lg.premine, &lg.floats);
-        for block in chain_blocks(&lg.chain, fork) {
-            b.ctx.consensus.set_validation_time_for_test(block.header.timestamp);
-            arrive(&b, block, "the common prefix").await;
-        }
-        b.ctx.simulated_time = fork_time;
-        b.ctx.consensus.set_validation_time_for_test(fork_time);
-        b.set_nonce_for_fork(1_000_000 + trial * 16);
-        let mut blocks = Vec::new();
-        while b.daa_of(b.sink()) < lg.chain.daa_of(lg.chain.sink()) {
-            blocks.push(b.heartbeat(lg.ttpb(), Vec::new()).await);
-        }
-        let header = b.ctx.consensus.get_block(b.sink()).unwrap().header;
-        let order = SortableBlock { hash: header.hash, blue_work: header.blue_work };
-        assert_eq!(header.blue_work, a_header.blue_work, "a genuine GHOSTDAG work tie");
-        if order > a_order { winner = Some((b, blocks)); break; }
-    }
-    let (b, blocks) = winner.expect("a distinct shallow sibling wins the hash tie within the test search budget");
-    for block in blocks {
-        z.ctx.consensus.set_validation_time_for_test(block.header.timestamp);
-        arrive(&z, block, "B's sibling block").await;
-    }
-    assert_eq!(z.sink(), b.sink(), "legal shallow reorg onto B");
-    assert_eq!(z.tip_state().1.state_root(), b.tip_state().1.state_root());
-    let b_hold = hold(&z);
-    assert_eq!(b_hold.1, 0, "no stale session on B");
-    assert_eq!(b_hold.0, with_session, "only the shared reservation remains");
-    assert!(!matches!(z.tip_state().1.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
-        "the return must remain an economic tie, not undo a Final with heartbeat work");
-    let old_len = chain_blocks(&lg.chain, lg.chain.sink()).len();
-    lg.beat(1).await;
-    for block in chain_blocks(&lg.chain, lg.chain.sink()).into_iter().skip(old_len) {
-        z.ctx.consensus.set_validation_time_for_test(block.header.timestamp);
-        arrive(&z, block, "A's extension").await;
-    }
-    assert_eq!(z.sink(), lg.chain.sink(), "return from the shallow sibling");
-    assert_eq!(z.tip_state().1.state_root(), lg.chain.tip_state().1.state_root());
-    assert_eq!(hold(&z), hold(&lg.chain));
-    assert_eq!(hold(&z).1, u32::from(with_session));
-}

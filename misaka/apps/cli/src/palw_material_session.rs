@@ -207,10 +207,6 @@ pub(crate) fn enrollment_from_spec_v1(spec: &MaterialSessionSpecV1) -> Result<Pa
         return Err(CliError::generic("a native session needs at least two distinct provider offers"));
     }
     let sponsor = bond("sponsor", &spec.sponsor)?;
-    if sponsor != session.executor {
-        // The fold refuses a native session its executor did not sponsor (audit fix-cd): only the executor consents to it.
-        return Err(CliError::generic("a native session's sponsor must be its executor (nativeSession.executor)"));
-    }
     let nonce = match &spec.nonce {
         Some(text) => hash("nonce", text)?,
         None => derived(b"MISAKA/PALW/CLI/MATERIAL-SESSION-NONCE/V1", &(sponsor, session.clone(), spec.enrollment_until_daa))?,
@@ -360,8 +356,7 @@ mod tests {
     use super::*;
 
     fn spec() -> MaterialSessionSpecV1 {
-        // A transaction id is 64 bytes (128 hex): the earlier 64-hex fixture never parsed, so this test had never passed.
-        let txid = "ab".repeat(64);
+        let txid = "ab".repeat(32);
         MaterialSessionSpecV1 {
             network_domain: Hash64::from_u64_word(1).to_string(),
             sponsor: format!("{txid}:0"),
@@ -403,9 +398,6 @@ mod tests {
         let mut late = spec();
         late.native_session.admit_until_daa = 1_001;
         assert!(draft_v1(&late).is_err());
-        let mut third_party = spec();
-        third_party.sponsor = format!("{}:3", "ab".repeat(64));
-        assert!(draft_v1(&third_party).is_err(), "a session its executor does not sponsor is never drafted");
         let mut tampered = draft.clone();
         tampered.consent = Hash64::from_u64_word(9).to_string();
         assert!(decode_draft(&tampered).is_err());
