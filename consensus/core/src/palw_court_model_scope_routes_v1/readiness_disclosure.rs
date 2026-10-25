@@ -493,7 +493,11 @@ mod tests {
             if wrong {
                 assert_eq!(case.outcome, PalwD2DisclosureOutcomeV1::PathConvicted { at_daa: 3_140 });
                 assert_eq!(row.standing, PalwD2ReadinessStandingV1::PathConvicted { ordinal: 1, at_daa: 3_140 });
-                assert_eq!(palw_d2_disclosure_open_v1(&reg, &demand(rk, 2), cap, FEES, 3_141), Err(PalwD2DisclosureRefusalV1::RootNotCommitted));
+                // Signed validity is checked before the already-convicted root standing.
+                assert_eq!(palw_d2_disclosure_open_v1(&reg, &demand(rk, 2), cap, FEES, 3_141), Err(PalwD2DisclosureRefusalV1::DemandExpired));
+                let mut next = demand(rk, 2);
+                next.valid_until_daa = 3_141;
+                assert_eq!(palw_d2_disclosure_open_v1(&reg, &next, cap, FEES, 3_141), Err(PalwD2DisclosureRefusalV1::RootNotCommitted));
             } else {
                 assert_eq!(case.outcome, PalwD2DisclosureOutcomeV1::Disclosed { path, at_daa: 3_140 });
                 assert_eq!(row.standing, PalwD2ReadinessStandingV1::Committed);
