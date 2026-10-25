@@ -863,7 +863,8 @@ impl Consensus {
 
     /// Validates that a valid block *header* exists for `hash`
     fn validate_block_exists(&self, hash: BlockHash) -> Result<(), ConsensusError> {
-        if match self.statuses_store.read().get(hash).optional().unwrap() {
+        if match self.statuses_store.read().get(hash).optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("native block status read: {e}")))? {
             Some(status) => status.is_valid(),
             None => false,
         } {
@@ -4744,7 +4745,8 @@ impl ConsensusApi for Consensus {
         let _guard = self.pruning_lock.blocking_read();
         self.validate_block_exists(low)?;
         self.validate_block_exists(high)?;
-        Ok(self.services.reachability_service.is_chain_ancestor_of(low, high))
+        self.services.reachability_service.try_is_chain_ancestor_of(low, high)
+            .map_err(|e| ConsensusError::GeneralOwned(format!("native chain reachability read: {e}")))
     }
 
     // max_blocks has to be greater than the merge set size limit
@@ -5810,3 +5812,6 @@ mod evm_reader_fault_tests;
 
 #[cfg(test)]
 mod native_header_fault_tests;
+
+#[cfg(test)]
+mod canonicality_fault_tests;
