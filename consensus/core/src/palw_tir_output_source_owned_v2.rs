@@ -1,4 +1,4 @@
-//! Output conviction's retained native source, with the legacy frame/source
+//! Native original install/Open/grant/Output source, with the legacy frame/source
 //! identity contract preserved. No new installer, policy or source authority.
 use super::{Frame, PalwChainStateV2, PalwStateV2Error, refused};
 use crate::{
@@ -16,7 +16,47 @@ pub(super) fn observed_v2() -> (u64, u64) {
     OBSERVED.with(std::cell::Cell::get)
 }
 
-pub(super) fn source_v2(state: &PalwChainStateV2, frame: &Frame) -> Result<NativeRetainedV1<Source>, PalwStateV2Error> {
+/// Stack-only nonwire scope; the actual payload and demand are owned by the
+/// existing native constructor. It stores no serialized authority or deep copy.
+pub(super) struct OwnedNativeSourceV2 {
+    source: NativeRetainedV1<Source>,
+}
+impl std::ops::Deref for OwnedNativeSourceV2 {
+    type Target = Source;
+    fn deref(&self) -> &Source {
+        &self.source
+    }
+}
+#[cfg(test)]
+thread_local! {static LIFECYCLE:std::cell::Cell<(u64,u64,u64)>=const{std::cell::Cell::new((0,0,0))};}
+#[cfg(test)]
+pub(super) fn reset_lifecycle_v2() {
+    LIFECYCLE.with(|c| c.set((0, 0, 0)));
+}
+#[cfg(test)]
+pub(super) fn lifecycle_v2() -> (u64, u64, u64) {
+    LIFECYCLE.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+pub(super) fn final_use_v2(owner: &OwnedNativeSourceV2) {
+    assert_ne!(owner.source_id_v1(), crate::Hash64::default());
+    LIFECYCLE.with(|c| {
+        let (created, dropped, used) = c.get();
+        assert!(created > dropped);
+        c.set((created, dropped, used + 1));
+    });
+}
+#[cfg(test)]
+impl Drop for OwnedNativeSourceV2 {
+    fn drop(&mut self) {
+        LIFECYCLE.with(|c| {
+            let (a, b, d) = c.get();
+            c.set((a, b + 1, d));
+        });
+    }
+}
+
+pub(super) fn source_v2(state: &PalwChainStateV2, frame: &Frame) -> Result<OwnedNativeSourceV2, PalwStateV2Error> {
     // Same lookup as legacy source(b,frame), and same full frame check as
     // frame.source_v1. The argument is the actual native fold's resolved frame.
     let record = state.tir_class_v1(&frame.original_v1().job.class_id).ok_or_else(|| refused("TIR original class is absent"))?;
@@ -55,5 +95,10 @@ pub(super) fn source_v2(state: &PalwChainStateV2, frame: &Frame) -> Result<Nativ
         let (a, b) = c.get();
         c.set((a, b + 1));
     });
-    Ok(source)
+    #[cfg(test)]
+    LIFECYCLE.with(|c| {
+        let (a, b, d) = c.get();
+        c.set((a + 1, b, d));
+    });
+    Ok(OwnedNativeSourceV2 { source })
 }

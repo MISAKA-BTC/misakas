@@ -723,7 +723,7 @@ pub(super) fn install_original_v1(
         )
         .map_err(refused)?;
     }
-    let original_source = source(b, &frame)?;
+    let original_source = output_source_owned_v2::source_v2(&b.state, &frame)?;
     let preparation = PalwTirPublicPreparationV1::new_v1(
         PalwTirPublicPreparationContractV1 {
             claim: p.original_claim,
@@ -743,6 +743,9 @@ pub(super) fn install_original_v1(
         &p.acquisition,
     )
     .map_err(refused)?;
+    #[cfg(test)]
+    output_source_owned_v2::final_use_v2(&original_source);
+    drop(original_source);
     let prep = PalwTirPublicPreparationRowV1 {
         descriptor: frame.descriptor_v1().clone(),
         allocation_id: p.allocation_id,
@@ -980,7 +983,7 @@ fn open_v1(
     b.check_accuser_room(owner, u128::from(c.terms.plan.deposit_sompi), "TIR public owner", ctx.daa_score)?;
     let funded =
         c.terms.plan.rent_sompi.checked_add(c.terms.plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("TIR owner funding"))?;
-    let original_source = source(b, frame)?;
+    let original_source = output_source_owned_v2::source_v2(&b.state, frame)?;
     let Some(Row::TirPreparation(prep)) = b.state.staged_court_row_v1(&frame.preparation_key_v1()) else {
         return Err(refused("TIR Open lost original shared preparation"));
     };
@@ -1001,6 +1004,9 @@ fn open_v1(
     .map_err(refused)?;
     owned.install_work_v1(&original_source, frame.plan_v1().owner_work.clone()).map_err(refused)?;
     owned.bind_preparation_v1(&original_source, &prep.preparation).map_err(refused)?;
+    #[cfg(test)]
+    output_source_owned_v2::final_use_v2(&original_source);
+    drop(original_source);
     if owned.response_custodians_v1().is_empty() {
         return Err(refused("TIR Open has no original Ready source; collect preparation defaults"));
     }
@@ -1666,7 +1672,7 @@ fn apply_grant_ready_inner_v1(
         crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
     )
     .map_err(|e| refused(format!("TIR ordinary Valid receipt refused: {e:?}")))?;
-    let original_source = source(b, &frame)?;
+    let original_source = output_source_owned_v2::source_v2(&b.state, &frame)?;
     let Some(Row::TirPreparation(old)) = b.state.staged_court_row_v1(&frame.preparation_key_v1()) else {
         return Err(refused("TIR atomic grant lost original preparation"));
     };
@@ -1697,6 +1703,9 @@ fn apply_grant_ready_inner_v1(
             network_domain,
         )
         .map_err(refused)?;
+    #[cfg(test)]
+    output_source_owned_v2::final_use_v2(&original_source);
+    drop(original_source);
     prep.check_structure_v1(&frame.preparation_key_v1()).map_err(refused)?;
     b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)))?;
     b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
@@ -1782,6 +1791,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_tir_three_source_consumers_tests_v2.rs");
     include!("palw_tir_output_source_owned_tests_v2.rs");
     include!("palw_court_shared_ids_typed_native_tests_v2.rs");
     include!("palw_court_shared_output_native_tests.rs");
