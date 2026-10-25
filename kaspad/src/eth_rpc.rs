@@ -119,30 +119,23 @@ impl NodeEthProvider {
                 let added: Vec<_> = vcc.added_chain_block_hashes.iter().copied().collect();
                 let removed: Vec<_> = vcc.removed_chain_block_hashes.iter().copied().collect();
                 let log_added = added.clone();
-                let session = self.consensus_manager.consensus().session().await;
-                let heads: Vec<EthBlock> = session
-                    .spawn_blocking(move |c| {
-                        // newHeads: each added EVM block's header, in commit order
-                        // (added is oldest-first); non-EVM blocks read as None.
-                        let heads: Vec<EthBlock> = if want_heads {
-                            added
-                                .iter()
-                                .copied()
-                                .filter_map(|l1| {
-                                    let resp = c.get_evm_block_by_l1_hash(l1);
-                                    let parent = parent_l1_hash32(c, &resp);
-                                    match resp {
-                                        Ok(Some(r)) => Some(to_eth_block(r, parent)),
-                                        _ => None,
-                                    }
-                                })
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
-                        heads
-                    })
-                    .await;
+                let heads = if want_heads {
+                    retry_reorg_logs_v2(
+                        || {
+                            let added = added.clone();
+                            let manager = self.consensus_manager.clone();
+                            async move {
+                                let session = manager.consensus().session().await;
+                                session.spawn_blocking(move |c| collect_heads_checked_v3(c, &added)).await
+                            }
+                        },
+                        || self.heads_tx.receiver_count() > 0,
+                        shutdown.clone(),
+                        std::time::Duration::from_millis(250),
+                    ).await.unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 // Lossy under lag — a slow WS subscriber drops events and reconnects
                 // + backfills (design R-5); the sends never block the pump.
                 for head in heads {
@@ -598,15 +591,7 @@ impl EthProvider for NodeEthProvider {
 
     async fn block_by_number(&self, number: u64) -> EthResult<Option<EthBlock>> {
         let session = self.consensus_manager.consensus().session().await;
-        let (resp, parent) = session
-            .spawn_blocking(move |c| {
-                let resp = c.get_evm_block_by_number(number);
-                let parent = parent_l1_hash32(c, &resp);
-                (resp, parent)
-            })
-            .await;
-        let resp = resp.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        Ok(resp.map(|r| to_eth_block(r, parent)))
+        session.spawn_blocking(move |c| checked_block_with_parent_v3(c, c.get_evm_block_by_number(number))).await
     }
 
     async fn block_by_tag(&self, tag: &str) -> EthResult<Option<EthBlock>> {
@@ -615,7 +600,7 @@ impl EthProvider for NodeEthProvider {
         // Resolve each tag to its real L1 block (audit H-04): latest/pending = the
         // latest fully executed canonical result; safe/finalized = certified prefix
         // pointers or explicit absence; earliest = number 0. Missing heads never alias the sink.
-        let (resp, parent) = session
+        session
             .spawn_blocking(move |c| {
                 let heads = c.get_evm_canonical_heads().map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?;
                 let resp = match tag.as_str() {
@@ -639,26 +624,15 @@ impl EthProvider for NodeEthProvider {
                         None => Ok(None),
                     }, // latest / pending
                 };
-                let parent = parent_l1_hash32(c, &resp);
-                Ok((resp, parent))
+                checked_block_with_parent_v3(c, resp)
             })
-            .await?;
-        let resp = resp.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        Ok(resp.map(|r| to_eth_block(r, parent)))
+            .await
     }
 
     async fn block_by_hash(&self, hash: [u8; 32]) -> EthResult<Option<EthBlock>> {
         let session = self.consensus_manager.consensus().session().await;
         let h = EvmH256::from_bytes(hash);
-        let (resp, parent) = session
-            .spawn_blocking(move |c| {
-                let resp = c.get_evm_block_by_rpc_hash(h);
-                let parent = parent_l1_hash32(c, &resp);
-                (resp, parent)
-            })
-            .await;
-        let resp = resp.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        Ok(resp.map(|r| to_eth_block(r, parent)))
+        session.spawn_blocking(move |c| checked_block_with_parent_v3(c, c.get_evm_block_by_rpc_hash(h))).await
     }
 
     async fn get_logs(&self, from: u64, to: u64, addresses: Vec<[u8; 20]>, topics: Vec<Vec<[u8; 32]>>) -> EthResult<Vec<EthLogEntry>> {
@@ -1162,30 +1136,51 @@ fn resolve_executed_tag(
 }
 
 /// The eth-rpc 32-byte parentHash of an EVM block: the first 32 bytes of the
-/// `evm_number − 1` block's L1 hash (audit H-04). Zero for EVM block 0 or when
-/// the parent cannot be read (a non-fatal best-effort field).
+/// immutable selected parent's L1 hash. Zero for EVM block 0 or the native
+/// API's genuine first-EVM boundary. Read errors must not fabricate genesis.
 fn parent_l1_hash32(
     c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
-    resp: &kaspa_consensus_core::errors::consensus::ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>>,
-) -> [u8; 32] {
-    let Ok(Some(r)) = resp else { return [0u8; 32] };
+    r: &kaspa_consensus_core::evm::EvmBlockResponse,
+) -> EthResult<[u8; 32]> {
     if r.header.evm_number == 0 {
-        return [0u8; 32];
+        return Ok([0u8; 32]);
     }
-    match c.get_evm_block_by_number(r.header.evm_number - 1) {
-        Ok(Some(p)) => {
+    Ok(match transaction_read_v2("EVM immutable parent", c.get_evm_parent_l1_hash(r.l1_hash))? {
+        Some(p) => {
             let mut h = [0u8; 32];
-            h.copy_from_slice(&p.l1_hash.as_bytes()[..32]);
+            h.copy_from_slice(&p.as_bytes()[..32]);
             h
         }
-        _ => [0u8; 32],
+        None => [0u8; 32],
+    })
+}
+
+fn checked_block_with_parent_v3(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    response: kaspa_consensus_core::errors::consensus::ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>>,
+) -> EthResult<Option<EthBlock>> {
+    let Some(block) = transaction_read_v2("EVM block", response)? else { return Ok(None) };
+    let parent = parent_l1_hash32(c, &block)?;
+    Ok(Some(to_eth_block(block, parent)))
+}
+
+fn collect_heads_checked_v3(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    added: &[kaspa_consensus_core::BlockHash],
+) -> EthResult<Vec<EthBlock>> {
+    let mut heads = Vec::new();
+    for &l1 in added {
+        if let Some(head) = checked_block_with_parent_v3(c, c.get_evm_block_by_l1_hash(l1))? {
+            heads.push(head);
+        }
     }
+    Ok(heads)
 }
 
 /// Map a consensus `EvmBlockResponse` to the adapter's primitive [`EthBlock`].
 /// The 32-byte `hash` is the first 32 bytes of the 64-byte L1 hash (the same id
 /// the receipt exposes as `blockHash`); `parent_hash` is the `evm_number − 1`
-/// block's id (audit H-04), computed by [`parent_l1_hash32`].
+/// immutable selected-parent id, computed by [`parent_l1_hash32`].
 fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse, parent_hash: [u8; 32]) -> EthBlock {
     let h = &resp.header;
     let mut hash = [0u8; 32];
@@ -1266,7 +1261,7 @@ async fn retry_reorg_logs_v2<T, E: std::fmt::Debug, F: std::future::Future<Outpu
             Ok(events) => return wanted().then_some(events),
             Err(error) => {
                 if !warned {
-                    kaspa_core::warn!("[{ETH_RPC}] logs: immutable reorg read unavailable; retaining notification for retry: {error:?}");
+                    kaspa_core::warn!("[{ETH_RPC}] immutable notification read unavailable; retaining notification for retry: {error:?}");
                     warned = true;
                 }
             }
@@ -1437,3 +1432,7 @@ mod exact_hash_logs_tests;
 #[cfg(test)]
 #[path = "eth_rpc_reorg_retry_tests.rs"]
 mod reorg_retry_tests;
+
+#[cfg(test)]
+#[path = "eth_rpc_head_fault_tests.rs"]
+mod head_fault_tests;
