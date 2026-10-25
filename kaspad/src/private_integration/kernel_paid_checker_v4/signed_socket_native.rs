@@ -17,6 +17,12 @@ fn dir() -> Option<PathBuf> {
     std::env::var_os("MISAKA_SIGNED_PROVIDER_HANDOFF_V4")
         .map(|path| std::fs::canonicalize(path).expect("existing canonical fixture directory"))
 }
+/// Negative control: the provider signs an authenticated `Refused` answer.
+/// That is an availability failure, never an exact invalid-unit coordinate,
+/// so it must reach only the answer obligation, never computation conviction.
+fn refuse_mode() -> bool {
+    std::env::var("MISAKA_SIGNED_PROVIDER_MODE_V4").as_deref() == Ok("refuse")
+}
 fn child_name(name: &str) -> String {
     format!("{}::{name}", module_path!().split_once("::").unwrap().1)
 }
@@ -92,7 +98,12 @@ fn provider_child() {
             (query.root, query.dependency, query.consent, query.provider),
             (input.root, input.root, input.consent, input.provider)
         );
-        let body = borsh::to_vec(&R::Answer { query: query.clone(), bytes: vec![0] }).unwrap();
+        let response = if refuse_mode() {
+            R::Refused { query: query.clone(), reason: "fixture provider withholds this unit".into() }
+        } else {
+            R::Answer { query: query.clone(), bytes: vec![0] }
+        };
+        let body = borsh::to_vec(&response).unwrap();
         let signer = |m: &[u8], c: &[u8]| Ok(key.sign_with_context(m, c).to_vec());
         let response = provider_transport_response_v1(&request.header, now(), body, vec![(input.provider, &signer)]).unwrap();
         let bytes = borsh::to_vec(&response).unwrap();
@@ -184,12 +195,31 @@ async fn checker_child() {
         )
         .err()
         .expect("genuine signed socket unit must fail actual SDK validation");
-    assert!(!transport_failed.get(), "signature/echo/authenticated transport must succeed before SDK failure");
-    let unit = provider_material_challenge_unit_v4(&error).expect("exact unit decoding/authentication provenance");
-    assert!(matches!(
-        error.into_cause(),
-        kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4::InvalidMaterial(_)
-    ));
+    use kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4 as FetchE;
+    let refused = refuse_mode();
+    // Same typed acquisition account the production checker logs, for both
+    // the availability and the invalid-material controls.
+    let report = error.acquisition_report().expect("reader-level failure carries its acquisition account");
+    assert_eq!(report.target, misaka_palw_kernel::claim_paid_v2::PaidClaimTargetV2::Program);
+    assert!(report.unit_requests >= 1);
+    if refused {
+        assert_eq!(report.fetched_bytes, 0, "a refused unit contributes no authenticated material bytes");
+    } else {
+        assert!(report.fetched_bytes >= 1, "the malformed signed unit was received and counted");
+    }
+    eprintln!("SIGNED_UNIT_NATIVE_V4 sdk_acquisition={report:?}");
+    let located = if refused {
+        // The signed refusal verifies, then is classified as availability.
+        assert!(transport_failed.get(), "authenticated refusal is a classified acquisition failure");
+        assert!(provider_material_challenge_unit_v4(&error).is_none(), "availability never yields an invalid-unit coordinate");
+        assert!(matches!(error.into_cause(), FetchE::Unavailable(_)), "refusal is Unavailable, not InvalidMaterial");
+        None
+    } else {
+        assert!(!transport_failed.get(), "signature/echo/authenticated transport must succeed before SDK failure");
+        let unit = provider_material_challenge_unit_v4(&error).expect("exact unit decoding/authentication provenance");
+        assert!(matches!(error.into_cause(), FetchE::InvalidMaterial(_)));
+        Some(unit)
+    };
     // Full daemon checker context: no copied binder/sign/funding or authority reconstruction.
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(node.clone()))).unwrap());
     let tick = Arc::new(TickService::new());
@@ -275,17 +305,31 @@ async fn checker_child() {
     tick.shutdown();
     running.await.unwrap();
     assert!(server.0.wait().unwrap().success());
+    // Refusal: the coordinate is the production checker's own failed signed
+    // query (provider's second request), never an SDK decode location.
+    let unit = match located {
+        Some(unit) => unit,
+        None => {
+            let q: PalwKernelMaterialUnitQueryV4 =
+                borsh::from_slice(&std::fs::read(dir.join("provider-query-1")).unwrap()).unwrap();
+            (q.stage, q.position)
+        }
+    };
     let object: PalwConsensusObjectV2 = borsh::from_slice(&std::fs::read(&object_path).unwrap()).unwrap();
     let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, .. } = &object else { panic!("actual monetary challenge") };
     let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { stage, position, .. } =
         &**action
     else {
-        panic!("availability obligation")
+        panic!("only the funded availability answer obligation, never FileProof/conviction")
     };
     assert_eq!((*stage, *position), unit);
     std::fs::copy(object_path, dir.join("checker-object")).unwrap();
     std::fs::copy(tx_path, dir.join("checker-transaction")).unwrap();
-    eprintln!("SIGNED_UNIT_NATIVE_V4 checker_pid={} provider_pid={pid} sdk_unit={unit:?} production_wal=ready", std::process::id());
+    eprintln!(
+        "SIGNED_UNIT_NATIVE_V4 mode={} checker_pid={} provider_pid={pid} unit={unit:?} production_wal=ready",
+        if refused { "refuse-availability" } else { "malformed-invalid-material" },
+        std::process::id()
+    );
     drop(client);
     drop(source);
     drop(ctx);

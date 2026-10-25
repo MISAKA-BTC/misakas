@@ -174,3 +174,42 @@ fn full_parameter_reconstruction_failure_never_blames_the_last_authentic_row() {
     let failure = ProviderReaderFailureV4::from(cause);
     assert_eq!(provider_material_challenge_unit_v4(&failure), None);
 }
+#[test]
+fn acquisition_report_is_returned_for_clean_unavailable_and_malformed_reads() {
+    let fixture = MemoryProvider::new();
+    let mut calls = 0u32;
+    let mut bytes = 0u64;
+    let clean = located(&fixture, MemoryProvider::limits(), |s, p| {
+        let raw = fetched(&fixture, s, p)?;
+        calls += 1;
+        bytes += raw.len() as u64;
+        Ok(raw)
+    })
+    .unwrap();
+    let report = clean.acquisition_report();
+    assert_eq!(report.target, PaidClaimTargetV2::TypedSpec);
+    assert_eq!((report.unit_requests, report.fetched_bytes), (calls, bytes), "report equals the observed provider IO");
+    assert!(report.workspace_bytes_charged >= report.fetched_bytes);
+    assert!(report.workspace_bytes_charged <= MemoryProvider::limits().max_workspace_bytes);
+    // Availability: the request is counted, no material byte is.
+    let unavailable =
+        match located(&fixture, MemoryProvider::limits(), |_, _| Err(ProviderReaderErrorV4::Unavailable("provider withheld".into()))) {
+            Err(failure) => failure,
+            Ok(_) => panic!("unavailable read cannot complete"),
+        };
+    let report = unavailable.acquisition_report().expect("reader-level failure keeps its account");
+    assert_eq!((report.unit_requests, report.fetched_bytes), (1, 0));
+    assert_eq!(unavailable.invalid_unit(), None, "availability never becomes an invalid-unit coordinate");
+    // Malformed: the received byte is counted and the exact unit is kept.
+    let first = std::cell::Cell::new(true);
+    let malformed = match located(&fixture, MemoryProvider::limits(), |s, p| {
+        if first.replace(false) { NativeRetainedV1::retain_existing_v1(vec![0]).map_err(capacity) } else { fetched(&fixture, s, p) }
+    }) {
+        Err(failure) => failure,
+        Ok(_) => panic!("malformed unit cannot complete"),
+    };
+    let report = malformed.acquisition_report().unwrap();
+    assert_eq!((report.unit_requests, report.fetched_bytes), (1, 1));
+    assert!(matches!(malformed.cause(), ProviderReaderErrorV4::InvalidMaterial(_)));
+    assert!(malformed.invalid_unit().is_some());
+}

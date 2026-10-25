@@ -568,6 +568,9 @@ impl PreparedKernelPaidCheckV4 {
                             PalwKernelMaterialFetchErrorV4 as E, monetary_material_challenge_object_v4,
                         };
                         let invalid_unit = provider_material_challenge_unit_v4(&error);
+                        if let Some(report) = error.acquisition_report() {
+                            kaspa_core::debug!("checker provider acquisition before failure: {report:?}");
+                        }
                         let error = error.into_cause();
                         if matches!(error, E::LocalCapacity(_)) {
                             kaspa_core::debug!("checker local capacity pending; no provider obligation or conviction: {error}");

@@ -25,7 +25,7 @@ fn bad(e: impl ToString) -> ProviderReaderErrorV4 {
 }
 #[path = "provider_reader_v4_failure.rs"]
 mod failure;
-pub use failure::ProviderReaderFailureV4;
+pub use failure::{ProviderAcquisitionReportV4, ProviderReaderFailureV4};
 
 fn compatibility(error: ProviderReaderErrorV4) -> Refusal {
     Refusal::new("PROVIDER_READER_V4", error.to_string())
@@ -218,9 +218,14 @@ use std::cell::{Cell, RefCell};
 /// checker/court/RSS or database bound.
 pub struct ProviderCheckedResultV4 {
     result: PaidClaimVerificationResultV2,
+    report: ProviderAcquisitionReportV4,
     _acquisition: Option<NativeDemandLeaseV1>,
 }
 impl ProviderCheckedResultV4 {
+    /// Same typed acquisition account for all four adapter targets.
+    pub fn acquisition_report(&self) -> ProviderAcquisitionReportV4 {
+        self.report
+    }
     pub fn finding(&self) -> &OutsiderFindingV1 {
         &self.result.finding
     }
@@ -614,11 +619,17 @@ fn check_provider_material_located_v4<F: FnMut(u8, u32) -> Result<NativeRetained
         }),
         PaidClaimTargetV2::Segmented => check.verify_segmented(&outsider, &reader, &canonical_opening.tokens),
     };
+    let report = ProviderAcquisitionReportV4 {
+        target,
+        unit_requests: reader.calls.get(),
+        fetched_bytes: reader.bytes.get(),
+        workspace_bytes_charged: reader.charged.get(),
+    };
     if let Some(error) = reader.error.into_inner() {
-        return Err(ProviderReaderFailureV4::from_reader(error, reader.invalid_unit.get()));
+        return Err(ProviderReaderFailureV4::from_reader(error, reader.invalid_unit.get(), report));
     }
     let result = checked.map_err(bad)?;
-    Ok(ProviderCheckedResultV4 { result, _acquisition: reader.lease.into_inner() })
+    Ok(ProviderCheckedResultV4 { result, report, _acquisition: reader.lease.into_inner() })
 }
 
 /// Compatibility entry point for callers whose transport still returns strings.

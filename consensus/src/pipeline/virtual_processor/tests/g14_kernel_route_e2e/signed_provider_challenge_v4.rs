@@ -15,9 +15,28 @@ fn rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge() {
         .args(["--exact", &child_name("typed_writer_child"), "--nocapture", "--test-threads=1"])
         .env("MISAKA_TYPED_WRITER_CHILD_V4", "1")
         .env("MISAKA_SIGNED_PROVIDER_NATIVE_V4", "1")
+        .env_remove("MISAKA_SIGNED_PROVIDER_MODE_V4")
         .status()
         .unwrap();
     assert!(status.success(), "same-claim native writer failed: {status}");
+}
+/// Negative control on the same actual path: an authenticated provider refusal
+/// is availability. The checker files only the funded answer obligation; the
+/// SDK reports `Unavailable` with no invalid-unit coordinate (asserted in the
+/// kaspad child), and nothing here is a computation conviction or approval.
+#[test]
+#[ignore = "requires explicitly pinned matching kaspad test executable; run with --ignored"]
+fn rfc07_signed_socket_refusal_is_availability_obligation_not_conviction() {
+    let bin = std::env::var_os("MISAKA_SIGNED_PROVIDER_CHECKER_BIN_V4").expect("explicit matching kaspad test binary required");
+    assert!(std::path::Path::new(&bin).is_file());
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &child_name("typed_writer_child"), "--nocapture", "--test-threads=1"])
+        .env("MISAKA_TYPED_WRITER_CHILD_V4", "1")
+        .env("MISAKA_SIGNED_PROVIDER_NATIVE_V4", "1")
+        .env("MISAKA_SIGNED_PROVIDER_MODE_V4", "refuse")
+        .status()
+        .unwrap();
+    assert!(status.success(), "same-claim native refusal writer failed: {status}");
 }
 pub(super) async fn paid_job(w: &mut World, job: &KernelJobV1) -> (Digest, Digest) {
     use misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2 as P;
