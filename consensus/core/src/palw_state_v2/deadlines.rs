@@ -2,7 +2,11 @@
 
 use super::*;
 
+#[path = "court_deadline_workspace_v2.rs"]
+mod workspace;
+
 pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    builder.reserve_court_deadline_workspace_v2(ctx.daa_score)?;
     // audit B-04/B-05 (fix-b): a session on a service-bound claim is ended here like any other (no held-skip cursor any more), and
     // its archive records the sweep as its cause. The cause is per session: restored before every iteration and after the sweep.
     let outer_cause = builder.court_end_evidence.clone();
@@ -588,4 +592,12 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
         }
     }
     Ok(())
+}
+
+
+impl TransitionBuilder<'_> {
+    pub(super) fn reserve_court_deadline_workspace_v2(&mut self, daa: u64) -> Result<(), PalwStateV2Error> {
+        if !self.native_writers_tracking_v1() { return Ok(()); }
+        self.admit_native_write_v1(workspace::quote(&self.state, daa)?)
+    }
 }

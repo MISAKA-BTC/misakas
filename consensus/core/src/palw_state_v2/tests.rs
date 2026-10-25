@@ -18,6 +18,7 @@ mod gdn_court_v2;
 // RFC-0006: remaining shared writer admission (payout/exposure/court/index/encoded/kernel rows) and the lenient-consumer guard.
 mod native_writers_v1;
 mod vesting_workspace_v2;
+mod court_deadline_workspace_v2;
 mod native_routing_work_v2;
 // RFC-0008: once-only settlement across consumers (dormant fence; kernel route aux 140).
 mod settlement_once_v1;
