@@ -11,6 +11,8 @@ use crate::palw_court_capacity_v1::*;
 
 #[path = "palw_court_capacity_sweep_workspace_v2.rs"]
 mod sweep_workspace;
+#[path = "palw_court_admission_workspace_v2.rs"]
+mod admission_workspace;
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CourtCapacityRefused(why.into())
@@ -210,7 +212,11 @@ pub(super) fn check_court_claim_admission_v1(
 /// **G14 lane r6-d1-release (r5-original-admission open 4): the claims a funded original admission reserved court capacity for** —
 /// every funded escrow row with an open, unsettled liability. Empty below `palw_tir_public_conviction_v1` (no funded row exists).
 pub(super) fn palw_funded_court_reserve_claims_v1(state: &PalwChainStateV2) -> std::collections::BTreeSet<Hash64> {
-    state.funded_escrows_v1().values().filter(|row| row.liability_open && row.settled_by.is_none()).map(|row| row.claim).collect()
+    funded_court_reserve_claims_borrowed_v2(state).collect()
+}
+
+fn funded_court_reserve_claims_borrowed_v2(state: &PalwChainStateV2) -> impl Iterator<Item = Hash64> + '_ {
+    state.funded_escrows_v1().values().filter(|row| row.liability_open && row.settled_by.is_none()).map(|row| row.claim)
 }
 
 /// **G14 lane r6-d1-release: the court-capacity reservation of a funded original admission** (when `palw_court_capacity_v1` is in
@@ -630,12 +636,11 @@ pub(super) fn court_admission_v1(
     let now = ctx.daa_score;
     let Some(mirror) = builder.params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(PalwCourtAdmissionV1::Legacy) };
     let policy = mirror.policy;
-    let mut record = builder
+    let record = builder
         .state
         .legacy_disputes
         .get(&claim_id)
         .filter(|record| record.live.contains_key(&challenger))
-        .cloned()
         .ok_or_else(|| refused(PALW_COURT_REFUSAL_NO_RESERVATION_V1))?;
     let bond = builder.state.bonds.get(&challenger).ok_or(PalwStateV2Error::MissingBond(challenger))?;
     if !matches!(bond.status, PalwBondStatusV2::Active) {
@@ -667,13 +672,17 @@ pub(super) fn court_admission_v1(
     // (`check_funded_court_reserve_v1`); its first court row runs on it.
     let reserve = !record.court_reserve_used
         && (palw_court_demanding_claim_v1(&builder.state, mirror.from_daa, claim)
-            || (claim.accepted_daa >= mirror.from_daa && palw_funded_court_reserve_claims_v1(&builder.state).contains(&claim_id)));
+            || (claim.accepted_daa >= mirror.from_daa && funded_court_reserve_claims_borrowed_v2(&builder.state).any(|id| id == claim_id)));
     // Round 2 (limit 2): the j-th concurrent court row on one claim pays j × the occupancy rate.
     let weight = policy.weight().saturating_mul(1 + record.courts.len() as u64);
     let escrow = policy.fee(ticket_window.saturating_add(session_window), weight);
     if escrow > 0 {
         builder.check_accuser_room(challenger, escrow, "court occupancy escrow", now)?;
     }
+    // All preceding admission checks borrow state only. Admit the clone, pool
+    // construction and scheduler before their first allocation or row write.
+    builder.reserve_court_admission_workspace_v2(claim_id, challenger, now)?;
+    let mut record = builder.state.legacy_disputes.get(&claim_id).expect("checked reservation, unchanged by admission quote").clone();
     let (reserve_pool, spare_pool) = court_pools_v1(&builder.state, ticket_window);
     let (pool, slots) =
         if reserve { (reserve_pool, policy.reserve_slots(turn)) } else { (spare_pool, policy.spare_slots(turn)) };
@@ -720,6 +729,7 @@ pub(super) fn court_opened_v1(
     if builder.params.court_capacity_at_v1(ctx.daa_score).is_none() {
         return Ok(());
     }
+    builder.reserve_court_opened_workspace_v2(claim_id)?;
     let Some(mut record) = builder.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
     let Some(row) = record.courts.get_mut(&challenger) else { return Ok(()) };
     let started_daa = match row.stage {
@@ -845,6 +855,21 @@ pub(super) fn court_unserved_at_lapse_v1(params: &PalwStateParamsV2, record: &cr
 
 
 impl TransitionBuilder<'_> {
+    pub(super) fn reserve_court_admission_workspace_v2(
+        &mut self, claim: Hash64, challenger: PalwBondKeyV2, now: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.native_writers_tracking_v1() { return Ok(()); }
+        let quote = admission_workspace::quote(&self.state, self.params, claim, challenger, now)?;
+        self.admit_native_write_v1(quote)
+    }
+
+    pub(super) fn reserve_court_opened_workspace_v2(&mut self, claim: Hash64) -> Result<(), PalwStateV2Error> {
+        if !self.native_writers_tracking_v1() { return Ok(()); }
+        let mut quote = native_writers::NativeWriteQuoteV1::new("court admitted session row handoff");
+        if let Some(record) = self.state.legacy_disputes.get(&claim) { quote.copy(record)?; }
+        self.admit_native_write_v1(quote)
+    }
+
     pub(super) fn reserve_court_capacity_sweep_workspace_v2(&mut self) -> Result<(), PalwStateV2Error> {
         if !self.native_writers_tracking_v1() { return Ok(()); }
         self.admit_native_write_v1(sweep_workspace::quote(&self.state)?)
