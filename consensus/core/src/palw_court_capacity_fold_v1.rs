@@ -13,6 +13,8 @@ use crate::palw_court_capacity_v1::*;
 mod sweep_workspace;
 #[path = "palw_court_admission_workspace_v2.rs"]
 mod admission_workspace;
+#[path = "palw_legacy_court_ingress_workspace_v2.rs"]
+mod legacy_ingress_workspace;
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CourtCapacityRefused(why.into())
@@ -386,18 +388,18 @@ pub(super) fn legacy_court_cap_admits_v1(
 /// indistinguishable from an honest outsider on chain; that residual is bounded only by cost (the floor collateral, the failed
 /// accusation's charge and, once adopted, the paid ingress).
 fn court_outsider_lane_inside_v1(state: &PalwChainStateV2, claim_id: Hash64, bond: &PalwBondKeyV2) -> bool {
-    let mut side: Vec<PalwBondKeyV2> = Vec::new();
-    if let Some(claim) = state.claims.get(&claim_id) {
-        side.push(claim.bond);
-    }
-    if let Some(panel) = state.panels.get(&claim_id) {
-        side.extend(panel.seats.iter().map(|seat| seat.bond));
-    }
-    if side.contains(bond) {
+    if court_outsider_side_borrowed_v2(state, claim_id).any(|key| key == *bond) {
         return true;
     }
     let Some(record) = state.bonds.get(bond) else { return false };
-    side.iter().filter_map(|k| state.bonds.get(k)).any(|s| s.operator_id == record.operator_id || s.payout_payload == record.payout_payload)
+    court_outsider_side_borrowed_v2(state, claim_id)
+        .filter_map(|key| state.bonds.get(&key))
+        .any(|s| s.operator_id == record.operator_id || s.payout_payload == record.payout_payload)
+}
+
+fn court_outsider_side_borrowed_v2(state: &PalwChainStateV2, claim: Hash64) -> impl Iterator<Item = PalwBondKeyV2> + '_ {
+    state.claims.get(&claim).map(|row| row.bond).into_iter()
+        .chain(state.panels.get(&claim).into_iter().flat_map(|panel| panel.seats.iter().map(|seat| seat.bond)))
 }
 
 /// A session opened by `opener` on `claim_id` is a FOLLOW-ON iff the claim already has a running session opened from the same side
@@ -454,20 +456,26 @@ pub fn palw_court_ingress_fee_due_v1(params: &PalwStateParamsV2, now: u64) -> Op
 /// Final, not voided), hard deadline not passed. Ordered by `(accepted_daa, claim id)` — the admission order, which every node
 /// derives alike. Rooted facts only (the claim rows and the params' clock).
 fn court_ingress_inflight_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, now: u64) -> Vec<(u64, Hash64)> {
-    let Some(from) = params.court_outsider_lane_from_daa() else { return Vec::new() };
+    if params.court_outsider_lane_from_daa().is_none() { return Vec::new(); }
+    let mut inflight: Vec<_> = court_ingress_inflight_borrowed_v2(state, params, now).collect();
+    inflight.sort_unstable();
+    inflight
+}
+
+fn court_ingress_inflight_borrowed_v2<'a>(
+    state: &'a PalwChainStateV2, params: &'a PalwStateParamsV2, now: u64,
+) -> impl Iterator<Item = (u64, Hash64)> + 'a {
+    let from = params.court_outsider_lane_from_daa();
     let w_disclose = palw_da_disclose_window_daa_v1(params);
-    let mut inflight: Vec<(u64, Hash64)> = state
+    state
         .claims
         .iter()
-        .filter(|(_, claim)| {
-            claim.accepted_daa >= from
+        .filter(move |(_, claim)| {
+            from.is_some_and(|at| claim.accepted_daa >= at)
                 && crate::palw_legacy_public_filer_v1::palw_dispute_phase_reservable_v1(&claim.phase, false)
                 && crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, w_disclose) >= now
         })
         .map(|(id, claim)| (claim.accepted_daa, *id))
-        .collect();
-    inflight.sort_unstable();
-    inflight
 }
 
 /// **The claims that hold an outside-side reservation at `now`** (ADR-0192 advance reservation): the first
@@ -588,6 +596,7 @@ pub(super) fn court_ingress_admission_v1(
     let admission = court_admission_v1(builder, ctx, claim_id, opener, session_window)?;
     let charge = match admission {
         PalwCourtAdmissionV1::Legacy => {
+            builder.reserve_legacy_court_ingress_workspace_v2(opener, direct_evidence, now)?;
             if schedule.is_some() {
                 paid_court_cap_admits_v1(&builder.state, builder.params, claim_id, opener, direct_evidence, now)?;
             } else {
@@ -855,6 +864,14 @@ pub(super) fn court_unserved_at_lapse_v1(params: &PalwStateParamsV2, record: &cr
 
 
 impl TransitionBuilder<'_> {
+    pub(super) fn reserve_legacy_court_ingress_workspace_v2(
+        &mut self, opener: PalwBondKeyV2, direct_evidence: bool, now: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.native_writers_tracking_v1() { return Ok(()); }
+        let quote = legacy_ingress_workspace::quote(&self.state, self.params, opener, direct_evidence, now)?;
+        self.admit_native_write_v1(quote)
+    }
+
     pub(super) fn reserve_court_admission_workspace_v2(
         &mut self, claim: Hash64, challenger: PalwBondKeyV2, now: u64,
     ) -> Result<(), PalwStateV2Error> {
