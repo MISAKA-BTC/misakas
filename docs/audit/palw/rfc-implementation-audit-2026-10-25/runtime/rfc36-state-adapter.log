@@ -1,0 +1,14 @@
+
+running 1 test
+test palw_state_v2::tests::row_access_v1::the_full_state_adapter_conforms_on_every_fixture ... conformance: genesis
+conformance: m02 populated
+conformance: m02 populated + kernel aux
+conformance: split close
+conformance: split close funded
+conformance: derived work chain
+conformance: chain with classes
+conformance: da setup
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5195 filtered out; finished in 0.04s
+

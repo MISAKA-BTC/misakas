@@ -1,0 +1,12 @@
+
+running 7 tests
+test palw_state_row_access_v1::tests::a_lying_supplier_is_rejected_never_believed ... ok
+test palw_state_row_access_v1::tests::a_silent_supplier_is_unavailable_never_absent_and_is_not_cached ... ok
+test palw_state_row_access_v1::tests::eviction_follows_lru_under_the_byte_budget ... ok
+test palw_state_row_access_v1::tests::the_cache_never_serves_another_roots_answer ... ok
+test palw_state_row_access_v1::tests::the_genesis_state_conforms ... ok
+test palw_state_row_access_v1::tests::the_overlay_merges_ranges_under_a_limit ... ok
+test palw_state_row_access_v1::tests::the_row_map_fence_is_dormant_everywhere_and_refused_if_armed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 5189 filtered out; finished in 0.05s
+

@@ -1,0 +1,102 @@
+{
+  "baseline_commit": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+  "baseline_build_parent": "23dab004a0cab5ff1917b40d706f73a04feecdb2",
+  "baseline_build_result": "PASS",
+  "baseline_build_seconds": 276.53,
+  "build_manifest": "/tmp/misaka-rfc-deadline-legacy-reorg-wave-source-retry1-20261025/record.json",
+  "changed_rust_paths_since_build_parent": [
+    "consensus/core/src/palw_court_model_scope_routes_v1/readiness_disclosure.rs",
+    "consensus/core/src/palw_staged_court_fold_v1.rs",
+    "consensus/core/src/palw_state_v2/court_deadline_workspace_v2.rs",
+    "consensus/core/src/palw_state_v2/deadlines.rs",
+    "consensus/core/src/palw_state_v2/tests.rs",
+    "consensus/core/src/palw_state_v2/tests/court_deadline_workspace_v2.rs",
+    "consensus/core/src/palw_tir_legacy_original_owner_tests_v4.rs",
+    "consensus/core/src/palw_tir_legacy_original_owner_v4.rs",
+    "consensus/core/src/palw_tir_public_state_v1.rs",
+    "kaspad/src/eth_rpc.rs",
+    "kaspad/src/eth_rpc_reorg_retry_tests.rs"
+  ],
+  "all_changed_source_paths_match_recorded_build": true,
+  "audited_runtime_source_sha256": [
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1.rs",
+      "sha256": "a57db658ff87c12ff03f95a7bd62f5aa702791b9ddd295cf3c1c966928a1f3f9"
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1/bits.rs",
+      "sha256": "52b36a009da86e00f5750b7617b3872f17fe038c4ec76d8e9443114ce85c7fce"
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1/proof.rs",
+      "sha256": "dd5f731f45a9ed4d09c303091dca5fa90c132ce45e5a21b25d64b1f6c19a866f"
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1/state.rs",
+      "sha256": "7b222c23888e7eefcc73520f232d1884788c3feb2d959b9f8aada77bf4a48cd1"
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1/tests.rs",
+      "sha256": "a0861345707f7f51d74f7b6ee9bad60bc69b59c27065620328e08b516353929e"
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1/trie.rs",
+      "sha256": "b810be47825430c61cc226a4995afe0b0eac703bfd03f893e6a72a7d7ffb2439"
+    },
+    {
+      "path": "consensus/core/src/palw_state_row_access_v1.rs",
+      "sha256": "bfb34224948e7ee2ab14c5f42de4c9a1bb814c2b2e903e860fd49c6dbafb514b"
+    },
+    {
+      "path": "consensus/core/src/palw_state_row_access_v1/tests.rs",
+      "sha256": "b9bcb287793379a449ac50cfab60870facda483f8fc7c1124bb19f503b8f260d"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/tests/row_access_v1.rs",
+      "sha256": "372f85adb47699c1e5a8fe5d8bef787c46a9ba19000c8be941f9742400b43d2f"
+    },
+    {
+      "path": "docs/maintenance/check_docs.py",
+      "sha256": "b3c60cb961354414b99cfad25f517401aa885bddd28400928cb52e7fa630287d"
+    },
+    {
+      "path": "docs/maintenance/doclib.py",
+      "sha256": "20f617612e432e0264bb2fd7da6c4eb506be805a7ee5079638d7d661e850300d"
+    },
+    {
+      "path": "docs/maintenance/generate_indexes.py",
+      "sha256": "393eed23cc26ec510de45f5ba1541e45eaae5e9e54ce6b4538e91a3140e428fe"
+    },
+    {
+      "path": "docs/maintenance/test_doc_tools.py",
+      "sha256": "83991ca1709115ee3278583e0497be18f8f94d712a766c1ca9b11c7c0116eb14"
+    }
+  ],
+  "uncommitted_changes_excluded": [
+    {
+      "path": "consensus/core/src/api/mod.rs",
+      "committed_sha256": "a22f67c694376747f94788aacaaf77c0b351c4f17c6aafc3932f5f538d19a17e",
+      "working_sha256": "2ac3c57b07a3eee34a411ecd165318e861d4f9369c77a239679608f157c4edc3"
+    },
+    {
+      "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+      "committed_sha256": "647c604ec9582823b048496396ce4f6aca36235af2f21408a00c2036647876fa",
+      "working_sha256": "6727e710b59930da04105cbb130c1fd0153d273dad429916cdd7371fa1a5bed7"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/tests.rs",
+      "committed_sha256": "36b5efdec5cfe583c23ffdec542ca3e9d78ac619dae48ed1fc7e8fbcde923815",
+      "working_sha256": "8681920436e7a063a670bbfe1e02c78598fb39c6ab222f392799981b522e9b17"
+    },
+    {
+      "path": "consensus/src/consensus/mod.rs",
+      "committed_sha256": "6f864f3b4011ec04e36748947dffc808d536c3b7b542abd1ada02704b0453fbf",
+      "working_sha256": "9cb0e40b3650712d2ec5362bf9d7748c3ea0349b2c9307d4d4a2cd72eec6a36b"
+    },
+    {
+      "path": "kaspad/src/eth_rpc.rs",
+      "committed_sha256": "c39c6d3646e708f84ee224911bd46cc46bb9c4fbf25ebec6550e576a75799b06",
+      "working_sha256": "ad81ccbe7e2a7aaf0c054b75794280e2fcbdd05f84095db4e84f7e97efdcc189"
+    }
+  ]
+}

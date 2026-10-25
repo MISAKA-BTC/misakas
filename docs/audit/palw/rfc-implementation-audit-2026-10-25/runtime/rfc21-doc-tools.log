@@ -1,0 +1,21 @@
+test_absolute (test_doc_tools.DocTests) ... ok
+test_anchor (test_doc_tools.DocTests) ... ok
+test_angle (test_doc_tools.DocTests) ... ok
+test_code (test_doc_tools.DocTests) ... ok
+test_code_label (test_doc_tools.DocTests) ... ok
+test_comment (test_doc_tools.DocTests) ... ok
+test_external (test_doc_tools.DocTests) ... ok
+test_fence (test_doc_tools.DocTests) ... ok
+test_html (test_doc_tools.DocTests) ... ok
+test_inline (test_doc_tools.DocTests) ... ok
+test_key_no_line (test_doc_tools.DocTests) ... ok
+test_offsets (test_doc_tools.DocTests) ... ok
+test_parentheses (test_doc_tools.DocTests) ... ok
+test_reference (test_doc_tools.DocTests) ... ok
+test_relative (test_doc_tools.DocTests) ... ok
+test_tilde (test_doc_tools.DocTests) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 0.002s
+
+OK

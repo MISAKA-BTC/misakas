@@ -1,0 +1,24 @@
+
+running 19 tests
+test palw_state_auth_map_v1::tests::a_change_set_computes_the_child_root_from_the_parent_pin_alone ... ok
+test palw_state_auth_map_v1::tests::a_delete_beside_an_opaque_sibling_and_an_insert_on_its_side_verify ... ok
+test palw_state_auth_map_v1::tests::a_dishonest_update_is_rejected ... ok
+test palw_state_auth_map_v1::tests::a_false_non_existence_is_rejected ... ok
+test palw_state_auth_map_v1::tests::a_misplaced_or_malformed_proof_is_rejected ... ok
+test palw_state_auth_map_v1::tests::a_missing_row_is_rejected ... ok
+test palw_state_auth_map_v1::tests::a_state_row_proof_verifies_only_in_its_own_state_branch_table_and_version ... ok
+test palw_state_auth_map_v1::tests::a_verified_update_computes_the_writers_new_root ... ok
+test palw_state_auth_map_v1::tests::a_whole_table_streams_in_bounded_chunks_and_a_skipped_chunk_is_rejected ... ok
+test palw_state_auth_map_v1::tests::an_omitted_range_is_rejected ... ok
+test palw_state_auth_map_v1::tests::another_table_or_version_does_not_verify ... ok
+test palw_state_auth_map_v1::tests::every_range_is_proven_complete ... ok
+test palw_state_auth_map_v1::tests::every_row_is_proven_present_and_every_probe_absent_or_present_exactly ... ok
+test palw_state_auth_map_v1::tests::limits_are_enforced_on_write ... ok
+test palw_state_auth_map_v1::tests::proof_size_is_bounded_and_logarithmic_for_hash_keys ... ok
+test palw_state_auth_map_v1::tests::subtree_test_never_clears_a_subtree_that_holds_a_key_of_the_range ... ok
+test palw_state_auth_map_v1::tests::the_key_encoding_preserves_order_and_is_prefix_free ... ok
+test palw_state_auth_map_v1::tests::the_map_agrees_with_a_btreemap_under_random_operations ... ok
+test palw_state_auth_map_v1::tests::the_root_is_a_function_of_the_rows_whatever_the_write_order ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 5177 filtered out; finished in 6.45s
+

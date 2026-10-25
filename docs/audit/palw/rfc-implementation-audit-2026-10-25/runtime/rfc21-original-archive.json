@@ -1,0 +1,10 @@
+{
+  "archive": "docs/history/documentation/2026-10-17/original-markdown.zip",
+  "archive_sha256": "1771a6c263bca628a8c0ccc91f94fb4a72ed5f4cf2d2ddce3d41fa4f6134530b",
+  "original_markdown_checked": 660,
+  "failures": [],
+  "passed": true,
+  "scope": "historical original Markdown preservation only; current content need not match historical organized hashes",
+  "manifest_mapped_paths_checked": 2481,
+  "manifest_mapped_paths_missing": []
+}

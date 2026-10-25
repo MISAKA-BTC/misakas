@@ -1,0 +1,88 @@
+[
+  {
+    "name": "rfc36-auth-map",
+    "command": [
+      "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+      "palw_state_auth_map_v1::tests",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 6.46,
+    "expected": 19,
+    "log": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-auth-map.log",
+    "passed": true,
+    "binary_sha256": "7e1310d6926e6f6a26e5f785ec3cb37ec6144062da37333012f0cdf10127be1c",
+    "summary": [
+      "ok",
+      "19",
+      "0",
+      "6.45"
+    ]
+  },
+  {
+    "name": "rfc36-row-access",
+    "command": [
+      "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+      "palw_state_row_access_v1::tests",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 0.06,
+    "expected": 7,
+    "log": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-row-access.log",
+    "passed": true,
+    "binary_sha256": "7e1310d6926e6f6a26e5f785ec3cb37ec6144062da37333012f0cdf10127be1c",
+    "summary": [
+      "ok",
+      "7",
+      "0",
+      "0.05"
+    ]
+  },
+  {
+    "name": "rfc36-state-adapter",
+    "command": [
+      "/tmp/misaka-rfc-deadline-legacy-reorg-kaspa_consensus_core-retry1-20261025",
+      "palw_state_v2::tests::row_access_v1",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 0.05,
+    "expected": 1,
+    "log": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc36-state-adapter.log",
+    "passed": true,
+    "binary_sha256": "7e1310d6926e6f6a26e5f785ec3cb37ec6144062da37333012f0cdf10127be1c",
+    "summary": [
+      "ok",
+      "1",
+      "0",
+      "0.04"
+    ]
+  },
+  {
+    "name": "rfc21-doc-tools",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "docs/maintenance",
+      "-p",
+      "test_*.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 0.07,
+    "expected": null,
+    "log": "docs/audit/palw/rfc-implementation-audit-2026-10-25/runtime/rfc21-doc-tools.log",
+    "passed": true,
+    "summary": [
+      "16",
+      "0.002"
+    ]
+  }
+]

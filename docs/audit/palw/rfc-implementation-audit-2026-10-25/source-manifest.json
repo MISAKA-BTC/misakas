@@ -1,0 +1,1325 @@
+{
+  "baseline": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+  "files": [
+    {
+      "path": "consensus/core/src/config/params.rs",
+      "sha256": "321c2d708a28b7ae97abdae9feceafe76bcb6fb2551b7fddc35908966de25dcb",
+      "lines": 14162
+    },
+    {
+      "path": "consensus/core/src/config/params/identity.rs",
+      "sha256": "5900405ff29a07540c83e996c3aa4e25432290d73a7d38d5c1f1d8c047598eae",
+      "lines": 6200
+    },
+    {
+      "path": "consensus/core/src/config/params/validation.rs",
+      "sha256": "3f16ff611d4efd22bc874ceee4e06880a4d99ebe7d90f3c4bf816dfb08da7489",
+      "lines": 3786
+    },
+    {
+      "path": "consensus/core/src/palw_annual_catalog_v1.rs",
+      "sha256": "3465fb8cb179744a4bbcb47620bd97d3586ff1768570bf8d7250065e315dd368",
+      "lines": 478
+    },
+    {
+      "path": "consensus/core/src/palw_beacon_source_fee_v1.rs",
+      "sha256": "5131149bd65908fe99d89218a538c45234aaaf4f18b1af9b1266905eaccf8309",
+      "lines": 479
+    },
+    {
+      "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+      "sha256": "27fd0506595bac1c026b4751c679cf875161f8aa9d184f8804a1ed8bf0e33cac",
+      "lines": 2882
+    },
+    {
+      "path": "consensus/core/src/palw_bond_budget_v1.rs",
+      "sha256": "aba1585376dae2e3ba578629ebf263abe91cef346c52a78adc7b2e38c72ccb5f",
+      "lines": 5565
+    },
+    {
+      "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+      "sha256": "3e2e9623c8251c4b0c15451c5f9e6b90e073e3e166746c14f9948a0e3d095e5a",
+      "lines": 370
+    },
+    {
+      "path": "consensus/core/src/palw_cell_coverage_v1.rs",
+      "sha256": "c2d544102f22518cf90e07924bf194b6e2f2e9e7829225c005f9199f186f6170",
+      "lines": 793
+    },
+    {
+      "path": "consensus/core/src/palw_claim_challenge_fold_v2.rs",
+      "sha256": "4ce60b5427b516b2f967ca026d4e802329a66f8661116a528527bdf16d80b82b",
+      "lines": 1386
+    },
+    {
+      "path": "consensus/core/src/palw_claim_challenge_v2.rs",
+      "sha256": "8f8e54dab3622a95aea243336df50150fbecd410f540cd996707ac36db29493a",
+      "lines": 998
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "sha256": "6d267e11795e30f59ac5ee2370e40815a438a8e1b544e66fdc330e4534c19c3a",
+      "lines": 321
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_checkpoint_resources_v1.rs",
+      "sha256": "c4ca53a49fa6e03f593a8c4d6110c01d0f543344cdcadfc2050af22f440815fe",
+      "lines": 80
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_fold_v1.rs",
+      "sha256": "9151820828e798f4825a563811ee5fa78ea2aed3bfed69c6cb93fe79415189b3",
+      "lines": 401
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_rewards_v1.rs",
+      "sha256": "9edf3a01ee706005fb726d85773239feb13b2eac2acd44c5a6776c065b6aea2a",
+      "lines": 542
+    },
+    {
+      "path": "consensus/core/src/palw_court_archive_discharge_v1.rs",
+      "sha256": "4f1cddc01457ca8eb23f98ec41d07c975382253dfe439c0276631d8805092d36",
+      "lines": 197
+    },
+    {
+      "path": "consensus/core/src/palw_court_archive_verify_v1.rs",
+      "sha256": "54a94e76505ed65236f34eb29f2bc7b21e51b06615167a9730eaf11e7c33ce5d",
+      "lines": 459
+    },
+    {
+      "path": "consensus/core/src/palw_court_capacity_fold_v1.rs",
+      "sha256": "647c604ec9582823b048496396ce4f6aca36235af2f21408a00c2036647876fa",
+      "lines": 840
+    },
+    {
+      "path": "consensus/core/src/palw_court_capacity_v1.rs",
+      "sha256": "3289e294e02b20a4f038dbf19e6ff79a056c46cc5636fec50204b6391843fdff",
+      "lines": 767
+    },
+    {
+      "path": "consensus/core/src/palw_court_close_receipt_v1.rs",
+      "sha256": "125fd6b87114939ecd7c331317d3bd5c4a49fcf45f05c190db483957539add9a",
+      "lines": 101
+    },
+    {
+      "path": "consensus/core/src/palw_court_duty_clock_v1.rs",
+      "sha256": "5c8d85d8316eeecd94158ce3056377775bfa19f7bba3cd6c52160035c9228135",
+      "lines": 94
+    },
+    {
+      "path": "consensus/core/src/palw_court_end_archive_fold_v1.rs",
+      "sha256": "ef2fe1f145466ce1af1eb2cfd62feca30ba7bae990f8c3fd30a669fcccd85e70",
+      "lines": 133
+    },
+    {
+      "path": "consensus/core/src/palw_court_end_archive_v1.rs",
+      "sha256": "68f4b75c95a0cb28f797c68e706269e529979380d555dad97c31a77dad568801",
+      "lines": 252
+    },
+    {
+      "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_disclosure.rs",
+      "sha256": "c8f3cc7e4575d4be07c5f18b46c8a908ff4cd0b6503dc44f97cfd2209b996712",
+      "lines": 561
+    },
+    {
+      "path": "consensus/core/src/palw_court_model_scope_routes_v1/readiness_root.rs",
+      "sha256": "b2315094e1e445814913e596f235ecdf9631023f64d46e9fccbf9abfbb517ce5",
+      "lines": 530
+    },
+    {
+      "path": "consensus/core/src/palw_court_numerical_transport_v1.rs",
+      "sha256": "6f2fdd5e4ae5ab2a413aa6bcb75b60794d1ee3e7edcffc056d2eafac15b7a21a",
+      "lines": 257
+    },
+    {
+      "path": "consensus/core/src/palw_court_policy_v1.rs",
+      "sha256": "cbf7a6dd478b27ba9e63e9f12b77beef59322474fa33fe64a72932a5d55cfeb8",
+      "lines": 67
+    },
+    {
+      "path": "consensus/core/src/palw_court_service_binding_v1.rs",
+      "sha256": "f6fa64121481eba43caf55e69d370bb2da45cdde338d5664251cd8f7abfb7226",
+      "lines": 483
+    },
+    {
+      "path": "consensus/core/src/palw_court_service_lifecycle_fold_v1.rs",
+      "sha256": "304fca3c8a308f6531f46a6799664778d825ea571dd65ffefa5705405a60bf7a",
+      "lines": 351
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_material_intake_fold_v1.rs",
+      "sha256": "211e8fbf20a036418f24f50c3eb3daa41080ec4a590b7e2d0af51a8ba7a601a9",
+      "lines": 297
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_material_intake_v1.rs",
+      "sha256": "755d258d4051584db315c4150821e491a4d1913dba57d5876e563c510fcb76c8",
+      "lines": 639
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_numerical_material_join_v1.rs",
+      "sha256": "a245d029d5dc91e1c4f298a4f22986d11cd2b93d62d29213c95eec00fc8919d0",
+      "lines": 104
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+      "sha256": "ae20a8ed7da6d1374a5c628ec18b13431fbbd21e48ca9ee731f3302d6dd9a222",
+      "lines": 124
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_semantic_material_v1.rs",
+      "sha256": "19b8ca7f5e4f3fdc843fbeadbf0ac1f0bb6bf337ba76c51249e4d1a8fa801498",
+      "lines": 310
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_tir_bottom_v1.rs",
+      "sha256": "3d477b2da761a85974e01b2074b0d3bdb2097b64326f915dd420c076e595aa4a",
+      "lines": 255
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+      "sha256": "a9249806bd808f6d577d8f3535895ede93e4a3cde4a9425e9cb87d0cd31d3005",
+      "lines": 453
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_tir_frontier_v1.rs",
+      "sha256": "3789ae9fa4259bbded7e626cee7cf39e9883de3f0943e618a3bb374520902f65",
+      "lines": 228
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_tir_response_v1.rs",
+      "sha256": "27317c6cdd272abe89389a56a14185af95b3402d34a4d5e9b26e0477a1db1a0d",
+      "lines": 199
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_tir_root_v1.rs",
+      "sha256": "60f4ffa8f541e8169242b974f5b4dcb3da0f08558ea8ac888b93dd9f66d36a87",
+      "lines": 222
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_tir_state_v1.rs",
+      "sha256": "a5af4623c9204bfeef219e42c409e49dff8a314e555406152e7d9f4efa2d6e4e",
+      "lines": 231
+    },
+    {
+      "path": "consensus/core/src/palw_court_tir_requests_v1.rs",
+      "sha256": "736a14230244c54a0d89776c9a7783bd9f5c1ea770f1ad413d00447e588358cf",
+      "lines": 810
+    },
+    {
+      "path": "consensus/core/src/palw_court_v2.rs",
+      "sha256": "8cc1e9993849f23294f55ca84f45c521d6176039abddc5893a64593497dde364",
+      "lines": 4817
+    },
+    {
+      "path": "consensus/core/src/palw_decode_pipeline_v4.rs",
+      "sha256": "147c98af691df6f89648dc318917ffa74d7a02636ef13048133131c7deddd784",
+      "lines": 1389
+    },
+    {
+      "path": "consensus/core/src/palw_exec_v2_fold.rs",
+      "sha256": "c73a4a3943228e48d8290e4aecdc090303498bf482784081069a1ab229dcc65f",
+      "lines": 1736
+    },
+    {
+      "path": "consensus/core/src/palw_fork_choice_rule_e_v1.rs",
+      "sha256": "185c7a6c8e52a42e7bed7c56abf06c4c90b615b92261652a07cabb4f3dade4e5",
+      "lines": 1457
+    },
+    {
+      "path": "consensus/core/src/palw_fp_answer_accounting_v1.rs",
+      "sha256": "71b104348acafd84d5c5f4ddab05c37fb97efb342eaefc363c9ac8488aec6365",
+      "lines": 190
+    },
+    {
+      "path": "consensus/core/src/palw_freeprompt_v3.rs",
+      "sha256": "521936d53513166c6b27155385d59cfd221de1437a41e3b4243466e15f4e100a",
+      "lines": 5142
+    },
+    {
+      "path": "consensus/core/src/palw_funded_escrow_v1.rs",
+      "sha256": "9dbeb89ea6b845c657ecb49a47e0678a78186feefdc73d8df2ad148b7ab942ca",
+      "lines": 1074
+    },
+    {
+      "path": "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs",
+      "sha256": "53fce64afb53c782eaaac9d340b10610df3c4163c4d00a3bbb518e9b02058e51",
+      "lines": 381
+    },
+    {
+      "path": "consensus/core/src/palw_funded_original_coordinator_v1.rs",
+      "sha256": "44116eff5b7e7b9e43032d85b433433339c0af444836a6382ac6e0916adb7aeb",
+      "lines": 234
+    },
+    {
+      "path": "consensus/core/src/palw_g14_gates_v1.rs",
+      "sha256": "2294c9b0881acfe6c0cc1bdf73bd3c34b195b9e4c6d427767a50405d57ad3e65",
+      "lines": 999
+    },
+    {
+      "path": "consensus/core/src/palw_gen_v1.rs",
+      "sha256": "9cec87571679e0a62b040f4ce73097041eb6736e6588a0346fb27dca7f2210fb",
+      "lines": 532
+    },
+    {
+      "path": "consensus/core/src/palw_improve_fold_v1.rs",
+      "sha256": "54498d906742c10ee24bd239e6e243e131f4cb3c7639c13d006f0a32180e6c2f",
+      "lines": 3365
+    },
+    {
+      "path": "consensus/core/src/palw_improve_v1.rs",
+      "sha256": "b15643e120adfe99768c796e2b89120882db39a590cda4544f0b00acd3f1ab3f",
+      "lines": 412
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2",
+      "lines": 2796
+    },
+    {
+      "path": "consensus/core/src/palw_model_eligibility_fold_v1.rs",
+      "sha256": "3b467da7692035b3a4be7e8225d750c218d2911ffe8bb9ef24f061bb1d6193d6",
+      "lines": 674
+    },
+    {
+      "path": "consensus/core/src/palw_model_registration_v1.rs",
+      "sha256": "fb69a8a662ad98a35de7c7fab324a362a0cc26976f9166721aae3be09c836f63",
+      "lines": 605
+    },
+    {
+      "path": "consensus/core/src/palw_model_tier_v1.rs",
+      "sha256": "a059ce3af30c7f7a735023010bd036fd1999fdbe4956d7a41d16c5f7f9189a71",
+      "lines": 486
+    },
+    {
+      "path": "consensus/core/src/palw_monetary_material_fold_v1.rs",
+      "sha256": "c9e8369e626e3ef9495c4bdb071e1a38491771ba5ee4f8c5b7c8559251e3dd21",
+      "lines": 1747
+    },
+    {
+      "path": "consensus/core/src/palw_native_mining_fold_v39.rs",
+      "sha256": "52cfd2a9072df883760614b5a0a48630eeb5e9f76b85e3fdeb194d18383927c4",
+      "lines": 751
+    },
+    {
+      "path": "consensus/core/src/palw_native_settlement_v1.rs",
+      "sha256": "e6ec510dcbaff2275cdff2e11a9e4f7a3ac6860b1dfbd48c3426ad20633bab20",
+      "lines": 1139
+    },
+    {
+      "path": "consensus/core/src/palw_paid_claim_bootstrap_read_v6.rs",
+      "sha256": "170215447893281f07d325da191eb02bfd593cce84fa2c2b07af5fb8b27fed52",
+      "lines": 242
+    },
+    {
+      "path": "consensus/core/src/palw_paid_claim_read_v1.rs",
+      "sha256": "af5577e8c3fed0f52f422dc143eb028e2483807c3a9e96929e42657ab64022ea",
+      "lines": 385
+    },
+    {
+      "path": "consensus/core/src/palw_panel_free_gate_v1.rs",
+      "sha256": "875c6126c797e5ad8de91343434c557f1c30d4108bb902064cd573c3085cd69e",
+      "lines": 372
+    },
+    {
+      "path": "consensus/core/src/palw_panel_free_v1.rs",
+      "sha256": "f48f45cdacf3b93eab4ce7af8f81c39feead3cb7dc414dbad20b07ce1e1179b1",
+      "lines": 210
+    },
+    {
+      "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+      "sha256": "0d1621ab96a23231af184e4f82dbdcfbf6abce96005a971014f43838c2bf9420",
+      "lines": 1293
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "sha256": "fcc405cd39ca782f418dbdc52c10656dacfc00c075f477910e1a807af23c0676",
+      "lines": 1077
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_v1/capacity.rs",
+      "sha256": "6d782ca118d24d12ca841e7d60baa31ffbd5577ff09a4c5787f37eb5c488ffa8",
+      "lines": 915
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_v1/report.rs",
+      "sha256": "c550e54ed17d30b1480b887e5b70032b2318f14547d7d81328e8b576dde6b9f2",
+      "lines": 340
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_v1/values.rs",
+      "sha256": "e8f3d94a2d3e9c574f84ca6f8eb69306fee541eae85700a887c5d8a20d8004d9",
+      "lines": 814
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0018_v1.rs",
+      "sha256": "df9a810523b90f04a6646d38a42141aa37a51df02a9c9042174c25580d9aedc6",
+      "lines": 1054
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0018_v1/attack_tests.rs",
+      "sha256": "39dff0d299b9c7d877c359c30175edf48c56466f89bb93ac5cb45b5ce531543b",
+      "lines": 277
+    },
+    {
+      "path": "consensus/core/src/palw_row_stream_v1.rs",
+      "sha256": "3c11b3760884aa92f1e4a9d58776ca4da6296fa41b1092e21b70a4520b847c93",
+      "lines": 453
+    },
+    {
+      "path": "consensus/core/src/palw_row_stream_v1/spill_reader.rs",
+      "sha256": "dfd156c9fce6ce6963d69faa2b10943b1236b1866fe8da0f0e45495fafed5152",
+      "lines": 248
+    },
+    {
+      "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+      "sha256": "0121ea99291c9d8af1983c5bc5b1057aaadab1cc5e5fe662ee4d85656cf598a7",
+      "lines": 775
+    },
+    {
+      "path": "consensus/core/src/palw_settlement_v1.rs",
+      "sha256": "25bc6d35248e3e5259710b032ce3be1c6edfa88894cda51787bae6dc174ff31f",
+      "lines": 868
+    },
+    {
+      "path": "consensus/core/src/palw_source_verifier_economics_fold_v2.rs",
+      "sha256": "94323dd4b1a297feff547e0f67bcc02ee3e32bd18fdc049ba0bfe94545f70e2e",
+      "lines": 567
+    },
+    {
+      "path": "consensus/core/src/palw_staged_court_fold_v1.rs",
+      "sha256": "e350caf1d8e8473a7932d8b74420620f2f0d7720db440529e285aed49b56069a",
+      "lines": 4015
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1.rs",
+      "sha256": "a57db658ff87c12ff03f95a7bd62f5aa702791b9ddd295cf3c1c966928a1f3f9",
+      "lines": 76
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1/proof.rs",
+      "sha256": "dd5f731f45a9ed4d09c303091dca5fa90c132ce45e5a21b25d64b1f6c19a866f",
+      "lines": 425
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1/state.rs",
+      "sha256": "7b222c23888e7eefcc73520f232d1884788c3feb2d959b9f8aada77bf4a48cd1",
+      "lines": 318
+    },
+    {
+      "path": "consensus/core/src/palw_state_auth_map_v1/trie.rs",
+      "sha256": "b810be47825430c61cc226a4995afe0b0eac703bfd03f893e6a72a7d7ffb2439",
+      "lines": 381
+    },
+    {
+      "path": "consensus/core/src/palw_state_row_access_v1.rs",
+      "sha256": "bfb34224948e7ee2ab14c5f42de4c9a1bb814c2b2e903e860fd49c6dbafb514b",
+      "lines": 672
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "sha256": "4a964ed53e2babd9de5cfb69d75a42ed8cae135ada256d3cabb3eb2723d62ee5",
+      "lines": 26887
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/block_preparation.rs",
+      "sha256": "d9466df6dde26a17e67d94e5e0e73b51691e442c98d5b62ca2ed6ad219056386",
+      "lines": 152
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/chain_state.rs",
+      "sha256": "81f742387b29ec11e747e4762694ad74b6d2beff074289cad3eedb84581c9177",
+      "lines": 4618
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/court_deadline_workspace_v2.rs",
+      "sha256": "ece560e2120d05e617afa1df8c08bf597f305ce8be446c7d65e4e2c90e6b6826",
+      "lines": 21
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/d2_readiness.rs",
+      "sha256": "770bc9d3d081267e2f30392c30a28d47f4e5303c4132e06200b89078a0e30071",
+      "lines": 291
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/deadlines.rs",
+      "sha256": "34277fef7f2a2df09e19a358600824e53e101c5bf22d7837e3987012b727622d",
+      "lines": 603
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/fold_read.rs",
+      "sha256": "e380f6d761777e36d5e8f9a624ef1245ed6b857e378b929b7b94739efa78f033",
+      "lines": 1965
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/native_writers.rs",
+      "sha256": "56d77a0c9043a345fb4b2c10c5a79dc86bae7e572e0bc9b96e5579726aa1a460",
+      "lines": 283
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/objects.rs",
+      "sha256": "100a740ff9cd34a20289efcfa17087fe8f7118b3bb077c12c4c9fcdecabbc086",
+      "lines": 4187
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/transition_builder.rs",
+      "sha256": "db00904e9dac7bb1642f50bb3b225decb98c1ba828c2d5adffde577d53080f9b",
+      "lines": 11169
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/vesting_workspace_v2.rs",
+      "sha256": "adc505ef50d63ce2ad7160067208b92eff9ab0f90d14c9b046ab56b777005328",
+      "lines": 91
+    },
+    {
+      "path": "consensus/core/src/palw_step_refute/memory_v2/transition.rs",
+      "sha256": "d6ba36d6ed2d2939437807bf04c673e8e048ececabb037ab8156f74090c9d273",
+      "lines": 910
+    },
+    {
+      "path": "consensus/core/src/palw_tir_position_terminal_v2.rs",
+      "sha256": "10b0a63ffc9ca217e49b675b1f1af9659153f89bec12c60c39200ab057cb4325",
+      "lines": 594
+    },
+    {
+      "path": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "sha256": "13efb8b76b56120b0c70d5c9dd19c95ff68491065c1db5c473c8f1dbde650b5e",
+      "lines": 1369
+    },
+    {
+      "path": "consensus/core/src/palw_tir_public_fold_v1.rs",
+      "sha256": "d2ecb21cbc1cc40f9e6746d7e2133adaf4688b939260a27f9725aa61e17c4685",
+      "lines": 6984
+    },
+    {
+      "path": "consensus/core/src/palw_tir_public_source_v1.rs",
+      "sha256": "54fc66ff6d8e89f2f95f2184206f4095f05b6d6467e88b8d679546450550ecee",
+      "lines": 1461
+    },
+    {
+      "path": "consensus/core/src/palw_tir_public_state_v1.rs",
+      "sha256": "ca1de7257cdd7fcd0f17212ea3c98e4cc7522cb8697e1f4db7cbd45da73cb7ac",
+      "lines": 1833
+    },
+    {
+      "path": "consensus/core/tests/ibd_row_stream_generations.rs",
+      "sha256": "1e379b1c24020c68c0c2c7e397175ece07255deb4a5450488086ecdda5d8f839",
+      "lines": 316
+    },
+    {
+      "path": "consensus/src/consensus/factory.rs",
+      "sha256": "51f4b1b09eac484d27108302f5210765e5ba67411f92132fb482f21e343bcf28",
+      "lines": 671
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+      "sha256": "00fa950539389792ec99f2d71b856351c24c300ba75b29cd0baa150a2d75160f",
+      "lines": 11613
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/processor/palw_accept.rs",
+      "sha256": "3347263fb141c086d6b2057d7a41b72b543804ca18f7a6dc23ca243dd172d374",
+      "lines": 3482
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/material_typed_pruned_import_v1.rs",
+      "sha256": "1647330f872fbf8d90cf2b9a883a53830b3adac34f5d5e1dab3edc1ee18ea168",
+      "lines": 374
+    },
+    {
+      "path": "consensus/src/processes/evm/mod.rs",
+      "sha256": "9af45369eaf7e111276bc695f9221fa311166e315c33fc8d09de40da8bad2f55",
+      "lines": 3223
+    },
+    {
+      "path": "database/src/storage_generations/mod.rs",
+      "sha256": "7436f6152d490a32df6bf869772ab586b3491c8adbc18fd5774aba05ce496c94",
+      "lines": 532
+    },
+    {
+      "path": "docs/PRINCIPLES.md",
+      "sha256": "7de5364029db47b54ba9bce6c895ac49ce3084b29acc539922a2ad077d548900",
+      "lines": 348
+    },
+    {
+      "path": "docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md",
+      "sha256": "ec7046522068d48b93281590bb8e367e1a40ef02df040494715cebc9e219f35c",
+      "lines": 204
+    },
+    {
+      "path": "docs/adr/0182-defer-media-and-model-improvement-until-post-mainnet.md",
+      "sha256": "8276d2dcbdd7068914774944c28e6b283542d004899ae847bccdc092a9a3350e",
+      "lines": 30
+    },
+    {
+      "path": "docs/design/palw/integration/genesis8-status.md",
+      "sha256": "1d459cfd467227a8a569d9a5dfd3cf1fef6b30e7731aceca18078452bdf8331d",
+      "lines": 233
+    },
+    {
+      "path": "docs/design/palw/integration/rfc-0006-0007-0008-0012-remaining-work-2026-10-15.md",
+      "sha256": "82270e5c12bc33c1a490170e4efe234250bcb60e2f6e46f47797e65091e711f1",
+      "lines": 1251
+    },
+    {
+      "path": "docs/design/palw/integration/rfc-0015-implementation-status-2026-10-15.md",
+      "sha256": "ac643a138a5a8d8e427a7c622cb021f7a4a67bae8f2689d6bb4fa44687f5a82b",
+      "lines": 134
+    },
+    {
+      "path": "docs/design/palw/integration/rfc-0018-implementation-status-2026-10-15.md",
+      "sha256": "d39dd831b5503c42b660819074653448ddd67eb07850cbc6b700cfabae106c9e",
+      "lines": 45
+    },
+    {
+      "path": "docs/design/palw/storage/ibd-generations.md",
+      "sha256": "0a05bf67b42eab4df21d45a9207b8d9b89438314893f8a6114bf5480e53e311f",
+      "lines": 235
+    },
+    {
+      "path": "docs/design/palw/storage/state-inventory.md",
+      "sha256": "aee809c2c2acad8362cd2b2c7641f1aa0b1f0a7e459a58fa1a58c7ff7f3981ee",
+      "lines": 172
+    },
+    {
+      "path": "docs/design/serving/rfc1-serving-surface.md",
+      "sha256": "d20f776cbdeca29210a43f47a7816e3ce8c256c54a17fb539e66c7e735d72916",
+      "lines": 24
+    },
+    {
+      "path": "docs/evidence/palw/g14-completion-2026-10-21/readiness-root-first.rs",
+      "sha256": "f4dcf0f2a2607c6709bec4fd17fe0151ef671d7c4e03bde03dabd997cdc7be71",
+      "lines": 181
+    },
+    {
+      "path": "docs/evidence/palw/g14-completion-2026-10-21/s1-and-original-cover.md",
+      "sha256": "e8525e4815330936ba1b4cbff2ea874a1a60d551c4bd408d90b1a79aceec9705",
+      "lines": 43
+    },
+    {
+      "path": "docs/evidence/palw/g14-completion-2026-10-21/terminal-intent.md",
+      "sha256": "5a4b91562333602fd099b3ed9bf458d15f7f2299a77a6012dadd065704fdd28c",
+      "lines": 11
+    },
+    {
+      "path": "docs/evidence/palw/g14-completion-2026-10-22/material-and-native-candidate.md",
+      "sha256": "2e346f8e7b75994fd5104b151826e4f1c7611a7cf4aaed8a86bfc9dbd149d259",
+      "lines": 52
+    },
+    {
+      "path": "docs/evidence/palw/g14-completion-2026-10-22/native-fee-and-source-graph.md",
+      "sha256": "b23616f0ed5351e9296e36c9e10661a939b60ce60cbcacd704bea7752681e8b0",
+      "lines": 49
+    },
+    {
+      "path": "docs/evidence/palw/g14-integration-candidate-2026-10-20/README.md",
+      "sha256": "dac1f1967cb6ea868cf9262bfb97f0281bbfaf03e93abcf8ac256ed418881f1f",
+      "lines": 489
+    },
+    {
+      "path": "docs/evidence/palw/g14-integration-candidate-2026-10-20/material-builder.md",
+      "sha256": "6876f28e6a94bdb06084fa1f05524b45fc0e70f76ab28dfe2f39b6620a35d28f",
+      "lines": 33
+    },
+    {
+      "path": "docs/evidence/palw/g14-measure-2026-10-18/rfc0016/summary.json",
+      "sha256": "bed7d41c9d88fcc3d03a04e38a340ea822b2f900f0b073ee0b7e88a13baa844d",
+      "lines": 16
+    },
+    {
+      "path": "docs/evidence/palw/g14-parallel-2026-10-22/rfc23-stage2.md",
+      "sha256": "8bd61029a274cc6a6f5b5121d05894f0840d0b78247ca2f5c555bc09808c4958",
+      "lines": 81
+    },
+    {
+      "path": "docs/evidence/palw/implementation-records/rfc-0001-0003-delivery-record.md",
+      "sha256": "f0bc2831b103cb5f976d9175771699cd6225c57f06616e1a156705499402b236",
+      "lines": 153
+    },
+    {
+      "path": "docs/evidence/palw/implementation-records/rfc-0009-remote-record.md",
+      "sha256": "ec9549c9fc1142a412404c888c0e1962f35d4217274cd61c06a1aa557f6bbd21",
+      "lines": 473
+    },
+    {
+      "path": "docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md",
+      "sha256": "4e10d666025035eecb886dbbc901f854aaf0f6febfaa022263d6c01ed5a7ec87",
+      "lines": 227
+    },
+    {
+      "path": "docs/evidence/rfc/0001-0038-parallel-continuation-2026-10-24.md",
+      "sha256": "bb3165e7fc94ba15682464bddf4c38276015c387b775694e92a1ecbca4c4255b",
+      "lines": 66
+    },
+    {
+      "path": "docs/evidence/rfc/0006-0008-0012-payout-provider-market-verification-2026-10-25.md",
+      "sha256": "aa2f29ba756317a6e638d39f7f6f4d6c928b163c209edb313763cdb1293a7735",
+      "lines": 55
+    },
+    {
+      "path": "docs/evidence/rfc/0006-0008-vesting-payout-workspace-2026-10-25.md",
+      "sha256": "f1769d794e356c96d4d2e3c3e70adf00b1ba892e88ba330445c371edfe9bc4ac",
+      "lines": 55
+    },
+    {
+      "path": "docs/evidence/rfc/0006-0012-deadline-legacy-reorg-verification-2026-10-25.md",
+      "sha256": "36777597953cbb6c6194ce490b55efea670ce389645ccf5c75d66b64b75a1da3",
+      "lines": 49
+    },
+    {
+      "path": "docs/evidence/rfc/0006-0012-source-cone-replay-logs-verification-2026-10-25.md",
+      "sha256": "60e0e4a86bbcf9700d3c508e4f316cad4c2a1b6bc2909924c0b3cea61e8165c9",
+      "lines": 74
+    },
+    {
+      "path": "docs/evidence/rfc/0006-gdn-retained-production-capture-2026-10-25.md",
+      "sha256": "04c7bf8be091da25c303403cc2a1988e9988c5ab7be53b645ee0280857bee20f",
+      "lines": 101
+    },
+    {
+      "path": "docs/evidence/rfc/0006-held-gdn-predecessor-witness-owner-2026-10-25.md",
+      "sha256": "429dbb56a4acf441e4ef28c640dd0d382426f8b0022c6eef37a9fb47a3115305",
+      "lines": 189
+    },
+    {
+      "path": "docs/evidence/rfc/0006-held-gdn-recurrence-snapshot-2026-10-25.md",
+      "sha256": "524ee5c574569a6a1b602d179aa103241776b079a1654c07e1f5c63fa5407161",
+      "lines": 40
+    },
+    {
+      "path": "docs/evidence/rfc/0006-tir-public-response-native-admission-2026-10-25.md",
+      "sha256": "21b1b3ba89fab33287f4805c7343a101cc16c984ddd78e4c39a48b8ef04e92de",
+      "lines": 56
+    },
+    {
+      "path": "docs/evidence/rfc/0007-bootstrap-source-fail-closed-2026-10-24.md",
+      "sha256": "b90708d9ce8911118ee9c810dc32f0edca4771596dd9f04fa37cce4f4d44ab49",
+      "lines": 75
+    },
+    {
+      "path": "docs/evidence/rfc/0007-paid-claim-reader-lock-receipts-2026-10-24.md",
+      "sha256": "8e890a11d8673ca3810bafb0e0f0e279893297d25377fdaeff45aabe2f7be469",
+      "lines": 75
+    },
+    {
+      "path": "docs/evidence/rfc/0007-provider-reader-typed-resource-retry-2026-10-25.md",
+      "sha256": "9492c72d8cb9274140329b596d8f05b585e850b4ee80ac3a4aeea92f7702e853",
+      "lines": 78
+    },
+    {
+      "path": "docs/evidence/rfc/0008-native-provider-gc-release-tuple-2026-10-25.md",
+      "sha256": "c6965d00a834503a4752df287585a93ffd0e235b8cbd1b31ba4efb943e4e93f0",
+      "lines": 45
+    },
+    {
+      "path": "docs/evidence/rfc/0008-selected-source-verifier-economics-2026-10-24.md",
+      "sha256": "f801385a4d792a87b45fdca89c5332714c3a6f931942cf23abb67f36de08dce3",
+      "lines": 29
+    },
+    {
+      "path": "docs/evidence/rfc/0011-existing-coverage-audit.json",
+      "sha256": "42c366b2deccdfb1b3ddb967a7e07fa366f06ff349f588fb7b2b0d721bb080bd",
+      "lines": 118
+    },
+    {
+      "path": "docs/evidence/rfc/0011-hf-census-coverage-2026-10-08.json",
+      "sha256": "4841a3f7091c4a399b6b7feb0f339c9e0c47c9c071b8fddc1cdc9ec3baba735d",
+      "lines": 2897
+    },
+    {
+      "path": "docs/evidence/rfc/0012-native39-settlement-mapping-audit-2026-10-25.md",
+      "sha256": "1119d7081e2acf91f675befc585bc4bff1c165e6770779b45014d6a21aea2f34",
+      "lines": 39
+    },
+    {
+      "path": "docs/evidence/rfc/0012-retained-source-p2p-pruned-import-2026-10-25.md",
+      "sha256": "6a8dbc87e4aae6fe3f63e7fa15679348158cebcbc0c375cfdc3f27c16c3d9e0a",
+      "lines": 175
+    },
+    {
+      "path": "docs/evidence/rfc/0012-retained-source-pruned-import-plan-2026-10-25.md",
+      "sha256": "5d3f04a9a0af6a54c523b791f12d09b42236590b20be11560a8b7dfa2cc33b56",
+      "lines": 238
+    },
+    {
+      "path": "docs/evidence/rfc/0013-llama-t12-registration.json",
+      "sha256": "304edfbe11b3eac9ab92254351e5b9f77c5759c6ae73df9e5672454904db869a",
+      "lines": 57
+    },
+    {
+      "path": "docs/evidence/rfc/0013-onboarding-tool-validation.json",
+      "sha256": "dfae2fdcba8edd82df605246bc7ac75b26e4991ee951d6c5d0ba3c8122463c53",
+      "lines": 198
+    },
+    {
+      "path": "docs/evidence/rfc/0019-gateway-advertised-model-identity-2026-10-25.md",
+      "sha256": "bf9f878986124c2f5d9db8c19aa588eb8280b3b20dd170c946398e9eb83416d1",
+      "lines": 15
+    },
+    {
+      "path": "docs/evidence/rfc/0019-local-llm-pre-post-switch-observation-2026-10-25.md",
+      "sha256": "e2e7240df92c57488693e4c24937cd0a77838355903a30cfd21a314946f2bdfe",
+      "lines": 15
+    },
+    {
+      "path": "docs/evidence/rfc/0029-cone-input-derived-native-owners-2026-10-25.md",
+      "sha256": "c0b1a5037141dcfb8a23b8e2c27cd19de389b5ce6b0b4b5d659fe6693d01ad0f",
+      "lines": 15
+    },
+    {
+      "path": "docs/evidence/rfc/0029-node-owner-custodian-retained-source-handoff-2026-10-25.md",
+      "sha256": "17eff58bb55ef223e207c1bad6772b80551df5880782a11d13be917fd4d4ca69",
+      "lines": 50
+    },
+    {
+      "path": "docs/evidence/rfc/0029-tir-complete-output-ids-typed-resource-2026-10-25.md",
+      "sha256": "e259a4caddef7df6ce7eaf170f48375fd59eb157675741b690b472666272521e",
+      "lines": 23
+    },
+    {
+      "path": "docs/evidence/rfc/0038-native-rail-answer-quote-2026-10-25.md",
+      "sha256": "33184776a0ac23f3378e85ead282869e7a4acf564696c4f40dd8af9814776f3a",
+      "lines": 56
+    },
+    {
+      "path": "docs/evidence/rfc/0038-producer-seat-answer-binding-2026-10-24.md",
+      "sha256": "5107a54a5a93f4efbb48d7b8d9dbb19cd077954d738340265f86b75ae8ec34a8",
+      "lines": 73
+    },
+    {
+      "path": "docs/evidence/rfc/0038-retained-native-answer-ingress-2026-10-24.md",
+      "sha256": "bc9fbfb139bf84e84d52f84c43beb8c0c049cbf9e39fdc06b702f8fe58ad0886",
+      "lines": 24
+    },
+    {
+      "path": "docs/governance/design-freeze.md",
+      "sha256": "aaf370f3d7b68df12574318139ba0d42bd1299a9e1630288b3466574bdde3527",
+      "lines": 40
+    },
+    {
+      "path": "docs/governance/parameter-register.md",
+      "sha256": "65933be511ba8c8a7479cc12489abfd16cf611b008288031b5de15f13bdfbe92",
+      "lines": 125
+    },
+    {
+      "path": "docs/governance/post-mainnet-scope.md",
+      "sha256": "f167bbd91342a6b34da0c1d98ebe1cc71be843b2d0e94c4ef9ab3a82b3d235a2",
+      "lines": 49
+    },
+    {
+      "path": "docs/maintenance/check_docs.py",
+      "sha256": "b3c60cb961354414b99cfad25f517401aa885bddd28400928cb52e7fa630287d",
+      "lines": 56
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "sha256": "646a29148a2bc3a3b84a141c36cfe98d10a3820aee085099bc2265f305f56ce8",
+      "lines": 42
+    },
+    {
+      "path": "docs/maintenance/validation-report.md",
+      "sha256": "7cb1f7f8781362dd77174cc706648d9b343cf259500b4a645ea78cb757813789",
+      "lines": 72
+    },
+    {
+      "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "sha256": "cf5d0a773fa10221d09ec0e4f5f28cbede209fdfda1c97e4e993ed4bfa941486",
+      "lines": 431
+    },
+    {
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "sha256": "146a6db24530aa8a5440e9b6904a3f3bf7f643fe21c4d63325be6c7eb6d78d87",
+      "lines": 4748
+    },
+    {
+      "path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "sha256": "2e6c459f7c1f2aceb4233f4c9b71364486d78f625e948aacf6e4c4fa1fe951b5",
+      "lines": 2621
+    },
+    {
+      "path": "docs/rfc/0004-palw-model-improvement.md",
+      "sha256": "6abaa2eba4f2ef5aa97774b93154858365f116370cec0b7a64465240252deb42",
+      "lines": 1155
+    },
+    {
+      "path": "docs/rfc/0005-palw-ml-vm.md",
+      "sha256": "cc096f4afa7bc81205e50f8123553a81d1b4ece4ed7ea6084cf6118aaa41676f",
+      "lines": 15
+    },
+    {
+      "path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "sha256": "06ae27140abd9812a80678750240b9e84785ecbd3871fc48fd64483af029f50c",
+      "lines": 1328
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "sha256": "eadad4e17cc30e8acf0b0f882d664fa1bedb871af9e6e63fb7bd1c00d924c07b",
+      "lines": 1497
+    },
+    {
+      "path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "sha256": "710936edcb883c09baa8b7daea0c8a3d953a02f521315bfa34d5cc266eb17324",
+      "lines": 361
+    },
+    {
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "sha256": "14a7202db577ccbe68b1f4ca4c929ad558e51fa31f9b4c468ca602db92243ddc",
+      "lines": 330
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "sha256": "de4435a333e023fe870f0e5dd218a9a7e53e2488e1662436f7a0ba15c1364004",
+      "lines": 246
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "sha256": "7b90b55124990629f5b00ab4b14ac189edb3bb2a22416ee493bf7ca6e229b083",
+      "lines": 746
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "sha256": "95a70735174361d070ca69e17f44907f70bb8ee30f25a9ea77e8c7e5c728b9f9",
+      "lines": 607
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "sha256": "8c9c2a6e3b5cb2b1c95d62da8a60670d826b5ecd27e56c661819a171102c2df0",
+      "lines": 394
+    },
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "sha256": "b6abbf1fcc2c62fe91397078274339ac6cb11942ccd4632dc6a00296a2d3bab8",
+      "lines": 1043
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "sha256": "9f005a05fd7c732069baa47195f4c56ef9995b423e9cf35876937f8d1046618c",
+      "lines": 968
+    },
+    {
+      "path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "sha256": "e821fe260743d5b9bad78d8918647c6f71a946818d1ac0bcd410c1673984f47a",
+      "lines": 674
+    },
+    {
+      "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "sha256": "6f91c20b1650ec66336df78bd6715a742e97edde4c5cdbc396afb3544c32fabc",
+      "lines": 46
+    },
+    {
+      "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "sha256": "3672c8774d690749527351c5276e622f19a623798a16e29386c2265392b28390",
+      "lines": 429
+    },
+    {
+      "path": "docs/rfc/0019-annual-model-upgrade.md",
+      "sha256": "ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e",
+      "lines": 446
+    },
+    {
+      "path": "docs/rfc/0020-long-context-calibration-memory.md",
+      "sha256": "9ea21859e194f85dedd83868df1c397b982df9f65f30e34de281fa2a355f6fce",
+      "lines": 187
+    },
+    {
+      "path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "sha256": "1d780be260b557208bf4bdf3310e09bb3b1b7f463d1dbc13cfe6a0f81b68183a",
+      "lines": 23
+    },
+    {
+      "path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "sha256": "753f83e076fc1228ddf8b29ae0520c9a61457ff66842da20d3fd31e773df4717",
+      "lines": 28
+    },
+    {
+      "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "sha256": "cfe54859d881c7201abbd9e2253d29fff83af7615b170f1e5b9efb4932cf8759",
+      "lines": 201
+    },
+    {
+      "path": "docs/rfc/0024-assets/geometry-report.json",
+      "sha256": "86e16f0b8a165c9432a79756cfa39861ea787c62de1bab7e27d8e42419d9a6d7",
+      "lines": 25
+    },
+    {
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "sha256": "ab4f29ce187abefcc408a26fcd0b9c0f4e4e862311a0406bab3a658037a9f62f",
+      "lines": 600
+    },
+    {
+      "path": "docs/rfc/0025-assets/arithmetic-test-results.txt",
+      "sha256": "e6480ac5e50cf680f1b7c9adf42661db57e0048138a6869f2e9a77178c1f462f",
+      "lines": 32
+    },
+    {
+      "path": "docs/rfc/0025-assets/capacity-report.json",
+      "sha256": "0da83e6a99496d909d8e2e7f27153a6c8932e06b67eb880bc3ba464ee50743ae",
+      "lines": 129
+    },
+    {
+      "path": "docs/rfc/0025-assets/capacity_planner.py",
+      "sha256": "ec57a30a50e24ce96c97788f58fcd263576341345067fe0adf35806d46ff57d0",
+      "lines": 214
+    },
+    {
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "sha256": "c4cf2e50999f29623cde90fff5e96b70b07f8e2f0c7fcf24d7df82c02a78f8db",
+      "lines": 705
+    },
+    {
+      "path": "docs/rfc/0026-court-policy-master-contract.md",
+      "sha256": "8dfdc4e80aa7a50f7f2b00f1dc302c347bb50a8da8e8f169865cef6fe038c687",
+      "lines": 194
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/measurement-report.md",
+      "sha256": "0cbf7757e642773e897abd721a673a2ed17cb2e88f1ba25252cd8e32e7a4582c",
+      "lines": 195
+    },
+    {
+      "path": "docs/rfc/0027-assets/validation-results.json",
+      "sha256": "ba02d738c5add43e0f1b8f7102c4b9ba68afd81f53ad634a5102bd4d30f3779b",
+      "lines": 24
+    },
+    {
+      "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "sha256": "337747d946ea2685c2920767eb9c552705fc38f42f2e299139808470ab582053",
+      "lines": 437
+    },
+    {
+      "path": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "sha256": "8bfeec2011ee648014ff4ee4207167189ff74d3828e99a70649d38832bd273b8",
+      "lines": 92
+    },
+    {
+      "path": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
+      "sha256": "9fb6257c28155e32e66c3dba004f6baf2e2c0661ad49ca858ff0c9a7ba6c723e",
+      "lines": 224
+    },
+    {
+      "path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "sha256": "1c46304fa175f2b1f214c397c682b829f3c0e3a23ef2729c7234746453ae501d",
+      "lines": 170
+    },
+    {
+      "path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "sha256": "5a969226d9d4b4a805d6e2f80df6df2b05dd5bac745927d717e2cc8f53d83b2f",
+      "lines": 47
+    },
+    {
+      "path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "sha256": "da14fa673ee16cbf368bf1caa10b27a388a06aa4425de5d51062be75a6c1ae36",
+      "lines": 68
+    },
+    {
+      "path": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
+      "sha256": "3339abc3303c7e80e22a64778b65643d7bcaea049f6241fa040b8d0726d5215e",
+      "lines": 32
+    },
+    {
+      "path": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
+      "sha256": "9f23efd19a8949949a1c8abfa192226e552de303045f33b3dbbc1102d2ad2ae8",
+      "lines": 99
+    },
+    {
+      "path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
+      "sha256": "746be1d58ec259fb8aaca4b55dd988025f9f558cd05b7c7d145cc0a468786042",
+      "lines": 135
+    },
+    {
+      "path": "docs/rfc/0036-authenticated-palw-state-map-and-row-access.md",
+      "sha256": "2a7da16331868ede8756e30c9e2d069a4827dee36b07ef62fa1729123b690920",
+      "lines": 90
+    },
+    {
+      "path": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
+      "sha256": "55f9c44976a289045f147c59f0a5cddbfe56efa1e0c81689d7cf5384b59515d3",
+      "lines": 89
+    },
+    {
+      "path": "docs/rfc/0038-palw-fp-answer-accounting.md",
+      "sha256": "c6f5f27e7426fb99920201e90dba22931029b54128ede4f81b9f127c0bd75bbf",
+      "lines": 49
+    },
+    {
+      "path": "kaspad/src/eth_rpc.rs",
+      "sha256": "c39c6d3646e708f84ee224911bd46cc46bb9c4fbf25ebec6550e576a75799b06",
+      "lines": 1439
+    },
+    {
+      "path": "kaspad/src/palw_fraud_filer.rs",
+      "sha256": "c155a3f077097528356d4a717af5679654b442c7a07b11e1d7e829584e6230e8",
+      "lines": 9543
+    },
+    {
+      "path": "kaspad/src/palw_gdn_held_filer.rs",
+      "sha256": "35d9a45cd0f01a81f3e2eb34b1e9399e8faccec549e60be2d2163c71960535ce",
+      "lines": 471
+    },
+    {
+      "path": "kaspad/src/palw_panel.rs",
+      "sha256": "ce27785b8a127e178998c90080d9ca9ed3b5949a2b122e66311136786403098d",
+      "lines": 15134
+    },
+    {
+      "path": "kaspad/src/palw_panel/answer_accounting.rs",
+      "sha256": "018ee80f45c30ca89f5a6e842d6744d150df010e7c55e0017c94d0af94d975c0",
+      "lines": 277
+    },
+    {
+      "path": "kaspad/src/palw_tir_acquisition_driver.rs",
+      "sha256": "17209475b912cb9dbe3ae10010067bffcde4f355b37d535ca56eb652035bc2ec",
+      "lines": 1649
+    },
+    {
+      "path": "kaspad/src/palw_tir_public_filer_scheduler.rs",
+      "sha256": "0d97e3ea6096ef2ba43aeac933a9a968f5038140f210128d41e102ca7156e241",
+      "lines": 556
+    },
+    {
+      "path": "kaspad/src/private_integration/kernel_paid_checker_v4.rs",
+      "sha256": "597d4cd527a64e353cf6475ea341a95fe5c9dc2f835729a27c60f3a023caea45",
+      "lines": 869
+    },
+    {
+      "path": "kaspad/src/private_integration/source_bootstrap_factory_v1.rs",
+      "sha256": "080de2dd99cf833e168816ea801637966478cb6a722664d64aac053f10e6fc40",
+      "lines": 177
+    },
+    {
+      "path": "misaka/evm/core/src/trace.rs",
+      "sha256": "2728ef5aaef5e424329142fd258a6d678bd35034f285c085219ba1f6c9feaf55",
+      "lines": 1262
+    },
+    {
+      "path": "misaka/palw/base0/src/fp_recompute.rs",
+      "sha256": "d223d31b197f6c94f0df38d4715f23d084f0dcb12fd030eb3134131685f90fc8",
+      "lines": 1668
+    },
+    {
+      "path": "misaka/palw/base0/tests/fp_prefix_inherit_e2e.rs",
+      "sha256": "a49407493a5465ba7bece279825ff82cf461cd8954a44fa71e571ec10d5a21ae",
+      "lines": 274
+    },
+    {
+      "path": "misaka/palw/constraint/src/schema.rs",
+      "sha256": "a085e569064ef8e4b39531d645c7f910cc90342055feb57ff0d5ef20a854d93a",
+      "lines": 894
+    },
+    {
+      "path": "misaka/palw/gateway/src/bin/rail.rs",
+      "sha256": "0f2a355cbd0d710e8052450dbe994a5c30288d86d01a0c39453f8d945afc0f85",
+      "lines": 2619
+    },
+    {
+      "path": "misaka/palw/gateway/src/main.rs",
+      "sha256": "1e762f2e762b9d4147cb1a6e1f482e6140acf74f7f0fefa65947176689b7e53f",
+      "lines": 4013
+    },
+    {
+      "path": "misaka/palw/gateway/src/surface.rs",
+      "sha256": "ea70ffcfa305fa9e92c8a6462e97dcd537bfdf6c89186f6b39777b84d07eb18b",
+      "lines": 2210
+    },
+    {
+      "path": "misaka/palw/kernel/src/claim_paid_bootstrap_source_v6.rs",
+      "sha256": "f661f5a1411ca600c17fc5d27b4027df4950ea60ee33feb59f7a0029ab9d2200",
+      "lines": 157
+    },
+    {
+      "path": "misaka/palw/remote/src/bundle.rs",
+      "sha256": "364274c073b6464f6882d144ee781b8b730c5bbd6532f7a4fe14428f8f5794de",
+      "lines": 1921
+    },
+    {
+      "path": "misaka/palw/remote/src/miner.rs",
+      "sha256": "0f942191e2dbf613066189cae650155ca62b19d4e1e55b39dfa130a7ad871874",
+      "lines": 1883
+    },
+    {
+      "path": "misaka/palw/remote/src/monetary_material.rs",
+      "sha256": "1c645afb7cb03655a3106820950c1ae42843f219afb333125a2404b638ef3d19",
+      "lines": 951
+    },
+    {
+      "path": "misaka/palw/remote/src/monetary_material_gc.rs",
+      "sha256": "feca351d878f522bf4eed6b8ff195282ac9e96230f9babad833962a0d1495290",
+      "lines": 1151
+    },
+    {
+      "path": "misaka/palw/remote/src/relay.rs",
+      "sha256": "c4cf3057fdb4794dd49e9013844d4a5c38c07847981b75607d0b6652bf653a5c",
+      "lines": 398
+    },
+    {
+      "path": "misaka/palw/remote/src/transport.rs",
+      "sha256": "4339ad12dfd3c044d0c4eef88bc2b5ca59b3f34bb8317753276dcbb1a9952e97",
+      "lines": 1671
+    },
+    {
+      "path": "misaka/palw/remote/src/verify.rs",
+      "sha256": "329bed5cafac36d393ef1f81efb3eeae64272bfe9468ac5cc381c1da89da2950",
+      "lines": 1013
+    },
+    {
+      "path": "misaka/palw/remote/tests/adv_c4_registration.rs",
+      "sha256": "fa93f7446f1137244befcba1f40e9abca62a440bc81205be4ff4efe86253b14a",
+      "lines": 496
+    },
+    {
+      "path": "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4.rs",
+      "sha256": "1486ddb76aab598be6f365008f6325cb578923f09a51b0375e78ffd04c73c087",
+      "lines": 717
+    },
+    {
+      "path": "misaka/palw/sdk/src/onboarding_chain.rs",
+      "sha256": "f4164836655d9802fa5fce058badd8dd754fb3da33f48098a66646ac525d5364",
+      "lines": 899
+    },
+    {
+      "path": "misaka/palw/sdk/src/onboarding_snapshot.rs",
+      "sha256": "1279d03937744602b8400ba1335966ffcf8761ef7c5f7fde6bd70c8913257d4e",
+      "lines": 182
+    },
+    {
+      "path": "misaka/palw/sdk/src/preflight/mod.rs",
+      "sha256": "562ee953a4cf7be0af8c779d833cb76d7131bfce3fdeac36a440e63fe2226884",
+      "lines": 849
+    },
+    {
+      "path": "misaka/palw/sdk/src/preflight/node.rs",
+      "sha256": "3e74f1cbd0762d516ded895bec8636e62f9b732825032a1b192fd3e4152e4d89",
+      "lines": 68
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/beacon_run.rs",
+      "sha256": "94c9ea724738c5cf71a97af74e61df5f354dddd401387afbd83a61b5b3f7d892",
+      "lines": 1265
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/bind.rs",
+      "sha256": "f9ef347dab27462fccc5e8c7c5c077a9a9a7520004ebbdf214d63e848564be43",
+      "lines": 101
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/cli.rs",
+      "sha256": "3af1e2f1645be2b6116750fd91b83b45c2708f1a96dc75d4c0bdb06725585021",
+      "lines": 758
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/conformance.rs",
+      "sha256": "3c0b57501cd215a85ef4a481379ebb255559f227ea198e6c9b940016020cdf43",
+      "lines": 760
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/manifest.rs",
+      "sha256": "e6dca71e8de52ce444b5753ec41ccec807b1d4bc4242ecffca8f3f5a09f2a5d3",
+      "lines": 578
+    },
+    {
+      "path": "misaka/palw/sdk/src/runtime_pack/verify.rs",
+      "sha256": "965a00812c80fcbb95a24b76c3f657aa966f608616f89296b27a275a989156bf",
+      "lines": 763
+    },
+    {
+      "path": "misaka/palw/sdk/src/tir_registration.rs",
+      "sha256": "88696268de87426312e366e5ac144c530d92b670fff78ded3f7b177aad1a0ca2",
+      "lines": 201
+    },
+    {
+      "path": "misaka/palw/sdk/tests/direct_tir_registration.rs",
+      "sha256": "9d796e2b18ec096cafea72776932da458322e2064d1b38f84018dbcf8892e7f4",
+      "lines": 1025
+    },
+    {
+      "path": "misaka/palw/tir/core/src/eval.rs",
+      "sha256": "0463a5c6dafa2e4210c6924fddc2752b83039109bf10e077c069c5cf2a50996c",
+      "lines": 335
+    },
+    {
+      "path": "misaka/palw/tir/core/src/pipeline.rs",
+      "sha256": "898586f896bafc2872a97616dccdc4631a44bbda0eb91d595ba5232b2efbf961",
+      "lines": 983
+    },
+    {
+      "path": "misaka/palw/tir/core/src/program_v39.rs",
+      "sha256": "94cbe07bde4f6ca1d5f49940aa087d06131ccf6f48bd0258ecde26d9c4a0e558",
+      "lines": 62
+    },
+    {
+      "path": "misaka/palw/tir/core/src/validate.rs",
+      "sha256": "7f05369b7615680ed43c2bd1182e31c38372fc70b4d5798d613d7c10fc5e9f05",
+      "lines": 658
+    },
+    {
+      "path": "misaka/palw/tir/core/src/validate_v2.rs",
+      "sha256": "297cb01644a4c2ffc3b5aba260c8c85ebca3b1afa8b47ed9021fdc594f613f07",
+      "lines": 201
+    },
+    {
+      "path": "misaka/palw/tir/lower/src/bin/palw-tir-convert.rs",
+      "sha256": "6180c5d68089e92f279212157af37a4d752cc0c743402000f5a1abf748d43dbe",
+      "lines": 394
+    },
+    {
+      "path": "misaka/palw/tir/lower/src/float_ref/mod.rs",
+      "sha256": "7591b68ebdd5821febddc3a39ef6bcf2dfe0961f7211134437df70d159c1edac",
+      "lines": 2560
+    },
+    {
+      "path": "misaka/palw/tir/lower/src/float_ref/stream.rs",
+      "sha256": "26811517f3f3f7cd7dab4a36fb6fc60878b3b62e0a8bd06efd6d80f8f5d73531",
+      "lines": 650
+    },
+    {
+      "path": "misaka/palw/tir/lower/src/ram_account.rs",
+      "sha256": "5364ae0ab8799966c08d40101ff3f5fc56bf2e4b4738170ec923588b13b019f2",
+      "lines": 219
+    },
+    {
+      "path": "misaka/palw/tir/lower/tests/position_blocks.rs",
+      "sha256": "6c6365e0d209591831b4429ad4f2e27e49f8695703948785f89779585f7b6783",
+      "lines": 153
+    },
+    {
+      "path": "scripts/drills/rfc0016_sigma_k_measure.py",
+      "sha256": "c8381b38794d00e4ff11f6d2a4eb01c17707834af652132c8e081028c1f58a6e",
+      "lines": 411
+    },
+    {
+      "path": "scripts/drills/rfc0018_dag_drill.py",
+      "sha256": "7f7f088ff6ac4234cb541401bf85e280bccf61e4a421c927c62b211e90b1c691",
+      "lines": 591
+    },
+    {
+      "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+      "sha256": "0c15f55908bb8e6680a8823bd7a1a5f85cda6a4d552144b4f98b74d7ad5ace05",
+      "lines": 675
+    },
+    {
+      "path": "scripts/genesis/genesis10_pipeline.py",
+      "sha256": "e0e3859c0da9a02b44afefc6f29d8692ff1706dbf3f2dba6dcbde3a2a3efc80c",
+      "lines": 2199
+    },
+    {
+      "path": "scripts/genesis/rfc20_acceptance.py",
+      "sha256": "7b23a209067f1c6ffd7293b29f1d50ae6faa248767ebd8b0c31e149d1f96cd0f",
+      "lines": 113
+    },
+    {
+      "path": "scripts/release/misaka-release-manifest.py",
+      "sha256": "fe8a45654f77e1a484e91e5d09a41fd23c4016e4cda09dc7838b1eafb681df8b",
+      "lines": 522
+    },
+    {
+      "path": "scripts/release/misaka-release-readiness.py",
+      "sha256": "d8ff9786e9d2ba62592b37872d8e36373ead54e15128768d28265887b1886b16",
+      "lines": 304
+    },
+    {
+      "path": "wallet/core/src/misaka_preflight.rs",
+      "sha256": "b061f56c4592a3b61dc77d9e975b15eb126680bbcd5e67c8ab274103e7470a68",
+      "lines": 461
+    }
+  ]
+}

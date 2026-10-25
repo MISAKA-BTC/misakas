@@ -1,0 +1,78 @@
+{
+  "passed": true,
+  "baseline": "0ec2efc4c3ead4d2b63c994d4744c59545a75626",
+  "rfc_count": 38,
+  "code_complete_rfcs": [
+    17,
+    19,
+    21,
+    36
+  ],
+  "verified_complete_rfcs": [
+    21,
+    36
+  ],
+  "categories": {
+    "PARTIAL_OR_UNVERIFIED": [
+      1,
+      2,
+      3,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      16,
+      18,
+      20,
+      22,
+      23,
+      24,
+      25,
+      26,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      37,
+      38
+    ],
+    "DEFERRED": [
+      4,
+      15
+    ],
+    "SUPERSEDED": [
+      5
+    ],
+    "CODE_COMPLETE_ACCEPTANCE_PENDING": [
+      17,
+      19
+    ],
+    "VERIFIED_COMPLETE": [
+      21,
+      36
+    ],
+    "ABSENT": [
+      27
+    ]
+  },
+  "category_counts": {
+    "PARTIAL_OR_UNVERIFIED": 30,
+    "DEFERRED": 2,
+    "SUPERSEDED": 1,
+    "CODE_COMPLETE_ACCEPTANCE_PENDING": 2,
+    "VERIFIED_COMPLETE": 2,
+    "ABSENT": 1
+  },
+  "validated_code_citations": 354,
+  "unique_cited_code_files": 179,
+  "source_manifest_files": 264
+}
