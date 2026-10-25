@@ -13815,6 +13815,7 @@ pub fn palw_panel_room_read_v1(
 
 mod native_mutation;
 mod native_writers;
+mod vesting_workspace_v2;
 mod transition_builder;
 mod block_preparation;
 mod input_views;
@@ -14179,6 +14180,8 @@ fn apply_vesting_maturity(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     // The RAW depth (I-8), as every other reader of the second clock takes it: `None` below
     // `palw_audit_2026_09_23`; the escape is computed from it by the pure functions.
     let raw_depth = palw_settled_anchor_depth_v1(builder.extras);
+    // Admit the caller-owned planner/recipient scratch before even the first latch copy.
+    builder.reserve_vesting_workspace_v2()?;
     builder.latch_matured_vesting_rows(ctx.daa_score, raw_depth)?;
     // The fold's belt: the non-market rows still waiting after 1b's drain come off the width. Zero
     // under the queue lemma (every step 3d on testnet-12), so the planner is handed the full width;
@@ -14217,6 +14220,7 @@ fn apply_activation_pool_flush_v1(builder: &mut TransitionBuilder<'_>) -> Result
     if builder.state.activation_pool_scheduled.is_empty() {
         return Ok(());
     }
+    builder.reserve_activation_pool_flush_workspace_v2()?;
     let market = palw_vesting_market_rows_waiting_v1(&builder.state).min(PALW_V2_VESTING_MARKET_RESERVE);
     let width = PALW_V2_MAX_PAYOUTS_PER_BLOCK
         .saturating_sub(palw_vesting_non_market_rows_waiting_v1(&builder.state))
