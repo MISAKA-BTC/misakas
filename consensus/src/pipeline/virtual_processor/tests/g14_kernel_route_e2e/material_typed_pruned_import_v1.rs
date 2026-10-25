@@ -68,19 +68,25 @@ async fn retained_source_fresh_pruned_import_and_one_native_block_then_cold_reop
         ConnBuilder::default().with_files_limit(20).with_db_path(scratch_path.clone()).with_create_if_missing(false).build().unwrap();
     let (source_tx, _source_rx) = async_channel::unbounded();
     let source_node = TestConsensus::with_db(scratch_db.clone(), &cfg, source_tx);
+    arm_recorded_clock(&source_node, reader.simulated_time);
     let mut source = t12_reopened_chain(source_node, &cfg, &bundle, reader.simulated_time, reader.nonce);
     check_source(&source, &manifest, point, tip, release);
 
+    eprintln!("PRUNED_IMPORT_V1 phase=proof_export event=start pp={point} tip={tip}");
     let proof = source.ctx.consensus.get_pruning_point_proof();
+    eprintln!("PRUNED_IMPORT_V1 phase=proof_export event=complete pp={point} tip={tip}");
     assert_eq!(proof.first().and_then(|level| level.last()).map(|h| h.hash), Some(point));
     // Normal IBD validates on a current consensus, then applies on empty staging.
     // A separate genesis-initialized validator preserves that distinction.
     let mut validator_cfg = cfg.clone();
     validator_cfg.process_genesis = true;
     let validator = TestConsensus::new(&validator_cfg);
+    arm_recorded_clock(&validator, reader.simulated_time);
+    eprintln!("PRUNED_IMPORT_V1 phase=proof_validate event=start pp={point} tip={tip}");
     validator
         .validate_pruning_proof(&proof, &PruningProofMetadata::new(source.ctx.consensus.get_header(tip).unwrap().blue_work))
         .unwrap();
+    eprintln!("PRUNED_IMPORT_V1 phase=proof_validate event=complete pp={point} tip={tip}");
     drop(validator);
 
     let trust = source.ctx.consensus.get_pruning_point_anticone_and_trusted_data().unwrap();
@@ -104,12 +110,18 @@ async fn retained_source_fresh_pruned_import_and_one_native_block_then_cold_reop
         ConnBuilder::default().with_files_limit(20).with_db_path(target_path.clone()).with_create_if_missing(true).build().unwrap();
     let (target_tx, _target_rx) = async_channel::unbounded();
     let target_node = TestConsensus::with_db(target_db.clone(), &cfg, target_tx);
-    let target = t12_reopened_chain(target_node, &cfg, &bundle, reader.simulated_time, reader.nonce);
+    arm_recorded_clock(&target_node, reader.simulated_time);
+    let mut target = t12_reopened_chain(target_node, &cfg, &bundle, reader.simulated_time, reader.nonce);
+    eprintln!("PRUNED_IMPORT_V1 phase=proof_apply event=start pp={point} tip={tip}");
     target.ctx.consensus.apply_pruning_proof((*proof).clone(), &trusted).unwrap();
     target.ctx.consensus.import_pruning_points(history).unwrap();
+    eprintln!("PRUNED_IMPORT_V1 phase=proof_apply event=complete pp={point} tip={tip}");
+    let trusted_count = trusted.len();
+    eprintln!("PRUNED_IMPORT_V1 phase=trusted event=start count={trusted_count} pp={point} tip={tip}");
     for block in trusted {
         target.ctx.consensus.validate_and_insert_trusted_block(block).virtual_state_task.await.unwrap();
     }
+    eprintln!("PRUNED_IMPORT_V1 phase=trusted event=complete count={trusted_count} pp={point} tip={tip}");
     target.ctx.consensus.clear_body_missing_anticone_set();
     headers_after_point(&source.ctx.consensus, &target.ctx.consensus, point, tip).await;
     target.ctx.consensus.validate_pruning_points(tip).unwrap();
@@ -119,10 +131,17 @@ async fn retained_source_fresh_pruned_import_and_one_native_block_then_cold_reop
     // The target decides what is missing. Never replay full genesis history.
     let missing = target.ctx.consensus.get_missing_block_body_hashes(tip).unwrap();
     assert!(!missing.contains(&release), "a physically pruned Release body cannot be required");
-    for hash in missing {
+    let body_count = missing.len();
+    eprintln!("PRUNED_IMPORT_V1 phase=bodies event=start count={body_count} pp={point} tip={tip}");
+    for (ordinal, hash) in missing.into_iter().enumerate() {
         let block = source.ctx.consensus.get_block(hash).expect("source retains requested post-point body");
         target.ctx.consensus.validate_and_insert_block(block).virtual_state_task.await.unwrap();
+        let processed = ordinal + 1;
+        if processed % 1000 == 0 {
+            eprintln!("PRUNED_IMPORT_V1 phase=bodies event=progress processed={processed} count={body_count} pp={point} tip={tip}");
+        }
     }
+    eprintln!("PRUNED_IMPORT_V1 phase=bodies event=complete count={body_count} pp={point} tip={tip}");
     assert_same_tip(&source.ctx.consensus, &target.ctx.consensus, &bundle, tip, material_root, &consents);
     assert!(!target.vp().block_transactions_store.has(release).unwrap());
     assert!(!target.vp().palw_state_v2_store.read().has_delta(release).unwrap());
@@ -130,11 +149,17 @@ async fn retained_source_fresh_pruned_import_and_one_native_block_then_cold_reop
     // Only scratch source is advanced. The original retained artifact stays reusable.
     let block = source.heartbeat(cfg.params.target_time_per_block(), vec![]).await;
     let accepted = block.hash();
+    let final_clock = source.ctx.simulated_time;
+    assert!(final_clock >= block.header.timestamp);
+    assert!(source.ctx.consensus.has_validation_time_for_test(), "heartbeat advances the existing source clock");
+    target.ctx.simulated_time = final_clock;
+    arm_recorded_clock(&target.ctx.consensus, final_clock);
     target.ctx.consensus.validate_and_insert_block(block).virtual_state_task.await.unwrap();
     assert_eq!(target.ctx.consensus.block_status(accepted), BlockStatus::StatusUTXOValid);
     assert_same_tip(&source.ctx.consensus, &target.ctx.consensus, &bundle, accepted, material_root, &consents);
     let expected_rows = virtual_rows(&target.ctx.consensus);
     let expected_root = target.tip_state().1.state_root();
+    eprintln!("PRUNED_IMPORT_V1 phase=cold_reopen event=start accepted={accepted} pp={point}");
     drop(target);
     let weak = Arc::downgrade(&target_db);
     drop(target_db);
@@ -142,15 +167,27 @@ async fn retained_source_fresh_pruned_import_and_one_native_block_then_cold_reop
     let cold_db = ConnBuilder::default().with_files_limit(20).with_db_path(target_path).with_create_if_missing(false).build().unwrap();
     let (cold_tx, _cold_rx) = async_channel::unbounded();
     let cold = TestConsensus::with_db(cold_db, &cfg, cold_tx);
+    arm_recorded_clock(&cold, final_clock);
     assert_eq!(cold.get_sink(), accepted);
     assert!(cold.is_pruning_utxoset_stable());
     assert_eq!(virtual_rows(&cold), expected_rows);
     let (_, state) = cold.virtual_processor().palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
     assert_eq!(state.state_root(), expected_root);
     assert_same_receipts(&source.ctx.consensus, &cold, material_root, &consents);
+    eprintln!("PRUNED_IMPORT_V1 phase=cold_reopen event=complete accepted={accepted} pp={point}");
     eprintln!(
         "PRUNED_IMPORT_V1 native_store_import_and_one_block=PASS pp={point} accepted={accepted} run={run:?} wire_crash_campaign=NOT_RUN"
     );
+}
+
+/// Run7 opts into this existing instance-local clock in pruning::started.
+/// Reopening a T12Chain restores ctx time but does not enable header validation's
+/// clock. Match the actual saved source clock before proof/header validation;
+/// never widen timestamp tolerance or stamp the incoming headers backwards.
+fn arm_recorded_clock(native: &TestConsensus, now: u64) {
+    assert!(now > 0, "a zero clock disables the existing opt-in");
+    native.set_validation_time_for_test(now);
+    assert!(native.has_validation_time_for_test());
 }
 
 fn required_path(name: &str) -> PathBuf {
@@ -204,18 +241,27 @@ fn check_source(source: &T12Chain, manifest: &Manifest, point: Hash64, tip: Hash
 async fn headers_after_point(source: &TestConsensus, target: &TestConsensus, point: Hash64, tip: Hash64) {
     let page = usize::try_from(source.params().mergeset_size_limit_history().upper_bound()).unwrap().checked_add(1).unwrap().max(4096);
     let mut low = point;
+    let mut processed = 0usize;
+    eprintln!("PRUNED_IMPORT_V1 phase=headers event=start pp={point} tip={tip}");
     while low != tip {
         let (hashes, reached) = source.get_hashes_between(low, tip, page).unwrap();
         assert_ne!(reached, low, "real native header export must make progress");
         for hash in hashes {
             let header = source.get_header(hash).unwrap();
             target.validate_and_insert_block(Block::from_header_arc(header)).virtual_state_task.await.unwrap();
+            processed = processed.checked_add(1).unwrap();
+            if processed % 1000 == 0 {
+                eprintln!("PRUNED_IMPORT_V1 phase=headers event=progress processed={processed} pp={point} tip={tip}");
+            }
         }
         low = reached;
     }
+    eprintln!("PRUNED_IMPORT_V1 phase=headers event=complete processed={processed} pp={point} tip={tip}");
 }
 
 fn import_snapshot(source: &TestConsensus, target: &TestConsensus, point: Hash64, cfg: &Config) {
+    let tip = source.get_sink();
+    eprintln!("PRUNED_IMPORT_V1 phase=snapshot_import event=start pp={point} tip={tip}");
     let snapshot = source.pruning_point_palw_state_shared_v1(point).expect("public exact-point snapshot");
     let declarations = source.palw_class_carriages_for_snapshot_v1(&snapshot, true).expect("complete snapshot declarations");
     source.palw_validate_snapshot_declarations_v1(&snapshot, &declarations, true).unwrap();
@@ -254,6 +300,8 @@ fn import_snapshot(source: &TestConsensus, target: &TestConsensus, point: Hash64
     let mut hash = kaspa_muhash::MuHash::new();
     let mut from = None;
     let mut rows = 0usize;
+    let mut pages = 0usize;
+    eprintln!("PRUNED_IMPORT_V1 phase=utxos event=start pp={point} tip={tip}");
     loop {
         let chunk = source.get_pruning_point_utxos(point, from, 4096, from.is_some()).unwrap();
         if chunk.is_empty() {
@@ -262,10 +310,13 @@ fn import_snapshot(source: &TestConsensus, target: &TestConsensus, point: Hash64
         from = chunk.last().map(|(out, _)| *out);
         rows = rows.checked_add(chunk.len()).unwrap();
         target.append_imported_pruning_point_utxos_for_session(session, &chunk, &mut hash).unwrap();
+        pages = pages.checked_add(1).unwrap();
+        eprintln!("PRUNED_IMPORT_V1 phase=utxos event=progress pages={pages} rows={rows} pp={point} tip={tip}");
     }
     assert!(rows > 0);
     assert_eq!(hash.clone().finalize(), source.get_header(point).unwrap().utxo_commitment);
     target.import_pruning_point_utxo_set_for_session(session, hash).unwrap();
+    eprintln!("PRUNED_IMPORT_V1 phase=utxos event=complete pages={pages} rows={rows} pp={point} tip={tip}");
     if let Some((header, state)) = source.pruning_point_evm_state(point) {
         target.import_pruning_point_evm_state_for_session(session, header, state).unwrap();
     } else {
@@ -276,6 +327,7 @@ fn import_snapshot(source: &TestConsensus, target: &TestConsensus, point: Hash64
     assert!(target.is_pruning_utxoset_stable());
     let context = target.pruning_import_session().unwrap();
     assert!(context.active.is_none() && !context.utxos_started && !context.utxos_imported);
+    eprintln!("PRUNED_IMPORT_V1 phase=snapshot_import event=complete pp={point} tip={tip}");
 }
 
 fn virtual_rows(native: &TestConsensus) -> Vec<(TransactionOutpoint, UtxoEntry)> {

@@ -184,3 +184,41 @@ formatted individually. Static review also binds the Arc-backed processor before
 borrowing its retention markers, so the guard cannot outlive a temporary owner.
 Compilation passed as recorded above. Runtime remains pending a successfully
 retained source and explicit invocation of the ignored test.
+
+## Post-compile test-clock correction
+
+Static review after the first compile identified an omitted runtime fixture input:
+Run7's `pruning::started` enables the existing instance-local validation clock, but
+`t12_reopened_chain` restores only `ctx.simulated_time`. It does not enable that
+clock on a newly opened consensus. The compile-only pin above therefore does not
+validate time handling or importer execution.
+
+The importer now explicitly sets and asserts the same existing validation clock on
+the scratch source, genesis proof validator and fresh target from the persisted
+reader time before proof/header processing. The source's existing `arm_clock` path
+then advances its clock while building the additional block. Before target acceptance,
+the target's context and validation clock advance to the source's final simulated
+time, which must cover the actual block timestamp. The cold reopened target enables
+that final clock before reads or any later work. No timestamp tolerance, params,
+header timestamp, public clock or runtime production entry is changed.
+
+The corrected leaf's coordinated build **passed in4m15s**. Build log:
+`/tmp/misaka-rfc-counting-import-clock-wave-build-20261025.log`.
+The six-identity source record is
+`/tmp/misaka-rfc-counting-import-clock-wave-source-20261025/record.json`.
+Corrected Consensus pin: `/tmp/misaka-rfc-counting-import-clock-consensus-20261025`,
+SHA256 `58021023dc1a785bebed02e8b2b477c5ab44b27fcb293b41afdb74367a1baf1d`.
+The parent again confirmed the exact ignored parent in
+`/tmp/misaka-rfc-counting-import-clock-ignored-inventory-20261025.log`.
+This supersedes the earlier compile-only pin for the clock/telemetry fixture;
+neither inventory is an executed runtime test. Build duration is not a benchmark.
+Actual retained-source import remains **NOT RUN**. Run7 is still active and its
+source DB was not opened by this work.
+
+The same correction adds test-only progress logs for proof export/validation/apply,
+trusted insertion, header/body transfer, UTXO import, complete snapshot import and
+cold reopen. Header/body progress reports every1000 successfully awaited entries;
+UTXO progress reports actual pages and cumulative rows after each appended page.
+Phase completion includes the actual processed count and point/tip identities.
+These logs do not alter consensus data or markers and are not acceptance gates,
+throughput measurements or evidence that any unexecuted importer succeeded.
