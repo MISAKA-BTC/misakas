@@ -96,6 +96,10 @@ struct Args {
     /// reference evaluator and far faster) instead of the reference evaluator.
     #[arg(long)]
     exec: bool,
+    /// Retain at most this many MiB of float logits during short --exec checks,
+    /// releasing the float head before integer execution. Zero always streams.
+    #[arg(long, default_value_t = 256)]
+    reference_cache_mib: u64,
     /// With `--exec`: also run the first N positions of the first evaluation sequence on the
     /// reference evaluator and refuse unless every logit is equal.
     #[arg(long, default_value_t = 0)]
@@ -468,7 +472,11 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     misaka_palw_tir_lower::ram_account::stage("fidelity.float");
     // On the typed backend both sides are compared a position at a time: the float reference runs
     // to the post block's inputs and the post block (stateless) is evaluated per position.
-    let (fl, post_in) = if a.exec {
+    let cache_float_logits = a.exec && rows_bytes / 3 <= a.reference_cache_mib.saturating_mul(1 << 20);
+    if cache_float_logits {
+        log(format!("caching {} MiB of reference logits to release the float head before integer execution", rows_bytes / 3 / (1 << 20)));
+    }
+    let (fl, post_in) = if a.exec && !cache_float_logits {
         let post_in = misaka_palw_tir_lower::float_ref::stream::run_to_post(&prep.hl, &loader, &eval, &progress("float"))
             .map_err(|e| e.to_string())?;
         (Vec::new(), post_in)
@@ -487,11 +495,15 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         }
         let mut first: Vec<Vec<f64>> = Vec::new();
         let mut dump: Option<(Vec<f32>, Vec<f32>)> = a.logits_out.as_ref().map(|_| (Vec::new(), Vec::new()));
-        let post_store = loader.load(prep.hl.post, None).map_err(|e| e.to_string())?;
+        let post_store = if cache_float_logits { None } else { Some(loader.load(prep.hl.post, None).map_err(|e| e.to_string())?) };
         let mut float_err: Option<String> = None;
         for (si, s) in eval.iter().enumerate() {
             fidelity::int_logits_exec_each(&prep.lowered.program, &mat.params, s, mat.logits_scale, &mut |p, row| {
-                let f = match misaka_palw_tir_lower::float_ref::stream::post_logits(&prep.hl, &post_store, &post_in[si][p], s[p], p) {
+                let reference_row = match &post_store {
+                    None => Ok(fl[si][p].clone()),
+                    Some(store) => misaka_palw_tir_lower::float_ref::stream::post_logits(&prep.hl, store, &post_in[si][p], s[p], p),
+                };
+                let f = match reference_row {
                     Ok(f) => f,
                     Err(e) => {
                         float_err.get_or_insert(e.to_string());

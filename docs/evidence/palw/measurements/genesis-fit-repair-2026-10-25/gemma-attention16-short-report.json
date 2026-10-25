@@ -1,0 +1,109 @@
+{
+  "architecture": "Gemma4UnifiedForConditionalGeneration",
+  "artifact_bytes": 14999741953,
+  "artifact_digest": null,
+  "backend": "misaka-palw-tir-exec",
+  "calibration": {
+    "length_rule": {
+      "context": 64,
+      "longest": null,
+      "rule": "not recurrent"
+    },
+    "positions": 2048,
+    "sequences": 4,
+    "source": {
+      "chunks": 1,
+      "files": [
+        {
+          "chunks": 1,
+          "git_blob": "2bb5730da32226843407b3036c40ed001b26804b",
+          "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
+          "path": "docs/operations/node/archival.md",
+          "sha256": "71c3c4e1386b8eaa8def15c0640277008a0a77b0691a387f3e340f23c1609909",
+          "tokens": 3689
+        },
+        {
+          "chunks": 1,
+          "git_blob": "9cad9e256809f5e893ce2ec69bde1efae4ae74be",
+          "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
+          "path": "docs/history/upstream/crescendo-guide.md",
+          "sha256": "e7f4ab8be58c9715f1aff83832a80889f772ff1c5e8c75b1b7e81bbe903d9965",
+          "tokens": 1250
+        },
+        {
+          "chunks": 1,
+          "git_blob": "9b7e5e85eb2e049679cd7ed1bcc46e9b18849047",
+          "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
+          "path": "CONTRIBUTING.md",
+          "sha256": "1f11326094038a50e4823bc73ff0a6e96cbf5502ab78ec737c5d969eb3ada651",
+          "tokens": 1213
+        },
+        {
+          "chunks": 1,
+          "git_blob": "d75fe2b3c7c52f9a1019a7999a472d64c4ce00d2",
+          "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
+          "path": "SECURITY.md",
+          "sha256": "1a4219d71ba1a6f705f502b64da01539afffa59183b4cb786dd90a6cc175a6f8",
+          "tokens": 4224
+        }
+      ],
+      "len": 512,
+      "tokenizer": {
+        "file": "tokenizer.json",
+        "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+      },
+      "tool": "misaka/palw/tir/lower/tools/tokenize_docs.py"
+    }
+  },
+  "composite": null,
+  "drift": null,
+  "evaluation": {
+    "positions": 128,
+    "sequences": 2,
+    "source": {
+      "chunks": 1,
+      "files": [
+        {
+          "chunks": 1,
+          "git_blob": "a3166dc2f915782ccea239f919ddd5aed5c5e7dd",
+          "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
+          "path": "README.md",
+          "sha256": "522dea275b685ae3b78947fbf5663ca359cc6df3c7c2da8dcecc4b2218b0ec21",
+          "tokens": 1442
+        },
+        {
+          "chunks": 1,
+          "git_blob": "1ab69ff7f2b0e72bec02d453afb9390dfff3607d",
+          "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
+          "path": "docs/PRINCIPLES.md",
+          "sha256": "3e7600b4f43531b8903f7ce7a68f6b2a5f8aef741201b561dbf83e7dc1bc1d8d",
+          "tokens": 7113
+        }
+      ],
+      "len": 64,
+      "tokenizer": {
+        "file": "tokenizer.json",
+        "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+      },
+      "tool": "misaka/palw/tir/lower/tools/tokenize_docs.py"
+    }
+  },
+  "max_window": null,
+  "metrics": {
+    "kl_max": 1.6068626389575147,
+    "kl_mean": 0.1413487034989612,
+    "positions": 128,
+    "ppl_delta": 0.0664816567847093,
+    "ppl_float": 2491489.5169730997,
+    "ppl_int": 2657127.867923206,
+    "scored": 126,
+    "top1_agreement": 0.8203125
+  },
+  "program_bytes": 31413,
+  "program_digest": "95dde11f70f3b9db286f2c933470f21dafff92dd5af9aab055a56bd67af559b0dab9e75a51eb060dccafb01b16905690a3fce892f325113049aec0ec82af24bd",
+  "seconds": 458.255935083,
+  "weight_precision": {
+    "attention_bits": 16,
+    "linear_bits": 8
+  }
+}
