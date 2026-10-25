@@ -18,6 +18,9 @@ use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeMap;
 
+#[path = "palw_tir_source_validation_owner_v3.rs"]
+pub(crate) mod source_validation_v3;
+
 #[cfg(test)]
 thread_local! {
     static CONTINUATION_SOURCE_STAGES_V2: std::cell::Cell<[u64;3]> = const {std::cell::Cell::new([0;3])};
@@ -80,6 +83,9 @@ impl From<crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> for PalwT
 trait SourceValueV2: Sized {
     type Error: From<String> + From<&'static str>;
     fn payload_v2(&self) -> &PalwTirPublicSourceV1;
+    fn preparation_validation_v3(row: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error>;
+    fn acquisition_validation_v3(row: &PalwTirPublicAcquisitionRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error>;
+
     fn construct_v2(
         record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
         layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
@@ -97,6 +103,9 @@ trait SourceValueV2: Sized {
 }
 impl SourceValueV2 for PalwTirPublicSourceV1 {
     type Error = String;
+    fn preparation_validation_v3(_: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, String> { Ok(None) }
+    fn acquisition_validation_v3(_: &PalwTirPublicAcquisitionRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, String> { Ok(None) }
+
     fn payload_v2(&self) -> &PalwTirPublicSourceV1 {
         self
     }
@@ -121,6 +130,13 @@ impl SourceValueV2 for PalwTirPublicSourceV1 {
 }
 impl SourceValueV2 for crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1> {
     type Error = PalwTirPublicSourceErrorV2;
+    fn preparation_validation_v3(row: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error> {
+        source_validation_v3::preparation_reserve_v3(row).map_err(Into::into)
+    }
+    fn acquisition_validation_v3(row: &PalwTirPublicAcquisitionRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error> {
+        source_validation_v3::acquisition_reserve_v3(row).map_err(Into::into)
+    }
+
     fn payload_v2(&self) -> &PalwTirPublicSourceV1 {
         self
     }
@@ -150,8 +166,7 @@ impl SourceValueV2 for crate::palw_native_resource_v1::NativeRetainedV1<PalwTirP
 }
 
 fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Result<Hash64, String> {
-    let bytes = borsh::to_vec(value).map_err(|e| e.to_string())?;
-    Ok(Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(domain).hash(&bytes).as_bytes().try_into().expect("64")))
+    source_validation_v3::hash_v3(domain, value)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -206,6 +221,7 @@ fn palw_tir_public_source_for_preparation_row_with_v2<S: SourceValueV2>(
     row: &PalwTirPublicPreparationRowV1,
     maximum_leaves: u64,
 ) -> Result<S, S::Error> {
+    let _validation = S::preparation_validation_v3(row)?;
     row.check_structure_v1(&row.key_v1())?;
     let c = row.preparation.contract_v1();
     if let Some(frame) = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, c.claim) {
@@ -219,7 +235,7 @@ fn palw_tir_public_source_for_preparation_row_with_v2<S: SourceValueV2>(
             || c.material_until_daa != plan.terms.material_until_daa
             || c.producer != custody.pledge_v1().producer
             || &c.drawn_panel != custody.drawn_panel_v1()
-            || !c.custodians.is_subset(&custody.liable_signers_v1())
+            || !c.custodians.iter().all(|bond| *bond == custody.pledge_v1().producer || frame.original_custody_v1().grant_v1(bond).is_some())
             || c.plan != plan.preparation
             || row.preparation.work_v1().allocation != plan.preparation_work
         {
@@ -227,6 +243,8 @@ fn palw_tir_public_source_for_preparation_row_with_v2<S: SourceValueV2>(
         }
         let source = source_for_frame_with_v2::<S>(state, frame, maximum_leaves)?;
         row.preparation.check_source_v1(source.payload_v2(), &plan.acquisition)?;
+        #[cfg(test)]
+        source_validation_v3::last_borrow_v3();
         return Ok(source);
     }
     // Old dormant rows may still reconstruct their original context. This does
@@ -276,6 +294,8 @@ fn palw_tir_public_source_for_preparation_row_with_v2<S: SourceValueV2>(
         return Err("TIR preparation work differs from original registered native quote".into());
     }
     row.preparation.check_source_v1(source.payload_v2(), &acquisition)?;
+    #[cfg(test)]
+    source_validation_v3::last_borrow_v3();
     Ok(source)
 }
 
@@ -526,6 +546,7 @@ fn palw_tir_public_source_for_row_with_v2<S: SourceValueV2>(
     row: &PalwTirPublicAcquisitionRowV1,
     maximum_leaves: u64,
 ) -> Result<S, S::Error> {
+    let _validation = S::acquisition_validation_v3(row)?;
     row.check_structure_v1(&row.key_v1()?)?;
     let c = row.owned.contract_v1();
     if let Some(frame) = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, c.claim) {
@@ -549,6 +570,8 @@ fn palw_tir_public_source_for_row_with_v2<S: SourceValueV2>(
         // protected slots. Membership here is never inferred from drawn Panel.
         let source = source_for_frame_with_v2::<S>(state, frame, maximum_leaves)?;
         check_source(row, source.payload_v2())?;
+        #[cfg(test)]
+        source_validation_v3::last_borrow_v3();
         return Ok(source);
     }
     let bundle = state.staged_bundle_contract_v1(c.claim).ok_or("TIR sidecar has no retained original ClaimBundle")?;
@@ -596,6 +619,8 @@ fn palw_tir_public_source_for_row_with_v2<S: SourceValueV2>(
             return Err("TIR rooted work allocation differs from original registered full-source quote".into());
         }
     }
+    #[cfg(test)]
+    source_validation_v3::last_borrow_v3();
     Ok(source)
 }
 

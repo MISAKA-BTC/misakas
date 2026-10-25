@@ -170,16 +170,19 @@ fn continuation_source_worker_v2(mode: u8) {
         thread_local! {static SEEN:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
         fn final_borrow(source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1) {
             assert_ne!(source.source_id_v1(), Hash64::default());
-            assert!(reserve_native_requests_v1(1).is_err());
+            assert!(reserve_native_requests_v1(CONTINUATION_VALIDATION_FREE_V3.with(std::cell::Cell::get) + 1).is_err());
             SEEN.with(|v| v.set(true));
         }
         for case in &cases {
-            let blocker = reserve_native_requests_v1(LIMIT - (q - 1)).unwrap();
+            let validation = continuation_validation_requests_v3(case, frame);
+            let peak = q.checked_add(validation).unwrap();
+            let blocker = reserve_native_requests_v1(LIMIT - (peak - 1)).unwrap();
             reset_continuation_source_stages_v2();
             assert!(matches!(direct(case, case.control.source_id), Err(PalwTirPublicSourceErrorV2::Resource(_))));
             assert_eq!(continuation_source_stages_v2(), [1, 0, 0]);
             drop(blocker);
-            let blocker = reserve_native_requests_v1(LIMIT - q).unwrap();
+            let blocker = reserve_native_requests_v1(LIMIT - peak).unwrap();
+            CONTINUATION_VALIDATION_FREE_V3.with(|v| v.set(validation));
             observe_continuation_source_borrow_v2(Some(final_borrow));
             SEEN.with(|v| v.set(false));
             reset_continuation_source_stages_v2();
@@ -253,3 +256,5 @@ fn public_row_owned_source_api_actual_accepted_row_quota_semantic_and_retry() {
     assert_eq!(get().unwrap().source_id_v1(), frame.plan_v1().source_id);
     assert!(reserve_native_requests_v1(LIMIT).is_ok());
 }
+
+include!("palw_tir_source_validation_owner_tests_v3.rs");

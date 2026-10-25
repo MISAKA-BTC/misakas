@@ -234,7 +234,7 @@ impl PalwTirPublicSourceV1 {
         layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
         header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeCoverageV1, NativeHeapV1,
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeHeapV1,
             TirNativeRequestsV1, source_tir_program_shape_v1};
         // Check real byte/count identity before scanner, clone or class builder.
         registered.check_program_v1().map_err(|e|E::Decode(e.into()))?;
@@ -274,10 +274,19 @@ impl PalwTirPublicSourceV1 {
         let encoded=borsh::object_length(layout).and_then(|a|borsh::object_length(header).map(|b|a.max(b)))
             .and_then(|a|borsh::object_length(&header.job_context).map(|b|a.max(b)))
             .map_err(|e|E::Decode(e.to_string()))? as u64;
-        let writer=encoded.max(1024).checked_mul(2).ok_or_else(||
-            E::Resource(NativeCoverageV1::overflow::<Self>("native Source hash writer capacity")))?;
+        let writer=Self::native_identity_writer_requests_v3(encoded)?;
         q.exact_v1::<u8>(writer).map_err(E::Resource)?;
         Ok(q.bytes_v1())
+    }
+
+    /// Borrowed identity serialization span only, not a decoded-heap ratio.
+    /// A span just over a power of two can have both its old and doubled
+    /// writer allocations live; twice the logical span is not that peak.
+    pub(crate) fn native_identity_writer_requests_v3(encoded: u64)
+        -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeCoverageV1};
+        encoded.max(1024).checked_next_power_of_two().and_then(|n| n.checked_mul(2))
+            .ok_or_else(|| E::Resource(NativeCoverageV1::overflow::<Self>("native Source hash writer capacity")))
     }
 
     pub fn new_v1(
