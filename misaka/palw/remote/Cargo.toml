@@ -12,6 +12,7 @@ repository.workspace = true
 
 [dependencies]
 kaspa-addresses.workspace = true
+misaka-endpoints.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 kaspa-txscript.workspace = true
@@ -51,6 +52,11 @@ required-features = ["rpc"]
 name = "palw-fork-choice-issuer"
 path = "src/bin/palw-fork-choice-issuer.rs"
 required-features = ["rpc"]
+
+# RFC-0009 stage B: the reference evidence provider and the publish/fetch client. No node and no key.
+[[bin]]
+name = "palw-evidence"
+path = "src/bin/palw-evidence.rs"
 
 [dev-dependencies]
 # DA16: the sketch's fixture weights (an artifact, its inventory, its kernel commitments).

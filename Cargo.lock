@@ -6345,6 +6345,7 @@ dependencies = [
  "kaspa-wrpc-client",
  "libc",
  "libcrux-ml-dsa",
+ "misaka-endpoints",
  "misaka-palw-challenge",
  "misaka-palw-kernel",
  "misaka-palw-tir",

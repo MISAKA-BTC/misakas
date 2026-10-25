@@ -23,6 +23,8 @@ kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default
 
 DNS seeder で peer が見つからない場合は `--addpeer=169.58.232.113:26311` と `--addpeer=169.58.39.220:26311` を追加します。同期と監視だけの node には、model artifact、producer key、Bond は要りません。
 
+node を立てずに掘る人は P2P には繋ぎません。`169.58.232.113` の `wss://wallet.misakascan.com/t12/wrpc/borsh` と `169.58.39.220` の `wss://llm.misakascan.com/t12/wrpc/borsh` が公開 wRPC です。手順は [testnet12-node-free.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-node-free.md) です。
+
 ## Identity の確認
 
 起動ログの次の 2 行を確認します。

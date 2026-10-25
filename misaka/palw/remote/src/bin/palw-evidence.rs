@@ -65,6 +65,11 @@ fn read_roots(path: &Path) -> ClaimRoots {
     }
 }
 
+/// `--providers` when the caller named one, otherwise the public testnet-12 evidence provider.
+fn providers_arg(providers: &Option<String>) -> String {
+    providers.clone().unwrap_or_else(|| misaka_endpoints::testnet12_evidence_provider_v1().to_string())
+}
+
 fn providers_of(arg: &str) -> Vec<ProviderSpecV1> {
     let text = if Path::new(arg).is_file() {
         std::fs::read_to_string(arg).unwrap_or_else(|e| die(format!("{arg}: {e}")))
@@ -284,7 +289,7 @@ fn main() {
                     .unwrap_or_else(|e| die(format!("the local chunk {} does not match its manifest: {e}", entry.index)));
                 chunks.push(bytes);
             }
-            let specs = providers_of(&need(&providers, "--providers"));
+            let specs = providers_of(&providers_arg(&providers));
             let opened = open_providers_v1(&specs);
             let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
             let (ok, report) = match publish_to_providers_v1(&claim, &manifest, &chunks, &refs, min_verified) {
@@ -311,7 +316,7 @@ fn main() {
         "redemption-publish" => {
             let file = file.unwrap_or_else(|| die("--file <the RDA4 bundle> is required"));
             let bytes = std::fs::read(&file).unwrap_or_else(|e| die(format!("{}: {e}", file.display())));
-            let specs = providers_of(&need(&providers, "--providers"));
+            let specs = providers_of(&providers_arg(&providers));
             let opened = open_providers_v1(&specs);
             let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
             let (ok, outcomes) = match publish_redemption_v1(&bytes, &refs, min_verified) {
@@ -334,7 +339,7 @@ fn main() {
         }
         "redemption-sync" => {
             let into = into.unwrap_or_else(|| die("--into <the node's --palw-redemption-auth-dir> is required"));
-            let specs = providers_of(&need(&providers, "--providers"));
+            let specs = providers_of(&providers_arg(&providers));
             let opened = open_providers_v1(&specs);
             let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
             let domain = network_domain.map(|d| hash("--network-domain", &serde_json::Value::String(d)));
@@ -355,7 +360,7 @@ fn main() {
             let claim = need(&claim, "--claim");
             let roots =
                 read_roots(&roots.unwrap_or_else(|| die("--roots <claim.json> is required: the claim's commitments from the chain")));
-            let specs = providers_of(&need(&providers, "--providers"));
+            let specs = providers_of(&providers_arg(&providers));
             let opened = open_providers_v1(&specs);
             let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
             if command == "fetch" {

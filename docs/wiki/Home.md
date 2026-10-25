@@ -11,7 +11,7 @@
 
 ## まず読むページ
 
-1. [Quick Start](Quick-Start) — ビルド、ノード、Bond、Floor producer
+1. [Quick Start](Quick-Start) — ビルド、ノード、Bond、Floor producer。node を置かずに掘る場合は [node なしの接続先](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-node-free.md)（`169.58.232.113` の公開 wRPC）
 2. [Testnet-12 Operator UI](Testnet-12-Operator-UI-JA) — セットアップウィザードと dashboard
 3. [FAQ / Troubleshooting](FAQ-Troubleshooting) — よくある停止理由
 4. [Operations Notes](Operations-Notes) — ポート、サービス化、更新
@@ -33,6 +33,7 @@
 | genesis | `a27f8f44fe4d91a5…`(全体は公開ノートに記載) |
 | premine txid | `5e0d5f1b37a71288…`(genesis の bond と fee float はこの txid の上にある) |
 | node の起動 | `kaspad --testnet --netsuffix=12` |
+| node なしの採掘 | `169.58.232.113` の `wss://wallet.misakascan.com/t12/wrpc/borsh` と `169.58.39.220` の `wss://llm.misakascan.com/t12/wrpc/borsh`。手順は [testnet12-node-free.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-node-free.md) |
 | CLI | `misaka --network testnet-12`(何も指定しないときの既定も testnet-12) |
 | P2P | `26311` |
 | node gRPC | `26210` |

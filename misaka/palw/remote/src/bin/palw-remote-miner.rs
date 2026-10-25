@@ -541,6 +541,9 @@ fn parse_args() -> Args {
         );
     }
     let network = network.unwrap_or_else(|| die("--network is required"));
+    if rpc.is_empty() && network == "testnet-12" {
+        rpc = misaka_endpoints::testnet12_public_wrpc_v1().iter().map(|n| n.wrpc_borsh.to_string()).collect();
+    }
     let (daa, block_hash) =
         checkpoint.unwrap_or_else(|| die("--checkpoint <daa>:<block hash> is required: the trust root the nodes are held to"));
     if rpc.len() < 2 {

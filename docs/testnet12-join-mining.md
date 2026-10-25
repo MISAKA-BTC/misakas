@@ -49,6 +49,10 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 Build current `main`. The public fleet runs commit `247ade1f9` (rev `247ade1f90b6`). Its x86_64 Linux
 release kaspad sha256 is `c57c8c13744aa29a8295b05bb7c495ef91bf1be4d5c755ecaa638e957fa403b8`.
 The int-13 list arms at DAA 15,500. A release build of `main` prints the fingerprint and the fence schedule in §3.
+A miner with no local node does not run `kaspad` and does not open P2P `26311`. Connect to the
+public wRPC on `169.58.232.113` (`wss://wallet.misakascan.com/t12/wrpc/borsh`) and the second host
+`169.58.39.220` (`wss://llm.misakascan.com/t12/wrpc/borsh`). The steps, the executor, and the same
+list `palw-remote-miner` reads are in [`testnet12-node-free.md`](testnet12-node-free.md).
 
 ```bash
 git clone https://github.com/MISAKA-BTC/misakas.git
