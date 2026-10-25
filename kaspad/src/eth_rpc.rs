@@ -809,6 +809,11 @@ impl NodeEthProvider {
             .spawn_blocking(move |c| -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
                 with_resolved_state_selector(c, &block, |l1| {
                     let Some(l1) = l1 else {
+                        // An absent certified head is node state, not a caller error; same
+                        // classification as account_at. A numeric/hash miss stays unknown.
+                        if matches!(&block, BlockId::Tag(t) if matches!(t.as_str(), "safe" | "finalized")) {
+                            return Err(EthRpcError::server("requested executed EVM head unavailable"));
+                        }
                         return Err(EthRpcError::invalid_params("eth_call/eth_estimateGas: the requested block is unknown"));
                     };
                     // §12.6 env from the TARGET block's committed header.
