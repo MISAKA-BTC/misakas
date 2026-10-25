@@ -88,7 +88,7 @@ impl NodeEthProvider {
     /// header out to `heads_tx` as a header (non-EVM blocks are skipped), in commit
     /// order. Spawned once at service start. All store work is skipped while no
     /// client is subscribed (`receiver_count == 0`).
-    pub fn spawn_head_pump(self: Arc<Self>) {
+    pub fn spawn_head_pump(self: Arc<Self>, shutdown: kaspa_utils::triggers::Listener) {
         let (tx, rx) = async_channel::unbounded();
         let listener_id = self
             .consensus_notifier
@@ -100,7 +100,12 @@ impl NodeEthProvider {
             return;
         }
         tokio::spawn(async move {
-            while let Ok(notification) = rx.recv().await {
+            loop {
+                let notification = tokio::select! {
+                    biased;
+                    _ = shutdown.clone() => break,
+                    notification = rx.recv() => match notification { Ok(n) => n, Err(_) => break },
+                };
                 let Notification::VirtualChainChanged(vcc) = notification else { continue };
                 // Gate each event independently — skip all store work when nobody
                 // is subscribed to it.
@@ -113,8 +118,9 @@ impl NodeEthProvider {
                 // (immutable once committed) — never the reorg-mutable number map.
                 let added: Vec<_> = vcc.added_chain_block_hashes.iter().copied().collect();
                 let removed: Vec<_> = vcc.removed_chain_block_hashes.iter().copied().collect();
+                let log_added = added.clone();
                 let session = self.consensus_manager.consensus().session().await;
-                let (heads, log_events): (Vec<EthBlock>, Vec<EthLogEvent>) = session
+                let heads: Vec<EthBlock> = session
                     .spawn_blocking(move |c| {
                         // newHeads: each added EVM block's header, in commit order
                         // (added is oldest-first); non-EVM blocks read as None.
@@ -134,18 +140,7 @@ impl NodeEthProvider {
                         } else {
                             Vec::new()
                         };
-                        // logs: detached (removed=true, oldest-first) then attached
-                        // (removed=false, oldest-first) — the reorg contract lives in
-                        // the unit-tested `reorg_ordered`.
-                        let log_events: Vec<EthLogEvent> = if want_logs {
-                            reorg_ordered(&removed, &added, |l1| c.get_evm_block_logs(l1).unwrap_or_default())
-                                .into_iter()
-                                .map(|(e, removed)| EthLogEvent { log: to_eth_log_entry(e), removed })
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
-                        (heads, log_events)
+                        heads
                     })
                     .await;
                 // Lossy under lag — a slow WS subscriber drops events and reconnects
@@ -153,8 +148,31 @@ impl NodeEthProvider {
                 for head in heads {
                     let _ = self.heads_tx.send(head);
                 }
-                for ev in log_events {
-                    let _ = self.logs_tx.send(ev);
+                if want_logs {
+                    // Keep this notification pending on a local read fault. No partial
+                    // reorg batch is published and no later notification overtakes it.
+                    // Each attempt releases its consensus session before the delay.
+                    let log_events = retry_reorg_logs_v2(
+                        || {
+                            let added = log_added.clone();
+                            let removed = removed.clone();
+                            let manager = self.consensus_manager.clone();
+                            async move {
+                                let session = manager.consensus().session().await;
+                                session.spawn_blocking(move |c| {
+                                    reorg_ordered_checked_v2(&removed, &added, |l1| c.get_evm_block_logs(l1))
+                                }).await
+                            }
+                        },
+                        || self.logs_tx.receiver_count() > 0,
+                        shutdown.clone(),
+                        std::time::Duration::from_millis(250),
+                    ).await;
+                    if let Some(events) = log_events {
+                        for (e, removed) in events {
+                            let _ = self.logs_tx.send(EthLogEvent { log: to_eth_log_entry(e), removed });
+                        }
+                    }
                 }
             }
         });
@@ -1202,6 +1220,7 @@ fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse, parent_hash: 
 /// oldest-first (`added_chain_block_hashes` is already oldest-first). Items within
 /// a block keep their order (logIndex). Generic + side-effect-free so the ordering
 /// contract is unit-tested in isolation from the consensus stores.
+#[cfg(test)]
 fn reorg_ordered<H: Copy, T>(removed: &[H], added: &[H], mut read: impl FnMut(H) -> Vec<T>) -> Vec<(T, bool)> {
     let mut out = Vec::new();
     for h in removed.iter().rev().copied() {
@@ -1211,6 +1230,54 @@ fn reorg_ordered<H: Copy, T>(removed: &[H], added: &[H], mut read: impl FnMut(H)
         out.extend(read(h).into_iter().map(|t| (t, false)));
     }
     out
+}
+
+/// Checked immutable reads preserve the entire notification as the retry unit.
+/// A successful empty block is distinct from an unavailable receipt/header row.
+fn reorg_ordered_checked_v2<H: Copy, T, E>(
+    removed: &[H],
+    added: &[H],
+    mut read: impl FnMut(H) -> Result<Vec<T>, E>,
+) -> Result<Vec<(T, bool)>, E> {
+    let mut out = Vec::new();
+    for h in removed.iter().rev().copied() {
+        out.extend(read(h)?.into_iter().map(|item| (item, true)));
+    }
+    for h in added.iter().copied() {
+        out.extend(read(h)?.into_iter().map(|item| (item, false)));
+    }
+    Ok(out)
+}
+
+async fn retry_reorg_logs_v2<T, E: std::fmt::Debug, F: std::future::Future<Output = Result<Vec<T>, E>>>(
+    mut read: impl FnMut() -> F,
+    mut wanted: impl FnMut() -> bool,
+    shutdown: kaspa_utils::triggers::Listener,
+    delay: std::time::Duration,
+) -> Option<Vec<T>> {
+    let mut warned = false;
+    while wanted() {
+        let result = tokio::select! {
+            biased;
+            _ = shutdown.clone() => return None,
+            result = read() => result,
+        };
+        match result {
+            Ok(events) => return wanted().then_some(events),
+            Err(error) => {
+                if !warned {
+                    kaspa_core::warn!("[{ETH_RPC}] logs: immutable reorg read unavailable; retaining notification for retry: {error:?}");
+                    warned = true;
+                }
+            }
+        }
+        tokio::select! {
+            biased;
+            _ = shutdown.clone() => return None,
+            _ = tokio::time::sleep(delay) => {},
+        }
+    }
+    None
 }
 
 /// Map a consensus `EvmLogEntry` to the adapter's primitive [`EthLogEntry`].
@@ -1281,7 +1348,7 @@ impl AsyncService for EthRpcService {
             // §9: register the newHeads pump (VirtualChainChanged → EthBlock fan-out)
             // before serving, so a client that subscribes right after connect sees
             // live heads.
-            self.provider.clone().spawn_head_pump();
+            self.provider.clone().spawn_head_pump(shutdown_signal.clone());
             let provider: Arc<dyn EthProvider> = self.provider.clone();
             // Returning `Ok(())` on a server error (rather than propagating it)
             // preserves the existing "eth-rpc bind/serve failure does not take down
@@ -1366,3 +1433,7 @@ mod transaction_authority_tests;
 #[cfg(test)]
 #[path = "eth_rpc_exact_hash_logs_tests.rs"]
 mod exact_hash_logs_tests;
+
+#[cfg(test)]
+#[path = "eth_rpc_reorg_retry_tests.rs"]
+mod reorg_retry_tests;
