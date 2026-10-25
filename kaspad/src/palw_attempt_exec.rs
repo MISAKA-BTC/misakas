@@ -95,8 +95,11 @@ mod tests {
         let params = params_for_network_v1("testnet-12").unwrap();
         let class_id: Hash64 = T12_QWEN25_8K_CLASS_ID.parse().unwrap();
         let root: Hash64 = T12_QWEN25_8K_INVENTORY_ROOT.parse().unwrap();
-        let err = execute_producer_anchor_v1(&params, class_id, root, &[], Hash64::from_u64_word(1)).unwrap_err();
-        assert!(err.contains("cannot serve"), "{err}");
+        let err = match execute_producer_anchor_v1(&params, class_id, root, &[], Hash64::from_u64_word(1)) {
+            Err(err) => err,
+            Ok(_) => panic!("an 8k class with no artifact resolved"),
+        };
+        assert!(err.contains("holds no artifact"), "{err}");
     }
 
     #[test]
