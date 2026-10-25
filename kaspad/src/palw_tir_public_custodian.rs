@@ -30,6 +30,8 @@
 //! demands from the prepared capture (the Begin/Part/Finish responder), measured completion within the fixed preparation clock at
 //! the largest profile, sweeping orphan `prepared-*` directories the journal never recorded, and re-sealing a corrupted capture.
 #![allow(dead_code)] // the panel loop calls the tick; the journal helpers are exercised by the tests below.
+use super::tir_public_owner::source_owned;
+use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, NativeRetainedV1};
 use crate::palw_panel::court_outbox::CourtOutboxV1;
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
@@ -954,7 +956,7 @@ enum ResponseStepV1 {
     /// Build the answer body from the sealed prepared capture.
     Body {
         demand: Hash64,
-        source: Box<kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1>,
+        source: NativeRetainedV1<kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1>,
         descriptor: PalwTirPublicPreparedDescriptorV1,
         material_until_daa: u64,
         now: u64,
@@ -1044,9 +1046,11 @@ impl PalwPanelService {
         }
         let mut steps: Vec<ResponseStepV1> = Vec::new();
         let mut now = 0u64;
+        let mut source_refusal: Option<NativeDecodeErrorV1<String>> = None;
         let armed = {
             let mut read = |state: &PalwChainStateV2| -> Result<(), String> {
                 steps.clear();
+                source_refusal = None;
                 now = state.last_point().ok_or("TIR responder snapshot has no accepted clock")?.daa_score;
                 // Discover the owed demands (EDF page of this bond's unfinished literal slots).
                 if let Ok((page, _)) = state.staged_tir_duties_after_v1(signer, now, None, PALW_TIR_PUBLIC_RESPONSES_V1) {
@@ -1104,14 +1108,14 @@ impl PalwPanelService {
                             case.failed = true;
                             continue;
                         };
-                        let source = kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_source_for_row_v1(
-                            state,
-                            row,
-                            frame.descriptor_v1().maximum_leaves,
-                        )?;
+                        let Some(source)=source_owned::defer_source_read_v2(&mut source_refusal,
+                            kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_source_for_row_owned_v2(
+                                state,row,frame.descriptor_v1().maximum_leaves)) else {
+                            return Ok(());
+                        };
                         steps.push(ResponseStepV1::Body {
                             demand: *demand,
-                            source: Box::new(source),
+                            source,
                             descriptor: sealed.descriptor,
                             material_until_daa: sealed.material_until_daa,
                             now,
@@ -1163,6 +1167,15 @@ impl PalwPanelService {
             court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
+        if let Some(why) = source_refusal {
+            match why {
+                NativeDecodeErrorV1::Resource(why) => {
+                    debug!("[{PALW_PANEL}] TIR responder Source capacity remains pending: {why}");
+                    return Ok(());
+                }
+                NativeDecodeErrorV1::Decode(why) => return Err(why),
+            }
+        }
         court_outbox.retain_pending(|(demand, round, responder, _)| !ours(*round, *responder) || book.responses.contains_key(demand));
         for step in steps {
             let result: Result<(), String> = async {
@@ -1188,14 +1201,14 @@ impl PalwPanelService {
                             )
                             .map_err(|e| e.to_string())?;
                         let directory = self.config.retention_dir.join("tir-public-prepared");
-                        let body = tokio::task::spawn_blocking(move || {
+                        let body = source_owned::run_owned_source_v2(source, move |source| {
                             let memory=memory;
                             let mut reader =
                                 backend.reopen_tir_prepared_capture_v1(&header, &descriptor, &directory, material_until_daa, now)?;
                             if reader.prepared_descriptor_v1() != Some(&descriptor) {
                                 return Err("the reopened capture is not the exact Ready descriptor".into());
                             }
-                            response_body_v1(reader.as_mut(), &source, request)
+                            response_body_v1(reader.as_mut(), source, request)
                                 .map(|body|CustodianOwnedV2::with_reservation(body,memory))
                         })
                         .await
@@ -1509,3 +1522,7 @@ mod tests {
         descriptor(1)
     }
 }
+
+#[cfg(test)]
+#[path="palw_tir_source_read_custodian_tests_v2.rs"]
+mod source_read_owned_tests;

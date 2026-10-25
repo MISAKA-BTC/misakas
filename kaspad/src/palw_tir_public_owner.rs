@@ -66,6 +66,9 @@ use std::sync::Arc;
 
 #[path = "palw_tir_owner_replay_owned_v2.rs"]
 mod replay_owned;
+#[path="palw_tir_source_worker_owned_v2.rs"]
+pub(super) mod source_owned;
+use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, NativeRetainedV1};
 use replay_owned::OwnedTirReplayV2;
 #[path = "palw_tir_cone_evidence_owned_v2.rs"]
 pub(super) mod cone_evidence_owned;
@@ -359,7 +362,7 @@ enum OwnerStepV1 {
     },
     Cone {
         claim: Hash64,
-        source: Box<PalwTirPublicSourceV1>,
+        source: NativeRetainedV1<PalwTirPublicSourceV1>,
         registered: Box<kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1>,
         layout: Box<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1>,
         leaf: u64,
@@ -429,9 +432,11 @@ impl PalwPanelService {
         let court_limits = kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&self.config.court);
         let mut steps: Vec<OwnerStepV1> = Vec::new();
         let mut now = 0u64;
+        let mut source_refusal: Option<NativeDecodeErrorV1<String>> = None;
         let armed = {
             let mut read = |state: &PalwChainStateV2| -> Result<(), String> {
                 steps.clear();
+                source_refusal = None;
                 now = state.last_point().ok_or("TIR owner snapshot has no accepted clock")?.daa_score;
                 fair_start = court_capacity_from.is_some_and(|from| now.saturating_add(1) >= from);
                 book.skipped.retain(|_, until| now < *until);
@@ -549,8 +554,10 @@ impl PalwPanelService {
                         ended.push(*claim);
                         continue;
                     };
-                    let source =
-                        kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_source_for_row_v1(state, row, maximum_leaves)?;
+                    let Some(source)=source_owned::defer_source_read_v2(&mut source_refusal,
+                        kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_source_for_row_owned_v2(state,row,maximum_leaves)) else {
+                        return Ok(());
+                    };
                     // 2. Harvest every accepted answer of the current turn, re-read from the rooted chunks and re-authenticated.
                     let active = row.owned.active_v1();
                     if let Some(p) = active {
@@ -684,7 +691,7 @@ impl PalwPanelService {
                                 .ok_or("TIR owner: class layout is gone")?;
                                 steps.push(OwnerStepV1::Cone {
                                     claim: *claim,
-                                    source: Box::new(source.clone()),
+                                    source,
                                     registered: Box::new(registered.clone()),
                                     layout: Box::new(layout.clone()),
                                     leaf,
@@ -789,6 +796,13 @@ impl PalwPanelService {
                 debug!("[{PALW_PANEL}] TIR owner read failed: {why}");
                 return;
             }
+        }
+        if let Some(why) = source_refusal {
+            match why {
+                NativeDecodeErrorV1::Resource(why) => debug!("[{PALW_PANEL}] TIR owner Source capacity remains pending: {why}"),
+                NativeDecodeErrorV1::Decode(why) => debug!("[{PALW_PANEL}] TIR owner Source read refused: {why}"),
+            }
+            return;
         }
         court_outbox.retain_pending(|(claim, round, responder, _)| !ours(*round, *responder) || book.cases.contains_key(claim));
         for step in steps {
@@ -908,8 +922,8 @@ impl PalwPanelService {
                             prompt_form: self.config.prompt_ids_form,
                             limits: kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&court),
                         };
-                        let outcome = tokio::task::spawn_blocking(move || {
-                            owner_cone_probe_v1(&source, &registered, &layout, &units, ids.as_ref(), &prompt, backend.as_ref(), &rules, leaf)
+                        let outcome = source_owned::run_owned_source_v2(source, move |source| {
+                            owner_cone_probe_v1(source, &registered, &layout, &units, ids.as_ref(), &prompt, backend.as_ref(), &rules, leaf)
                         })
                         .await
                         .map_err(|e| format!("TIR owner cone worker failed: {e}"))?;
@@ -1136,3 +1150,7 @@ mod tests {
 #[cfg(test)]
 #[path="palw_tir_cone_owned_consumer_tests_v2.rs"]
 mod cone_owned_consumer_tests;
+
+#[cfg(test)]
+#[path="palw_tir_source_read_owner_tests_v2.rs"]
+mod source_read_owned_tests;

@@ -37,7 +37,7 @@ impl PalwTirOwnStepSourceV1 for SearchSource {
         Err("unused".into())
     }
 }
-fn case() -> (OwnerCaseV1, Arc<PalwMemoryLedgerV1>) {
+pub(super) fn case() -> (OwnerCaseV1, Arc<PalwMemoryLedgerV1>) {
     let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(64), || None);
     let memory = ledger
         .reserve(PalwMemoryReservationKeyV1 { role: "cone-case-test", class_id: Default::default(), job: Default::default() }, 64)

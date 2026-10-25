@@ -196,3 +196,60 @@ fn continuation_source_worker_v2(mode: u8) {
     }
     assert!(reserve_native_requests_v1(LIMIT).is_ok());
 }
+
+#[test]
+fn public_row_owned_source_api_actual_accepted_row_quota_semantic_and_retry() {
+    const CHILD: &str = "MISAKA_PUBLIC_ROW_OWNED_SOURCE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let full = format!("{}::public_row_owned_source_api_actual_accepted_row_quota_semantic_and_retry", module_path!());
+        assert!(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", full.split_once("::").unwrap().1, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .status()
+                .unwrap()
+                .success()
+        );
+        return;
+    }
+    use crate::palw_native_resource_v1::*;
+    use crate::palw_tir_public_state_v1::*;
+    let f = source_three_fixture();
+    let cases = continuation_source_cases_v2(&f);
+    let case = &cases[2];
+    let frame = &f.fx.frame;
+    let T::Acquisition { owner, reserved_daa } = case.control.target else { panic!("actual accepted acquisition") };
+    let key = owner_key(frame, owner, reserved_daa).unwrap();
+    let Some(Row::TirAcquisition(row)) = case.state.staged_court_row_v1(&key) else { panic!("actual signed Open row") };
+    let max = frame.descriptor_v1().maximum_leaves;
+    let get = || palw_tir_public_source_for_row_owned_v2(&case.state, row, max);
+    assert_eq!(get().unwrap().source_id_v1(), frame.plan_v1().source_id);
+    const LIMIT: u64 = 256 << 20;
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: LIMIT, database_bytes: 0 }));
+    let q = crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::native_construction_requests_v1(
+        &f.fx.record,
+        &f.fx.layout,
+        frame.header_v1(),
+    )
+    .unwrap();
+    assert!(q > 0 && q < LIMIT);
+    let blocker = reserve_native_requests_v1(LIMIT - (q - 1)).unwrap();
+    reset_continuation_source_stages_v2();
+    assert!(matches!(get(), Err(NativeDecodeErrorV1::Resource(_))));
+    assert_eq!(continuation_source_stages_v2(), [1, 0, 0]);
+    assert_eq!(palw_tir_public_source_for_row_v1(&case.state, row, max).unwrap().source_id_v1(), frame.plan_v1().source_id);
+    drop(blocker);
+    let blocker = reserve_native_requests_v1(LIMIT - q).unwrap();
+    let held = get().unwrap();
+    assert_eq!(held.source_id_v1(), frame.plan_v1().source_id);
+    assert!(reserve_native_requests_v1(1).is_err());
+    drop(held);
+    assert!(reserve_native_requests_v1(q).is_ok());
+    drop(blocker);
+    assert!(matches!(palw_tir_public_source_for_row_owned_v2(&case.state, row, max - 1), Err(NativeDecodeErrorV1::Decode(_))));
+    let mut wrong = row.as_ref().clone();
+    wrong.descriptor.source_id = Hash64::default();
+    assert!(matches!(palw_tir_public_source_for_row_owned_v2(&case.state, &wrong, max), Err(NativeDecodeErrorV1::Decode(_))));
+    assert_eq!(get().unwrap().source_id_v1(), frame.plan_v1().source_id);
+    assert!(reserve_native_requests_v1(LIMIT).is_ok());
+}

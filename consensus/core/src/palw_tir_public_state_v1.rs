@@ -504,6 +504,23 @@ pub(crate) fn palw_tir_public_source_for_row_native_v2(
         maximum_leaves,
     )
 }
+/// Retained Source reconstruction from the caller's accepted row/context.
+/// No admission, activation, approval or portable work authority is minted.
+/// Raw/String snapshot APIs remain available for existing callers.
+pub fn palw_tir_public_source_for_row_owned_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    row: &PalwTirPublicAcquisitionRowV1,
+    maximum_leaves: u64,
+) -> Result<
+    crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>,
+    crate::palw_native_resource_v1::NativeDecodeErrorV1<String>,
+> {
+    palw_tir_public_source_for_row_native_v2(state, row, maximum_leaves).map_err(|why| match why {
+        PalwTirPublicSourceErrorV2::Resource(why) => crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why),
+        PalwTirPublicSourceErrorV2::Decode(why) => crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why),
+    })
+}
+
 fn palw_tir_public_source_for_row_with_v2<S: SourceValueV2>(
     state: &crate::palw_state_v2::PalwChainStateV2,
     row: &PalwTirPublicAcquisitionRowV1,
