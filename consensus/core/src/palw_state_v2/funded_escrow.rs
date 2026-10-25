@@ -483,4 +483,201 @@ mod tests {
         b.sweep_funded_escrows_v1(u64::MAX).unwrap();
         assert!(b.entries.is_empty());
     }
+
+    // ---- RFC38 lane C3 (RFC-0035 A): the escrow against the native UTXO ledger, under a TEST-ONLY schedule ----
+    //
+    // The dues below come from `PalwEscrowFeeScheduleV1::test_only_v1` (cfg(test)); they are NOT a production schedule and no
+    // production value exists (`palw_escrow_fee_schedule_v1` stays `None`, the funded-original schedule stays `Err(Schedule)`).
+    // The ledger is the native `UtxoCollection` moved by `UtxoDiff::add_transaction` (the same algebra the virtual processor uses);
+    // the processor's spend filter and coinbase are not run here (no production schedule can reach them): this test's limit.
+
+    fn ledger_total(ledger: &crate::utxo::utxo_collection::UtxoCollection) -> u128 {
+        ledger.values().map(|e| e.amount as u128).sum()
+    }
+
+    /// Populate `tx` from the ledger (a missing input is the native "not in the UTXO set" refusal) and move it by one diff.
+    fn ledger_apply(
+        ledger: &mut crate::utxo::utxo_collection::UtxoCollection,
+        tx: &Transaction,
+        daa: u64,
+    ) -> Result<(crate::utxo::utxo_diff::UtxoDiff, Vec<u64>, u64), TransactionOutpoint> {
+        let entries: Vec<crate::tx::UtxoEntry> =
+            tx.inputs.iter().map(|i| ledger.get(&i.previous_outpoint).cloned().ok_or(i.previous_outpoint)).collect::<Result<_, _>>()?;
+        let amounts: Vec<u64> = entries.iter().map(|e| e.amount).collect();
+        let fee = amounts.iter().sum::<u64>().checked_sub(tx.outputs.iter().map(|o| o.value).sum::<u64>()).expect("fee >= 0");
+        let mut diff = crate::utxo::utxo_diff::UtxoDiff::default();
+        diff.add_transaction(&crate::tx::PopulatedTransaction::new(tx, entries), daa).expect("diff");
+        for op in diff.remove.keys() {
+            ledger.remove(op);
+        }
+        ledger.extend(diff.add.iter().map(|(k, v)| (*k, v.clone())));
+        Ok((diff, amounts, fee))
+    }
+
+    fn ledger_revert(ledger: &mut crate::utxo::utxo_collection::UtxoCollection, diff: &crate::utxo::utxo_diff::UtxoDiff) {
+        for op in diff.add.keys() {
+            ledger.remove(op);
+        }
+        ledger.extend(diff.remove.iter().map(|(k, v)| (*k, v.clone())));
+    }
+
+    /// The escrow identity holds against the ledger: the row's unreleased value is exactly the UTXO at its current outpoint
+    /// (none once settled), and `amount = paid + burned + returned + unreleased`.
+    fn assert_row_matches_ledger(state: &PalwChainStateV2, ledger: &crate::utxo::utxo_collection::UtxoCollection) {
+        for row in state.funded_escrows_v1().values() {
+            let unreleased = row.unreleased_v1().expect("conservation");
+            assert_eq!(row.amount_sompi, row.paid_sompi + row.burned_sompi + row.returned_sompi + unreleased);
+            match row.settled_by {
+                None => assert_eq!(ledger.get(&row.funding_outpoint).map(|e| e.amount), Some(unreleased), "escrow UTXO = unreleased"),
+                Some(_) => assert_eq!(unreleased, 0),
+            }
+        }
+    }
+
+    /// **RFC-0035 A acceptance (TEST-ONLY schedule): collect, execute, settle/return on the native ledger.** A funding output
+    /// (1,000) is escrowed; a relay spend pays work 300, burns 100 (withheld from the fee) and re-locks 600 on the change-back; at
+    /// the hard deadline the liability clears and the payer return takes the 600. Checked at every step: ledger value is conserved
+    /// (`before = after + fee`, `fee >= burn`), the row equals its UTXO, a replay is refused by both the ledger and the fold
+    /// (exactly-once), an under-funded or over-drawn spend changes nothing, restart (carriage round trip) continues identically,
+    /// and a reorg (state delta revert + reversed UTXO diff) restores row, lock and ledger together.
+    #[test]
+    fn rfc35a_test_only_schedule_escrow_conserves_on_native_ledger_exactly_once_restart_reorg() {
+        use crate::palw_funded_escrow_v1::{
+            PalwEscrowDueKindV1, PalwEscrowDueV1, PalwEscrowFeeScheduleV1, PalwEscrowRefusalV1, palw_escrow_fee_schedule_v1,
+        };
+        use crate::utxo::utxo_collection::UtxoCollection;
+        let p = params();
+        let extras = PalwTransitionExtrasV1 { funded_escrow_retention_daa: Some(100), ..Default::default() };
+        let row0 = open_row();
+        assert!(palw_escrow_fee_schedule_v1(&row0).is_none(), "production: no settlement schedule exists");
+        let payer_spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&payload().as_bytes());
+        let relay_op = TransactionOutpoint::new(h(88), 0);
+        let mut ledger: UtxoCollection = UtxoCollection::new();
+        ledger.insert(row0.funding_outpoint, crate::tx::UtxoEntry::new(1_000, payer_spk.clone(), 100, false));
+        ledger.insert(relay_op, crate::tx::UtxoEntry::new(150, payee(42), 100, false));
+        let total0 = ledger_total(&ledger);
+
+        // Collect: install the row over the funded outpoint.
+        let genesis = PalwChainStateV2::genesis();
+        let mut b = TransitionBuilder::new(&genesis, &p, false, false, false, false, &extras);
+        b.install_funded_escrow_v1(row0).unwrap();
+        let s0 = b.state.clone();
+        assert_row_matches_ledger(&s0, &ledger);
+
+        let worker = kaspa_hashes::blake2b_512_address_payload(&[11u8; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+        let schedule = PalwEscrowFeeScheduleV1::test_only_v1(
+            h(1),
+            vec![
+                PalwEscrowDueV1 { kind: PalwEscrowDueKindV1::WorkPayment, payee: Some(worker), amount_sompi: 300 },
+                PalwEscrowDueV1 { kind: PalwEscrowDueKindV1::Burn, payee: None, amount_sompi: 100 },
+            ],
+        );
+        let spend = |inputs: Vec<TransactionOutpoint>, outputs: Vec<TransactionOutput>| {
+            Transaction::new(
+                0,
+                inputs.into_iter().map(|op| TransactionInput::new(op, vec![], 0, 0)).collect(),
+                outputs,
+                0,
+                crate::subnets::SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            )
+        };
+
+        // Insufficient relay funding: the relay's change exceeds its own input, so the escrow would fund it. Refused.
+        let greedy = spend(
+            vec![row0.funding_outpoint, relay_op],
+            vec![TransactionOutput::new(300, payee(11)), TransactionOutput::new(600, payer_spk.clone()), TransactionOutput::new(151, payee(42))],
+        );
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&row0, &greedy, &[1_000, 150], 5_000, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::EscrowFundsOtherOutputs)
+        );
+        // Over-drawn escrow: dues beyond the escrowed value. Refused (no partial payment, no clamp).
+        let over = PalwEscrowFeeScheduleV1::test_only_v1(
+            h(1),
+            vec![PalwEscrowDueV1 { kind: PalwEscrowDueKindV1::WorkPayment, payee: Some(worker), amount_sompi: 1_001 }],
+        );
+        let over_tx = spend(vec![row0.funding_outpoint, relay_op], vec![TransactionOutput::new(1_001, payee(11))]);
+        assert!(palw_escrow_qualified_spend_v1(&row0, &over_tx, &[1_000, 150], 5_000, Some(&over)).is_err());
+        // A forged fact (more paid than the escrow holds) is refused by the fold's writer and leaves the builder untouched.
+        let mut forged = row0;
+        forged.paid_sompi = 1_001;
+        let mut b = TransitionBuilder::new(&s0, &p, false, false, false, false, &extras);
+        assert!(b.settle_funded_escrow_v1(&PalwEscrowSettlementFactV1 { contract_id: h(1), old: row0, new: forged }).is_err());
+        assert!(b.entries.is_empty());
+        assert_eq!(b.state.state_root(), s0.state_root(), "a refused settlement changes nothing");
+        assert_eq!(ledger_total(&ledger), total0);
+
+        // Execute + settle (partial): work 300 paid, 100 burned out of the fee, 600 re-locked, the relay keeps 40 change (fee 210 = burn 100 + relay 110).
+        let tx1 = spend(
+            vec![row0.funding_outpoint, relay_op],
+            vec![TransactionOutput::new(300, payee(11)), TransactionOutput::new(600, payer_spk.clone()), TransactionOutput::new(40, payee(42))],
+        );
+        let ledger_before_tx1 = ledger.clone();
+        let (d_utxo1, amounts1, fee1) = ledger_apply(&mut ledger, &tx1, 5_000).unwrap();
+        let plan1 = palw_escrow_qualified_spend_v1(&row0, &tx1, &amounts1, 5_000, Some(&schedule)).unwrap();
+        assert_eq!((plan1.paid_now, plan1.burned_now, plan1.returned_now, plan1.continued_now), (300, 100, 0, 600));
+        assert!(fee1 >= plan1.burned_now, "the burn is withheld from the actual fee, never minted");
+        assert_eq!(ledger_total(&ledger) + fee1 as u128, total0, "ledger: before = after + fee");
+        let mut b = TransitionBuilder::new(&s0, &p, false, false, false, false, &extras);
+        let fact1 = PalwEscrowSettlementFactV1 { contract_id: h(1), old: plan1.old, new: plan1.new };
+        b.settle_funded_escrow_v1(&fact1).unwrap();
+        let s1 = b.state.clone();
+        let d1 = delta(b.entries.clone());
+        assert_row_matches_ledger(&s1, &ledger);
+
+        // Exactly-once: the same spend again is refused by the ledger (input gone) and its fact by the fold.
+        assert_eq!(ledger_apply(&mut ledger.clone(), &tx1, 5_001).unwrap_err(), row0.funding_outpoint);
+        let mut b = TransitionBuilder::new(&s1, &p, false, false, false, false, &extras);
+        assert!(b.settle_funded_escrow_v1(&fact1).is_err());
+        assert!(b.entries.is_empty() && b.state.state_root() == s1.state_root());
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&s1.funded_escrows_v1()[&h(1)], &tx1, &amounts1, 5_001, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::NotEscrowInput),
+            "the continued row answers only for its change-back"
+        );
+
+        // Restart: the carriage round trip yields the same state, which continues identically.
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s1)).unwrap();
+        let s1r = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(s1.state_root())).unwrap();
+        assert_eq!(s1r.funded_escrows_v1(), s1.funded_escrows_v1());
+
+        // The liability clears at the hard deadline; the payer return takes the 600 (the payer's own spend, no relay).
+        let hard = row0.hard_deadline_daa;
+        let mut b = TransitionBuilder::new(&s1r, &p, false, false, false, false, &extras);
+        b.sweep_funded_escrows_v1(hard).unwrap();
+        let s2 = b.state.clone();
+        let d2 = delta(b.entries.clone());
+        let row2 = s2.funded_escrows_v1()[&h(1)];
+        assert!(!row2.liability_open);
+        let tx2 = spend(vec![row2.funding_outpoint], vec![TransactionOutput::new(600, payer_spk.clone())]);
+        let total1 = ledger_total(&ledger);
+        let (d_utxo2, amounts2, fee2) = ledger_apply(&mut ledger, &tx2, hard + 1).unwrap();
+        let plan2 = palw_escrow_qualified_spend_v1(&row2, &tx2, &amounts2, hard + 1, None).unwrap();
+        assert_eq!((plan2.returned_now, fee2), (600, 0));
+        assert_eq!(ledger_total(&ledger), total1);
+        let mut b = TransitionBuilder::new(&s2, &p, false, false, false, false, &extras);
+        b.settle_funded_escrow_v1(&PalwEscrowSettlementFactV1 { contract_id: h(1), old: plan2.old, new: plan2.new }).unwrap();
+        let s3 = b.state.clone();
+        let d3 = delta(b.entries.clone());
+        assert_row_matches_ledger(&s3, &ledger);
+        let done = s3.funded_escrows_v1()[&h(1)];
+        assert_eq!((done.paid_sompi, done.burned_sompi, done.returned_sompi), (300, 100, 600), "every sompi accounted once");
+        assert_eq!(ledger_total(&ledger) + 100 + 110, total0, "only the burn and the relay's own 110 left the ledger, as fee");
+
+        // Reorg: revert state deltas and reversed UTXO diffs together; row, lock and ledger come back step by step.
+        ledger_revert(&mut ledger, &d_utxo2);
+        let u2 = revert_delta_v2(&s3, &d3, &p).unwrap();
+        assert_eq!(u2.state_root(), s2.state_root());
+        assert_row_matches_ledger(&u2, &ledger);
+        let u1 = revert_delta_v2(&u2, &d2, &p).unwrap();
+        assert_eq!(u1.state_root(), s1.state_root());
+        ledger_revert(&mut ledger, &d_utxo1);
+        let u0 = revert_delta_v2(&u1, &d1, &p).unwrap();
+        assert_eq!(u0.state_root(), s0.state_root());
+        assert_eq!(ledger, ledger_before_tx1, "the ledger is the pre-spend ledger");
+        assert_row_matches_ledger(&u0, &ledger);
+        assert_eq!(ledger_total(&ledger), total0);
+    }
 }
