@@ -394,18 +394,50 @@ mod tests {
     }
 
     #[test]
-    fn appended_kernel_query_preserves_previous_purpose_bytes() {
+    fn appended_material_purposes_preserve_wire_tags_and_signed_purpose() {
         for (value, tag) in [
             (ProviderTransportPurposeV1::NativeReadyV3, 0u8),
             (ProviderTransportPurposeV1::RecoveryEnrollmentV4, 1),
             (ProviderTransportPurposeV1::KernelMaterialIngressV4, 2),
             (ProviderTransportPurposeV1::KernelMaterialQueryV4, 3),
             (ProviderTransportPurposeV1::KernelMaterialReplacementV4, 4),
+            (ProviderTransportPurposeV1::NativeManifestV3, 5),
         ] {
             assert_eq!(borsh::to_vec(&value).unwrap(), [tag]);
             assert_eq!(borsh::from_slice::<ProviderTransportPurposeV1>(&[tag]).unwrap(), value);
         }
-        assert!(borsh::from_slice::<ProviderTransportPurposeV1>(&[5]).is_err());
+        for tag in 6..=u8::MAX {
+            assert!(borsh::from_slice::<ProviderTransportPurposeV1>(&[tag]).is_err());
+        }
+        // An appended ordinal is its own signed purpose, never an alias for a
+        // previously authorized request. Fresh replay guards isolate identity
+        // rejection from ordinary duplicate-request rejection.
+        let executor = key(1);
+        let old = request(&executor, 7);
+        let manifest = provider_transport_request_v1(
+            ProviderTransportPurposeV1::NativeManifestV3,
+            old.header.domain,
+            old.header.sender,
+            executor.verification_key.as_ref().to_vec(),
+            old.header.recipients.clone(),
+            [8; 32],
+            NOW,
+            1_000,
+            old.body.clone(),
+            signer(&executor),
+        ).unwrap();
+        let policy = ProviderTransportPolicyV1::new(Hash64::from_u64_word(1), 1 << 20);
+        let verify = |message: &ProviderTransportRequestV1, purpose| {
+            provider_transport_verify_request_v1(message, purpose, &policy, NOW, Some(1_000),
+                &mut ProviderTransportReplayGuardV1::new(16, policy.max_skew_ms))
+        };
+        verify(&manifest, ProviderTransportPurposeV1::NativeManifestV3).unwrap();
+        assert!(verify(&manifest, ProviderTransportPurposeV1::NativeReadyV3).is_err());
+        assert!(verify(&old, ProviderTransportPurposeV1::NativeManifestV3).is_err());
+        let mut relabelled = old;
+        relabelled.header.purpose = ProviderTransportPurposeV1::NativeManifestV3;
+        assert!(verify(&relabelled, ProviderTransportPurposeV1::NativeManifestV3).is_err(),
+            "changing the ordinal must invalidate the original signed request");
     }
     #[test]
     fn a_signed_request_verifies_once_and_every_tamper_or_replay_is_refused() {

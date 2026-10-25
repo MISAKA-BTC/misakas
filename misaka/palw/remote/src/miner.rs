@@ -1110,18 +1110,12 @@ mod tests {
         // An executor that returns DIFFERENT roots for the same position would make a second attempt there: refused, nothing sent.
         struct Drifting(u8);
         impl AttemptExecutor for Drifting {
-            fn execute(&mut self, _: Hash64) -> Result<ExecutedAttempt, String> {
+            fn execute(&mut self, anchor: Hash64) -> Result<ExecutedAttempt, String> {
                 self.0 += 1;
-                Ok(ExecutedAttempt {
-                    execution: PalwAttemptExecutionV1 {
-                        trace_root: h(100 + self.0),
-                        output_root: h(11),
-                        execution_root: h(12),
-                        trace_manifest_root: h(13),
-                        trace_chunk_count: 1,
-                    },
-                    material: vec![],
-                })
+                // Stage-A opaque-capture bookkeeping adversary, not backend capture authentication.
+                let mut executed = Exec { calls: Cell::new(0) }.execute(anchor)?;
+                executed.execution.trace_root = h(100 + self.0);
+                Ok(executed)
             }
         }
         state.cursor = None;
