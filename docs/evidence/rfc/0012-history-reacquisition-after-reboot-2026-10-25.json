@@ -1,0 +1,78 @@
+{
+  "recorded_at": "2026-10-25T12:29:06.079708+00:00",
+  "source_head": "78277650f034f2a1416306b3da741dde10f78b82",
+  "boot": "kern.boottime: { sec = 1792930279, usec = 483764 } Sun Oct 25 21:11:19 2026",
+  "incident": "Unplanned local reboot cleared temporary build, executable pins and public history raw/gzip. Historical committed evidence is retained, but lost raw data is not currently reproducible from those files alone.",
+  "campaign_os_crash": "UNKNOWN: uncontrolled reboot is not the required campaign",
+  "artifact_root": "/Users/wata/.codex/artifacts/rfc06-12-20261025",
+  "baseline_sha256": "a30d9fc4409cdb740ebd338a314e6b18ce95f30e08e244ca6a474fcad8869bad",
+  "baseline": {
+    "anchor": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+    "identity": {
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "consensusParamsId": "ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e",
+      "consensusScheduleId": "9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5",
+      "importSessionEpoch": 0,
+      "importSessionPhase": "legacy-stable",
+      "pruningPointHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    },
+    "anchor_header": {
+      "acceptedIdMerkleRoot": "7a85f8b26bb598b78136acf692672e49b2009500231401519d76bfd483e922d6c368bdcce7831b4690182ff13ca758f08f563baa05723d2b4142942133171d2f",
+      "bits": 545259519,
+      "blueScore": 53418,
+      "blueWork": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005dc9072e2",
+      "daaScore": 15477,
+      "evmCommitmentRoot": "940dc0a66deea5c37d9a114513753fdf2b5b7484d2077f9875aa2d0828d8682cdd1e4f39bfce6cd145f8b2e14c3ecc4e0e6ed6b78c743a3f834f3afbe7f6392a",
+      "evmPayloadHash": "877fcd175efdb52807879d7fca7f28b3257f5afdc596c39557d1fe3d6c30f85c9d3da6c0a8bb8b96dfbbd2c136408414ad59cf473c1646042499566e02d676b1",
+      "hash": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+      "hashMerkleRoot": "668705cd95d663581c044b869ef6f555229fec6bc779143e05740266ba7cd360f0bc8f450f999fb3b3320b0b894a06c5579894f678e77c08c0c3ee0afaaf5300",
+      "nonce": 9396570,
+      "overlayCommitmentRoot": "1170a63b5413037dbde426d61585f6662dc8c8f82a782b0b991bc8449a2406ccd67946c35cca7e018a84fdbf482d0e02f55af44f8ea48e3eabadf2b067382a62",
+      "palwCommitment": [],
+      "palwStateRoot": "ff82074b0d71fe30914838147bd231734bacecfc9ee6d96cea1c23e0e80578ac6b185b071067ed5474c5a26332005430c34b7f2b42833f5170ed9f8a601bdfc0",
+      "parentsByLevel": [
+        [
+          "e2faa2eb97fbe2d3bf3afa55f601e807878c6794e17cb74f78520480adaeff40a1ca16b9829d0e79d1f5645f55c6e376797f61a9661f827a2d9c3e30a8652154"
+        ]
+      ],
+      "powAlgoId": 8,
+      "pruningPoint": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "timestamp": 1792922408275,
+      "utxoCommitment": "db49ce1bc1f278a5f7e7c9d29e483a026815a0571df8a75f5446e2646bddb4f3ccee2e74afcf5ea8b912e938fb363cda2faddd4a94979cc9ba9219b4b9d30740",
+      "version": 2
+    }
+  },
+  "reacquisition": "Fresh genesis scan with pinned original identity and anchor; no previous cursor or coverage transferred. Live output is not terminal acceptance evidence.",
+  "test": {
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "scripts/drills",
+      "-p",
+      "test_misaka_public_history.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "parent_tests": 16,
+    "log": "test_actual_collector_byte_stop_keeps_unsaved_cursor_and_after_stamp (test_misaka_public_history.Coverage) ... ok\ntest_all_verdict_observations_transitions_and_known_conflicts (test_misaka_public_history.Coverage) ... ok\ntest_baseline_refuses_cursor_resume_mismatch_and_oversize (test_misaka_public_history.Coverage) ... ok\ntest_baseline_restarts_at_genesis_and_mismatch_refuses_before_page (test_misaka_public_history.Coverage) ... ok\ntest_closed_ancestry_is_coverage_only_never_compatibility (test_misaka_public_history.Coverage) ... ok\ntest_conflicting_same_hash_is_not_overwritten (test_misaka_public_history.Coverage) ... ok\ntest_error_missing_after_incomplete_and_duplicate_page_are_distinct (test_misaka_public_history.Coverage) ... ok\ntest_false_stable_and_changed_identity_or_anchor_refuse (test_misaka_public_history.Coverage) ... ok\ntest_gzip_corrupt_crc_and_truncation_are_unknown_and_resume_refused (test_misaka_public_history.Coverage) ... ok\ntest_gzip_roundtrip_preserves_original_byte_identity_and_resume_cursor (test_misaka_public_history.Coverage) ... ok\ntest_missing_page_or_ancestor_is_unknown (test_misaka_public_history.Coverage) ... ok\ntest_oversize_frame_is_refused_before_payload_read (test_misaka_public_history.Coverage) ... ok\ntest_page_after_terminal_stamp_is_not_closed (test_misaka_public_history.Coverage) ... ok\ntest_resume_rejects_missing_after_and_shell_option_host (test_misaka_public_history.Coverage) ... ok\ntest_round_header_without_decodable_exec_is_not_counted_as_refused (test_misaka_public_history.Coverage) ... ok\ntest_segment_resume_inclusive_duplicate_and_tip_advance (test_misaka_public_history.Coverage) ... ok\n\n----------------------------------------------------------------------\nRan 16 tests in 0.227s\n\nOK\n"
+  },
+  "source_files": [
+    {
+      "path": "scripts/drills/misaka_public_history_collect.py",
+      "sha256": "cc0ddffab0c62b5628d38d40601af47f97d2badee99351503334f73bc5ad5d76"
+    },
+    {
+      "path": "scripts/drills/test_misaka_public_history.py",
+      "sha256": "bc2b1c0abb01145d00bfd5cbd8dc54aa2fe7f96ddadbcf3ed04eba1951787f7b"
+    }
+  ],
+  "status": {
+    "public_history_coverage": "PENDING_REACQUISITION",
+    "evm_compatibility": "UNKNOWN",
+    "campaign_15_gates": "UNKNOWN",
+    "rust_build": "PENDING separate persistent cold build; not acceptance"
+  }
+}

@@ -3,6 +3,7 @@
 
 Initial: --ssh-host misaka-ibm --anchor HASH --output segment1.ndjson --max-pages 1200 --max-seconds 2400 --max-frame-bytes 67108864 --max-segment-bytes 2147483648
 Resume from plain or closed .ndjson.gz AFTER prior job terminates: --resume segment1.ndjson [segment2.ndjson ...] --output NEW.ndjson ...
+Reacquire lost segments: --baseline identity-and-anchor.json --output NEW.ndjson ... (always starts at genesis).
 No remote files, configuration, node restarts, DB access, or EVM compatibility verdict.
 """
 import argparse
@@ -120,6 +121,31 @@ def prepare(args):
         raise ValueError('max_segment_bytes must reserve at least 8*max_frame_bytes+65536 bytes')
     identity = header = cursor = None
     anchor = args.anchor
+    baseline_path = getattr(args, 'baseline', None)
+    if baseline_path:
+        if args.resume:
+            raise ValueError('baseline is for a fresh genesis scan, not resume')
+        with open(baseline_path, 'rb') as source:
+            raw = source.read((1 << 20) + 1)
+        if len(raw) > 1 << 20:
+            raise ValueError('baseline exceeds 1 MiB')
+        baseline = json.loads(raw)
+        from misaka_public_history_analyze import IDENTITY
+        if not isinstance(baseline, dict) or set(baseline) != {'anchor', 'identity', 'anchor_header'}:
+            raise ValueError('baseline requires only anchor, identity and anchor_header; no cursor or coverage')
+        identity, header = baseline['identity'], baseline['anchor_header']
+        if (not isinstance(identity, dict) or set(identity) != set(IDENTITY) | {'pruningPointHash'}
+                or any(value is None or value == '' for value in identity.values())
+                or any(not isinstance(identity[key], str) for key in (*IDENTITY, 'pruningPointHash') if key != 'importSessionEpoch')
+                or type(identity['importSessionEpoch']) is not int or identity['importSessionEpoch'] < 0
+                or not isinstance(header, dict) or header.get('hash') != baseline['anchor']
+                or type(header.get('daaScore')) is not int or header['daaScore'] < 0):
+            raise ValueError('baseline identity/header is incomplete')
+        if anchor is not None and anchor != baseline['anchor']:
+            raise ValueError('baseline anchor differs from explicit anchor')
+        anchor = baseline['anchor']
+        # It pins only what the new before/after RPC stamps must match. Missing
+        # old data grants no cursor, page, ancestry or compatibility coverage.
     if args.resume:
         previous = analyze(args.resume)
         unsafe = [f for f in previous['faults'] if f['kind'] not in ('incomplete_line', 'segment_error')]
@@ -162,6 +188,7 @@ def main():
     parser.add_argument('--ssh-host', required=True)
     parser.add_argument('--port', type=int, default=26314)
     parser.add_argument('--anchor')
+    parser.add_argument('--baseline', help='bounded identity/anchor JSON for a new scan from genesis; never a resume cursor')
     parser.add_argument('--resume', nargs='*', default=[])
     parser.add_argument('--output', required=True)
     parser.add_argument('--max-pages', type=int, required=True)

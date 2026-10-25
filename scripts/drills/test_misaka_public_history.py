@@ -47,6 +47,54 @@ class Coverage(unittest.TestCase):
     def whole(self):
         return [{'kind':'before','data':stamp()},page(0,G,[block(G),block(P,G),block(A,P)]),{'kind':'after','data':stamp()}]
 
+    def baseline_args(self):
+        from misaka_public_history_analyze import stamp_identity
+        identity, header = stamp_identity(stamp())
+        path = self.root/'baseline.json'
+        path.write_text(json.dumps({'anchor':A,'identity':identity,'anchor_header':header}))
+        return argparse.Namespace(ssh_host='misaka-ibm',port=26314,max_pages=1,max_seconds=10,timeout=1,
+            max_frame_bytes=1024,max_segment_bytes=131072,anchor=None,resume=[],baseline=str(path),output=str(self.root/'new'))
+
+    def test_baseline_restarts_at_genesis_and_mismatch_refuses_before_page(self):
+        from misaka_public_history_analyze import IDENTITY, stamp_identity
+        for changed in [False, True]:
+            config = prepare(self.baseline_args())
+            self.assertIsNone(config['cursor'])
+            calls, output = [], io.BytesIO()
+            class FakeRpc:
+                def __init__(inner,**kwargs):pass
+                def close(inner):pass
+                def call(inner,method,params=None):
+                    if method=='getPalwNodeStatus':
+                        value=stamp()['node']
+                        if changed:value['consensusParamsId']='changed'
+                        return value
+                    if method=='getBlockDagInfo':return stamp()['dag']
+                    if method=='getBlock':return stamp()['anchor']
+                    self.assertEqual(method,'getBlocks');calls.append(params['lowHash'])
+                    return {'blockHashes':[G,P,A],'blocks':[block(G),block(P,G),block(A,P)]}
+            scope={'BoundedWsRpc':FakeRpc,'BoundedOutput':BoundedOutput,'config':config,'IDENTITY':IDENTITY,
+                   'stamp_identity':stamp_identity,'sys':types.SimpleNamespace(stdout=types.SimpleNamespace(buffer=output))}
+            with self.assertRaises(SystemExit) as code:exec(REMOTE,scope)
+            self.assertEqual(code.exception.code,2 if changed else 0)
+            self.assertEqual(calls,[] if changed else [G])
+            records=[json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertEqual(sum(r['kind']=='page' for r in records),0 if changed else 1)
+
+    def test_baseline_refuses_cursor_resume_mismatch_and_oversize(self):
+        args=self.baseline_args();args.resume=['unavailable-old-segment']
+        with self.assertRaisesRegex(ValueError,'not resume'):prepare(args)
+        args=self.baseline_args();args.anchor=G
+        with self.assertRaisesRegex(ValueError,'differs'):prepare(args)
+        for change in ['cursor','missing-identity','boolean-epoch','boolean-daa','oversize']:
+            args=self.baseline_args();path=Path(args.baseline);value=json.loads(path.read_text())
+            if change=='cursor':value['cursor']=P
+            if change=='missing-identity':del value['identity']['consensusParamsId']
+            if change=='boolean-epoch':value['identity']['importSessionEpoch']=False
+            if change=='boolean-daa':value['anchor_header']['daaScore']=True
+            path.write_text(' '*(1<<20)+'{}' if change=='oversize' else json.dumps(value))
+            with self.assertRaises(ValueError):prepare(args)
+
     def test_closed_ancestry_is_coverage_only_never_compatibility(self):
         r=analyze([self.write('all',self.whole())])
         self.assertEqual(r['coverage_status'],'COMPLETE_TO_ANCHOR')

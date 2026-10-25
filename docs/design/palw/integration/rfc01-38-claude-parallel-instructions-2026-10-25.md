@@ -8,7 +8,15 @@
 
 根拠は[全38本の監査](../../../audit/palw/rfc-implementation-audit-2026-10-25-head1257/README.md)と、各詳細記録。監査対象は `1257f0ae8b2f33f5421e09be416f3aa86af0b47c`。受入完了2/38（21・36）、コード項目充足4/38（17・19・21・36）という区分を出発点とする。36は純ライブラリ＋休眠fenceの宣言範囲だけである。
 
-監査後の確定差分として、`bc2217cc6b74d9e70f940e4b9caf458bd730ad69` のLegacy court ingress事前予約は実装・検証済み。これを未実装として再作成しない。作成時の確定HEADは `bca931f72bcc38b5e52d320cd79aa99a7de8784b`。現在のcheckoutにはclaim/court予約、署名providerのnative試験、公開履歴収集の未コミット差分がある。これらは統合基点に自動では含まれず、受入済みとも数えない。統括が開始時に最新状態を確認する。
+指示書更新時の確定HEADは `78277650f034f2a1416306b3da741dde10f78b82`。監査snapshotの判定と、その後の個別進展を区別する。以下を既存成果として引き継ぎ、再実装しない。
+
+- `bc2217cc6`：Legacy court ingress事前予約の実装・検証。
+- `4890b70dd`：[native claim/court membershipの予約所有権](../../../evidence/rfc/0006-native-claim-court-membership-owner-2026-10-25.md)。局所24テストPASS。
+- `a4973592d`：[署名provider→実checker→資金付きnative challenge](../../../evidence/rfc/0007-signed-provider-native-funded-challenge-2026-10-25.md)。局所21親テストPASS。独立sourceやpaid Final承認の成立を意味しない。
+
+開始時に再確認すべき進行中作業は、GDN held-answer認証workspace、mesh一回決済の失敗原子性、paid-check authorityのtyped Resource伝播、normal-source typed読取draft、公開履歴collectorのbaseline照合。これらの未コミット差分を受入済みと数えず、既存担当と所有権を調整する。特に実行中ビルドが参照するRustは編集しない。
+
+ローカル再起動により `/tmp` の旧binary・生履歴・ビルドが失われた。過去の確定証拠と、現在再取得可能な原資料を区別する。新規ログ・binary pin・source manifest・生履歴は永続領域へ保存する。この作業では `/Users/wata/.codex/artifacts/rfc06-12-20261025` を使用中。偶発的な再起動はOS crash gateのPASSにしない。
 
 ## 全Claude共通指示（各担当へ必ず渡す）
 
@@ -62,7 +70,7 @@
 
 目的: native graph、Legacy callback、DB/cache、court/aux consumerを横断して、生成から最後の使用まで予約所有権を閉じる。
 
-- 既存予約済み経路と未予約経路をcaller単位で区別する。監査後に閉じたLegacy ingressを再実装しない。進行中のclaim/court membership予約と重複する変更は統括と調整する。
+- 既存予約済み経路と未予約経路をcaller単位で区別する。監査後に閉じたLegacy ingressを再実装しない。確定済みclaim/court membership予約と進行中のGDN認証workspaceを確認し、重複する変更は統括と調整する。
 - scratch buffer、Set/Map、canonical encoding、clone、negative cacheの確保前に必要量を見積もり、scope/worker/session間へtokenを明示的に移譲する。
 - Bのgraph/calendarへ同じresource vectorを接続する。キャンセル、panic、再試行、checkpoint失敗で二重解放・予約漏れを起こさない。
 - RFC16の容量・不足reportを実測・実予約から構築し、未知と実ゼロを区別する。常時Noneのまま新しいwrapperだけ追加して閉鎖しない。
@@ -112,7 +120,7 @@
 - 全対応class/shape/fault/answerについて、original起点のdoor、局所化、challenge、courtを接続する。回答不能・取得不能と計算誤りを区別し、availability失敗を自動的に計算誤りの有罪判定にしない。
 - 非Panel外部1人が取得・検査・提出できる経路を作る。producerの非公開状態や全件展開に暗黙依存しない。必要なmaterialはF、資源枠はA、原資はCへ依頼する。
 - 承認済み独立sourceが未提供でも、adapter・直接検査・拒否経路の実装は進める。fixtureの別process/別鍵を独立性や抽選承認の実証にしない。
-- 進行中の署名provider/socket→native challenge試験は統括が引継ぎ状態を確認する。別の擬似checkerを作り直さない。
+- 署名provider/socket→native challengeの確定済み試験を引き継ぐ。paid-check authorityとnormal-source typed読取の進行中差分は統括が所有権を確認する。別の擬似checkerを作り直さない。
 
 主所有範囲: verifier/adapter/checkerの専用leaf module。共有provider material protocolはFと契約する。
 
