@@ -823,18 +823,15 @@ impl NodeEthProvider {
                     Some(heads) => heads.latest_head().ok_or_else(|| EthRpcError::server("latest executed EVM head unavailable"))?,
                     None => return Err(EthRpcError::server("canonical EVM heads unavailable")),
                 };
-                // The canonical HEAD L1 block's DAA score is the activation-fence
-                // selector the executor would use for a block built on this head
-                // (`B.header.daa_score`). `Err` if the sink header is briefly
-                // unavailable ⇒ treat as 0 (fence-inert ⇒ F003 off, fail-safe).
-                let head_daa = c.get_header(sink).map(|h| h.daa_score).unwrap_or(0);
-                Ok((
-                    c.get_evm_state_snapshot_of(sink),
-                    c.get_evm_header_of(sink),
-                    head_daa,
-                    c.evm_activation_fences(),
-                    c.palw_evm_view_v1(),
-                ))
+                with_executed_l1_daa(c, sink, |head_daa| {
+                    Ok((
+                        c.get_evm_state_snapshot_of(sink),
+                        c.get_evm_header_of(sink),
+                        head_daa,
+                        c.evm_activation_fences(),
+                        c.palw_evm_view_v1(),
+                    ))
+                })
             })
             .await?;
         let snap = snap.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
@@ -919,25 +916,26 @@ impl NodeEthProvider {
                     // fence is `u64::MAX`-inert on every network today ⇒ `false` exactly as
                     // before, but tracks the executor automatically once F003 is deployed.
                     let (.., f003_mldsa_verify_fence) = c.evm_activation_fences();
-                    let target_daa = c.get_header(l1).map(|h| h.daa_score).unwrap_or(0);
-                    let env = kaspa_evm::sim::EthCallEnv {
-                        chain_id: EVM_CHAIN_ID,
-                        number: header.evm_number,
-                        timestamp: header.evm_timestamp_sec,
-                        coinbase: header.coinbase,
-                        gas_limit: header.gas_limit,
-                        f003_active: target_daa >= f003_mldsa_verify_fence,
-                        // ADR-0089 §7 (recorded gap): the PALW fold is kept only at the tip
-                        // (`load_tip_cached`); reconstructing the fold at a historical block
-                        // would mean a replay this RPC does not run. A historical simulation
-                        // therefore sees the market's doors CLOSED (no view ⇒ no handlers,
-                        // fences inert) — a call against 0xF010..0xF013 or a facade at a past
-                        // block returns as if the fence were dormant there, never a stale view.
-                        palw_view: None,
-                        market_fences: Default::default(),
-                        chain_id_for_holders: EVM_CHAIN_ID,
-                    };
-                    Ok((snapshot, env))
+                    with_executed_l1_daa(c, l1, |target_daa| {
+                        let env = kaspa_evm::sim::EthCallEnv {
+                            chain_id: EVM_CHAIN_ID,
+                            number: header.evm_number,
+                            timestamp: header.evm_timestamp_sec,
+                            coinbase: header.coinbase,
+                            gas_limit: header.gas_limit,
+                            f003_active: target_daa >= f003_mldsa_verify_fence,
+                            // ADR-0089 §7 (recorded gap): the PALW fold is kept only at the tip
+                            // (`load_tip_cached`); reconstructing the fold at a historical block
+                            // would mean a replay this RPC does not run. A historical simulation
+                            // therefore sees the market's doors CLOSED (no view ⇒ no handlers,
+                            // fences inert) — a call against 0xF010..0xF013 or a facade at a past
+                            // block returns as if the fence were dormant there, never a stale view.
+                            palw_view: None,
+                            market_fences: Default::default(),
+                            chain_id_for_holders: EVM_CHAIN_ID,
+                        };
+                        Ok((snapshot, env))
+                    })
                 })
             })
             .await
@@ -989,6 +987,21 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
         error: l.error.clone(),
     }
 }
+
+/// Activation metadata belongs to this exact executed L1 block. An unreadable
+/// header is unavailable, never a successful simulation with an invented DAA zero.
+fn with_executed_l1_daa<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    l1: kaspa_consensus_core::BlockHash,
+    then: impl FnOnce(u64) -> EthResult<T>,
+) -> EthResult<T> {
+    let header = c.get_header(l1).map_err(|e| EthRpcError::server(format!("executed L1 activation header: {e:?}")))?;
+    then(header.daa_score)
+}
+
+#[cfg(test)]
+#[path = "eth_rpc_activation_daa_tests.rs"]
+mod activation_daa_tests;
 
 /// Resolve once before either account lookup or historical simulation. API read
 /// errors must not become an absent account, unknown selector or canonicality denial.
