@@ -27,7 +27,7 @@
 //!   it must on the live chain. The genesis `utxo_commitment` and hash are recomputed from that set
 //!   exactly as `set_genesis_utxo_commitment_from_config` does for a node, and the set is imported
 //!   through the node's own `import_pruning_point_utxo_set`.
-//! * **The EVM lane is inert — on every build**: `evm_activation_daa_score` is `u64::MAX` and
+//! * **The ordinary EVM lane fixture is inert**: `evm_activation_daa_score` is `u64::MAX` and
 //!   `palw_model_evm` `None` (testnet-12 ships the lane active from DAA 0, asserted below). This
 //!   harness is testnet-12's clock: it stamps every template with a simulated time, because the
 //!   chain it needs is hundreds of 120 s slots long and the wall clock cannot drive that. On an
@@ -39,6 +39,8 @@
 //!   every harness block was then disqualified. The lane is orthogonal to everything asserted here;
 //!   the path a node actually mines — its own template, the heartbeat adapter, no re-stamp, the lane
 //!   as shipped — is `t12_clock_floor::t12_the_node_s_own_beats_tick_from_genesis_with_the_evm_lane_as_shipped`.
+//!   The dedicated `evm_round_gas_production_v2` child explicitly restores EVM activation and
+//!   uses the instance-local validation/template clock without re-stamping a built block.
 //!
 //! PoW difficulty is skipped (`skip_proof_of_work`), as in every harness test; the class lottery
 //! (the attempt's `class_ticket_v3` under the class target) is NOT — every attempt here wins it.
@@ -800,6 +802,11 @@ async fn a_floor_final_scheduled_with_edit(
 
     // ---- genesis: the node's own premine import, against the recomputed commitment ----------------
     let mut chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    if config.params.is_evm_active(0) {
+        // An explicit EVM-active consumer fixture uses the instance-local test
+        // clock, not post-build timestamp/commitment repair or real wall time.
+        chain.ctx.consensus.set_validation_time_for_test(chain.ctx.simulated_time);
+    }
     if fixed_heartbeat {
         chain.heartbeat_payload = Some(Hash64::from_u64_word(0xC0FF_EE08));
     }
@@ -995,6 +1002,10 @@ async fn a_floor_final_scheduled_with_edit(
     );
     AtTheTargetSpan { chain, lane, claim_id, executor, final_row, span_daa, target, opening, open_round, window, schedule, carrier }
 }
+
+#[cfg(feature = "evm")]
+#[path = "evm_round_gas_production_v2.rs"]
+mod evm_round_gas_production_v2;
 
 /// Stage 8 and 9: a chain block inside the target span (so the sink's selected parent — a round
 /// block's anchor — is the opening block), then a round block for `round` under `permit_index`,

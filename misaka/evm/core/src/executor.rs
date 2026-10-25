@@ -916,6 +916,9 @@ pub fn empty_acceptance_result(input: &EvmBlockInput) -> EvmExecutionResult {
         input.daa_score,
         coinbase,
     );
+    // Match the full executor's ADR0139 cap, including its minimum clamp.
+    // Empty acceptance still commits gas_limit and must not erase round gas.
+    let derived = env::EvmDerivedEnv { gas_limit: input.user_gas_cap.max(MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK), ..derived };
     let parent_burn = input.parent.map(|p| evmu256_to_u128(p.evm_burn_accumulator)).unwrap_or(0);
     let parent_total = input.parent.map(|p| evmu256_to_u128(p.evm_total_native_balance)).unwrap_or(0);
     let header = EvmExecutionHeader {
@@ -1253,7 +1256,7 @@ mod tests {
         let empty_payload = EvmExecutionPayload::default();
 
         // (a) implicit-genesis parent, empty state.
-        let input = input_with(&empty_payload, &[]);
+        let mut input = input_with(&empty_payload, &[]);
         let (full, full_db) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input).unwrap();
         let fast = empty_acceptance_result(&input);
         assert_eq!(full.header, fast.header, "fast-path header must equal full execution (genesis parent)");
@@ -1306,13 +1309,37 @@ mod tests {
         // fence-conditional receipts_root must STILL equal the full path's (both emit
         // v2(empty) == Ethereum's empty root). This closes the review gap where the
         // fast-path↔full-path equivalence was only proven for the inert fence.
-        let active_input = EvmBlockInput { typed_receipt_root_activation_daa_score: 0, ..child_input };
+        let mut active_input = EvmBlockInput { typed_receipt_root_activation_daa_score: 0, ..child_input };
         let (full_active, _) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &active_input).unwrap();
         let fast_active = empty_acceptance_result(&active_input);
         assert_eq!(full_active.header, fast_active.header, "fence-active: fast path == full path");
         assert_eq!(full_active.header.commitment_root(), fast_active.header.commitment_root());
         // Empty receipts ⇒ the active root equals the inert root (both the empty trie).
         assert_eq!(full_active.header.receipts_root, fast_child.header.receipts_root, "empty receipts_root is fence-invariant");
+        // ADR0139 round gas is part of the exact same input, even when no
+        // user transaction executes. Cover both parent shapes and receipt
+        // layouts, including the historical minimum clamp and round ceiling.
+        for cap in [0, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
+            kaspa_consensus_core::evm::evm_user_gas_cap_v1(Some(1)),
+            kaspa_consensus_core::evm::EVM_CHAIN_BLOCK_GAS_CEILING_V1] {
+            for receipt_fence in [0, u64::MAX] {
+                input.user_gas_cap = cap;
+                input.typed_receipt_root_activation_daa_score = receipt_fence;
+                let (full, _) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input).unwrap();
+                let fast = empty_acceptance_result(&input);
+                assert_eq!(full.header, fast.header, "genesis parent, cap={cap}, receipt fence={receipt_fence}");
+                assert_eq!(fast.header.gas_limit, cap.max(MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK));
+                active_input.user_gas_cap = cap;
+                active_input.typed_receipt_root_activation_daa_score = receipt_fence;
+                let (full, db) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &active_input).unwrap();
+                let fast = empty_acceptance_result(&active_input);
+                assert_eq!(full.header, fast.header, "stateful parent, cap={cap}, receipt fence={receipt_fence}");
+                assert_eq!(snapshot_from_cachedb(&db), parent_snapshot);
+                let (from_snapshot, snapshot) = crate::snapshot::execute_block_from_snapshot(&parent_snapshot, &active_input).unwrap();
+                assert_eq!(from_snapshot.header, full.header);
+                assert_eq!(snapshot, parent_snapshot);
+            }
+        }
     }
 
     #[test]

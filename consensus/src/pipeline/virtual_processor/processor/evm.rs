@@ -76,12 +76,29 @@ impl VirtualStateProcessor {
         // Whether the inline path pre-validated the flat seed (so the post-execution S6 check below
         // is not run twice). The pipeline path (206-seeded) leaves this false and is checked below.
         let mut seed_prevalidated = false;
+        // Round authority belongs to this actual native context. The worker
+        // cannot derive it from an absent (or cached) EVM header's gas limit.
+        let user_gas_cap =
+            kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
+                ctx.palw_round_verdicts
+                    .as_ref()
+                    .map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses))
+                    .unwrap_or(0)
+            }));
         // O12: a pipelined run pre-executed this block's acceptance on the
         // worker (same pure function, same inputs — see EvmPipeline). Consume
         // its result; fall back to inline execution when the pipeline ended.
         // ADR-0089: the pipeline pre-executed without the window; past the fence its result is
         // consumed and discarded, and the block is executed inline with the market inputs.
-        let pipelined = pipeline.and_then(|p| p.recv(current)).filter(|_| !market_fences.evm_active);
+        let pipelined = pipeline.and_then(|p| p.recv(current)).filter(|result| {
+            !market_fences.evm_active && match result {
+                Ok(staged) => staged.result.header.gas_limit == user_gas_cap,
+                // An error carries no executed gas-limit identity: the worker
+                // used a cached header or the historical base fallback. Redo
+                // inline before classifying it under this actual context.
+                Err(_) => false,
+            }
+        });
         let staged = match pipelined {
             Some(Ok(staged)) => Some(staged),
             Some(Err(why)) => return Err(market_owned_v2::execution_fault_v2(why)),
@@ -90,16 +107,6 @@ impl VirtualStateProcessor {
                 // parent first, then ascending blue work — §3.1 canonical order).
                 // Lane accept-order: past its fence, parents-first at this block's DAA score.
                 let sorted_mergeset: Vec<BlockHash> = self.acceptance_ordered_mergeset(&ctx.ghostdag_data, header.daa_score);
-                // ADR-0139: this chain block's accepted-user-gas cap — one round budget per DISTINCT
-                // permitted round among the round blocks it merges, from the round indices their
-                // envelopes carry; the base where the execution lane is not in force.
-                let user_gas_cap =
-                    kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
-                        ctx.palw_round_verdicts
-                            .as_ref()
-                            .map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses))
-                            .unwrap_or(0)
-                    }));
                 let map_err = market_owned_v2::execution_fault_v2;
                 // The validated flat/reconstruct seed (S9), or None ⇒ seed from 206 (the default,
                 // and the fallback for pre-activation / Unavailable parents).

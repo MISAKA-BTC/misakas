@@ -53,7 +53,9 @@ impl VirtualStateProcessor {
         parent: BlockHash,
         child_daa: u64,
     ) -> Result<Option<NativeChainStateV1>, PalwLocalTransitionFaultV1> {
-        if !self.palw_evm_market_fences_at(child_daa).evm_active {
+        // Market projection and execution-round gas are independent consumers
+        // of the same exact parent. A dormant market must not erase round gas.
+        if !self.palw_evm_market_fences_at(child_daa).evm_active && self.palw_execution_lane_at(child_daa).is_none() {
             return Ok(None);
         }
         let params = self.palw_state_params_v2.as_ref().ok_or(PalwLocalTransitionFaultV1::Context(Context::HistoryUnavailable))?;
