@@ -1745,11 +1745,15 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     /// one: a figure for fewer decode calls than the attempt makes would under-state it.
     fn attempt_working_set_bytes(&self, prefill_tokens: usize) -> Option<u64> {
         let profile = self.profile.as_ref()?;
-        let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+        let mut job = kaspa_consensus_core::palw_base0_profile::rc_job_context(
             profile,
             u32::try_from(prefill_tokens).ok()?,
             self.canonical_job.1.max(1),
         );
+        // The job this backend runs carries ITS network id, and the run's held output material counts that id's bytes
+        // (`palw_output_material_bytes_v1`): the RC context's id would price the gate for another network's job, as the
+        // dense tier's `resource_job_v1` already avoids.
+        job.network_id = self.network_id.clone();
         self.resource_profile_v1(Some(&job), kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer)
             .map(|p| p.working_set_bytes())
     }
@@ -4949,7 +4953,18 @@ mod tests {
         assert!(matches!(profile.capture, PalwCaptureRetentionV1::Fold { .. }), "{:?}", profile.capture);
         assert_eq!(profile.leaves, leaves);
         assert!(profile.recurrence_layers >= 1 && profile.gdn_state_bytes > 0, "a hybrid prices its recurrence state");
-        assert!(profile.capture_retained_bytes < 1 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
+        // The fold prices its retained digests plus the one open block it buffers (`palw_fold_capture_bytes_v1`, d3ff09371:
+        // 512 B a digest, 256 B a leaf of the block): a small job is that buffer and almost nothing else.
+        let PalwCaptureRetentionV1::Fold { retain_level } = profile.capture else { unreachable!() };
+        assert_eq!(
+            profile.capture_retained_bytes,
+            kaspa_consensus_core::palw_resource_profile_v1::palw_fold_capture_bytes_v1(leaves, retain_level),
+            "the fold is priced by the one formula"
+        );
+        assert!(
+            leaves <= 1u64 << retain_level,
+            "a small job folds into one block, so its fold is that block's buffer: {leaves} leaves, level {retain_level}"
+        );
         assert_eq!(backend.runtime_profile_v1().map(|p| p.name()), Some("Q36-KV-i32"));
         assert_eq!(
             backend.attempt_working_set_bytes(job.declared_prefill_tokens as usize),
