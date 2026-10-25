@@ -28,6 +28,9 @@ mod conv_request_owner;
 #[path = "conv_demand_borrow_v3.rs"]
 mod conv_demand_borrow;
 pub use conv_demand_borrow::gdn_check_conv_demands_borrowed_v3;
+#[path = "transition_predecessor_retained_v3.rs"]
+mod transition_predecessor_retained;
+pub use transition_predecessor_retained::{PalwGdnTransitionBuiltV3, gdn_transition_refutation_with_accused_retained_v3};
 
 pub use conv_request_owner::{PalwGdnConvAdmissionV3, PalwGdnConvOwnerV3, PalwGdnConvRefutationRequestsV3, PalwGdnConvRequiredRowV3,
     gdn_conv_refutation_requests_v3, visit_gdn_conv_required_rows_v3};
@@ -703,6 +706,26 @@ fn transition_refutation_v2(
     tile: &dyn Fn(PalwStepCoordinateV1) -> Option<leg::PalwStepTileLeafV1>,
     checkpoint: &dyn Fn(u32) -> Option<(leg::PalwCheckpointLeafV2, Vec<Vec<u8>>)>,
 ) -> Result<PalwGdnTransitionRefutationV2, PalwGdnCourtErrorV2> {
+    let witness = |at: u32, positions: u32, layer: u16, selection: Option<u32>| -> Result<PalwGdnCheckpointWitnessV2, PalwGdnCourtErrorV2> {
+        let (leaf, chunks) = checkpoint(at).ok_or_else(|| evidence("the capture lacks a checkpoint"))?;
+        let opening = leg::step_opening_capped_v1(capture.checkpoint_leaf_hashes, u64::from(at), capture.max_leaves)?;
+        let mut out = Vec::new();
+        for flat in gdn_selected_delta_chunks_v2(&capture.binding.shape_profile, positions, layer, selection)? {
+            out.push(gdn_chunk_witness_v2(&capture.binding.shape_profile, positions, &chunks, flat)?);
+        }
+        Ok(PalwGdnCheckpointWitnessV2 { leaf, opening, chunks: out })
+    };
+    transition_refutation_with_witness_v3(capture, node_slot, head, index, supplied, tile, &witness)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transition_refutation_with_witness_v3(
+    capture: &super::capture::PalwGdnCaptureV2<'_>,
+    node_slot: u32, head: u32, index: u32,
+    supplied: Option<PalwGdnCheckpointWitnessV2>,
+    tile: &dyn Fn(PalwStepCoordinateV1) -> Option<leg::PalwStepTileLeafV1>,
+    witness: &dyn Fn(u32, u32, u16, Option<u32>) -> Result<PalwGdnCheckpointWitnessV2, PalwGdnCourtErrorV2>,
+) -> Result<PalwGdnTransitionRefutationV2, PalwGdnCourtErrorV2> {
     let binding = capture.binding;
     let profile = &binding.shape_profile;
     let (layer, selection, program) = transition_site_v2(profile, node_slot, head)?;
@@ -710,22 +733,13 @@ fn transition_refutation_v2(
     let (_, to_first) = checkpoint_site_v2(binding, index)?;
     let last = coordinate_at_v2(binding, to_first - 1, node_slot, if sliced { head } else { 0 });
     let start = gdn_replay_start_v2(binding, &last)?;
-    let witness = |at: u32, positions: u32| -> Result<PalwGdnCheckpointWitnessV2, PalwGdnCourtErrorV2> {
-        let (leaf, chunks) = checkpoint(at).ok_or_else(|| evidence("the capture lacks a checkpoint"))?;
-        let opening = leg::step_opening_capped_v1(capture.checkpoint_leaf_hashes, u64::from(at), capture.max_leaves)?;
-        let mut out = Vec::new();
-        for flat in gdn_selected_delta_chunks_v2(profile, positions, layer, selection)? {
-            out.push(gdn_chunk_witness_v2(profile, positions, &chunks, flat)?);
-        }
-        Ok(PalwGdnCheckpointWitnessV2 { leaf, opening, chunks: out })
-    };
     let accused = match supplied {
         Some(accused) => accused,
-        None => witness(index, to_first)?,
+        None => witness(index, to_first, layer, selection)?,
     };
     let predecessor = match start.checkpoint_index {
         None => None,
-        Some(prev) => Some(witness(prev, start.first_position)?),
+        Some(prev) => Some(witness(prev, start.first_position, layer, selection)?),
     };
     let required = canonical_input_leaves_with_start_v2(
         profile,

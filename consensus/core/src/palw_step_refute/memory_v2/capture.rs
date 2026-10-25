@@ -11,6 +11,10 @@ use super::*;
 mod recurrence_layout_owner;
 pub(crate) use recurrence_layout_owner::gdn_recurrence_section_retained_v3;
 use recurrence_layout_owner::{RecurrenceKindV3, recurrence_kind_v3};
+#[path = "predecessor_witness_owner_v3.rs"]
+mod predecessor_witness_owner;
+pub use predecessor_witness_owner::{PalwGdnPredecessorRequestV3, PalwGdnPredecessorOwnerV3,
+    PalwGdnPredecessorBuiltV3, gdn_predecessor_witness_request_v3};
 
 
 /// **Where a class's checkpoint at `positions` keeps its recurrence half, and how many chunks the whole checkpoint has** —
@@ -66,16 +70,29 @@ pub(crate) fn gdn_selected_delta_chunks_v2(
 ) -> Result<Vec<u32>, PalwGdnCourtErrorV2> {
     let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
     let (offset, _, _) = gdn_recurrence_section_v2(profile, positions)?;
+    let mut out = Vec::new();
+    visit_selected_delta_chunks_at_v3(&geometry, layer, head, offset, |flat| { out.push(flat); Ok(()) })?;
+    Ok(out)
+}
+
+/// The collector and retained predecessor builder share the native selection
+/// order without requiring a temporary selected-index Vec in the latter.
+fn visit_selected_delta_chunks_at_v3(
+    geometry: &PalwGdnStateGeometryV2<'_>, layer: u16, head: Option<u32>, offset: u64,
+    mut visit: impl FnMut(u32) -> Result<(), PalwGdnCourtErrorV2>,
+) -> Result<(), PalwGdnCourtErrorV2> {
+    if head.is_some_and(|h| h >= geometry.heads) { return Err(PalwStepRefuteError::Unadjudicable.into()); }
     let heads = head.map_or(0..geometry.heads, |h| h..h + 1);
     let blocks = geometry.v_dim.div_ceil(geometry.delta_rows_per_chunk);
-    let mut out = Vec::new();
     for h in heads {
         for block in 0..blocks {
             let local = geometry.delta_chunk_index(layer, h, block).ok_or(PalwStepRefuteError::Unadjudicable)?;
-            out.push(offset.checked_add(local).and_then(|i| u32::try_from(i).ok()).ok_or(PalwStepRefuteError::Unadjudicable)?);
+            let flat = offset.checked_add(local).and_then(|i| u32::try_from(i).ok())
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            visit(flat)?;
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 /// **One chunk's membership witness, from the checkpoint's whole chunk list** — its bytes and its path under the class's own tree

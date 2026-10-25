@@ -35,8 +35,17 @@ fn layers_request(n: u64) -> Result<u64, PalwGdnCourtErrorV2> {
 pub(crate) struct RetainedRecurrenceSectionV3 {
     _layout: Option<maps::PalwStateLayoutV4>,
     _lease: Option<NativeDemandLeaseV1>,
+    layer_bytes: u64,
     pub(crate) offset: u64,
     pub(crate) count: u64,
+}
+impl RetainedRecurrenceSectionV3 {
+    pub(crate) fn layout_v3(&self) -> Option<&maps::PalwStateLayoutV4> {
+        self._layout.as_ref()
+    }
+    pub(crate) fn layer_bytes_v3(&self) -> u64 {
+        self.layer_bytes
+    }
 }
 pub(crate) fn gdn_recurrence_section_retained_v3(
     profile: &crate::palw_step::PalwShapeProfileV3,
@@ -58,7 +67,7 @@ pub(crate) fn gdn_recurrence_section_retained_v3(
         layers_request(attention)?.checked_add(layers_request(recurrence)?).ok_or_else(|| NativeCoverageV1::overflow::<u16>(PATH))?;
     let lease = reserve_native_requests_v1(bytes)?;
     let (offset, count, layout) = gdn_recurrence_section_v2(profile, positions)?;
-    Ok(RetainedRecurrenceSectionV3 { _layout: layout, _lease: lease, offset, count })
+    Ok(RetainedRecurrenceSectionV3 { _layout: layout, _lease: lease, layer_bytes: bytes, offset, count })
 }
 
 #[cfg(test)]

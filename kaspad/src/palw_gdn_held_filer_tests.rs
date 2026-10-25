@@ -73,15 +73,40 @@ pub(crate) fn world(forge_head: u32) -> World {
 }
 
 fn world_with_fault(forge_head: u32, conv_window: bool) -> World {
-    let artifact = Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8));
-    let profile = qwen36_profile_v8(geometry()).expect("graph-v8 projects");
-    let backend = Qwen36Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile.clone(), qwen36_held_canonical_v1(160))
+    world_with_fault_at_checkpoint(forge_head, conv_window, 0)
+}
+
+// Test-only native job selection. Existing fixtures retain their canonical
+// tuple/first checkpoint; predecessor tests execute a legitimate longer job.
+fn world_with_fault_at_checkpoint(forge_head: u32, conv_window: bool, recurrence_ordinal: usize) -> World {
+    // The long profile's Core canonical and prefill draw must reach the second
+    // recurrence. Use the existing native 64-position constructor;
+    // default worlds keep the original 32-position artifact and identity.
+    let artifact = Arc::new(if recurrence_ordinal == 0 {
+        misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8)
+    } else {
+        misaka_palw_base0::qwen36::qwen36_dev_fixture_heads(4, 8, 2, 4, 8, 32)
+    });
+    assert_eq!(artifact.shape.max_position, if recurrence_ordinal == 0 { 32 } else { 64 });
+    let native_geometry = PalwQwen36GeometryV1 { n_ctx: if recurrence_ordinal == 0 { 160 } else { 384 }, ..geometry() };
+    let profile = qwen36_profile_v8(native_geometry).expect("graph-v8 projects");
+    let canonical = qwen36_held_canonical_v1(profile.n_ctx);
+    assert_eq!(kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(&profile, false), Some(canonical));
+    let backend = Qwen36Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile.clone(), canonical)
         .expect("servable")
         .with_step_ladder_cap(PALW_STEP_LEG_MAX_LEAVES)
         .with_prompt_ids_form(PalwPromptIdsFormV1::MerkleV1)
         .with_attempt_rules(PalwAttemptRulesV1::CoreV1);
-    let (canonical, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x6D_6E02)).expect("a job");
-    let out = backend.execute(&palw_attempt_job_v1(canonical, true), &prompt).expect("the honest attempt runs");
+    let (canonical_context, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x6D_6E02)).expect("a job");
+    assert_eq!((canonical_context.declared_prefill_tokens, canonical_context.exact_decode_tokens), canonical);
+    let drawn = palw_attempt_job_v1(canonical_context, true);
+    assert_eq!(drawn.declared_prefill_tokens, canonical.0);
+    assert_eq!(drawn.exact_decode_tokens, 1);
+    let drawn_positions = kaspa_consensus_core::palw_context_ladder::palw_job_footprint_v1(
+        drawn.declared_prefill_tokens, drawn.exact_decode_tokens,
+    );
+    assert!(drawn_positions < artifact.shape.max_position as u64);
+    let out = backend.execute(&drawn, &prompt).expect("the honest attempt runs");
     // A held class carries no prompt ids in its material (PanelDa): the accuser has the job's public prompt.
     let carried: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
     let mut honest = backend
@@ -89,6 +114,15 @@ fn world_with_fault(forge_head: u32, conv_window: bool) -> World {
         .ok()
         .filter(|v| !v.prompt_token_ids.is_empty())
         .unwrap_or_else(|| backend.gdn_accuser_view_v2(&out.material, Some(&carried)).expect("the accuser's view"));
+    assert_eq!(honest.binding.job_context.declared_prefill_tokens, drawn.declared_prefill_tokens);
+    assert_eq!(honest.binding.job_context.exact_decode_tokens, drawn.exact_decode_tokens);
+    if recurrence_ordinal > 0 {
+        let recurrence_count = honest.checkpoint_leaves.iter().filter(|leaf| {
+            let positions = palw_checkpoint_positions_at_v1(&profile, &honest.binding.job_context, leaf.covered_decode_call);
+            palw_checkpoint_leaf_carries_recurrence_v1(&profile, positions)
+        }).count();
+        assert!(recurrence_count > recurrence_ordinal, "the real drawn capture must contain the requested nonfirst recurrence");
+    }
     // The job's prompt commitment is under the form its attempt rules committed it with; the accuser reads it from the chain.
     let committed = honest.binding.job_context.prompt_token_ids_hash;
     honest.prompt_ids_form = [PalwPromptIdsFormV1::MerkleV1, PalwPromptIdsFormV1::Flat]
@@ -105,7 +139,8 @@ fn world_with_fault(forge_head: u32, conv_window: bool) -> World {
         .checkpoint_leaves
         .iter()
         .map(|leaf| (leaf.checkpoint_index, palw_checkpoint_positions_at_v1(&b.shape_profile, ctx, leaf.covered_decode_call)))
-        .find(|(_, p)| palw_checkpoint_leaf_carries_recurrence_v1(&b.shape_profile, *p))
+        .filter(|(_, p)| palw_checkpoint_leaf_carries_recurrence_v1(&b.shape_profile, *p))
+        .nth(recurrence_ordinal)
         .expect("a recurrence-carrying checkpoint");
     let demands = if conv_window {
         gdn_conv_window_demands_v2(b, node_slot, forge_head, index)
@@ -496,3 +531,6 @@ mod conv_owner_tests;
 
 #[path = "palw_gdn_held_borrowed_demand_tests_v3.rs"]
 mod borrowed_demand_tests;
+
+#[path = "palw_gdn_held_predecessor_owner_tests_v3.rs"]
+mod predecessor_owner_tests;

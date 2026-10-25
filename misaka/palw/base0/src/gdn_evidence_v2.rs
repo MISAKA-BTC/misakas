@@ -52,6 +52,8 @@ use court_error::base0_gdn_court_error_with_replay_v3;
 #[path = "gdn_witness_copy_owner_v4.rs"]
 mod witness_copy_owner;
 pub use witness_copy_owner::{Base0GdnRetainedCheckpointWitnessV4, Base0GdnWitnessBuiltV4, base0_gdn_checkpoint_witness_retained_v4};
+#[path = "gdn_predecessor_evidence_v3.rs"]
+mod predecessor_evidence;
 
 
 
@@ -442,8 +444,8 @@ pub fn base0_gdn_transition_evidence_from_disclosures_retained_v4<K: Base0FpReco
     if demands != gdn_transition_demands_v2(material.binding, node_slot, head, index).map_err(base0_gdn_court_error_v3)?.as_slice() {
         return Err(NativeDecodeErrorV1::Decode("the answered demands are not the units this transition reads".into()));
     }
-    base0_gdn_checkpoint_witness_retained_v4(demands, answers)?.try_build_v4(|accused|
-        transition_disclosures_with_accused_v4(material, &leg, node_slot, head, index, accused, kernels))
+    predecessor_evidence::transition_with_owned_predecessor_v3(material, &leg, node_slot, head, index,
+        base0_gdn_checkpoint_witness_retained_v4(demands, answers)?, kernels)
 }
 
 #[allow(clippy::too_many_arguments)]

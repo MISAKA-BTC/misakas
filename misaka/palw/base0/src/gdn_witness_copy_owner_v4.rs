@@ -37,6 +37,7 @@ fn native_heap<T: NativeHeapV1>(value: &T) -> Result<u64, Error> {
 pub struct Base0GdnWitnessCopyOwnerV4 {
     _lease: Option<NativeDemandLeaseV1>,
     conv_owner: Option<kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnConvOwnerV3>,
+    predecessor_owner: Option<kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnPredecessorOwnerV3>,
 }
 
 /// Field order retires the copied witness before its request. No implicit clone
@@ -80,6 +81,12 @@ impl<T> Deref for Base0GdnWitnessBuiltV4<T> {
     }
 }
 impl<T> Base0GdnWitnessBuiltV4<T> {
+    pub(super) fn with_predecessor_owner_v3(mut self,
+        owner: Option<kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnPredecessorOwnerV3>,
+    ) -> Self {
+        self.owner.predecessor_owner = owner;
+        self
+    }
     pub(super) fn with_conv_owner_v5(mut self, owner: kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnConvOwnerV3) -> Self {
         self.owner.conv_owner = Some(owner);
         self
@@ -143,7 +150,7 @@ pub fn base0_gdn_checkpoint_witness_retained_v4(
     answers: &[PalwHeldDisclosureV1],
 ) -> Result<Base0GdnRetainedCheckpointWitnessV4, Error> {
     let bytes = witness_copy_request_v4(demands, answers)?;
-    let owner = Base0GdnWitnessCopyOwnerV4 { _lease: reserve_native_requests_v1(bytes).map_err(Error::Resource)?, conv_owner: None };
+    let owner = Base0GdnWitnessCopyOwnerV4 { _lease: reserve_native_requests_v1(bytes).map_err(Error::Resource)?, conv_owner: None, predecessor_owner: None };
     let witness =
         gdn_checkpoint_witness_from_disclosures_v2(demands, answers).map_err(crate::gdn_evidence_v2::base0_gdn_court_error_v3)?;
     // Validate the actual output capacities against the requested clone roles.

@@ -15,7 +15,11 @@ convolution source layer, block order, native chunk index and checked recurrence
 borrowed check compares each exact `StateChunk { checkpoint, chunk }` in place, including length
 and final ordinal. It neither sorts nor constructs replacement units. A mismatch remains an
 Evidence refusal rather than an honest verdict. Unsupported native layouts retain their typed
-refusal; new request/index arithmetic overflow is Resource, with no fallback layout.
+refusal, with no fallback layout. The initial continuation classified flat-index overflow as
+Resource. The subsequent [predecessor-owner scope](0006-held-gdn-predecessor-witness-owner-2026-10-25.md)
+restores its historical Unadjudicable meaning: a u32 chunk-address representation limit is not
+allocation quota. Request-size and allocation-ordinal overflow remain Resource. The original
+runtime results below predate that narrow correction and are not relabeled as testing it.
 
 The actual `base0_gdn_conv_window_evidence_from_disclosures_retained_v4` calls this check before
 its full convolution role quote. Legacy collectors remain available and use the same visitor;
@@ -60,6 +64,15 @@ The full held-filer regression passed **28/28 in 75.91 seconds** on the same pin
 in `/tmp/misaka-rfc-borrowed-demand-node-held-regression-20261025.log`. This full group includes
 the two new focused tests; the overlapping focused/group counts are not added. Child results
 are included in their parents, not independent additional counts.
+
+Subsequently, the predecessor-owner continuation's corrected source passed the full held-filer
+group **30/30 in 94.34 seconds** on pinned binary
+`/tmp/misaka-rfc-predecessor-node-retry3-20261025`, SHA-256
+`c726fd3a76442887334ea29bc3f74f26ec348b607fc51945ea27f2959eba8793`, in
+`/tmp/misaka-rfc-predecessor-node-held-regression-retry3-20261025.log`. That group includes this
+record's borrowed-demand cases and the two new predecessor cases. It is a later regression at
+that corrected source, not an additive independent count or a test that reaches u32 overflow.
+The linked predecessor record retains its three failed fixture runs and final focused results.
 
 Build duration is not a model cost measurement. This worker has not invoked Cargo. New leaves were
 formatted individually, modified production files passed parser-only checks, and

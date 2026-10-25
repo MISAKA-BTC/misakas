@@ -12,10 +12,7 @@ fn visit_conv_chunk_indices_v3(
 ) -> Result<(), PalwGdnCourtErrorV2> {
     for block in 0..geometry.conv_kernel.div_ceil(geometry.conv_rows_per_chunk) {
         let local = geometry.conv_chunk_index(layer, head, block).ok_or(PalwStepRefuteError::Unadjudicable)?;
-        let flat = offset
-            .checked_add(local)
-            .and_then(|index| u32::try_from(index).ok())
-            .ok_or_else(|| NativeCoverageV1::overflow::<u32>("GDN borrowed conv chunk index"))?;
+        let flat = offset.checked_add(local).and_then(|index| u32::try_from(index).ok()).ok_or(PalwStepRefuteError::Unadjudicable)?;
         visit(flat)?;
     }
     Ok(())
