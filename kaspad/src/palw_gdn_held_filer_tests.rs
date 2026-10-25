@@ -534,3 +534,6 @@ mod borrowed_demand_tests;
 
 #[path = "palw_gdn_held_predecessor_owner_tests_v3.rs"]
 mod predecessor_owner_tests;
+
+#[path = "palw_gdn_held_transition_demand_tests_v3.rs"]
+mod transition_demand_tests;

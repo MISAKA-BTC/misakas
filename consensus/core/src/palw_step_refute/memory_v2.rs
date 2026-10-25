@@ -17,6 +17,7 @@ pub use capture::{PalwGdnCaptureV2, gdn_refutation_from_capture_v2, gdn_refutati
 pub use capture::{PalwGdnPredecessorRequestV3, PalwGdnPredecessorOwnerV3,
     PalwGdnPredecessorBuiltV3, gdn_predecessor_witness_request_v3};
 pub use transition::{PalwGdnTransitionBuiltV3, gdn_transition_refutation_with_accused_retained_v3};
+pub use transition::gdn_check_transition_demands_borrowed_v3;
 // RFC-0006 consumer v2: the checkpoint's own two facts (delta transition, convolution window), the court that keeps an anchored
 // replay sound — see the module's docs. Public so the generated native scanners can name its wire types by their owner path.
 pub mod transition;

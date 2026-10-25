@@ -441,9 +441,9 @@ pub fn base0_gdn_transition_evidence_from_disclosures_retained_v4<K: Base0FpReco
     demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1], kernels: impl FnMut() -> K,
 ) -> Result<Base0GdnWitnessBuiltV4<PalwGdnTransitionRefutationV2>, NativeDecodeErrorV1<String>> {
     let leg = base0_gdn_leaf_leg_retained_v3(material)?;
-    if demands != gdn_transition_demands_v2(material.binding, node_slot, head, index).map_err(base0_gdn_court_error_v3)?.as_slice() {
-        return Err(NativeDecodeErrorV1::Decode("the answered demands are not the units this transition reads".into()));
-    }
+    kaspa_consensus_core::palw_step_refute::memory_v2::gdn_check_transition_demands_borrowed_v3(
+        material.binding, node_slot, head, index, demands,
+    ).map_err(base0_gdn_court_error_v3)?;
     predecessor_evidence::transition_with_owned_predecessor_v3(material, &leg, node_slot, head, index,
         base0_gdn_checkpoint_witness_retained_v4(demands, answers)?, kernels)
 }

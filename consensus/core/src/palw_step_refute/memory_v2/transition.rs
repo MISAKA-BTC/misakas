@@ -28,6 +28,9 @@ mod conv_request_owner;
 #[path = "conv_demand_borrow_v3.rs"]
 mod conv_demand_borrow;
 pub use conv_demand_borrow::gdn_check_conv_demands_borrowed_v3;
+#[path = "transition_demand_borrow_v3.rs"]
+mod transition_demand_borrow;
+pub use transition_demand_borrow::gdn_check_transition_demands_borrowed_v3;
 #[path = "transition_predecessor_retained_v3.rs"]
 mod transition_predecessor_retained;
 pub use transition_predecessor_retained::{PalwGdnTransitionBuiltV3, gdn_transition_refutation_with_accused_retained_v3};

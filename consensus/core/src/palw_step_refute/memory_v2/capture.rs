@@ -77,7 +77,7 @@ pub(crate) fn gdn_selected_delta_chunks_v2(
 
 /// The collector and retained predecessor builder share the native selection
 /// order without requiring a temporary selected-index Vec in the latter.
-fn visit_selected_delta_chunks_at_v3(
+pub(super) fn visit_selected_delta_chunks_at_v3(
     geometry: &PalwGdnStateGeometryV2<'_>, layer: u16, head: Option<u32>, offset: u64,
     mut visit: impl FnMut(u32) -> Result<(), PalwGdnCourtErrorV2>,
 ) -> Result<(), PalwGdnCourtErrorV2> {
