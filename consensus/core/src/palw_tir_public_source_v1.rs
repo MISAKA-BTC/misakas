@@ -14,6 +14,8 @@ pub mod parameter_cover_v1;
 
 #[path = "palw_tir_complete_ids_owned_v2.rs"]
 pub(crate) mod complete_ids_owned_v2;
+#[path = "palw_tir_public_response_native_v2.rs"]
+mod response_native_v2;
 
 pub const PALW_TIR_PUBLIC_FRONTIER_HASHES_V1: usize = 1024;
 pub const PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1: u32 = 1024;
@@ -83,31 +85,38 @@ pub enum PalwTirPublicResponseV1 {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
-fn vector<T: BorshDeserialize, R: Read>(r: &mut R, maximum: usize) -> io::Result<Vec<T>> {
+fn allocation_error(native: bool) -> io::Error {
+    if native { io::Error::new(io::ErrorKind::OutOfMemory, "TIR public allocation failed") }
+    else { invalid("TIR public allocation failed") }
+}
+fn vector<T: BorshDeserialize, R: Read>(r: &mut R, maximum: usize, native: bool) -> io::Result<Vec<T>> {
     let length = u32::deserialize_reader(r)? as usize;
     if length > maximum {
         return Err(invalid("TIR public vector exceeds its bound before allocation"));
     }
     let mut values = Vec::new();
-    values.try_reserve_exact(length).map_err(|_| invalid("TIR public allocation failed"))?;
+    values.try_reserve_exact(length).map_err(|_| allocation_error(native))?;
+    if native && values.capacity() != length { return Err(allocation_error(true)); }
     for _ in 0..length {
         values.push(T::deserialize_reader(r)?);
     }
     Ok(values)
 }
-fn opening<R: Read>(r: &mut R) -> io::Result<PalwStepOpeningV1> {
+fn opening<R: Read>(r: &mut R, native: bool) -> io::Result<PalwStepOpeningV1> {
     Ok(PalwStepOpeningV1 {
         leaf_index: BorshDeserialize::deserialize_reader(r)?,
         leaf_hash: BorshDeserialize::deserialize_reader(r)?,
-        siblings: vector(r, PATH)?,
+        siblings: vector(r, PATH, native)?,
     })
 }
-fn leaf<R: Read>(r: &mut R, maximum_bytes: usize) -> io::Result<PalwStepTileLeafV1> {
+fn leaf<R: Read>(r: &mut R, maximum_bytes: usize, native: bool) -> io::Result<PalwStepTileLeafV1> {
     Ok(PalwStepTileLeafV1 {
         version: BorshDeserialize::deserialize_reader(r)?,
         coord: BorshDeserialize::deserialize_reader(r)?,
         value_count: BorshDeserialize::deserialize_reader(r)?,
-        values_le: crate::palw_public_binding_v1::read_bounded_bytes_v1(r, maximum_bytes)?,
+        values_le: if native { vector(r, maximum_bytes, true)? } else {
+            crate::palw_public_binding_v1::read_bounded_bytes_v1(r, maximum_bytes)?
+        },
     })
 }
 impl BorshDeserialize for PalwTirPublicResponseV1 {
@@ -117,43 +126,51 @@ impl BorshDeserialize for PalwTirPublicResponseV1 {
 }
 impl PalwTirPublicResponseV1 {
     fn decode_with_leaf_bound_v1<R: Read>(r: &mut R, maximum_leaf_bytes: usize) -> io::Result<Self> {
+        Self::decode_mode_v2(r, maximum_leaf_bytes, false)
+    }
+    fn decode_mode_v2<R: Read>(r: &mut R, maximum_leaf_bytes: usize, native: bool) -> io::Result<Self> {
         Ok(match u8::deserialize_reader(r)? {
-            0 => Self::StepNode { frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1)?, siblings: vector(r, PATH)? },
-            1 => Self::StepLeaf { preimage: leaf(r, maximum_leaf_bytes)?, opening: opening(r)? },
+            0 => Self::StepNode { frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1, native)?, siblings: vector(r, PATH, native)? },
+            1 => Self::StepLeaf { preimage: leaf(r, maximum_leaf_bytes, native)?, opening: opening(r, native)? },
             2 => {
                 let length = u32::deserialize_reader(r)? as usize;
                 if length > RUN {
                     return Err(invalid("TIR public run exceeds the native run bound"));
                 }
-                let mut preimages = Vec::with_capacity(length);
+                let mut preimages = if native {
+                    let mut out = Vec::new();
+                    out.try_reserve_exact(length).map_err(|_| allocation_error(true))?;
+                    if out.capacity() != length { return Err(allocation_error(true)); }
+                    out
+                } else { Vec::with_capacity(length) };
                 for _ in 0..length {
-                    preimages.push(leaf(r, maximum_leaf_bytes)?);
+                    preimages.push(leaf(r, maximum_leaf_bytes, native)?);
                 }
                 Self::StepRun {
                     preimages,
                     range: PalwStepRangeOpeningV1 {
                         first_leaf_index: BorshDeserialize::deserialize_reader(r)?,
-                        leaf_hashes: vector(r, RUN)?,
-                        siblings: vector(r, PATH * 2)?,
+                        leaf_hashes: vector(r, RUN, native)?,
+                        siblings: vector(r, PATH * 2, native)?,
                     },
                 }
             }
-            3 => Self::RowsNode { frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1)?, siblings: vector(r, PATH)? },
+            3 => Self::RowsNode { frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1, native)?, siblings: vector(r, PATH, native)? },
             4 => Self::TileNode {
                 row_root: BorshDeserialize::deserialize_reader(r)?,
-                row_opening: opening(r)?,
-                frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1)?,
-                siblings: vector(r, PATH)?,
+                row_opening: opening(r, native)?,
+                frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1, native)?,
+                siblings: vector(r, PATH, native)?,
             },
             5 => Self::TraceTile {
                 row_root: BorshDeserialize::deserialize_reader(r)?,
-                row_opening: opening(r)?,
-                lanes: vector(r, TILE_LANES)?,
-                opening: opening(r)?,
+                row_opening: opening(r, native)?,
+                lanes: vector(r, TILE_LANES, native)?,
+                opening: opening(r, native)?,
             },
             6 => Self::Ids {
                 rows_root: BorshDeserialize::deserialize_reader(r)?,
-                ids: vector(r, PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize)?,
+                ids: vector(r, PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize, native)?,
             },
             _ => return Err(invalid("unknown TIR public response")),
         })
@@ -821,7 +838,7 @@ mod tests {
         );
     }
 
-    fn source(x: &TinyExecution) -> PalwTirPublicSourceV1 {
+    pub(super) fn source(x: &TinyExecution) -> PalwTirPublicSourceV1 {
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
         PalwTirPublicSourceV1::new_v1(
             &record,
@@ -833,7 +850,7 @@ mod tests {
         )
         .unwrap()
     }
-    fn ids(source: &PalwTirPublicSourceV1, x: &TinyExecution) -> PalwTirPublicAuthenticatedIdsV1 {
+    pub(super) fn ids(source: &PalwTirPublicSourceV1, x: &TinyExecution) -> PalwTirPublicAuthenticatedIdsV1 {
         let rows_root = crate::palw_step_refute::tiled_logits_rows_root_v1(&x.binding.job_context, &x.rows).unwrap();
         PalwTirPublicIdsAssemblerV1::default()
             .push_v1(
@@ -855,9 +872,13 @@ mod tests {
         assert!(bytes.len() as u64 <= bound.maximum_response_bytes);
         let decoded = source.decode_response_v1(&request, &bytes).unwrap();
         assert_eq!(decoded, response);
+        let native = source.decode_response_native_v2(&request, &bytes).unwrap();
+        assert_eq!(*native, response);
         let authenticated = source.authenticate_v1(&request, &decoded, ids).unwrap();
         assert_eq!(authenticated.source_id_v1(), source.source_id_v1());
         assert_eq!(authenticated.request_v1(), request);
+        let native_auth = source.authenticate_response_owned_v2(&request, &native, ids).unwrap();
+        assert_eq!(native_auth.response_v1(), authenticated.response_v1());
     }
     #[test]
     fn registered_original_geometry_authenticates_nodes_raw_leaves_and_runs_without_decode_pin() {
@@ -1108,10 +1129,10 @@ mod tests {
 
     /// Registered geometry with no execution or model tensors allocated: the
     /// original header may commit any root; acquisition still has to open it.
-    fn geometry(vocab: u32, decode: u32) -> (PalwTirPublicSourceV1, crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1) {
+    pub(super) fn geometry(vocab: u32, decode: u32) -> (PalwTirPublicSourceV1, crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1) {
         geometry_with_trace(vocab, decode, None)
     }
-    fn geometry_with_trace(
+    pub(super) fn geometry_with_trace(
         vocab: u32,
         decode: u32,
         trace: Option<(Hash64, &[u32])>,
