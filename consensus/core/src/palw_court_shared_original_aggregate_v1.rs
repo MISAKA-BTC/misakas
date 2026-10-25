@@ -118,7 +118,28 @@ impl<'a> OriginalAggregateDraftV1<'a>{
     /// An inventory is not a service/escrow capability. There is deliberately no
     /// success variant or conversion to a fully reservable/admitted original.
     pub(crate) fn reservation_readiness_v1(&self)->Result<std::convert::Infallible,AggregateNotReadyV1>{
-        if self.shape.grammar==OriginalGrammarV1::Prefix{return Err(AggregateNotReadyV1::UnsupportedNativeGrammar(UnsupportedNativeGrammarV1::PrefixGeneratedSelectionAndStop));}
-        Err(AggregateNotReadyV1::UnresolvedSupplyContract(self.unresolved_supply_v1().next().expect("native allbranch terms always unresolved")))
+        self.reservation_readiness_with_v1(&NoAdoptedAllBranchTermsV1)
     }
+    /// Lane B input boundary: the all-branch packet/funding terms are read from `terms`
+    /// (C funding/supply, F material/provider contracts), keyed by the actual original claim.
+    /// Family-local unresolved supply is reported first, in the fixed numeric → constraint →
+    /// tokenizer order; the success type stays uninhabited until an adopted contract type exists.
+    pub(crate) fn reservation_readiness_with_v1<T:AllBranchTermsSourceV1+?Sized>(&self,terms:&T)->Result<std::convert::Infallible,AggregateNotReadyV1>{
+        if self.shape.grammar==OriginalGrammarV1::Prefix{return Err(AggregateNotReadyV1::UnsupportedNativeGrammar(UnsupportedNativeGrammarV1::PrefixGeneratedSelectionAndStop));}
+        let local=self.unresolved_supply_v1().find(|u|*u!=UnresolvedSupplyContractV1::NativeAllBranchPacketAndFundingTerms);
+        if let Some(u)=local{return Err(AggregateNotReadyV1::UnresolvedSupplyContract(u));}
+        match terms.adopted_terms_v1(self.numeric.aggregate_binding_v1().0){Err(u)=>Err(AggregateNotReadyV1::UnresolvedSupplyContract(u)),Ok(never)=>match never{}}
+    }
+}
+/// RFC-0026 §3 / RFC-0030 §5–7 input boundary for the original's all-branch terms (packet,
+/// service reservation, execution fee, source custody, funding). The `Ok` type is uninhabited:
+/// no supplier can report readiness until C/F publish an adopted contract type and Claude 0
+/// replaces it centrally. Never implement this with an unconditional or invented supplier.
+pub(crate) trait AllBranchTermsSourceV1 {
+    fn adopted_terms_v1(&self,original_claim:Hash64)->Result<std::convert::Infallible,UnresolvedSupplyContractV1>;
+}
+/// The only current source: no adopted all-branch contract exists.
+pub(crate) struct NoAdoptedAllBranchTermsV1;
+impl AllBranchTermsSourceV1 for NoAdoptedAllBranchTermsV1 {
+    fn adopted_terms_v1(&self,_:Hash64)->Result<std::convert::Infallible,UnresolvedSupplyContractV1>{Err(UnresolvedSupplyContractV1::NativeAllBranchPacketAndFundingTerms)}
 }

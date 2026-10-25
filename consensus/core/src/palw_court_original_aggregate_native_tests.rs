@@ -32,6 +32,13 @@ fn original_aggregate_draft_requires_native_variant_and_never_grants_reservation
                 if limit==required.get(){let held=result.unwrap();assert_eq!(checker.outstanding(),(required.get(),0));drop(held);}else{assert!(matches!(result,Err(crate::palw_court_shared_tir_builder_store_v1::original_aggregate::AggregateErrorV1::Resource(_))));}assert_eq!(checker.outstanding(),(0,0));}
             assert_eq!(aggregate.shape_v1().grammar_v1(),K::Ordinary);assert!(aggregate.unresolved_supply_v1().next().is_some());
             assert!(matches!(aggregate.reservation_readiness_v1(),Err(NotReady::UnresolvedSupplyContract(_))));
+            {use crate::palw_court_shared_tir_builder_store_v1::original_aggregate::{AllBranchTermsSourceV1,UnresolvedSupplyContractV1 as U};
+                struct Probe(std::cell::Cell<Option<crate::Hash64>>);
+                impl AllBranchTermsSourceV1 for Probe{fn adopted_terms_v1(&self,c:crate::Hash64)->Result<std::convert::Infallible,U>{self.0.set(Some(c));Err(U::NativeAllBranchPacketAndFundingTerms)}}
+                let probe=Probe(std::cell::Cell::new(None));let r=aggregate.reservation_readiness_with_v1(&probe);
+                let local=aggregate.unresolved_supply_v1().find(|u|*u!=U::NativeAllBranchPacketAndFundingTerms);
+                match local{Some(u)=>{assert_eq!(r.unwrap_err(),NotReady::UnresolvedSupplyContract(u));assert_eq!(probe.0.get(),None,"family-local supply is reported before the terms source");},
+                    None=>{assert_eq!(r.unwrap_err(),NotReady::UnresolvedSupplyContract(U::NativeAllBranchPacketAndFundingTerms));assert_eq!(probe.0.get(),Some(claim),"terms are asked for the actual original");}}}
             assert!(A::derive_current_v1(&b.state,frame,&source,&graph,h(0xABA1),&join,F::Ordinary{output_and_stop:&output,selection:&selection},T::NotApplicable).is_err());
         }
         assert_eq!(before,b.state.state_root());
