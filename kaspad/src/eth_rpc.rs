@@ -868,6 +868,7 @@ impl NodeEthProvider {
             // first fold) leaves the market's doors unregistered in simulation, exactly as the
             // executor leaves them for a lane whose fold has no window to show.
             palw_view: market.as_ref().map(|(view, _)| view.clone()),
+            palw_view_owned_v2: None,
             market_fences: market.as_ref().map(|(_, fences)| *fences).unwrap_or_default(),
             chain_id_for_holders: EVM_CHAIN_ID,
         };
@@ -917,24 +918,21 @@ impl NodeEthProvider {
                     // before, but tracks the executor automatically once F003 is deployed.
                     let (.., f003_mldsa_verify_fence) = c.evm_activation_fences();
                     with_executed_l1_daa(c, l1, |target_daa| {
-                        let env = kaspa_evm::sim::EthCallEnv {
-                            chain_id: EVM_CHAIN_ID,
-                            number: header.evm_number,
-                            timestamp: header.evm_timestamp_sec,
-                            coinbase: header.coinbase,
-                            gas_limit: header.gas_limit,
-                            f003_active: target_daa >= f003_mldsa_verify_fence,
-                            // ADR-0089 §7 (recorded gap): the PALW fold is kept only at the tip
-                            // (`load_tip_cached`); reconstructing the fold at a historical block
-                            // would mean a replay this RPC does not run. A historical simulation
-                            // therefore sees the market's doors CLOSED (no view ⇒ no handlers,
-                            // fences inert) — a call against 0xF010..0xF013 or a facade at a past
-                            // block returns as if the fence were dormant there, never a stale view.
-                            palw_view: None,
-                            market_fences: Default::default(),
-                            chain_id_for_holders: EVM_CHAIN_ID,
-                        };
-                        Ok((snapshot, env))
+                        with_historical_market_view_v2(c, l1, |market| {
+                            let env = kaspa_evm::sim::EthCallEnv {
+                                chain_id: EVM_CHAIN_ID,
+                                number: header.evm_number,
+                                timestamp: header.evm_timestamp_sec,
+                                coinbase: header.coinbase,
+                                gas_limit: header.gas_limit,
+                                f003_active: target_daa >= f003_mldsa_verify_fence,
+                                palw_view: None,
+                                palw_view_owned_v2: market.as_ref().map(|(view, _)| view.clone()),
+                                market_fences: market.as_ref().map(|(_, fences)| *fences).unwrap_or_default(),
+                                chain_id_for_holders: EVM_CHAIN_ID,
+                            };
+                            Ok((snapshot, env))
+                        })
                     })
                 })
             })
@@ -990,6 +988,16 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
 
 /// Activation metadata belongs to this exact executed L1 block. An unreadable
 /// header is unavailable, never a successful simulation with an invented DAA zero.
+fn with_historical_market_view_v2<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    target: kaspa_consensus_core::BlockHash,
+    visit: impl FnOnce(Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewAtV2>) -> EthResult<T>,
+) -> EthResult<T> {
+    let view = c.palw_evm_view_at_owned_v2(target)
+        .map_err(|e| EthRpcError::server(format!("historical PALW view unavailable: {e}")))?;
+    visit(view)
+}
+
 fn with_executed_l1_daa<T>(
     c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
     l1: kaspa_consensus_core::BlockHash,
@@ -1255,3 +1263,7 @@ mod tests {
         assert_eq!(pairs, vec![(1, false), (2, false)]);
     }
 }
+
+#[cfg(test)]
+#[path = "eth_rpc_historical_market_tests.rs"]
+mod historical_market_tests;

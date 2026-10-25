@@ -6,6 +6,8 @@ pub mod storage;
 pub mod test_consensus;
 
 mod palw_material_hold;
+#[cfg(test)]
+mod evm_view_projection_hook_v2;
 mod utxo_set_override;
 
 use kaspa_consensus_core::Hash64;
@@ -2777,6 +2779,52 @@ impl ConsensusApi for Consensus {
         // parent, and its score stands in for that block's, as the fences above do.
         let tip = state.last_point().map(|p| p.block).unwrap_or_default();
         Some((Arc::new(self.virtual_processor.palw_evm_view_with_market_gate_v1(&state, state_params, tip, tip_daa)), fences))
+    }
+
+    fn palw_evm_view_at_owned_v2(
+        &self,
+        target: BlockHash,
+    ) -> Result<Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewAtV2>, kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2> {
+        use kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2 as E;
+        let params = &self.config.params;
+        let bundle = match &params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle,
+            _ => return Ok(None),
+        };
+        // Keep the exact header, import epoch and projection in one reader-first
+        // pruning session. The internal state reader supports recursive reads.
+        let _session = self.pruning_lock.blocking_read();
+        // A reader session prevents pruning, but begin_import may still change
+        // epoch. Preserve its typed result before header read and validate only
+        // for an active view: dormant windows do no state work and return None.
+        let generation = self.virtual_processor.evm_asof_import_status_v2();
+        let header = self.headers_store.get_header(target).map_err(|e| match e {
+            kaspa_database::prelude::StoreError::KeyNotFound(_) => E::HistoryUnavailable,
+            kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason) => E::Resource(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<kaspa_consensus_core::header::Header>("historical EVM header", &reason)),
+            other => E::Store(other.to_string()),
+        })?;
+        let fences = params.palw_evm_market_fences_at(header.daa_score);
+        if !fences.any_active() { return Ok(None); }
+        let (generation, stable) = generation.map_err(crate::pipeline::virtual_processor::NativeEvmAsOfFaultV2::into_public_v2)?;
+        if !stable || generation.active.is_some() { return Err(E::Context("import incomplete".into())); }
+        let state = self.virtual_processor.palw_evm_post_state_owned_v2(target)
+            .map_err(crate::pipeline::virtual_processor::NativeEvmAsOfFaultV2::into_public_v2)?
+            .ok_or(E::HistoryUnavailable)?;
+        if state.last_point().is_some_and(|p| p.block != target || p.daa_score != header.daa_score) {
+            return Err(E::Context("post-target state/header point differs".into()));
+        }
+        let gate = kaspa_consensus_core::palw_state_v2::NativeEvmMarketGateInputsV2::at_params_v2(params, header.daa_score);
+        let view = state.evm_view_owned_v2(kaspa_consensus_core::evm::EVM_CHAIN_ID, bundle.state.base_class_id(), gate)
+            .map_err(E::Resource)?;
+        #[cfg(test)]
+        evm_view_projection_hook_v2::invoke(self);
+        let (after, stable) = self.virtual_processor.evm_asof_import_status_v2()
+            .map_err(crate::pipeline::virtual_processor::NativeEvmAsOfFaultV2::into_public_v2)?;
+        if !stable || after.active.is_some() || after.epoch != generation.epoch {
+            return Err(E::Context("import generation changed during historical view projection".into()));
+        }
+        Ok(Some((view, fences)))
     }
 
     fn palw_model_lines_v1(&self, class_id: kaspa_hashes::Hash64) -> Option<Vec<kaspa_consensus_core::api::PalwModelLineRowReadV1>> {

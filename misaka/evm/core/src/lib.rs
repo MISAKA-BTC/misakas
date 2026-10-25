@@ -100,6 +100,9 @@ pub fn smoke_transfer(value_wei: u128) -> u128 {
 /// Errors from running a block's EVM lane.
 #[derive(Debug, derive_more::Display)]
 pub enum EvmExecError {
+    /// Local simulation setup refusal; never a semantic block rejection.
+    #[display("evm native local capacity: {_0}")]
+    NativeResource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
     /// A payload tx could not be decoded / its signer recovered.
     #[display("evm payload tx: {_0}")]
     TxDecode(tx::TxDecodeError),

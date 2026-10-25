@@ -1225,6 +1225,13 @@ impl ConsensusSessionOwned {
         self.consensus.palw_evm_view_v1()
     }
 
+    pub fn palw_evm_view_at_owned_v2(
+        &self,
+        target: kaspa_consensus_core::BlockHash,
+    ) -> Result<Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewAtV2>, kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2> {
+        self.consensus.palw_evm_view_at_owned_v2(target)
+    }
+
     pub fn palw_model_lines_v1(
         &self,
         class_id: kaspa_consensus_core::Hash64,

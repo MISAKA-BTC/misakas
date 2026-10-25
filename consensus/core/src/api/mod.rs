@@ -920,6 +920,15 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Exact post-target PALW view. None only when the existing window is inactive.
+    /// Missing native history and local faults must not substitute the latest view.
+    fn palw_evm_view_at_owned_v2(
+        &self,
+        _target: BlockHash,
+    ) -> Result<Option<crate::evm::view_owned_v2::NativeEvmViewAtV2>, crate::evm::view_owned_v2::NativeEvmViewFaultV2> {
+        Err(crate::evm::view_owned_v2::NativeEvmViewFaultV2::Unavailable("exact post-target reader not implemented"))
+    }
+
     /// ADR-0088 Decision 12: the proposals attached to a line, keyed by proposal id. `None` when
     /// the line does not exist.
     fn palw_model_proposals_v1(

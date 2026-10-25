@@ -40,6 +40,8 @@ pub struct EthCallEnv {
     /// `evm_view_v1`, the same view the executor read for the head's child). `None`
     /// ⇒ the market's doors are not registered, whatever the fences say.
     pub palw_view: Option<std::sync::Arc<PalwEvmViewV1>>,
+    /// Exact historical view and its allocation owner, retained through callbacks.
+    pub palw_view_owned_v2: Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewOwnedV2>,
     /// ADR-0089 Decision 9: the market fences at the simulated head, resolved by the
     /// RPC the way consensus resolves them for a block. `evm_active == false` ⇒ the
     /// four addresses and the facades are empty accounts in simulation too.
@@ -62,6 +64,7 @@ impl Default for EthCallEnv {
             gas_limit: 0,
             f003_active: false,
             palw_view: None,
+            palw_view_owned_v2: None,
             market_fences: PalwEvmMarketFencesV1::default(),
             chain_id_for_holders: EVM_CHAIN_ID,
         }
@@ -102,6 +105,17 @@ fn effective_gas(call_gas: u64, env_gas: u64) -> u64 {
 // lint here to unblock the clippy gate.
 #[allow(clippy::field_reassign_with_default)]
 pub fn simulate_call(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCall) -> Result<EthCallOutcome, EvmExecError> {
+    // Reject ambiguous inputs even below the fence; never select one silently.
+    if env.palw_view.is_some() && env.palw_view_owned_v2.is_some() {
+        return Err(EvmExecError::InvariantViolation("both legacy and retained PALW views supplied".into()));
+    }
+    let market = if env.market_fences.evm_active {
+        match &env.palw_view_owned_v2 {
+            Some(view) => Some(crate::model_market::MarketHandlers::new_retained_v2(view.clone(), env.market_fences, env.chain_id_for_holders)
+                .map_err(EvmExecError::NativeResource)?),
+            None => env.palw_view.as_ref().map(|view| crate::model_market::MarketHandlers::new(view.clone(), env.market_fences, env.chain_id_for_holders)),
+        }
+    } else { None };
     let mut db = seed_cachedb(snapshot)?;
     let gas_limit = effective_gas(call.gas_limit, env.gas_limit);
 
@@ -139,13 +153,6 @@ pub fn simulate_call(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCa
         // uses (parity): F002 always, F003 iff active at this head.
         .append_handler_register_box({
             let f003_active = env.f003_active;
-            // ADR-0089: the market's doors in simulation are the executor's, bound to the head's
-            // view and fences the RPC resolved (parity).
-            let market = env
-                .palw_view
-                .clone()
-                .filter(|_| env.market_fences.evm_active)
-                .map(|view| crate::model_market::MarketHandlers::new(view, env.market_fences, env.chain_id_for_holders));
             Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, market.clone()))
         })
         .build();

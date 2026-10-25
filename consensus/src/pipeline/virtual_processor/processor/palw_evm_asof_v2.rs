@@ -27,6 +27,16 @@ pub(crate) enum NativeEvmAsOfFaultV2 {
     Context(&'static str),
 }
 impl NativeEvmAsOfFaultV2 {
+    pub(crate) fn into_public_v2(self) -> kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2 {
+        use kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2 as E;
+        match self {
+            Self::Resource(e) => E::Resource(e),
+            Self::CapacityUnavailable => E::CapacityUnavailable,
+            Self::HistoryUnavailable => E::HistoryUnavailable,
+            Self::Store(e) => E::Store(e.to_string()),
+            other => E::Context(other.to_string()),
+        }
+    }
     fn store(error: StoreError) -> Self {
         match error {
             StoreError::LocalResourceUnavailable(reason) => {
@@ -89,7 +99,7 @@ impl SelectedParentCycleV2 {
     }
 }
 impl VirtualStateProcessor {
-    fn evm_asof_import_status_v2(
+    pub(crate) fn evm_asof_import_status_v2(
         &self,
     ) -> Result<(kaspa_consensus_core::pruning::PruningImportSessionStateV1, bool), NativeEvmAsOfFaultV2> {
         // The legacy status wrapper stringifies StoreError. Preserve the actual

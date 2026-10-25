@@ -17624,3 +17624,6 @@ mod funded_original_native_candidate;
 mod pruning_snapshot_readiness_v1;
 
 mod evm_asof_owned_v2;
+
+#[cfg(feature = "evm")]
+mod evm_view_vertical_v2;

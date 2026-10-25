@@ -552,23 +552,27 @@ enum FacadeCall {
     Write(Action),
 }
 
+mod retained_v2;
+use retained_v2::{RetainedSetupV2, ViewOwnerV2};
+
 /// **The window and the hand, bound to one block's view.** Built once per EVM block (or per
 /// `eth_call`) from the selected parent's fold rows; cloned into every handler closure. `queued`
 /// is the block's running action count: the intercept refuses the 129th action, and the executor
 /// re-syncs it to the committed count after every tx so a reverted or skipped tx never counts.
 #[derive(Clone)]
 pub struct MarketHandlers {
-    view: Arc<PalwEvmViewV1>,
+    view: ViewOwnerV2,
     fences: PalwEvmMarketFencesV1,
     chain_id: u64,
     /// `facade_address_v1(line) → line`, for every line in the view.
-    facades: Arc<HashMap<Address, Hash64>>,
-    queued: Arc<AtomicUsize>,
+    facades: Option<Arc<HashMap<Address, Hash64>>>,
+    queued: Option<Arc<AtomicUsize>>,
     /// **Per-account action counts for this block** (mainnet audit 2026-09-06, M-16/L-6).
     /// Re-synced from the COMMITTED action list beside `queued`, by the same call and for the same
     /// reason: a reverted or skipped tx must not count. Bounded by
     /// `MAX_MARKET_ACTIONS_PER_EVM_BLOCK` entries, so at most 128 rows a block.
-    queued_by_account: Arc<std::sync::Mutex<HashMap<Address, usize>>>,
+    queued_by_account: Option<Arc<std::sync::Mutex<HashMap<Address, usize>>>>,
+    retained: Option<Arc<RetainedSetupV2>>,
 }
 
 impl MarketHandlers {
@@ -577,12 +581,13 @@ impl MarketHandlers {
     pub fn new(view: Arc<PalwEvmViewV1>, fences: PalwEvmMarketFencesV1, chain_id: u64) -> Self {
         let facades = view.lines.iter().map(|(id, _)| (to_address(&facade_address_v1(id)), *id)).collect();
         Self {
-            view,
+            view: ViewOwnerV2::Legacy(view),
             fences,
             chain_id,
-            facades: Arc::new(facades),
-            queued: Arc::new(AtomicUsize::new(0)),
-            queued_by_account: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            facades: Some(Arc::new(facades)),
+            queued: Some(Arc::new(AtomicUsize::new(0))),
+            queued_by_account: Some(Arc::new(std::sync::Mutex::new(HashMap::new()))),
+            retained: None,
         }
     }
 
@@ -598,12 +603,13 @@ impl MarketHandlers {
 
     /// The block's action count as the intercept sees it.
     pub fn queued(&self) -> usize {
-        self.queued.load(Ordering::SeqCst)
+        self.retained.as_ref().map_or_else(|| self.queued.as_ref().map_or(0, |q| q.load(Ordering::SeqCst)), |s| s.queued())
     }
 
     /// How many of this block's committed actions belong to one account (audit M-16/L-6).
     pub fn queued_for_account(&self, account: &Address) -> usize {
-        self.queued_by_account.lock().map(|m| m.get(account).copied().unwrap_or(0)).unwrap_or(0)
+        if let Some(setup) = &self.retained { return setup.queued_for(account); }
+        self.queued_by_account.as_ref().and_then(|m| m.lock().ok().map(|m| m.get(account).copied().unwrap_or(0))).unwrap_or(0)
     }
 
     /// **Re-sync BOTH running counts to the committed action list** (the executor, after every tx).
@@ -614,8 +620,10 @@ impl MarketHandlers {
     /// executor walks the accepted txs in one canonical order on every node, so these counts are a
     /// function of the same sequence everywhere.
     pub fn set_committed(&self, actions: &[PalwEvmMarketActionV1]) {
-        self.queued.store(actions.len(), Ordering::SeqCst);
-        if let Ok(mut by_account) = self.queued_by_account.lock() {
+        if let Some(setup) = &self.retained { setup.reset(actions); return; }
+        if let Some(queued) = &self.queued { queued.store(actions.len(), Ordering::SeqCst); }
+        if let Some(accounts) = &self.queued_by_account
+            && let Ok(mut by_account) = accounts.lock() {
             by_account.clear();
             for action in actions {
                 *by_account.entry(Address::from(action.account.as_bytes())).or_insert(0) += 1;
@@ -638,7 +646,7 @@ impl MarketHandlers {
         } else if *target == writer_address() {
             Some(Door::Writer)
         } else {
-            self.facades.get(target).map(|line| Door::Facade(*line))
+            self.facade_v2(target).map(|line| Door::Facade(*line))
         }
     }
 
@@ -860,7 +868,7 @@ impl MarketHandlers {
             x if x == s.line_of => {
                 let a = Args::parse(input, 1)?;
                 let addr = a.address(0)?;
-                Out::default().hash(self.facades.get(&addr)).finish()
+                Out::default().hash(self.facade_v2(&addr)).finish()
             }
             x if x == s.chain_daa => {
                 Args::parse(input, 0)?;
@@ -1495,12 +1503,7 @@ fn write_frame<EXT, DB: Database>(
             action_log_data(id, &record),
         ),
     });
-    market.queued.fetch_add(1, Ordering::SeqCst);
-    // The per-account half of the same running count (audit M-16/L-6); both are re-synced from the
-    // committed list by `set_committed` after every tx, so a reverted tx counts on neither.
-    if let Ok(mut by_account) = market.queued_by_account.lock() {
-        *by_account.entry(inputs.caller).or_insert(0) += 1;
-    }
+    market.record_v2(inputs.caller);
     Ok(outcome(InstructionResult::Return, Vec::new(), gas, memory))
 }
 
