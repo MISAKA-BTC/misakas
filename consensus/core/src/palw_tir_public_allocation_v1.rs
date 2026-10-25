@@ -242,14 +242,15 @@ fn original_controls(
     terminal: &PalwTirPublicTerminalPlanV1,
     rules: PalwTirPublicAllocationRulesV1,
 ) -> Result<(PalwRenderingResourcePlanV1, PalwRenderingResourcePlanV1, PalwTirPublicControlFootprintV1), String> {
+    // These bytes are used only as lengths. Borsh 1.5.1 object_length calls
+    // the same serializer with a checked usize counting writer, without Vec.
     let fixed_components =
-        borsh::to_vec(&(semantic, acquisition, flat_trace, preparation_work, owner_work, preparation, executor, terminal))
-            .map_err(|e| e.to_string())?
-            .len() as u64;
-    let original_bytes = borsh::to_vec(original).map_err(|e| e.to_string())?.len() as u64;
-    let header_bytes = borsh::to_vec(header).map_err(|e| e.to_string())?.len() as u64;
-    let config_bytes = borsh::to_vec(&rules.config).map_err(|e| e.to_string())?.len() as u64;
-    let work_rules_bytes = borsh::to_vec(&owner_work.rules).map_err(|e| e.to_string())?.len() as u64;
+        borsh::object_length(&(semantic, acquisition, flat_trace, preparation_work, owner_work, preparation, executor, terminal))
+            .map_err(|e| e.to_string())? as u64;
+    let original_bytes = borsh::object_length(original).map_err(|e| e.to_string())? as u64;
+    let header_bytes = borsh::object_length(header).map_err(|e| e.to_string())? as u64;
+    let config_bytes = borsh::object_length(&rules.config).map_err(|e| e.to_string())? as u64;
+    let work_rules_bytes = borsh::object_length(&owner_work.rules).map_err(|e| e.to_string())? as u64;
     let signature = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
     // Exact variable original/header/component encodings above; fixed 8KiB
     // covers allocation IDs/clocks/controls, source descriptor and pledge
@@ -1135,6 +1136,7 @@ pub fn check_tir_public_allocation_retained_v2(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("palw_tir_allocation_counting_lengths_tests_v2.rs");
     struct Fixture {
         geometry: PalwStagedClaimGeometryV1,
         original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
