@@ -5231,12 +5231,16 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_block_by_l1_hash(&self, l1_hash: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmRawTxStoreReader, EvmReceiptsStoreReader};
-        let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { return Ok(None) };
-        let tx_hashes = self.storage.evm_receipts_store.get(l1_hash).optional().unwrap().map(|r| r.tx_hashes).unwrap_or_default();
-        // RPC §7.3 `size`: byte length of the block's accepted tx data (sum of raw
-        // EIP-2718 bytes via the R-2 raw-tx store; an absent row contributes 0).
-        let encoded_size =
-            tx_hashes.iter().map(|h| self.storage.evm_raw_tx_store.get(*h).unwrap().map(|r| r.raw.len() as u64).unwrap_or(0)).sum();
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM block read: {e}"));
+        let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().map_err(unavailable)? else { return Ok(None) };
+        let tx_hashes = self.storage.evm_receipts_store.get(l1_hash).optional().map_err(unavailable)?
+            .map(|r| r.tx_hashes).unwrap_or_default();
+        // RPC §7.3 size: absent immutable raw rows retain their existing zero contribution.
+        let mut encoded_size = 0;
+        for h in &tx_hashes {
+            encoded_size += self.storage.evm_raw_tx_store.get(*h).map_err(unavailable)?
+                .map(|r| r.raw.len() as u64).unwrap_or(0);
+        }
         Ok(Some(kaspa_consensus_core::evm::EvmBlockResponse { header, l1_hash, tx_hashes, encoded_size }))
     }
 
@@ -5276,15 +5280,16 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_block_by_number(&self, evm_number: u64) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmNumberStoreReader};
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM block selector read: {e}"));
         // Resolve the (upsert) number index, then re-validate canonicality: the
         // candidate must still be a selected-chain block AND its header's
         // evm_number must match (a reorg-orphaned row reads as absent — the same
         // canonical-resolution guard as `get_evm_tx_receipt`).
-        let Some(l1_hash) = self.storage.evm_number_store.get(evm_number).unwrap() else { return Ok(None) };
-        if !self.is_chain_block(l1_hash).unwrap_or(false) {
+        let Some(l1_hash) = self.storage.evm_number_store.get(evm_number).map_err(unavailable)? else { return Ok(None) };
+        if !self.is_chain_block(l1_hash)? {
             return Ok(None);
         }
-        match self.storage.evm_header_store.get(l1_hash).optional().unwrap() {
+        match self.storage.evm_header_store.get(l1_hash).optional().map_err(unavailable)? {
             Some(h) if h.evm_number == evm_number => self.get_evm_block_by_l1_hash(l1_hash),
             _ => Ok(None),
         }
@@ -5295,7 +5300,8 @@ impl ConsensusApi for Consensus {
         rpc_hash: kaspa_hashes::EvmH256,
     ) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
         use crate::model::stores::evm::EvmBlockHashMapStoreReader;
-        let Some(l1_hash) = self.storage.evm_block_hash_map_store.get(rpc_hash).unwrap() else { return Ok(None) };
+        let Some(l1_hash) = self.storage.evm_block_hash_map_store.get(rpc_hash)
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM RPC hash read: {e}")))? else { return Ok(None) };
         self.get_evm_block_by_l1_hash(l1_hash)
     }
 
@@ -5796,3 +5802,6 @@ impl Consensus {
         Ok(Some((finality, state)))
     }
 }
+
+#[cfg(test)]
+mod evm_reader_fault_tests;
