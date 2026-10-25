@@ -15244,6 +15244,11 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::MaterialDisclosedHeld { .. } => "MaterialDisclosedHeld",
         PalwConsensusObjectV2::RoundPermitEquivocated { .. } => "RoundPermitEquivocated",
         PalwConsensusObjectV2::ObjectiveOffence { .. } => "ObjectiveOffence",
+        PalwConsensusObjectV2::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
+        PalwConsensusObjectV2::ReaderRouterDeclaredV2 { .. } => "ReaderRouterDeclaredV2",
+        PalwConsensusObjectV2::RoutedStepAccusedV2 { .. } => "RoutedStepAccusedV2",
+        PalwConsensusObjectV2::SourceBootstrapV1 { .. } => "SourceBootstrapV1",
+        PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { .. } => "RoutedMaterialAnsweredV2",
     }
 }
 

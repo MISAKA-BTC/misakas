@@ -386,7 +386,7 @@ impl PreparedKernelPaidCheckV4 {
         use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
         let enrollment = hash(&self.spec.enrollment)?.as_bytes();
         let (raw, _raw) = read_bounded(&self.spec.work_path, self.spec.max_input_bytes)?;
-        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
+        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
         if shape.logical_requests_v1() > self.spec.max_workspace_bytes {
             return Err("checker canonical opening exceeds explicit workspace".into());
         }
@@ -398,7 +398,7 @@ impl PreparedKernelPaidCheckV4 {
         let base = kaspa_consensus_core::palw_prospective_kernel_material_v4::commit_identity_v4(&work.commit).0;
         let audit = if let Some(path) = &self.spec.compact_record_path {
             let (raw, _raw) = read_bounded(path, self.spec.max_input_bytes)?;
-            let shape = preflight_native_value_v1::<NativeCompactProofV4>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
+            let shape = preflight_native_value_v1::<NativeCompactProofV4>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
             if shape.logical_requests_v1() > self.spec.max_workspace_bytes {
                 return Err("checker direct-check record exceeds workspace".into());
             }

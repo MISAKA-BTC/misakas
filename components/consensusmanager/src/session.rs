@@ -743,6 +743,21 @@ impl ConsensusSessionOwned {
     ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>, String> {
         self.consensus.palw_native_routing_claim_authority_v2(claim, job)
     }
+    pub fn palw_native_recovery_session_quote_v4(
+        &self,
+        checkpoint: Option<BlockHash>,
+        daa: u64,
+        class: Hash64,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4,
+        >,
+        String,
+    > {
+        self.consensus.palw_native_recovery_session_quote_v4(checkpoint, daa, class, executor, providers)
+    }
     pub fn palw_monetary_material_covenants_v1(
         &self,
     ) -> Result<Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {

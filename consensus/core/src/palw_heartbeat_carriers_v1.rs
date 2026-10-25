@@ -253,7 +253,12 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::TrapCommittedV1 { .. }
         | O::TrapRevealedV1 { .. }
         // RFC-0010: a certified Panel epoch output is evidence in the fee market beside the claims it serves, not a conviction.
-        | O::PanelBeaconProofV3 { .. } => false,
+        | O::PanelBeaconProofV3 { .. }
+        | O::GdnStepAccusedV2 { .. }
+        | O::ReaderRouterDeclaredV2 { .. }
+        | O::RoutedStepAccusedV2 { .. }
+        | O::SourceBootstrapV1 { .. }
+        | O::RoutedMaterialAnsweredV2 { .. } => false,
     }
 }
 

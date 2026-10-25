@@ -40,7 +40,7 @@ impl PalwChainStateV2 {
     ) -> Option<PalwRoundFeeAdmissionV1> {
         let mirror = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score))?;
         let extras = PalwTransitionExtrasV1 { escrow_carve, ..PalwTransitionExtrasV1::default() };
-        let mut builder = TransitionBuilder::new(self, params, false, false, false, false, &extras);
+        let mut builder = TransitionBuilder::try_new(self, params, false, false, false, false, &extras).ok()?;
         tick_bond_budget_v1(&mut builder, ctx).ok()?;
         Some(PalwRoundFeeAdmissionV1 {
             policy: mirror.policy.clone(),

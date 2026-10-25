@@ -2890,6 +2890,8 @@ pub struct Params {
     pub palw_selected_source_bootstrap_v1: Option<crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1>,
     /// Separate paid draw lineage for native approved bootstrap sources. All shipped presets leave it dormant.
     pub palw_paid_bootstrap_source_v6: Option<crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapSourceFenceV6>,
+    /// Explicit source-economics input. `None` on every shipped preset. Ordinary activation is refused.
+    pub palw_source_economics_v1: Option<crate::palw_paid_bootstrap_economics_v1::PalwSourceEconomicsFenceV1>,
 
     /// **ADR-0100 Decision 4's fence: a sharded class is licensed per shard.**
     ///
@@ -5984,6 +5986,7 @@ impl Params {
             palw_memory_routing_court_v2: self.palw_memory_routing_court_v2,
             palw_selected_source_bootstrap_v1: self.palw_selected_source_bootstrap_v1,
             palw_paid_bootstrap_source_v6: self.palw_paid_bootstrap_source_v6,
+            palw_source_economics_v1: self.palw_source_economics_v1,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
@@ -7129,6 +7132,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_memory_routing_court_v2: None,
     palw_selected_source_bootstrap_v1: None,
     palw_paid_bootstrap_source_v6: None,
+    palw_source_economics_v1: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7469,6 +7473,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_memory_routing_court_v2: None,
     palw_selected_source_bootstrap_v1: None,
     palw_paid_bootstrap_source_v6: None,
+    palw_source_economics_v1: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7791,6 +7796,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_memory_routing_court_v2: None,
     palw_selected_source_bootstrap_v1: None,
     palw_paid_bootstrap_source_v6: None,
+    palw_source_economics_v1: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -11567,17 +11573,17 @@ pub const PALW_T12_INT13_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
 ];
 
-/// **The int-13 list's height — `None`** (it was DAA 9,000 in the coordinator's brief of 2026-10-08, until the user cancelled that flag day), ONE named constant that the preset, a drill's
+/// **The int-13 list's height — DAA 15,500** (the user's decision of 2026-10-25), ONE named constant that the preset, a drill's
 /// `--palw-drill-int13-at` and the deploy kit's copy (`contrib/t12-deploy-kit/fleet.env.example`, pinned to this value by
 /// `t12_deploy_kit_constants`) share. A height no other fence uses — not 750, 1,000, 1,300, 1,700, 2,000, 3,600, 5,300, 5,395, 5,490 or
-/// 5,585: the fork id names heights, not fences. `None` is the dormant release.
+/// 5,585: the fork id names heights, not fences.
 ///
-/// **`None` — there is no DAA-9,000 flag day on testnet-12** (the user's decision of 2026-10-08, ~20:00). The four fences of this list wait
-/// for ONE future release — the full-activation release, which also enables RFC-0008, RFC-0010, RFC-0011's K2 route, RFC-0012, RFC-0014 and
-/// RFC-0015 once all RFC implementation is complete — and that release takes a fresh height then. Until it does, the shipped testnet-12
-/// ruleset arms the list nowhere and every shipped id is the int-12 release's, byte for byte. The list, [`palw_t12_arm_int13_flag_day_at_v1`]
-/// and the drill flag `--palw-drill-int13-at` stay: they are how the list is tested and how it will be scheduled.
-pub const PALW_T12_INT13_DAA: Option<u64> = None;
+/// **DAA 15,500 arms every entry of [`PALW_T12_INT13_FENCES_V1`] together** (`palw_audit_1004_v1`, `palw_gen_range_twin_v1`,
+/// `palw_model_court_window`, `palw_receipt_spend_v4`). There is still no DAA-9,000 flag day (the user's decision of 2026-10-08).
+/// Fences whose validators still refuse an armed height — RFC-0008, RFC-0010, RFC-0011's K2 route, RFC-0012, RFC-0014, RFC-0015's
+/// Panel=0, and the source-economics book — stay off this list: arming them fails `validate_palw_v2` and the node does not start.
+/// A scheduled height is normalised out of the handshake identity, so a rolling upgrade peers until 15,500 and forks there.
+pub const PALW_T12_INT13_DAA: Option<u64> = Some(15_500);
 
 /// **The int-13 flag day, armed** — every entry of [`PALW_T12_INT13_FENCES_V1`] at [`PALW_T12_INT13_DAA`], each through its own `set`,
 /// on the ASSEMBLED ruleset, after the int-11 flag day whose `palw_gen_v1` the range twin needs below it; a no-op while the height is
@@ -13289,6 +13295,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_memory_routing_court_v2: None,
     palw_selected_source_bootstrap_v1: None,
     palw_paid_bootstrap_source_v6: None,
+    palw_source_economics_v1: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,

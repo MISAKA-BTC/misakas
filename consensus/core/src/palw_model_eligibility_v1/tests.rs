@@ -263,10 +263,8 @@ fn req_elig_4_attempts_are_counted_at_commit_and_bounded_per_lineage_principal_a
     };
     use PalwEligibilityCommitRefusalV1 as R;
     assert_eq!(admit(&lineage, &principal, &network, &c, now - 1), Err(R::ProbationTooShort));
-    assert_eq!(
-        admit(&lineage, &principal, &network, &PalwEligibilityExamCommitV1 { claims_count: p.probation_min_claims - 1, ..c }, now),
-        Err(R::TooFewClaims)
-    );
+    let few = PalwEligibilityExamCommitV1 { claims_count: p.probation_min_claims - 1, ..c };
+    assert_eq!(admit(&lineage, &principal, &network, &few, now), Err(R::TooFewClaims));
     assert_eq!(admit(&lineage, &principal, &network, &c, now), Ok(()));
     palw_eligibility_count_attempt_v1(&p, now, &mut lineage, &mut principal, &mut network);
     // Withdrawing after seeing the draw refunds nothing: the attempt is already spent, and a replay of the same index is refused.
@@ -515,7 +513,8 @@ fn s7_5_closed_after_promotion_lapses_at_the_next_renewal() {
     }
     let outcome = palw_eligibility_exam_verdict_v1(&p, &renewal, model.next_renewal_daa + 1).unwrap();
     assert_eq!(outcome, PalwEligibilityExamOutcomeV1::NotPromoted);
-    palw_eligibility_apply_outcome_v1(&p, &mut model, PalwEligibilityExamPurposeV1::Renewal, outcome, model.next_renewal_daa + 1);
+    let renewal_daa = model.next_renewal_daa + 1;
+    palw_eligibility_apply_outcome_v1(&p, &mut model, PalwEligibilityExamPurposeV1::Renewal, outcome, renewal_daa);
     let window_end = model.next_renewal_daa + p.lapse_grace_daa;
     assert!(palw_eligibility_lapse_v1(&p, &mut model, window_end + 1));
     assert_eq!(window_end - promoted, p.renewal_epoch_daa + p.lapse_grace_daa, "the post-promotion exposure window");

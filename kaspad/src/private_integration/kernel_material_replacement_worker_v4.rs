@@ -129,7 +129,7 @@ fn decode_input<T: NativeWireScanV1 + borsh::BorshDeserialize>(
         .ok_or("replacement has no raw input headroom")?
         .min(spec.max_input_bytes);
     let (raw, _raw) = read_bounded(path, raw_cap)?;
-    let shape = preflight_native_value_v1::<T>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
+    let shape = preflight_native_value_v1::<T>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
     let next = inputs.checked_add(shape.logical_requests_v1()).ok_or("replacement aggregate input heap overflow")?;
     let overlap = next.checked_add(raw.len() as u64 + 1).ok_or("replacement raw/decode overlap overflow")?;
     if overlap > spec.max_input_heap_bytes {

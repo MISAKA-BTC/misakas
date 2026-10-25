@@ -53,7 +53,19 @@ pub fn private_paid_claim_params_v4(salt: &PalwDrillSaltV1) -> Result<Params, St
 }
 
 pub(super) fn validate_private_paid_claim_relations_v4(params: &Params) -> Result<(), String> {
-    super::paid_claim_factory::validate_private_paid_claim_relations_v3(params)?;
+    // The running profile keeps compact V4 and release recovery armed. The
+    // production validator still refuses both. Only this copy is made dormant,
+    // the same way the V3 relation check excepts its own unapproved fences.
+    let mut checked = params.clone();
+    if let Some(compact) = checked.palw_claim_compact_v4.as_mut() {
+        compact.activation = ForkActivation::never();
+    }
+    if let Some(recovery) = checked.palw_material_release_recovery_v2.as_mut() {
+        recovery.activation = ForkActivation::never();
+    }
+    checked.sync_palw_claim_compact_v4();
+    checked.sync_palw_bond_budget_v1();
+    super::paid_claim_factory::validate_private_paid_claim_relations_v3(&checked)?;
     let compact = params.palw_claim_compact_v4.as_ref().ok_or("private v4 compact capability absent")?;
     let recovery = params.palw_material_release_recovery_v2.as_ref().ok_or("private v4 release recovery absent")?;
     compact.policy.validate()?;

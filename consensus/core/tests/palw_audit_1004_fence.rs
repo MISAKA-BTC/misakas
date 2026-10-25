@@ -57,10 +57,11 @@ fn it_is_dormant_on_every_ruleset_with_no_height_anywhere() {
     }
     // Testnet-12 as shipped arms it NOWHERE (the int-13 list has no height), and still validates.
     let shipped = palw_t12_shipped_params();
-    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
-    assert_eq!(shipped.palw_audit_1004_v1, None, "the shipped ruleset does not arm it");
-    assert_eq!(mirror(&shipped), None, "…and has no fold mirror");
-    assert!(!shipped.palw_audit_1004_active_at(u64::MAX - 1));
+    let at = PALW_T12_INT13_DAA.expect("the int-13 flag day");
+    assert_eq!(at, 15_500, "the user's decision of 2026-10-25");
+    assert_eq!(shipped.palw_audit_1004_v1, Some(ForkActivation::new(at)), "the shipped ruleset arms it at the flag day");
+    assert_eq!(mirror(&shipped), Some(at), "…with its fold mirror");
+    assert!(!shipped.palw_audit_1004_active_at(at - 1) && shipped.palw_audit_1004_active_at(at));
     shipped.validate_palw_v2().expect("the shipped ruleset validates");
     // Armed through the int-13 list at a test height, it is armed with its fold mirror.
     let mut listed = shipped.clone();

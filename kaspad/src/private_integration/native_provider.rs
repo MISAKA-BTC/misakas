@@ -472,7 +472,7 @@ impl LoopbackNativeProviderV3 {
             )?;
         }
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyRequestV3>(
-            &request.body,
+            request.body.as_slice(),
             request.body.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -939,7 +939,7 @@ impl LoopbackNativeProviderV3 {
         }
         let encoded = borsh::to_vec(&signatures).map_err(|e| e.to_string())?;
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<Vec<(PalwBondKeyV2, Vec<u8>)>>(
-            &encoded,
+            encoded.as_slice(),
             encoded.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -1170,7 +1170,7 @@ impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
         write_frame_v3(&mut stream, &borsh::to_vec(&signed).map_err(|e| e.to_string())?)?;
         let frame = read_frame_v3(&mut stream)?;
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<ProviderTransportResponseV1>(
-            &frame,
+            &frame[..],
             frame.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -1180,7 +1180,7 @@ impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
         .map_err(|e| e.to_string())?;
         let responders = provider_transport_verify_response_v1(&response, &signed.header, roster_keys, &self.policy, now_unix_ms())?;
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyResponseV3>(
-            &response.body,
+            response.body.as_slice(),
             response.body.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -1234,7 +1234,7 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
     let _ = stream.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3));
     let Ok(bytes) = read_frame_v3(&mut stream) else { return };
     if kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<ProviderTransportRequestV1>(
-        &bytes,
+        &bytes[..],
         bytes.len() as u64,
     )
     .is_err()

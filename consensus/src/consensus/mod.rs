@@ -8,6 +8,21 @@ pub mod test_consensus;
 mod palw_material_hold;
 mod utxo_set_override;
 
+fn import_context_fault(
+    error: kaspa_consensus_core::errors::pruning::PruningImportError,
+) -> kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 {
+    use kaspa_consensus_core::errors::pruning::PruningImportError as E;
+    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
+    match error {
+        E::PruningPointImportContextUnavailable(_, _)
+        | E::PruningImportSessionRefused { .. }
+        | E::ImportedPalwStateHeaderMissing(_)
+        | E::MissingPointedPruningPoint
+        | E::PruningPointsWrongGenesis(_, _) => F::HistoryUnavailable,
+        _ => F::StoreUnreadable,
+    }
+}
+
 use crate::{
     config::Config,
     errors::{BlockProcessResult, RuleError},
@@ -46,7 +61,7 @@ use crate::{
     },
 };
 use kaspa_consensus_core::{
-    BlockHashSet, BlueWorkType, ChainPath, HashMapCustomHasher,
+    BlockHashSet, BlueWorkType, ChainPath, Hash64, HashMapCustomHasher,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     api::{
         BlockValidationFutures, ConsensusApi, ConsensusStats,
@@ -1636,11 +1651,7 @@ impl ConsensusApi for Consensus {
         }
         observed.state.source_bootstrap_check_work_authority_v1(work).map_err(fault)?;
         let after = self.lkg_virtual_state.load();
-        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|error| match error {
-            kaspa_database::prelude::StoreError::KeyNotFound(_) => F::HistoryUnavailable,
-            kaspa_database::prelude::StoreError::LocalResourceUnavailable(_) => F::CapacityUnavailable,
-            _ => F::StoreUnreadable,
-        })?;
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(import_context_fault)?;
         if !stable
             || import.active.is_some()
             || import.epoch != observed.import_epoch
@@ -1683,7 +1694,7 @@ impl ConsensusApi for Consensus {
             .as_ref()
             .filter(|f| f.at != kaspa_consensus_core::config::params::ForkActivation::never() && f.at.is_active(before.daa_score))
             .ok_or(F::HistoryUnavailable)?;
-        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(fault)?;
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(import_context_fault)?;
         if !stable || import.active.is_some() {
             return Err(F::HistoryUnavailable);
         }
@@ -1698,7 +1709,7 @@ impl ConsensusApi for Consensus {
         }
         state.source_bootstrap_check_epoch_authority_v1().map_err(state_fault)?;
         let after = self.lkg_virtual_state.load();
-        let (after_import, stable) = self.virtual_processor.pruning_import_status().map_err(fault)?;
+        let (after_import, stable) = self.virtual_processor.pruning_import_status().map_err(import_context_fault)?;
         if !stable
             || after_import.active.is_some()
             || import.epoch != after_import.epoch
@@ -4555,7 +4566,8 @@ impl ConsensusApi for Consensus {
         kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
     > {
         let Some(point) = self.virtual_processor.palw_weighing_point_v2_checked(self.get_sink())? else { return Ok(None) };
-        let Some(state) = self.virtual_processor.palw_candidate_state_for_selection_v2(point)? else { return Ok(None) };
+        let Some(retained) = self.virtual_processor.palw_candidate_state_for_selection_v2(point)? else { return Ok(None) };
+        let state = retained.into_unreserved_legacy_v1()?;
         let Ok(daa_score) = self.headers_store.get_daa_score(point) else { return Ok(None) };
         Ok(Some(kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1 { state, block: point, daa_score }))
     }

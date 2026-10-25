@@ -30,8 +30,10 @@ The code, the current CLI `--help` and the ADR decisions are authoritative. This
 - [testnet-12 regenesis record](testnet-12-regenesis-2026-09-23.md)
 - [Mainnet readiness](mainnet-readiness.md), [Release process](release-process.md)
 
-Invariants to check on testnet-12: consensus params fingerprint `5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6`,
-genesis `a27f8f44fe4d91a5…`, schedule id `1678e07359f6727e…` (`kaspad --testnet --netsuffix=12`, or `misaka --network testnet-12`).
+Invariants to check on testnet-12: consensus params fingerprint `ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e`,
+genesis `a27f8f44fe4d91a5…`, schedule id `9ef2b1a795c74d6f…` (`kaspad --testnet --netsuffix=12`, or `misaka --network testnet-12`).
+The handshake identity is unchanged. The int-13 list (`palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window`,
+`palw_receipt_spend_v4`) arms at DAA 15,500.
 Never count blocks, blue-score depth or DAA as finality on testnet-12; use finality depth or a `Final` PALW anchor.
 
 ## Architecture
@@ -44,7 +46,7 @@ Never count blocks, blue-score depth or DAA as finality on testnet-12; use final
 
 - [Reference index](reference/README.md) — ADRs, RFCs 0001–0015, specs, design records, registries
 - [ADR index](adr/README.md) · [RFCs](rfc/) · [Specs](spec/) · [PALW design records](design/palw/)
-- [Activation readiness matrix](design/palw/activation-readiness-matrix.md) — what is implemented, verified and armable (nothing new is armed)
+- [Activation readiness matrix](design/palw/activation-readiness-matrix.md) — what is implemented, verified and armable (the int-13 list arms at DAA 15,500)
 - [2026-10-12 RFC/ADR review](design/palw/rfc-adr-review-resolution-2026-10-12.md) and the [Panel=1 / Bond-time / model-capital proposal](design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md)
 - [Round / EXEC additional acceptance conditions (2026-10-10)](palw-round-exec-additional-acceptance-2026-10-10.md)
 

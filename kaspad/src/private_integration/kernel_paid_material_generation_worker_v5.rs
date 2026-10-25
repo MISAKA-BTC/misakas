@@ -319,7 +319,7 @@ fn decode<T: NativeWireScanV1 + borsh::BorshDeserialize>(
         .ok_or("V5 input has no raw overlap headroom")?
         .min(spec.max_input_bytes);
     let (raw, _raw) = read_bounded(path, cap)?;
-    let shape = preflight_native_value_v1::<T>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
+    let shape = preflight_native_value_v1::<T>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
     *requests = requests.checked_add(shape.logical_requests_v1()).ok_or("V5 input workspace overflow")?;
     if requests.checked_add(raw.len() as u64 + 1).is_none_or(|n| n > spec.max_workspace_bytes) {
         return Err("V5 aggregate input/decode overlap exceeds explicit workspace".into());

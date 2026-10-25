@@ -6,7 +6,7 @@ use kaspa_consensus_core::{
 };
 
 impl PalwPanelService {
-    fn bind_native_routing_replay_v2(
+    pub(crate) fn bind_native_routing_replay_v2(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         backend: &mut dyn PalwExecutionBackendV1,
@@ -24,7 +24,7 @@ impl PalwPanelService {
         }
         Ok(authority)
     }
-    fn refresh_native_routing_replay_v2(
+    pub(crate) fn refresh_native_routing_replay_v2(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         authority: Option<&Arc<PalwNativeRoutingClaimAuthorityV2>>,

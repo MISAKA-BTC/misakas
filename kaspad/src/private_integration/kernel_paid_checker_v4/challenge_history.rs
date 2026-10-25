@@ -53,7 +53,7 @@ fn read_action(outbox: &Path, slot: usize, cap: u64) -> Result<Option<NativeReta
         return Ok(None);
     }
     let (raw, _raw) = read_bounded(&path, cap)?;
-    preflight_native_value_v1::<PalwConsensusObjectV2>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
+    preflight_native_value_v1::<PalwConsensusObjectV2>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
     Ok(Some(retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwConsensusObjectV2>(&raw)).map_err(|e| e.to_string())?))
 }
 

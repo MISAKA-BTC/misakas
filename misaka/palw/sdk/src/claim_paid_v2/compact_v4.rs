@@ -15,7 +15,8 @@ impl VerifiedPaidClaimSourcesV2 {
             .filter(|p| p.version == 4)
             .ok_or_else(|| refused("not a compact V4 class"))?;
         let registration = self.route.paid_compact_contract_v4(&plan.id()).map_err(refused)?.registration;
-        registration.validate_for_class(&self.authority.class, &self.route.ledger().map_err(refused)?).map_err(refused)?;
+        let ledger = self.route.ledger().map_err(refused)?;
+        registration.validate_for_class(&self.authority.class, &ledger).map_err(refused)?;
         Ok(registration)
     }
     fn check_compact_v4(
@@ -157,7 +158,8 @@ pub fn compact_registration_object_v4(
     route: &PalwKernelRouteStateV1,
     registration: CompactClaimRegistrationV4,
 ) -> Result<KernelRouteObjectV1, Refusal> {
-    registration.validate(&route.ledger().map_err(refused)?).map_err(refused)?;
+    let ledger = route.ledger().map_err(refused)?;
+    registration.validate(&ledger).map_err(refused)?;
     Ok(KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::RegisterCompactContractV4 { registration } })
 }
 /// Preserve the clock floors of the existing class builder, then select the
@@ -186,7 +188,8 @@ pub fn compact_class_object_v4(
     }
     class.interactive_plan = Some(registration.plan.clone());
     class.validate().map_err(refused)?;
-    registration.validate_for_class(class, &route.ledger().map_err(refused)?).map_err(refused)?;
+    let ledger = route.ledger().map_err(refused)?;
+    registration.validate_for_class(class, &ledger).map_err(refused)?;
     Ok(object)
 }
 

@@ -237,10 +237,10 @@ mod tests {
         let mut malformed = vec![0u8];
         malformed.extend(borsh::to_vec(&q).unwrap());
         malformed.extend(u32::MAX.to_le_bytes());
-        assert!(preflight_native_value_v1::<PalwKernelMaterialUnitResponseV4>(&malformed, malformed.len() as u64).is_err());
+        assert!(preflight_native_value_v1::<PalwKernelMaterialUnitResponseV4>(malformed.as_slice(), malformed.len() as u64).is_err());
         let mut trailing = borsh::to_vec(&q).unwrap();
         trailing.push(0);
-        assert!(preflight_native_value_v1::<PalwKernelMaterialUnitQueryV4>(&trailing, trailing.len() as u64).is_err());
+        assert!(preflight_native_value_v1::<PalwKernelMaterialUnitQueryV4>(trailing.as_slice(), trailing.len() as u64).is_err());
     }
     #[test]
     fn query_does_not_accept_substituted_consent_or_unit_echo() {

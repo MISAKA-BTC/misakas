@@ -479,6 +479,9 @@ impl Params {
         if self.palw_paid_bootstrap_source_v6.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_paid_bootstrap_source_v6 = None;
         }
+        if self.palw_source_economics_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_source_economics_v1 = None;
+        }
         // ADR-0100 Decision 4, likewise.
         if self.palw_shard_licensing == Some(ForkActivation::never()) {
             self.palw_shard_licensing = None;
@@ -1071,6 +1074,7 @@ impl Params {
             palw_memory_routing_court_v2,
             palw_selected_source_bootstrap_v1,
             palw_paid_bootstrap_source_v6,
+            palw_source_economics_v1,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -1391,6 +1395,7 @@ impl Params {
             ("palw_memory_routing_court_v2", *palw_memory_routing_court_v2),
             ("palw_selected_source_bootstrap_v1", palw_selected_source_bootstrap_v1.map(|f| f.at)),
             ("palw_paid_bootstrap_source_v6", palw_paid_bootstrap_source_v6.map(|f| f.activation)),
+            ("palw_source_economics_v1", palw_source_economics_v1.map(|f| f.activation)),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
@@ -1666,6 +1671,19 @@ impl Params {
             h.write(b"palw_paid_bootstrap_source_v6");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.id().as_slice());
+        }
+        if let Some(fence) = self.palw_source_economics_v1 {
+            h.write(b"palw_source_economics_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.version.to_le_bytes());
+            h.write(fence.policy.enrollment);
+            h.write(fence.policy.actor);
+            h.write(fence.policy.payer);
+            h.write(fence.policy.prepaid_sompi.to_le_bytes());
+            h.write(fence.policy.reserved_sompi.to_le_bytes());
+            h.write(fence.policy.r_cap_sompi.to_le_bytes());
+            h.write(fence.policy.budget_reservation_sompi.to_le_bytes());
+            h.write(fence.policy.inclusive_until_daa.to_le_bytes());
         }
         // ADR-0100 Decision 4's fence, NAMED likewise: it changes what licenses a claim.
         if let Some(licensing) = self.palw_shard_licensing {
@@ -2624,6 +2642,7 @@ impl Params {
             palw_memory_routing_court_v2,
             palw_selected_source_bootstrap_v1,
             palw_paid_bootstrap_source_v6,
+            palw_source_economics_v1,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -3419,6 +3438,9 @@ impl Params {
         if let Some(fence) = palw_paid_bootstrap_source_v6.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        if let Some(fence) = palw_source_economics_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // ADR-0100 Decision 4. Some-only, likewise.
         if let Some(activation) = palw_shard_licensing.as_mut() {
             fork(activation, visit);
@@ -4079,6 +4101,7 @@ impl Params {
             palw_memory_routing_court_v2,
             palw_selected_source_bootstrap_v1,
             palw_paid_bootstrap_source_v6,
+            palw_source_economics_v1,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -4914,6 +4937,19 @@ impl Params {
             h.write(b"palw_paid_bootstrap_source_v6");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.id().as_slice());
+        }
+        if let Some(fence) = palw_source_economics_v1 {
+            h.write(b"palw_source_economics_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.version.to_le_bytes());
+            h.write(fence.policy.enrollment);
+            h.write(fence.policy.actor);
+            h.write(fence.policy.payer);
+            h.write(fence.policy.prepaid_sompi.to_le_bytes());
+            h.write(fence.policy.reserved_sompi.to_le_bytes());
+            h.write(fence.policy.r_cap_sompi.to_le_bytes());
+            h.write(fence.policy.budget_reservation_sompi.to_le_bytes());
+            h.write(fence.policy.inclusive_until_daa.to_le_bytes());
         }
         // ADR-0100 Decision 4, Some-only for the same reason: every shipped preset leaves it
         // `None` and fingerprints byte-identically to a build without the field.

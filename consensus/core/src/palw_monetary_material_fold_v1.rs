@@ -348,7 +348,7 @@ fn action_inner_v4(
         if builder.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
             return Err(refused("current generation challenge own fence dormant"));
         }
-        let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(builder.state, root, *provider)
+        let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(&builder.state, root, *provider)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
         if current != Some(*consent) {
             return Err(refused("current challenge substitutes provider generation"));
@@ -1497,7 +1497,7 @@ pub(super) fn routed_answer_v2(
     if encoded > limits.max_close_bytes || encoded > owned.terms.max_material_bytes || encoded > p.max_bytes_per_contract {
         return Err(refused("routed material answer exceeds native/signed capacity"));
     }
-    let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(b.state, root, a.provider)
+    let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(&b.state, root, a.provider)
         .map_err(|e| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(e, refused))?;
     if current != Some(consent) || !owned.providers.iter().any(|v| v.provider == a.provider && !v.charged) {
         return Err(refused("routed material provider generation differs from own accepted state"));

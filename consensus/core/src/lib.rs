@@ -1002,4 +1002,5 @@ pub mod palw_paid_material_generation_v5;
 pub mod palw_paid_claim_observation_v5;
 
 pub mod palw_paid_bootstrap_source_v6;
+pub mod palw_paid_bootstrap_economics_v1;
 pub mod palw_paid_claim_observation_v6;

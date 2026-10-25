@@ -35,6 +35,8 @@ source-v1/source-paid-v1 require --private-probe-source-policy=ABSOLUTE_BORSH (e
   source-paid-v1 combines the exact paid-v4 base and this explicit source policy on every node.
   --private-probe-paid-bootstrap-source-policy=ABSOLUTE_BORSH optionally arms the distinct V6 consumer
   (u64 nonzero scheduled activation, PaidBootstrapSourcePolicyV6); all nodes must use the exact same policy.
+  --private-probe-source-economics=ABSOLUTE_BORSH is the finite unapproved economics input
+  (u64 activation, PalwSourceEconomicsPolicyV1) and requires that V6 policy. It does not approve the numbers.
 population-v1 additionally requires --private-probe-bonds=N (actual funded registry only).
 Read-only mode: --print-private-probe-profile
 Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1, paid-v3, paid-v4 or source-paid-v1)
@@ -122,6 +124,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-kernel-material-replacement"
                         | "--private-probe-source-policy"
                         | "--private-probe-paid-bootstrap-source-policy"
+                        | "--private-probe-source-economics"
                         | "--private-probe-source-check"
                         | "--private-probe-source-open"
                         | "--private-probe-paid-generation-export"
@@ -172,6 +175,10 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let paid_bootstrap_source_policy = flags.values.remove("--private-probe-paid-bootstrap-source-policy");
     if paid_bootstrap_source_policy.is_some() && profile != "source-paid-v1" {
         return Err("V6 downstream source policy requires explicit source-paid-v1 profile".into());
+    }
+    let source_economics = flags.values.remove("--private-probe-source-economics");
+    if source_economics.is_some() && (profile != "source-paid-v1" || paid_bootstrap_source_policy.is_none()) {
+        return Err("source economics requires source-paid-v1 and its explicit V6 policy".into());
     }
     let source_checker_file = flags.values.remove("--private-probe-source-check");
     if source_checker_file.is_some() && (!source_profile || flags.print || bootstrap.is_some() || paid_output.is_some()) {
@@ -337,6 +344,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             &salt,
             Path::new(source_policy.as_ref().ok_or("source policy absent")?),
             paid_bootstrap_source_policy.as_deref().map(Path::new),
+            source_economics.as_deref().map(Path::new),
         )?,
         "complete-v1" => private_complete_check_params_v1(&salt)?,
         "paid-v3" => private_paid_claim_params_v3(&salt)?,

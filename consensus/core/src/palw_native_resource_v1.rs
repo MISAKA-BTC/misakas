@@ -39,7 +39,7 @@ pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1
 pub(crate) use ledger_expansion::{ledger_cache_clone_v1, reserve_ledger_expansion_v1};
 pub use tir::decode_native_tir_program_v1;
 pub(crate) use tir::{NativeTirShardWorkspaceV1, TirNativeRequestsV1, reserve_native_tir_shard_workspace_v1};
-pub(crate) use typed::BTreeNodeEnvelopeV1;
+pub use typed::BTreeNodeEnvelopeV1;
 #[cfg(test)]
 mod aux_registry_tests;
 pub(crate) mod wire;

@@ -353,6 +353,14 @@ router_arms += '137=>return Err(wire::wire_bad("unallocated selected-source boot
 router_arms += '138 if key_bytes==65 && prefix==1=>misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6::scan_native_wire_v1(frame)?,\n'
 router_arms += '138 if key_bytes==65 && prefix==2=>crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6::scan_native_wire_v1(frame)?,\n'
 router_arms += '138=>return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),\n'
+router_arms += '146 if key_bytes==129 && prefix==2=>crate::palw_paid_bootstrap_economics_v1::PalwSourceFundingRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '146 if key_bytes==129 && prefix==3=>crate::palw_paid_bootstrap_economics_v1::PalwSourceCourtRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '146 if key_bytes==129 && prefix==4=>crate::palw_paid_bootstrap_economics_v1::PalwSourceEntitlementRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '146 if key_bytes==129 && prefix==5=>crate::palw_paid_bootstrap_economics_v1::PalwSourceQueueRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '146 if key_bytes==129 && prefix==6=>crate::palw_paid_bootstrap_economics_v1::PalwSourceRefundRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '146 if key_bytes==129 && prefix==8=>crate::palw_paid_bootstrap_economics_v1::PalwSourceHoldRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '146 if key_bytes==129 && prefix==9=>crate::palw_paid_bootstrap_economics_v1::PalwSourceLiabilityRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '146=>return Err(wire::wire_bad("unallocated source economics row namespace")),\n'
 
 code=code.replace(router_marker, router_arms+router_marker, 1)
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)

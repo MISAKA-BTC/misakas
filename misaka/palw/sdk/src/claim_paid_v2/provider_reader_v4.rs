@@ -113,7 +113,7 @@ pub fn fetch_parameter_from_provider_v4(
         }
         // Always walk actual lengths before decode, even if native accounting
         // is disabled in a private runtime. A frame cap alone cannot bound Vec.
-        let shape = preflight_native_value_v1::<PalwKernelParameterRowV4>(&bytes, bytes.len() as u64).map_err(bad)?;
+        let shape = preflight_native_value_v1::<PalwKernelParameterRowV4>(bytes.as_slice(), bytes.len() as u64).map_err(bad)?;
         let codec = kernel_material_unit_requests_v4(PALW_KERNEL_PARAMETER_STAGE_V4, &bytes)
             .map_err(bad)?
             .bytes()
@@ -252,7 +252,7 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> Reader<'_, 
         read: impl FnOnce(&T) -> Result<R, String>,
     ) -> Result<R, Refusal> {
         let raw = self.fetch(stage, ordinal).map_err(bad)?;
-        preflight_native_value_v1::<T>(&raw, raw.len() as u64).map_err(bad)?;
+        preflight_native_value_v1::<T>(raw.as_slice(), raw.len() as u64).map_err(bad)?;
         let codec =
             kernel_material_unit_requests_v4(stage, &raw).map_err(bad)?.bytes().ok_or_else(|| bad("provider codec size overflow"))?;
         // Admit actual codec storage before the auth quote's own decode. Both
@@ -381,7 +381,7 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> Reader<'_, 
         };
         let (first, _) = self.segmented_range(position)?;
         self.decoded::<PalwKernelSegmentedPartV4, _>(PALW_KERNEL_SEGMENTED_PART_STAGE_V4, first, |unit| {
-            preflight_native_value_v1::<misaka_palw_kernel::seg_da::SegPartResponseV1>(&unit.bytes, unit.bytes.len() as u64)
+            preflight_native_value_v1::<misaka_palw_kernel::seg_da::SegPartResponseV1>(unit.bytes.as_slice(), unit.bytes.len() as u64)
                 .map_err(|e| e.to_string())?;
             let part = retain_native_value_decode_v1(&unit.bytes, || {
                 borsh::from_slice::<misaka_palw_kernel::seg_da::SegPartResponseV1>(&unit.bytes)

@@ -20,6 +20,17 @@ fn store_fault(error: kaspa_database::prelude::StoreError) -> PalwSourceBootstra
         _ => PalwSourceBootstrapContextFaultV1::StoreUnreadable,
     }
 }
+fn import_fault(error: kaspa_consensus_core::errors::pruning::PruningImportError) -> PalwSourceBootstrapContextFaultV1 {
+    use kaspa_consensus_core::errors::pruning::PruningImportError as E;
+    match error {
+        E::PruningPointImportContextUnavailable(_, _)
+        | E::PruningImportSessionRefused { .. }
+        | E::ImportedPalwStateHeaderMissing(_)
+        | E::MissingPointedPruningPoint
+        | E::PruningPointsWrongGenesis(_, _) => PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+        _ => PalwSourceBootstrapContextFaultV1::StoreUnreadable,
+    }
+}
 fn state_fault(error: PalwStateV2Error) -> PalwSourceBootstrapContextFaultV1 {
     match error {
         PalwStateV2Error::NativeResource(why) => PalwSourceBootstrapContextFaultV1::Capacity(why),
@@ -104,7 +115,7 @@ impl VirtualStateProcessor {
         if policy.chain_genesis != self.genesis.hash || policy.network != network || policy.ruleset != Hash64::from_bytes(ruleset) {
             return Err(PalwSourceBootstrapContextFaultV1::StoreUnreadable);
         }
-        let (before, stable) = self.pruning_import_status().map_err(store_fault)?;
+        let (before, stable) = self.pruning_import_status().map_err(import_fault)?;
         if !stable || before.active.is_some() {
             return Err(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
         }
@@ -183,7 +194,7 @@ impl VirtualStateProcessor {
         {
             return Err(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
         }
-        let (after, stable_after) = self.pruning_import_status().map_err(store_fault)?;
+        let (after, stable_after) = self.pruning_import_status().map_err(import_fault)?;
         if !stable_after || after.active.is_some() || before.epoch != after.epoch {
             return Err(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
         }

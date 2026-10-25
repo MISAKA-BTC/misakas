@@ -2341,6 +2341,14 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux146 action2 funding and action3 court, with hold, liability, entitlement, one-time queue acknowledgement and one-time refund",
+        },
+        "palw_paid_bootstrap_source_v6",
+        "source economics book; queue acknowledgement is not a coinbase payment; ordinary activation stays refused",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::ObjectTags { lo: 230, hi: 230 },
         "palw_court_model_scope_v1",
         "D2 seat readiness digest (reserved; not landed)",

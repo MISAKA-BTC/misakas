@@ -374,7 +374,7 @@ impl PreparedKernelPaidWorkV4 {
             palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2, palw_producer_v2::PalwObjectRehearsalV1,
         };
         let (work_bytes, _file_lease) = read_bounded(&self.spec.work_path, self.spec.max_input_bytes)?;
-        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(&work_bytes, work_bytes.len() as u64)
+        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(work_bytes.as_slice(), work_bytes.len() as u64)
             .map_err(|e| e.to_string())?;
         if shape.logical_requests_v1() > self.spec.max_workspace_bytes {
             return Err("kernel paid decoded input exceeds explicit workspace".into());
@@ -396,7 +396,7 @@ impl PreparedKernelPaidWorkV4 {
         let checkpoint = hash(&self.spec.checkpoint)?;
         let mut object: Option<NativeRetainedV1<PalwConsensusObjectV2>> = if object_path.exists() {
             let (bytes, _raw_lease) = read_bounded(&object_path, self.spec.max_input_bytes)?;
-            preflight_native_value_v1::<PalwConsensusObjectV2>(&bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+            preflight_native_value_v1::<PalwConsensusObjectV2>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
             Some(retain_native_value_decode_v1(&bytes, || borsh::from_slice(&bytes)).map_err(|e| e.to_string())?)
         } else {
             None
@@ -878,7 +878,7 @@ pub(super) async fn drive_paid_source_lock_v6(
     let object = if object_path.exists() {
         let cap = ctx.maximum_input_bytes.min(ctx.maximum_workspace_bytes.saturating_sub(signing_quote) / 4);
         let (raw, _raw) = read_bounded(&object_path, cap)?;
-        let shape = preflight_native_value_v1::<PalwConsensusObjectV2>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
+        let shape = preflight_native_value_v1::<PalwConsensusObjectV2>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
         source_lock_workspace_v6(ctx.maximum_workspace_bytes, signing_quote, raw.len() as u64, shape.logical_requests_v1())?;
         retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwConsensusObjectV2>(&raw)).map_err(|e| e.to_string())?
     } else {

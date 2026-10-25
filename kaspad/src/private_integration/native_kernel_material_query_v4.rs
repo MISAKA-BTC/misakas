@@ -101,7 +101,7 @@ impl AuthenticatedSocketExchangeV3 {
         write_frame_v3(&mut socket, &borsh::to_vec(&request).map_err(|e| FetchError::Unknown(e.to_string()))?)
             .map_err(FetchError::Unavailable)?;
         let frame = read_query_frame_v4(&mut socket, cap)?;
-        preflight_native_value_v1::<ProviderTransportResponseV1>(&frame, frame.len() as u64).map_err(query_shape_error_v4)?;
+        preflight_native_value_v1::<ProviderTransportResponseV1>(&frame[..], frame.len() as u64).map_err(query_shape_error_v4)?;
         let envelope = retain_native_value_decode_classified_v1(&frame, || borsh::from_slice::<ProviderTransportResponseV1>(&frame))
             .map_err(query_decode_error_v4)?;
         let keys = [(query.provider, authority.provider_pubkey().to_vec())];
@@ -110,7 +110,7 @@ impl AuthenticatedSocketExchangeV3 {
         if responders.as_slice() != [query.provider] {
             return Err(FetchError::InvalidMaterial("kernel query provider differs".into()));
         }
-        preflight_native_value_v1::<Response>(&envelope.body, envelope.body.len() as u64).map_err(query_shape_error_v4)?;
+        preflight_native_value_v1::<Response>(envelope.body.as_slice(), envelope.body.len() as u64).map_err(query_shape_error_v4)?;
         let answer = retain_native_value_decode_classified_v1(&envelope.body, || borsh::from_slice::<Response>(&envelope.body))
             .map_err(query_decode_error_v4)?;
         // Transfers the admitted byte owner without cloning or discarding its
@@ -181,7 +181,7 @@ pub(super) fn handle_query_v4(stream: &mut TcpStream, service: &LoopbackNativePr
         return;
     }
     drop(replay);
-    if preflight_native_value_v1::<Query>(&request.body, REQUEST).is_err() {
+    if preflight_native_value_v1::<Query>(request.body.as_slice(), REQUEST).is_err() {
         return;
     }
     let Ok(query) = retain_native_value_decode_v1(&request.body, || borsh::from_slice::<Query>(&request.body)) else { return };

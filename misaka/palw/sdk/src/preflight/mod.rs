@@ -836,13 +836,13 @@ mod judge_cache_key_tests {
     use super::*;
 
     /// A judgment is keyed by the ruleset it was judged on, not by the network's name: testnet-12's key carries this build's params and
-    /// schedule ids (the live int-12 ones), so a cache written by a build with another schedule never answers here.
+    /// schedule ids (the int-13 flag day at DAA 15,500), so a cache written by a build with another schedule never answers here.
     #[test]
     fn the_cache_key_names_the_ruleset_not_only_the_network() {
         let tag = ruleset_tag(&Some("testnet-12".to_string()));
         let net = chain::PreflightNetwork::parse("testnet-12").expect("testnet-12");
         assert_eq!(tag, format!("{}|{}", net.params.consensus_params_id(), net.params.consensus_schedule_id()));
-        assert!(tag.starts_with("5ee7fd8ee019968c"), "{tag}");
+        assert!(tag.starts_with("ef379378f09bf33f"), "{tag}");
         assert_eq!(ruleset_tag(&None), "no-network");
         assert_eq!(ruleset_tag(&Some("testnet-12".to_string())), tag, "memoised");
     }

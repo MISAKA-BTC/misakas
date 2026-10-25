@@ -196,7 +196,7 @@ impl<T: NativeHeapV1> NativeHeapV1 for Arc<T> {
 /// This is allocation-request accounting under the repository's pinned std;
 /// allocator arenas, committed pages and physical overhead are separate coverage.
 #[allow(dead_code)]
-pub(crate) struct BTreeNodeEnvelopeV1<K, V> {
+pub struct BTreeNodeEnvelopeV1<K, V> {
     parent: usize,
     metadata: [usize; 4],
     keys: [K; 16],
@@ -294,6 +294,16 @@ macro_rules! native_unit {
     };
 }
 macro_rules! native_enum {
+    ($ty:ty;) => {
+        impl NativeHeapV1 for $ty {
+            fn native_members_v1(&self) -> Option<u64> {
+                match *self {}
+            }
+            fn native_heap_v1(&self, _: &str) -> NativeCoverageV1 {
+                match *self {}
+            }
+        }
+    };
     ($ty:ty; $($variant:ident $( { $($named:ident),* } )? $( ( $($tuple:ident),* ) )?),* $(,)?) => {
         impl NativeHeapV1 for $ty {
             fn native_members_v1(&self)->Option<u64> {

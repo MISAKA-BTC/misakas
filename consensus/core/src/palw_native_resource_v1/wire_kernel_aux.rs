@@ -189,6 +189,28 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6::scan_native_wire_v1(frame)?
         }
         138 => return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),
+        146 if key_bytes == 129 && prefix == 2 => {
+            crate::palw_paid_bootstrap_economics_v1::PalwSourceFundingRowV1::scan_native_wire_v1(frame)?
+        }
+        146 if key_bytes == 129 && prefix == 3 => {
+            crate::palw_paid_bootstrap_economics_v1::PalwSourceCourtRowV1::scan_native_wire_v1(frame)?
+        }
+        146 if key_bytes == 129 && prefix == 4 => {
+            crate::palw_paid_bootstrap_economics_v1::PalwSourceEntitlementRowV1::scan_native_wire_v1(frame)?
+        }
+        146 if key_bytes == 129 && prefix == 5 => {
+            crate::palw_paid_bootstrap_economics_v1::PalwSourceQueueRowV1::scan_native_wire_v1(frame)?
+        }
+        146 if key_bytes == 129 && prefix == 6 => {
+            crate::palw_paid_bootstrap_economics_v1::PalwSourceRefundRowV1::scan_native_wire_v1(frame)?
+        }
+        146 if key_bytes == 129 && prefix == 8 => {
+            crate::palw_paid_bootstrap_economics_v1::PalwSourceHoldRowV1::scan_native_wire_v1(frame)?
+        }
+        146 if key_bytes == 129 && prefix == 9 => {
+            crate::palw_paid_bootstrap_economics_v1::PalwSourceLiabilityRowV1::scan_native_wire_v1(frame)?
+        }
+        146 => return Err(wire::wire_bad("unallocated source economics row namespace")),
         135 => return Err(wire::wire_bad("unallocated compact V4 row namespace")),
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,

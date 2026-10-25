@@ -95,7 +95,7 @@ pub fn native_recovery_session_quote_v4(
             if *table != PALW_MONETARY_MATERIAL_TABLE_V1 {
                 continue;
             }
-            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
             let row = retain_native_value_decode_v1(bytes, || borsh::from_slice::<PalwMonetaryMaterialRowV1>(bytes))
                 .map_err(|e| e.to_string())?;
             let Some(s) = row.terms.native_session.as_ref() else { continue };
@@ -117,7 +117,7 @@ pub fn native_recovery_session_quote_v4(
             else {
                 continue;
             };
-            preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+            preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
             let recovery_row = retain_native_value_decode_v1(bytes, || borsh::from_slice::<PalwMaterialRecoveryRowV2>(bytes))
                 .map_err(|e| e.to_string())?;
             let PalwMaterialRecoveryRowV2::Active(contract) = &*recovery_row else { continue };

@@ -1886,6 +1886,9 @@ pub struct PalwStateParamsV2 {
     #[borsh(skip)]
     pub(crate) paid_bootstrap_source_v6:
         Option<(u64, misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6)>,
+    /// Explicit source-economics input. Skipped by Borsh so a dormant `None` does not change historical state bytes.
+    #[borsh(skip)]
+    pub(crate) source_economics_v1: Option<(u64, crate::palw_paid_bootstrap_economics_v1::PalwSourceEconomicsPolicyV1)>,
     #[borsh(skip)]
     paid_consumer_lifecycle: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the

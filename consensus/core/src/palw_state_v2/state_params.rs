@@ -174,6 +174,7 @@ impl PalwStateParamsV2 {
             econ_contracts_v1: Default::default(),
             selected_source_bootstrap_v1: None,
             paid_bootstrap_source_v6: None,
+            source_economics_v1: None,
             paid_consumer_lifecycle: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,

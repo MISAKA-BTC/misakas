@@ -147,7 +147,7 @@ pub fn kernel_material_replacement_v4(
             if *table != PALW_MONETARY_MATERIAL_TABLE_V1 {
                 continue;
             }
-            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
             let row = retain_native_value_decode_v1(bytes, || borsh::from_slice::<PalwMonetaryMaterialRowV1>(bytes))
                 .map_err(|e| e.to_string())?;
             if row.providers.iter().any(|p| p.provider == *provider && !p.charged) {
@@ -233,14 +233,14 @@ pub fn material_generation_present_v4(state: &PalwChainStateV2, root: Hash64, co
             continue;
         }
         if *table == PALW_MONETARY_MATERIAL_TABLE_V1 {
-            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
             let row = retain_native_value_decode_v1(bytes, || borsh::from_slice::<PalwMonetaryMaterialRowV1>(bytes))
                 .map_err(|e| e.to_string())?;
             if row.consent == consent {
                 return Ok(true);
             }
         } else if *table == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 {
-            preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+            preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
             let row = retain_native_value_decode_v1(bytes, || borsh::from_slice::<PalwMaterialRecoveryRowV2>(bytes))
                 .map_err(|e| e.to_string())?;
             if row.contract().generations.iter().any(|g| g.consent == consent) {

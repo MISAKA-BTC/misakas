@@ -110,7 +110,7 @@ fn prompt_ids_keyed(domain: &'static [u8], parts: &[&[u8]]) -> Hash64 {
 /// reason: a checker that assumed the occupant would authenticate material the network never
 /// committed. The form is a property of the RULESET (`Params::palw_prompt_ids_merkle`), never of
 /// the carrier, so a challenger picks what to carry and never which rules apply (ADR-0046).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
 pub enum PalwPromptIdsFormV1 {
     /// [`crate::palw_v2::prompt_token_ids_hash_v2`] — the flat digest every shipped preset runs.
     Flat,

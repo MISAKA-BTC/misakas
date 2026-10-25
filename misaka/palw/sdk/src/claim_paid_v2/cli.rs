@@ -79,7 +79,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             // exact native row grammar before the nested Borsh allocation.
             let mut row = bytes.clone();
             row.extend_from_slice(&0u64.to_le_bytes());
-            let mut reader = NativeWireReaderV1::new(&row, row.len() as u64);
+            let mut reader = NativeWireReaderV1::new(row.as_slice(), row.len() as u64);
             let shape = PalwPaidCompactContractV4::scan_native_wire_v1(&mut reader).map_err(|e| e.to_string())?;
             if reader.remaining() != 0 || shape.heap > 64 << 20 {
                 return Err("compact registration exceeds decoded native capacity".into());

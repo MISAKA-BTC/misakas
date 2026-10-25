@@ -249,14 +249,10 @@ fn apply_inner(
             let mut bound = row.clone();
             bound.transcript_root =
                 misaka_palw_kernel::claim_compact_v1::native_v4::compact_transcript_root_v4(row.transcript_root, proof_root);
-            bound
-                .validate_with_compact_v4(
-                    &a,
-                    &r.ledger_checked_v1()
-                        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
-                    Some(proof_root),
-                )
-                .map_err(refused)?;
+            let ledger = r
+                .ledger_checked_v1()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+            bound.validate_with_compact_v4(&a, &ledger, Some(proof_root)).map_err(refused)?;
             b.write_kernel_row(
                 PAID_CLAIM_COMPACT_V4,
                 compact_proof_binding_key_v4(*enrollment, *round),
@@ -598,6 +594,7 @@ fn apply_inner(
             {
                 return Err(refused("V6 receipt has no explicit V6 admission"));
             }
+            super::palw_paid_bootstrap_source_fold_v6::observe_checker_economics_v1(b, ctx, signer, &receipt.enrollment)?;
             receipt_fold(b, ctx, signer, receipt)?;
         }
         PaidClaimObjectV2::Receipt { receipt } => receipt_fold(b, ctx, signer, receipt)?,
@@ -724,14 +721,10 @@ fn admit_review(
     let claimed = misaka_palw_challenge::effective_false_accept_bits_v1(&arithmetic).map_err(|e| refused(e.to_string()))?;
     let actual = if let Some(plan) = a.class.interactive_plan.as_ref().filter(|p| p.version == 4) {
         let registration = r.paid_compact_contract_v4(&plan.id()).map_err(refused)?.registration;
-        let bits = registration
-            .validate_for_class(
-                &a.class,
-                &r.ledger_checked_v1()
-                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
-            )
-            .map_err(refused)?
-            .effective_bits;
+        let ledger = r
+            .ledger_checked_v1()
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+        let bits = registration.validate_for_class(&a.class, &ledger).map_err(refused)?.effective_bits;
         let bits = u16::try_from(bits).map_err(|_| refused("compact union bound is nonpositive/unrepresentable"))?;
         misaka_palw_challenge::EffectiveBitsV1::Bits(bits)
     } else {

@@ -87,7 +87,7 @@ impl PalwMaterialAuthorityRecordV2 {
             .map_err(E::LocalResource)?;
         q.vec_v1::<u8>((754 + binding.job_context.network_id.len() as u64).max(1024)).map_err(E::LocalResource)?;
         let _hash = reserve_native_requests_v1(q.bytes_v1()).map_err(E::LocalResource)?;
-        crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| E::Authentication(e.to_string()))
+        crate::palw_step_leg::verify_binding_v1(binding).map(|_| ()).map_err(|e| E::Authentication(e.to_string()))
     }
 }
 

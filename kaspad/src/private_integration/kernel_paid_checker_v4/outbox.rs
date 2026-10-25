@@ -213,7 +213,7 @@ pub(super) fn scan_outbox(
             return Err("checker action WAL has a gap or follows a terminal action; history retained".into());
         }
         let (raw, _raw) = read_bounded(&object_path, cap)?;
-        preflight_native_value_v1::<PalwConsensusObjectV2>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<PalwConsensusObjectV2>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
         let object =
             retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwConsensusObjectV2>(&raw)).map_err(|e| e.to_string())?;
         let (transaction, lease) = if tx_path.exists() {

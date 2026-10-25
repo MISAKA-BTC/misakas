@@ -135,7 +135,8 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
             .ok_or("compact exporter requires the explicit private V4 configuration, never a V3 relabel")?;
         fence.policy.validate()?;
         let registration = route.paid_compact_contract_v4(&plan.id())?.registration;
-        registration.validate_for_class(&paid_class, &route.ledger()?)?;
+        let ledger = route.ledger()?;
+        registration.validate_for_class(&paid_class, &ledger)?;
         Some(registration)
     } else {
         None

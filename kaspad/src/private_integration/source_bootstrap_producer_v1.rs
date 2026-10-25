@@ -431,7 +431,7 @@ impl PreparedSourceBootstrapProducerV1 {
             retain_native_value_decode_v1(&raw, || borsh::from_slice::<SaltedCommitV1>(&raw)).map_err(|e| e.to_string())?
         } else {
             let (raw, _raw) = read_bounded(&spec.model, self.spec.maximum_input_bytes)?;
-            let shape = preflight_native_value_v1::<Parameters>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
+            let shape = preflight_native_value_v1::<Parameters>(raw.as_slice(), raw.len() as u64).map_err(|e| e.to_string())?;
             if shape.logical_requests_v1() > spec.maximum_workspace_bytes {
                 return Err("source model exceeds workspace authority".into());
             }

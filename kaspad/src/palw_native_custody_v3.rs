@@ -578,6 +578,6 @@ pub fn palw_native_signature_map_owned_v3(
     for row in signatures {
         borsh::to_writer(&mut bytes, row).map_err(|e| e.to_string())?;
     }
-    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
     retain_native_value_decode_v1(&bytes, || borsh::from_slice::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes)).map_err(|e| e.to_string())
 }
