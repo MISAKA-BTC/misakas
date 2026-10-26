@@ -3492,14 +3492,15 @@ impl VirtualStateProcessor {
 pub(crate) mod test_only_inclusion_premise {
     use kaspa_consensus_core::palw_court_service_binding_v1::{CourtServiceInclusionPremiseV1 as Premise, PALW_COURT_SERVICE_INCLUSION_PREMISE_V1};
     #[cfg(test)]
-    static OVERRIDE: std::sync::Mutex<Option<Premise>> = std::sync::Mutex::new(None);
+    /// `Some(x)`: the test's premise `x` (a `TEST_ONLY_` premise, or `None` = test-only typed-missing). `None`: production.
+    static OVERRIDE: std::sync::Mutex<Option<Option<Premise>>> = std::sync::Mutex::new(None);
     #[cfg(test)]
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     pub(crate) fn effective_v1() -> Option<Premise> {
         #[cfg(test)]
         if let Some(p) = *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
-            return Some(p);
+            return p;
         }
         PALW_COURT_SERVICE_INCLUSION_PREMISE_V1
     }
@@ -3519,7 +3520,16 @@ pub(crate) mod test_only_inclusion_premise {
     pub(crate) fn set_named_v1(name: &'static str, premise: Premise) -> TestOnlyPremiseGuardV1 {
         assert!(name.starts_with("TEST_ONLY_"), "the inclusion premise override accepts only TEST_ONLY_ constants, got {name}");
         let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(premise);
+        *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Some(premise));
+        TestOnlyPremiseGuardV1 { _serial: serial }
+    }
+    /// TEST ONLY: fold with NO inclusion premise (the typed-missing case production no longer has since the 2026-10-26 pin).
+    /// `name` must start with `TEST_ONLY_`.
+    #[cfg(test)]
+    pub(crate) fn set_typed_missing_v1(name: &'static str) -> TestOnlyPremiseGuardV1 {
+        assert!(name.starts_with("TEST_ONLY_"), "the inclusion premise override accepts only TEST_ONLY_ names, got {name}");
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(None);
         TestOnlyPremiseGuardV1 { _serial: serial }
     }
     #[cfg(test)]
