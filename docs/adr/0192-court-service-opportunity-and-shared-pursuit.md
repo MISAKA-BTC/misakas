@@ -42,3 +42,11 @@ A のレビューでは少なくとも、DAA ごとの複数 block / 無 block�
 ## 採択後の受入条件
 
 T02–T05、T06–T09、T13–T15 を同じ release binary で実施。予約・effective terms・保留を reorg/restart/pruned IBD から同じ状態に戻す。t12 同一性試験を通す。測定値、derived_upper、未被覆を分離する。tag 230 の codec、応答 fee、turn duration、SC64 profile はこの ADR で決めない。
+
+## 追補(2026-10-26、lane F03b2): F03 A の未決 2 点の暫定決定
+
+**暫定。ユーザーが変更し得る。** 2026-10-22 の値決定委任(目安可、根拠と見直し条件を台帳に)により統括が決定。
+
+1. **request ごとの admission 予算(目安):** bytes = 1 court packet(V1、34,000 B)、work = その操作 class の op_work(V11 `[5,13,1,11]`、request=Opening、body/IDs/root/round=DissectionMove、bottom=Close)。超過は状態変更なしで拒否(tag 178 入口)。M-C 実測で置換する。
+2. **重なる合法 choice:** 同じ座標は従来どおり統合。異なる choice は応答期限の早い順、同順位は座標 id の昇順で決定論的に処理。受付時に `Q ≤ c·W`(Q=閉じた request 集合の大きさ、c=予約 packet/DAA、W=hard 窓)を要求し、各 request ≤ 1 packet なので k 番目の処理 DAA は `a + ⌈k/c⌉ − 1 < a + ⌈Q/c⌉ ≤ a + W = h`。共謀者の先取り・埋め直しは同じ集合の座標で、統合により job を増やさない。
+3. 実装: `consensus/core/src/palw_court_shared_frontier_budget_v1.rs`。fold は処理 DAA をまだ記録しない(純関数と受付検査のみ)。

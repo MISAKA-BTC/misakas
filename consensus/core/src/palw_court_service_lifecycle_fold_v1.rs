@@ -90,6 +90,14 @@ pub(super) fn install_shared_frontier_context_v1(
     }
     let derived = crate::palw_court_shared_tir_state_v1::derive_shared_tir_context_v1(&b.state, claim)
         .map_err(|e| refused(format!("shared frontier install refused: {e}")))?;
+    // F03b2 (provisional): Q <= c * W, so the deterministic EDF schedule serves every coordinate before hard.
+    if !crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(
+        derived.queries,
+        crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
+        derived.hard_daa.saturating_sub(derived.original_accepted_daa),
+    ) {
+        return Err(refused("shared frontier universe exceeds the reserved service capacity of the hard window"));
+    }
     if derived.original_accepted_daa != ctx.daa_score {
         return Err(refused("shared frontier installs only at the original's own accepting point"));
     }
@@ -194,6 +202,25 @@ pub(super) fn apply_shared_court_wire_op_v1(
 ) -> Result<SharedCourtOpEffectV1, PalwStateV2Error> {
     use crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1 as W;
     op.validate_shape_v1().map_err(refused)?;
+    // G14 lane F03b2 (ADR-0192 A/A addendum, PROVISIONAL estimate): per-request budget, checked before any state change.
+    {
+        use crate::palw_court_capacity_v1::PalwCourtOpClassV1 as C;
+        let class = match op {
+            W::Request { .. } => Some(C::Opening),
+            W::Body { .. } | W::Ids { .. } => Some(C::DissectionMove),
+            W::Numerical { manifest, .. } => Some(match manifest.kind {
+                crate::palw_court_numerical_transport_v1::NumericalKindV1::Bottom => C::Close,
+                _ => C::DissectionMove,
+            }),
+            W::NativeHeldDefault { .. } => None,
+        };
+        if let Some(class) = class {
+            let carried = borsh::object_length(op).map_err(|e| refused(e.to_string()))? as u64;
+            let (_, work) = crate::palw_court_shared_frontier_budget_v1::shared_frontier_budget_v1(class);
+            crate::palw_court_shared_frontier_budget_v1::check_shared_frontier_budget_v1(class, carried, work)
+                .map_err(|e| refused(format!("shared frontier budget: {e:?}")))?;
+        }
+    }
     let op = match op {
         W::Body { claim, ordinal, bytes } => SharedCourtOpV1::Body { claim: *claim, ordinal: *ordinal, bytes },
         W::Ids { claim, rows_root, ids } => SharedCourtOpV1::Ids { claim: *claim, rows_root: *rows_root, ids },

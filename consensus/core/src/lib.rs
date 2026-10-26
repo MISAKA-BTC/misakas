@@ -1163,6 +1163,7 @@ pub mod palw_court_shared_tir_stream_v1;
 pub mod palw_court_shared_tir_stream_state_v1;
 pub mod palw_court_shared_tir_response_v1;
 pub mod palw_court_shared_tir_state_v1;
+pub mod palw_court_shared_frontier_budget_v1;
 pub(crate) mod palw_court_shared_tir_builder_store_v1;
 /// RFC-0032 A non-exclusive terminal material ingress (dormant: typed-missing storage schedule).
 pub mod palw_court_shared_material_intake_v1;
