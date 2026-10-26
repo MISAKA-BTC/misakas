@@ -47,3 +47,16 @@ This is a real 1.5B artifact measurement, **not 9B-8k**, not K2 native claim val
 ## 8k prefix consistency during the 32k run
 
 A [captured comparison](raw/dolphin-prefix-8192-2026-10-26/comparison.json) at 09:27 UTC compared the finished 8k run against the first 8,192 positions of the still-running 32k process. All **512 chunk-terminal logits digests agree**, using identical artifact, token input, shape and binary identities. The byte-for-byte bounded stdout snapshots and their hashes are retained. This checks the emitted 16-position endpoints; it does not compare every position's logits or complete internal traces and does not certify a claim. Timing and allocation fields may differ. The remainder of 32k is still pending; the prefix result is not a completed 32k cost measurement.
+
+
+## Completion-evidence validation
+
+The collector now also checks that setup/result JSON agrees with the actual
+stdout records, requested and executed position counts agree, every chunk has
+exactly the requested width (except a final remainder), and the final logits
+digest/cache allocation agree with the last chunk. Eight checks pass, including
+negative cases with recomputed log hashes: missing chunks, mismatched final
+records/digests/cache, wrong chunk width and a falsely enlarged requested scope
+are rejected. The existing 8k summary regenerates byte-for-byte unchanged; N=0
+remains a valid setup control. This strengthens evidence collection and adds no
+new model execution or claim-certification result.

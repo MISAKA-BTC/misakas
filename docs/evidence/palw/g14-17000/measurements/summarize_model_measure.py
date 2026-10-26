@@ -19,15 +19,32 @@ def summarize(folder):
     assert raw['exit_code'] == 0
     for name in ('stdout', 'stderr'):
         assert sha(folder / (name + '.log')) == raw[name + '_sha256']
-    chunks = [json.loads(line.split(' ', 1)[1]) for line in
-              (folder / 'stdout.log').read_text().splitlines()
+    lines = (folder / 'stdout.log').read_text().splitlines()
+    # Bind the collector's JSON to the actual harness records, including the
+    # libtest prefix emitted on the first line. Hashes alone do not establish
+    # agreement between two independently parsed representations.
+    for key, prefix in [('setup', 'G14_MODEL_SETUP '), ('result', 'G14_MODEL_RESULT ')]:
+        records = [json.loads(line.split(prefix, 1)[1]) for line in lines if prefix in line]
+        assert len(records) == 1 and records[0] == raw[key], f'{key} record mismatch'
+    setup = raw['setup']
+    expected = int(raw['env']['G14_A16_POSITIONS'])
+    chunk_size = int(raw['env']['G14_A16_CHUNK'])
+    assert expected == setup['positions_requested'] <= setup['declared_max_context']
+    assert 1 <= chunk_size <= 32 and chunk_size == setup['chunk_positions']
+    chunks = [json.loads(line.split(' ', 1)[1]) for line in lines
               if line.startswith('G14_MODEL_CHUNK ')]
     result = raw['result']
     position = 0
     for chunk in chunks:
-        assert chunk['first'] == position and chunk['end'] > position
+        assert chunk['first'] == position
+        assert chunk['end'] == min(position + chunk_size, expected) > position
+        assert chunk['wall_ns'] > 0 and chunk['logical_trace_i32_bytes'] > 0
+        assert re.fullmatch(r'[0-9a-f]{64}', chunk['logits_sha256'])
         position = chunk['end']
-    assert position == result['positions_executed'] == raw['completed_positions']
+    assert position == result['positions_executed'] == raw['completed_positions'] == expected
+    if chunks:
+        assert chunks[-1]['logits_sha256'] == result['last_logits_sha256'], 'final logits mismatch'
+        assert chunks[-1]['cache_resident_bytes'] == result['cache_resident_bytes'], 'final cache mismatch'
     total_ns = sum(c['wall_ns'] for c in chunks)
     assert total_ns == result['total_forward_wall_ns']
     trace_bytes = sum(c['logical_trace_i32_bytes'] for c in chunks)
