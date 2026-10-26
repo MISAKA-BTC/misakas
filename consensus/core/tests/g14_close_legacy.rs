@@ -91,10 +91,47 @@ fn arm_legacy(mut p: Params, at: u64, held: bool, route: bool) -> (Params, Vec<P
         records.push(record(PalwG14GatedFenceV1::G14RouteRequiredV1, p.genesis.hash, at));
     }
     p.sync_palw_g14_gates_v1();
-    p.validate_palw_v2_with_arming_records_v1(&records).unwrap_or_else(|e| panic!("the armed ruleset validates with its records: {e:?}"));
+    validates_with_records_but_f02_f03(&p, &records).unwrap_or_else(|e| panic!("the armed ruleset validates with its records: {e:?}"));
     let unpinned = p.validate_palw_v2().expect_err("no record is pinned in this binary");
     assert!(format!("{unpinned:?}").contains("no arm-readiness record"), "{unpinned:?}");
     (p, records)
+}
+
+/// **Record gate vs RFC-0026 F02/F03.** The slice lanes have not adopted F02 (`PALW_COURT_SERVICE_PROFILE_V1`) or F03's paid ingress in
+/// this binary, so a real-height arming of the legacy fences is refused by `validate_palw_court_policy_completeness_v1` AFTER its record
+/// admits (lane LEGACY, 2026-10-26: the cause of the 7 / 12 failures lane ACT reported). This returns `Ok` when the whole validation
+/// passes, or when its ONLY refusal is that typed F02/F03 gate AND every armed gated fence's record then admits on its own; any other
+/// refusal is returned. Nothing is skipped silently: the F02/F03 refusal is asserted by name in `lg14_*` / `court_capacity_*`.
+fn validates_with_records_but_f02_f03(p: &Params, records: &[PalwG14ArmingRecordV1]) -> Result<(), String> {
+    validates_with_records_but_f02_f03_cost(p, records, &[])
+}
+
+/// [`validates_with_records_but_f02_f03`] with TIR frame cost records (checked on their own when F02/F03 stops the whole validation).
+fn validates_with_records_but_f02_f03_cost(
+    p: &Params,
+    records: &[PalwG14ArmingRecordV1],
+    cost_records: &[kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
+) -> Result<(), String> {
+    let whole = if cost_records.is_empty() {
+        p.validate_palw_v2_with_arming_records_v1(records)
+    } else {
+        p.validate_palw_v2_with_arming_and_cost_records_v1(records, cost_records)
+    };
+    let Err(e) = whole else { return Ok(()) };
+    let s = format!("{e:?}");
+    if !(s.contains("OneOutsiderCapacityIncomplete") || s.contains("ServiceOpportunityIncomplete")) {
+        return Err(s);
+    }
+    for fence in PalwG14GatedFenceV1::ALL {
+        if let Some(at) = fence.armed(p) {
+            palw_g14_arming_record_admits_v1(fence, p.genesis.hash, at.daa_score(), records)
+                .map_err(|r| format!("{} ({fence:?}): {r:?}", fence.name()))?;
+        }
+    }
+    if !cost_records.is_empty() {
+        p.validate_palw_tir_frame_cost_in_v1(cost_records).map_err(|e| format!("{e:?}"))?;
+    }
+    Ok(())
 }
 
 fn refused_with(e: &PalwStateV2Error, want: &str) -> bool {
@@ -143,8 +180,11 @@ fn lg14_arming_needs_a_record_naming_the_network_and_height() {
     for i in 0..records.len() {
         let mut fewer = records.clone();
         let dropped = fewer.remove(i);
-        let why = p.validate_palw_v2_with_arming_records_v1(&fewer).expect_err("every record is load-bearing");
-        assert!(format!("{why:?}").contains(dropped.fence.name()), "{:?}: {why:?}", dropped.fence);
+        assert!(p.validate_palw_v2_with_arming_records_v1(&fewer).is_err(), "every record is load-bearing");
+        // The whole validation stops at the first fence's F02/F03 refusal, so the dropped fence's own record gate is read directly.
+        let at = dropped.fence.armed(&p).expect("armed").daa_score();
+        let why = palw_g14_arming_record_admits_v1(dropped.fence, p.genesis.hash, at, &fewer).expect_err("every record is load-bearing");
+        assert!(matches!(why, PalwG14ArmingRefusalV1::NoRecord), "{:?}: {why:?}", dropped.fence);
     }
     let elsewhere: Vec<PalwG14ArmingRecordV1> =
         records.iter().map(|r| PalwG14ArmingRecordV1 { activation_daa: RELEASE + 1, ..*r }).collect();
@@ -231,7 +271,9 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     .into_iter()
     .map(|fence| record(fence, t12.genesis.hash, RELEASE))
     .collect();
-    let why = p.validate_palw_v2_with_arming_and_cost_records_v1(&past_records, &past).expect_err("door past the horizon");
+    assert!(p.validate_palw_v2_with_arming_and_cost_records_v1(&past_records, &past).is_err(), "door past the horizon");
+    // The whole validation now stops first at RFC-0026 F02/F03 (typed, slice lanes), so the horizon refusal is read from its own check.
+    let why = p.validate_palw_tir_frame_cost_in_v1(&past).expect_err("door past the horizon");
     assert!(format!("{why:?}").contains("liability horizon"), "{why:?}");
     cost.clock.maximum_door_daa = horizon;
     p.palw_tir_frame_cost_v1 = Some(cost);
@@ -256,15 +298,17 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     .into_iter()
     .map(|fence| record(fence, t12.genesis.hash, RELEASE))
     .collect();
-    p.validate_palw_v2_with_arming_and_cost_records_v1(&records, &cost_records)
+    validates_with_records_but_f02_f03_cost(&p, &records, &cost_records)
         .unwrap_or_else(|e| panic!("the FP route ruleset validates with its records: {e:?}"));
-    let why = p.validate_palw_v2_with_arming_records_v1(&records).expect_err("no pinned frame cost record");
+    assert!(p.validate_palw_v2_with_arming_records_v1(&records).is_err(), "no pinned frame cost record");
+    let why = p.validate_palw_tir_frame_cost_in_v1(&[]).expect_err("no pinned frame cost record");
     assert!(format!("{why:?}").contains("TIR frame cost"), "{why:?}");
     // Without LG14-A's record the staged court's prerequisite cannot be armed (G-18 stands; only the record unlocks it).
     let without_filer: Vec<PalwG14ArmingRecordV1> =
         records.iter().copied().filter(|r| r.fence != PalwG14GatedFenceV1::LegacyPublicFilerV1).collect();
-    let why = p.validate_palw_v2_with_arming_and_cost_records_v1(&without_filer, &cost_records).expect_err("LG14-A unrecorded");
-    assert!(format!("{why:?}").contains("palw_legacy_public_filer_v1"), "{why:?}");
+    assert!(p.validate_palw_v2_with_arming_and_cost_records_v1(&without_filer, &cost_records).is_err(), "LG14-A unrecorded");
+    let why = validates_with_records_but_f02_f03_cost(&p, &without_filer, &cost_records).expect_err("LG14-A unrecorded");
+    assert!(why.contains("palw_legacy_public_filer_v1"), "{why}");
     let mirror = bundle(&p).state.g14_route_required_v1().expect("option (b)");
     eprintln!("[FP] route mirror at {RELEASE}: {mirror:?}");
     use PalwG14RouteFamilyV1 as F;
@@ -400,7 +444,7 @@ fn held_chain_lane(armed: bool, lane: bool, sybils: u64) -> (Held, HeldRow, Vec<
         if lane {
             p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(0));
             p.sync_palw_g14_gates_v1();
-            p.validate_palw_v2_with_arming_records_v1(&records).unwrap_or_else(|e| panic!("the lane validates beside LG14-A: {e:?}"));
+            validates_with_records_but_f02_f03(&p, &records).unwrap_or_else(|e| panic!("the lane validates beside LG14-A: {e:?}"));
         }
         p
     } else {
