@@ -161,7 +161,7 @@ fn public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_un
                 }
                 5 | 6 => {
                     altered.reserver = if bad == 5 { producer() } else { bond(8) };
-                    let reservation = parent.legacy_disputes[&seed.claim].live[&seed.reserver].clone();
+                    let reservation = parent.legacy_disputes[&seed.claim].live[&seed.reserver];
                     parent.legacy_disputes.get_mut(&seed.claim).unwrap().live.insert(altered.reserver, reservation);
                     parent.bonds.get_mut(&altered.reserver).unwrap().collateral = u64::MAX / 2;
                 }
@@ -720,7 +720,7 @@ fn public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal
     for n in 100..=164 {
         let owner = bond(n);
         let (row, _) = fixture_for_owner(owner);
-        let reservation = builder.state.legacy_disputes[&claim].live[&bond(7)].clone();
+        let reservation = builder.state.legacy_disputes[&claim].live[&bond(7)];
         builder.state.legacy_disputes.get_mut(&claim).unwrap().live.insert(owner, reservation);
         let demand = row.next_demand_v1(101).unwrap().unwrap();
         let movement = PalwConstraintStreamMoveV1 {
@@ -1424,7 +1424,6 @@ fn every_paid_family_continues_and_convicts_after_actual_sibling_da_default() {
     };
     add(Action::EogPart { offset: 0, ids: accusation.eog.ids.clone() });
     add(Action::EogFinish);
-    drop(add);
     while completed.court().phase() != Phase::Complete {
         let id = completed.court().next_rendering_id().unwrap();
         let mut actions = if completed.court().is_eog(id) {

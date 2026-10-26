@@ -10,7 +10,6 @@ native_enum!(crate::palw_prefix_family_court_v1::Q36HeadV1; Whole { replay, cont
 native_struct!(crate::palw_prefix_family_court_v1::PublicInputsV1; unit, offset, length, sources, source, bytes, stream);
 native_struct!(crate::palw_prefix_family_court_v1::HeadInputsV1; rows, stream);
 
-use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]
 use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};

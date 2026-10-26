@@ -4,7 +4,7 @@ use crate::BlockHash;
 use std::sync::OnceLock;
 pub(crate) mod typed;
 pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1};
-pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
+pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit};
 mod demand;
 mod restore;
 mod restore_workspace;

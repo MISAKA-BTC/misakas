@@ -1152,16 +1152,13 @@ pub fn palw_staged_owned_progress_v1(
         },
         bundle: match owned {
             Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) => Some(bundle.progress_v1()),
-            _ => match state.staged_bundle_contract_v1(key.0) {
-                Some(bundle) => Some(crate::palw_staged_bundle_v1::PalwStagedBundleProgressV1 {
-                    bundle_id: bundle.plan.id_v1(key.0),
-                    plan: bundle.plan.clone(),
-                    active_index: None,
-                    pending_seed: None,
-                    inventory: None,
-                }),
-                _ => None,
-            },
+            _ => state.staged_bundle_contract_v1(key.0).map(|bundle| crate::palw_staged_bundle_v1::PalwStagedBundleProgressV1 {
+                bundle_id: bundle.plan.id_v1(key.0),
+                plan: bundle.plan.clone(),
+                active_index: None,
+                pending_seed: None,
+                inventory: None,
+            }),
         },
         seed_id,
         cursor,
@@ -1181,31 +1178,29 @@ pub fn palw_staged_owned_context_v1(
     }
     let context = match state.staged_owned_row_v1(key.0, key.1) {
         Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) => {
-            if let Some(context) = &bundle.selected_context {
-                if bundle.active.is_none()
+            if let Some(context) = &bundle.selected_context
+                && (bundle.active.is_none()
                     || bundle.active.is_some_and(|n| {
                         bundle
                             .plan
                             .stages
                             .get(n as usize + 1)
                             .is_some_and(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
-                    })
-                {
-                    return Ok(Some((context.binding.as_ref().clone(), context.job.as_ref().clone())));
-                }
+                    }))
+            {
+                return Ok(Some((context.binding.as_ref().clone(), context.job.as_ref().clone())));
             }
-            if let Some(context) = bundle.flat_context.as_ref().or(bundle.float_context.as_ref()) {
-                if bundle.active.is_none()
+            if let Some(context) = bundle.flat_context.as_ref().or(bundle.float_context.as_ref())
+                && (bundle.active.is_none()
                     || bundle.active.is_some_and(|n| {
                         bundle
                             .plan
                             .stages
                             .get(n as usize + 1)
                             .is_some_and(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
-                    })
-                {
-                    return Ok(Some((context.binding.as_ref().clone(), context.job.as_ref().clone())));
-                }
+                    }))
+            {
+                return Ok(Some((context.binding.as_ref().clone(), context.job.as_ref().clone())));
             }
             let Some(stage) = bundle.active.and_then(|index| bundle.opened.get(index as usize)) else {
                 let contract = state.staged_bundle_contract_v1(key.0).ok_or("paid bundle original claim context absent")?;

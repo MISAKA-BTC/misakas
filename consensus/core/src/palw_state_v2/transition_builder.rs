@@ -133,7 +133,7 @@ impl<'a> TransitionBuilder<'a> {
             bound = bound.add::<PalwBondStateV2>(NativeCoverageV1::Bounded { bytes: (primary + lookup) as u64 }, path);
         }
         self.native_reservation
-            .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+            .grow_v1(bound.bytes().ok_or(PalwStateV2Error::NativeResource(bound))?)
             .map_err(PalwStateV2Error::NativeResource)?;
 
         if new.is_none() {
@@ -385,7 +385,7 @@ impl<'a> TransitionBuilder<'a> {
             journal_capacity = Some(count);
         }
         self.native_reservation
-            .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+            .grow_v1(bound.bytes().ok_or(PalwStateV2Error::NativeResource(bound))?)
             .map_err(PalwStateV2Error::NativeResource)?;
         if let Some(count) = journal_capacity {
             self.entries.try_reserve_exact(count - self.entries.len()).map_err(|_| {
@@ -505,7 +505,7 @@ impl<'a> TransitionBuilder<'a> {
         let mut total = bytes.len() as u64;
         if let Some(pending) = self.state.pending_chunks.get(group) {
             let heap = pending.native_heap_v1("chunk assembly existing group clone");
-            q.add_v1(heap.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(heap))?).map_err(PalwStateV2Error::NativeResource)?;
+            q.add_v1(heap.bytes().ok_or(PalwStateV2Error::NativeResource(heap))?).map_err(PalwStateV2Error::NativeResource)?;
             for part in pending.parts.values() {
                 total = total.checked_add(part.len() as u64).ok_or_else(|| {
                     PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwPendingChunksV2>("chunk assembly bytes"))
@@ -2817,7 +2817,7 @@ impl<'a> TransitionBuilder<'a> {
             || default.custodians.contains(&winner)
             || default.custodians.iter().any(|bond| {
                 *bond != contract.producer
-                    && !contract.custody.credited.get(bond).is_some_and(|receipt| receipt.credited_daa <= default.opened_daa)
+                    && contract.custody.credited.get(bond).is_none_or(|receipt| receipt.credited_daa > default.opened_daa)
             })
         {
             return Err(PalwStateV2Error::CarriageInconsistent(

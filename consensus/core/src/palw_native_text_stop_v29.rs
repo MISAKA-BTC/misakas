@@ -5,7 +5,6 @@ use crate::palw_native_final_v27::{CheckedNativeFinalConditionsV27, NativeFinalC
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::{
     flat_resources29::{FlatResourcePlanV29, derive_flat_resources_v29},
-    flat_scope25::CheckedResourceScopeV25,
     hash::{Digest, object_id},
     seg::{SEG_LEN_V4, claim_root_v1},
     trace::ParamCommitmentsV1,
@@ -402,8 +401,8 @@ impl NativeTextBookV29 {
         {
             return Err("text29 rooted original funding/book/conservation differs".into());
         }
-        if let Some(s) = &b.settlement {
-            if s.job != b.funded.id()
+        if let Some(s) = &b.settlement
+            && (s.job != b.funded.id()
                 || s.original_funding != b.funded.root()
                 || s.terminal != b.terminal
                 || s.claim != b.claim.as_ref().map(NativeTextClaimV29::root)
@@ -420,10 +419,9 @@ impl NativeTextBookV29 {
                         || s.producer != 0
                         || s.actual_collected_slash != b.funded.maximum.producer_reserve
                         || s.finder_credit != b.funded.maximum.finder_award
-                        || s.proof == [0; 64]))
-            {
-                return Err("text29 restored terminal original principal and collected collateral differ".into());
-            }
+                        || s.proof == [0; 64])))
+        {
+            return Err("text29 restored terminal original principal and collected collateral differ".into());
         }
         Ok(b)
     }

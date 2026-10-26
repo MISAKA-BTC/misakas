@@ -1,6 +1,5 @@
 //! **`palw_state_v2`'s unit tests**, moved out of `palw_state_v2.rs` (2026-10-12, a behaviour-preserving split: the module path
 //! `crate::palw_state_v2::tests` and every test in it are unchanged; only the file moved).
-#![cfg(test)]
 
 mod gdn_court_v2;
 mod kernel_route_locator_v1;

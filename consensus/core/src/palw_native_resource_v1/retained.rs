@@ -141,6 +141,7 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
         self.try_project_v1(Clone::clone)
     }
     /// Prevent Deref method resolution from selecting an unreserved deep Clone.
+    #[allow(clippy::should_implement_trait)] // deliberately shadows Clone::clone with a fallible one
     pub fn clone(&self) -> Result<Self, NativeCoverageV1> {
         self.try_clone_v1()
     }

@@ -270,12 +270,12 @@ pub fn require_panel_session_window_v2(
 ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
     use crate::palw_state_v2::PalwStateV2Error;
     let Some(claim) = state.claim(id) else { return Ok(()) };
-    if let Some(row) = panel_lifetime_claim_v2(state, params, id, claim).map_err(PalwStateV2Error::KernelRouteRefused)? {
-        if required_until > row.terms.liability_until_daa {
-            return Err(PalwStateV2Error::KernelRouteRefused(
-                "native court or DA extension exceeds its signed Panel liability endpoint".into(),
-            ));
-        }
+    if let Some(row) = panel_lifetime_claim_v2(state, params, id, claim).map_err(PalwStateV2Error::KernelRouteRefused)?
+        && required_until > row.terms.liability_until_daa
+    {
+        return Err(PalwStateV2Error::KernelRouteRefused(
+            "native court or DA extension exceeds its signed Panel liability endpoint".into(),
+        ));
     }
     Ok(())
 }
@@ -293,7 +293,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let now = self.last_point().map(|p| p.daa_score).unwrap_or(0);
         let mut total = 0u32;
         let mut owned = std::collections::BTreeMap::<PalwBondKeyV2, u32>::new();
-        for ((table, key), _) in &route.aux {
+        for (table, key) in route.aux.keys() {
             if *table != PALW_PANEL_LIFETIME_TABLE_V2 {
                 continue;
             }

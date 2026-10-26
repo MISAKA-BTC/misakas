@@ -20,12 +20,12 @@ impl Params {
             .palw_paid_bootstrap_source_v6
             .filter(|f| f.activation != ForkActivation::never())
             .map(|f| (f.activation.daa_score(), f.policy));
-        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            if bundle.state.paid_bootstrap_source_v6 != mirror {
-                return Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned(
-                    "V6 paid bootstrap source mirror is not synchronized".into(),
-                ));
-            }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.paid_bootstrap_source_v6 != mirror
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned(
+                "V6 paid bootstrap source mirror is not synchronized".into(),
+            ));
         }
         if let Some(fence) = self.palw_paid_bootstrap_source_v6 {
             fence.policy.validate().map_err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned)?;
@@ -210,7 +210,7 @@ pub(crate) fn collect_for_authority_v6(
     }
     let epoch = epoch_v6(route)?;
     let mut count = 0usize;
-    for ((table, key), _) in &route.aux {
+    for (table, key) in route.aux.keys() {
         if *table == crate::palw_source_bootstrap_v1::PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1 && key.len() == 65 && key[0] == 1 {
             count = count.checked_add(1).ok_or_else(|| bad("V6 source count overflow"))?;
             if count > binding.collector.maximum_events as usize {
@@ -228,7 +228,7 @@ pub(crate) fn collect_for_authority_v6(
             misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1,
         >("V6 source event vector", "allocator refusal"))
     })?;
-    for ((table, key), _) in &route.aux {
+    for (table, key) in route.aux.keys() {
         if *table != crate::palw_source_bootstrap_v1::PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1 || key.len() != 65 || key[0] != 1 {
             continue;
         }
@@ -437,7 +437,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         }
         let ledger = route.ledger_checked_v1().map_err(native)?;
         let mut count = 0u32;
-        for ((table, key), _) in &route.aux {
+        for (table, key) in route.aux.keys() {
             if *table != PAID_BOOTSTRAP_SOURCE_TABLE_V6 {
                 continue;
             }

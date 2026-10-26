@@ -933,7 +933,7 @@ fn close_unclaimed(
     if book.original_funded_root() != h.original_book_root
         || book.requester_operator() != h.requester_operator
         || counter.next_nonce <= misaka_palw_kernel::flat_execution11::canonical_nonce_v11(&book.job().nonce).map_err(refused)?
-        || row.trace_bytes.len() != 0
+        || !row.trace_bytes.is_empty()
     {
         return Err(refused("stage Close lacks original escrow/shared nonce/claim lineage"));
     }

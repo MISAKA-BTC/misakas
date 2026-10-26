@@ -230,7 +230,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         49 if k.len() == 64 => {
             <crate::palw_model_conformance_v2::ModelConformanceRowV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
-        50 if k.len() == 0 => <(u64, u32) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        50 if k.is_empty() => <(u64, u32) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         51 if k.len() == 64 => <crate::palw_model_vector_v2::ModelVectorRowV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         52 if k.len() == 68 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         53 if k.len() == 64 => <crate::palw_model_vector_da_v2::ModelVectorDemandV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
@@ -254,19 +254,19 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         65 if k.len() == 64 => <bool as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         66 if k.len() == 128 => <crate::palw_flat_model_seal_v6::FlatNativeSealRowV6 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         67 if k.len() == 68 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        68 if k.len() == 0 => <u32 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        68 if k.is_empty() => <u32 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         69 if k.len() == 64 => <bool as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         70 if k.len() == 128 => {
             <crate::palw_flat_model_vector_v7::FlatNativeSealRowV7 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
         71 if k.len() == 68 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        72 if k.len() == 0 => <u32 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        72 if k.is_empty() => <u32 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         78 if k.len() == 64 => <bool as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         79 if k.len() == 128 => {
             <crate::palw_flat_model_vector_v9::FlatNativeSealRowV9 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
         80 if k.len() == 68 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        81 if k.len() == 0 => <u32 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        81 if k.is_empty() => <u32 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         73 if k.len() == 64 => {
             <crate::palw_flat_model_vector_da_v7::FlatVectorDemandV7 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
@@ -432,7 +432,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         92 if k.len() == 68 && k[0] == 31 && k[65] == 2 => {
             raw_aux_row_v1(frame, (crate::palw_native_initial_v31::INITIAL_PART_BYTES_V31) as u64)?
         }
-        93 if k.len() == 0 => {
+        93 if k.is_empty() => {
             <crate::palw_flat_execution_v11::NativeExecutionPoliciesV11 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
         93 if k.len() == 65 && k[0] == 19 => {
@@ -468,7 +468,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         96 if k.len() == 69 && k[0] == 1 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         96 if k.len() == 70 && k[0] == 29 && k[1] == 0 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         96 if k.len() == 70 && k[0] == 29 && k[1] == 1 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        97 if k.len() == 0 => <u32 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        97 if k.is_empty() => <u32 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         98 if k.len() == 64 => {
             <crate::palw_flat_execution_v11::NativeExecutionPreparationV11 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
@@ -513,9 +513,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         99 if k.len() == 65 && k[0] == 13 => {
             <crate::palw_flat_execution_v11::NativeExecutionDiscoveryV13 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
-        99 if k.len() == 66 && k[0] == 15 => {
-            raw_aux_row_v1(frame, (misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11) as u64)?
-        }
+        99 if k.len() == 66 && k[0] == 15 => raw_aux_row_v1(frame, misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11)?,
         99 if k.len() == 68 && k[0] == 28 => raw_aux_row_v1(frame, (32 << 10) as u64)?,
         99 if k.len() == 131 && k[0] == 29 => {
             raw_aux_row_v1(frame, (crate::palw_native_text_stop_v29::TEXT_STOP_PART_BYTES_V29) as u64)?
@@ -643,9 +641,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         112 if k.len() == 65 && k[0] == 20 => {
             <crate::palw_flat_execution_v11::NativeExecutionProofGroupV11 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
-        112 if k.len() == 66 && k[0] == 23 => {
-            raw_aux_row_v1(frame, (misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11) as u64)?
-        }
+        112 if k.len() == 66 && k[0] == 23 => raw_aux_row_v1(frame, misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11)?,
         112 if k.len() == 69 && k[0] == 1 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         112 if k.len() == 69 && k[0] == 3 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         112 if k.len() == 69 && k[0] == 6 => <Vec<[u8; 64]> as NativeWireScanV1>::scan_native_wire_v1(frame)?,

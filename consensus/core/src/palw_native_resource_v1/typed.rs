@@ -1,6 +1,5 @@
 //! Native allocation requests, visited by type rather than inferred from codec bytes.
 //! This is a pinned Rust BTree allocation envelope, not physical RSS approval.
-use super::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem::size_of,
@@ -284,6 +283,8 @@ macro_rules! native_tuple_struct { ($ty:ty; $($field:ident),* $(,)?) => {
         }
     }
 }; }
+// Kept in the toolkit for unit types; no type uses it at present.
+#[allow(unused_macros)]
 macro_rules! native_unit {
     ($ty:ty) => {
         impl NativeHeapV1 for $ty {
@@ -315,6 +316,7 @@ macro_rules! native_enum {
                 }),* }
             }
             fn native_heap_v1(&self,path:&str)->NativeCoverageV1 {
+                let _ = path; // fieldless variants do not use it
                 match self { $(Self::$variant $( { $($named),* } )? $( ( $($tuple),* ) )? => {
                     #[allow(unused_mut)] let mut sum=NativeCoverageV1::zero();
                     $($(sum=sum.add::<Self>($named.native_heap_v1(path),path);)*)?
@@ -325,6 +327,8 @@ macro_rules! native_enum {
         }
     };
 }
+// Kept in the toolkit for types without a layout visitor; no type uses it at present.
+#[allow(unused_macros)]
 macro_rules! native_unsupported {
     ($ty:ty) => {
         impl NativeHeapV1 for $ty {
@@ -334,7 +338,7 @@ macro_rules! native_unsupported {
         }
     };
 }
-pub(crate) use {native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
+pub(crate) use {native_enum, native_struct, native_tuple_struct, native_unit};
 
 impl<T: NativeHeapV1 + ?Sized> NativeHeapV1 for &T {
     fn native_members_v1(&self) -> Option<u64> {
@@ -403,6 +407,14 @@ impl NativeHeapV1 for misaka_palw_kernel::opv::OpvStateV1 {
     }
 }
 
+// The owner returns only borrowed references and exhaustively destructures all
+// private fields; extending that record requires a matching inventory bridge.
+impl NativeHeapV1 for misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26 {
+    fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
+        self.native_inventory_parts_v1().native_heap_v1(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,13 +440,5 @@ mod tests {
             assert!(fields.iter().any(|field| field.component.ends_with(expected)), "{expected}");
         }
         assert!(state.native_heap_v1("state").bytes().is_some());
-    }
-}
-
-// The owner returns only borrowed references and exhaustively destructures all
-// private fields; extending that record requires a matching inventory bridge.
-impl NativeHeapV1 for misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26 {
-    fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        self.native_inventory_parts_v1().native_heap_v1(path)
     }
 }

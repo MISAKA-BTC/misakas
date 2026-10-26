@@ -698,7 +698,7 @@ pub(super) fn owner_open(r: &PalwKernelRouteStateV1, job: Digest, owner: Digest)
     let i = s.owners.iter().position(|v| *v == owner).ok_or_else(|| refused("text29 original physical owner absent"))?;
     let mut n = 0;
     for id in &s.units[3 + i * 2..5 + i * 2] {
-        if *id != [0; 64] && demand(r, *id)?.settled == false {
+        if *id != [0; 64] && !demand(r, *id)?.settled {
             n += 1;
         }
     }

@@ -52,7 +52,7 @@
 //! only for a verdict every committed leaf of which lies in the segments its mask covers, and that
 //! read nothing a segment replay does not recompute (a KV checkpoint, a generated token).
 
-use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1, palw_panel_contradiction_convicts_execution_v1};
+use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1};
 use crate::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3};
 use crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwVoidReasonV2};
@@ -3277,7 +3277,12 @@ pub(crate) mod tests {
         let opening = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&[3, 5, 8, 13], 0).expect("a short prompt opens");
         for contradiction in &cases {
             for claim_root in [root, h64(0xE0)] {
-                let v1 = palw_panel_contradiction_convicts_execution_v1(contradiction, claim_root, h64(0xAF), 1 << 20);
+                let v1 = crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_v1(
+                    contradiction,
+                    claim_root,
+                    h64(0xAF),
+                    1 << 20,
+                );
                 assert_eq!(
                     palw_false_valid_convicts_execution_v2(contradiction, None, claim_root, h64(0xAF), 1 << 20),
                     v1,

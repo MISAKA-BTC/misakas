@@ -220,11 +220,9 @@ impl PalwChainStateV2 {
     pub fn staged_public_prefix_rows_v1(
         &self,
     ) -> impl Iterator<Item = &crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1> {
-        self.staged_courts.values().filter_map(|row| match row {
-            row => match row.active_row_v1() {
-                Some(PalwStagedCourtRowV1::PublicPrefix(row)) => Some(row.as_ref()),
-                _ => None,
-            },
+        self.staged_courts.values().filter_map(|row| match row.active_row_v1() {
+            Some(PalwStagedCourtRowV1::PublicPrefix(row)) => Some(row.as_ref()),
+            _ => None,
         })
     }
     pub fn staged_public_prefix_duties_after_v1(

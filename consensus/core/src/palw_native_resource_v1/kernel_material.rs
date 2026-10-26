@@ -17,7 +17,7 @@ fn add(a: u64, b: u64) -> Result<u64, NativeCoverageV1> {
     a.checked_add(b).ok_or_else(|| NativeCoverageV1::overflow::<PositionResponseV1>("kernel material cardinality"))
 }
 fn shape_product(mut shape: impl Iterator<Item = u64>) -> Result<u64, NativeCoverageV1> {
-    shape.try_fold(1u64, |n, d| product(n, d))
+    shape.try_fold(1u64, product)
 }
 fn tensor_wire(q: &mut TirNativeRequestsV1, wire: &TensorWireV1) -> Result<(), NativeCoverageV1> {
     let dtype = misaka_palw_kernel::plan::dtype_of_tag(wire.dtype).ok_or_else(|| bad("unknown material tensor dtype"))?;
@@ -113,7 +113,7 @@ pub fn native_kernel_parameter_tensor_requests_v4(
     spec: &crate::palw_kernel_parameter_material_v4::PalwKernelParameterSpecV4<'_>,
 ) -> Result<u64, NativeCoverageV1> {
     let shape = &spec.declaration.shape;
-    if shape.len() > misaka_palw_tir::types::MAX_RANK || shape.iter().any(|d| *d == 0) || !matches!(spec.suite, 2 | 3) {
+    if shape.len() > misaka_palw_tir::types::MAX_RANK || shape.contains(&0) || !matches!(spec.suite, 2 | 3) {
         return Err(bad("parameter has no supported actual tensor geometry/commitment suite"));
     }
     let n = shape_product(shape.iter().copied().map(u64::from))?;
@@ -130,10 +130,10 @@ pub fn native_kernel_parameter_tensor_requests_v4(
     Ok(q.bytes_v1())
 }
 
-fn occurrence_block<'a>(
-    p: &'a misaka_palw_tir::program::TirProgramV1,
+fn occurrence_block(
+    p: &misaka_palw_tir::program::TirProgramV1,
     occurrence: u16,
-) -> Result<&'a misaka_palw_tir::program::Block, NativeCoverageV1> {
+) -> Result<&misaka_palw_tir::program::Block, NativeCoverageV1> {
     let at = occurrence as usize;
     let index = if at == 0 {
         p.schedule.pre

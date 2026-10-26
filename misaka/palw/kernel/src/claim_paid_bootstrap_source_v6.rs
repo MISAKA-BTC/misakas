@@ -103,6 +103,40 @@ impl PaidBootstrapSourceBindingV6 {
     }
 }
 
+impl crate::claim_paid_v2::PaidClaimCheckAuthorityV2 {
+    /// A new typed source path, never a fabricated legacy VerifiedWorkBeacon.
+    /// Native admission independently reconstructs this binding/collector from
+    /// own rows; SDK callers cannot make remote event bytes native authority.
+    pub fn verify_approved_bootstrap_v6(
+        class: &crate::claim_paid_v2::PaidClaimClassV2,
+        enrollment: &crate::claim_paid_v2::PaidClaimEnrollmentV2,
+        base: &misaka_palw_challenge::ChallengeSubjectV1,
+        binding: &PaidBootstrapSourceBindingV6,
+        source: &ApprovedSourceStateV1,
+        now: u64,
+        checker_snapshot: Digest,
+    ) -> Result<Self, String> {
+        let subject = crate::claim_paid_v2::paid_subject_with_checker_snapshot_v2(base, class, enrollment, checker_snapshot)?;
+        if !class.supports_approved_bootstrap_source_v6()
+            || !enrollment.lifetime.receipt_open(now)
+            || binding.enrollment != enrollment.id()
+            || binding.checker_snapshot != checker_snapshot
+            || binding.liability_until != enrollment.lifetime.liability_until
+            || binding.consumer.commitment != subject.commitment_root
+            || binding.consumer.target_profile != class.base_class
+            || binding.consumer.commitment_position < enrollment.lifetime.committed_daa
+            || binding.consumer.commitment_position > enrollment.accepted_until_daa
+        {
+            return Err("V6 check authority changes the signed native statement/checker/lifetime".into());
+        }
+        let seed = binding.seed(source)?;
+        if matches!(source, ApprovedSourceStateV1::Locked { locked_at, .. } if *locked_at > now) {
+            return Err("V6 approved source lock is from a future native position".into());
+        }
+        Self::from_approved_bootstrap_parts_v6(class, enrollment, binding.id(), seed)
+    }
+}
+
 #[cfg(test)]
 mod source_controls {
     use super::*;
@@ -204,39 +238,5 @@ mod source_controls {
         assert_eq!(old.encode()[2], 4);
         assert_eq!(new.encode()[2], 17);
         assert_ne!(old.encode(), new.encode());
-    }
-}
-
-impl crate::claim_paid_v2::PaidClaimCheckAuthorityV2 {
-    /// A new typed source path, never a fabricated legacy VerifiedWorkBeacon.
-    /// Native admission independently reconstructs this binding/collector from
-    /// own rows; SDK callers cannot make remote event bytes native authority.
-    pub fn verify_approved_bootstrap_v6(
-        class: &crate::claim_paid_v2::PaidClaimClassV2,
-        enrollment: &crate::claim_paid_v2::PaidClaimEnrollmentV2,
-        base: &misaka_palw_challenge::ChallengeSubjectV1,
-        binding: &PaidBootstrapSourceBindingV6,
-        source: &ApprovedSourceStateV1,
-        now: u64,
-        checker_snapshot: Digest,
-    ) -> Result<Self, String> {
-        let subject = crate::claim_paid_v2::paid_subject_with_checker_snapshot_v2(base, class, enrollment, checker_snapshot)?;
-        if !class.supports_approved_bootstrap_source_v6()
-            || !enrollment.lifetime.receipt_open(now)
-            || binding.enrollment != enrollment.id()
-            || binding.checker_snapshot != checker_snapshot
-            || binding.liability_until != enrollment.lifetime.liability_until
-            || binding.consumer.commitment != subject.commitment_root
-            || binding.consumer.target_profile != class.base_class
-            || binding.consumer.commitment_position < enrollment.lifetime.committed_daa
-            || binding.consumer.commitment_position > enrollment.accepted_until_daa
-        {
-            return Err("V6 check authority changes the signed native statement/checker/lifetime".into());
-        }
-        let seed = binding.seed(source)?;
-        if matches!(source, ApprovedSourceStateV1::Locked { locked_at, .. } if *locked_at > now) {
-            return Err("V6 approved source lock is from a future native position".into());
-        }
-        Self::from_approved_bootstrap_parts_v6(class, enrollment, binding.id(), seed)
     }
 }

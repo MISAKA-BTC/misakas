@@ -3992,7 +3992,7 @@ impl VirtualStateProcessor {
                     leaf.check()?;
                     let owner = state.bond(&leaf.reserver).ok_or("staged owner has no registered bond")?;
                     let paid = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_paid_authority_v1(
-                        &state,
+                        state,
                         (leaf.claim, leaf.reserver),
                     )?;
                     let authorized = match paid {
@@ -4034,7 +4034,7 @@ impl VirtualStateProcessor {
                     movement.check()?;
                     let owner = state.bond(&movement.reserver).ok_or("staged owner has no registered bond")?;
                     let paid = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_paid_authority_v1(
-                        &state,
+                        state,
                         (movement.claim, movement.reserver),
                     )?;
                     let artifact = match &movement.action {

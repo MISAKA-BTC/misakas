@@ -688,10 +688,10 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
         })
     }
     let mut sum = NativeWireShapeV1::default();
-    let n = (count("exec_v2_job_uses", false)?);
+    let n = count("exec_v2_job_uses", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("exec_v2_rewards", true)?);
+    let n = count("exec_v2_rewards", true)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
@@ -699,7 +699,7 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
         >(),
     )?;
     sum = sum.allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, ()>>())?;
-    let n = (count("staged_courts", true)?);
+    let n = count("staged_courts", true)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
@@ -709,7 +709,7 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
             >,
         >(),
     )?;
-    let n = (count("staged_courts", false)?);
+    let n = count("staged_courts", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
@@ -719,85 +719,85 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
             >,
         >(),
     )?;
-    let n = (count("staged_courts", false)?);
+    let n = count("staged_courts", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), ()>,
         >(),
     )?;
-    let n = (count("improvement_lines", false)?);
+    let n = count("improvement_lines", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("improvement_lines", false)?);
+    let n = count("improvement_lines", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, BTreeSet<crate::Hash64>>>(),
     )?;
     sum = sum.allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, ()>>())?;
-    let n = (count("improvement_epochs", false)?);
+    let n = count("improvement_epochs", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64, u64), ()>>(),
     )?;
-    let n = (count("improvement_eval_jobs", true)?);
+    let n = count("improvement_eval_jobs", true)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, crate::palw_improve_eval_v1::PalwEvalJobKeyV1>,
         >(),
     )?;
-    let n = (count("improvement_artifacts", false)?);
+    let n = count("improvement_artifacts", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64, u64, crate::Hash64), ()>,
         >(),
     )?;
-    let n = (count("improvement_artifacts", false)?);
+    let n = count("improvement_artifacts", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64, u64, crate::Hash64), ()>,
         >(),
     )?;
-    let n = (count("improvement_artifacts", false)?);
+    let n = count("improvement_artifacts", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64, crate::Hash64), ()>>(),
     )?;
-    let n = (checked_counts_v1(&[
+    let n = checked_counts_v1(&[
         count("improvement_artifacts", false)?,
         count("improvement_cases", false)?,
         count("improvement_setter_sets", false)?,
-    ])?);
+    ])?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, u64, u8, crate::Hash64), ()>>(),
     )?;
-    let n = (count("improvement_opt_ins", false)?);
+    let n = count("improvement_opt_ins", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("improvement_licences", false)?);
+    let n = count("improvement_licences", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("claims", false)?);
+    let n = count("claims", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("claims", false)?);
+    let n = count("claims", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("claims", false)?);
+    let n = count("claims", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, crate::Hash64>>(),
     )?;
-    let n = (count("court_sessions", false)?);
+    let n = count("court_sessions", false)?;
     sum = sum.allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, u32>>())?;
-    let n = (count("court_sessions", false)?);
+    let n = count("court_sessions", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("court_close_groups", false)?);
+    let n = count("court_close_groups", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
@@ -807,31 +807,31 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
             >,
         >(),
     )?;
-    let n = (count("court_sessions", false)?);
+    let n = count("court_sessions", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), ()>,
         >(),
     )?;
-    let n = (count("reporter_commitments", false)?);
+    let n = count("reporter_commitments", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, u32>>(),
     )?;
-    let n = (count("reporter_commitments", false)?);
+    let n = count("reporter_commitments", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("vesting", false)?);
+    let n = count("vesting", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("vesting", false)?);
+    let n = count("vesting", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("vesting", false)?);
+    let n = count("vesting", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("vesting", true)?);
+    let n = count("vesting", true)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
@@ -841,31 +841,31 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
             >,
         >(),
     )?;
-    let n = (count("da_sessions", false)?);
+    let n = count("da_sessions", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2), ()>,
         >(),
     )?;
-    let n = (checked_counts_v1(&[count("da_sessions", true)?, count("da_claims", true)?])?);
+    let n = checked_counts_v1(&[count("da_sessions", true)?, count("da_claims", true)?])?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), ()>,
         >(),
     )?;
-    let n = (count("legacy_disputes", false)?);
+    let n = count("legacy_disputes", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
-    let n = (count("legacy_disputes", false)?);
+    let n = count("legacy_disputes", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), ()>,
         >(),
     )?;
-    let n = (count("claims", false)?);
+    let n = count("claims", false)?;
     sum = sum.allocation(
         n,
         std::mem::size_of::<

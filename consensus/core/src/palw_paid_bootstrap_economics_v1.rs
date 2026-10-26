@@ -140,7 +140,7 @@ pub struct EconomicsReportV1 {
     pub queue_acknowledged: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct PalwSourceEconomicsBookV1 {
     funding: BTreeMap<[u8; 129], PalwSourceFundingRowV1>,
     court: BTreeMap<[u8; 129], PalwSourceCourtRowV1>,
@@ -149,20 +149,6 @@ pub struct PalwSourceEconomicsBookV1 {
     refunds: BTreeMap<[u8; 129], PalwSourceRefundRowV1>,
     holds: BTreeMap<[u8; 129], PalwSourceHoldRowV1>,
     liability: BTreeMap<[u8; 129], PalwSourceLiabilityRowV1>,
-}
-
-impl Default for PalwSourceEconomicsBookV1 {
-    fn default() -> Self {
-        Self {
-            funding: BTreeMap::new(),
-            court: BTreeMap::new(),
-            entitlement: BTreeMap::new(),
-            queue: BTreeMap::new(),
-            refunds: BTreeMap::new(),
-            holds: BTreeMap::new(),
-            liability: BTreeMap::new(),
-        }
-    }
 }
 
 impl PalwSourceEconomicsPolicyV1 {
@@ -192,10 +178,10 @@ impl crate::config::params::Params {
             .palw_source_economics_v1
             .filter(|fence| fence.activation != crate::config::params::ForkActivation::never())
             .map(|fence| (fence.activation.daa_score(), fence.policy));
-        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            if bundle.state.source_economics_v1 != mirror {
-                return Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned("source economics mirror is not synchronized".into()));
-            }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.source_economics_v1 != mirror
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned("source economics mirror is not synchronized".into()));
         }
         if let Some(fence) = self.palw_source_economics_v1 {
             fence.policy.validate().map_err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned)?;

@@ -550,10 +550,8 @@ impl PalwFloatConstraintSourceSessionV1 {
         let missing = self
             .custodians
             .iter()
-            .filter(|key| match self.slot_cursor_v1(key) {
-                Ok(PalwFloatSourceCursorV1::Complete) => false,
-                Ok(PalwFloatSourceCursorV1::Nominate) => false,
-                _ => true,
+            .filter(|key| {
+                !matches!(self.slot_cursor_v1(key), Ok(PalwFloatSourceCursorV1::Complete | PalwFloatSourceCursorV1::Nominate))
             })
             .copied()
             .collect();

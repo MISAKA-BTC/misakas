@@ -170,6 +170,7 @@ impl CheckedNativeQueuePlanV30 {
             _ => None,
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn record_from(
         policy: &NativeQueuePolicyV30,
         mass: &NativeCarriageMassParamsV22,
@@ -350,6 +351,7 @@ impl NativeQueueGlobalV30 {
     }
     /// Both global mutations are transactional. The caller persists the two
     /// exact resulting rows with original funding/consent, never separately.
+    #[allow(clippy::too_many_arguments)]
     pub fn admit(
         &mut self,
         physical: &mut NativeCarriageGlobalV22,

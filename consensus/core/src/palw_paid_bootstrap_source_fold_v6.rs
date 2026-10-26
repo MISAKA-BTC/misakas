@@ -1,13 +1,9 @@
 //! Mutations only for explicitly signed V6 admission/lock/receipt namespaces.
-use super::palw_kernel_route_fold_v1 as route_fold;
 use super::*;
 use crate::palw_claim_challenge_v2::*;
 use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
 use crate::palw_paid_bootstrap_source_v6::*;
-use misaka_palw_kernel::{
-    claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6,
-    hash::{Digest, object_id},
-};
+use misaka_palw_kernel::hash::Digest;
 fn bad(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(why.into())
 }
@@ -254,14 +250,13 @@ pub(super) fn fund_producer_economics_v1(
         return Err(bad("source economics payer is not the enrolled producer"));
     }
     policy.validate().map_err(bad)?;
-    if let Some(route) = b.state.kernel_route() {
-        if let Ok(ledger) = route.ledger_checked_v1() {
-            if let Some(claim) = ledger.claims.get(&authority.enrollment.base_claim) {
-                if claim.reserved != 0 && claim.reserved != policy.budget_reservation_sompi {
-                    return Err(bad("source economics budget reservation is not the claim reservation"));
-                }
-            }
-        }
+    if let Some(route) = b.state.kernel_route()
+        && let Ok(ledger) = route.ledger_checked_v1()
+        && let Some(claim) = ledger.claims.get(&authority.enrollment.base_claim)
+        && claim.reserved != 0
+        && claim.reserved != policy.budget_reservation_sompi
+    {
+        return Err(bad("source economics budget reservation is not the claim reservation"));
     }
     let (previous, mut book) = load_economics(b)?;
     book.fund(PalwSourceFundingRowV1 {
@@ -308,10 +303,10 @@ fn apply_checker_economics(
         key[65..].copy_from_slice(&policy.actor);
         key
     };
-    if from_checker || previous.keys().any(|key| key.as_slice() == court_key.as_slice()) {
-        if let Some(court) = court_from_claim(b, ctx, policy)? {
-            book.observe_court(court).map_err(bad)?;
-        }
+    if (from_checker || previous.keys().any(|key| key.as_slice() == court_key.as_slice()))
+        && let Some(court) = court_from_claim(b, ctx, policy)?
+    {
+        book.observe_court(court).map_err(bad)?;
     }
     book.release_at(ctx.daa_score).map_err(bad)?;
     store_economics(b, previous, &book)

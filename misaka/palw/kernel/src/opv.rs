@@ -756,6 +756,17 @@ fn execution_root(row: &ClaimRowV1) -> Digest {
     }
 }
 
+// Read-only resource projection; all native and derived fields remain exhaustive.
+impl OpvStateV1 {
+    pub fn native_inventory_parts_v1(
+        &self,
+    ) -> (&Option<OpvPolicyV1>, &BTreeSet<Digest>, &BTreeSet<Digest>, &BTreeMap<Digest, OpvClaimRowV1>, &BTreeSet<(Digest, Digest)>)
+    {
+        let Self { policy, admitted, classes, claims, live } = self;
+        (policy, admitted, classes, claims, live)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -970,16 +981,5 @@ mod tests {
         let s = FinalAssuranceV1::OptimisticPublicVerification.statement();
         assert!(s.contains("not a proof"));
         assert!(!FinalAssuranceV1::PanelLicensed.statement().is_empty());
-    }
-}
-
-// Read-only resource projection; all native and derived fields remain exhaustive.
-impl OpvStateV1 {
-    pub fn native_inventory_parts_v1(
-        &self,
-    ) -> (&Option<OpvPolicyV1>, &BTreeSet<Digest>, &BTreeSet<Digest>, &BTreeMap<Digest, OpvClaimRowV1>, &BTreeSet<(Digest, Digest)>)
-    {
-        let Self { policy, admitted, classes, claims, live } = self;
-        (policy, admitted, classes, claims, live)
     }
 }

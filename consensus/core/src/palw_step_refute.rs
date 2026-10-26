@@ -5652,76 +5652,6 @@ pub(crate) mod hostile_totality_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
-#[cfg(test)]
-mod catalog_through_line_tests {
-    use super::{KDESC_ALL, KDESC_BASE0_ALL, KERNEL_CATALOG, resolve_kernel};
-    use crate::palw_step::kernel_semantics_id_v1;
-    use std::collections::BTreeSet;
-
-    /// Every kernel the coverage gate will certify must be one this build can actually execute.
-    ///
-    /// Guaranteed by construction now (both read `KERNEL_CATALOG`), asserted anyway because the
-    /// property is the whole point of A4: a certified-but-unresolvable kernel makes every dispute
-    /// over it `Unadjudicable`, which is rejected-but-unslashed — the hole a forger farms.
-    #[test]
-    fn every_catalogued_kernel_resolves_to_a_program() {
-        for id in super::catalogued_kernel_ids_v1() {
-            assert!(resolve_kernel(&id).is_some(), "catalogued but not adjudicable: {id}");
-        }
-    }
-
-    /// `KDESC_ALL` is the human-facing list and registration reads it; the table is what the
-    /// adjudicator runs. They must be the same set, in both directions — a descriptor in the list
-    /// but not the table certifies the unexecutable, and one in the table but not the list is a
-    /// kernel registration cannot name.
-    #[test]
-    fn the_descriptor_list_and_the_adjudication_table_are_the_same_set() {
-        let listed: BTreeSet<&str> = KDESC_ALL.iter().copied().collect();
-        let tabled: BTreeSet<&str> = KERNEL_CATALOG.iter().map(|(d, _)| *d).collect();
-        assert_eq!(listed, tabled, "KDESC_ALL and KERNEL_CATALOG have drifted apart");
-        assert_eq!(KDESC_ALL.len(), KERNEL_CATALOG.len(), "a duplicate descriptor would hide a gap");
-    }
-
-    /// **ADR-0102: a fenced kernel resolves, and is not in the identity.** Resolvable, or an
-    /// admitted class reaching it would end its disputes `Unadjudicable`; out of
-    /// `catalogued_kernel_ids_v1`, or shipping it would move `court_catalog_root` — and with it
-    /// every V2 preset's fingerprint — on networks that never arm its fence.
-    #[test]
-    fn a_fenced_kernel_resolves_and_stays_out_of_the_identity() {
-        let fenced = super::fenced_kernel_ids_v1();
-        assert!(!fenced.is_empty());
-        assert!(fenced.contains(&kernel_semantics_id_v1(super::KDESC_A16_REQUANTIZE_BY_TOKEN)));
-        for id in &fenced {
-            assert!(resolve_kernel(id).is_some(), "fenced but not adjudicable: {id}");
-        }
-        assert!(fenced.is_disjoint(&super::catalogued_kernel_ids_v1()), "a fenced kernel inside the identity is a flag day");
-        assert!(!KDESC_ALL.contains(&super::KDESC_A16_REQUANTIZE_BY_TOKEN));
-        let kimi = super::kimi_fenced_kernel_ids_v1();
-        assert_eq!(kimi.len(), 4);
-        for id in &kimi {
-            assert!(resolve_kernel(id).is_some(), "Kimi kernel fenced but not adjudicable: {id}");
-        }
-        assert!(
-            kimi.is_disjoint(&super::catalogued_kernel_ids_v1()),
-            "Kimi kernels inside the identity would move court_catalog_root"
-        );
-        assert!(kimi.is_disjoint(&fenced), "Kimi kernels must not ride the token-lift fence");
-    }
-
-    /// ADR-0040 Decision H's tenth op included: the closed BASE-0 catalog is closed on this side
-    /// too. `Rescale` was the one missing when the audit looked, and Decision H records that the
-    /// other nine cannot be computed without it.
-    #[test]
-    fn the_closed_base0_catalog_reaches_the_adjudicator_whole() {
-        assert_eq!(KDESC_BASE0_ALL.len(), 10, "ADR-0040 froze ten BASE-0 kinds");
-        for d in KDESC_BASE0_ALL {
-            let id = kernel_semantics_id_v1(d);
-            assert!(resolve_kernel(&id).is_some(), "BASE-0 op not adjudicable: {d}");
-            assert!(super::catalogued_kernel_ids_v1().contains(&id), "BASE-0 op not catalogued: {d}");
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // ADR-0096 Decision 7 — the decode-token refutation under a constraint
 // ---------------------------------------------------------------------------------------------
@@ -6087,4 +6017,74 @@ fn constrained_decode_decision_v1(
         committed as usize,
     );
     if beats { Ok(convicted()) } else { Err(PalwStepRefuteError::NoFaultFound) }
+}
+
+#[cfg(test)]
+mod catalog_through_line_tests {
+    use super::{KDESC_ALL, KDESC_BASE0_ALL, KERNEL_CATALOG, resolve_kernel};
+    use crate::palw_step::kernel_semantics_id_v1;
+    use std::collections::BTreeSet;
+
+    /// Every kernel the coverage gate will certify must be one this build can actually execute.
+    ///
+    /// Guaranteed by construction now (both read `KERNEL_CATALOG`), asserted anyway because the
+    /// property is the whole point of A4: a certified-but-unresolvable kernel makes every dispute
+    /// over it `Unadjudicable`, which is rejected-but-unslashed — the hole a forger farms.
+    #[test]
+    fn every_catalogued_kernel_resolves_to_a_program() {
+        for id in super::catalogued_kernel_ids_v1() {
+            assert!(resolve_kernel(&id).is_some(), "catalogued but not adjudicable: {id}");
+        }
+    }
+
+    /// `KDESC_ALL` is the human-facing list and registration reads it; the table is what the
+    /// adjudicator runs. They must be the same set, in both directions — a descriptor in the list
+    /// but not the table certifies the unexecutable, and one in the table but not the list is a
+    /// kernel registration cannot name.
+    #[test]
+    fn the_descriptor_list_and_the_adjudication_table_are_the_same_set() {
+        let listed: BTreeSet<&str> = KDESC_ALL.iter().copied().collect();
+        let tabled: BTreeSet<&str> = KERNEL_CATALOG.iter().map(|(d, _)| *d).collect();
+        assert_eq!(listed, tabled, "KDESC_ALL and KERNEL_CATALOG have drifted apart");
+        assert_eq!(KDESC_ALL.len(), KERNEL_CATALOG.len(), "a duplicate descriptor would hide a gap");
+    }
+
+    /// **ADR-0102: a fenced kernel resolves, and is not in the identity.** Resolvable, or an
+    /// admitted class reaching it would end its disputes `Unadjudicable`; out of
+    /// `catalogued_kernel_ids_v1`, or shipping it would move `court_catalog_root` — and with it
+    /// every V2 preset's fingerprint — on networks that never arm its fence.
+    #[test]
+    fn a_fenced_kernel_resolves_and_stays_out_of_the_identity() {
+        let fenced = super::fenced_kernel_ids_v1();
+        assert!(!fenced.is_empty());
+        assert!(fenced.contains(&kernel_semantics_id_v1(super::KDESC_A16_REQUANTIZE_BY_TOKEN)));
+        for id in &fenced {
+            assert!(resolve_kernel(id).is_some(), "fenced but not adjudicable: {id}");
+        }
+        assert!(fenced.is_disjoint(&super::catalogued_kernel_ids_v1()), "a fenced kernel inside the identity is a flag day");
+        assert!(!KDESC_ALL.contains(&super::KDESC_A16_REQUANTIZE_BY_TOKEN));
+        let kimi = super::kimi_fenced_kernel_ids_v1();
+        assert_eq!(kimi.len(), 4);
+        for id in &kimi {
+            assert!(resolve_kernel(id).is_some(), "Kimi kernel fenced but not adjudicable: {id}");
+        }
+        assert!(
+            kimi.is_disjoint(&super::catalogued_kernel_ids_v1()),
+            "Kimi kernels inside the identity would move court_catalog_root"
+        );
+        assert!(kimi.is_disjoint(&fenced), "Kimi kernels must not ride the token-lift fence");
+    }
+
+    /// ADR-0040 Decision H's tenth op included: the closed BASE-0 catalog is closed on this side
+    /// too. `Rescale` was the one missing when the audit looked, and Decision H records that the
+    /// other nine cannot be computed without it.
+    #[test]
+    fn the_closed_base0_catalog_reaches_the_adjudicator_whole() {
+        assert_eq!(KDESC_BASE0_ALL.len(), 10, "ADR-0040 froze ten BASE-0 kinds");
+        for d in KDESC_BASE0_ALL {
+            let id = kernel_semantics_id_v1(d);
+            assert!(resolve_kernel(&id).is_some(), "BASE-0 op not adjudicable: {d}");
+            assert!(super::catalogued_kernel_ids_v1().contains(&id), "BASE-0 op not catalogued: {d}");
+        }
+    }
 }

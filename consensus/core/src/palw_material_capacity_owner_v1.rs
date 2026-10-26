@@ -236,7 +236,7 @@ fn recovery_requests(encoded: &[u8], ledger: Option<&misaka_palw_kernel::ledger:
                 match codec {
                     0 => shape::<PalwHeldMaterialBundleV1>(data)?,
                     4 => shape::<crate::palw_routed_material_v2::PalwHeldMaterialBundleV2>(data)?,
-                    1 | 2 | 3 => {
+                    1..=3 => {
                         let bundle = if codec == 1 {
                             shape::<PalwKernelMaterialBundleV1>(data)?
                         } else if codec == 3 {
@@ -614,7 +614,7 @@ impl NativeRetainedV1<Store> {
     ) -> Result<Self, PalwMaterialCapacityErrorV1> {
         use PalwMaterialCapacityErrorV1 as E;
         let requests = recovery_requests(encoded, ledger).map_err(|e| E::LocalResource(C::unsupported::<Store>(COMPONENT, &e)))?;
-        let count = requests.bytes().ok_or_else(|| E::LocalResource(requests))?;
+        let count = requests.bytes().ok_or(E::LocalResource(requests))?;
         let lease = reserve_native_requests_v1(count).map_err(E::LocalResource)?;
         let value = Store::recover_inner_v4(
             encoded,

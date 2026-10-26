@@ -142,7 +142,6 @@ pub fn derive_stage_quota_v28(class: &CheckedStageClassV28, job: &CheckedStageJo
             job.job().positions as u64
         }
         misaka_palw_tir::program_v2::OutputDecl::Final { .. } => 1,
-        _ => return Err("stage28 output semantics".into()),
     };
     let post = outputs
         .checked_mul(crate::element::node_opening_bytes_v1(prepared.node_count))

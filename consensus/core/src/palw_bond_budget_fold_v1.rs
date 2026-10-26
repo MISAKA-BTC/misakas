@@ -1986,10 +1986,10 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         .map(|(id, _)| *id)
         .collect();
     for id in paid {
-        if let Some(held) = builder.state.bond_budget.as_ref().and_then(|b| b.claim_row(&id)) {
-            if let Some(queue) = drained.iter().find(|queue| native_queued_income_id_v1(**queue, &held.bond) == id) {
-                super::palw_monetary_material_fold_v1::observe_payment(builder, ctx, id, *queue);
-            }
+        if let Some(held) = builder.state.bond_budget.as_ref().and_then(|b| b.claim_row(&id))
+            && let Some(queue) = drained.iter().find(|queue| native_queued_income_id_v1(**queue, &held.bond) == id)
+        {
+            super::palw_monetary_material_fold_v1::observe_payment(builder, ctx, id, *queue);
         }
         builder
             .bond_budget_op(|budget, _, j| budget.confirm_native_income_payment_v1(&mirror.policy, &id, now, j))

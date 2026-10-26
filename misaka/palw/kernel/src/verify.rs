@@ -564,10 +564,10 @@ fn freivalds_once<F: FieldElemV1>(
             let (x, wt) = (&inputs[0], &inputs[1]);
             let (k, nn) = (wt.shape[0], wt.shape[1]);
             let key = (s, n, label_rep);
-            if !batch.contains_key(&key) {
+            if let std::collections::btree_map::Entry::Vacant(e) = batch.entry(key) {
                 let r: Vec<F> = seed.vector_in(batch_label, nn)?;
                 let wr = project(wt, 0, k, nn, &r, cost);
-                batch.insert(key, (raw(&r), raw(&wr), tensor_commitment(wt)));
+                e.insert((raw(&r), raw(&wr), tensor_commitment(wt)));
             }
             let (r, wr, _) = batch.get(&key).expect("projection inserted");
             let (r, wr) = (unraw::<F>(r), unraw::<F>(wr));
@@ -578,10 +578,10 @@ fn freivalds_once<F: FieldElemV1>(
             let (wt, x) = (&inputs[0], &inputs[1]);
             let m = wt.shape[0];
             let key = (s, n, label_rep);
-            if !batch.contains_key(&key) {
+            if let std::collections::btree_map::Entry::Vacant(e) = batch.entry(key) {
                 let r: Vec<F> = seed.vector_in(batch_label, m)?;
                 let rw = project_left(wt, &r, cost);
-                batch.insert(key, (raw(&r), raw(&rw), tensor_commitment(wt)));
+                e.insert((raw(&r), raw(&rw), tensor_commitment(wt)));
             }
             let (r, rw, _) = batch.get(&key).expect("projection inserted");
             let (r, rw) = (unraw::<F>(r), unraw::<F>(rw));
@@ -848,16 +848,16 @@ fn check_instance(
     if !ctx.well_typed(s, p, n, &output) {
         return Err(fault(FaultKindV1::Malformed));
     }
-    if let CheckerRandomness::Paid(randomness) = seed {
-        if let Some(consumer) = &randomness.compact {
-            let block = ctx.w.occurrences[s as usize].0;
-            if consumer
-                .relation(randomness.stage, randomness.seed, ctx.c.plan.root(), p, s, block, n, &inputs, &output)
-                .map_err(|what| ScopeVerdictV1::Unavailable { what })?
-            {
-                *checks = checks.saturating_add(1);
-                return Ok(());
-            }
+    if let CheckerRandomness::Paid(randomness) = seed
+        && let Some(consumer) = &randomness.compact
+    {
+        let block = ctx.w.occurrences[s as usize].0;
+        if consumer
+            .relation(randomness.stage, randomness.seed, ctx.c.plan.root(), p, s, block, n, &inputs, &output)
+            .map_err(|what| ScopeVerdictV1::Unavailable { what })?
+        {
+            *checks = checks.saturating_add(1);
+            return Ok(());
         }
     }
     match rel.checker {

@@ -206,7 +206,7 @@ impl NativeWireScanV1 for String {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         let bytes = reader.word()? as u64;
         reader.skip(bytes)?;
-        NativeWireShapeV1::default().allocation(bytes as u64, 1)
+        NativeWireShapeV1::default().allocation(bytes, 1)
     }
 }
 macro_rules! wire_tuple { ($($ty:ident),+) => {

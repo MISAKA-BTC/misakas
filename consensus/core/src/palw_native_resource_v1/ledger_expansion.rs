@@ -37,6 +37,7 @@ impl ReservedKernelLedgerV1 {
     }
     /// Prevent method-resolution through Deref from silently selecting the
     /// underlying infallible deep Clone. Callers must handle capacity refusal.
+    #[allow(clippy::should_implement_trait)] // deliberately shadows Clone::clone with a fallible one
     pub fn clone(&self) -> Result<Self, NativeCoverageV1> {
         self.try_clone_v1()
     }

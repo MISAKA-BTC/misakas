@@ -679,8 +679,8 @@ impl PalwHistoryRecoveryV1 {
         {
             return Err("history recovery changes the frozen seed, work, custody or clocks".into());
         }
-        if let Some(demand) = &self.demand {
-            if Some(&demand.request) != self.remaining_request_v1().as_ref()
+        if let Some(demand) = &self.demand
+            && (Some(&demand.request) != self.remaining_request_v1().as_ref()
                 || demand.opened_daa < self.opened_daa
                 || demand.opened_daa >= demand.answer_until_daa
                 || demand.answer_until_daa > self.recovery_until_daa
@@ -690,23 +690,21 @@ impl PalwHistoryRecoveryV1 {
                         || buffer.total_bytes == 0
                         || buffer.total_bytes as usize > PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1
                         || buffer.bytes.len() > buffer.total_bytes as usize
-                })
-            {
-                return Err("history demand or protected buffer differs from the accepted backwards cursor".into());
-            }
+                }))
+        {
+            return Err("history demand or protected buffer differs from the accepted backwards cursor".into());
         }
-        if let Some(default) = &self.default {
-            if self.demand.is_some()
+        if let Some(default) = &self.default
+            && (self.demand.is_some()
                 || Some(&default.request) != self.remaining_request_v1().as_ref()
                 || default.custodians != self.custodians
                 || default.opened_daa < self.opened_daa
                 || default.answer_until_daa.checked_sub(default.opened_daa) != Some(self.response_span_daa)
                 || default.answer_until_daa > self.recovery_until_daa
                 || default.collected_daa < default.answer_until_daa
-                || default.collected_daa >= self.collect_until_daa
-            {
-                return Err("history default is not the exact expired accepted demand".into());
-            }
+                || default.collected_daa >= self.collect_until_daa)
+        {
+            return Err("history default is not the exact expired accepted demand".into());
         }
         Ok(())
     }
@@ -718,10 +716,11 @@ impl PalwHistoryRecoveryV1 {
         if self.default.is_some() || now < self.opened_daa || now >= self.collect_until_daa {
             return Err("history recovery is terminal or outside its original paid window".into());
         }
-        if let Some(answerer) = action.answerer_v1() {
-            if !self.custodians.contains(&answerer) && answerer != self.initial.owner {
-                return Err("history answerer has no literal signed custody grant".into());
-            }
+        if let Some(answerer) = action.answerer_v1()
+            && !self.custodians.contains(&answerer)
+            && answerer != self.initial.owner
+        {
+            return Err("history answerer has no literal signed custody grant".into());
         }
         match action {
             PalwHistoryRecoveryActionV1::Demand => {

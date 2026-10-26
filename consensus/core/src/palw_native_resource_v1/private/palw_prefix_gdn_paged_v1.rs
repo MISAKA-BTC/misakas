@@ -4,7 +4,6 @@ use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1, native_enum
 native_struct!(crate::palw_prefix_gdn_paged_v1::PalwGdnPagedStateV1; context, prefix_tokens, position, d_k, d_v, pages_per_row, depth, root, parameters, phase, row, page, accumulator, delta, decay, beta, key, value);
 native_enum!(crate::palw_prefix_gdn_paged_v1::PhaseV1; Idle, Read, Write);
 
-use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]
 use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};
@@ -14,15 +13,15 @@ impl NativeWireScanV1 for crate::palw_prefix_gdn_paged_v1::PhaseV1 {
         reader.step()?;
         match reader.byte()? {
             0 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             1 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             2 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),

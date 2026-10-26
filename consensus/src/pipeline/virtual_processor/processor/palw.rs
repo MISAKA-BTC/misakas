@@ -1527,7 +1527,7 @@ impl VirtualStateProcessor {
             return Ok(None);
         }
         let authority = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_paid_authority_v1(&state, key)?;
-        if !authority.is_some_and(|authority| now < authority.terms.material_until_daa) {
+        if authority.is_none_or(|authority| now >= authority.terms.material_until_daa) {
             return Ok(None);
         }
         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_owned_seed_v1(&state, key)
@@ -2836,17 +2836,15 @@ impl VirtualStateProcessor {
                 admission: Some(authentic),
                 ..
             } = object
+                && *class_id == id
+                && *artifact_root == class.artifact_root
+                && *pwu_rule == class.pwu_rule
+                && *slash_value_per_pwu == class.slash_value_per_pwu
+                && class.registered_daa == 0
+                && class.registrant_bond.is_none()
+                && borsh::to_vec(authentic.as_ref()).map_err(|e| e.to_string())? == bytes
             {
-                if *class_id == id
-                    && *artifact_root == class.artifact_root
-                    && *pwu_rule == class.pwu_rule
-                    && *slash_value_per_pwu == class.slash_value_per_pwu
-                    && class.registered_daa == 0
-                    && class.registrant_bond.is_none()
-                    && borsh::to_vec(authentic.as_ref()).map_err(|e| e.to_string())? == bytes
-                {
-                    return Ok(());
-                }
+                return Ok(());
             }
         }
         Err(format!("class {id}: missing authenticated legacy canonical identity for complete snapshot capability"))
@@ -2876,18 +2874,14 @@ impl VirtualStateProcessor {
             return Ok(false);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(court) = self.palw_court_params_v2.as_ref() {
-            if let Some(entry) =
+        if let Some(court) = self.palw_court_params_v2.as_ref()
+            && let Some(entry) =
                 misaka_palw_base0::classes::canonical_classes_v1(court).into_iter().find(|entry| entry.class_id() == id)
-            {
-                let canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(
-                    &entry.profile,
-                    entry.canonical_job.0,
-                    entry.canonical_job.1,
-                );
-                kaspa_consensus_core::palw_class_sync_v1::validate_class_context_v1(id, class, semantics, &entry.profile, &canonical)?;
-                return Ok(true);
-            }
+        {
+            let canonical =
+                kaspa_consensus_core::palw_base0_profile::rc_job_context(&entry.profile, entry.canonical_job.0, entry.canonical_job.1);
+            kaspa_consensus_core::palw_class_sync_v1::validate_class_context_v1(id, class, semantics, &entry.profile, &canonical)?;
+            return Ok(true);
         }
         // A matching catalog label alone is not a compiled execution declaration.
         Ok(false)

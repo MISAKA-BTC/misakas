@@ -997,10 +997,10 @@ impl PalwRoleMemoryNeedV1 {
 
     /// The decomposition, for a hold line or a telemetry field.
     pub fn describe(&self) -> String {
-        if crate::palw_resource_admission_v2::enabled() {
-            if let Err(reason) = self.checked_total_bytes_v2() {
-                return format!("{} demand is unknown under resource-admission-v2: {reason}", self.role.name());
-            }
+        if crate::palw_resource_admission_v2::enabled()
+            && let Err(reason) = self.checked_total_bytes_v2()
+        {
+            return format!("{} demand is unknown under resource-admission-v2: {reason}", self.role.name());
         }
         match self.profile {
             Some(p) => format!(

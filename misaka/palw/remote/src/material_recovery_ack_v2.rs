@@ -551,14 +551,13 @@ mod tests {
         current.sequence = 1;
         current.reserved_acks = 0;
         current.last_receipt = id;
-        assert_eq!(
+        assert!(
             outbox
                 .retire_checkpoint_finalized(id, |row| Ok(row.provider == current.provider
                     && row.stream == current.stream
                     && row.sequence == current.sequence
                     && row.receipt == current.last_receipt))
-                .unwrap(),
-            true
+                .unwrap()
         );
         drop(outbox);
         assert_eq!(MaterialRecoveryAckOutboxV2::open(&file).unwrap().pending().count(), 0);

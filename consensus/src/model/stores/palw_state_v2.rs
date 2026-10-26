@@ -49,9 +49,7 @@ use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_native_resource_v1::{
     NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_classified_v1,
 };
-use kaspa_consensus_core::palw_state_v2::{
-    PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error,
-};
+use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2};
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;

@@ -474,7 +474,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Provide
     ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
         r.step()?;
         match r.byte()? {
-            0 | 1 | 2 | 3 | 4 => Ok(Default::default()),
+            0..=4 => Ok(Default::default()),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown provider transport purpose")),
         }
     }
@@ -482,7 +482,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Provide
 macro_rules! transport_wire_v1 {($ty:ty;$($field:ty),+)=>{
     impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for $ty {
         fn scan_native_wire_v1<R:std::io::Read>(r:&mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>)->std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1>{
-            use kaspa_consensus_core::palw_native_resource_v1::{NativeWireShapeV1,NativeWireScanV1};
+            use kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1;
             r.step()?;let shape=NativeWireShapeV1::default();$(let shape=shape.merge(<$field>::scan_native_wire_v1(r)?)?;)+Ok(shape)
         }
     }

@@ -185,7 +185,7 @@ impl PalwChainStateV2 {
             }
         }
         let mut works = 0u32;
-        for ((t, k), _) in &route.aux {
+        for (t, k) in route.aux.keys() {
             if *t != PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1 {
                 continue;
             }
@@ -324,15 +324,14 @@ fn validate_work(e: &PalwSourceBootstrapEpochRowV1, row: &PalwSourceBootstrapWor
             return Err(refuse("bootstrap approval does not bind its drawn slot/work interval"));
         }
     }
-    if let Some((final_daa, settled_daa)) = row.settlement {
-        if row.approvals.len() < usize::from(p.selection.quorum)
+    if let Some((final_daa, settled_daa)) = row.settlement
+        && (row.approvals.len() < usize::from(p.selection.quorum)
             || final_daa < row.work.accepted_daa
             || settled_daa <= final_daa
             || settled_daa > p.stake_release_daa
-            || row.approvals.iter().any(|a| a.accepted_daa > settled_daa)
-        {
-            return Err(refuse("bootstrap source settlement lacks selected quorum/historical ordering"));
-        }
+            || row.approvals.iter().any(|a| a.accepted_daa > settled_daa))
+    {
+        return Err(refuse("bootstrap source settlement lacks selected quorum/historical ordering"));
     }
     Ok(())
 }

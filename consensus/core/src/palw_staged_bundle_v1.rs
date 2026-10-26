@@ -752,10 +752,10 @@ impl PalwOwnedStagedBundleV1 {
         if self.selected_native.is_some() && self.selected_context.is_some() {
             return Err("selected source retains both a legacy and a native original context".into());
         }
-        if let Some(native) = &self.selected_native {
-            if self.selected.is_none() || native.header.committed_execution_root != self.execution_root {
-                return Err("native selected source changes literal paid frame or original execution".into());
-            }
+        if let Some(native) = &self.selected_native
+            && (self.selected.is_none() || native.header.committed_execution_root != self.execution_root)
+        {
+            return Err("native selected source changes literal paid frame or original execution".into());
         }
         match (&self.selected, &self.selected_context) {
             (Some(_), None) if self.selected_native.is_some() => {}

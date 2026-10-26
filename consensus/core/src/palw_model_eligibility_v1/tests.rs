@@ -191,14 +191,11 @@ fn req_elig_2_the_network_probation_budget_is_fixed_whatever_the_number_of_model
             let mut principal = PalwEligibilityPrincipalRowV1::default();
             let mut model = probation_row((i % 250) as u8, (i % 250) as u8, daa);
             // Each model asks its whole stage cap in one-block claims.
-            loop {
-                match palw_probation_admit_v1(&p, &lineage, &network, daa, crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1) {
-                    Ok(units) => {
-                        palw_probation_charge_v1(&p, daa, units, &mut model, &mut lineage, &mut principal, &mut network);
-                        granted_total += units;
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(units) =
+                palw_probation_admit_v1(&p, &lineage, &network, daa, crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1)
+            {
+                palw_probation_charge_v1(&p, daa, units, &mut model, &mut lineage, &mut principal, &mut network);
+                granted_total += units;
             }
         }
         assert!(granted_total <= network_budget, "{models} models: {granted_total} > the fixed network budget {network_budget}");

@@ -153,12 +153,12 @@ impl crate::config::params::Params {
     pub fn validate_palw_selected_source_bootstrap_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         let mirror =
             self.palw_selected_source_bootstrap_v1.filter(|f| f.at != ForkActivation::never()).map(|f| (f.at.daa_score(), f.policy));
-        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            if bundle.state.selected_source_bootstrap_v1 != mirror {
-                return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
-                    "bootstrap native policy mirror is not synchronized with Params",
-                ));
-            }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.selected_source_bootstrap_v1 != mirror
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "bootstrap native policy mirror is not synchronized with Params",
+            ));
         }
         let Some(f) = self.palw_selected_source_bootstrap_v1.filter(|f| f.at != ForkActivation::never()) else { return Ok(()) };
         f.policy.validate().map_err(crate::palw_mode_v2::PalwModeV2Error::Invalid)?;
@@ -282,7 +282,7 @@ impl PalwSourceBootstrapOwnContextV1 {
             return Err(E::KernelRouteRefused("bootstrap own context cannot change its fixed anchor".into()));
         }
         let bound = self.native_heap_v1("bootstrap own context anchor copy");
-        let lease = reserve_native_requests_v1(bound.bytes().ok_or_else(|| E::NativeResource(bound))?).map_err(E::NativeResource)?;
+        let lease = reserve_native_requests_v1(bound.bytes().ok_or(E::NativeResource(bound))?).map_err(E::NativeResource)?;
         let mut next = self.clone();
         next.anchor = anchor;
         next.validate_shape().map_err(|e| E::KernelRouteRefused(e.into()))?;

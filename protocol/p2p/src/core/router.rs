@@ -474,6 +474,26 @@ fn prefix_history_message_bounded_v1(payload: &KaspadMessagePayload) -> bool {
     }
 }
 
+fn match_for_io_error(err_status: &tonic::Status) -> Option<&std::io::Error> {
+    let mut err: &(dyn std::error::Error + 'static) = err_status;
+
+    loop {
+        if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+            return Some(io_err);
+        }
+
+        // h2::Error do not expose std::io::Error with `source()`
+        // https://github.com/hyperium/h2/pull/462
+        if let Some(h2_err) = err.downcast_ref::<h2::Error>()
+            && let Some(io_err) = h2_err.get_io()
+        {
+            return Some(io_err);
+        }
+
+        err = err.source()?;
+    }
+}
+
 #[cfg(test)]
 mod prefix_history_tests {
     use super::*;
@@ -493,25 +513,5 @@ mod prefix_history_tests {
         assert!(!prefix_history_message_bounded_v1(&KaspadMessagePayload::PalwPrefixHistoryRequest(
             crate::pb::PalwPrefixHistoryRequestMessage { request: vec![0; 513] }
         )));
-    }
-}
-
-fn match_for_io_error(err_status: &tonic::Status) -> Option<&std::io::Error> {
-    let mut err: &(dyn std::error::Error + 'static) = err_status;
-
-    loop {
-        if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
-            return Some(io_err);
-        }
-
-        // h2::Error do not expose std::io::Error with `source()`
-        // https://github.com/hyperium/h2/pull/462
-        if let Some(h2_err) = err.downcast_ref::<h2::Error>()
-            && let Some(io_err) = h2_err.get_io()
-        {
-            return Some(io_err);
-        }
-
-        err = err.source()?;
     }
 }

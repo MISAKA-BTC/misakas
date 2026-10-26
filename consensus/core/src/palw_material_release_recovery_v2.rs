@@ -303,15 +303,14 @@ impl PalwMaterialRecoveryRowV2 {
                 return Err("recovery generation is duplicate, unordered or excessive");
             }
         }
-        if let Self::Terminal(r) = self {
-            if r.final_consent != c.generations.last().unwrap().consent
+        if let Self::Terminal(r) = self
+            && (r.final_consent != c.generations.last().unwrap().consent
                 || r.tail_block == Hash64::default()
                 || r.release_block == Hash64::default()
                 || r.acknowledged.iter().any(|provider| !c.generations.iter().any(|g| g.providers.contains(provider)))
-                || c.generations.iter().all(|g| g.providers.iter().all(|provider| r.acknowledged.contains(provider)))
-            {
-                return Err("terminal receipt or acknowledgement set differs");
-            }
+                || c.generations.iter().all(|g| g.providers.iter().all(|provider| r.acknowledged.contains(provider))))
+        {
+            return Err("terminal receipt or acknowledgement set differs");
         }
         Ok(())
     }
@@ -687,13 +686,13 @@ pub fn material_provider_terminals_owned_v4(
                 continue;
             }
             let row = row_owned(bytes)?;
-            if let PalwMaterialRecoveryRowV2::Terminal(r) = &*row {
-                if matches(r) {
-                    count = count.checked_add(1).ok_or("terminal count overflow")?;
-                    len = len
-                        .checked_add(borsh::object_length(r).map_err(|e| e.to_string())? as u64)
-                        .ok_or("terminal output extent overflow")?;
-                }
+            if let PalwMaterialRecoveryRowV2::Terminal(r) = &*row
+                && matches(r)
+            {
+                count = count.checked_add(1).ok_or("terminal count overflow")?;
+                len = len
+                    .checked_add(borsh::object_length(r).map_err(|e| e.to_string())? as u64)
+                    .ok_or("terminal output extent overflow")?;
             }
         }
     }
@@ -707,10 +706,10 @@ pub fn material_provider_terminals_owned_v4(
                 continue;
             }
             let row = row_owned(bytes)?;
-            if let PalwMaterialRecoveryRowV2::Terminal(r) = &*row {
-                if matches(r) {
-                    borsh::to_writer(&mut encoded, r).map_err(|e| e.to_string())?;
-                }
+            if let PalwMaterialRecoveryRowV2::Terminal(r) = &*row
+                && matches(r)
+            {
+                borsh::to_writer(&mut encoded, r).map_err(|e| e.to_string())?;
             }
         }
     }

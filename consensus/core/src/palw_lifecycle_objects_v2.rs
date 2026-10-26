@@ -344,7 +344,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature } => {
             if signature.is_empty() {
                 Err("a kernel route chunk must carry its opener's signature — unsigned, anyone could open a group as any bond")
-            } else if {
+            } else {
                 // Native targets 6/7 own their paid protected lane: up to 64 fragments of
                 // 32 KiB (`palw_kernel_chunks_v1`, the funded/stage folds); all others keep 16.
                 let native = matches!(
@@ -357,15 +357,16 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
                 } else {
                     (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES)
                 };
-                chunk.count == 0
+                let out_of_range = chunk.count == 0
                     || chunk.count > count_cap
                     || chunk.index >= chunk.count
                     || chunk.bytes.is_empty()
-                    || chunk.bytes.len() > byte_cap
-            } {
-                Err("a kernel route chunk's index, count or part is out of range")
-            } else {
-                Ok(())
+                    || chunk.bytes.len() > byte_cap;
+                if out_of_range {
+                    Err("a kernel route chunk's index, count or part is out of range")
+                } else {
+                    Ok(())
+                }
             }
         }
         // (tag 111): a seat's receipt carries its signature; everything else is the kernel's structural admission.

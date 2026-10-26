@@ -345,13 +345,11 @@ pub fn select_native_session_with_recovery_v4(
         }
         if let Some(row) =
             select_native_session_v3(std::iter::once(row), attempt, daa, |provider| state.bond(provider).map(|b| b.operator_id))
-        {
-            if selected
+            && selected
                 .as_ref()
                 .is_none_or(|old: &crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1| row.terms.root < old.terms.root)
-            {
-                selected = Some(row);
-            }
+        {
+            selected = Some(row);
         }
     }
     Ok(selected)

@@ -413,6 +413,7 @@ impl PaidClaimCheckAuthorityV2 {
     }
     /// Caller must supply the independently verified source beacon; the transcript
     /// validator binds every producer message and challenge before this constructor.
+    #[allow(clippy::too_many_arguments)]
     fn for_interactive_round_inner(
         class: &PaidClaimClassV2,
         enrollment: &PaidClaimEnrollmentV2,

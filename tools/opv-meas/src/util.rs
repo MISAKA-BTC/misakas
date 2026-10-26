@@ -2,7 +2,14 @@
 use serde_json::{Value, json};
 use std::time::Instant;
 
+/// `(user seconds, system seconds, peak RSS bytes)` of this process so far (zeros without `getrusage`).
+#[cfg(not(unix))]
+pub fn rusage() -> (f64, f64, u64) {
+    (0.0, 0.0, 0)
+}
+
 /// `(user seconds, system seconds, peak RSS bytes)` of this process so far.
+#[cfg(unix)]
 pub fn rusage() -> (f64, f64, u64) {
     // SAFETY: getrusage writes into a zeroed rusage we own.
     let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
@@ -15,7 +22,14 @@ pub fn rusage() -> (f64, f64, u64) {
     (tv(ru.ru_utime), tv(ru.ru_stime), rss)
 }
 
+/// 1, 5 and 15 minute load averages of the host (zeros without `getloadavg`).
+#[cfg(not(unix))]
+pub fn loadavg() -> [f64; 3] {
+    [0.0; 3]
+}
+
 /// 1, 5 and 15 minute load averages of the host.
+#[cfg(unix)]
 pub fn loadavg() -> [f64; 3] {
     let mut l = [0f64; 3];
     // SAFETY: getloadavg fills at most 3 doubles.

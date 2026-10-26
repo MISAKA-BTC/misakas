@@ -104,16 +104,15 @@ fn check_enrollment(
     if prior.is_none() && existing.len() >= p.max_contracts as usize {
         return Err(refused("monetary material contract table is full"));
     }
-    if let Some(old) = prior {
-        if old.terms != *t
+    if let Some(old) = prior
+        && (old.terms != *t
             || old.providers.iter().filter(|p| !p.charged || !p.fee_paid).count() + e.offers.len()
                 > PALW_MONETARY_MATERIAL_MAX_PROVIDERS_V1
             || e.offers.iter().any(|o| {
                 old.providers.iter().any(|previous| previous.provider == o.provider && (!previous.charged || !previous.fee_paid))
-            })
-        {
-            return Err(refused("replacement changes the accepted obligation or reuses an old provider"));
-        }
+            }))
+    {
+        return Err(refused("replacement changes the accepted obligation or reuses an old provider"));
     }
     let sponsor = active(builder, &t.sponsor)?;
     let mut operators = BTreeSet::new();
@@ -914,13 +913,231 @@ pub(super) fn observe_payment(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                 && observation.amount == provider.prepaid_fee_sompi
             {
                 provider.fee_paid = true;
-                row.service_fee_paid_sompi =
-                    row.service_fee_paid_sompi.checked_add(u128::from(observation.amount)).unwrap_or(u128::MAX);
+                row.service_fee_paid_sompi = row.service_fee_paid_sompi.saturating_add(u128::from(observation.amount));
             }
             row.last_payment = Some(observation.clone());
             write(builder, row.terms.root, Some(&row));
         }
     }
+}
+
+/// Queue IDs coalesce recipients; only the material receipt preimage links a
+/// queue portion to the original exact funded entitlement. Capture that link
+/// from authenticated journal rows before the original claim is forgotten.
+fn capture_queue_entitlements(builder: &mut TransitionBuilder<'_>) -> Result<(), PalwStateV2Error> {
+    use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, PalwMaterialIncomeV1, PalwMaterialPaymentV1};
+    let mut pending = BTreeSet::new();
+    let mut queued = Vec::new();
+    for entry in &builder.entries {
+        if let PalwDeltaEntryV2::BondBudgetRow { table, key, old, new } = entry {
+            if *table != PALW_BUDGET_TABLE_MATERIAL_INCOME_V1 {
+                continue;
+            }
+            for bytes in [old, new].into_iter().flatten() {
+                let m: PalwMaterialIncomeV1 =
+                    borsh::from_slice(bytes).map_err(|_| refused("material queue journal does not decode"))?;
+                if let (Some(root), PalwMaterialPaymentV1::Pending { income }) = (m.root, m.payment) {
+                    pending.insert((root, m.accepted_daa, income));
+                }
+            }
+            if let Some(bytes) = new {
+                let m: PalwMaterialIncomeV1 =
+                    borsh::from_slice(bytes).map_err(|_| refused("material queue journal does not decode"))?;
+                if let (Some(root), PalwMaterialPaymentV1::Queued { income: Some(income), queued_daa, paid_daa: None, .. }) =
+                    (m.root, m.payment)
+                {
+                    let id: Hash64 = borsh::from_slice(key).map_err(|_| refused("material queue key does not decode"))?;
+                    if builder
+                        .state
+                        .bond_budget
+                        .as_ref()
+                        .and_then(|b| b.material_income.get(&id))
+                        .is_some_and(|m| matches!(m.payment, PalwMaterialPaymentV1::Queued { paid_daa: None, .. }))
+                    {
+                        queued.push((id, root, m.accepted_daa, income, queued_daa));
+                    }
+                }
+            }
+        }
+    }
+    for (receipt, root, accepted, income, queued_daa) in queued {
+        let source = pending.iter().filter(|(r, a, _)| *r == root && *a == accepted).find_map(|(_, _, source)| {
+            (crate::palw_bond_budget_v1::material_queue_receipt_id_v1(*source, income, queued_daa) == receipt).then_some(*source)
+        });
+        let Some(source) = source else { continue };
+        for mut row in builder.state.monetary_material_rows_v1() {
+            if !builder.state.monetary_material_scope_v1(&row).contains(&root) {
+                continue;
+            }
+            if row.queued_entitlements.get(&receipt).is_some_and(|old| *old != source) {
+                return Err(refused("material queue entitlement substitution"));
+            }
+            if row.queued_entitlements.insert(receipt, source) != Some(source) {
+                write(builder, row.terms.root, Some(&row));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn plan_native_ready(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+    native_claim: &super::PalwClaimStateV2,
+) -> Result<Option<PalwMonetaryMaterialRowV1>, PalwStateV2Error> {
+    if builder.params.monetary_material_at_v1(ctx.daa_score).is_none() {
+        return Ok(None);
+    }
+    let (session, binding) = builder
+        .monetary_native_ready
+        .get(&claim)
+        .ok_or_else(|| refused("new native work has no authenticated prior-session Ready"))?;
+    let mut row = builder.state.monetary_material_row_v1(*session).ok_or_else(|| refused("native ready session disappeared"))?;
+    if row.native_binding.is_some() || !row.healthy(&builder.state) {
+        return Err(refused("native ready session consumed or providers defaulted"));
+    }
+    let scope = binding.manifest.scope(claim).ok_or_else(|| refused("native Ready has no exact claim scope"))?;
+    if scope.codec != builder.state.native_material_codec_for_claim_v2(claim, native_claim)?
+        || scope.commitment != native_claim.execution_root
+    {
+        return Err(refused("native Ready codec/execution differs from its own prospective routing authority"));
+    }
+    row.native_binding = Some(binding.clone());
+    row.root_seen = true;
+    Ok(Some(row))
+}
+pub(super) fn bind_native_ready(builder: &mut TransitionBuilder<'_>, row: &PalwMonetaryMaterialRowV1) {
+    write(builder, row.terms.root, Some(row));
+}
+
+/// Explicit V2 retrieval + exact accepted generation + atomic applied receipt.
+/// A receipt is only a recovery cursor. It grants no computation credit.
+pub(super) fn routed_answer_v2(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    a: &crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_resource_v1::{
+        NativeDecodeErrorV1, TirNativeRequestsV1, native_value_requests_v1, reserve_native_requests_v1,
+        retain_native_value_decode_classified_v1,
+    };
+    use crate::palw_routed_material_v2::PalwRoutedMaterialTargetV2;
+    use crate::palw_step_refute::routing_v2::{PalwRoutingCourtErrorV2, check_routed_step_committed_half_v2};
+    let PalwRoutedMaterialTargetV2::Monetary { root, consent } = a.target else {
+        return Err(refused("routed monetary answer target differs"));
+    };
+    let p = policy(b, ctx.daa_score)?;
+    let limits = b.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;
+    let route = b.state.kernel_route().ok_or_else(|| refused("routed monetary route absent"))?;
+    let bytes = route
+        .aux
+        .iter()
+        .find_map(|((t, k), v)| {
+            (*t == PALW_MONETARY_MATERIAL_TABLE_V1 && k.as_slice() == root.as_byte_slice()).then_some(v.as_slice())
+        })
+        .ok_or_else(|| refused("routed material contract absent"))?;
+    let owned =
+        retain_native_value_decode_classified_v1::<PalwMonetaryMaterialRowV1, std::io::Error>(bytes, || borsh::from_slice(bytes))
+            .map_err(|e| match e {
+                NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
+                NativeDecodeErrorV1::Decode(e) => refused(e.to_string()),
+            })?;
+    let native = b.state.reader_router_of_claim_v2(a.claim)?.ok_or_else(|| refused("routed material claim stamp absent"))?;
+    let claim = b.state.claim(&a.claim).ok_or(PalwStateV2Error::MissingClaim(a.claim))?;
+    let ladder =
+        b.state.class_step_ladder_v1(&claim.class_id, b.extras.held_context_ladder.ok_or(PalwStateV2Error::HeldContextDormant)?);
+    a.check_shape(ladder).map_err(refused)?;
+    let encoded = borsh::object_length(a).map_err(|e| refused(e.to_string()))? as u64;
+    if encoded > limits.max_close_bytes || encoded > owned.terms.max_material_bytes || encoded > p.max_bytes_per_contract {
+        return Err(refused("routed material answer exceeds native/signed capacity"));
+    }
+    let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(&b.state, root, a.provider)
+        .map_err(|e| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(e, refused))?;
+    if current != Some(consent) || !owned.providers.iter().any(|v| v.provider == a.provider && !v.charged) {
+        return Err(refused("routed material provider generation differs from own accepted state"));
+    }
+    let scope = owned
+        .native_binding
+        .as_ref()
+        .map(|v| &v.manifest)
+        .or(owned.terms.material_manifest.as_ref())
+        .and_then(|m| m.scope(a.claim))
+        .ok_or_else(|| refused("routed material exact scope absent"))?;
+    if scope.codec != crate::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldCompleteV2
+        || scope.commitment != claim.execution_root
+    {
+        return Err(refused("routed answer scope codec/execution differs"));
+    }
+    let missing = crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: a.refutation.step.output_opening.leaf_index };
+    let index = owned
+        .challenges
+        .iter()
+        .position(|c| c.provider == a.provider && c.dependency == a.claim && c.native_missing == Some(missing))
+        .ok_or_else(|| refused("routed material has no exact challenged unit"))?;
+    let challenge = &owned.challenges[index];
+    if challenge.answered
+        || ctx.daa_score > challenge.deadline_daa
+        || challenge.native_binding.as_deref() != Some(&a.refutation.step.binding)
+    {
+        return Err(refused("routed material challenge is answered/late or binding differs"));
+    }
+    let mut checkpoint = if b.state.material_recovery_row_v2(root).is_some() {
+        if b.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
+            return Err(refused("routed recovery fence dormant"));
+        }
+        let receipt = a.receipt.as_ref().ok_or_else(|| refused("routed recovery answer requires applied checkpoint"))?;
+        let checkpoint =
+            b.state.material_provider_ack_checkpoint_v2(&a.provider).ok_or_else(|| refused("routed provider stream absent"))?;
+        if receipt.challenge_deadline_daa != challenge.deadline_daa
+            || receipt.stream != checkpoint.stream
+            || receipt.previous != checkpoint.last_receipt
+            || checkpoint.sequence.checked_add(1) != Some(receipt.sequence)
+            || checkpoint.reserved_answer_events == 0
+        {
+            return Err(refused("routed answer replay/substitution in receipt stream"));
+        }
+        Some(checkpoint)
+    } else {
+        if a.receipt.is_some() {
+            return Err(refused("routed legacy contract cannot introduce a receipt stream"));
+        }
+        None
+    };
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(native_value_requests_v1(&*owned).map_err(PalwStateV2Error::NativeResource)?)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    // Existing native write encodes, journals and keeps an independent aux row.
+    let row_bytes = borsh::object_length(&*owned).map_err(|e| refused(e.to_string()))? as u64;
+    for _ in 0..4 {
+        q.vec_v1::<u8>(row_bytes).map_err(PalwStateV2Error::NativeResource)?;
+    }
+    q.vec_v1::<u8>(3 * 69 + 4 * 256).map_err(PalwStateV2Error::NativeResource)?;
+    let _mutation = reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+    check_routed_step_committed_half_v2(&a.refutation, claim.execution_root, &native.declaration, ladder).map_err(|e| match e {
+        PalwRoutingCourtErrorV2::Resource(e) => PalwStateV2Error::NativeResource(e),
+        other => refused(other.to_string()),
+    })?;
+    if !super::palw_kernel_route_fold_v1::charge_route_budget_v1(b, ctx, 0, false)? {
+        return Err(refused("routed answer route budget exhausted"));
+    }
+    let mut row = (*owned).clone();
+    b.slash_bond(row.challenges[index].challenger, u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1))?;
+    row.challenges[index].answered = true;
+    if let Some(checkpoint) = &mut checkpoint {
+        let receipt = a.receipt.as_ref().expect("checked above");
+        checkpoint.sequence = receipt.sequence;
+        let network = Hash64::from_bytes(b.state.kernel_route().expect("route checked").header.policy.network_domain);
+        checkpoint.last_receipt = a.message(network);
+        checkpoint.reserved_answer_events -= 1;
+        b.write_kernel_row(
+            crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
+            crate::palw_material_release_recovery_v2::material_provider_stream_key_v2(&a.provider),
+            Some(borsh::to_vec(checkpoint).unwrap()),
+        );
+    }
+    write(b, root, Some(&row));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1364,223 +1581,4 @@ mod tests {
         }
         assert_eq!(reverted, state);
     }
-}
-
-/// Queue IDs coalesce recipients; only the material receipt preimage links a
-/// queue portion to the original exact funded entitlement. Capture that link
-/// from authenticated journal rows before the original claim is forgotten.
-fn capture_queue_entitlements(builder: &mut TransitionBuilder<'_>) -> Result<(), PalwStateV2Error> {
-    use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, PalwMaterialIncomeV1, PalwMaterialPaymentV1};
-    let mut pending = BTreeSet::new();
-    let mut queued = Vec::new();
-    for entry in &builder.entries {
-        if let PalwDeltaEntryV2::BondBudgetRow { table, key, old, new } = entry {
-            if *table != PALW_BUDGET_TABLE_MATERIAL_INCOME_V1 {
-                continue;
-            }
-            for bytes in [old, new].into_iter().flatten() {
-                let m: PalwMaterialIncomeV1 =
-                    borsh::from_slice(bytes).map_err(|_| refused("material queue journal does not decode"))?;
-                if let (Some(root), PalwMaterialPaymentV1::Pending { income }) = (m.root, m.payment) {
-                    pending.insert((root, m.accepted_daa, income));
-                }
-            }
-            if let Some(bytes) = new {
-                let m: PalwMaterialIncomeV1 =
-                    borsh::from_slice(bytes).map_err(|_| refused("material queue journal does not decode"))?;
-                if let (Some(root), PalwMaterialPaymentV1::Queued { income: Some(income), queued_daa, paid_daa: None, .. }) =
-                    (m.root, m.payment)
-                {
-                    let id: Hash64 = borsh::from_slice(key).map_err(|_| refused("material queue key does not decode"))?;
-                    if builder
-                        .state
-                        .bond_budget
-                        .as_ref()
-                        .and_then(|b| b.material_income.get(&id))
-                        .is_some_and(|m| matches!(m.payment, PalwMaterialPaymentV1::Queued { paid_daa: None, .. }))
-                    {
-                        queued.push((id, root, m.accepted_daa, income, queued_daa));
-                    }
-                }
-            }
-        }
-    }
-    for (receipt, root, accepted, income, queued_daa) in queued {
-        let source = pending.iter().filter(|(r, a, _)| *r == root && *a == accepted).find_map(|(_, _, source)| {
-            (crate::palw_bond_budget_v1::material_queue_receipt_id_v1(*source, income, queued_daa) == receipt).then_some(*source)
-        });
-        let Some(source) = source else { continue };
-        for mut row in builder.state.monetary_material_rows_v1() {
-            if !builder.state.monetary_material_scope_v1(&row).contains(&root) {
-                continue;
-            }
-            if row.queued_entitlements.get(&receipt).is_some_and(|old| *old != source) {
-                return Err(refused("material queue entitlement substitution"));
-            }
-            if row.queued_entitlements.insert(receipt, source) != Some(source) {
-                write(builder, row.terms.root, Some(&row));
-            }
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn plan_native_ready(
-    builder: &TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    claim: Hash64,
-    native_claim: &super::PalwClaimStateV2,
-) -> Result<Option<PalwMonetaryMaterialRowV1>, PalwStateV2Error> {
-    if builder.params.monetary_material_at_v1(ctx.daa_score).is_none() {
-        return Ok(None);
-    }
-    let (session, binding) = builder
-        .monetary_native_ready
-        .get(&claim)
-        .ok_or_else(|| refused("new native work has no authenticated prior-session Ready"))?;
-    let mut row = builder.state.monetary_material_row_v1(*session).ok_or_else(|| refused("native ready session disappeared"))?;
-    if row.native_binding.is_some() || !row.healthy(&builder.state) {
-        return Err(refused("native ready session consumed or providers defaulted"));
-    }
-    let scope = binding.manifest.scope(claim).ok_or_else(|| refused("native Ready has no exact claim scope"))?;
-    if scope.codec != builder.state.native_material_codec_for_claim_v2(claim, native_claim)?
-        || scope.commitment != native_claim.execution_root
-    {
-        return Err(refused("native Ready codec/execution differs from its own prospective routing authority"));
-    }
-    row.native_binding = Some(binding.clone());
-    row.root_seen = true;
-    Ok(Some(row))
-}
-pub(super) fn bind_native_ready(builder: &mut TransitionBuilder<'_>, row: &PalwMonetaryMaterialRowV1) {
-    write(builder, row.terms.root, Some(row));
-}
-
-/// Explicit V2 retrieval + exact accepted generation + atomic applied receipt.
-/// A receipt is only a recovery cursor. It grants no computation credit.
-pub(super) fn routed_answer_v2(
-    b: &mut TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    a: &crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2,
-) -> Result<(), PalwStateV2Error> {
-    use crate::palw_native_resource_v1::{
-        NativeDecodeErrorV1, TirNativeRequestsV1, native_value_requests_v1, reserve_native_requests_v1,
-        retain_native_value_decode_classified_v1,
-    };
-    use crate::palw_routed_material_v2::PalwRoutedMaterialTargetV2;
-    use crate::palw_step_refute::routing_v2::{PalwRoutingCourtErrorV2, check_routed_step_committed_half_v2};
-    let PalwRoutedMaterialTargetV2::Monetary { root, consent } = a.target else {
-        return Err(refused("routed monetary answer target differs"));
-    };
-    let p = policy(b, ctx.daa_score)?;
-    let limits = b.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;
-    let route = b.state.kernel_route().ok_or_else(|| refused("routed monetary route absent"))?;
-    let bytes = route
-        .aux
-        .iter()
-        .find_map(|((t, k), v)| {
-            (*t == PALW_MONETARY_MATERIAL_TABLE_V1 && k.as_slice() == root.as_byte_slice()).then_some(v.as_slice())
-        })
-        .ok_or_else(|| refused("routed material contract absent"))?;
-    let owned =
-        retain_native_value_decode_classified_v1::<PalwMonetaryMaterialRowV1, std::io::Error>(bytes, || borsh::from_slice(bytes))
-            .map_err(|e| match e {
-                NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
-                NativeDecodeErrorV1::Decode(e) => refused(e.to_string()),
-            })?;
-    let native = b.state.reader_router_of_claim_v2(a.claim)?.ok_or_else(|| refused("routed material claim stamp absent"))?;
-    let claim = b.state.claim(&a.claim).ok_or(PalwStateV2Error::MissingClaim(a.claim))?;
-    let ladder =
-        b.state.class_step_ladder_v1(&claim.class_id, b.extras.held_context_ladder.ok_or(PalwStateV2Error::HeldContextDormant)?);
-    a.check_shape(ladder).map_err(refused)?;
-    let encoded = borsh::object_length(a).map_err(|e| refused(e.to_string()))? as u64;
-    if encoded > limits.max_close_bytes || encoded > owned.terms.max_material_bytes || encoded > p.max_bytes_per_contract {
-        return Err(refused("routed material answer exceeds native/signed capacity"));
-    }
-    let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(&b.state, root, a.provider)
-        .map_err(|e| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(e, refused))?;
-    if current != Some(consent) || !owned.providers.iter().any(|v| v.provider == a.provider && !v.charged) {
-        return Err(refused("routed material provider generation differs from own accepted state"));
-    }
-    let scope = owned
-        .native_binding
-        .as_ref()
-        .map(|v| &v.manifest)
-        .or(owned.terms.material_manifest.as_ref())
-        .and_then(|m| m.scope(a.claim))
-        .ok_or_else(|| refused("routed material exact scope absent"))?;
-    if scope.codec != crate::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldCompleteV2
-        || scope.commitment != claim.execution_root
-    {
-        return Err(refused("routed answer scope codec/execution differs"));
-    }
-    let missing = crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: a.refutation.step.output_opening.leaf_index };
-    let index = owned
-        .challenges
-        .iter()
-        .position(|c| c.provider == a.provider && c.dependency == a.claim && c.native_missing == Some(missing))
-        .ok_or_else(|| refused("routed material has no exact challenged unit"))?;
-    let challenge = &owned.challenges[index];
-    if challenge.answered
-        || ctx.daa_score > challenge.deadline_daa
-        || challenge.native_binding.as_deref() != Some(&a.refutation.step.binding)
-    {
-        return Err(refused("routed material challenge is answered/late or binding differs"));
-    }
-    let mut checkpoint = if b.state.material_recovery_row_v2(root).is_some() {
-        if b.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
-            return Err(refused("routed recovery fence dormant"));
-        }
-        let receipt = a.receipt.as_ref().ok_or_else(|| refused("routed recovery answer requires applied checkpoint"))?;
-        let checkpoint =
-            b.state.material_provider_ack_checkpoint_v2(&a.provider).ok_or_else(|| refused("routed provider stream absent"))?;
-        if receipt.challenge_deadline_daa != challenge.deadline_daa
-            || receipt.stream != checkpoint.stream
-            || receipt.previous != checkpoint.last_receipt
-            || checkpoint.sequence.checked_add(1) != Some(receipt.sequence)
-            || checkpoint.reserved_answer_events == 0
-        {
-            return Err(refused("routed answer replay/substitution in receipt stream"));
-        }
-        Some(checkpoint)
-    } else {
-        if a.receipt.is_some() {
-            return Err(refused("routed legacy contract cannot introduce a receipt stream"));
-        }
-        None
-    };
-    let mut q = TirNativeRequestsV1::new();
-    q.add_v1(native_value_requests_v1(&*owned).map_err(PalwStateV2Error::NativeResource)?)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    // Existing native write encodes, journals and keeps an independent aux row.
-    let row_bytes = borsh::object_length(&*owned).map_err(|e| refused(e.to_string()))? as u64;
-    for _ in 0..4 {
-        q.vec_v1::<u8>(row_bytes).map_err(PalwStateV2Error::NativeResource)?;
-    }
-    q.vec_v1::<u8>(3 * 69 + 4 * 256).map_err(PalwStateV2Error::NativeResource)?;
-    let _mutation = reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
-    check_routed_step_committed_half_v2(&a.refutation, claim.execution_root, &native.declaration, ladder).map_err(|e| match e {
-        PalwRoutingCourtErrorV2::Resource(e) => PalwStateV2Error::NativeResource(e),
-        other => refused(other.to_string()),
-    })?;
-    if !super::palw_kernel_route_fold_v1::charge_route_budget_v1(b, ctx, 0, false)? {
-        return Err(refused("routed answer route budget exhausted"));
-    }
-    let mut row = (*owned).clone();
-    b.slash_bond(row.challenges[index].challenger, u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1))?;
-    row.challenges[index].answered = true;
-    if let Some(checkpoint) = &mut checkpoint {
-        let receipt = a.receipt.as_ref().expect("checked above");
-        checkpoint.sequence = receipt.sequence;
-        let network = Hash64::from_bytes(b.state.kernel_route().expect("route checked").header.policy.network_domain);
-        checkpoint.last_receipt = a.message(network);
-        checkpoint.reserved_answer_events -= 1;
-        b.write_kernel_row(
-            crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
-            crate::palw_material_release_recovery_v2::material_provider_stream_key_v2(&a.provider),
-            Some(borsh::to_vec(checkpoint).unwrap()),
-        );
-    }
-    write(b, root, Some(&row));
-    Ok(())
 }

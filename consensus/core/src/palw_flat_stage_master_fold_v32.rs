@@ -7,6 +7,7 @@ use misaka_palw_kernel::flat_inputs12::composition32::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[allow(dead_code)] // capability32 composition is not wired into the stage fold yet
 struct NativeInvocationBindingV32 {
     version: u16,
     master: Digest,
@@ -22,12 +23,14 @@ struct NativeInvocationBindingV32 {
 }
 /// This type is not exported and has no decoder/public raw constructor. Its
 /// kernel projection cannot be substituted for an authenticated native receipt.
+#[allow(dead_code)] // capability32 composition is not wired into the stage fold yet
 struct NativeCheckedComponentFinalV32 {
     binding: NativeInvocationBindingV32,
     output: CheckedComponentOutputV32,
     terminal: Digest,
     credit: crate::Hash64,
 }
+#[expect(dead_code, reason = "capability32 composition is not wired into the stage fold yet")]
 fn component_final(
     builder: &TransitionBuilder<'_>,
     master: &CheckedMasterRequestV32,
@@ -120,6 +123,7 @@ fn component_final(
     .map_err(refused)?;
     Ok(NativeCheckedComponentFinalV32 { binding, output: projection, terminal: book.root(), credit: queue })
 }
+#[expect(dead_code, reason = "capability32 composition is not wired into the stage fold yet")]
 fn compose_final(
     master: &CheckedMasterRequestV32,
     components: Vec<NativeCheckedComponentFinalV32>,
@@ -165,6 +169,7 @@ fn master_read<T: BorshDeserialize>(r: &PalwKernelRouteStateV1, kind: u8, id: &i
     }
     borsh::from_slice(raw).ok()
 }
+#[expect(dead_code, reason = "capability32 composition is not wired into the stage fold yet")]
 fn restore_master(
     builder: &TransitionBuilder<'_>,
     p: &NativeStagePoliciesV28,

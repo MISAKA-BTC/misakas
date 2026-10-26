@@ -79,6 +79,7 @@ pub struct PalwStateCarriageVerifiedV1 {
 pub struct PalwStateCarriageAssemblerV1 {
     pinned: Hash64,
     committed: Hash64,
+    #[expect(dead_code, reason = "kept with the assembler's pinned page; not read yet")]
     header: Header,
     parent_header: Header,
     fork_choice: Option<PalwForkChoiceOpeningV1>,

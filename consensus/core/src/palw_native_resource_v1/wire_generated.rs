@@ -1,9 +1,9 @@
 //! Generated structural Borsh visitors; manual codecs are separate adapters.
 #![allow(unused_mut)]
+#![allow(clippy::match_single_binding)]
 use super::wire::wire_struct;
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 wire_struct!(crate::config::params::ForkActivation; u64);
 wire_struct!(crate::evm::EvmAddress; [u8; crate::evm::EVM_ADDRESS_SIZE]);
 impl NativeWireScanV1 for crate::evm::model_market::PalwEvmMarketActionKindV1 {
@@ -3523,7 +3523,7 @@ impl NativeWireScanV1 for crate::palw_paid_bootstrap_economics_v1::PalwSourceEco
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 | 1 | 2 | 3 => Ok(NativeWireShapeV1::default()),
+            0..=3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

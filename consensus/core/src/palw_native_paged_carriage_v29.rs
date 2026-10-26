@@ -70,6 +70,7 @@ impl CheckedNativePagedCarriagePlanV29 {
     pub fn record(&self) -> &NativePagedCarriageRecordV29 {
         &self.record
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn derive(
         program: &TirProgramV1,
         real_pc: &ParamCommitmentsV1,

@@ -6,7 +6,7 @@ use crate::{
     palw_kernel_route_v1::PalwKernelChunkTargetV1,
     palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2,
     palw_native_carriage_v22::NativeCarriageMassParamsV22,
-    palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwConsensusObjectV2},
+    palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
     tx::{Transaction, VerifiableTransaction},
 };
 use std::sync::Arc;

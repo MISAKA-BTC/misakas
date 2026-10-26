@@ -472,10 +472,9 @@ pub(super) fn request(
     }
     let r = builder.state.kernel_route.as_ref().unwrap();
     if let Some(id) = r.aux_row::<Digest>(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11, &slot_key(*signer, q.slot))
+        && pending(r, id).is_ok_and(|d| !d.settled)
     {
-        if pending(r, id).is_ok_and(|d| !d.settled) {
-            return Err(refused("stage28 original requester source/trace slot occupied"));
-        }
+        return Err(refused("stage28 original requester source/trace slot occupied"));
     }
     if super::super::super::palw_flat_execution_fold_v11::source::slot_occupied(r, signer, q.slot)?
         || r.aux_row::<crate::Hash64>(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11, &bytes(&(*signer, q.slot)))
@@ -643,7 +642,7 @@ pub(super) fn answer(
 }
 fn finish_answer(
     builder: &mut TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
+    _ctx: &PalwBlockContextV2,
     p: &NativeStagePoliciesV28,
     h: &JobHeader,
     d: &mut NativeStagePendingV28,
@@ -782,7 +781,7 @@ impl PalwKernelRouteStateV1 {
     fn stage_answer_eligibility_impl_v28(
         &self,
         id: Digest,
-        now: u64,
+        _now: u64,
         mass: &crate::palw_native_carriage_v22::NativeCarriageMassParamsV22,
         service: &crate::palw_flat_execution_capacity_v22::NativeCarriageServiceV22,
         owner: PalwBondKeyV2,

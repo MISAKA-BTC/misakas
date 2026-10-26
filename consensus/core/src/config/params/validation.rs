@@ -2850,8 +2850,7 @@ impl Params {
             ("palw_staged_float_constraint_v1", self.palw_staged_float_constraint_v1, self.palw_staged_float_constraint_v1_fence()),
         ] {
             let Some(fence) = fence.filter(|f| *f != ForkActivation::never()) else { continue };
-            if armed.is_none() || !self.palw_staged_public_court_v1_fence().is_some_and(|court| court.daa_score() <= fence.daa_score())
-            {
+            if armed.is_none() || self.palw_staged_public_court_v1_fence().is_none_or(|court| court.daa_score() > fence.daa_score()) {
                 let _ = name;
                 return Err(InvalidParams(
                     "a staged route extension requires ConsensusV2 and palw_staged_public_court_v1 at or below it",

@@ -503,7 +503,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
         let refuse = |s: String| PalwStateV2Error::CarriageInconsistent(format!("paid claim: {s}"));
-        let native = |why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse);
+        let native = |why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse);
         self.assert_paid_bootstrap_source_consistency_v6(params)?;
         self.assert_paid_compact_consistency_v4(params)?;
         let Some(route) = self.kernel_route() else { return Ok(()) };
@@ -735,7 +735,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     }
                     let lock = route
                         .paid_claim_effective_lock_checked_v6(&a)
-                        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse))?
+                        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?
                         .ok_or_else(|| refuse("receipt has no initial lock".into()))?;
                     if receipt.version != 2
                         || !receipt.complete
@@ -850,7 +850,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                         (
                             route
                                 .paid_claim_effective_lock_checked_v6(&a)
-                                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse))?
+                                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?
                                 .ok_or_else(|| refuse("Final initial lock absent".into()))?,
                             1,
                             [0; 64],

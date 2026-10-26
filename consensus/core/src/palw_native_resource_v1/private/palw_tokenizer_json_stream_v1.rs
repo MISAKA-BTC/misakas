@@ -9,7 +9,6 @@ native_enum!(crate::palw_tokenizer_json_stream_v1::Field; Ignore, Model, Vocab, 
 native_struct!(crate::palw_tokenizer_json_stream_v1::StringState; key, word, long_word, utf8, escape, hex, hex_digits, high, key_hash, ordinary, literal, ordinary_len, literal_len, non_byte, space);
 native_struct!(crate::palw_tokenizer_json_stream_v1::NumberState; phase, positive, value, float, integer_digits, leading_zeros, significant, seen_nonzero, exponent, exponent_positive);
 
-use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]
 use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};
@@ -18,31 +17,31 @@ impl NativeWireScanV1 for crate::palw_tokenizer_json_stream_v1::Field {
         reader.step()?;
         match reader.byte()? {
             0 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             1 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             2 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             3 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             4 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             5 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             6 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
@@ -55,7 +54,7 @@ impl NativeWireScanV1 for crate::palw_tokenizer_json_stream_v1::Lex {
         reader.step()?;
         match reader.byte()? {
             0 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             1 => {
@@ -86,35 +85,35 @@ impl NativeWireScanV1 for crate::palw_tokenizer_json_stream_v1::Scope {
         reader.step()?;
         match reader.byte()? {
             0 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             1 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             2 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             3 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             4 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             5 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             6 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             7 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),

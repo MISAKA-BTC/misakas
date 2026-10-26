@@ -13,7 +13,7 @@ fn every_contiguous_row_and_merged_tail_is_within_the_new_bound() {
             for row in 0..rows {
                 let first = layout.leaf_of((row * width) as u64).unwrap();
                 let last = layout.leaf_of(((row + 1) * width - 1) as u64).unwrap();
-                assert!(last - first + 1 <= bound, "{shape:?} row{row}:{}>{bound}", last - first + 1);
+                assert!(last - first < bound, "{shape:?} row{row}:{}>{bound}", last - first + 1);
             }
         }
     }

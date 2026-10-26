@@ -720,9 +720,7 @@ pub(crate) fn spawn(cmd: &Cmd, run_dir: &Path) -> Result<Child, String> {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
     }
-    let child = command
-        .spawn()
-        .map_err(|e| format!("{}: {e}", cmd.program.display()))?;
+    let child = command.spawn().map_err(|e| format!("{}: {e}", cmd.program.display()))?;
     Ok(Child { cmd: cmd.clone(), child, started: Instant::now() })
 }
 

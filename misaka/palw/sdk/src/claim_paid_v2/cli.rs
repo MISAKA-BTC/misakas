@@ -56,7 +56,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     let command = args[0].to_ascii_uppercase();
     let mut f = BTreeMap::new();
-    if (args.len() - 1) % 2 != 0 {
+    if !(args.len() - 1).is_multiple_of(2) {
         return Err(USAGE.into());
     }
     for pair in args[1..].chunks_exact(2) {

@@ -14,7 +14,7 @@ impl NativeWireScanV1 for crate::palw_prefix_public_source_v1::PalwPrefixPublicA
         reader.step()?;
         match reader.byte()? {
             0 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             1 => {
@@ -27,7 +27,7 @@ impl NativeWireScanV1 for crate::palw_prefix_public_source_v1::PalwPrefixPublicA
                 Ok(sum)
             }
             2 => {
-                let mut sum = NativeWireShapeV1::default();
+                let sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),

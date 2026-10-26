@@ -2,7 +2,7 @@
 //! Each demand step removes exactly one authenticated ordinal, including the
 //! actual served payload/journal. Historical guarantees are never refunded.
 use super::*;
-use misaka_palw_kernel::flat_quota11::{source16::*, trace17::*};
+use misaka_palw_kernel::flat_quota11::source16::*;
 
 fn charge_removed(
     builder: &mut TransitionBuilder<'_>,

@@ -4,7 +4,6 @@ use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1, native_enum
 native_struct!(crate::palw_native_queue_v30::NativeQueueGlobalV30; version, policy, service, live, packets, owned_bytes, entries);
 native_struct!(crate::palw_native_queue_v30::QueueEntryV30; job, funding, lease, packets, owned_bytes);
 
-use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]
 use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};

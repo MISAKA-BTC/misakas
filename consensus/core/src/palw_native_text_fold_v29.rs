@@ -6,10 +6,7 @@ use crate::{
     palw_native_text_stop_v29::*,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
-use misaka_palw_kernel::{
-    flat_quota11::text29::*, flat_resources10::ResourceAxisV10 as Axis, flat_resources29::*, flat_scope25::*,
-    trace::ParamCommitmentsV1,
-};
+use misaka_palw_kernel::{flat_quota11::text29::*, flat_resources10::ResourceAxisV10 as Axis, flat_resources29::*, flat_scope25::*};
 use misaka_palw_tir::program::TirProgramV1;
 #[path = "palw_native_text_da_fold_v29.rs"]
 mod public;
@@ -1315,16 +1312,15 @@ fn settle(
             return Err(refused("text29 collected finder award lacks independent finder"));
         }
     }
-    if let Some((_, payout)) = paid_finder {
-        if !builder.params.reporter_income_active_at(ctx.daa_score)
-            && builder
-                .state
-                .pending_payouts
-                .get(&crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payout))
-                .is_some_and(|v| v.amount.checked_add(s.finder_credit).is_none())
-        {
-            return Err(refused("text29 finder actual payout overflow"));
-        }
+    if let Some((_, payout)) = paid_finder
+        && !builder.params.reporter_income_active_at(ctx.daa_score)
+        && builder
+            .state
+            .pending_payouts
+            .get(&crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payout))
+            .is_some_and(|v| v.amount.checked_add(s.finder_credit).is_none())
+    {
+        return Err(refused("text29 finder actual payout overflow"));
     }
     if s.actual_collected_slash > 0 && builder.slash_bond(h.producer, s.actual_collected_slash as u128)? != s.actual_collected_slash {
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original collected collateral changed after final preflight".into()));
@@ -1914,10 +1910,10 @@ fn collect_terminal(
     if !public::all_collected(r, id)? {
         return Err(refused("text29 collection original public answer/default caches remain"));
     }
-    if let Ok(status) = paid_status(r, id) {
-        if status.active || status.paid_owners.iter().any(|v| *v != [0; 64]) || ctx.daa_score <= status.latest_paid_horizon {
-            return Err(refused("text29 collection original paid owner liability remains"));
-        }
+    if let Ok(status) = paid_status(r, id)
+        && (status.active || status.paid_owners.iter().any(|v| *v != [0; 64]) || ctx.daa_score <= status.latest_paid_horizon)
+    {
+        return Err(refused("text29 collection original paid owner liability remains"));
     }
     let owners: Vec<Digest> = read(r, EXECUTION_SEAL_ACTOR_TABLE_V11, 0, &id, 4 + 4 * 64).unwrap_or_default();
     if owners.len() > 4 {

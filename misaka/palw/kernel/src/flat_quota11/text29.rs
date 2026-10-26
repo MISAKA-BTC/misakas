@@ -316,13 +316,13 @@ pub(crate) fn complete_public_callback_bound_v29(
                         .ok_or("callback flat reply overflow")?
                 };
                 flat = flat.max(values);
-                if let misaka_palw_tir::Prim::TopK { k, .. } = n.prim {
-                    if crate::flat_scope7::point_relation(&pr, q, occ as u16, node as u16).map_err(|e| format!("{e:?}"))? {
-                        topk = topk.max(
-                            crate::flat_topk_locator25::topk_relation_callback_bound_v25(&shape, k)
-                                .ok_or("callback TopK selected-row overflow")?,
-                        );
-                    }
+                if let misaka_palw_tir::Prim::TopK { k, .. } = n.prim
+                    && crate::flat_scope7::point_relation(&pr, q, occ as u16, node as u16).map_err(|e| format!("{e:?}"))?
+                {
+                    topk = topk.max(
+                        crate::flat_topk_locator25::topk_relation_callback_bound_v25(&shape, k)
+                            .ok_or("callback TopK selected-row overflow")?,
+                    );
                 }
             }
         }

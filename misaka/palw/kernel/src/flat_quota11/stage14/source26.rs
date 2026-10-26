@@ -85,6 +85,7 @@ pub fn source_owner_contract_root_v26(n: &NativeStageSourceOwnerV26) -> Digest {
         ),
     )
 }
+#[allow(clippy::too_many_arguments)]
 pub fn check_stage_source_owner_v26(
     class: &CheckedStageClassV14,
     book: &StageJobBookV14,
@@ -810,6 +811,7 @@ pub struct TextNativeSourceOwnerV29 {
     pub actual_debit: u64,
     pub actual_receipt: Digest,
 }
+#[allow(clippy::too_many_arguments)]
 pub fn check_text_source_owner_v29(
     program: &misaka_palw_tir::program::TirProgramV1,
     pc: &ParamCommitmentsV1,

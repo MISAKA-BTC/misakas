@@ -13,13 +13,13 @@ fn transformed(a: &Tensor, b: &Tensor, dtype: DType, out: &[usize]) -> Result<Te
     let r = perm.len();
     perm.swap(r - 2, r - 1);
     let btshape = perm.iter().map(|i| b.shape[*i as usize]).collect::<Vec<_>>();
-    let bt = eval_primitive(&Prim::Transpose { perm }, &[b.clone()], b.dtype, &btshape)?;
+    let bt = eval_primitive(&Prim::Transpose { perm }, std::slice::from_ref(b), b.dtype, &btshape)?;
     let mut brshape = btshape;
     brshape.insert(r - 2, 1);
     let br = eval_primitive(&Prim::Reshape, &[bt], b.dtype, &brshape)?;
     let mut arshape = a.shape.clone();
     arshape.push(1);
-    let ar = eval_primitive(&Prim::Reshape, &[a.clone()], a.dtype, &arshape)?;
+    let ar = eval_primitive(&Prim::Reshape, std::slice::from_ref(a), a.dtype, &arshape)?;
     let mut mmshape = out.to_vec();
     mmshape.push(1);
     let mm = eval_primitive(&Prim::MatMul, &[br, ar], dtype, &mmshape)?;

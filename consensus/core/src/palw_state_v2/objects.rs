@@ -175,7 +175,7 @@ pub(super) fn apply_object(
                 let bound = (pubkey, operator_pubkey, capable_classes).native_heap_v1("native registration input copy");
                 builder
                     .native_reservation
-                    .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+                    .grow_v1(bound.bytes().ok_or(PalwStateV2Error::NativeResource(bound))?)
                     .map_err(PalwStateV2Error::NativeResource)?;
             }
             builder.write_bond(
@@ -1046,7 +1046,7 @@ pub(super) fn apply_object(
                 let bound = shards.native_heap_v1("bond shards incoming copy");
                 builder
                     .native_reservation
-                    .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+                    .grow_v1(bound.bytes().ok_or(PalwStateV2Error::NativeResource(bound))?)
                     .map_err(PalwStateV2Error::NativeResource)?;
             }
             builder.write_bond_shards((*bond, *class_id), (!shards.is_empty()).then(|| shards.clone()))?;

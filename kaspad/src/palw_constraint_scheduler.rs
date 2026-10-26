@@ -747,17 +747,17 @@ impl ConstraintSchedulerV1 {
         {
             return Err("constraint holding is not authenticated by the immutable job table root".into());
         }
-        if let Some(registered) = target.registered_semantics.as_ref() {
-            if !registered.matches_context(&binding.job_context) || registered.token_table_root != Some(root) {
-                return Err("constraint table differs from immutable registered semantics".into());
-            }
+        if let Some(registered) = target.registered_semantics.as_ref()
+            && (!registered.matches_context(&binding.job_context) || registered.token_table_root != Some(root))
+        {
+            return Err("constraint table differs from immutable registered semantics".into());
         }
         let mut eog = table.eog_ids_v1()?;
         eog.sort_unstable();
         if eog.is_empty() || eog.windows(2).any(|w| w[0] >= w[1]) || eog.last().is_some_and(|id| *id >= table.vocab_v1()) {
             return Err("constraint EOG holding is not a canonical bounded set".into());
         }
-        let court = PalwConstraintStreamCourtV1::new(
+        let _court = PalwConstraintStreamCourtV1::new(
             target.claim_id,
             progress.reserver,
             progress.reserved_daa,

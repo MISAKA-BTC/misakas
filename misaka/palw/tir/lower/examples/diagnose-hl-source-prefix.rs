@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let started = std::time::Instant::now();
     let loader = Streamed::new(&prep.hl, &prep.binding, ck.as_ref()).with_lazy(65536, 128 << 20);
-    let post = run_to_post(&prep.hl, &loader, &[ids.clone()], &|i, n| eprintln!("source float occurrence{i}/{n}"))?;
+    let post = run_to_post(&prep.hl, &loader, std::slice::from_ref(&ids), &|i, n| eprintln!("source float occurrence{i}/{n}"))?;
     let store = loader.load(prep.hl.post, None)?;
     let logits = post_logits(&prep.hl, &store, &post[0][ids.len() - 1], *ids.last().unwrap(), ids.len() - 1)?;
     let mut top = (0..logits.len()).collect::<Vec<_>>();

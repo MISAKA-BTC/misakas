@@ -42,8 +42,7 @@ impl PanelConsumerLifetimeTermsV2 {
                 self.producer,
                 self.immutable_fields,
             ]
-            .iter()
-            .any(|v| *v == [0; 64])
+            .contains(&[0; 64])
             || self.accept_by_daa >= self.service_until_daa
             || self.service_until_daa >= self.liability_until_daa
             || self.liability_until_daa == u64::MAX
@@ -86,7 +85,7 @@ impl PanelLifetimeAuthorizationV2 {
     }
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.version != 2
-            || [self.network, self.ruleset, self.nonce, self.producer, self.class].iter().any(|id| *id == [0; 64])
+            || [self.network, self.ruleset, self.nonce, self.producer, self.class].contains(&[0; 64])
             || self.accept_from_daa > self.accept_by_daa
             || self.accept_by_daa >= self.service_until_daa
             || self.service_until_daa >= self.liability_until_daa

@@ -477,14 +477,14 @@ pub(crate) fn verify_point_prepared_v25(
     let scope = relation_priced_v25(
         c.base.claim.program,
         c.base.claim.positions,
-        &pr,
+        pr,
         p,
         s,
         n,
         common::size_with_limit(c.base.claim.program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
             .map_err(|_| bad("oversized program"))?,
     )?;
-    if f.element >= scope.output_elements || wire > scope.filing_bytes || !common::authenticate_node(&c.base, &pr, output, (p, s, n)) {
+    if f.element >= scope.output_elements || wire > scope.filing_bytes || !common::authenticate_node(&c.base, pr, output, (p, s, n)) {
         return Err(bad("point output coordinate/root or filing bound"));
     }
     let node = pr.w.node(s, n);
@@ -494,7 +494,7 @@ pub(crate) fn verify_point_prepared_v25(
     let got = Inputs(vec![authenticate(&f.output, node.out.dtype, &sh.out, &output.commitment, output_kind)?])
         .get(0, f.element)
         .map_err(|_| bad("missing committed output point"))?;
-    let sources = operand_sources(&pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
+    let sources = operand_sources(pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
     if f.inputs.len() != sources.len() {
         return Err(bad("wrong point operand count"));
     }
@@ -506,7 +506,7 @@ pub(crate) fn verify_point_prepared_v25(
         let root = match src {
             OperandSourceV1::Source(SourceV1::Node { position, occurrence, node }) => {
                 let opening = o.node.as_ref().ok_or_else(|| bad("missing point operand node"))?;
-                if !common::authenticate_node(&c.base, &pr, opening, (*position, *occurrence, *node)) {
+                if !common::authenticate_node(&c.base, pr, opening, (*position, *occurrence, *node)) {
                     return Err(bad("borrowed point operand node"));
                 }
                 Some(opening.commitment)

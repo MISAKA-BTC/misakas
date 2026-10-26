@@ -2620,10 +2620,8 @@ impl VirtualStateProcessor {
                                 // this set (a block's transactions are accepted by a later block),
                                 // so the registration still has to arrive in somebody else's
                                 // block. See ADR-0064's correction.
-                                let bootstrap = self
-                                    .palw_bootstrap_activation
-                                    .filter(|fence| fence.is_active(point.daa_score))
-                                    .map(|_| &**&folded);
+                                let bootstrap =
+                                    self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &*folded);
                                 let attempt =
                                     match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
                                         Ok(attempt) => attempt,
@@ -5793,7 +5791,7 @@ impl VirtualStateProcessor {
                     &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
                     state_params,
                     &point,
-                    &objects,
+                    objects,
                     None,
                     self.palw_unavailable_abstains_at(self.genesis.daa_score),
                     self.palw_capability_bound_at(self.genesis.daa_score),

@@ -140,10 +140,7 @@ pub fn verify_native_aux_v32<'a>(
         rows: &proof.collection.rows,
     })
 }
-pub fn verify_native_payouts_v32<'a>(
-    proof: &'a PalwFactProofV1,
-    pinned_inner_state: Hash64,
-) -> Result<&'a [(Vec<u8>, Vec<u8>)], String> {
+pub fn verify_native_payouts_v32(proof: &PalwFactProofV1, pinned_inner_state: Hash64) -> Result<&[(Vec<u8>, Vec<u8>)], String> {
     checked_extent(proof)?;
     let raw = &proof.state.preimage;
     if proof.collection.label != NATIVE_PAYOUT_LABEL_V32

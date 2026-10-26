@@ -40,7 +40,7 @@ mod tests {
             &g.root(),
             native.seal_actor,
             Some((&a, &a.root())),
-            (&s, &s.row_root()),
+            (s, &s.row_root()),
             None,
         )
         .unwrap();
@@ -74,7 +74,7 @@ mod tests {
                 &g.root(),
                 book.job().producer,
                 Some((&producer_before, &producer_before.root())),
-                (&s, &s.row_root()),
+                (s, &s.row_root()),
                 Some((row, &row.root()))
             )
             .is_err()
@@ -89,7 +89,7 @@ mod tests {
                 &g.root(),
                 a.actor,
                 Some((a, &a.root())),
-                (&s, &s.row_root()),
+                (s, &s.row_root()),
                 Some((&changed, &changed.root()))
             )
             .is_err()
@@ -103,7 +103,7 @@ mod tests {
         let g = state.global_row();
         let s = state.subject(&book.job().id()).unwrap();
         let mut public =
-            TraceShardV17::from_native_rows(&quota, &plan, &g, &g.root(), [99; 64], None, (&s, &s.row_root()), None).unwrap();
+            TraceShardV17::from_native_rows(&quota, &plan, &g, &g.root(), [99; 64], None, (s, &s.row_root()), None).unwrap();
         let reserved = public.global_row().network.reserved.clone();
         public.debit_ordinary(&quota, &epoch, &plan).unwrap();
         assert_eq!(public.global_row().network.reserved, reserved);

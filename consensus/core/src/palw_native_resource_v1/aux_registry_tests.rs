@@ -114,10 +114,10 @@ fn writer_helpers(sources: &[(PathBuf, String)]) -> BTreeMap<String, usize> {
             let body_text: String = text[body..body_end].chars().filter(|c| !c.is_whitespace()).collect();
             for (index, param) in top_level_parts(&text[open..close.saturating_sub(1)]).into_iter().enumerate() {
                 let compact: String = param.chars().filter(|c| !c.is_whitespace()).collect();
-                if let Some(pname) = compact.strip_suffix(":u8") {
-                    if body_text.contains(&format!("write_kernel_row({pname},")) {
-                        helpers.insert(name.clone(), index);
-                    }
+                if let Some(pname) = compact.strip_suffix(":u8")
+                    && body_text.contains(&format!("write_kernel_row({pname},"))
+                {
+                    helpers.insert(name.clone(), index);
                 }
             }
         }

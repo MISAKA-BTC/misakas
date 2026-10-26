@@ -255,7 +255,7 @@ impl KernelMaterialContextArchiveV4 {
         if self.pending_expiry.is_none() {
             return Ok(());
         }
-        if !self.pending_expiry.is_some_and(|(id, _, _)| id == consent) || self.rows.contains_key(&consent) {
+        if self.pending_expiry.is_none_or(|(id, _, _)| id != consent) || self.rows.contains_key(&consent) {
             return Err("kernel expiry completion still has metadata or another intent".into());
         }
         let file = self.file.with_extension("kernel-context-expiry-v4");
@@ -306,10 +306,12 @@ impl KernelMaterialContextArchiveV4 {
                 continue;
             }
             let old = self.get(*id)?.ok_or("replacement slot row vanished")?;
-            if let PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement: prior, .. } = &old.capsule {
-                if prior.root == replacement.root && prior.previous == replacement.previous && prior.sequence == replacement.sequence {
-                    return Err("root/previous/sequence already has an immutable signed replacement deadline".into());
-                }
+            if let PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement: prior, .. } = &old.capsule
+                && prior.root == replacement.root
+                && prior.previous == replacement.previous
+                && prior.sequence == replacement.sequence
+            {
+                return Err("root/previous/sequence already has an immutable signed replacement deadline".into());
             }
         }
         Ok(())
