@@ -24,3 +24,24 @@ The processor uses its explicit **cfg(test) adjudication cap 4**, reserve 2, and
 For the single 64-position / six-claim N=1 preflight sample, filing phases took 19.072 ms and 21.896 ms. Each block contained 74,310 bytes of full local Borsh transactions for six filings (29,226 object bytes). The outsider's local check took 7.862 ms and its later filing 12.338 ms (13,758 transaction bytes). These are single descriptive samples, not latency bounds; transaction serialization excludes P2P framing. Seal-phase budget rows can refer to the previous charged block, identified by `budget_blue`.
 
 The [summary validator](../summarize_capacity_measure.py) verifies raw log hashes, emitted records, paired N=0/N=1 conditions, charged work, charged versus dropped counts, and successive budget identities. The 20-repeat batch (320 processes) is queued separately. Latest-source runs are also separate. No continuous adversarial inclusion, reserved service for a particular honest outsider, Gate C, restart/reorg/pruning, real-model court, or production capacity claim follows from this preflight.
+
+## Native reduced-budget batch — 320 processes completed
+
+The [full batch](raw/native-capacity-batch-2026-10-26/summary.json) completed **320/320 processes with exit 0**, on the same pinned `9c93b6a13` source/binary as the preflight: two profiles × four outstanding-claim counts (1/2/4/6) × 20 repetitions × N=0/N=1. Every N=1 run verified both junk-filing rounds and the later outsider conviction. Log hashes, charged work, drop counts, budget resets and paired baselines were independently checked with the summary validator. [Raw records](raw/native-capacity-batch-2026-10-26/raw.json) and [manifest](raw/native-capacity-batch-2026-10-26/manifest.json) preserve all observations.
+
+Load ranged **10.351–19.690**. The following wall times are median / nearest-rank p95 in milliseconds over 20 fresh processes per condition. They include native carrier processing and local blocks; they are not a CPU-only measurement or a population tail bound.
+
+| Positions | Outstanding claims | Filing round 0 ms | Filing round 1 ms | Outsider local check ms | Outsider filing ms | Median full-process RSS |
+|---|---:|---|---|---|---|---:|
+| 6 | 1 | 4.988 / 5.855 | 4.641 / 5.264 | 1.464 / 1.482 | 5.103 / 5.874 | 56,942,592 B |
+| 6 | 2 | 6.707 / 7.315 | 6.228 / 7.482 | 1.469 / 1.501 | 5.436 / 5.826 | 59,097,088 B |
+| 6 | 4 | 9.966 / 31.227 | 10.671 / 35.868 | 1.567 / 6.063 | 6.827 / 28.226 | 63,315,968 B |
+| 6 | 6 | 33.706 / 66.285 | 33.792 / 117.318 | 1.660 / 4.555 | 19.084 / 36.356 | 68,132,864 B |
+| 64 | 1 | 21.035 / 36.083 | 18.646 / 27.814 | 10.671 / 19.447 | 15.376 / 28.619 | 64,569,344 B |
+| 64 | 2 | 10.251 / 32.099 | 10.473 / 37.445 | 7.146 / 12.254 | 9.327 / 29.268 | 72,318,976 B |
+| 64 | 4 | 38.332 / 53.514 | 35.778 / 79.409 | 7.598 / 9.124 | 35.163 / 71.811 | 93,110,272 B |
+| 64 | 6 | 45.477 / 62.309 | 39.334 / 130.653 | 7.954 / 12.243 | 37.914 / 58.135 | 114,638,848 B |
+
+The non-monotone filing medians (for example 64 positions at one versus two claims) coincide with changing machine load and cannot establish a production scaling law. Across both rounds the 1/2/4-claim cases charge all filings; every 6-claim case charges four and drops two without a dismissal fee. The reserve is available to any eligible prosecutor, including the junk coalition; an outsider's later successful filing does not establish priority under continuous same-block saturation.
+
+This completes the reduced-budget fixture curve, **not M-CAP's arming requirement**. The production-cap node, minimum hardware, worst admissible proof, full TIR session reservations, continuous refill/service and restart/reorg/pruned replay remain unmeasured. Results after the post-commit anchor change will be kept under their own source identity.

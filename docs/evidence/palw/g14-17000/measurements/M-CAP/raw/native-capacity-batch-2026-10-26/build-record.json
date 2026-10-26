@@ -1,0 +1,38 @@
+{
+  "source_commit": "9c93b6a130b724b0b8d9ea31ab8525c2af8ac1dc",
+  "source_trees": "d1874a261a6e42cc9d5098c8ab568dea711610a525b7f07fde5a4f18f4443711",
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--release",
+    "-p",
+    "kaspa-consensus",
+    "--lib",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "shared_slot": true,
+  "stage": "BUILT",
+  "features": "default",
+  "minimum_hardware": false,
+  "load_before": [
+    7.11962890625,
+    9.11181640625,
+    9.37353515625
+  ],
+  "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+  "builder_sha256": "4a1057462264d25160dd5a04b9014fc2b54f1392dcaa3d91fcf7ac886d747018",
+  "exit_code": 0,
+  "wall_seconds": 603.891570041,
+  "load_after": [
+    10.7099609375,
+    10.2607421875,
+    10.037109375
+  ],
+  "binary": {
+    "path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+    "sha256": "bd7f7a365a1dadab35b9cffa91ddbb6e59fea5f5554302d673872d4da000e652"
+  },
+  "source_unchanged": true
+}

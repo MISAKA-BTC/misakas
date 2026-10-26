@@ -1,0 +1,646 @@
+{
+  "status": "UNDER_LOAD_FIXTURE_ONLY",
+  "source_commit": "9c93b6a130b724b0b8d9ea31ab8525c2af8ac1dc",
+  "binary_sha256": "bd7f7a365a1dadab35b9cffa91ddbb6e59fea5f5554302d673872d4da000e652",
+  "processes": 320,
+  "arming_evidence": false,
+  "minimum_hardware": false,
+  "production_cap_measured": false,
+  "load_1m_min": 10.35107421875,
+  "load_1m_max": 19.6904296875,
+  "quantile_scope": "Descriptive process samples; no population latency bound. N=0 includes setup; not subtracted from N=1.",
+  "groups": [
+    {
+      "positions": 6,
+      "claims": 1,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.06,
+        "p95_nearest_rank": 0.06,
+        "max": 0.09
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 54272000.0,
+        "p95_nearest_rank": 54460416.0,
+        "max": 54509568.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 41.852833000000004,
+        "p95_nearest_rank": 44.466625,
+        "max": 55.457916
+      }
+    },
+    {
+      "positions": 6,
+      "claims": 1,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.09,
+        "p95_nearest_rank": 0.1,
+        "max": 0.13
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 56942592.0,
+        "p95_nearest_rank": 57212928.0,
+        "max": 57262080.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 41.871832999999995,
+        "p95_nearest_rank": 44.848333,
+        "max": 74.998167
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 20,
+        "median": 4.988270999999999,
+        "p95_nearest_rank": 5.855292,
+        "max": 6.133833
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 20,
+        "median": 4.641166999999999,
+        "p95_nearest_rank": 5.264459,
+        "max": 5.308666
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 20,
+        "median": 1.4641875,
+        "p95_nearest_rank": 1.481958,
+        "max": 1.720208
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 20,
+        "median": 5.102812500000001,
+        "p95_nearest_rank": 5.873833,
+        "max": 5.955291
+      },
+      "adjudicated_per_round": [
+        1
+      ],
+      "over_budget_per_round": [
+        0
+      ],
+      "filing_transaction_borsh_bytes": [
+        12385
+      ]
+    },
+    {
+      "positions": 6,
+      "claims": 2,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.09,
+        "p95_nearest_rank": 0.09,
+        "max": 0.09
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 56303616.0,
+        "p95_nearest_rank": 56688640.0,
+        "max": 56803328.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 69.572979,
+        "p95_nearest_rank": 73.036459,
+        "max": 74.877542
+      }
+    },
+    {
+      "positions": 6,
+      "claims": 2,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.13,
+        "p95_nearest_rank": 0.14,
+        "max": 0.14
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 59097088.0,
+        "p95_nearest_rank": 59473920.0,
+        "max": 59604992.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 70.358104,
+        "p95_nearest_rank": 74.671791,
+        "max": 75.997833
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 20,
+        "median": 6.706854,
+        "p95_nearest_rank": 7.314667,
+        "max": 7.81
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 20,
+        "median": 6.228334,
+        "p95_nearest_rank": 7.481833,
+        "max": 11.214458
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 20,
+        "median": 1.4693955,
+        "p95_nearest_rank": 1.500791,
+        "max": 1.52175
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 20,
+        "median": 5.4364170000000005,
+        "p95_nearest_rank": 5.826,
+        "max": 5.846166
+      },
+      "adjudicated_per_round": [
+        2
+      ],
+      "over_budget_per_round": [
+        0
+      ],
+      "filing_transaction_borsh_bytes": [
+        24770
+      ]
+    },
+    {
+      "positions": 6,
+      "claims": 4,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.17,
+        "p95_nearest_rank": 0.42,
+        "max": 0.45
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 59957248.0,
+        "p95_nearest_rank": 60325888.0,
+        "max": 60669952.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 148.048063,
+        "p95_nearest_rank": 392.920625,
+        "max": 424.6495
+      }
+    },
+    {
+      "positions": 6,
+      "claims": 4,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.245,
+        "p95_nearest_rank": 0.63,
+        "max": 0.64
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 63315968.0,
+        "p95_nearest_rank": 63864832.0,
+        "max": 63913984.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 153.63020799999998,
+        "p95_nearest_rank": 429.517042,
+        "max": 430.188125
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 20,
+        "median": 9.966458500000002,
+        "p95_nearest_rank": 31.226917,
+        "max": 39.430459
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 20,
+        "median": 10.671188,
+        "p95_nearest_rank": 35.868166,
+        "max": 37.480625
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 20,
+        "median": 1.566646,
+        "p95_nearest_rank": 6.063459,
+        "max": 9.801416
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 20,
+        "median": 6.8273125,
+        "p95_nearest_rank": 28.226166,
+        "max": 30.219583
+      },
+      "adjudicated_per_round": [
+        4
+      ],
+      "over_budget_per_round": [
+        0
+      ],
+      "filing_transaction_borsh_bytes": [
+        49540
+      ]
+    },
+    {
+      "positions": 6,
+      "claims": 6,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.7849999999999999,
+        "p95_nearest_rank": 1.36,
+        "max": 1.39
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 64208896.0,
+        "p95_nearest_rank": 64536576.0,
+        "max": 64569344.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 746.0903955,
+        "p95_nearest_rank": 1319.387292,
+        "max": 1347.154333
+      }
+    },
+    {
+      "positions": 6,
+      "claims": 6,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 1.1099999999999999,
+        "p95_nearest_rank": 1.56,
+        "max": 1.76
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 68132864.0,
+        "p95_nearest_rank": 68370432.0,
+        "max": 68403200.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 812.7002085,
+        "p95_nearest_rank": 1182.772167,
+        "max": 1371.90975
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 20,
+        "median": 33.706042,
+        "p95_nearest_rank": 66.285333,
+        "max": 105.311542
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 20,
+        "median": 33.7916455,
+        "p95_nearest_rank": 117.317625,
+        "max": 136.722083
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 20,
+        "median": 1.6602505,
+        "p95_nearest_rank": 4.554667,
+        "max": 4.927917
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 20,
+        "median": 19.084229,
+        "p95_nearest_rank": 36.356,
+        "max": 53.5825
+      },
+      "adjudicated_per_round": [
+        4
+      ],
+      "over_budget_per_round": [
+        2
+      ],
+      "filing_transaction_borsh_bytes": [
+        74310
+      ]
+    },
+    {
+      "positions": 64,
+      "claims": 1,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.29,
+        "p95_nearest_rank": 0.34,
+        "max": 0.45
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 60301312.0,
+        "p95_nearest_rank": 60850176.0,
+        "max": 60866560.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 261.8376455,
+        "p95_nearest_rank": 315.029959,
+        "max": 396.558625
+      }
+    },
+    {
+      "positions": 64,
+      "claims": 1,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.42,
+        "p95_nearest_rank": 0.48,
+        "max": 0.69
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 64569344.0,
+        "p95_nearest_rank": 64880640.0,
+        "max": 65241088.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 253.6703125,
+        "p95_nearest_rank": 299.291167,
+        "max": 502.722667
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 20,
+        "median": 21.0346875,
+        "p95_nearest_rank": 36.083417,
+        "max": 56.797292
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 20,
+        "median": 18.645604,
+        "p95_nearest_rank": 27.814458,
+        "max": 28.50325
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 20,
+        "median": 10.670604,
+        "p95_nearest_rank": 19.446791,
+        "max": 27.396167
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 20,
+        "median": 15.3759585,
+        "p95_nearest_rank": 28.6185,
+        "max": 40.005459
+      },
+      "adjudicated_per_round": [
+        1
+      ],
+      "over_budget_per_round": [
+        0
+      ],
+      "filing_transaction_borsh_bytes": [
+        12385
+      ]
+    },
+    {
+      "positions": 64,
+      "claims": 2,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.255,
+        "p95_nearest_rank": 0.59,
+        "max": 0.64
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 67682304.0,
+        "p95_nearest_rank": 68648960.0,
+        "max": 68681728.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 238.2990835,
+        "p95_nearest_rank": 554.644125,
+        "max": 606.485375
+      }
+    },
+    {
+      "positions": 64,
+      "claims": 2,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 0.33,
+        "p95_nearest_rank": 0.82,
+        "max": 0.84
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 72318976.0,
+        "p95_nearest_rank": 73383936.0,
+        "max": 73465856.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 236.4595415,
+        "p95_nearest_rank": 588.645625,
+        "max": 635.764667
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 20,
+        "median": 10.2508535,
+        "p95_nearest_rank": 32.099458,
+        "max": 32.407958
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 20,
+        "median": 10.473104,
+        "p95_nearest_rank": 37.444542,
+        "max": 40.534709
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 20,
+        "median": 7.1462915,
+        "p95_nearest_rank": 12.254041,
+        "max": 15.394208
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 20,
+        "median": 9.327417,
+        "p95_nearest_rank": 29.26825,
+        "max": 32.6485
+      },
+      "adjudicated_per_round": [
+        2
+      ],
+      "over_budget_per_round": [
+        0
+      ],
+      "filing_transaction_borsh_bytes": [
+        24770
+      ]
+    },
+    {
+      "positions": 64,
+      "claims": 4,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 1.24,
+        "p95_nearest_rank": 1.54,
+        "max": 1.63
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 86974464.0,
+        "p95_nearest_rank": 87588864.0,
+        "max": 88129536.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 1202.8502085,
+        "p95_nearest_rank": 1502.712958,
+        "max": 1584.036583
+      }
+    },
+    {
+      "positions": 64,
+      "claims": 4,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 1.49,
+        "p95_nearest_rank": 1.67,
+        "max": 1.91
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 93110272.0,
+        "p95_nearest_rank": 94044160.0,
+        "max": 94388224.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 1181.079604,
+        "p95_nearest_rank": 1294.496875,
+        "max": 1520.87825
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 20,
+        "median": 38.33225,
+        "p95_nearest_rank": 53.514333,
+        "max": 110.223333
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 20,
+        "median": 35.7775,
+        "p95_nearest_rank": 79.408666,
+        "max": 96.7645
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 20,
+        "median": 7.597875,
+        "p95_nearest_rank": 9.124375,
+        "max": 24.705917
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 20,
+        "median": 35.162896,
+        "p95_nearest_rank": 71.811375,
+        "max": 82.719333
+      },
+      "adjudicated_per_round": [
+        4
+      ],
+      "over_budget_per_round": [
+        0
+      ],
+      "filing_transaction_borsh_bytes": [
+        49540
+      ]
+    },
+    {
+      "positions": 64,
+      "claims": 6,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 2.03,
+        "p95_nearest_rank": 2.34,
+        "max": 2.63
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 111476736.0,
+        "p95_nearest_rank": 112295936.0,
+        "max": 112754688.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 1996.252625,
+        "p95_nearest_rank": 2294.331667,
+        "max": 2571.597
+      }
+    },
+    {
+      "positions": 64,
+      "claims": 6,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 20,
+        "median": 2.32,
+        "p95_nearest_rank": 4.64,
+        "max": 4.72
+      },
+      "peak_rss_bytes": {
+        "samples": 20,
+        "median": 114638848.0,
+        "p95_nearest_rank": 115998720.0,
+        "max": 117932032.0
+      },
+      "setup_wall_ms": {
+        "samples": 20,
+        "median": 1957.017021,
+        "p95_nearest_rank": 3985.287791,
+        "max": 4070.286459
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 20,
+        "median": 45.477042,
+        "p95_nearest_rank": 62.309417,
+        "max": 144.019708
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 20,
+        "median": 39.3341875,
+        "p95_nearest_rank": 130.653,
+        "max": 157.616
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 20,
+        "median": 7.9544165,
+        "p95_nearest_rank": 12.243458,
+        "max": 18.010375
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 20,
+        "median": 37.914125,
+        "p95_nearest_rank": 58.134875,
+        "max": 101.644583
+      },
+      "adjudicated_per_round": [
+        4
+      ],
+      "over_budget_per_round": [
+        2
+      ],
+      "filing_transaction_borsh_bytes": [
+        74310
+      ]
+    }
+  ]
+}

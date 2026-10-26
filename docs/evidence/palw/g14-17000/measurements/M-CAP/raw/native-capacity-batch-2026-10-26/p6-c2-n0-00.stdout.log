@@ -1,0 +1,7 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure ... G14_CAP_MEASURE {"arming_evidence":false,"calculated_adjudications":4,"claim_states_at_measurement":["ProbabilisticPass { passed_daa: 5, window_end_daa: 55 }","ProbabilisticPass { passed_daa: 10, window_end_daa: 60 }"],"claims":2,"continuous_adversary_inclusion_guaranteed":false,"fixture_only":true,"gate_c_measured":false,"n":0,"outsider":null,"per_claim_worst_work":1224336,"positions":6,"production_cap_measured":false,"real_model_measured":false,"reserved_prosecution_runs":2,"rounds":[],"schema":1,"setup_wall_ns":70311125,"test_adjudication_cap":4,"test_policy":true,"work_cap":1073741824}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1194 filtered out; finished in 0.08s
+
