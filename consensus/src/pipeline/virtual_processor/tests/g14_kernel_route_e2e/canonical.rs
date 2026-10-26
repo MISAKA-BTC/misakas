@@ -1342,6 +1342,8 @@ async fn g14_canonical_opv_a_borrowed_trace_of_another_prompt_is_refused_at_incl
 
 /// lane SPINE (2026-10-26): the Panel=1 kernel-route vertical slice, stage by stage.
 mod cert;
+/// lane CLOCK (2026-10-26): the kernel route claim on X3's notice / hard clock.
+mod clock;
 mod f03k;
 /// lane SEED (2026-10-26): the Panel=1 seat draw and sample seed from a post-commit seed anchor (G14 review MAJOR-1).
 mod seed;

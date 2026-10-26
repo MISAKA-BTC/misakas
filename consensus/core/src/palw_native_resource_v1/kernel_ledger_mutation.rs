@@ -105,6 +105,16 @@ impl ReservedKernelLedgerV1 {
         self.ledger.commitment_scope_from_daa = from;
     }
 
+    /// **G14 lane CLOCK**: X3's activation, where `palw_claim_hard_deadline_v1` is armed (`misaka_palw_kernel::claim_clock`). A scalar.
+    pub fn set_claim_clock_from_daa_v1(&mut self, from: Option<u64>) {
+        self.ledger.claim_clock_from_daa = from;
+    }
+
+    /// The injected claim clock (read by the fold's Panel=1 censorship relation).
+    pub fn claim_clock_from_daa_v1(&self) -> Option<u64> {
+        self.ledger.claim_clock_from_daa
+    }
+
     /// **The consumer-derived inputs installed before an object or the tick** (attested roots, interim verifier-pay and
     /// sealed-bounty policies, provider liability set, consumer Final-reward caps). Their heaps are the actual typed values handed
     /// in; they replace the previous values, which drop after the swap, so both coexist for one instant and both are admitted.
