@@ -62,3 +62,36 @@ The PASS/FAIL of the "run" rows is in the build result recorded in §5.
   - Either the seat charge is the intended new rule (RFC08 lifecycle / Codex `f4054fe39`), and the assert must be updated deliberately by its owner, or it is a regression.
   - SPINE did not change the assert. **統括 decides which.**
 - UNIMPLEMENTED: S1, S2, S3a', S3b', S3c', S4 (see §2). The table test is red, as intended.
+
+## 6. Second round (2026-10-26): origin of the S3b seat charge, S4, F02 premise, F03b
+
+### Bisecting the S3b seat charge
+The same test (`..._ibd_node_convicts_a_covered_lie_before_final`) fails at `canonical.rs:676` on all three bases: f4054fe39, 55510b56a and 3c5f4c24b. So it is not caused by RFC08/RFC07. There is no change to slash code in f4054..3c5f4.
+- **Origin:** commit 5bdd427fb (2026-10-16, "close G-K1 ..."). At a conviction, `palw_g14_lane_closure_fold_v1::charge_kernel_signers_on_conviction_v1` charges the liability lock of each passing-receipt signer (seat). `palw_kernel_route_fold_v1.rs:1391`.
+- **Judgement: an intended new rule.** Reasons:
+  - It closes audit G-K1 ("a counted PASSING receipt locks the signer's liability ... charged at any conviction"; `docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md` §3.4).
+  - It has its own E2E: `g14_lane_closure.rs::kernel_route_valid_signers_are_charged_on_conviction`.
+  - The canonical assert ("the colluding seats are not charged") is from 2026-10-10 (c995dfcc3), from before G-K1.
+- **Proposal to the canonical harness owner (G14C lane):** change the assert in `canonical()` so each seat's slashed amount rises by exactly that seat's G-K1 lock amount (`palw_g14_lane_closure_v1` lock relation). Also check that the producer's slash and the bounty are not changed by the seat charge. SPINE has not changed the assert.
+
+### S4 (reorg across the deciding block)
+- Implemented: `decided_across_a_reorg` with two tests, `g14_spine_s4_{honest_final,default}_is_decided_once_across_a_reorg`.
+- **Result: FAIL on both.** `recovery::reorged_node` builds a heavier branch with empty heartbeats, and the "DNS reorg gate" (`palw_reorg_strict_economic_win` = 0 in `canonical_config`) refuses it: "B out-works A: Z reorgs onto B".
+- The fix needed is a competing branch that also wins economically. For example, re-carry the same claim, Panel receipts and demand on B, then add heartbeats. That is SPINE's next task. The gate's behaviour itself is correct.
+
+### F02 inclusion premise (merged 9803e043d)
+- **S3c'' (premise None, the production value) FAIL.** The kernel route still turns the demand into `Unavailable { producer_defaulted: true }` at the deadline. `misaka_palw_kernel::ledger`'s default does not consult `court_service_inclusion_premise_v1`, so the F02 rule ("None ⇒ no default, held") is bypassed on the kernel route.
+  - **Request to F02:** wire the premise into the kernel ledger's default.
+- **S3c''' (with a test premise) UNIMPLEMENTED.** `palw_accept.rs` copies the const `PALW_COURT_SERVICE_INCLUSION_PREMISE_V1` directly, so a native E2E cannot inject a test premise.
+  - **Request to F02 / central:** a `#[cfg(test)]` setter that only takes values with a `TEST_ONLY_` name.
+- The existing S3c PASS is the kernel ledger's deadline-only default. It does not show F02's rule.
+
+### F03b (cherry-picked 1298841fa) and a continuous S3b'
+- I did not build the continuous run. The two F03b legs cannot be joined from the spine:
+  - F03b is a core-fold unit test on the TIR public route, not the kernel route.
+  - Capture/refill and bottom → `Voided{CourtHeldVerdict}` → slash use different fixtures: the frame fixture `(7,1),4` and the history fixture.
+  - The fixture Panel has 3 seats.
+- **Request to F03:** either serve both legs with one Panel=1 fixture/world, or add a shared frontier and paid-ingress `file_proof` to the kernel route. **To 統括:** a decision on whether to switch the slice to the TIR public route.
+
+### Current stage table (`g14_spine_`, 4 tests run, all FAIL as designed or for a real gap)
+PASS: S3a, S3c (deadline-only). FAIL: S3b×2 (G-K1 assert), S3c'' (premise bypassed), S4×2 (reorg gate). UNIMPLEMENTED: S1, S2, S3a' (CERT), S3b', S3c', S3c'''.
