@@ -160,3 +160,9 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 - 根拠: capital unit 13,000 KAS（t12 最小 producer bond）、1 unit・1 日あたり claim・reward block・Round rights 各 72（名目 10 slot に 1、184 s/DAA で 1 日の block の約 15%）、1 日の reward は unit の 0.25（回収可能 slash 0.51 未満）、export cap 250‰、liability hold 10,000 DAA（court clock v2 の上限）。
 - 見直し条件: ADR-0176 Stage 1（参照 miner の正直な速度、実測 S/K）、X3 の実測 Δ。値を変えれば digest が変わり、承認一覧の更新が要る。
 - 範囲: preset には入れていない（fence 高さは統括の統合時）。`palw_model_bond_allocation_v1` は slice（`PALW_T12_KERNEL_SLICE_FENCES_V1`）に model tier が無いので、承認一覧は空のまま。
+
+## 2026-10-26 lane CERT — kernel route の認証失敗時の保留報酬（**暫定**、統括の値決定委任）
+
+| 項目 | 名前 | 値 | 単位 | 根拠 | 見直し条件 |
+|---|---|---|---|---|---|
+| CERT | `palw_kernel_uncertified_split_v1`（NotCertified・Expired・NoPopulation・Withdrawn・Final 後 conviction） | producer 0 / burn = V3 burn 100‰（切捨て）/ 残りを poster へ返却。burn + refund = 報酬 | ‰ of 保留報酬 | 全額返却だと自己支払い claim が認証抽選を無料で引ける。全額 burn だと正直な claim がまれに落ちたとき（約 0.7%）支払者の負担が重すぎる | m/k の確定（VAL・ユーザー承認）、正直 claim の実測失敗率、V3 burn の変更 |

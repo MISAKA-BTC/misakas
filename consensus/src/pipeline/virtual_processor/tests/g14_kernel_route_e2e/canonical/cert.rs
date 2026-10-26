@@ -246,6 +246,16 @@ pub(super) async fn s3a_prime_shortfall() {
     assert!(matches!(w.net.claim_state(&claim), ClaimStateV1::Final { .. }), "still a kernel Final");
     assert!(decided.outcome.is_some_and(|(_, at)| at > short.deadline_daa), "decided only past the attestation deadline");
     assert_eq!(w.net.owed(0), producer_before, "an uncertified Final never pays the producer");
-    assert_eq!(w.net.owed(1), poster_before + Rules::final_reward(&policy), "the held reward returns to the poster, whole");
+    let (burn, refund) = palw_kernel_uncertified_split_v1(Rules::final_reward(&policy));
+    assert_eq!(burn + refund, Rules::final_reward(&policy), "conservation: burn + refund = the held reward");
+    assert!(burn > 0, "the V3 burn share is taken");
+    assert_eq!(w.net.owed(1), poster_before + refund, "the poster gets the reward less the burn (PROVISIONAL split)");
     assert!(hold(&w.net, &claim).is_none(), "settled once");
+    // Exactly once: later blocks never name the refund (or any producer payment) again.
+    for _ in 0..5 {
+        let (p0, p1) = (w.net.owed(0), w.net.owed(1));
+        let next = w.net.daa() + 1;
+        w.net.beat_to(next).await;
+        assert!(w.net.owed(0) <= p0 && w.net.owed(1) <= p1, "no second settlement of the held reward");
+    }
 }

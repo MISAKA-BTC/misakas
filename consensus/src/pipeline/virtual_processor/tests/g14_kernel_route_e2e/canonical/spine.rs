@@ -48,7 +48,7 @@ const STAGES: &[Stage] = &[
         CertCase::CertifiedReorgIbd,
     ),
     Stage::Cert(
-        "S3a' approval shortfall / Unavailable verifiers: NotCertified, producer never paid, reward returned to the poster \
+        "S3a' approval shortfall / Unavailable verifiers: NotCertified, producer never paid, reward less the V3 burn share returned to the poster \
          (TEST-ONLY cert policy)",
         CertCase::Shortfall,
     ),

@@ -331,6 +331,29 @@ pub fn palw_native_mining_security_certified_v39(state: &PalwChainStateV2, minin
     palw_native_mining_certification_row_v39(state, mining_claim).and_then(|row| row.outcome).is_some_and(|(o, _)| o.certifies())
 }
 
+/// **A failed kernel certification's held reward: `(burn, refund)`, burn + refund = amount** (PROVISIONAL, coordinator value
+/// delegation 2026-10-26; docs/governance/parameter-register.md). The producer is paid nothing. The burn is the V3 burn share
+/// (`PALW_G14_ESCROW_BURN_PERMILLE_V1`, rounded down) so a self-paid claim does not get a free certification lottery; the rest returns to
+/// the poster, so an honest claim's rare miss does not cost its payer the whole reward.
+pub fn palw_kernel_uncertified_split_v1(amount: u64) -> (u64, u64) {
+    let burn = (u128::from(amount) * u128::from(crate::palw_g14_values_v1::PALW_G14_ESCROW_BURN_PERMILLE_V1) / 1_000) as u64;
+    (burn, amount - burn)
+}
+
+#[cfg(test)]
+mod kernel_uncertified_split_tests {
+    use super::*;
+    #[test]
+    fn cert_kernel_uncertified_split_conserves_and_burns_the_v3_share() {
+        for amount in [0u64, 1, 9, 10, 999, 1_000, 500_000_000, u64::MAX] {
+            let (burn, refund) = palw_kernel_uncertified_split_v1(amount);
+            assert_eq!(u128::from(burn) + u128::from(refund), u128::from(amount), "burn + refund = reward at {amount}");
+            assert!(burn <= amount / 10, "never more than 100 permille at {amount}");
+        }
+        assert_eq!(palw_kernel_uncertified_split_v1(500_000_000), (50_000_000, 450_000_000));
+    }
+}
+
 /// The certification id of a kernel-route ledger claim (domain-separated from every chain and native39 claim's).
 pub fn palw_kernel_claim_certification_id_v1(kernel_claim: &[u8; 64]) -> EligDigestV1 {
     hash64(PALW_CERTIFICATION_ID_DOMAIN_V1, &[b"kernel-route-claim-v1", kernel_claim])
