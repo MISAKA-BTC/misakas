@@ -432,13 +432,7 @@ impl TransitionBuilder<'_> {
         if !self.params.settlement_once_active_at(now) {
             return Ok(PalwSettleOnceV1::Dormant);
         }
-        // RFC-0006: the marker lookup's owned 64-byte key, admitted before it exists.
-        if self.native_writers_tracking_v1() {
-            let mut q = super::native_writers::NativeWriteQuoteV1::new("settlement-once marker lookup key");
-            q.exact::<u8>(64)?;
-            self.admit_native_write_v1(q)?;
-        }
-        if let Some(row) = super::palw_settlement_once_fold_v1::settled_row_v1(&self.state, &obligation)? {
+        if let Some(row) = self.settled_row_checked_v1(&obligation)? {
             return Ok(PalwSettleOnceV1::AlreadySettled(row));
         }
         if let Some(refusal) = self.leg_liability_refusal_v1(now, &leg, amount) {

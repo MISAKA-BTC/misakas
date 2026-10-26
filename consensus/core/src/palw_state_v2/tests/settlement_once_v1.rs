@@ -574,3 +574,32 @@ fn audit_a4_a_refused_source_fee_payout_returns_the_prepaid_fee_to_the_sponsor()
     assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, true, 402).is_err());
     assert_eq!(payout(&b.state, 1), 50);
 }
+
+#[test]
+fn held_fee_repeat_probe_reserves_before_lookup_and_retries_without_mutation() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut seed = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let (obligation, debit) = escrow_reward(3);
+    seed.settle_once_v1(100, obligation, PalwSettlementConsumerV1::KernelTick, 10, debit).unwrap();
+    let settled = seed.state;
+    for limit in [0, 63, 64] {
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: 0 });
+        let mut b = TransitionBuilder::new(&settled, &p, false, false, false, false, &extras);
+        b.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+        let result = super::super::palw_paid_claim_trap_fold_v1::check_fee_hold_admits_v1(&mut b, &obligation);
+        if limit < 64 {
+            assert!(matches!(result, Err(PalwStateV2Error::NativeResource(_))));
+            assert_eq!(checker.outstanding(), (0, 0));
+        } else {
+            assert!(!result.unwrap(), "a settled fee cannot be held again");
+            assert_eq!(checker.outstanding(), (64, 0));
+        }
+        assert_eq!(b.state, settled);
+        assert!(b.entries.is_empty());
+        drop(b);
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+}

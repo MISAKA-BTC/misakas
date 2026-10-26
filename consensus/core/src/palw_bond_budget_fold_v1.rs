@@ -2313,7 +2313,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             progress,
         );
         if builder.params.settlement_once_active_at(now)
-            && super::palw_settlement_once_fold_v1::settled_row_v1(&builder.state, &tranche)?.is_some()
+            && builder.settled_row_checked_v1(&tranche)?.is_some()
         {
             continue;
         }

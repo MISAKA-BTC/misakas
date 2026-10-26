@@ -49,13 +49,7 @@ impl TransitionBuilder<'_> {
             return Err(refused("the settlement-once registry needs the kernel route header (fail closed: no unmarked payment)"));
         }
         let id = obligation.id_v1();
-        // RFC-0006: the owned lookup key is a 64-byte Vec; admit it before it exists.
-        if self.native_writers_tracking_v1() {
-            let mut q = super::native_writers::NativeWriteQuoteV1::new("settlement-once marker lookup key");
-            q.exact::<u8>(id.len() as u64)?;
-            self.admit_native_write_v1(q)?;
-        }
-        if let Some(row) = settled_row_v1(&self.state, &obligation)? {
+        if let Some(row) = self.settled_row_checked_v1(&obligation)? {
             return Ok(PalwSettleOnceV1::AlreadySettled(row));
         }
         let row = PalwSettlementOnceRowV1 {
@@ -74,17 +68,26 @@ impl TransitionBuilder<'_> {
 
 /// **The settled marker of `obligation`**, validated under its own key — `Err` (fail closed) for an undecodable or foreign row,
 /// `Ok(None)` when the obligation is open (or there is no route).
-pub(super) fn settled_row_v1(
-    state: &PalwChainStateV2,
-    obligation: &PalwSettlementObligationV1,
-) -> Result<Option<PalwSettlementOnceRowV1>, PalwStateV2Error> {
-    let id = obligation.id_v1();
-    let Some(bytes) = state.kernel_route.as_ref().and_then(|route| route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec()))) else {
-        return Ok(None);
-    };
-    let row: PalwSettlementOnceRowV1 = borsh::from_slice(bytes).map_err(|_| refused("an undecodable settlement-once marker (fail closed)"))?;
-    row.validate_v1(&id).map_err(refused)?;
-    Ok(Some(row))
+impl TransitionBuilder<'_> {
+    pub(super) fn settled_row_checked_v1(
+        &mut self,
+        obligation: &PalwSettlementObligationV1,
+    ) -> Result<Option<PalwSettlementOnceRowV1>, PalwStateV2Error> {
+        let id = obligation.id_v1();
+        // Every consumer, including pre-payment probes, reserves the owned
+        // BTreeMap key before constructing it. The decoded marker is fixed-size.
+        if self.native_writers_tracking_v1() {
+            let mut q = super::native_writers::NativeWriteQuoteV1::new("settlement-once marker lookup key");
+            q.exact::<u8>(id.len() as u64)?;
+            self.admit_native_write_v1(q)?;
+        }
+        let Some(bytes) = self.state.kernel_route.as_ref().and_then(|route| route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec()))) else {
+            return Ok(None);
+        };
+        let row: PalwSettlementOnceRowV1 = borsh::from_slice(bytes).map_err(|_| refused("an undecodable settlement-once marker (fail closed)"))?;
+        row.validate_v1(&id).map_err(refused)?;
+        Ok(Some(row))
+    }
 }
 
 /// The settled marker of `obligation` in `state`, if any (source controls read the journal through this).

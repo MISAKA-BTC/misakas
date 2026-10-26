@@ -442,7 +442,7 @@ fn past_both_fences_a_release_settles_once_and_never_twice() {
     let marker = super::super::palw_settlement_once_fold_v1::palw_settled_once_v1(&b.state, &o).expect("closed once");
     assert_eq!((marker.consumer, marker.amount), (PalwSettlementConsumerV1::PaidClaimTrap, 0));
     // The slot can never be held again (a later batch naming it is a repeat).
-    assert!(!check_fee_hold_admits_v1(&b, &o).unwrap());
+    assert!(!check_fee_hold_admits_v1(&mut b, &o).unwrap());
 }
 
 #[test]

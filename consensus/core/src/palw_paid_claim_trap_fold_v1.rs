@@ -370,10 +370,10 @@ pub(super) fn check_fee_hold_until_checked_v1(
 /// **May this slot's fee be held now?** Neither held already nor settled by any consumer (a repeat is refused by a strict arm and
 /// skipped whole by the tick, as the RFC08-1 marker does).
 pub(super) fn check_fee_hold_admits_v1(
-    builder: &TransitionBuilder<'_>,
+    builder: &mut TransitionBuilder<'_>,
     obligation: &PalwSettlementObligationV1,
 ) -> Result<bool, PalwStateV2Error> {
-    if super::palw_settlement_once_fold_v1::settled_row_v1(&builder.state, obligation)?.is_some() {
+    if builder.settled_row_checked_v1(obligation)?.is_some() {
         return Ok(false);
     }
     let key = palw_paid_trap_held_fee_key_v1(&obligation.subject, &obligation.party, obligation.ordinal);
