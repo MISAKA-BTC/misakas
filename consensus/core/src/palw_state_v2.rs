@@ -4861,7 +4861,7 @@ pub enum PalwVoidReasonV2 {
     WorkSliceDefaulted = 132,
     /// **ADR-0206 (lane g14-fam-panelda): a PanelDa claim's prompt was not publicly disclosed by `a + 1,040`.** A default, never a
     /// conviction: the claim earns nothing, its disclosure deposit is burned, its computation bond is not slashed and no strike is
-    /// written (an unavailable prompt is not a computation error). Explicit Borsh number **140**; written only past
+    /// written (an unavailable prompt is not a computation error). Explicit Borsh number **140** (void-reason namespace; 140 is also an object tag and an aux table id elsewhere — AUDIT-2 m3); written only past
     /// `Params::palw_panel_da_disclosure_v1`.
     PanelDaDisclosureDefault = 140,
 }

@@ -205,3 +205,34 @@ ADR-0206(proposed)。値は `consensus/core/src/palw_g14_values_v1.rs` 末尾。
 | `PALW_G14_PANEL_DA_OUTSIDER_MIN_WINDOW_DAA_V1` | 2,000 DAA | 包含遅延 4+最大 class replay+turn 42 の 2 倍を大きく上回る | 外部者 replay 実測 |
 | `PALW_G14_PANEL_DA_MAX_DISCLOSED_IDS_V1` | 32,768 | t12 最大 8K class に余裕 | 長 context class の提供 |
 | `PALW_G14_PANEL_DA_DISCLOSURE_DEPOSIT_SOMPI_V1` | 13,107,200 sompi | 2 × 32,768 × 4 B × 50 sompi/B | 料率・最大 ids |
+
+## 2026-10-27 lane AUDIT-FIX — 独立監査 AUDIT-1〜3 の指摘への記録（**目安**、未実測、fence・preset は変更なし）
+
+承認: ユーザー委任 2026-10-22（目安で決めてよい）。どの値も measured record・arming record に入れない。
+
+### AUDIT-1 M5 — Panel=1 seat/sample seed の grinding 上限（目安）
+
+- 前提: seat/sample seed は commit の後に記録された最初の anchor（SEED 648544c46、`draw_panel_one_seats_v1`）。Gate C は m/k = 75/41、f = 0.25 で誤認証 p = 3.99e-8/抽選（2026-10-26 承認）。
+- **攻撃者が得る選択肢:** (a) 最初の anchor を含む block を自分で出せた場合に公開するか保留するか。保留 1 回ごとに次の anchor が seed になり、選択肢が 1 増える。beacon policy の retry 2 と同じ扱いで、1 claim あたりの選択肢を c ≤ 3 とみる（保留を続けると block 報酬を失い、DAG の他者の anchor が先に入るので、f = 0.25 の採掘割合では 3 回連続で最初の anchor を握る確率は 0.25³ ≈ 1.6%）。(b) claim を出し直す（別の claim id → 別の seed）。試行回数 N。
+- **弱まり方:** 1 claim あたり c·p ≤ 3 × 3.99e-8 = 1.2e-7。N 回の試行で ≤ N·c·p。成功確率 1/2 には N ≈ 4.2e6 回が要る。
+- **費用:** 1 試行あたり少なくとも job fee 1 MSK ＋ V2 funded fee 0.816 MSK ＋ 認証失敗時の保留報酬 burn（V3 burn 100‰ × 5 MSK = 0.5 MSK）≈ 2.3 MSK。1 試行の期待利得は 500 MSK × 1.2e-7 = 6e-5 MSK で、費用の約 1/38,000。さらに認証は ⌊4,096/75⌋ = 54 件/日が上限なので、4.2e6 回には約 210 年かかる。保留する block の報酬はこれに加算される。
+- **結論（目安）:** grinding は Gate C の上限を最大 3 倍（c）弱めるが、年間の誤認証期待は 7.9e-4 から ≤ 2.4e-3 にとどまり、経済的に引き合わない。
+- **見直し条件:** beacon の retry・anchor delay の変更、1 claim あたりの費用（job fee・V2 fee・V3 burn）の低下、認証上限 4,096 position/日の引上げ、攻撃者の採掘割合が 0.25 を超える証拠、seed の取り方の変更（commit 後最初の anchor 以外）。
+
+### AUDIT-3 m2 — PanelDa の結果は Final 前には保証されない
+
+- PanelDa claim は公開期限 a + 1,040 までに prompt が公開されないと、Final の時点で `PanelDaDisclosureDefault` として void になる（報酬なし、deposit は burn）。よって **Final 前の PanelDa の結果は保証されない**。利用者・決済は Final（かつ SecurityCertified）だけを根拠にする。
+- **deposit（13,107,200 sompi ≈ 0.131 MSK）が外部利得上限 500 MSK よりはるかに小さい理由:** 未公開の claim は Final に達しないので、保留で得られる利得がない。deposit は計算の誤りへの担保ではなく、公開データの運搬費（2 × 32,768 ids × 4 B × 50 sompi/B）を裏付けるだけ。嘘の計算への抑止は claim collateral と court（下の m3）に依る。
+- 見直し条件: PanelDa の結果を Final 前に使う経路が追加された場合（その時は deposit を利得上限に合わせる必要がある）。
+
+### AUDIT-3 m3 — 検出時の損失 ≥ 500 MSK × (1 / 検出率) の確認
+
+- 検出時の損失 L（kernel route interim policy、`palw_kernel_route_v1.rs` の `palw_kernel_route_policy_v1`）: claim collateral 1,000 MSK の没収 ＋ 保留報酬 5 MSK ＋ V2 fee 0.816 MSK ≈ 1,005.8 MSK（総額）。告発者に 49%（ADR-0032）が渡るので、自分で告発する攻撃者の正味損失は 1,000 × 0.51 + 5 + 0.816 ≈ 515.8 MSK。Panel seat の bond の slash 額は kernel route では確認できず、ここでは 0 として数える（下限）。
+- 必要額 500 / d: d = 0.90 → 555.6 MSK、d = 0.99 → 505.1 MSK。
+- **判定:** 総額 1,005.8 MSK は 90〜99% の全域で満たす。**自己告発の正味 515.8 MSK では d ≥ 96.9% でのみ満たし、d = 90% では 39.8 MSK 不足する。** seat bond の slash（正味）が 40 MSK 以上あれば不足は埋まる。統括へ報告済み（値の変更はしていない）。
+- 見直し条件: claim collateral・報告者取り分・外部利得上限・検出率の目安の変更、seat bond slash の額の確定。
+
+### AUDIT-3 m1 — PanelDa deposit の burn は `slashed` に数えられる
+
+- 公開 default の deposit は `burn_registration_fee` で burn され、bond の `slashed` を増やす（`palw_panel_da_disclosure_fold_v1.rs` の `settle_panel_da_at_final_v1`）。**これは有罪ではない**（`PalwVoidReasonV2::PanelDaDisclosureDefault`、strike なし、計算 bond は slash しない）。
+- state に field を足さないため、表示は変えずに文書化する: RPC・台帳の `slashed` は「burn の総額」であり、有罪の合計として読まない。有罪の数は conviction の記録（court の verdict）から数える。

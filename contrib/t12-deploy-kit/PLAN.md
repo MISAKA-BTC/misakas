@@ -614,3 +614,11 @@ host に進むのは、前の host の `upgrade` が最後まで通り、`check`
 
 **戻し**: 問題の出た host から（複数なら 5.104 → .113 → ibm の順）、fleet.env の REV は **upgrade の REV のまま** で
 `./install-<host>.sh upgrade-rollback`。`rollback` は使わない（§6）。
+
+**DAA 17,000 fence（G14 slice・6 family・PanelDa の武装、drill なし）での追加条件（AUDIT-4 m5、2026-10-27）**:
+- **3 host とも、17,000 の少なくとも 1 更新窓前に `upgrade` を終える**（上の順 2〜4 を最後まで、`check-fleet.sh` で全 node が新 fp・synced）。
+  17,000 の直前に host を残して跨がない。
+- **遅れている node は止める**: 17,000 の時点で旧 binary のまま、または fp が他と違う / tip が合わない node は、跨ぐ前に
+  `systemctl stop` する（旧規則で fence を跨ぐと分裂する。止めた node は新 binary にしてから空 datadir で resync）。
+- **未解決のリスク: 跨いだ後の rollback は未試験**。fence を跨ぐ drill を省いたので、17,000 を越えてから `upgrade-rollback` で旧 binary に
+  戻すと旧規則で新 block を拒否し得る。跨いだ後は戻しではなく修正版の前進配備を前提にする（drill をしていないことは記録上もそのまま残す）。
