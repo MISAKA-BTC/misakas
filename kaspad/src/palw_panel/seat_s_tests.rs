@@ -178,7 +178,8 @@ fn c1_s3_never_attests_past_the_fence_without_verify_material() {
             assert!(!body.contains(never), "the SEAT-S4 route reads no {never}");
         }
     }
-    assert!(route.contains(".replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening, segment_claim)"), "authenticated first");
+    assert!(route.contains("segment_replay_routing::BoundSegmentReplayV2::bind_with("), "native identity before the worker");
+    assert!(include_str!("../palw_segment_replay_routing_v2.rs").contains(".replay_segment_from_checkpoint_v1("), "actual authenticated segment replay");
     assert!(route.contains("execution_root: duty.execution_root") && route.contains("trace_root: duty.trace_root"));
     assert!(!palw_seat_arm_licenses_v1(true, PalwSeatArmV1::SegmentResume), "the legacy S1/S3 resume licenses nothing");
     assert!(palw_seat_arm_licenses_v1(true, PalwSeatArmV1::VerifiedSegmentResume));
@@ -343,7 +344,7 @@ async fn h2_the_held_partial_replay_runs_off_the_loop() {
     assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 0, "returned, not re-run");
     // The route puts every segment replay in the slots and prices it as the streamed fold.
     let route = body_of(source(), "    async fn seat_s4_resume_v1(");
-    assert!(route.contains("replays.start_segment(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), backend,"));
+    assert!(route.contains("replays.start_routed_segment_v2(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), bound,"));
     assert!(route.contains("crate::palw_backends::palw_partial_seat_streamed_need_v1("), "M3");
     assert!(route.contains("if !replays.has_room(seat_r_duty.heavy) {"));
 }
@@ -669,8 +670,7 @@ fn f1_an_err_is_the_openings_only_when_the_family_names_an_authentication_link()
     ] {
         assert_eq!(palw_seat_s4_refusal_v1(local.clone()), PalwSeatSegmentRefusalV1::Local(local));
     }
-    let route = body_of(source(), "    async fn seat_s4_resume_v1(");
-    assert!(route.contains(".map_err(palw_seat_s4_refusal_v1)"), "the route's task sorts its Err");
+    assert!(include_str!("../palw_segment_replay_routing_v2.rs").contains(".map_err(palw_seat_s4_refusal_v1)"), "the bound worker sorts its Err");
 }
 
 /// **F1: this host's failure is never the producer's.** A segment task that panics, or whose

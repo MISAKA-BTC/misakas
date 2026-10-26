@@ -133,4 +133,4 @@ impl BoundFpReplayV2 {
 
 #[cfg(test)]
 #[path = "palw_fp_replay_routing_tests_v2.rs"]
-mod tests;
+pub(super) mod tests;
