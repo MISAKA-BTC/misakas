@@ -862,10 +862,12 @@ pub fn palw_g14_route_family_fences_v1(family: PalwG14RouteFamilyV1) -> &'static
         PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix => {
             &["palw_staged_public_court_v1", "palw_legacy_public_filer_v1", "palw_g14_route_required_v1"]
         }
+        // Listed in intended activation order: the binding at or below the staged court. Not a params refusal, because Constraint /
+        // Prefix use the staged court without it; `route_armed` counts the family from the latest of the three.
         PalwG14RouteFamilyV1::FpTokenizer => &[
-            "palw_staged_public_court_v1",
-            "palw_legacy_public_filer_v1",
             "palw_fp_tokenizer_match",
+            "palw_legacy_public_filer_v1",
+            "palw_staged_public_court_v1",
             "palw_g14_route_required_v1",
         ],
         PalwG14RouteFamilyV1::NonPublicEvidence => &[],

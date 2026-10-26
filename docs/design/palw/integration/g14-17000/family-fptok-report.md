@@ -63,3 +63,20 @@ No new value was needed (no `palw_g14_values_v1` change).
    fence-crossing drill; no measured value).
 3. FPCP: confirm the staged raw-tokenizer verdict reads the tokenizer from the class row (not from the job), which is what makes
    the binding sufficient.
+
+## 6. Follow-up (coordinator request, 2026-10-26)
+
+**(1) Base vs branch.** Both were run with the same command: `cargo test -p kaspa-consensus-core --no-fail-fast --test g14_close_legacy --test g14_court_capacity`. The base run used `d8aded6de`'s three files and its own `CARGO_TARGET_DIR=target-base`.
+
+| target | base `d8aded6de` | branch | classification |
+|---|---|---|---|
+| g14_close_legacy | 1 pass / 8 fail | 1 pass / 8 fail (same tests) | all **base pre-existing** |
+| g14_court_capacity | 2 pass / 13 fail / 1 ignored | same | all **base pre-existing** |
+| fp_recoverable_families_have_no_remaining_lg14a_dependency (:237) | FAIL | FAIL | **base pre-existing** |
+| g14_close_gates | not run on base | 12 / 12 pass | — |
+
+Every failure has the same cause. Validation of the armed ruleset is refused with `Invalid("OneOutsiderCapacityIncomplete: RFC-0026 F03 … incomplete; ServiceOpportunityIncomplete: F02 … not adopted")` (from the F02/F03 slice lanes). The t12 identity pins (`5ee7fd8e` / `5de80e64` / `1678e073`) are also stale on base. None of these failures comes from this diff.
+
+**(2)** The :237 failure is not caused by this diff. The FpTokenizer fence list is now ordered binding → LG14-A → staged court. No params validator ties the binding below the staged court, because Constraint and Prefix legitimately use the staged court without the binding. `route_armed` counts the family only from the latest of the three fences. Placing the binding at or below the court is therefore a fence-list (release) choice. Changing this order is a reorder of a string array only, and was not rebuilt.
+
+**(3) Not implemented.** `palw_g14_route_fp_refusal_v1` receives no class row: its arguments are params, DAA, commitment and framed. Only its caller `palw_state_v2/objects.rs:~3669` holds `builder.state` and can read the class's listing (`tir_class_v1` / `PalwGenClassRecordV1::tokenizer_id`, and the class row's `raw_tokenizer_bytes`). Proposed connection: add a `class_has_tokenizer_material: bool` argument (`raw_tokenizer_bytes.is_some()` on the class's registered semantics) and drop `FpTokenizer` from `route_armed` when it is false, which returns `G14_ROUTE_ABSENT`. Tests to add: a listed class is admitted and an unlisted class is refused, both with every route armed. This changes the shared fold caller, so it is left to the owner of `objects.rs` (SPINE / F02).
