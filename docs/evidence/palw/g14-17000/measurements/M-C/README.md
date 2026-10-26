@@ -5,3 +5,13 @@
 The runner [run_court_op.py](../run_court_op.py) records the exact executable SHA-256, source/test hashes, command, environment, pre/post load, `/usr/bin/time -l` CPU and peak RSS, raw stdout/stderr and the harness's warm-up-separated median/p95/max over at least 20 operations. `MEASURE_N=0` is captured in separate processes as setup context. The [batch runner](../run_court_batch.py) has entered a shared build slot and is waiting for load ≤5 before launching the first operation. The per-operation runner's `--allow-under-load` mode is exploratory and marks the result `UNDER_LOAD`; arming evidence requires a quiet run and a repeat on the slowest supported node.
 
 This preexisting harness still lacks the requested Panel=1 approval, post-commit challenge, constraint receipt, public fault proof, and outsider-ingress operation classes. Those must be added in test code and measured before a complete M-C table or `PALW_RFC0016_MEASURED_RECORDS_V1` / `PALW_RFC0608_MEASURED_RECORDS_V1` candidate can be claimed.
+
+## Exploratory loaded sample — not an arming input
+
+One operation completed on the pinned binary: `close_cone_forged_last_stage`, three fresh processes with `MEASURE_N=1000` and three separate `MEASURE_N=0` setup baselines. The first verification in each process is reported separately. All six processes had `under_load=true`; 1-minute load before/after ranged **8.07–15.72**. [Raw JSON and per-process stdout/stderr](raw/loaded-preliminary-close-cone-forged/raw.json) contain every command, exit 0, timestamp/load, CPU/RSS and harness line.
+
+| Fixture operation | Median of three process medians | Largest process p95 | Largest item | Warm-up range | Exemplar body | Distinct fixtures | Median process peak RSS / N=0 RSS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Forged close cone, last-stage mismatch | 383,708 ns | 3,165,917 ns | 15,553,792 ns | 219,125–223,542 ns | 10,753 B | 984 | 36,077,568 / 35,979,264 B |
+
+The process medians were 389,875 / 383,708 / 373,709 ns; the p95 values were 3,165,917 / 2,137,917 / 1,191,792 ns. The median process RSS difference is 98,304 B, only a descriptive difference between independent processes, not an isolated verifier working set. The harness measured wall elapsed time on small fixtures and did not measure a real model or maximum profile. The high-load p95/max are scheduling-sensitive; no cost, capacity, deadline or fee policy may adopt them. The quiet batch remains pending.

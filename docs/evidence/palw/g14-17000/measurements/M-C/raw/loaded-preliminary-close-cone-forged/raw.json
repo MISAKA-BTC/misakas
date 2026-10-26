@@ -1,0 +1,306 @@
+{
+  "operation": "close_cone_forged_last_stage",
+  "n": 1000,
+  "runs_requested": 3,
+  "baseline_runs_requested": 3,
+  "scale": null,
+  "source_commit": "84d7186471454c050c85fd3170b1ba9dea0d9987",
+  "source_files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+    },
+    {
+      "path": "consensus/core/tests/palw_tir_court_verify_cpu.rs",
+      "sha256": "a58ebdd11fcecda426aa0d3daf00423fb64c87a295886e13f0803ac95ccb496c"
+    },
+    {
+      "path": "consensus/core/tests/palw_tir_fixture_common.rs",
+      "sha256": "bb756bad4d221de2451017efe0f8ee258f56d76e64825a6e7315913a79d5b3bc"
+    }
+  ],
+  "binary_path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+  "binary_sha256": "bc13a045eb79b795365c9f21050da122a2e3de479246c9e3beb2a02c9c1e4ac7",
+  "build_command": [
+    "/Users/wata/Downloads/MISAKA-wt-b/buildslot.sh",
+    "cargo",
+    "test",
+    "--offline",
+    "--release",
+    "-p",
+    "kaspa-consensus-core",
+    "--test",
+    "palw_tir_court_verify_cpu",
+    "--no-run"
+  ],
+  "features": "default",
+  "minimum_hardware": false,
+  "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10",
+  "runs": [
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "close_cone_forged_last_stage",
+        "MEASURE_N": "0"
+      },
+      "exit_code": 0,
+      "wall_seconds": 47.948944167,
+      "before": {
+        "utc": "2026-10-26T04:12:25Z",
+        "uptime": "13:12  up 16:01, 1 user, load averages: 8.07 7.88 9.53",
+        "load": [
+          8.0654296875,
+          7.8837890625,
+          9.52685546875
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T04:13:13Z",
+        "uptime": "13:13  up 16:02, 1 user, load averages: 13.59 9.40 9.99",
+        "load": [
+          13.59033203125,
+          9.396484375,
+          9.9912109375
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 35913728,
+      "user_seconds": 45.36,
+      "system_seconds": 0.13,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0",
+      "stdout_log": "baseline-00.stdout.log",
+      "stderr_log": "baseline-00.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "close_cone_forged_last_stage",
+        "MEASURE_N": "0"
+      },
+      "exit_code": 0,
+      "wall_seconds": 47.509609625,
+      "before": {
+        "utc": "2026-10-26T04:13:13Z",
+        "uptime": "13:13  up 16:02, 1 user, load averages: 13.59 9.40 9.99",
+        "load": [
+          13.59033203125,
+          9.396484375,
+          9.9912109375
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T04:14:01Z",
+        "uptime": "13:14  up 16:03, 1 user, load averages: 15.34 10.55 10.39",
+        "load": [
+          15.341796875,
+          10.55419921875,
+          10.392578125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 35979264,
+      "user_seconds": 45.51,
+      "system_seconds": 0.13,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0",
+      "stdout_log": "baseline-01.stdout.log",
+      "stderr_log": "baseline-01.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "close_cone_forged_last_stage",
+        "MEASURE_N": "0"
+      },
+      "exit_code": 0,
+      "wall_seconds": 41.513567583,
+      "before": {
+        "utc": "2026-10-26T04:14:01Z",
+        "uptime": "13:14  up 16:03, 1 user, load averages: 15.34 10.55 10.39",
+        "load": [
+          15.341796875,
+          10.55419921875,
+          10.392578125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T04:14:42Z",
+        "uptime": "13:14  up 16:03, 1 user, load averages: 12.20 10.34 10.32",
+        "load": [
+          12.19873046875,
+          10.3427734375,
+          10.3203125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 36110336,
+      "user_seconds": 41.09,
+      "system_seconds": 0.08,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0",
+      "stdout_log": "baseline-02.stdout.log",
+      "stderr_log": "baseline-02.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "close_cone_forged_last_stage",
+        "MEASURE_N": "1000"
+      },
+      "exit_code": 0,
+      "wall_seconds": 46.291592791,
+      "before": {
+        "utc": "2026-10-26T04:14:42Z",
+        "uptime": "13:14  up 16:03, 1 user, load averages: 12.20 10.34 10.32",
+        "load": [
+          12.19873046875,
+          10.3427734375,
+          10.3203125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T04:15:28Z",
+        "uptime": "13:15  up 16:04, 1 user, load averages: 15.07 11.35 10.69",
+        "load": [
+          15.0654296875,
+          11.35107421875,
+          10.689453125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 36077568,
+      "user_seconds": 44.35,
+      "system_seconds": 0.13,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=220375 median_wall_ns=389875 p95_wall_ns=3165917 p99_wall_ns=5919583 max_wall_ns=13026250 total_wall_ns=818004998 observed_expected_outcomes=1000",
+      "stdout_log": "sample-00.stdout.log",
+      "stderr_log": "sample-00.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "close_cone_forged_last_stage",
+        "MEASURE_N": "1000"
+      },
+      "exit_code": 0,
+      "wall_seconds": 44.709431792000004,
+      "before": {
+        "utc": "2026-10-26T04:15:28Z",
+        "uptime": "13:15  up 16:04, 1 user, load averages: 15.07 11.35 10.69",
+        "load": [
+          15.0654296875,
+          11.35107421875,
+          10.689453125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T04:16:13Z",
+        "uptime": "13:16  up 16:05, 1 user, load averages: 15.72 11.98 10.95",
+        "load": [
+          15.7177734375,
+          11.98388671875,
+          10.951171875
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 36110336,
+      "user_seconds": 43.47,
+      "system_seconds": 0.1,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=223542 median_wall_ns=383708 p95_wall_ns=2137917 p99_wall_ns=3564292 max_wall_ns=15553792 total_wall_ns=673600428 observed_expected_outcomes=1000",
+      "stdout_log": "sample-01.stdout.log",
+      "stderr_log": "sample-01.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "close_cone_forged_last_stage",
+        "MEASURE_N": "1000"
+      },
+      "exit_code": 0,
+      "wall_seconds": 41.81112962500001,
+      "before": {
+        "utc": "2026-10-26T04:16:13Z",
+        "uptime": "13:16  up 16:05, 1 user, load averages: 15.72 11.98 10.95",
+        "load": [
+          15.7177734375,
+          11.98388671875,
+          10.951171875
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T04:16:55Z",
+        "uptime": "13:16  up 16:06, 1 user, load averages: 12.66 11.63 10.87",
+        "load": [
+          12.6640625,
+          11.6318359375,
+          10.8662109375
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 36012032,
+      "user_seconds": 41.53,
+      "system_seconds": 0.06,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=219125 median_wall_ns=373709 p95_wall_ns=1191792 p99_wall_ns=3468667 max_wall_ns=3505209 total_wall_ns=578275333 observed_expected_outcomes=1000",
+      "stdout_log": "sample-02.stdout.log",
+      "stderr_log": "sample-02.stderr.log"
+    }
+  ],
+  "status": "UNDER_LOAD"
+}
