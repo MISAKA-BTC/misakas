@@ -58,7 +58,7 @@ PRIVATE_G14_LAST_FLAG_DAY = 28
 TESTNET12_FULL_ACTIVATION_DAA = 17_000
 # kaspad's flag that moves consensus-core's PALW_T12_FULL_ACTIVATION_FENCES_V1 to H on a salted drill chain.
 FULL_ACTIVATION_FLAG = '--palw-drill-full-activation-at'
-CROSSINGS = ('full-activation-flag', 'factory')
+CROSSINGS = ('full-activation-flag', 'factory', 'kernel-slice')
 PHASES = ('F0', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7')
 TERMINAL_PHASES = ('final', 'settled', 'convicted', 'defaulted', 'void', 'expired', 'unavailable', 'released')
 
@@ -123,13 +123,19 @@ def roles_for(plan, seats):
     return roles
 
 
-def node_argv(private_node, salt, at, seats, appdir, ports, extra=()):
-    """The shipped private node on the g14-v1 drill profile with the full set moved to H (the crossing under test)."""
+def factory_set(crossing):
+    """The g14-v1 factory set a crossing runs: the kernel slice (lane TNODE, PALW_T12_KERNEL_SLICE_FENCES_V1 with drill records for
+    the G14 and kernel-route gated fences) or the full candidate set."""
+    return 'kernel-slice' if crossing == 'kernel-slice' else 'full'
+
+
+def node_argv(private_node, salt, at, seats, appdir, ports, extra=(), g14_set='full'):
+    """The shipped private node on the g14-v1 drill profile with the set moved to H (the crossing under test)."""
     p2p, grpc, borsh, js, evm = ports
     argv = [
         str(private_node),
         '--private-probe-profile=g14-v1', '--private-probe-salt=%s' % salt,
-        '--private-probe-g14-at=%d' % at, '--private-probe-g14-set=full',
+        '--private-probe-g14-at=%d' % at, '--private-probe-g14-set=%s' % g14_set,
         '--private-probe-panel-seats=%d' % seats,
         '--testnet', '--netsuffix=12', '--appdir=%s' % appdir,
         '--nodnsseed', '--outpeers=0', '--disable-upnp',
@@ -146,7 +152,8 @@ def node_argv(private_node, salt, at, seats, appdir, ports, extra=()):
 
 
 def crossing_flags(crossing, at):
-    """The node flags the chosen crossing adds on top of the factory's: the full-activation list at H, or nothing."""
+    """The node flags the chosen crossing adds on top of the factory's: the full-activation list at H, or nothing (the factory and
+    the kernel slice, which the factory itself arms)."""
     if crossing not in CROSSINGS:
         raise PlanError('--crossing: one of %s' % ', '.join(CROSSINGS))
     if crossing == 'full-activation-flag':
@@ -272,7 +279,7 @@ def run(args):  # pragma: no cover - drives real processes
     plan = build_plan(args.at, args.partition_lead, args.partition_tail, args.restart_after, args.pre_claims, args.post_claims,
                       args.public_target)
     ns = argparse.Namespace(
-        mode='cross', family='positive', at=args.at, set='full', seats=args.seats, salt=args.salt, work=args.work, out=args.out + '.raw',
+        mode='cross', family='positive', at=args.at, set=factory_set(args.crossing), seats=args.seats, salt=args.salt, work=args.work, out=args.out + '.raw',
         private_node=args.private_node, kaspad=args.kaspad, cli=args.cli, port_base=args.port_base, tamper_leaf=None,
         canonical_interval=20, stall_s=args.stall_s, outsider_funding_bili=2_000_000, outsider_collateral_bili=0,
         positive_finals=0, positive_every=180, liveness_span=15, after_daa=0, frozen_timeout=3600, d11=False, d16=False, inject=[],
@@ -290,7 +297,7 @@ def run(args):  # pragma: no cover - drives real processes
     def profile():
         import subprocess
         p = subprocess.run([args.private_node, '--private-probe-profile=g14-v1', '--private-probe-salt=%s' % args.salt,
-                            '--private-probe-g14-at=%d' % args.at, '--private-probe-g14-set=full',
+                            '--private-probe-g14-at=%d' % args.at, '--private-probe-g14-set=%s' % factory_set(args.crossing),
                             '--private-probe-panel-seats=%d' % args.seats, '--print-private-probe-profile',
                             '--testnet', '--netsuffix=12'], capture_output=True, text=True)
         if p.returncode:
