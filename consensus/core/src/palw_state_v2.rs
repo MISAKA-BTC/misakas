@@ -2818,6 +2818,8 @@ pub fn palw_bond_committed_v1(
         .saturating_add(lock_excess)
         // G14 lane D: what the kernel route has reserved against the bond (a claim's collateral, a demand bond); 0 with no route.
         .saturating_add(state.kernel_reserved(bond))
+        // Lane F02b: the slice's court capital rows (0 with none; written only past `palw_kernel_route_panel_one_v1`).
+        .saturating_add(state.kernel_court_capital_reserved_v1(bond))
         .saturating_add(state.onboarding_reserved(bond))
         .saturating_add(state.model_artifact_reserved_at_v2(bond, now_daa))
         .saturating_add(state.model_vector_reserved_at_v2(bond, now_daa))

@@ -134,7 +134,7 @@ impl ReservedKernelLedgerV1 {
     }
 
     /// **G14 lane F02b:** the court-bound claims whose producer default is held (no adopted inclusion premise), admitted first.
-    pub fn install_court_default_held_v1(&mut self, held: std::collections::BTreeSet<[u8; 64]>) -> Result<(), NativeCoverageV1> {
+    pub fn install_court_default_held_v1(&mut self, held: std::collections::BTreeMap<[u8; 64], u64>) -> Result<(), NativeCoverageV1> {
         let quote = held.native_heap_v1("kernel ledger consumer court default hold");
         self.grow_v1(quote.bytes().ok_or(quote)?)?;
         self.ledger.court_default_held = held;
