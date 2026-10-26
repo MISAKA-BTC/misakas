@@ -1,0 +1,7 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::measurement::g14_native_panel_measure ... G14_MEASURE {"actual_seats":null,"admitted_daa":null,"arming_evidence":false,"case":"withheld_reveal","challenge":null,"claim":"ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc","class":"6a85c5bded8e3ba3fd777d5f40b145397395bb07030cce4f90b8e502a0af8c22d7ac4f5383dbf529ef128b427d70e17feb1862f31818f14a1d2b59d4de34ec55","covered_daa":null,"final_after_cover_daa":null,"final_daa":null,"fixture_only":true,"gate_c_certification_measured":false,"job":"7ad6befa35d6b2a4f196683abecf1609828c2f1f00cb2d136ade7c0568bfc9f3492ea0d5e1e78b23c893677641946fc2d93af4d4fcaa597c8e709246565a4d78","legacy_model_route_compared":false,"n":1,"panel_one_from_daa":4,"phases":[{"daa_after":5,"daa_before":4,"object_bytes":4898,"phase":"claim_seal","wall_ns":4632584},{"daa_after":107,"daa_before":5,"object_bytes":0,"phase":"seal_expiry","wall_ns":421932167}],"post_commit_beacon_measured":false,"randomness_withholding_measured":false,"requested_seats":1,"schema":2,"scope":"native_kernel_interim_panel3_vs_panel1","verdict":"UNREVEALED_SEAL_FORFEITED"}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1192 filtered out; finished in 0.47s
+

@@ -1,0 +1,1000 @@
+{
+  "status": "UNDER_LOAD_FIXTURE_ONLY",
+  "arming_evidence": false,
+  "processes": 60,
+  "pairs": 15,
+  "load_min": 9.4091796875,
+  "load_max": 9.88037109375,
+  "groups": [
+    {
+      "case": "honest",
+      "seats": 3,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 50970624.0,
+      "process_user_median": 0.02,
+      "phases": {}
+    },
+    {
+      "case": "honest",
+      "seats": 3,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "FINAL"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 66666496.0,
+      "process_user_median": 0.2,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 4070208,
+          "max_wall_ns": 12015167,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "claim_reveal_and_assignment": {
+          "median_wall_ns": 4778917,
+          "max_wall_ns": 9246375,
+          "object_bytes": [
+            9717
+          ]
+        },
+        "receipt_construct_and_sign": {
+          "median_wall_ns": 1265208,
+          "max_wall_ns": 1434750,
+          "object_bytes": [
+            16341
+          ]
+        },
+        "constraint_receipt_accept": {
+          "median_wall_ns": 6855042,
+          "max_wall_ns": 9057625,
+          "object_bytes": [
+            16341
+          ]
+        },
+        "outsider_local_check": {
+          "median_wall_ns": 2400041,
+          "max_wall_ns": 2598208,
+          "object_bytes": [
+            0
+          ]
+        },
+        "advance_to_final": {
+          "median_wall_ns": 166870833,
+          "max_wall_ns": 196086500,
+          "object_bytes": [
+            0
+          ]
+        }
+      }
+    },
+    {
+      "case": "honest",
+      "seats": 1,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 51855360.0,
+      "process_user_median": 0.03,
+      "phases": {}
+    },
+    {
+      "case": "honest",
+      "seats": 1,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "FINAL"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 66895872.0,
+      "process_user_median": 0.19,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 3990834,
+          "max_wall_ns": 4066041,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "claim_reveal_and_assignment": {
+          "median_wall_ns": 4298000,
+          "max_wall_ns": 4486208,
+          "object_bytes": [
+            9717
+          ]
+        },
+        "receipt_construct_and_sign": {
+          "median_wall_ns": 944875,
+          "max_wall_ns": 976542,
+          "object_bytes": [
+            5447
+          ]
+        },
+        "constraint_receipt_accept": {
+          "median_wall_ns": 4386041,
+          "max_wall_ns": 4721500,
+          "object_bytes": [
+            5447
+          ]
+        },
+        "outsider_local_check": {
+          "median_wall_ns": 2297542,
+          "max_wall_ns": 2304209,
+          "object_bytes": [
+            0
+          ]
+        },
+        "advance_to_final": {
+          "median_wall_ns": 153274083,
+          "max_wall_ns": 165339792,
+          "object_bytes": [
+            0
+          ]
+        }
+      }
+    },
+    {
+      "case": "forged_output",
+      "seats": 3,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "ea3a610f8a7b199485eee9325e40bb59121e90125dce09792a8a6c18fbfcc3665240b90ba0dc04a1adf4908eaf10f3e92d30c1adef4ed1ef2e79db39f3fe7596"
+      ],
+      "process_rss_median": 50806784.0,
+      "process_user_median": 0.02,
+      "phases": {}
+    },
+    {
+      "case": "forged_output",
+      "seats": 3,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "CONVICTED"
+      ],
+      "claims": [
+        "ea3a610f8a7b199485eee9325e40bb59121e90125dce09792a8a6c18fbfcc3665240b90ba0dc04a1adf4908eaf10f3e92d30c1adef4ed1ef2e79db39f3fe7596"
+      ],
+      "process_rss_median": 55164928.0,
+      "process_user_median": 0.05,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 3888000,
+          "max_wall_ns": 3967459,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "claim_reveal_and_assignment": {
+          "median_wall_ns": 4306417,
+          "max_wall_ns": 4470416,
+          "object_bytes": [
+            9717
+          ]
+        },
+        "receipt_construct_and_sign": {
+          "median_wall_ns": 1691583,
+          "max_wall_ns": 1979500,
+          "object_bytes": [
+            16341
+          ]
+        },
+        "constraint_receipt_accept": {
+          "median_wall_ns": 6354875,
+          "max_wall_ns": 6624833,
+          "object_bytes": [
+            16341
+          ]
+        },
+        "outsider_local_check": {
+          "median_wall_ns": 609292,
+          "max_wall_ns": 615792,
+          "object_bytes": [
+            0
+          ]
+        },
+        "public_fault_proof_seal_and_ingress": {
+          "median_wall_ns": 9103583,
+          "max_wall_ns": 9862334,
+          "object_bytes": [
+            150
+          ]
+        }
+      }
+    },
+    {
+      "case": "forged_output",
+      "seats": 1,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "ea3a610f8a7b199485eee9325e40bb59121e90125dce09792a8a6c18fbfcc3665240b90ba0dc04a1adf4908eaf10f3e92d30c1adef4ed1ef2e79db39f3fe7596"
+      ],
+      "process_rss_median": 51707904.0,
+      "process_user_median": 0.03,
+      "phases": {}
+    },
+    {
+      "case": "forged_output",
+      "seats": 1,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "CONVICTED"
+      ],
+      "claims": [
+        "ea3a610f8a7b199485eee9325e40bb59121e90125dce09792a8a6c18fbfcc3665240b90ba0dc04a1adf4908eaf10f3e92d30c1adef4ed1ef2e79db39f3fe7596"
+      ],
+      "process_rss_median": 55312384.0,
+      "process_user_median": 0.05,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 3860125,
+          "max_wall_ns": 4004792,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "claim_reveal_and_assignment": {
+          "median_wall_ns": 4106000,
+          "max_wall_ns": 4485375,
+          "object_bytes": [
+            9717
+          ]
+        },
+        "receipt_construct_and_sign": {
+          "median_wall_ns": 355959,
+          "max_wall_ns": 357417,
+          "object_bytes": [
+            5447
+          ]
+        },
+        "constraint_receipt_accept": {
+          "median_wall_ns": 3831000,
+          "max_wall_ns": 4052291,
+          "object_bytes": [
+            5447
+          ]
+        },
+        "outsider_local_check": {
+          "median_wall_ns": 610667,
+          "max_wall_ns": 638417,
+          "object_bytes": [
+            0
+          ]
+        },
+        "public_fault_proof_seal_and_ingress": {
+          "median_wall_ns": 9161209,
+          "max_wall_ns": 9722458,
+          "object_bytes": [
+            150
+          ]
+        }
+      }
+    },
+    {
+      "case": "fake_state",
+      "seats": 3,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "9861921fef87fa89e19a9d1f98853363e61e00277cdca51324bc905ec1d5d9f24915e63ca8096db490eb1606d24ceab53899cc57a63e21a16edb08f77a333a2c"
+      ],
+      "process_rss_median": 50905088.0,
+      "process_user_median": 0.02,
+      "phases": {}
+    },
+    {
+      "case": "fake_state",
+      "seats": 3,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "CONVICTED"
+      ],
+      "claims": [
+        "9861921fef87fa89e19a9d1f98853363e61e00277cdca51324bc905ec1d5d9f24915e63ca8096db490eb1606d24ceab53899cc57a63e21a16edb08f77a333a2c"
+      ],
+      "process_rss_median": 55263232.0,
+      "process_user_median": 0.05,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 4085625,
+          "max_wall_ns": 4250667,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "claim_reveal_and_assignment": {
+          "median_wall_ns": 4635834,
+          "max_wall_ns": 4982250,
+          "object_bytes": [
+            9717
+          ]
+        },
+        "receipt_construct_and_sign": {
+          "median_wall_ns": 1045334,
+          "max_wall_ns": 1119459,
+          "object_bytes": [
+            16341
+          ]
+        },
+        "constraint_receipt_accept": {
+          "median_wall_ns": 6195166,
+          "max_wall_ns": 6672167,
+          "object_bytes": [
+            16341
+          ]
+        },
+        "outsider_local_check": {
+          "median_wall_ns": 1379958,
+          "max_wall_ns": 1445584,
+          "object_bytes": [
+            0
+          ]
+        },
+        "public_fault_proof_seal_and_ingress": {
+          "median_wall_ns": 9644833,
+          "max_wall_ns": 10402750,
+          "object_bytes": [
+            1410
+          ]
+        }
+      }
+    },
+    {
+      "case": "fake_state",
+      "seats": 1,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "9861921fef87fa89e19a9d1f98853363e61e00277cdca51324bc905ec1d5d9f24915e63ca8096db490eb1606d24ceab53899cc57a63e21a16edb08f77a333a2c"
+      ],
+      "process_rss_median": 51609600.0,
+      "process_user_median": 0.03,
+      "phases": {}
+    },
+    {
+      "case": "fake_state",
+      "seats": 1,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "CONVICTED"
+      ],
+      "claims": [
+        "9861921fef87fa89e19a9d1f98853363e61e00277cdca51324bc905ec1d5d9f24915e63ca8096db490eb1606d24ceab53899cc57a63e21a16edb08f77a333a2c"
+      ],
+      "process_rss_median": 55476224.0,
+      "process_user_median": 0.06,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 4066708,
+          "max_wall_ns": 8534584,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "claim_reveal_and_assignment": {
+          "median_wall_ns": 4702500,
+          "max_wall_ns": 11298417,
+          "object_bytes": [
+            9717
+          ]
+        },
+        "receipt_construct_and_sign": {
+          "median_wall_ns": 658000,
+          "max_wall_ns": 686375,
+          "object_bytes": [
+            5447
+          ]
+        },
+        "constraint_receipt_accept": {
+          "median_wall_ns": 4227542,
+          "max_wall_ns": 13461875,
+          "object_bytes": [
+            5447
+          ]
+        },
+        "outsider_local_check": {
+          "median_wall_ns": 1440292,
+          "max_wall_ns": 3514875,
+          "object_bytes": [
+            0
+          ]
+        },
+        "public_fault_proof_seal_and_ingress": {
+          "median_wall_ns": 10551959,
+          "max_wall_ns": 24817292,
+          "object_bytes": [
+            1410
+          ]
+        }
+      }
+    },
+    {
+      "case": "duplicate",
+      "seats": 3,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 50872320.0,
+      "process_user_median": 0.02,
+      "phases": {}
+    },
+    {
+      "case": "duplicate",
+      "seats": 3,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "COPY_REJECTED_ORIGINAL_FINAL"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 66568192.0,
+      "process_user_median": 0.2,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 4002000,
+          "max_wall_ns": 4035417,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "claim_reveal_and_assignment": {
+          "median_wall_ns": 4640792,
+          "max_wall_ns": 4656792,
+          "object_bytes": [
+            9717
+          ]
+        },
+        "receipt_construct_and_sign": {
+          "median_wall_ns": 1271875,
+          "max_wall_ns": 1272167,
+          "object_bytes": [
+            16341
+          ]
+        },
+        "constraint_receipt_accept": {
+          "median_wall_ns": 6782375,
+          "max_wall_ns": 6986708,
+          "object_bytes": [
+            16341
+          ]
+        },
+        "outsider_local_check": {
+          "median_wall_ns": 2296209,
+          "max_wall_ns": 2384041,
+          "object_bytes": [
+            0
+          ]
+        },
+        "duplicate_admission": {
+          "median_wall_ns": 10748875,
+          "max_wall_ns": 13485083,
+          "object_bytes": [
+            5012
+          ]
+        },
+        "advance_to_final": {
+          "median_wall_ns": 164556292,
+          "max_wall_ns": 166557542,
+          "object_bytes": [
+            0
+          ]
+        }
+      }
+    },
+    {
+      "case": "duplicate",
+      "seats": 1,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 51757056.0,
+      "process_user_median": 0.03,
+      "phases": {}
+    },
+    {
+      "case": "duplicate",
+      "seats": 1,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "COPY_REJECTED_ORIGINAL_FINAL"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 66961408.0,
+      "process_user_median": 0.22,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 4311125,
+          "max_wall_ns": 4395875,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "claim_reveal_and_assignment": {
+          "median_wall_ns": 4911875,
+          "max_wall_ns": 4988209,
+          "object_bytes": [
+            9717
+          ]
+        },
+        "receipt_construct_and_sign": {
+          "median_wall_ns": 973250,
+          "max_wall_ns": 983292,
+          "object_bytes": [
+            5447
+          ]
+        },
+        "constraint_receipt_accept": {
+          "median_wall_ns": 5024542,
+          "max_wall_ns": 5263959,
+          "object_bytes": [
+            5447
+          ]
+        },
+        "outsider_local_check": {
+          "median_wall_ns": 2294833,
+          "max_wall_ns": 2330417,
+          "object_bytes": [
+            0
+          ]
+        },
+        "duplicate_admission": {
+          "median_wall_ns": 10631542,
+          "max_wall_ns": 10882208,
+          "object_bytes": [
+            5012
+          ]
+        },
+        "advance_to_final": {
+          "median_wall_ns": 170213000,
+          "max_wall_ns": 170538292,
+          "object_bytes": [
+            0
+          ]
+        }
+      }
+    },
+    {
+      "case": "withheld_reveal",
+      "seats": 3,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 50855936.0,
+      "process_user_median": 0.02,
+      "phases": {}
+    },
+    {
+      "case": "withheld_reveal",
+      "seats": 3,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "UNREVEALED_SEAL_FORFEITED"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 74940416.0,
+      "process_user_median": 0.36,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 4161041,
+          "max_wall_ns": 4298042,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "seal_expiry": {
+          "median_wall_ns": 353767750,
+          "max_wall_ns": 365499833,
+          "object_bytes": [
+            0
+          ]
+        }
+      }
+    },
+    {
+      "case": "withheld_reveal",
+      "seats": 1,
+      "n": 0,
+      "processes": 3,
+      "verdicts": [
+        "SETUP_ONLY"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 51576832.0,
+      "process_user_median": 0.03,
+      "phases": {}
+    },
+    {
+      "case": "withheld_reveal",
+      "seats": 1,
+      "n": 1,
+      "processes": 3,
+      "verdicts": [
+        "UNREVEALED_SEAL_FORFEITED"
+      ],
+      "claims": [
+        "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc"
+      ],
+      "process_rss_median": 74989568.0,
+      "process_user_median": 0.4,
+      "phases": {
+        "claim_seal": {
+          "median_wall_ns": 4632584,
+          "max_wall_ns": 4775916,
+          "object_bytes": [
+            4898
+          ]
+        },
+        "seal_expiry": {
+          "median_wall_ns": 421932167,
+          "max_wall_ns": 445438833,
+          "object_bytes": [
+            0
+          ]
+        }
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "honest",
+      "ordinal": 0,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": false,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        54,
+        57
+      ],
+      "covered_daa": [
+        4,
+        7
+      ]
+    },
+    {
+      "case": "honest",
+      "ordinal": 1,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": false,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        57,
+        54
+      ],
+      "covered_daa": [
+        7,
+        4
+      ]
+    },
+    {
+      "case": "honest",
+      "ordinal": 2,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": false,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        54,
+        57
+      ],
+      "covered_daa": [
+        4,
+        7
+      ]
+    },
+    {
+      "case": "forged_output",
+      "ordinal": 0,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        4,
+        7
+      ]
+    },
+    {
+      "case": "forged_output",
+      "ordinal": 1,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        7,
+        4
+      ]
+    },
+    {
+      "case": "forged_output",
+      "ordinal": 2,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        4,
+        7
+      ]
+    },
+    {
+      "case": "fake_state",
+      "ordinal": 0,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        4,
+        7
+      ]
+    },
+    {
+      "case": "fake_state",
+      "ordinal": 1,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        7,
+        4
+      ]
+    },
+    {
+      "case": "fake_state",
+      "ordinal": 2,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        4,
+        7
+      ]
+    },
+    {
+      "case": "duplicate",
+      "ordinal": 0,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": false,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        54,
+        57
+      ],
+      "covered_daa": [
+        4,
+        7
+      ]
+    },
+    {
+      "case": "duplicate",
+      "ordinal": 1,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": false,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        57,
+        54
+      ],
+      "covered_daa": [
+        7,
+        4
+      ]
+    },
+    {
+      "case": "duplicate",
+      "ordinal": 2,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": false,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        54,
+        57
+      ],
+      "covered_daa": [
+        4,
+        7
+      ]
+    },
+    {
+      "case": "withheld_reveal",
+      "ordinal": 0,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        null,
+        null
+      ]
+    },
+    {
+      "case": "withheld_reveal",
+      "ordinal": 1,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        null,
+        null
+      ]
+    },
+    {
+      "case": "withheld_reveal",
+      "ordinal": 2,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": true,
+        "verdict": true,
+        "final_daa": true,
+        "final_after_cover_daa": true
+      },
+      "absolute_final_daa": [
+        null,
+        null
+      ],
+      "covered_daa": [
+        null,
+        null
+      ]
+    }
+  ]
+}
