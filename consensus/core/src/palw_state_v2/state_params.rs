@@ -196,6 +196,7 @@ impl PalwStateParamsV2 {
             kernel_route_panel_one_from_daa: None,
             kernel_panel_one_test_only_external_gain_bound_v1: None,
             court_clock_v2_from_daa: None,
+            panel_da_disclosure_from_daa: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
             class_registration_origin_from_daa: None,
@@ -748,6 +749,23 @@ impl PalwStateParamsV2 {
     /// `Params::palw_court_clock_v2`'s height, if armed (the mirror).
     pub fn court_clock_v2_from_daa(&self) -> Option<u64> {
         self.court_clock_v2_from_daa
+    }
+
+    /// **PanelDa mandatory disclosure mirror** (`Params::palw_panel_da_disclosure_v1`, ADR-0206), written by
+    /// `Params::sync_palw_g14_gates_v1` (and by fixtures).
+    pub fn with_panel_da_disclosure_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.panel_da_disclosure_from_daa = from_daa;
+        self
+    }
+
+    /// Does the PanelDa disclosure duty govern a claim originally accepted at `accepted_daa`? `false` on every shipped preset.
+    pub fn panel_da_disclosure_governs_v1(&self, accepted_daa: u64) -> bool {
+        self.panel_da_disclosure_from_daa.is_some_and(|from| accepted_daa >= from)
+    }
+
+    /// `Params::palw_panel_da_disclosure_v1`'s height, if armed (the mirror).
+    pub fn panel_da_disclosure_from_daa(&self) -> Option<u64> {
+        self.panel_da_disclosure_from_daa
     }
 
     /// Is the G14 F03 outsider court lane / owner reclamation in force at `daa_score`? `false` on every shipped preset.

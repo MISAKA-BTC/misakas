@@ -142,6 +142,7 @@ impl PalwChainStateV2 {
             funded_escrows: BTreeMap::new(),
             d2_readiness: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
+            panel_da_disclosures: BTreeMap::new(),
             class_semantics: BTreeMap::new(),
             claim_semantics: BTreeMap::new(),
             legacy_answers: BTreeMap::new(),
@@ -2942,6 +2943,11 @@ impl PalwChainStateV2 {
         if !self.fp_public_jobs.is_empty() {
             state.update(b"public_fp_jobs/v1");
             state.update(collection_root(b"public_fp_jobs", &self.fp_public_jobs).as_byte_slice());
+        }
+        // Lane g14-fam-panelda (ADR-0206): its own block, empty on every network below `palw_panel_da_disclosure_v1`.
+        if !self.panel_da_disclosures.is_empty() {
+            state.update(b"panel_da_disclosures/v1");
+            state.update(collection_root(b"panel_da_disclosures", &self.panel_da_disclosures).as_byte_slice());
         }
         if !self.class_semantics.is_empty() {
             state.update(b"class_semantics/v1");

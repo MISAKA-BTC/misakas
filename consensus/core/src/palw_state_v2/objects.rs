@@ -841,6 +841,11 @@ fn apply_object_inner(
         PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
             super::palw_court_shared_material_intake_fold_v1::material_intake(builder, ctx, intake)?;
         }
+        // Lane g14-fam-panelda (tag 233, ADR-0206): below `palw_panel_da_disclosure_v1` the acceptance gate drops it unjudged (A-2);
+        // the fold re-checks the fence.
+        PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim, prompt_token_ids } => {
+            super::palw_panel_da_disclosure_fold_v1::fold_panel_da_disclosure_v1(builder, ctx, claim, prompt_token_ids)?;
+        }
         PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { answer } => {
             da_sessions::apply_routed_material_answer_v2(builder, ctx, answer)?;
         }
@@ -3810,6 +3815,9 @@ fn apply_object_inner(
             } else {
                 None
             };
+            // Lane g14-fam-panelda (ADR-0206): a governed PanelDa text commitment discloses its ids later, not here.
+            let panel_da_deferred = builder.params.panel_da_disclosure_governs_v1(ctx.daa_score)
+                && public_job.as_deref().is_some_and(|c| crate::palw_panel_da_disclosure_v1::palw_panel_da_disclosable_job_v1(&c.job));
             let price = crate::palw_state_v2::palw_fp_commitment_price_answered_v1(
                 &builder.state,
                 builder.params,
@@ -3820,6 +3828,8 @@ fn apply_object_inner(
                     receipt_rights: builder.fp_receipt_rights_inputs_v1(ctx),
                     // RFC-0002 Phase H: the IR class lane is open exactly where the TIR public frame is (G-03 frames every IR original).
                     tir_free_prompt_active: builder.extras.tir_public_conviction_active,
+                    // Lane g14-fam-panelda (ADR-0206): a governed PanelDa text commitment discloses its ids later.
+                    panel_da_deferred_prompt: panel_da_deferred,
                 },
                 claim_id,
                 class_id,
@@ -4037,6 +4047,10 @@ fn apply_object_inner(
             }
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim))?;
+            // Lane g14-fam-panelda (ADR-0206): a governed PanelDa text claim's disclosure row and deposit lock (no-op below the fence).
+            if let Some(written) = builder.state.claims.get(claim_id).cloned() {
+                super::palw_panel_da_disclosure_fold_v1::admit_panel_da_on_commit_v1(builder, ctx, *claim_id, &written, public_job.as_deref())?;
+            }
             builder.stamp_staged_claim_v1(*claim_id, staged_contract)?;
             if let Some(wire) = public_job_wire {
                 builder.write_public_fp_job_v1(*claim_id, Some(wire))?;
@@ -4061,7 +4075,8 @@ fn apply_object_inner(
                 consumed_state_root: consumed_prefix_state.state_root,
                 consumed_prefix_tokens: consumed_prefix_state.prefix_tokens,
             };
-            if derived.is_some() {
+            // Lane g14-fam-panelda: a deferred PanelDa claim's prompt row is written by its disclosure (with the ids), not here.
+            if derived.is_some() && !panel_da_deferred {
                 // ADR-0148: the first compute-priced commitment opens the lane's one target.
                 if in_compute {
                     builder.seed_fp_pooled_receipt_target()?;

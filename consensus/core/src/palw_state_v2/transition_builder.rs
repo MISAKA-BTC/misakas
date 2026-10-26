@@ -844,6 +844,10 @@ impl<'a> TransitionBuilder<'a> {
         if new.is_none() && self.state.fp_public_jobs.contains_key(&key) {
             self.write_public_fp_job_v1(key, None)?;
         }
+        // Lane g14-fam-panelda (ADR-0206): the disclosure row leaves with its claim (empty below the fence).
+        if new.is_none() && self.state.panel_da_disclosures.contains_key(&key) {
+            self.write_panel_da_disclosure_v1(key, None)?;
+        }
         if new.is_none() && self.state.exec_v2_origins.contains_key(&key) {
             self.write_exec_origin(key, None)?;
         }
@@ -9386,6 +9390,7 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwVoidReasonV2::WorkRootExpired
                 | PalwVoidReasonV2::WorkSliceProvenFalse
                 | PalwVoidReasonV2::WorkSliceDefaulted
+                | PalwVoidReasonV2::PanelDaDisclosureDefault
         ) {
             return Ok(0);
         }
@@ -9425,6 +9430,7 @@ impl<'a> TransitionBuilder<'a> {
             // RFC-0008 v2: an expired work session is a timeout, never a charge (the guard above returns first); a slice proven false or
             // defaulted is the kernel route's charge, never a second one here.
             PalwVoidReasonV2::WorkRootExpired | PalwVoidReasonV2::WorkSliceProvenFalse | PalwVoidReasonV2::WorkSliceDefaulted => false,
+            PalwVoidReasonV2::PanelDaDisclosureDefault => false,
         };
         // A free-prompt claim's receipt rights (#5) are its fraud gain as the escrow is an attempt's,
         // so they go on the same reasons. The escrow slot is the ledger's (ADR-0160 E-5): past
@@ -9473,7 +9479,8 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwVoidReasonV2::PermissionlessNoCapablePanel
                 | PalwVoidReasonV2::WorkRootExpired
                 | PalwVoidReasonV2::WorkSliceProvenFalse
-                | PalwVoidReasonV2::WorkSliceDefaulted => 0,
+                | PalwVoidReasonV2::WorkSliceDefaulted
+                | PalwVoidReasonV2::PanelDaDisclosureDefault => 0,
             }
         };
         let nominal = claim.reserved.saturating_add(escrow).saturating_add(action);
@@ -9770,6 +9777,11 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
+        // Lane g14-fam-panelda (ADR-0206): a governed PanelDa claim settles only once its prompt is public; an undisclosed one is
+        // voided here as a disclosure default (deposit burned, no conviction). No row (every shipped network): unchanged.
+        if !super::palw_panel_da_disclosure_fold_v1::settle_panel_da_at_final_v1(self, id, claim, final_daa)? {
+            return Ok(());
+        }
         // G14 lane r6-d1-release (user decision D1): a claim bound to the court service book goes Final on its normal schedule; the
         // binding holds its retirement (`retire_claim`) and its collateral/material until the binding's release.
         if self.state.staged_claim_contract_v1(&id).and_then(|c| c.prefix_custody.as_ref()).is_some_and(|c| !c.qualified()) {

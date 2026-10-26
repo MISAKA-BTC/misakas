@@ -359,6 +359,7 @@ pub(crate) fn own_claim_events_at_v1(
                     // RFC-0008 v2 amendment 1: a slice of the session was convicted / defaulted through the kernel route.
                     R::WorkSliceProvenFalse => "work_slice_proven_false",
                     R::WorkSliceDefaulted => "work_slice_defaulted",
+                    R::PanelDaDisclosureDefault => "panel_da_disclosure_default",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }
@@ -10771,6 +10772,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
         PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => "TirDesignatedEventV1",
         PalwConsensusObjectV2::MaterialIntakeV1 { .. } => "MaterialIntakeV1",
+        PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { .. } => "PanelDaPromptDisclosedV1",
         PalwConsensusObjectV2::SeatReadinessRootV1 { .. } => "SeatReadinessRootV1",
         PalwConsensusObjectV2::SeatReadinessDemandedV1 { .. } => "SeatReadinessDemandedV1",
         PalwConsensusObjectV2::SeatReadinessAnsweredV1 { .. } => "SeatReadinessAnsweredV1",

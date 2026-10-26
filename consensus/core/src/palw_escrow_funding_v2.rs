@@ -421,6 +421,8 @@ pub fn palw_void_reason_keeps_obligation_v1(reason: PalwVoidReasonV2) -> bool {
         PalwVoidReasonV2::WorkRootExpired => false,
         // RFC-0008 v2 amendment 1: the kernel route charges the slice executor; the root holds nothing.
         PalwVoidReasonV2::WorkSliceProvenFalse | PalwVoidReasonV2::WorkSliceDefaulted => false,
+        // ADR-0206: the disclosure fold burns the deposit; the claim's own reservation holds nothing.
+        PalwVoidReasonV2::PanelDaDisclosureDefault => false,
     }
 }
 

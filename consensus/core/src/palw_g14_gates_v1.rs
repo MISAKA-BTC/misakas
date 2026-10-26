@@ -622,8 +622,8 @@ impl Params {
 
     /// **PanelDa mandatory disclosure gate (DORMANT, lane g14-fam-panelda, ADR-0206 proposed).** Needs `palw_panel_da` and
     /// `palw_court_clock_v2` in force at or below it, and window arithmetic that leaves the outsider its notice window. **Refused when
-    /// armed on any network for now**: the disclosure carrier, its fold row and the deposit lock are not wired (lane report), so the
-    /// family is implemented-as-rules, not activatable.
+    /// armed on any network for now**: the carrier, fold row, deposit and Final hold are wired and fold-tested, but the real-node E2E
+    /// (mempool → template → processor) has not run (lane report). Lift only with that E2E's record.
     pub fn validate_palw_panel_da_disclosure_v1(&self) -> Result<(), PalwModeV2Error> {
         let Some(at) = self.palw_panel_da_disclosure_v1_fence() else { return Ok(()) };
         let below = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at.daa_score());
@@ -639,7 +639,8 @@ impl Params {
             return Err(PalwModeV2Error::Invalid("palw_panel_da_disclosure_v1: the deadline leaves the outsider no notice window"));
         }
         Err(PalwModeV2Error::Invalid(
-            "palw_panel_da_disclosure_v1: the disclosure carrier, fold row and deposit lock are not wired; arming is refused (ADR-0206 proposed)",
+            "palw_panel_da_disclosure_v1: the carrier (tag 233), fold row, deposit lock/burn, Final hold and route input are wired and \
+             fold-tested, but no real-node (mempool/template/processor) E2E has run yet; arming is refused until it has (ADR-0206)",
         ))
     }
 
@@ -744,6 +745,7 @@ impl Params {
         let outsider_lane = self.palw_court_outsider_lane_v1_fence().map(|f| f.daa_score());
         let panel_one = self.palw_kernel_route_panel_one_v1_fence().map(|f| f.daa_score());
         let court_clock = self.palw_court_clock_v2_fence().map(|f| f.daa_score());
+        let panel_da_disclosure = self.palw_panel_da_disclosure_v1_fence().map(|f| f.daa_score());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle
                 .state
@@ -752,7 +754,8 @@ impl Params {
                 .with_reward_liability_horizon_from_daa(liability)
                 .with_court_outsider_lane_from_daa(outsider_lane)
                 .with_kernel_route_panel_one_from_daa(panel_one)
-                .with_court_clock_v2_from_daa(court_clock);
+                .with_court_clock_v2_from_daa(court_clock)
+                .with_panel_da_disclosure_from_daa(panel_da_disclosure);
         }
     }
 }

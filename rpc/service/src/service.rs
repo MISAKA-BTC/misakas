@@ -510,6 +510,8 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 // RFC-0008 v2 amendment 1: a slice of the session was convicted / defaulted through the kernel route.
                 R::WorkSliceProvenFalse => "work_slice_proven_false",
                 R::WorkSliceDefaulted => "work_slice_defaulted",
+                // ADR-0206: a PanelDa prompt not disclosed by its deadline (a default, not a conviction).
+                R::PanelDaDisclosureDefault => "panel_da_disclosure_default",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }

@@ -3677,6 +3677,8 @@ impl VirtualStateProcessor {
             receipt_rights: self.palw_fp_receipt_rights_inputs_at(daa_score),
             // RFC-0002 Phase H: the IR class lane opens with the TIR public frame (the fold's own reading of the same fence).
             tir_free_prompt_active: self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(daa_score)),
+            // Lane g14-fam-panelda: a node's price answer quotes PublicDa (a PanelDa quote is the fold's, past its fence).
+            panel_da_deferred_prompt: false,
         };
         // The claim id only names a refusal; no claim exists until the rail signs one.
         let price = if let Some((commitment, answer)) = accounting {

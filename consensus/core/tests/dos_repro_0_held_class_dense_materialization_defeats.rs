@@ -434,6 +434,7 @@ fn dos_repro_0_held_class_dense_materialization_defeats_defect_record() {
                     daa_score: 0,
                     receipt_rights: None,
                     tir_free_prompt_active: false,
+                panel_da_deferred_prompt: false,
                 },
                 &h(0xC1A1),
                 &id,

@@ -811,6 +811,14 @@ fn keep_original_prompt_ids_v1(
     if original.job.prompt_mode == crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL && prompt.prompt_token_ids.is_empty() {
         return Ok(());
     }
+    // Lane g14-fam-panelda (ADR-0206): a governed PanelDa original's public replay input is its DISCLOSURE, written by
+    // `palw_panel_da_disclosure_fold_v1` through [`keep_disclosed_prompt_ids_v1`] by `a + 1,040` (or the claim defaults).
+    if prompt.prompt_token_ids.is_empty()
+        && crate::palw_panel_da_disclosure_v1::palw_panel_da_disclosable_job_v1(&original.job)
+        && b.params.panel_da_disclosure_governs_v1(frame.plan_v1().terms.accepted_daa)
+    {
+        return Ok(());
+    }
     crate::palw_freeprompt_v3::palw_fp_prompt_ids_admit_v1(&original.job, &prompt.prompt_token_ids, form)
         .map_err(|e| refused(format!("TIR original frame has no public prompt ids to keep for an outside replay: {e:?}")))?;
     let epoch = b.params.epoch_length.max(1);
@@ -831,6 +839,35 @@ fn keep_original_prompt_ids_v1(
         None => PalwFpClaimPromptV1 { expires_daa: prompt.expires_daa.max(horizon), ..prompt.clone() },
     };
     b.write_fp_claim_prompt(key, Some(row))
+}
+
+/// **Lane g14-fam-panelda (ADR-0206): a disclosed PanelDa prompt becomes the claim's public replay input** — the same prompt row
+/// `(class, producer, claim)` the frame keeps for a PublicDa original, to the frame's horizon (or the ordinary row expiry where no
+/// frame exists). The ids were admitted against the claim's hash by the caller.
+pub(super) fn keep_disclosed_prompt_ids_v1(
+    b: &mut TransitionBuilder<'_>,
+    claim: Hash64,
+    class_id: Hash64,
+    producer: PalwBondKeyV2,
+    ids: &[u32],
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    let row = PalwFpClaimPromptV1 {
+        prompt_tokens: ids.len() as u32,
+        prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(ids),
+        prompt_token_ids: ids.to_vec(),
+        expires_daa: palw_fp_prompt_row_expiry_v1(now, b.params.epoch_length),
+        consumed_state_root: Hash64::default(),
+        consumed_prefix_tokens: 0,
+    };
+    if let Some(frame) = palw_tir_public_claim_v1(&b.state, claim).cloned() {
+        let form = [crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1]
+            .into_iter()
+            .find(|f| crate::palw_freeprompt_v3::palw_fp_prompt_ids_admit_v1(&frame.original_v1().job, ids, *f).is_ok())
+            .ok_or_else(|| refused("a PanelDa disclosure does not bind the framed original's ids"))?;
+        return keep_original_prompt_ids_v1(b, &frame, form, &row);
+    }
+    b.write_fp_claim_prompt((class_id, producer, claim), Some(row))
 }
 
 pub(super) fn bind_panel_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, claim: Hash64) -> Result<(), PalwStateV2Error> {

@@ -196,6 +196,8 @@ mod palw_provider_court_fold_v1;
 mod palw_legacy_answer_chunks_fold_v2;
 #[path = "palw_legacy_public_filer_fold_v1.rs"]
 mod palw_legacy_public_filer_fold_v1;
+#[path = "palw_panel_da_disclosure_fold_v1.rs"]
+mod palw_panel_da_disclosure_fold_v1;
 #[path = "palw_court_capacity_fold_v1.rs"]
 mod palw_court_capacity_fold_v1;
 #[path = "palw_staged_court_fold_v1.rs"]
@@ -2057,6 +2059,10 @@ pub struct PalwStateParamsV2 {
     /// (`crate::palw_court_clock_v2`). `None` on every shipped preset.
     #[borsh(skip)]
     court_clock_v2_from_daa: Option<u64>,
+    /// **Lane g14-fam-panelda (ADR-0206): `Params::palw_panel_da_disclosure_v1`'s height**, mirrored by
+    /// `Params::sync_palw_g14_gates_v1` (`crate::palw_panel_da_disclosure_v1`). `None` on every shipped preset.
+    #[borsh(skip)]
+    panel_da_disclosure_from_daa: Option<u64>,
     /// **RFC-0006 R6-CELL round 4: `Params::palw_cell_coverage_closure_v1`'s height**, mirrored by
     /// `Params::sync_palw_cell_coverage_closure_v1` (`crate::palw_cell_coverage_closure_v1`: the registration refusal, the claim gate
     /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
@@ -2820,6 +2826,8 @@ pub fn palw_bond_committed_v1(
         .saturating_add(state.kernel_reserved(bond))
         // Lane F02b: the slice's court capital rows (0 with none; written only past `palw_kernel_route_panel_one_v1`).
         .saturating_add(state.kernel_court_capital_reserved_v1(bond))
+        // Lane g14-fam-panelda (ADR-0206): PanelDa disclosure deposits still locked (0 with no row; written only past the fence).
+        .saturating_add(state.panel_da_deposit_locked_v1(bond))
         .saturating_add(state.onboarding_reserved(bond))
         .saturating_add(state.model_artifact_reserved_at_v2(bond, now_daa))
         .saturating_add(state.model_vector_reserved_at_v2(bond, now_daa))
@@ -3790,6 +3798,12 @@ pub fn palw_claim_final_floor_v1(
     // own `final_daa`, so none expires.
     let floor = match crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, *claim_id) {
         Some(frame) => floor.max(frame.plan_v1().terms.collect_until_daa),
+        None => floor,
+    };
+    // **Lane g14-fam-panelda (ADR-0206): a governed PanelDa claim reaches `Final` only past its disclosure deadline**, so no reward,
+    // weight or settlement credit moves before its prompt is public (or it defaults). The row exists only past the fence.
+    let floor = match palw_panel_da_disclosure_fold_v1::palw_panel_da_final_floor_v1(state, claim_id) {
+        Some(after_deadline) => floor.max(after_deadline),
         None => floor,
     };
     // **G-08 (`palw_reward_liability_horizon_v1`): a legacy free-prompt claim reaches `Final` only at its liability horizon**
@@ -4845,6 +4859,11 @@ pub enum PalwVoidReasonV2 {
     /// or timed out, so the slice can never be verified. Same terms as [`Self::WorkSliceProvenFalse`]; the route's default penalty is the
     /// charge. Explicit Borsh number **132**.
     WorkSliceDefaulted = 132,
+    /// **ADR-0206 (lane g14-fam-panelda): a PanelDa claim's prompt was not publicly disclosed by `a + 1,040`.** A default, never a
+    /// conviction: the claim earns nothing, its disclosure deposit is burned, its computation bond is not slashed and no strike is
+    /// written (an unavailable prompt is not a computation error). Explicit Borsh number **140**; written only past
+    /// `Params::palw_panel_da_disclosure_v1`.
+    PanelDaDisclosureDefault = 140,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -7648,6 +7667,14 @@ pub enum PalwConsensusObjectV2 {
     MaterialIntakeV1 {
         intake: Box<crate::palw_court_shared_material_intake_v1::SignedMaterialIntakeV1>,
     } = 255,
+    /// **(tag 233, lane g14-fam-panelda, ADR-0206): a PanelDa claim's prompt ids, disclosed in public** by anyone holding ids the
+    /// claim's `prompt_token_ids_hash` binds (no signature: the hash fixes WHICH ids, so the filer's identity is irrelevant). Folded
+    /// by `palw_panel_da_disclosure_fold_v1`. Dormant behind `palw_panel_da_disclosure_v1` (below it the live build's undecodable
+    /// payload, A-2: rides unjudged, folds nothing).
+    PanelDaPromptDisclosedV1 {
+        claim: Hash64,
+        prompt_token_ids: Vec<u32>,
+    } = 233,
     /// **(tag 201) RFC-0024 §4 `PositionDissectionV2`**: the responder's signed position round over the terminal tile
     /// (`crate::palw_tir_position_terminal_v2`). Dormant behind `palw_tir_bounded_door_v1` (below it the live build's
     /// undecodable payload, A-2). Folds no state: the round is re-checked inside the close that names a position.
@@ -10501,6 +10528,9 @@ pub enum PalwStateV2Error {
     /// drops it by name first; this is the second lock), or a rule of [`crate::palw_legacy_public_filer_v1`], by name.
     #[error("the legacy route's dispute reservation refuses this: {0}")]
     LegacyDisputeRefused(String),
+    /// Lane g14-fam-panelda (ADR-0206): a PanelDa disclosure or a governed PanelDa admission refused.
+    #[error("PanelDa disclosure refuses this: {0}")]
+    PanelDaDisclosureRefused(String),
     /// **Court capacity refuses this** (lane g14-court-capacity, `crate::palw_court_capacity_v1`): the block's court budget, court
     /// admission, or the deadline guarantee of the queue. Past `palw_court_capacity_v1` only.
     #[error("court capacity refuses this: {0}")]
@@ -11203,6 +11233,10 @@ pub struct PalwChainStateV2 {
     /// Accepted public FP commitment metadata, without prompt IDs or capture. Kept with the claim
     /// past the never-armed public-filer fence, rooted and carried through pruning snapshots.
     fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
+    /// **Lane g14-fam-panelda (ADR-0206): governed PanelDa claims' disclosure rows** — written only past
+    /// `palw_panel_da_disclosure_v1` (empty on every shipped network), journaled as delta 236; enters the root
+    /// (`panel_da_disclosures/v1`) and the carriage (tail `0xE8`) only when non-empty.
+    panel_da_disclosures: BTreeMap<Hash64, crate::palw_panel_da_disclosure_v1::PalwPanelDaDisclosureRowV1>,
     class_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     claim_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     legacy_answers: BTreeMap<
@@ -12351,6 +12385,12 @@ pub enum PalwDeltaEntryV2 {
         old: Option<Vec<u8>>,
         new: Option<Vec<u8>>,
     } = 201,
+    /// Lane g14-fam-panelda (delta 236, ADR-0206): one governed PanelDa claim's disclosure row.
+    PanelDaDisclosure {
+        key: Hash64,
+        old: Option<crate::palw_panel_da_disclosure_v1::PalwPanelDaDisclosureRowV1>,
+        new: Option<crate::palw_panel_da_disclosure_v1::PalwPanelDaDisclosureRowV1>,
+    } = 236,
     /// Immutable canonical semantic identities, one row per registered class.
     ClassSemantics {
         key: Hash64,
@@ -19215,6 +19255,8 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::TirContainerIdentityV1) => builder.extras.tir_container_identity_active,
         // RFC-0024 (tags 201-204): the bounded door's mirror at this block.
         K::Fence(F::TirBoundedDoorV1) => builder.extras.tir_bounded_door_active,
+        // ADR-0206: the bundle's mirror of `palw_panel_da_disclosure_v1` (synced from `Params`).
+        K::Fence(F::PanelDaDisclosureV1) => builder.params.panel_da_disclosure_from_daa().is_some_and(|from| ctx.daa_score >= from),
     }
 }
 
@@ -19436,6 +19478,11 @@ pub struct PalwFpPriceInputsV1 {
     /// `daa_score`. Past it an IR class's work is derived from its admitted program and published layout
     /// ([`crate::palw_tir_fp_lane_v1`]); below it an IR class has no work profile and is refused exactly as before.
     pub tir_free_prompt_active: bool,
+    /// **Lane g14-fam-panelda (ADR-0206): a governed PanelDa text commitment** — its ids are disclosed later, not carried. Past the
+    /// derived-work fence it is priced with its WHOLE prompt accounted as already paid (prefill credited zero, ADR-0082 D10's
+    /// reading), which can only under-credit and never pays a prefix twice; with answer accounting in force it is still refused
+    /// (that rule reads the ids). `false` everywhere else (byte for byte as before).
+    pub panel_da_deferred_prompt: bool,
 }
 
 /// **The two numbers a free-prompt claim's receipt rights are priced from** (the audit's #5): the
@@ -19676,7 +19723,8 @@ pub fn palw_fp_commitment_price_answered_v1(
         // shipped preset. A named prefix-STATE is how a producer that computed locally
         // (and never paid) still prices the tail: the object is the checkpoint a seat
         // replays from, not a miner's word for "cache hit" (ADR-0145 §6).
-        if prompt_token_ids.len() != prompt_tokens as usize {
+        let deferred = inputs.panel_da_deferred_prompt && prompt_token_ids.is_empty() && answer.is_none();
+        if prompt_token_ids.len() != prompt_tokens as usize && !deferred {
             return Err(PalwStateV2Error::FreePromptPromptNotAccountable { claim: *claim_id, carried: prompt_token_ids.len() });
         }
         // **The class's ladder, defaulted to the STRUCTURAL top rather than the network's.**
@@ -19698,7 +19746,7 @@ pub fn palw_fp_commitment_price_answered_v1(
         // §6's cache rule with the prefix taken to be the prompt; the prefix-STATE rule still
         // applies (a consumed state can only lower the credit, and here there is nothing left of
         // the prefill to lower).
-        let accounted = if decode_rules {
+        let accounted = if decode_rules || deferred {
             prompt_tokens
         } else {
             crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid)
@@ -22885,6 +22933,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::SeatAvailability { key, old, new } => swap_write!(state.seat_availability, key, old, new),
         PalwDeltaEntryV2::SeatRootReadiness { key, old, new } => swap_write!(state.seat_root_readiness, key, old, new),
         PalwDeltaEntryV2::PublicFpJob { key, old, new } => swap_write!(state.fp_public_jobs, key, old, new),
+        PalwDeltaEntryV2::PanelDaDisclosure { key, old, new } => swap_write!(state.panel_da_disclosures, key, old, new),
         PalwDeltaEntryV2::ClassSemantics { key, old, new } => swap_write!(state.class_semantics, key, old, new),
         PalwDeltaEntryV2::ClaimSemantics { key, old, new } => swap_write!(state.claim_semantics, key, old, new),
         PalwDeltaEntryV2::LegacyAnswer { key, old, new } => swap_write!(state.legacy_answers, key, old, new),
@@ -23403,6 +23452,8 @@ pub struct PalwStateCarriageV2 {
     pub d2_readiness: crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1,
     /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
     pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
+    /// Lane g14-fam-panelda: PanelDa disclosure rows, appended tail 0xE8, present only when non-empty.
+    pub panel_da_disclosures: BTreeMap<Hash64, crate::palw_panel_da_disclosure_v1::PalwPanelDaDisclosureRowV1>,
     /// Immutable signed registration semantics, optional tail 0xF7.
     pub class_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     pub claim_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
@@ -24145,6 +24196,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1.serialize(writer)?;
             self.fp_public_jobs.serialize(writer)?;
         }
+        if !self.panel_da_disclosures.is_empty() {
+            crate::palw_panel_da_disclosure_v1::PALW_CARRIAGE_PANEL_DA_DISCLOSURES_TAIL_V1.serialize(writer)?;
+            self.panel_da_disclosures.serialize(writer)?;
+        }
         if !self.class_semantics.is_empty() {
             crate::palw_class_semantics_v1::PALW_CARRIAGE_CLASS_SEMANTICS_TAIL_V1.serialize(writer)?;
             self.class_semantics.serialize(writer)?;
@@ -24389,6 +24444,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_legacy_answers = false;
         let mut fp_public_jobs = BTreeMap::new();
         let mut seen_fp_public_jobs = false;
+        let mut panel_da_disclosures = BTreeMap::new();
+        let mut seen_panel_da_disclosures = false;
         let mut class_semantics = BTreeMap::new();
         let mut claim_semantics = BTreeMap::new();
         let mut seen_class_semantics = false;
@@ -24727,6 +24784,13 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an empty class semantics tail"));
                     }
                 }
+                crate::palw_panel_da_disclosure_v1::PALW_CARRIAGE_PANEL_DA_DISCLOSURES_TAIL_V1 if !seen_panel_da_disclosures => {
+                    seen_panel_da_disclosures = true;
+                    panel_da_disclosures = BTreeMap::deserialize_reader(reader)?;
+                    if panel_da_disclosures.is_empty() {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an empty PanelDa disclosures tail"));
+                    }
+                }
                 PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1 if !seen_fp_public_jobs => {
                     seen_fp_public_jobs = true;
                     fp_public_jobs = BTreeMap::deserialize_reader(reader)?;
@@ -24934,6 +24998,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             funded_escrows,
             d2_readiness,
             fp_public_jobs,
+            panel_da_disclosures,
             class_semantics,
             claim_semantics,
             legacy_answers,
@@ -25087,6 +25152,7 @@ impl PalwStateCarriageV2 {
             funded_escrows: state.funded_escrows.clone(),
             d2_readiness: state.d2_readiness.clone(),
             fp_public_jobs: state.fp_public_jobs.clone(),
+            panel_da_disclosures: state.panel_da_disclosures.clone(),
             class_semantics: state.class_semantics.clone(),
             claim_semantics: state.claim_semantics.clone(),
             legacy_answers: state.legacy_answers.clone(),
@@ -25371,6 +25437,7 @@ impl PalwStateCarriageV2 {
             funded_escrows: self.funded_escrows,
             d2_readiness: self.d2_readiness,
             fp_public_jobs: self.fp_public_jobs,
+            panel_da_disclosures: self.panel_da_disclosures,
             class_semantics: self.class_semantics,
             claim_semantics: self.claim_semantics,
             legacy_answers: self.legacy_answers,

@@ -649,6 +649,8 @@ pub fn palw_capacity_void_reason_keeps_obligation_v1(reason: crate::palw_state_v
         // RFC-0008 v2 amendment 1: a session ended by a slice's kernel conviction or default holds nothing on the root (the charge is the
         // kernel route's, on the slice executor).
         PalwVoidReasonV2::WorkSliceProvenFalse | PalwVoidReasonV2::WorkSliceDefaulted => false,
+        // ADR-0206: a PanelDa disclosure default burns only its deposit (charged by the disclosure fold); nothing held here.
+        PalwVoidReasonV2::PanelDaDisclosureDefault => false,
     }
 }
 
