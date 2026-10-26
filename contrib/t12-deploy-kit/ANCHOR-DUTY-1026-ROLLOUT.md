@@ -1,6 +1,21 @@
 # testnet-12 node-only release: anchor duty の短い待ち + 5.104 の b5 退役 — rollout checklist
 
-2026-10-26 作成(branch `release/t12-anchor-duty-247ade1f9`)。**この文書のどの手順もまだ実行していない。** 実行したのは Mac 上の
+2026-10-26 作成(branch `release/t12-anchor-duty-247ade1f9`)。
+
+> **実施状況(2026-10-26 09:00〜09:24 CET)**: §4 の手順 0 と 1 まで実施した。release branch を push、`distribute-from-mac.sh kit` と
+> `binaries`(3 台とも sha256 一致)、各 host で `stage` と `DRY_RUN=1 upgrade`。DRY_RUN は 3 台とも最後まで通り、`nothing … was changed`。
+> 稼働中の node・pinner は 1 台も再起動していない(全部 247ade1f90b6 のまま)。各 host の旧 `fleet.env` は
+> `/root/t12-rel/kit/fleet.env.bak-before-24d7560777f0`、5.104 の旧 `install-5104.sh` は同じ名前の `.bak-…` に残した。
+> **手順 2 以降(実際の upgrade と b5 の退役)は未実施。**
+>
+> **kit の修正(この過程で見つけたもの)**: host の kit の `lib.sh`(main と同じ)は Phase H の IR artifact(`ART_PH`、
+> `PH_MANIFEST_MODE=drop`)と `HOST_EXTRA_ARGS` を launch script に入れない。live の 247ade1f90b6 の launch script は、Mac に残っていない
+> int-8 Phase H 版の kit で生成されたもので、全 8k seat に `--palw-class-artifact=…smollm2…palwtir` があり、`--palw-verify-class-manifest`
+> は無く、5.104 では末尾に `--palw-seat-replay-slots=1` が付く。最初の DRY_RUN はこの差で pre-flight 中止になった(何も止まっていない)。
+> この branch の `lib.sh` にその 2 つを足し、stage し直した結果、live と新しい launch script の差は header・`BIN`・`EXPECT_SHA` だけ
+> (5.104 の b2・b4 は意図した `--addpeer=127.0.0.1:26341` の削除も)になった。`main` の kit には同じ欠落が残っている。
+
+元の記述(作成時点では、この文書のどの手順もまだ実行していなかった): 実行したのは Mac 上の
 build・テスト・再 pin の dry run と、live への読み取りだけ。背景と測定は `docs/design/palw/t12-panel-room-bind-loop-1026.md`。
 
 ## 1. このリリースに入っているもの
@@ -55,10 +70,10 @@ commit `24d7560777f0` はまだどの remote にも push していない(build s
 |---|---|---|---|
 | 0 | Mac | `fleet.env` の `REV`・`KASPAD_SHA256`・`MISAKA_SHA256`・`PALW_CLASS_SHA256` を §3 の値に、`UPGRADE_FROM_FP` を空にする(他の行は live の `fleet.env` のまま)→ `./distribute-from-mac.sh kit` →【確認】`./distribute-from-mac.sh binaries` → `./check-fleet.sh` | 全 node が fp OK・synced・peer あり |
 | 1 | 各 host | `./install-<host>.sh stage` → `DRY_RUN=1 ./install-<host>.sh upgrade`(稼働中の service に触れない)。5.104 だけは `DRY_RUN=1 UPGRADE_ARGS_CHANGE_OK=1 ./install-5104.sh upgrade`(b2・b4 の peer から `127.0.0.1:26341` が消える diff が出る。それ以外の diff が出たら止める) | ibm・.113 は ARGS の diff なしで最後まで通る |
-| 2 | ibm【確認】 | `./install-ibm.sh upgrade`(b0 → b1 → b3、20 s 間隔) | `./install-ibm.sh check` と Mac の `CHECK_REGISTRY=1 ./check-fleet.sh` を 2〜3 分あけて 2 回: daa が進む・8k `readySeatsNow ≥ 7` |
+| 2 | ibm【確認】 | `./install-ibm.sh upgrade`(先に host の pinner `misaka-palw-pinner` を入れ替えて再起動し、その後 b0 → b1 → b3、20 s 間隔。.113・5.104 も同じく pinner が先) | `./install-ibm.sh check` と Mac の `CHECK_REGISTRY=1 ./check-fleet.sh` を 2〜3 分あけて 2 回: daa が進む・8k `readySeatsNow ≥ 7` |
 | 3 | .113【確認】 | `./install-113.sh upgrade`(b6 → b7) | 同上。misakascan の表示が進む |
 | 4 | 5.104【確認】 | `UPGRADE_ARGS_CHANGE_OK=1 ./install-5104.sh upgrade`(b2 → b4。b5 は NODES に無いので触らない — 旧 binary のまま動き続けるが identity は同じ) | `CHECK_REGISTRY=1 ./check-fleet.sh` |
-| 5 | 5.104【確認】 | b5 の退役: `./move-host.sh preflight retire 5` → `MOVE_TO=retired CONFIRM_MOVE_SEAT=yes ./move-host.sh retire 5` | 8k の ready が 8 に落ちて止まる(必要 7)。b5 の readiness が切れる(最大 24 DAA ≈ 66 分)までは、b5 を含む panel が残り得る(残り 4 seat で quorum 3) |
+| 5 | 5.104【確認】 | b5 の退役: `distribute-from-mac.sh kit` は `move-host.sh`・`move-nodes.sh` を送らないので、先に Mac から 5.104 の `/root/t12-rel/kit/` へ送る → `./move-host.sh preflight retire 5` → `MOVE_TO=retired CONFIRM_MOVE_SEAT=yes ./move-host.sh retire 5` | 8k の ready が 8 に落ちて止まる(必要 7)。b5 の readiness が切れる(最大 24 DAA ≈ 66 分)までは、b5 を含む panel が残り得る(残り 4 seat で quorum 3) |
 
 ## 5. 配備後に見るもの
 
