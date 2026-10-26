@@ -156,6 +156,19 @@ impl PalwSecurityCertificationPolicyV1 {
         }
     }
 
+    /// **The production Gate C policy — m / k = 75 / 41 USER-APPROVED 2026-10-26** (user: 「m/k 75/41 を承認」; decided 2026-10-22
+    /// as an estimate under f = 0.25: false certification 3.99e-8 per claim, ≤ 54 certifications a day under the 4,096-position cap,
+    /// 7.9e-4 a year; honest certification 0.9926 at 90 % response). The other fields are the RFC-0018 design values at `day_daa`.
+    /// Replaces the e2e harness's TEST-ONLY policy. Not read by any preset.
+    pub const fn approved_v1(day_daa: u64) -> Self {
+        Self::design_unapproved_v1(day_daa)
+    }
+
+    /// Whether `self` is the approved policy at `day_daa`.
+    pub fn is_approved_v1(&self, day_daa: u64) -> bool {
+        *self == Self::approved_v1(day_daa)
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.k == 0 || self.k > self.m || self.m == 0 {
             return Err("certification needs 1 ≤ k ≤ m");
@@ -329,6 +342,29 @@ pub fn palw_native_mining_certification_row_v39(state: &PalwChainStateV2, mining
 /// `crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39`, never directly.
 pub fn palw_native_mining_security_certified_v39(state: &PalwChainStateV2, mining_claim: &Hash64) -> bool {
     palw_native_mining_certification_row_v39(state, mining_claim).and_then(|row| row.outcome).is_some_and(|(o, _)| o.certifies())
+}
+
+/// **A failed kernel certification's held reward: `(burn, refund)`, burn + refund = amount** (PROVISIONAL, coordinator value
+/// delegation 2026-10-26; docs/governance/parameter-register.md). The producer is paid nothing. The burn is the V3 burn share
+/// (`PALW_G14_ESCROW_BURN_PERMILLE_V1`, rounded down) so a self-paid claim does not get a free certification lottery; the rest returns to
+/// the poster, so an honest claim's rare miss does not cost its payer the whole reward.
+pub fn palw_kernel_uncertified_split_v1(amount: u64) -> (u64, u64) {
+    let burn = (u128::from(amount) * u128::from(crate::palw_g14_values_v1::PALW_G14_ESCROW_BURN_PERMILLE_V1) / 1_000) as u64;
+    (burn, amount - burn)
+}
+
+#[cfg(test)]
+mod kernel_uncertified_split_tests {
+    use super::*;
+    #[test]
+    fn cert_kernel_uncertified_split_conserves_and_burns_the_v3_share() {
+        for amount in [0u64, 1, 9, 10, 999, 1_000, 500_000_000, u64::MAX] {
+            let (burn, refund) = palw_kernel_uncertified_split_v1(amount);
+            assert_eq!(u128::from(burn) + u128::from(refund), u128::from(amount), "burn + refund = reward at {amount}");
+            assert!(burn <= amount / 10, "never more than 100 permille at {amount}");
+        }
+        assert_eq!(palw_kernel_uncertified_split_v1(500_000_000), (50_000_000, 450_000_000));
+    }
 }
 
 /// The certification id of a kernel-route ledger claim (domain-separated from every chain and native39 claim's).
@@ -645,6 +681,17 @@ pub fn palw_certification_grief_f64(f: f64, m: u32, k: u32, veto: u32) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn val_approved_gate_c_policy_is_75_of_41_and_validates() {
+        let p = PalwSecurityCertificationPolicyV1::approved_v1(720);
+        assert_eq!((p.m, p.k, p.veto), (75, 41, 0));
+        p.validate().expect("strict majority");
+        assert!(p.is_approved_v1(720));
+        let mut other = p;
+        other.k = 40;
+        assert!(!other.is_approved_v1(720));
+    }
+
     use super::*;
 
     #[test]

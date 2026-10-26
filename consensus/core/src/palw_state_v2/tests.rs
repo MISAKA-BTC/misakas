@@ -41,6 +41,7 @@ mod native_liability_hold_v1;
 mod r5_f02_wire_v1;
 // G14 r6 D4: native post-Final duty clocks (text29 / funded v11).
 mod r6_d4_post_final_duty_v1;
+mod f02b_kernel_court_admission_v1;
 mod paid_consumer_retention_v1;
 // Compute-claim audit (lane compute-exec, 2026-10-22): a decoded answer re-sold as prefill / under a second bond.
 mod audit_compute_exec_v1;
@@ -28613,6 +28614,7 @@ mod evm_market {
             tir_public_originals: Default::default(),
             tir_public_conviction_active: false,
             court_service_inclusion_premise_v1: None,
+            kernel_court_admission_v1: None,
             tir_container_identity_active: false,
             fp_answer_accounting_active: false,
             fp_claim_answers: Default::default(),
@@ -28903,6 +28905,7 @@ mod evm_market {
             tir_public_originals: Default::default(),
             tir_public_conviction_active: false,
             court_service_inclusion_premise_v1: None,
+            kernel_court_admission_v1: None,
             tir_container_identity_active: false,
             fp_answer_accounting_active: false,
             fp_claim_answers: Default::default(),

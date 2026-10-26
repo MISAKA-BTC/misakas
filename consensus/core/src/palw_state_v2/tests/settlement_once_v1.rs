@@ -582,7 +582,8 @@ fn held_fee_repeat_probe_reserves_before_lookup_and_retries_without_mutation() {
     let extras = PalwTransitionExtrasV1::default();
     let parent = with_route(PalwChainStateV2::genesis());
     let mut seed = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-    let (obligation, debit) = escrow_reward(3);
+    let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, [3; 64], [4; 64], 0);
+    let debit = PalwSettlementDebitV1::Held { amount: 10 };
     seed.settle_once_v1(100, obligation, PalwSettlementConsumerV1::KernelTick, 10, debit).unwrap();
     let settled = seed.state;
     for limit in [0, 63, 64] {
@@ -601,5 +602,43 @@ fn held_fee_repeat_probe_reserves_before_lookup_and_retries_without_mutation() {
         assert!(b.entries.is_empty());
         drop(b);
         assert_eq!(checker.outstanding(), (0, 0));
+    }
+}
+
+#[test]
+fn held_fee_open_probe_reserves_both_keys_before_semantic_result() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    use crate::palw_paid_claim_trap_v1::{PalwHeldCheckFeeRowV1, PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1};
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, [3; 64], [4; 64], 0);
+    for held in [false, true] {
+        let mut parent = with_route(PalwChainStateV2::genesis());
+        if held {
+            let mut seed = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+            super::super::palw_paid_claim_trap_fold_v1::write_held_check_fee_v1(&mut seed, &PalwHeldCheckFeeRowV1 {
+                version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+                claim: obligation.subject, verifier: obligation.party, slot: obligation.ordinal,
+                poster: [5; 64], fee: 10, release_after_daa: 100,
+            }).unwrap();
+            parent = seed.state;
+        }
+        for limit in [0, 63, 64, 200, 201] {
+            let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: 0 });
+            let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+            b.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+            let result = super::super::palw_paid_claim_trap_fold_v1::check_fee_hold_admits_v1(&mut b, &obligation);
+            if limit < 201 {
+                assert!(matches!(result, Err(PalwStateV2Error::NativeResource(_))));
+                assert_eq!(checker.outstanding(), (if limit < 64 { 0 } else { 64 }, 0));
+            } else {
+                assert_eq!(result.unwrap(), !held, "an existing held fee cannot be held twice");
+                assert_eq!(checker.outstanding(), (201, 0));
+            }
+            assert_eq!(b.state, parent);
+            assert!(b.entries.is_empty());
+            drop(b);
+            assert_eq!(checker.outstanding(), (0, 0));
+        }
     }
 }

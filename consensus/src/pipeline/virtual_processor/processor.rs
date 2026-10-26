@@ -1279,7 +1279,7 @@ pub(super) enum PalwMergedOwnedWorkV1 {
 mod dns;
 mod evm;
 mod palw;
-mod palw_accept;
+pub(in crate::pipeline::virtual_processor) mod palw_accept;
 pub(crate) mod palw_h1_guard;
 mod palw_validate;
 mod template;

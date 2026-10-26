@@ -116,7 +116,7 @@ pub const PALW_KERNEL_CHUNK_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/chunk-
 pub const PALW_KERNEL_ROUTE_INTERIM_SEATS_V1: usize = 3;
 pub const PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1: u8 = 3;
 /// **Panel=1** (PRINCIPLES §5, RFC-0010 §0 addendum): one assigned seat per claim, quorum 1 — selected by
-/// `Params::palw_kernel_route_panel_one_v1` (dormant; USER DECISION PENDING between this and the interim 3-of-3). The seat's receipt
+/// `Params::palw_kernel_route_panel_one_v1` (dormant; the 1-seat policy was adopted on 2026-10-22). The seat's receipt
 /// is one input to the claim-level verification; the public court, the challenge window and bond/slash decide a dispute exactly as
 /// under 3-of-3 (a seat's signature never justifies a fault, PRINCIPLES §5).
 pub const PALW_KERNEL_ROUTE_PANEL_ONE_SEATS_V1: usize = 1;
@@ -674,6 +674,51 @@ pub fn palw_kernel_interim_challenge_v1(claim: &Digest) -> (Digest, Digest) {
         out
     };
     (derive(0), derive(1))
+}
+
+/// **lane SEED (G14 independent review MAJOR-1 / MINOR-1): the Panel=1 seed domain.** Past `palw_kernel_route_panel_one_v1` a
+/// committed claim's seat draw, challenge anchor and sample seed are keyed by the claim id AND a round seed anchor (ADR-0130/ADR-0170)
+/// recorded strictly after the commit — the same kind of post-commit anchor RFC-0018 Gate C draws its verifiers from — so a producer
+/// that re-forms its claim id cannot know at commit which operator sits or which positions are sampled. No new randomness source.
+pub const PALW_KERNEL_ROUTE_PANEL_ONE_SEED_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/panel-one-seed/v1";
+
+/// **Is a round seed anchor later than a commit?** `true` iff the anchor's span STARTS strictly after `committed_daa`
+/// (`anchor.span × span_daa > committed_daa`), `span_daa` the lane's span length now. Then the anchor's block is strictly later than
+/// the commit's, so the claim id was fixed before the anchor existed. An anchor recorded under a longer span length (before a span
+/// shortening) only ever reads as older here — the predicate fails closed, never open. No anchor, no draw.
+pub fn palw_kernel_panel_one_anchor_after_commit_v1(
+    committed_daa: u64,
+    span_daa: u64,
+    anchor: Option<&crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
+) -> bool {
+    anchor.is_some_and(|a| a.span.saturating_mul(span_daa.max(1)) > committed_daa)
+}
+
+/// The Panel=1 derivation `H(domain; tag ‖ claim ‖ anchor span ‖ anchor block ‖ anchor execution key)`: tag 0 the lottery seed,
+/// 1 the challenge anchor, 2 the sample seed.
+fn palw_kernel_panel_one_derive_v1(claim: &Digest, anchor: &crate::palw_execution_lane_v1::PalwExecSeedAnchorV1, tag: u8) -> [u8; 64] {
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_PANEL_ONE_SEED_DOMAIN_V1).to_state();
+    s.update(&[tag]);
+    s.update(claim);
+    s.update(&anchor.span.to_le_bytes());
+    s.update(anchor.block.as_byte_slice());
+    s.update(anchor.execution_key.as_byte_slice());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(s.finalize().as_bytes());
+    out
+}
+
+/// **The Panel=1 lottery seed** of a claim under a post-commit anchor (see [`PALW_KERNEL_ROUTE_PANEL_ONE_SEED_DOMAIN_V1`]).
+pub fn palw_kernel_panel_one_seed_v1(claim: &Digest, anchor: &crate::palw_execution_lane_v1::PalwExecSeedAnchorV1) -> Hash64 {
+    Hash64::from_bytes(palw_kernel_panel_one_derive_v1(claim, anchor, 0))
+}
+
+/// **The Panel=1 challenge anchor and sample seed** of a claim under a post-commit anchor.
+pub fn palw_kernel_panel_one_challenge_v1(
+    claim: &Digest,
+    anchor: &crate::palw_execution_lane_v1::PalwExecSeedAnchorV1,
+) -> (Digest, Digest) {
+    (palw_kernel_panel_one_derive_v1(claim, anchor, 1), palw_kernel_panel_one_derive_v1(claim, anchor, 2))
 }
 
 /// The interim lottery seed of a claim: `H("misaka-palw/kernel-route/interim-assignment/v1"; claim id)`.
@@ -1834,6 +1879,48 @@ mod tests {
         assert!(PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 > 1_000_000);
         // C4 F-C4R3-03: the route's own chunk lane (the lead's allocation of 2026-10-08), above onboarding's 36–40.
         assert_eq!((PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, PALW_KERNEL_ROUTE_TABLE_RESERVED_42_V1), (41, 42));
+    }
+
+    /// **lane SEED (G14 review MAJOR-1) (a), the pure half**: under Panel=1 the seat seed, challenge anchor and sample seed of a claim
+    /// are functions of the claim AND a post-commit seed anchor. The same claim id under two anchors draws differently (so the claim id
+    /// alone predicts nothing), the interim claim-id-only values are none of them, and an anchor not strictly later than the commit
+    /// (or none) never draws.
+    #[test]
+    fn lane_seed_panel_one_seed_needs_a_post_commit_anchor() {
+        use crate::palw_execution_lane_v1::PalwExecSeedAnchorV1;
+        let claim = [0x5Au8; 64];
+        let a = PalwExecSeedAnchorV1 { span: 101, block: Hash64::from_bytes([1; 64]), execution_key: Hash64::from_bytes([2; 64]) };
+        let b = PalwExecSeedAnchorV1 { execution_key: Hash64::from_bytes([3; 64]), ..a };
+        let c = PalwExecSeedAnchorV1 { span: 102, ..a };
+        let d = PalwExecSeedAnchorV1 { block: Hash64::from_bytes([4; 64]), ..a };
+        assert_eq!(palw_kernel_panel_one_seed_v1(&claim, &a), palw_kernel_panel_one_seed_v1(&claim, &a), "deterministic");
+        for other in [&b, &c, &d] {
+            assert_ne!(palw_kernel_panel_one_seed_v1(&claim, &a), palw_kernel_panel_one_seed_v1(&claim, other), "the anchor moves the seed");
+            assert_ne!(palw_kernel_panel_one_challenge_v1(&claim, &a), palw_kernel_panel_one_challenge_v1(&claim, other));
+        }
+        assert_ne!(palw_kernel_panel_one_seed_v1(&claim, &a), palw_kernel_interim_seed_v1(&claim), "not the grindable interim seed");
+        let (anchor_a, sample_a) = palw_kernel_panel_one_challenge_v1(&claim, &a);
+        let (anchor_i, sample_i) = palw_kernel_interim_challenge_v1(&claim);
+        assert!(anchor_a != anchor_i && sample_a != sample_i && anchor_a != sample_a);
+        // The claim still matters: another claim under the same anchor draws differently.
+        assert_ne!(palw_kernel_panel_one_seed_v1(&claim, &a), palw_kernel_panel_one_seed_v1(&[0x5B; 64], &a));
+        // The winning operator follows the anchor, not the claim id: over 64 anchors one claim id seats several operators.
+        let ops: Vec<Hash64> = (0..8u8).map(|i| Hash64::from_bytes([0x10 + i; 64])).collect();
+        let winners: std::collections::BTreeSet<Hash64> = (0..64u64)
+            .map(|k| {
+                let anchor = PalwExecSeedAnchorV1 { execution_key: Hash64::from_bytes([k as u8; 64]), ..a };
+                let seed = palw_kernel_panel_one_seed_v1(&claim, &anchor);
+                *ops.iter().min_by_key(|op| palw_kernel_interim_key_v1(&seed, op, 1)).unwrap()
+            })
+            .collect();
+        assert!(winners.len() >= 4, "one claim id, many seat outcomes: {}", winners.len());
+        // Anchor freshness: strictly later than the commit, in DAA, at the lane's span length.
+        assert!(!palw_kernel_panel_one_anchor_after_commit_v1(100, 1, None), "no anchor, no draw");
+        assert!(!palw_kernel_panel_one_anchor_after_commit_v1(100, 1, Some(&PalwExecSeedAnchorV1 { span: 100, ..a })), "the commit's own span");
+        assert!(!palw_kernel_panel_one_anchor_after_commit_v1(100, 1, Some(&PalwExecSeedAnchorV1 { span: 99, ..a })), "an older anchor");
+        assert!(palw_kernel_panel_one_anchor_after_commit_v1(100, 1, Some(&a)), "the next span's anchor");
+        assert!(!palw_kernel_panel_one_anchor_after_commit_v1(100, 5, Some(&PalwExecSeedAnchorV1 { span: 20, ..a })), "span 20 starts at 100");
+        assert!(palw_kernel_panel_one_anchor_after_commit_v1(100, 5, Some(&PalwExecSeedAnchorV1 { span: 21, ..a })));
     }
 
     fn chunk_bond(i: u32) -> PalwBondKeyV2 {

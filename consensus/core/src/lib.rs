@@ -206,6 +206,7 @@ pub mod palw_batch_licence_v1;
 /// N3 (REQ-N3-1/2/3): the Work Beacon's independent bootstrap, apart from the ordinary Beacon and Panel=0 — dormant.
 pub mod palw_beacon_bootstrap_v1;
 pub mod palw_beacon_source_fee_v1;
+mod palw_paid_normal_source_owned_v1;
 pub mod palw_beacon_source_opt_in_v1;
 /// RFC-0007 RFC07-3 (user decision 2026-10-15): the seal-before-commit order of beacon sources — no source cycle of any length.
 pub mod palw_beacon_source_order_v1;
@@ -1066,6 +1067,8 @@ pub mod palw_rfc0608_measured_v1;
 /// arms nothing.
 pub mod palw_values_p4_v1;
 pub mod palw_g14_values_v1;
+pub mod palw_kernel_route_panel_one_censorship_v1;
+pub mod palw_kernel_court_admission_v1;
 /// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
 /// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
 pub mod palw_cell_coverage_v1;
@@ -1163,6 +1166,7 @@ pub mod palw_court_shared_tir_stream_v1;
 pub mod palw_court_shared_tir_stream_state_v1;
 pub mod palw_court_shared_tir_response_v1;
 pub mod palw_court_shared_tir_state_v1;
+pub mod palw_court_shared_frontier_budget_v1;
 pub(crate) mod palw_court_shared_tir_builder_store_v1;
 /// RFC-0032 A non-exclusive terminal material ingress (dormant: typed-missing storage schedule).
 pub mod palw_court_shared_material_intake_v1;
@@ -1183,7 +1187,3 @@ pub mod palw_paid_bootstrap_source_v6;
 pub mod palw_paid_claim_observation_v6;
 
 pub mod palw_exec_origin_coverage_v1;
-
-// RFC07 normal V5 source chain, typed Resource / owned rows. Native caller:
-// `paid_claim_check_authority_checked_v2` (Receipt / FS folds).
-mod rfc07_normal_source_owned_draft;

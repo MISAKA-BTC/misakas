@@ -219,7 +219,8 @@ pub(super) fn hold_kernel_final_reward_v1(
 
 /// **lane CERT: the held kernel Final reward settles once, at the certification's decision.** Certifying: paid to the producer exactly
 /// as the released `Final` paid it (the bond-budget recipient, the RFC-0016 telemetry, the kernel payout). Any other outcome
-/// (`NotCertified`, `Expired`, `NoPopulation`, `Withdrawn`; a conviction after `Final` withdraws): returned whole to the poster; the
+/// (`NotCertified`, `Expired`, `NoPopulation`, `Withdrawn`; a conviction after `Final` withdraws): the V3 burn share is burned and the
+/// rest is returned to the poster ([`palw_kernel_uncertified_split_v1`], provisional); the
 /// producer is never paid uncertified. A producer whose bond left the route before certification is not paid either (returned).
 fn settle_kernel_reward_hold_v1(
     builder: &mut TransitionBuilder<'_>,
@@ -240,7 +241,9 @@ fn settle_kernel_reward_hold_v1(
             super::palw_rfc0016_fold_v1::rfc0016_note_escrow_payout_v1(builder, now, kernel_claim, hold.amount)?;
             builder.add_kernel_payout(payload, hold.amount)
         }
-        _ => builder.add_kernel_payout(Hash64::from_bytes(hold.poster_payload), hold.amount),
+        // PROVISIONAL (coordinator, 2026-10-26, value delegation): the V3 burn share is never named (burned; the poster's debit
+        // stands), the rest returns to the poster. Neither goes to the producer.
+        _ => builder.add_kernel_payout(Hash64::from_bytes(hold.poster_payload), palw_kernel_uncertified_split_v1(hold.amount).1),
     }
 }
 

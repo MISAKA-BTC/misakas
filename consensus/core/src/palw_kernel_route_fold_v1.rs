@@ -108,6 +108,52 @@ impl PalwChainStateV2 {
         self.kernel_route.as_ref()
     }
 
+    /// **Lane F02b:** the court capital the slice's admissions reserved against `bond` (its rows in the dedicated aux table).
+    pub fn kernel_court_capital_reserved_v1(&self, bond: &PalwBondKeyV2) -> u128 {
+        use crate::palw_kernel_court_admission_v1::*;
+        let Some(k) = self.kernel_route.as_ref() else { return 0 };
+        let prefix = kernel_court_capital_payer_prefix_v1(bond);
+        k.aux
+            .range((PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, prefix.clone())..)
+            .take_while(|((table, key), _)| *table == PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1 && key.starts_with(&prefix))
+            .filter_map(|(_, bytes)| borsh::from_slice::<KernelCourtCapitalRowV1>(bytes).ok())
+            .fold(0u128, |sum, row| sum.saturating_add(row.amount))
+    }
+
+    /// **Lane F02b:** every court capital row (the release sweep's input).
+    pub fn kernel_court_capital_rows_v1(&self) -> Vec<crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1> {
+        use crate::palw_kernel_court_admission_v1::*;
+        let Some(k) = self.kernel_route.as_ref() else { return Vec::new() };
+        k.aux
+            .range((PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, Vec::new())..)
+            .take_while(|((table, _), _)| *table == PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1)
+            .filter_map(|(_, bytes)| borsh::from_slice::<KernelCourtCapitalRowV1>(bytes).ok())
+            .collect()
+    }
+
+    /// **Lane F02b: the court-bound kernel claims whose producer default is held, with the release horizon (hard deadline).** Held
+    /// while no inclusion premise is adopted, or (premise adopted, S3c') while any reserved packet of the claim is recorded as
+    /// `MissingSupply`. A held default is released without slash at the horizon (the kernel ledger's tick).
+    pub fn kernel_court_default_held_v1(
+        &self,
+        premise: Option<&crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1>,
+    ) -> std::collections::BTreeMap<[u8; 64], u64> {
+        let Some(service) = self.court_service_state_v1() else { return Default::default() };
+        let Some(k) = self.kernel_route.as_ref() else { return Default::default() };
+        service
+            .claims
+            .values()
+            .filter(|binding| k.kernel_claim_row_v1(&binding.claim).is_some())
+            .filter(|binding| {
+                premise.is_none()
+                    || binding.packet_ids.iter().any(|id| {
+                        service.book.assess(id) == crate::palw_court_service_v1::ServiceAssessment::MissingSupply
+                    })
+            })
+            .map(|binding| (binding.claim.as_bytes(), binding.hard_deadline_daa))
+            .collect()
+    }
+
     /// What the kernel route has reserved against `bond` (0 with no kernel route): V2's committed-collateral ledger adds it.
     pub fn kernel_reserved(&self, bond: &PalwBondKeyV2) -> u128 {
         self.kernel_route.as_ref().map(|k| k.reserved_of(bond) as u128).unwrap_or(0)
@@ -424,6 +470,12 @@ fn load_ledger_with_projection_v9(
         .expect("created")
         .apply_paid_claim_consumer_inputs_v2(ledger.paid_consumer_projection_mut_v1())
         .map_err(refused)?;
+    // G14 lane F02b: a court-service-bound claim's producer default is held (no slash) without an adopted inclusion premise or
+    // while a reserved unit has no recorded supply (S3c'), and released without slash at its hard deadline.
+    let held = builder.state.kernel_court_default_held_v1(builder.extras.court_service_inclusion_premise_v1.as_ref());
+    if !held.is_empty() {
+        ledger.install_court_default_held_v1(held).map_err(PalwStateV2Error::NativeResource)?;
+    }
     let caps = builder.kernel_final_reward_caps_v1(&ledger);
     ledger.install_final_reward_caps_v1(caps).map_err(PalwStateV2Error::NativeResource)?;
     // RFC08 R8-ECON (`palw_minimum_price_v1`): every governed job's contracted claim carries its signed funded minimum as a payout
@@ -1470,6 +1522,20 @@ fn draw_seats(
     // Lane g14p/kernel-route U02: the seat policy (interim 3-of-3, or Panel=1 past `palw_kernel_route_panel_one_v1`) at the draw.
     let (seat_count, seat_quorum) = builder.params.kernel_route_seats_and_quorum_v1(draw_daa);
     let seed = palw_kernel_interim_seed_v1(claim);
+    let challenge = palw_kernel_interim_challenge_v1(claim);
+    draw_seats_seeded(builder, producer, deadline_daa, seat_count, seat_quorum, seed, challenge)
+}
+
+/// The seat draw under a given lottery seed and challenge pair (the interim one at the commit, or lane SEED's post-commit Panel=1 one).
+fn draw_seats_seeded(
+    builder: &TransitionBuilder<'_>,
+    producer: &PalwBondKeyV2,
+    deadline_daa: u64,
+    seat_count: usize,
+    seat_quorum: u8,
+    seed: Hash64,
+    (challenge_anchor, sample_seed): (misaka_palw_kernel::hash::Digest, misaka_palw_kernel::hash::Digest),
+) -> KernelAssignmentV1 {
     let producer_operator = builder.state.bonds.get(producer).map(|b| b.operator_id);
     let floor = builder.params.min_collateral_sompi();
     // One entry per operator: its best (smallest) key over its eligible bonds.
@@ -1496,7 +1562,6 @@ fn draw_seats(
         .map(|(_, bond)| KernelSeatV1 { bond, kernel_bond: palw_kernel_bond_id_v1(&bond), scope: ScopeV1::WholeClaim })
         .collect();
     let quorum = seat_quorum.min(seats.len() as u8);
-    let (challenge_anchor, sample_seed) = palw_kernel_interim_challenge_v1(claim);
     KernelAssignmentV1 {
         assignment_root: palw_kernel_assignment_root_v1(&seats, quorum),
         seats,
@@ -1507,6 +1572,54 @@ fn draw_seats(
     }
 }
 
+/// **lane SEED (G14 independent review MAJOR-1 / MINOR-1): the deferred Panel=1 seat draw.** A Panel-licensed program claim committed
+/// at or past `palw_kernel_route_panel_one_v1` has no assignment at its commit. At the first block whose state holds a round seed
+/// anchor (ADR-0130 / ADR-0170, the kind RFC-0018 Gate C draws from) recorded strictly after the commit, its one seat, its challenge
+/// anchor and its sample seed are drawn from `H(claim ‖ anchor)` — once: the claim must still be `Checking` with no assignment and no
+/// counted receipt. A claim no anchor reaches by its check deadline has no seat, so no receipt can cover it: it times out (never
+/// `Final`). Below the fence (every claim committed earlier) nothing here runs, and the interim draw at the commit is unchanged.
+fn draw_panel_one_seats_v1(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1) -> Result<(), PalwStateV2Error> {
+    let Some(from) = builder.params.kernel_route_panel_one_from_daa() else { return Ok(()) };
+    let Some(lane) = builder.extras.round_lane else { return Ok(()) };
+    let Some(anchor) = builder.state.round_seed_anchor else { return Ok(()) };
+    let mut due: Vec<(misaka_palw_kernel::hash::Digest, PalwBondKeyV2, u64, u64)> = Vec::new();
+    {
+        let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+        for (claim, row) in ledger.claims.iter() {
+            let misaka_palw_kernel::lifecycle::ClaimStateV1::Checking { anchor_daa: committed_daa, deadline_daa } = row.life.state else {
+                continue;
+            };
+            if committed_daa < from
+                || !matches!(row.body, ClaimBodyV1::Program { .. })
+                || ledger.mode_of_claim(claim) != Some(misaka_palw_kernel::mode::VerificationModeV1::PanelLicensed)
+                || route.assignment_of(claim).is_some()
+                || !route.receipts_of(claim).is_empty()
+                || route.paid_claim_for_base_v2(claim).ok().flatten().is_some()
+                || !palw_kernel_panel_one_anchor_after_commit_v1(committed_daa, lane.schedule_span_daa, Some(&anchor))
+            {
+                continue;
+            }
+            let producer = route.bond_key_of(&row.producer).ok_or_else(|| refused("a Panel=1 claim's producer has no V2 bond"))?;
+            due.push((*claim, producer, committed_daa, deadline_daa));
+        }
+    }
+    for (claim, producer, committed_daa, deadline_daa) in due {
+        let (seat_count, seat_quorum) = builder.params.kernel_route_seats_and_quorum_v1(committed_daa);
+        let seed = palw_kernel_panel_one_seed_v1(&claim, &anchor);
+        let challenge = palw_kernel_panel_one_challenge_v1(&claim, &anchor);
+        let assignment = draw_seats_seeded(builder, &producer, deadline_daa, seat_count, seat_quorum, seed, challenge);
+        for seat in &assignment.seats {
+            builder.note_kernel_bond(&seat.bond)?;
+        }
+        builder.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1,
+            key_bytes(&claim),
+            Some(borsh::to_vec(&assignment).expect("an assignment serializes")),
+        )?;
+    }
+    Ok(())
+}
+
 /// **Tag 110: one kernel route object.** See the module doc.
 pub(super) fn apply_kernel_route_object_v1(
     builder: &mut TransitionBuilder<'_>,
@@ -1515,6 +1628,107 @@ pub(super) fn apply_kernel_route_object_v1(
     signer: &PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
     apply_kernel_route_object_authorized_v2(builder, ctx, bytes, signer, false)
+}
+
+/// **Lane F02b: the slice's court admissions of this object's committed claims (pure).** `Ok(Some(vec))`: every Panel-licensed
+/// program claim committed by this object admitted (empty when no schedule is in force or no claim qualifies); `Ok(None)`: one was
+/// refused — the caller drops the object, nothing is written. Each later claim of the same object is reserved on top of the earlier
+/// ones (book and capital).
+pub(super) fn kernel_court_admissions_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    ledger: &KernelLedgerV1,
+    events: &[LedgerEventV1],
+    signer: &PalwBondKeyV2,
+) -> Result<Option<Vec<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionV1>>, PalwStateV2Error> {
+    let Some(schedule) = builder.extras.kernel_court_admission_v1 else { return Ok(Some(Vec::new())) };
+    // The slice's own fence: below `palw_kernel_route_panel_one_v1` nothing is admitted or written.
+    if builder.params.kernel_route_panel_one_from_daa().is_none_or(|from| ctx.daa_score < from) {
+        return Ok(Some(Vec::new()));
+    }
+    let mut out: Vec<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionV1> = Vec::new();
+    for event in events {
+        let LedgerEventV1::ClaimCommitted { claim } = event else { continue };
+        let row = ledger.claims.get(claim).ok_or_else(|| refused("accepted kernel claim is missing"))?;
+        if ledger.mode_of_claim(claim) != Some(misaka_palw_kernel::mode::VerificationModeV1::PanelLicensed)
+            || !matches!(row.body, ClaimBodyV1::Program { .. })
+        {
+            continue;
+        }
+        let deadline = row.committed_daa + ledger.policy.check_window_daa;
+        let assignment = draw_seats(builder, claim, signer, deadline, ctx.daa_score);
+        let mut signers: std::collections::BTreeSet<PalwBondKeyV2> = assignment.seats.iter().map(|s| s.bond).collect();
+        signers.insert(*signer);
+        let collateral = builder.state.bonds.get(signer).map_or(0, |b| b.collateral as u128);
+        // Free = collateral less everything committed, less this object's own kernel reservations (not flushed yet), less the
+        // capital of earlier admissions in this object.
+        let pending: u128 = events
+            .iter()
+            .filter_map(|e| match e {
+                LedgerEventV1::ClaimCommitted { claim } => ledger.claims.get(claim).map(|c| c.reserved as u128),
+                _ => None,
+            })
+            .sum::<u128>()
+            .saturating_add(out.iter().map(|a| a.capital).sum::<u128>());
+        let free = collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)).saturating_sub(pending);
+        let existing = out.last().map(|a| &a.book).or(builder.state.court_service_state_v1());
+        match crate::palw_kernel_court_admission_v1::kernel_court_admission_candidate_v1(
+            existing,
+            Hash64::from_bytes(*claim),
+            Hash64::from_bytes(row.job_id),
+            Hash64::from_bytes(row.class_binding_id),
+            row.committed_daa,
+            &signers,
+            *signer,
+            free,
+            &schedule,
+        ) {
+            Ok(admission) => out.push(admission),
+            Err(_) => return Ok(None),
+        }
+    }
+    Ok(Some(out))
+}
+
+/// **Lane F02b: write the admitted book and every capital lock** (journalled; reorg undoes them with the block).
+pub(super) fn write_kernel_court_admissions_v1(
+    builder: &mut TransitionBuilder<'_>,
+    admissions: Vec<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionV1>,
+) -> Result<(), PalwStateV2Error> {
+    let Some(last) = admissions.last() else { return Ok(()) };
+    builder.write_court_service_state_v1(last.book.clone())?;
+    use crate::palw_kernel_court_admission_v1::*;
+    for a in &admissions {
+        let claim = a.claim;
+        let key = kernel_court_capital_key_v1(&a.payer, claim);
+        if builder.state.kernel_route.as_ref().is_some_and(|k| k.aux.contains_key(&(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, key.clone()))) {
+            return Err(refused("kernel court capital row already exists"));
+        }
+        let row = KernelCourtCapitalRowV1 {
+            version: KERNEL_COURT_CAPITAL_ROW_VERSION_V1,
+            payer: a.payer,
+            claim,
+            amount: a.capital,
+            hard_deadline_daa: a.hard_deadline_daa,
+        };
+        row.check_v1().map_err(refused)?;
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, key, Some(borsh::to_vec(&row).expect("row serializes")))?;
+    }
+    Ok(())
+}
+
+/// **Lane F02b: release the court capital rows** whose claim left the live book (resolved-book release) or whose hard deadline was
+/// reached. Removing the row returns the collateral; nothing is charged. Runs once per block in the kernel route's closing step.
+pub(super) fn release_kernel_court_capital_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    use crate::palw_kernel_court_admission_v1::*;
+    let rows = builder.state.kernel_court_capital_rows_v1();
+    for row in rows {
+        let bound = builder.state.court_service_state_v1().is_some_and(|s| s.claims.contains_key(&row.claim));
+        if !bound || ctx.daa_score >= row.hard_deadline_daa {
+            builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, kernel_court_capital_key_v1(&row.payer, row.claim), None)?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn apply_kernel_route_object_authorized_v2(
@@ -2067,6 +2281,22 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
+            // Lane F03k2 (inside the dormant `palw_kernel_route_panel_one_v1`): a Panel-licensed class registers only if saturating
+            // the court for its claims' whole exposure costs more than a claim's maximum gain; a missing gain bound refuses it.
+            let panel_one = builder.params.kernel_route_panel_one_from_daa().is_some_and(|from| ctx.daa_score >= from);
+            if panel_one && !ledger.opv.classes.contains(class) {
+                let worst = bounds.map_or(u64::MAX, |b| b.max_court_work);
+                if crate::palw_kernel_route_panel_one_censorship_v1::panel_one_censorship_check_v1(
+                    &ledger.policy,
+                    worst,
+                    builder.params.kernel_panel_one_external_gain_bound_v1(),
+                )
+                .is_err()
+                {
+                    persist_budget(builder, ctx, &ledger)?;
+                    return Ok(());
+                }
+            }
         }
     }
     // A paid opt-in reserves its fixed signed fee for the actual source bond
@@ -2096,6 +2326,15 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return Ok(());
         }
     }
+    // Lane F02b: the slice's atomic court admission, decided (pure) before any accepted claim/fee/bond write. A refusal drops the
+    // object exactly as a refused budget plan does; the rows are written below only once the object stands.
+    let court_admissions = match kernel_court_admissions_v1(builder, ctx, &ledger, &events, signer)? {
+        Some(admissions) => admissions,
+        None => {
+            persist_budget(builder, ctx, &ledger)?;
+            return Ok(());
+        }
+    };
     // Reserve the shared Q/R window before any accepted claim/fee/bond write.
     // A refused plan still pays the public verification budget it already used.
     for event in &events {
@@ -2207,6 +2446,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             // RFC-0015: an OptimisticPublicVerification claim has no Panel — no seats, no assignment, no receipts.
             let panel_licensed = ledger.mode_of_claim(claim) == Some(misaka_palw_kernel::mode::VerificationModeV1::PanelLicensed);
             if panel_licensed && matches!(ledger.claims.get(claim).map(|c| &c.body), Some(ClaimBodyV1::Program { .. })) {
+                // lane SEED (G14 review MAJOR-1): past `palw_kernel_route_panel_one_v1` nothing is drawn at the commit — the seats,
+                // challenge anchor and sample seed wait for a round seed anchor later than this block (`draw_panel_one_seats_v1`).
+                if builder.params.kernel_route_panel_one_governs_v1(ctx.daa_score) {
+                    continue;
+                }
                 let assignment = draw_seats(builder, claim, signer, deadline, ctx.daa_score);
                 for seat in &assignment.seats {
                     builder.note_kernel_bond(&seat.bond)?;
@@ -2229,6 +2473,8 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // TABLE_ATTESTED would let an unrelated program borrow it in the next object.
     ledger.restore_attested_v1(original_attested);
     flush(builder, &ledger, &before)?;
+    // Lane F02b: after the flush, so the book's context check reads the committed kernel claim rows.
+    write_kernel_court_admissions_v1(builder, court_admissions)?;
     if let Some((subject, row)) = scope {
         super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row)?;
     }
@@ -2451,6 +2697,8 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
                 .map_err(PalwStateV2Error::NativeResource)?;
         }
     }
+    // lane SEED: the Panel=1 seat draws of claims committed past the fence, once a post-commit seed anchor exists. A no-op below it.
+    draw_panel_one_seats_v1(builder, &ledger)?;
     let pending_source_fees: Vec<_> =
         ledger.beacon_source_fee_promises.iter().filter(|(_, promise)| promise.outcome.is_none()).map(|(key, _)| *key).collect();
     let events = ledger.tick_reserved_v1().map_err(PalwStateV2Error::NativeResource)?;
@@ -2519,6 +2767,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // DA16: a demand on a transferred claim that nobody answered is its providers' failure — charge them (never the producer).
     super::palw_provider_court_fold_v1::settle_provider_liable_defaults_v1(builder, ctx, &events)?;
     super::palw_claim_challenge_fold_v2::tick_paid_claim_final_projection_v2(builder, ctx)?;
+    release_kernel_court_capital_v1(builder, ctx)?;
     Ok(())
 }
 

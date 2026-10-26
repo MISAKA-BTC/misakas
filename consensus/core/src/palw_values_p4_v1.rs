@@ -373,7 +373,7 @@ mod tests {
             crate::palw_rfc0016_v1::values::PALW_RFC0016_MEASURED_RECORDS_V1
         ));
         // R3: the beacon shape is not an approval.
-        assert!(crate::palw_panel_beacon_v1::approved_panel_beacon_policies_v1().is_empty());
+        assert_eq!(crate::palw_panel_beacon_v1::approved_panel_beacon_policies_v1().len(), 1, "the 2026-10-26 user-approved policy only");
     }
 
     #[test]

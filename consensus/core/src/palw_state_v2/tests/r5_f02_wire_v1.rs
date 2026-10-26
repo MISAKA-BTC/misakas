@@ -351,6 +351,7 @@ fn r5_f02_wire_claim_index_matches_the_scan_and_follows_writes_and_undo() {
             intent_digest: h64(22),
             material_until_daa: HORIZON,
             body: None,
+            service: None,
         }))
     };
     for (daa, id) in [(A + 9, 0x31u64), (A + 3, 0x32)] {

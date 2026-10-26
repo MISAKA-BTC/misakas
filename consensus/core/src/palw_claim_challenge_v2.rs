@@ -372,9 +372,6 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         (a.enrollment.base_claim == *claim && a.context.id() == index.target).then_some(a)
     }
 
-    /// String compatibility edge for SDK / RPC display only. Consensus folds call
-    /// [`Self::paid_claim_check_authority_checked_v2`] and keep Resource typed;
-    /// this wrapper is the same authority algorithm, flattened only for display.
     pub fn paid_claim_check_authority_v2(
         &self,
         context: &Digest,
@@ -940,8 +937,8 @@ pub(crate) use bootstrap_read_v6::with_checker_v6 as with_bootstrap_checker_v6;
 #[path = "palw_paid_claim_base_checked_v1.rs"]
 mod paid_base_checked_v1;
 
-// Typed native paid-check read: the Receipt and FS folds call it directly; the
-// String `paid_claim_check_authority_v2` above is only the SDK compat edge.
+// The native checked sibling preserves local resource refusals for Receipt and
+// FS folds; the public String method above is only a compatibility wrapper.
 #[path = "palw_paid_check_authority_checked_v2.rs"]
 mod paid_check_authority_checked_v2;
 #[cfg(test)]

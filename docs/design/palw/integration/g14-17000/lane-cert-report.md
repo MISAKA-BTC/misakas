@@ -33,3 +33,6 @@ The kernel's `settle` drops zero-amount instructions. When an escrow is fully pa
 - Decided `'K'` rows are never retired (they remain as public status).
 - Choice for 統括/user: on failure the reward is returned to the poster rather than burned.
 - m/k and policy wait for VAL and the user. Gate C arming record and the `route_armed` family stay central.
+
+## 追補 2026-10-26（branch `claude/g14-cert2`、base `bc2c750f3`）— 失敗時の分配（暫定）
+統括の暫定決定（値決定委任）に従い、認証失敗時の保留報酬は producer 0、V3 burn 100‰（`PALW_G14_ESCROW_BURN_PERMILLE_V1`、切捨て）を burn（どこにも払い出さない。poster の debit はそのまま）、残りを poster へ返す（`palw_kernel_uncertified_split_v1`）。台帳 `docs/governance/parameter-register.md` に記載。試験: 保存則（burn + refund = 報酬、0〜u64::MAX）の unit 試験と、e2e の shortfall で poster への返却が reward − burn であること、決定後の block で二度目の精算が起きないこと（exactly once）。

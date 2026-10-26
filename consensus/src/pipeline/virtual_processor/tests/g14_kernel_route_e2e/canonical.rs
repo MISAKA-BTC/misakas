@@ -604,7 +604,9 @@ async fn claimed(w: &mut World, mode: Mode, producer: usize, lie: bool) -> (Clai
     let seats = match mode {
         Mode::Panel => {
             let seats = w.seats(&claim.id);
-            assert_eq!(seats.len(), 3, "three distinct-operator seats");
+            // lane F03k2: the seat count is the route's policy at the draw (interim 3-of-3, or 1 in a Panel=1 world).
+            let (expected, _) = w.net.bundle.state.kernel_route_seats_and_quorum_v1(w.net.daa());
+            assert_eq!(seats.len(), expected, "the policy's distinct-operator seats");
             assert!(!seats.contains(&producer), "never the producer");
             w.cover(&claim.id).await; // every assigned seat signs a passing receipt
             seats
@@ -664,7 +666,20 @@ async fn canonical(mode: Mode, start: Start, outcome: Outcome) {
             let OutsiderFindingV1::Prosecute(proof) = fresh.check(claim.id, &da, &model) else {
                 panic!("the participant's verifier finds the lie from public material")
             };
-            let seats_slashed: Vec<(usize, u64)> = seats.iter().map(|c| (*c, w.net.slashed(*c))).collect();
+            // G-K1 (5bdd427fb): each covering seat's passing receipt holds a signer liability lock, charged at the conviction.
+            // (Assert updated 2026-10-26 by the G14 coordinator on the canonical harness owner's behalf: G-K1 is an intended rule.)
+            let seats_slashed: Vec<(usize, u64, u64)> = seats
+                .iter()
+                .map(|c| {
+                    use kaspa_consensus_core::palw_g14_lane_closure_v1::*;
+                    let key = palw_kernel_signer_lock_key_v1(&w.net.kid(*c), &claim.id);
+                    let row = w.net.api().expect("the route").aux.get(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key)).cloned();
+                    let lock = borsh::from_slice::<PalwKernelSignerLockRowV1>(&row.expect("every covering seat holds a G-K1 lock"))
+                        .expect("a lock row")
+                        .amount;
+                    (*c, w.net.slashed(*c), lock)
+                })
+                .collect();
             Rules::file_proof(&mut node, NEWCOMER, claim.id, proof).await;
             sync(&node, &mut w.net).await;
             let ledger = w.net.ledger();
@@ -672,8 +687,8 @@ async fn canonical(mode: Mode, start: Start, outcome: Outcome) {
             assert_eq!(w.net.collateral(0), before - slashed, "the REAL producer bond lost the reservation");
             assert_eq!(w.net.kernel_reserved(0), 0);
             assert_eq!(w.net.owed(NEWCOMER), Rules::bounty(&policy, slashed), "the participant's share of the slash is queued");
-            for (card, before) in &seats_slashed {
-                assert_eq!(w.net.slashed(*card), *before, "the colluding seats are not charged by the producer's conviction");
+            for (card, before, lock) in &seats_slashed {
+                assert_eq!(w.net.slashed(*card), *before + *lock, "each colluding seat is charged exactly its G-K1 signer lock");
             }
             let read = Rpc::of(&node.chain).claim(&claim.id);
             assert!(read.convicted, "the participant's own node serves the verdict");
@@ -1328,6 +1343,8 @@ async fn g14_canonical_opv_a_borrowed_trace_of_another_prompt_is_refused_at_incl
 /// lane SPINE (2026-10-26): the Panel=1 kernel-route vertical slice, stage by stage.
 mod cert;
 mod f03k;
+/// lane SEED (2026-10-26): the Panel=1 seat draw and sample seed from a post-commit seed anchor (G14 review MAJOR-1).
+mod seed;
 mod spine;
 
 /// lane T0308 (2026-10-26): T03 forged/fake objects and T08 offline miner, distinct signer, relay, no replay — on the same slice.

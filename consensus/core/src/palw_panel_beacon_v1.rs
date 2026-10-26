@@ -50,11 +50,49 @@ pub use misaka_palw_challenge as challenge;
 /// The domain of an epoch's committed subject. Not shared with any other subject kind's commitment.
 pub const PANEL_ASSIGNMENT_COMMITMENT_DOMAIN_V1: &[u8] = b"MISAKA/PALW/PANEL-ASSIGNMENT/COMMITMENT/V1";
 
-/// **The schemes this release approves for Panel binding entropy: none.** A scheme is approved only after the external review of
-/// RFC-0007 §VI.8 item 2 (reorg / withholding / last-mover / candidate-grinding bias, and RFC-0010's P0-10 analysis); the shipped
-/// registry is empty, so [`verify_panel_beacon_v1`] refuses every proof. EXTERNAL_GATE_PENDING.
+/// **The production Panel beacon: `k` = 3 sources** (USER-APPROVED 2026-10-26, from an estimate). With adversarial share
+/// f = 0.25, all 3 sources are adversarial with probability 0.25^3 = 1.6 %, and then the seal-reveal v6 rule still leaves the last
+/// contributor at most `retry + 1` = 3 outputs to choose from.
+pub const PALW_PANEL_BEACON_K_APPROVED_V1: u32 = 3;
+/// **`D` = 200 DAA settlement depth** (approved estimate): the upper end of t12's quiet-time finality depth, 7–10 h at 184 s/DAA
+/// (140–200 DAA), so a source the beacon mixes cannot be reorged out after the lock.
+pub const PALW_PANEL_BEACON_SETTLEMENT_DEPTH_APPROVED_V1: u64 = 200;
+/// Anchor delay 2 slots, window 40 slots (the econ B12 interim shape), retry 2, one repetition (approved estimates).
+pub const PALW_PANEL_BEACON_ANCHOR_DELAY_APPROVED_V1: u64 = 2;
+pub const PALW_PANEL_BEACON_WINDOW_APPROVED_V1: u64 = 40;
+pub const PALW_PANEL_BEACON_RETRY_APPROVED_V1: u32 = 2;
+/// The 128-bit effective target the policy declares (the 2026-10-08 ruling).
+pub const PALW_PANEL_BEACON_SECURITY_BITS_APPROVED_V1: u16 = 128;
+
+/// **The production Panel beacon policy — USER-APPROVED 2026-10-26, FROM AN ESTIMATE** (user: 「本番の beacon policy（k/D）…を
+/// 承認」). Shape: the paid opt-in source policy (v5 contract; seal-reveal v6 where the route enables it), so the sources are
+/// approved paid claims, as the 2026-10-17 decision requires; before the first approved paid Final the network draws from its fixed
+/// bootstrap seed (`palw_values_p4_v1`), which earns no EXEC credit. The values are estimates (no external bias review has run): revise
+/// on RFC-0007 §VI.8 item 2 / RFC-0010 P0-10 review, or on measured finality depth. Not a cryptographic proof of computation (§8):
+/// the beacon is randomness only.
+pub fn palw_panel_beacon_policy_approved_v1() -> PostCommitChallengePolicyV1 {
+    use misaka_palw_challenge::hash::named_id;
+    PostCommitChallengePolicyV1 {
+        security_bits: PALW_PANEL_BEACON_SECURITY_BITS_APPROVED_V1,
+        retry_limit: PALW_PANEL_BEACON_RETRY_APPROVED_V1,
+        soundness_policy_id: named_id("soundness/t12-user-approved-estimate-2026-10-26/v1"),
+        grinding_budget_policy_id: named_id("grinding/t12-user-approved-estimate-2026-10-26/v1"),
+        resource_schedule_id: named_id("resources/t12-user-approved-estimate-2026-10-26/v1"),
+        retention_policy_id: named_id("retention/t12-user-approved-estimate-2026-10-26/v1"),
+        ..misaka_palw_challenge::policy::paid_opt_in_source_policy_v5(
+            PALW_PANEL_BEACON_K_APPROVED_V1,
+            PALW_PANEL_BEACON_ANCHOR_DELAY_APPROVED_V1,
+            PALW_PANEL_BEACON_WINDOW_APPROVED_V1,
+            PALW_PANEL_BEACON_SETTLEMENT_DEPTH_APPROVED_V1,
+            1,
+        )
+    }
+}
+
+/// **The schemes this release approves for Panel binding entropy**: the one user-approved policy above (2026-10-26). Not read by
+/// any preset until the integrator arms the slice.
 pub fn approved_panel_beacon_policies_v1() -> Vec<PostCommitChallengePolicyV1> {
-    Vec::new()
+    vec![palw_panel_beacon_policy_approved_v1()]
 }
 
 /// **The scheme id a policy is named by in `PanelPolicyV1::beacon_scheme`.**
@@ -402,6 +440,19 @@ pub enum PanelBeaconStateV1 {
 
 #[cfg(test)]
 mod paid_panel_tests {
+    #[test]
+    fn val_approved_beacon_policy_is_paid_sourced_validates_and_carries_the_approved_values() {
+        let p = palw_panel_beacon_policy_approved_v1();
+        p.validate().expect("the approved policy validates");
+        assert!(p.is_paid_opt_in_source(), "sources are approved paid claims (2026-10-17)");
+        assert_eq!((p.work_count_k, p.settlement_depth_d, p.anchor_delay_slots, p.beacon_window_slots), (3, 200, 2, 40));
+        assert_eq!((p.retry_limit, p.security_bits), (2, 128));
+        assert_eq!(p.interactive_mode, misaka_palw_challenge::policy::InteractiveModeV1::NonInteractive);
+        assert_eq!(approved_panel_beacon_policies_v1(), vec![p.clone()]);
+        // f = 0.25: every source adversarial with probability 1/64 < 2 %.
+        assert!(4u64.pow(PALW_PANEL_BEACON_K_APPROVED_V1) >= 50);
+    }
+
     use super::*;
     use crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1;
     use challenge::*;
@@ -543,7 +594,7 @@ mod paid_panel_tests {
     #[test]
     fn paid_panel_adapter_uses_frozen_facts_and_complete_fee_inventory_without_approving_a_policy() {
         let (p, req, mut h, proof) = fixture();
-        assert!(approved_panel_beacon_policies_v1().is_empty());
+        assert!(!approved_panel_beacon_policies_v1().contains(&p), "the fixture is not the approved policy");
         assert_eq!(verify_panel_beacon_v1(&[], &h, &req, &proof), Err(PanelBeaconRefusalV1::UnapprovedScheme));
         let approved = [p];
         verify_panel_beacon_v1(&approved, &h, &req, &proof).unwrap();

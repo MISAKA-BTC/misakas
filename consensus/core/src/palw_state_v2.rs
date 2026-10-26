@@ -2049,6 +2049,10 @@ pub struct PalwStateParamsV2 {
     /// by `Params::sync_palw_g14_gates_v1`. `None` on every shipped preset (the interim 3-of-3).
     #[borsh(skip)]
     kernel_route_panel_one_from_daa: Option<u64>,
+    /// **Lane F03k2: a TEST-ONLY external gain bound** for the Panel=1 class censorship relation. Fixtures only; `None` everywhere else,
+    /// so the fold falls back to `palw_g14_values_v1` (typed-missing today).
+    #[borsh(skip)]
+    kernel_panel_one_test_only_external_gain_bound_v1: Option<u64>,
     /// **G14 U06/U07 (lane g14p/court-clock): `Params::palw_court_clock_v2`'s height**, mirrored by `Params::sync_palw_g14_gates_v1`
     /// (`crate::palw_court_clock_v2`). `None` on every shipped preset.
     #[borsh(skip)]
@@ -2814,6 +2818,8 @@ pub fn palw_bond_committed_v1(
         .saturating_add(lock_excess)
         // G14 lane D: what the kernel route has reserved against the bond (a claim's collateral, a demand bond); 0 with no route.
         .saturating_add(state.kernel_reserved(bond))
+        // Lane F02b: the slice's court capital rows (0 with none; written only past `palw_kernel_route_panel_one_v1`).
+        .saturating_add(state.kernel_court_capital_reserved_v1(bond))
         .saturating_add(state.onboarding_reserved(bond))
         .saturating_add(state.model_artifact_reserved_at_v2(bond, now_daa))
         .saturating_add(state.model_vector_reserved_at_v2(bond, now_daa))
@@ -20568,6 +20574,10 @@ pub struct PalwTransitionExtrasV1 {
     /// [`crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1`] (typed-missing: `None`); `None` makes every
     /// F02 default undecided (no slash). `None` by `Default`.
     pub court_service_inclusion_premise_v1: Option<crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1>,
+    /// **Lane F02b: the kernel-route court admission schedule** (atomic packets + capital at original acceptance). The processor
+    /// copies [`crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1`] (typed-missing `None`). `None` by
+    /// `Default`: no kernel-route admission reserves anything.
+    pub kernel_court_admission_v1: Option<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1>,
     /// `palw_tir_container_identity_v1` at this block (RFC-0002 02-A): a TIR class's `PALWART3` container binding folds, and a
     /// TIR original of an unbound class is refused. False below it (every shipped preset).
     pub tir_container_identity_active: bool,

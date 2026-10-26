@@ -42,3 +42,12 @@ A のレビューでは少なくとも、DAA ごとの複数 block / 無 block�
 ## 採択後の受入条件
 
 T02–T05、T06–T09、T13–T15 を同じ release binary で実施。予約・effective terms・保留を reorg/restart/pruned IBD から同じ状態に戻す。t12 同一性試験を通す。測定値、derived_upper、未被覆を分離する。tag 230 の codec、応答 fee、turn duration、SC64 profile はこの ADR で決めない。
+
+## 追補(2026-10-26、lane F03b2): F03 A の未決 2 点の暫定決定
+
+**暫定。ユーザーが変更し得る。** 2026-10-22 の値決定委任(目安可、根拠と見直し条件を台帳に)により統括が決定。
+
+1. **サイズでは拒否しない(目安、改訂 2):** 最大 B bytes の座標は `⌈B/34,000⌉` packet(V1)として、original acceptance で予約した容量から差し引く。work の目安は class の op_work(V11 `[5,13,1,11]`)として台帳に記録するが、op ごとの実測がないため単独では執行しない。M-C 実測で置き換える。
+2. **容量:** original acceptance で `Q = Σ_i ⌈maxB_i/34,000⌉`(全分岐の全座標)を計算し、`Q ≤ c·W` を満たさなければ original の受付を拒否する(状態変更なし)。原因は生産側の誤りであり、conviction 時には拒否しない。
+3. **重なる合法 choice:** 同じ座標は統合する。異なる choice は応答期限の早い順、同順位は座標 id の昇順で処理する。shared request の期限はすべて h なので、fold 内では到着順(block 内では object 順)になる。fold は request 行(version 2)に `SharedServiceSlotV1 {packets, start, end}` を記録し、claim の前回 slot の直後から連続して割り当てる。h より前に終わらない slot は「予約容量なし」として拒否する。間断なく処理した場合の k 番目の終了 DAA は `a + ⌈Σ_{j≤k} p_j / c⌉ − 1 ≤ a + ⌈Q/c⌉ − 1 < h` で、各座標の行は 1 つだけなので、共謀者の先取りや埋め直しで job は増えない。
+4. 実装: `palw_court_shared_frontier_budget_v1.rs`、`palw_court_shared_tir_state_v1.rs`(v2 行と packet 計算)、`palw_court_shared_tir_fold_v1.rs`(slot の記録)。version 1 の行は byte 単位で不変で、version 2 は末尾に slot を付加する。

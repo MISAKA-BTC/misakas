@@ -890,6 +890,14 @@ pub struct KernelLedgerV1 {
     /// state, its rows or its root. A demand on such a claim that nobody answers by its deadline is a
     /// [`LedgerEventV1::ProviderLiableDefault`] — the providers' failure, never the producer's; and [`Self::provider_lapse`] voids it.
     pub provider_liable: BTreeSet<Digest>,
+    /// **G14 lane F02b: claims whose producer availability default is HELD** (no slash, no Unavailable): court-service-bound claims
+    /// while the consumer has adopted no explicit inclusion premise (RFC-0026 §4.1 item 4). Consumer-derived and re-injected at every
+    /// load like [`Self::provider_liable`]; NOT part of this state, its rows or its root. A due demand on such a claim stays open
+    /// (the claim cannot reach Final past it, its reservation stays held); once the premise is adopted the ordinary default applies.
+    /// The value is the claim's horizon (its original hard deadline): a held demand still due there is released WITHOUT slash — the
+    /// claim turns `Unavailable { producer_defaulted: false }` (pre-Final; its reservation is returned by the tick's release), the
+    /// demand bonds are refunded and the claim's other demands are moot.
+    pub court_default_held: BTreeMap<Digest, u64>,
     /// Consumer-resolved commitment-only court scope. Only claims committed at or after this
     /// activation omit model-dependent node values. Never a ledger row; a consensus consumer
     /// must derive it from authenticated configuration at every load, including public reads.
@@ -944,7 +952,11 @@ pub fn single_class_id_v1(
 }
 
 pub(crate) fn settle(out: &mut Vec<LedgerEventV1>, bond: Digest, amount: u64, kind: SettlementKindV1, claim: Option<Digest>) {
-    if amount > 0 {
+    // A zero remainder is still the terminal release marker for a fully paid
+    // job escrow. Keep that semantic event in the receipt stream so consumers
+    // can recognize the one-time escrow-final reward; other zero-value
+    // settlements remain elided.
+    if amount > 0 || kind == SettlementKindV1::ReleaseJobEscrow {
         out.push(LedgerEventV1::Settlement(SettlementInstructionV1 { bond, amount, kind, claim }));
     }
 }
@@ -994,6 +1006,7 @@ impl KernelLedgerV1 {
             seg_progress: BTreeMap::new(),
             typed: crate::spec::TypedStateV1::default(),
             provider_liable: BTreeSet::new(),
+            court_default_held: BTreeMap::new(),
             commitment_scope_from_daa: None,
             verifier_pay_policy: None,
             verifier_pay: BTreeMap::new(),
@@ -3172,6 +3185,19 @@ impl KernelLedgerV1 {
             let Some(d) = self.demands.remove(&(claim, stage, position)) else { continue };
             let last = d.last_class();
             let post_final = self.claims.get(&claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Final { .. }));
+            // G14 F02b: no adopted inclusion premise → no attributable default: hold the demand open, charge nothing.
+            if let Some(&horizon) = self.court_default_held.get(&claim) {
+                if daa < horizon {
+                    self.demands.insert((claim, stage, position), d);
+                } else {
+                    if !post_final && let Some(row) = self.claims.get_mut(&claim) {
+                        let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: false });
+                    }
+                    self.refund(&claim, &d, out);
+                    self.settle_demands_moot(&claim, out);
+                }
+                continue;
+            }
             // DA16: a transferred claim's material is its providers' obligation — the producer is not charged for this failure.
             if self.provider_liable.contains(&claim) {
                 self.provider_liable_default(claim, stage, position, last, post_final, d, out);

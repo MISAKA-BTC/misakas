@@ -90,6 +90,17 @@ pub(super) fn install_shared_frontier_context_v1(
     }
     let derived = crate::palw_court_shared_tir_state_v1::derive_shared_tir_context_v1(&b.state, claim)
         .map_err(|e| refused(format!("shared frontier install refused: {e}")))?;
+    // F03b2 (provisional): Q (in packets, every coordinate at its maximum size) <= c * W, so the schedule serves every coordinate
+    // before hard. Over capacity is a production error at original acceptance: the admission is refused (checkpoint restores).
+    let universe_packets = crate::palw_court_shared_tir_state_v1::shared_frontier_universe_packets_v1(&b.state, &derived)
+        .map_err(|e| refused(format!("shared frontier packets: {e}")))?;
+    if !crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(
+        universe_packets,
+        crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
+        derived.hard_daa.saturating_sub(derived.original_accepted_daa),
+    ) {
+        return Err(refused("shared frontier universe exceeds the reserved service capacity of the hard window"));
+    }
     if derived.original_accepted_daa != ctx.daa_score {
         return Err(refused("shared frontier installs only at the original's own accepting point"));
     }
@@ -113,7 +124,11 @@ pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx:
     // supply recorded too, or its packets stay `Pending` and its liability never closes. Bindings exist only past the conviction
     // fence (F02 with a pinned profile, or a funded admission), and an empty book returns below, so gating on the fence alone
     // changes nothing where no binding exists.
-    if !(court_service_f02_active_v1(b) || (b.extras.tir_public_conviction_active && !b.state.funded_escrows_v1().is_empty())) {
+    // Lane F02b: a kernel-route admission schedule in force records supply for the bindings it installed.
+    if !(court_service_f02_active_v1(b)
+        || b.extras.kernel_court_admission_v1.is_some()
+        || (b.extras.tir_public_conviction_active && !b.state.funded_escrows_v1().is_empty()))
+    {
         return Ok(());
     }
     let Some(old) = b.state.court_service_state_v1() else { return Ok(()) };
@@ -194,6 +209,7 @@ pub(super) fn apply_shared_court_wire_op_v1(
 ) -> Result<SharedCourtOpEffectV1, PalwStateV2Error> {
     use crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1 as W;
     op.validate_shape_v1().map_err(refused)?;
+    // G14 lane F03b2: no size refusal here. A request is charged ⌈max bytes / 34,000⌉ packets in the request fold.
     let op = match op {
         W::Body { claim, ordinal, bytes } => SharedCourtOpV1::Body { claim: *claim, ordinal: *ordinal, bytes },
         W::Ids { claim, rows_root, ids } => SharedCourtOpV1::Ids { claim: *claim, rows_root: *rows_root, ids },

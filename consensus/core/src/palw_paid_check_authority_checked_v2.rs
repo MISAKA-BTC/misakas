@@ -1,7 +1,8 @@
 //! Typed native paid-check read. String compatibility belongs at the SDK edge;
 //! a local admission failure must never select a legacy authority fallback.
-//! Native callers: ordinary Receipt and FS initial-source revalidation in
-//! `palw_claim_challenge_fold_v2`, via `kernel_ledger_projection_state_error_v1`.
+//! Native Receipt and FS consumers use this typed sibling. The compatibility
+//! String API delegates here, but normal-source readers inside it still need
+//! their own typed ownership conversion.
 use crate::palw_claim_challenge_v2::*;
 use crate::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
@@ -45,17 +46,12 @@ impl PalwKernelRouteStateV1 {
             )
             .map_err(invalid);
         }
-        // Same normal V5 source algorithm/provenance, read through the typed
-        // owner: target/fee/cost/authority/index/round rows, finals, sources and
-        // promises keep Resource distinct from Decode. The material (and its
-        // source/promise tickets) stays owned until the collector's last use.
-        let material = self
-            .rfc07_normal_paid_material_owned_v5(context)?
-            .ok_or_else(|| invalid("paid claim source funding missing"))?;
+        // Keep the V5 collector and rooted source ordering, while preserving
+        // typed failures and the retained source/promise demand through use.
+        let material = self.rfc07_normal_paid_material_owned_v5(context)?.ok_or_else(|| invalid("paid claim source funding missing"))?;
         let (contract, sources, promises) = &*material;
         let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, contract, sources, promises, now)
             .map_err(|why| invalid(why.to_string()))?;
-        drop(material);
         let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) = collected else {
             return Err(invalid("paid claim source has not locked"));
         };

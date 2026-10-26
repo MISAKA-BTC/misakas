@@ -2159,7 +2159,9 @@ impl VirtualStateProcessor {
             // G14 G-03: the route's own fence (not whether its rules resolved), so a frameless TIR original is refused past it.
             tir_public_conviction_active: self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa_score)),
             // Lane F02: the pinned inclusion premise (typed-missing `None`: no F02 default is attributed).
-            court_service_inclusion_premise_v1: kaspa_consensus_core::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1,
+            court_service_inclusion_premise_v1: test_only_inclusion_premise::effective_v1(),
+            // Lane F02b: the kernel-route court admission schedule (typed-missing `None`).
+            kernel_court_admission_v1: kaspa_consensus_core::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1,
             // RFC-0002 02-A: the TIR container identity's own fence.
             tir_container_identity_active: self.palw_tir_container_identity_v1.is_some_and(|f| f.is_active(daa_score)),
             // Compute-claim audit CX-01/CX-02: the answer accounting's own fence. Its answers (`fp_claim_answers`) are filled by native
@@ -3481,4 +3483,68 @@ impl VirtualStateProcessor {
             intent,
         )
     }
+}
+
+/// **G14 lane F02b: the inclusion premise the processor folds with.** Production: the pinned
+/// `PALW_COURT_SERVICE_INCLUSION_PREMISE_V1` (typed-missing `None`). Under `cfg(test)` a harness may set a premise, but only through
+/// [`crate::set_test_only_inclusion_premise_v1!`] naming a constant whose name starts with `TEST_ONLY_`; the returned guard clears it.
+/// The override is process-wide while held (the processor folds on its own threads), so a test that sets it serializes on the guard.
+pub(crate) mod test_only_inclusion_premise {
+    use kaspa_consensus_core::palw_court_service_binding_v1::{CourtServiceInclusionPremiseV1 as Premise, PALW_COURT_SERVICE_INCLUSION_PREMISE_V1};
+    #[cfg(test)]
+    static OVERRIDE: std::sync::Mutex<Option<Premise>> = std::sync::Mutex::new(None);
+    #[cfg(test)]
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    pub(crate) fn effective_v1() -> Option<Premise> {
+        #[cfg(test)]
+        if let Some(p) = *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Some(p);
+        }
+        PALW_COURT_SERVICE_INCLUSION_PREMISE_V1
+    }
+
+    #[cfg(test)]
+    pub(crate) struct TestOnlyPremiseGuardV1 {
+        _serial: std::sync::MutexGuard<'static, ()>,
+    }
+    #[cfg(test)]
+    impl Drop for TestOnlyPremiseGuardV1 {
+        fn drop(&mut self) {
+            *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+    /// Use [`crate::set_test_only_inclusion_premise_v1!`]; `name` must start with `TEST_ONLY_` (panics otherwise).
+    #[cfg(test)]
+    pub(crate) fn set_named_v1(name: &'static str, premise: Premise) -> TestOnlyPremiseGuardV1 {
+        assert!(name.starts_with("TEST_ONLY_"), "the inclusion premise override accepts only TEST_ONLY_ constants, got {name}");
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(premise);
+        TestOnlyPremiseGuardV1 { _serial: serial }
+    }
+    #[cfg(test)]
+    #[test]
+    fn f02b_premise_override_is_test_only_named_and_cleared() {
+        const TEST_ONLY_PREMISE_DELAY_4: Premise = Premise { version: 1, inclusion_delay_daa: 4 };
+        {
+            let _g = crate::set_test_only_inclusion_premise_v1!(TEST_ONLY_PREMISE_DELAY_4);
+            assert_eq!(effective_v1(), Some(TEST_ONLY_PREMISE_DELAY_4));
+        }
+        assert_eq!(effective_v1(), PALW_COURT_SERVICE_INCLUSION_PREMISE_V1);
+        assert!(std::panic::catch_unwind(|| {
+            let _g = set_named_v1("PRODUCTION_PREMISE", TEST_ONLY_PREMISE_DELAY_4);
+        })
+        .is_err());
+        assert_eq!(effective_v1(), PALW_COURT_SERVICE_INCLUSION_PREMISE_V1);
+    }
+}
+
+/// `set_test_only_inclusion_premise_v1!(TEST_ONLY_NAME)` — sets the processor's inclusion premise to the named constant while the
+/// returned guard lives. Refuses (panics) any constant whose name does not start with `TEST_ONLY_`.
+#[cfg(test)]
+#[macro_export]
+macro_rules! set_test_only_inclusion_premise_v1 {
+    ($name:ident) => {
+        $crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::set_named_v1(stringify!($name), $name)
+    };
 }

@@ -3607,6 +3607,11 @@ mod conviction_e2e_tests {
                     let mut conv=TransitionBuilder::new(&b.state,&params,false,false,false,false,&at_extras);
                     let slashed_before=conv.state.bond(&producer).unwrap().slashed;
                     lifecycle(&mut conv,&at_rules.at,claim,outsider()).unwrap();
+                    // F03b2: the bottom evidence is charged in packets, never refused for size, and convicts before hard.
+                    assert!(at_rules.at.daa_score<frame.plan_v1().terms.accepted_daa+crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
+                    assert!(m.total_bytes>0);
+                    eprintln!("f03b2 bottom evidence: {} B = {} packets",m.total_bytes,
+                        crate::palw_court_shared_frontier_budget_v1::packets_for_bytes_v1(m.total_bytes));
                     assert!(matches!(conv.state.claim(&claim).unwrap().phase,PalwClaimPhaseV2::Voided {reason:PalwVoidReasonV2::CourtHeldVerdict,..}));
                     assert!(conv.state.bond(&producer).unwrap().slashed>slashed_before,"the producer is slashed");
                     eprintln!("f03b_t05 positive: outsider conviction via shared bottom, producer slashed {}",
@@ -4059,10 +4064,17 @@ mod conviction_e2e_tests {
     /// `bind_clock_service`.
     #[test]
     fn f03b_t05_shared_frontier_survives_full_owner_capture_sybil_refill_and_latest_answer() {
+        exercise_f03b_t05(palw_tir_public_frame_fixture_v1(Some((7,1)),4),false);
+    }
+    /// F03b2: the wide fixture, where at least one coordinate's maximum response needs ≥ 2 packets; Q is charged by packet count.
+    #[test]
+    fn f03b2_t05_wide_fixture_charges_multi_packet_coordinates() {
+        exercise_f03b_t05(crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_wide_v1(Some((7,1)),4),true);
+    }
+    fn exercise_f03b_t05(fx:PalwTirPublicFrameFixtureV1,require_multi:bool) {
         use crate::palw_court_shared_tir_state_v1::{self as shared,RootedSharedDataV1};
         use crate::palw_court_shared_tir_frontier_v1::{SignedSharedRequestV1,SharedRequestEffectV1,SHARED_REQUEST_CONTEXT_V1};
         use super::super::palw_court_shared_tir_fold_v1 as fold;
-        let fx=palw_tir_public_frame_fixture_v1(Some((7,1)),4);
         let frame=&fx.frame;let claim=frame.plan_v1().original_claim;
         let owners=squatters(Frame::MAXIMUM_OWNERS_V1);
         let refill:Vec<PalwBondKeyV2>=(0..4).map(|i|bond(480+i)).collect();
@@ -4094,6 +4106,37 @@ mod conviction_e2e_tests {
             intent.signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys[&actor].signing_key,
                 intent.signing_message(network).unwrap().as_byte_slice(),SHARED_REQUEST_CONTEXT_V1,[13;32]).unwrap().as_ref().to_vec();intent
         };
+        // F03b2: packets per coordinate (size charged, never refused) and Q ≤ c·W at acceptance.
+        let packets:Vec<u64>=(0..set.len()).map(|i|shared::shared_coordinate_packets_v1(&source,&set.request_at(i).unwrap()).unwrap()).collect();
+        let universe=shared::shared_frontier_universe_packets_v1(&b.state,&derived).unwrap();
+        assert_eq!(universe,packets.iter().sum::<u64>());
+        assert!(crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(universe,
+            crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,derived.hard_daa-derived.original_accepted_daa));
+        let widest=(0..set.len()).max_by_key(|&i|(packets[i as usize],std::cmp::Reverse(i))).unwrap();
+        eprintln!("f03b2: universe={} coordinates, {} packets; widest ordinal {} = {} packets",set.len(),universe,widest,packets[widest as usize]);
+        if require_multi {
+            assert!(packets[widest as usize]>=2,"the wide fixture has a multi-packet coordinate");
+            assert!(universe>set.len(),"Q is charged by packet count, not by coordinate count");
+        }
+        // Negative: no reserved capacity left. A request whose slot cannot end before hard is refused with no state change.
+        {
+            let snapshot=b.state.clone();
+            let hard_rel=crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+            // Fill the window: one request at hard-1 takes the last packet; any further request at hard-1 has no capacity left.
+            let mut probe=TransitionBuilder::new(&snapshot,&params,false,false,false,false,&extras);
+            let one=(0..set.len()).find(|&i|packets[i as usize]==1).expect("a one-packet coordinate");
+            assert_eq!(fold::request(&mut probe,&at(frame,hard_rel-1),claim,&make(one,outsider())).unwrap(),SharedRequestEffectV1::Opened);
+            let other=(0..set.len()).find(|&i|i!=one).unwrap();
+            let before=probe.state.state_root();let n=probe.entries.len();
+            assert!(fold::request(&mut probe,&at(frame,hard_rel-1),claim,&make(other,outsider())).is_err(),"no reserved capacity left before hard");
+            assert_eq!(probe.state.state_root(),before);assert_eq!(probe.entries.len(),n);
+            if packets[widest as usize]>1 {
+                let mut late=TransitionBuilder::new(&snapshot,&params,false,false,false,false,&extras);
+                assert!(fold::request(&mut late,&at(frame,hard_rel-1),claim,&make(widest,outsider())).is_err(),"a multi-packet slot cannot start at hard-1");
+            }
+        }
+        // Negative: a claim with no installed frontier (no reserved capacity at all) is refused.
+        assert!(fold::request(&mut b,&at(frame,offset+1),h(0xF03B),&make(0,outsider())).is_err());
         // Pre-emption: the coalition requests every coordinate of every branch first (round-robin over its bonds), then is silent.
         let ctx=at(frame,offset+1);
         for ordinal in 0..set.len() {
@@ -4101,6 +4144,17 @@ mod conviction_e2e_tests {
             assert_eq!(fold::request(&mut b,&ctx,claim,&make(ordinal,sybil)).unwrap(),SharedRequestEffectV1::Opened);
         }
         assert_eq!(b.state.staged_tir_owner_count_v1(&claim),Frame::MAXIMUM_OWNERS_V1,"requests take no owner slot");
+        // F03b2: every recorded slot charges its coordinate's packets back to back and ends before hard (Q ≤ c·W).
+        let mut expect_start=ctx.daa_score;
+        for ordinal in 0..set.len() {
+            let Some(Row::CourtSharedQuery(q))=b.state.staged_court_row_v1(&Key::CourtSharedQuery(set.request_id(ordinal).unwrap())) else {panic!("row")};
+            let s=q.service.expect("version-2 row records its service slot");
+            assert_eq!((s.packets,s.start_daa),(packets[ordinal as usize],expect_start));
+            assert!(s.end_daa<derived.hard_daa);expect_start=s.end_daa+1;
+        }
+        assert_eq!(fold::shared_service_cursor_v1(&b.state,claim),Some(expect_start-1));
+        let wide_row=match b.state.staged_court_row_v1(&Key::CourtSharedQuery(set.request_id(widest).unwrap())) {Some(Row::CourtSharedQuery(q))=>q.service.unwrap(),_=>unreachable!()};
+        eprintln!("f03b2: widest coordinate slot {:?}, hard {}",wide_row,derived.hard_daa);
         let captured=b.state.state_root();let journal=b.entries.len();
         // Refill (fresh Sybils re-requesting) and same-root duplicates coalesce; so does the outsider. Nothing moves, nothing is refused.
         for round in 0..3u64 {for ordinal in 0..set.len() {
