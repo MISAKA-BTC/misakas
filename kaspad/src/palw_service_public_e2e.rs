@@ -1197,6 +1197,49 @@ async fn carry_fp_commitment(
     prompt: &Vec<u32>,
     large: bool,
 ) -> Hash64 {
+    carry_fp_commitment_with_original(chain, floats, commitment, prompt, large, None).await
+}
+
+/// **A required-family claim past `palw_staged_public_court_v1`** (lane FPCP, 2026-10-27): the fold's `prepare_required_bundle_v1`
+/// refuses a staged-family claim (prefix state, constraint, tokenizer) carried WITHOUT its transaction-local original public binding
+/// and the producer's signed history pledge — the "carried but not admitted" of the native public prefix cases since the staged
+/// preclaim landed (2026-10-15). `original`: the binding header the producer's backend derives from its own material; the pledge is
+/// quoted by the chain's own staged preclaim and signed by bond 0, exactly as the production producer (`palw_panel.rs`) builds it.
+async fn carry_fp_commitment_with_original(
+    chain: &mut Chain,
+    floats: &mut [Funding],
+    commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    prompt: &Vec<u32>,
+    large: bool,
+    original: Option<&kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
+) -> Hash64 {
+    let pledge = original.map(|header| {
+        use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
+        let (_, _, quote) = chain
+            .tc
+            .palw_staged_preclaim_quote_v1(commitment.clone(), header.clone())
+            .expect("the staged preclaim quotes this original")
+            .expect("a staged family is claimed by this job");
+        let accept_until_daa = quote.plan.terms.open_until_daa;
+        assert!(accept_until_daa > chain.daa(), "the quote is still open");
+        let mut pledge = PalwHistoryCustodyPledgeV1 {
+            version: 1,
+            claim: kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment),
+            producer: chain.bonds[0],
+            execution_root: commitment.execution_root,
+            job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
+            cu_ruleset_id: header.job_context_v1().cu_ruleset_id,
+            resource_plan_id: quote.resource_plan_id,
+            maximum_records: quote.maximum_records,
+            maximum_custodians: quote.maximum_custodians,
+            accept_until_daa,
+            material_until_daa: accept_until_daa.checked_add(quote.material_span_daa).unwrap(),
+            signature: Vec::new(),
+        };
+        pledge.signature = signed(0, pledge.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1);
+        pledge.check_v1().unwrap();
+        (pledge, header.clone())
+    });
     let carried = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&commitment.job, prompt);
     assert_eq!(&carried, prompt, "ordinary PublicDA FP carries the hash-bound user prompt");
     let quote = chain
@@ -1216,6 +1259,24 @@ async fn carry_fp_commitment(
     let build = |fee| {
         if large {
             return large_constraint_transaction(commitment.clone(), carried.clone(), &floats[0], fee);
+        }
+        if let Some((pledge, header)) = &pledge {
+            return signer
+                .build_fp_commitment_tx_original_public_v1(
+                    &chain.config.params,
+                    chain.daa(),
+                    chain.network_domain,
+                    chain.config.params.palw_prompt_ids_form_v1(),
+                    commitment.clone(),
+                    carried.clone(),
+                    kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: quote.quanta, pwu: quote.pwu },
+                    pledge,
+                    header,
+                    floats[0].0,
+                    &floats[0].1,
+                    fee,
+                )
+                .unwrap();
         }
         signer
             .build_fp_commitment_tx_under_params_v1(
@@ -1462,7 +1523,12 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         (outcome, event, None)
     });
     let claim = if let Some((_, _, Some((commitment, prompt)))) = &foreign {
-        carry_fp_commitment(&mut chain, &mut floats, commitment, prompt, case.large_constraint()).await
+        // A native public prefix claim is a staged required family: it carries its original public binding and signed pledge.
+        let original = case.native_prefix().then(|| {
+            let (outcome, _, _) = foreign.as_ref().unwrap();
+            tiled.as_ref().unwrap().backend(&chain).public_execution_binding_header_v1(&outcome.material).unwrap()
+        });
+        carry_fp_commitment_with_original(&mut chain, &mut floats, commitment, prompt, case.large_constraint(), original.as_ref()).await
     } else {
         let (attempt, claim) = chain.build_attempt_roots(
             0,
