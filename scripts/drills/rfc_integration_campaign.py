@@ -434,7 +434,9 @@ def native_claim_fact(requirement, payload, dag):
 
 
 def final_status(scenarios, gates, base_passed, resources_passed, fatal=None):
-    if fatal is not None or any(s.get('status') == 'FAIL' for s in scenarios):
+    if fatal is not None or any(not isinstance(s, dict) or s.get('status') == 'FAIL' for s in scenarios) or any(
+        not isinstance(g, dict) or g.get('status') == 'FAIL' for g in gates.values()
+    ):
         return 'FAIL'
     if not base_passed or not resources_passed or not scenarios or not gates or any(
         row.get('status') != 'PASS' for row in scenarios + list(gates.values())):

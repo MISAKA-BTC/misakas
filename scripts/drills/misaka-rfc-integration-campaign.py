@@ -190,7 +190,7 @@ def main():
         except Exception as error:
             fatal = 'post-run identity failure: ' + repr(error)
         scenarios = drill.scenario_results
-        observed = {row['id'] for row in scenarios}
+        observed = {row.get('id') for row in scenarios if isinstance(row, dict)}
         for planned in frozen.plan['scenarios']:
             if planned['id'] not in observed:
                 scenarios.append(dict(id=planned['id'], kind=planned['kind'], stage=planned['stage'], claims=planned['claims'],

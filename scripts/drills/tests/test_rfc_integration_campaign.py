@@ -110,6 +110,7 @@ class FrozenPlanCounterexamples(unittest.TestCase):
                 dict(id=attack['id'], kind=attack['kind'], stage=attack['stage'], claims=attack['claims'], facts=[])]
         gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
         self.assertTrue(all(row['status'] == 'FAIL' for row in gates.values()))
+        self.assertEqual(campaign.final_status(rows, gates, True, True), 'FAIL')
         self.assertTrue(any('duplicate observed fact id' in error for error in next(iter(gates.values()))['integrityErrors']))
         rows[0]['facts'] = [dict(fact, status='PASS', role='B')]
         gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
@@ -119,6 +120,7 @@ class FrozenPlanCounterexamples(unittest.TestCase):
         gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
         self.assertTrue(all(row['status'] == 'FAIL' for row in gates.values()))
         self.assertTrue(any('no textual identity' in error for error in next(iter(gates.values()))['integrityErrors']))
+        self.assertEqual(campaign.final_status(rows + [None], gates, True, True), 'FAIL')
 
     def test_actual_local_python_import_closure_is_frozen(self):
         root = Path(campaign.__file__).parent
