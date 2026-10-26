@@ -783,6 +783,9 @@ pub(super) fn install_original_v1(
     // G14 lane court-f02 (RFC-0028): ordinary admission installs the original's court service binding once its frame row exists.
     // Dormant (no row) below `palw_tir_public_conviction_v1` or without a pinned service profile.
     super::palw_court_service_lifecycle_fold_v1::install_court_service_binding_v1(b, ctx, original_claim)?;
+    // G14 lane F03b (ADR-0192 A/A): the claim-common shared frontier, fixed here from the original alone (dormant without a
+    // binding or below the shared lifecycle fences).
+    super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, original_claim)?;
     Ok(())
 }
 
@@ -3595,6 +3598,20 @@ mod conviction_e2e_tests {
                     else {panic!("bottom transport kind")};assert!(opened);
                 eprintln!("numerical bottom transport: bytes={} parts={}",m.total_bytes,p.len());
                 match &outcome {bottoms::SharedTirBottomOutcomeV1::NoMismatchFound=>{},bottoms::SharedTirBottomOutcomeV1::NativeFault(_)=>{assert!(false_partition);local_faults+=1;}}
+                // G14 lane F03b T05 positive leg: the outsider's shared bottom (filed with no owner slot, against the producer's
+                // own signed root) reaches the conviction funnel — claim void and producer slashed. The producer cannot file it.
+                if let bottoms::SharedTirBottomOutcomeV1::NativeFault(_)=&outcome {
+                    let lifecycle=super::super::palw_court_service_lifecycle_fold_v1::apply_shared_bottom_conviction_v1;
+                    let mut own=TransitionBuilder::new(&b.state,&params,false,false,false,false,&at_extras);
+                    assert!(lifecycle(&mut own,&at_rules.at,claim,producer).is_err(),"the producer is liable and cannot file");
+                    let mut conv=TransitionBuilder::new(&b.state,&params,false,false,false,false,&at_extras);
+                    let slashed_before=conv.state.bond(&producer).unwrap().slashed;
+                    lifecycle(&mut conv,&at_rules.at,claim,outsider()).unwrap();
+                    assert!(matches!(conv.state.claim(&claim).unwrap().phase,PalwClaimPhaseV2::Voided {reason:PalwVoidReasonV2::CourtHeldVerdict,..}));
+                    assert!(conv.state.bond(&producer).unwrap().slashed>slashed_before,"the producer is slashed");
+                    eprintln!("f03b_t05 positive: outsider conviction via shared bottom, producer slashed {}",
+                        conv.state.bond(&producer).unwrap().slashed-slashed_before);
+                }
                 assert_eq!(b.state.claim(&claim),Some(&original_claim));
                 assert_eq!(b.state.bond(&producer),Some(&original_producer));assert_eq!(b.state.bond(&outsider()),Some(&original_filer));
                 let key=Key::CourtSharedBottom(c.id().unwrap());let row=b.state.staged_court_row_v1(&key).unwrap().clone();
@@ -4028,6 +4045,90 @@ mod conviction_e2e_tests {
         // Source/signature/native journal fixture only; no actual lifecycle,
         // original all-branch funding, refilling/late adversary campaign or node T05.
         assert!(installed.staged_tir_owner_count_v1(&claim)==Frame::MAXIMUM_OWNERS_V1);
+    }
+
+    /// **G14 lane F03b T05 (ADR-0192 A/A): the claim-common frontier under full owner capture, Sybil pre-emption, silence, refill,
+    /// same-root duplicates and the legal latest answer.** Eight coalition bonds hold every owner slot; they and four more
+    /// unlinked-looking coalition Sybils (own operator ids — the F03 residual) request EVERY coordinate of the closed universe
+    /// first and then stay silent; every refill and every outsider request on the same coordinate coalesces (no state change, no
+    /// capacity refusal, no owner slot). The producer answers only at the last legal DAA (`hard - 1`); the answer is shared,
+    /// authenticated data any outsider reads; past hard it is refused. The context is the production derivation
+    /// (`derive_shared_tir_context_v1`), not a hand-built fixture. Negative: the frontier alone never voids the claim (data is not
+    /// a verdict) and the producer cannot file its own conviction. Test-only: distinct fixture keys (seeds 50..62) are not a
+    /// showing of operator independence; hard window = `DISPUTE_WINDOW_DAA` (10,000); the unit-cost service book of
+    /// `bind_clock_service`.
+    #[test]
+    fn f03b_t05_shared_frontier_survives_full_owner_capture_sybil_refill_and_latest_answer() {
+        use crate::palw_court_shared_tir_state_v1::{self as shared,RootedSharedDataV1};
+        use crate::palw_court_shared_tir_frontier_v1::{SignedSharedRequestV1,SharedRequestEffectV1,SHARED_REQUEST_CONTEXT_V1};
+        use super::super::palw_court_shared_tir_fold_v1 as fold;
+        let fx=palw_tir_public_frame_fixture_v1(Some((7,1)),4);
+        let frame=&fx.frame;let claim=frame.plan_v1().original_claim;
+        let owners=squatters(Frame::MAXIMUM_OWNERS_V1);
+        let refill:Vec<PalwBondKeyV2>=(0..4).map(|i|bond(480+i)).collect();
+        let coalition:Vec<PalwBondKeyV2>=owners.iter().chain(refill.iter()).copied().collect();
+        let (mut state,params,extras,offset)=open_world(&fx,frame,&coalition);
+        for owner in &owners {state=open(frame,&state,&params,&extras,offset,*owner).unwrap();}
+        assert_eq!(state.staged_tir_owner_count_v1(&claim),Frame::MAXIMUM_OWNERS_V1);
+        assert!(open(frame,&state,&params,&extras,offset+1,outsider()).is_err(),"every owner slot is held by the coalition");
+        let producer=frame.custody_v1().pledge_v1().producer;
+        let mut keys=std::collections::BTreeMap::new();
+        for (i,actor) in coalition.iter().chain([outsider(),producer].iter()).enumerate() {
+            let kp=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([50+i as u8;32]);
+            state.bonds.get_mut(actor).unwrap().pubkey=kp.verification_key.as_ref().to_vec();keys.insert(*actor,kp);
+        }
+        state=bind_clock_service(&state,frame,&params,&extras);
+        let derived=shared::derive_shared_tir_context_v1(&state,claim).unwrap();
+        let p=frame.plan_v1();
+        assert_eq!((derived.original_accepted_daa,derived.hard_daa,derived.material_until_daa),
+            (p.terms.accepted_daa,p.terms.accepted_daa+crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA,p.terms.material_until_daa));
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        b.write_staged_row_v1(Key::CourtSharedContext(claim),Some(Row::CourtSharedContext(Box::new(derived.clone())))).unwrap();
+        assert_eq!(shared::derive_shared_tir_context_v1(&b.state,claim).unwrap(),derived,"owner capture cannot move the frontier");
+        let source=frame.source_v1(&fx.record,&fx.layout,fx.rules.maximum_leaves).unwrap();
+        let set=crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame,&source,derived.profile_id).unwrap();
+        let network=extras.tir_public_network_domain_v1.unwrap();
+        let make=|ordinal:u64,actor:PalwBondKeyV2| {
+            let mut intent=SignedSharedRequestV1 {version:1,scope:derived.scope_id,ordinal,
+                request_id:set.request_id(ordinal).unwrap(),signer:actor,signature:vec![]};
+            intent.signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys[&actor].signing_key,
+                intent.signing_message(network).unwrap().as_byte_slice(),SHARED_REQUEST_CONTEXT_V1,[13;32]).unwrap().as_ref().to_vec();intent
+        };
+        // Pre-emption: the coalition requests every coordinate of every branch first (round-robin over its bonds), then is silent.
+        let ctx=at(frame,offset+1);
+        for ordinal in 0..set.len() {
+            let sybil=coalition[ordinal as usize % coalition.len()];
+            assert_eq!(fold::request(&mut b,&ctx,claim,&make(ordinal,sybil)).unwrap(),SharedRequestEffectV1::Opened);
+        }
+        assert_eq!(b.state.staged_tir_owner_count_v1(&claim),Frame::MAXIMUM_OWNERS_V1,"requests take no owner slot");
+        let captured=b.state.state_root();let journal=b.entries.len();
+        // Refill (fresh Sybils re-requesting) and same-root duplicates coalesce; so does the outsider. Nothing moves, nothing is refused.
+        for round in 0..3u64 {for ordinal in 0..set.len() {
+            let actor=if round==2 {outsider()} else {refill[((ordinal+round) % refill.len() as u64) as usize]};
+            assert_eq!(fold::request(&mut b,&at(frame,offset+2+round),claim,&make(ordinal,actor)).unwrap(),SharedRequestEffectV1::Coalesced);
+        }}
+        assert_eq!(b.state.state_root(),captured);assert_eq!(b.entries.len(),journal);
+        // The producer's legal latest answer at hard - 1 on the lie's leaf (leaf 7 of this fixture): shared data, readable by anyone.
+        let first=(0..set.len()).find(|&i|set.request_at(i).unwrap()==crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf {index:7}).unwrap();
+        let body=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage:fx.execution.preimages[7].clone(),opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,7).unwrap()}).unwrap();
+        let hard=crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+        let late=b.state.clone();
+        let mut past=TransitionBuilder::new(&late,&params,false,false,false,false,&extras);
+        assert!(fold::share_body(&mut past,&at(frame,hard),claim,first,&body).is_err(),"no answer at or past hard");
+        let claim_before=b.state.claim(&claim).cloned();
+        assert!(fold::share_body(&mut b,&at(frame,hard-1),claim,first,&body).unwrap());
+        assert!(!fold::share_body(&mut b,&at(frame,hard-1),claim,first,&body).unwrap(),"duplicate body coalesces");
+        assert!(matches!(shared::read_shared_data_v1(&b.state,claim,first).unwrap(),Some(RootedSharedDataV1::Unit(unit))
+            if unit.source_id_v1()==p.source_id && borsh::to_vec(unit.response_v1()).unwrap()==body));
+        // Negative: data alone is never a verdict; the producer is not a filer of its own conviction.
+        assert_eq!(b.state.claim(&claim),claim_before.as_ref());
+        assert!(!matches!(b.state.claim(&claim).unwrap().phase,PalwClaimPhaseV2::Voided {..}));
+        let mut own=TransitionBuilder::new(&b.state,&params,false,false,false,false,&extras);
+        assert!(super::super::palw_court_service_lifecycle_fold_v1::apply_shared_bottom_conviction_v1(&mut own,&at(frame,hard-1),claim,producer).is_err());
+        for owner in &owners {
+            assert!(frame.original_custody_v1().credit_v1(owner).is_none(),"coalition owners are not liable seats; their silence is no fault");
+        }
     }
 
     fn bind_clock_service(state: &PalwChainStateV2, frame: &Frame, params: &PalwStateParamsV2, extras: &PalwTransitionExtrasV1) -> PalwChainStateV2 {

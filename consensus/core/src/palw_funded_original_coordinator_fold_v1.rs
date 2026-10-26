@@ -362,6 +362,8 @@ pub(super) fn install_original_admission_v1(
                 b.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(next).into())))?;
             }
             let claim_id = row.claim;
+            // G14 lane F03b (ADR-0192 A/A): the shared frontier rides the same all-branch book (idempotent with the plain hook).
+            super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, claim_id)?;
             b.install_funded_escrow_v1(row)?;
             // The paired object's checkpoint restores the complete install if
             // either reserved capacity or the distinct-claim cap refuses it.

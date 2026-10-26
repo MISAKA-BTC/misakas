@@ -99,6 +99,32 @@ impl SharedTirContextV1 {
     }
     pub fn check_context(&self,state:&PalwChainStateV2)->Result<(),String> {self.source(state).map(|_|())}
 }
+/// **ADR-0192 A/A (lane F03b): the claim-common localisation frontier, derived from the original alone.** Every field is a
+/// function of the retained original frame, its registered class/layout and the claim's court service binding (installed at the
+/// same accepting point by F02's admission or the RFC-0035 funded all-branch book). Nothing depends on an owner, filer, requester
+/// or relay, so a coalition holding every owner slot cannot change, consume or pre-empt it: the closed request universe
+/// (`queries`: every legal coordinate of every branch the source admits) is fixed at acceptance. Data identity only.
+pub fn derive_shared_tir_context_v1(state:&PalwChainStateV2,claim:Hash64)->Result<SharedTirContextV1,String> {
+    let service=state.court_service_state_v1().ok_or("shared frontier: no court service book")?;
+    let binding=service.claims.get(&claim).ok_or("shared frontier: original has no service binding")?;
+    let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,claim).ok_or("shared frontier: original frame absent")?;
+    let p=frame.plan_v1();
+    if p.original_claim!=claim || (p.allocation_id,p.source_id,p.terms.accepted_daa)
+        !=(binding.allocation_id,binding.source_id,binding.original_accepted_daa) {
+        return Err("shared frontier: service binding names another original".into());
+    }
+    let record=state.tir_class_v1(&frame.original_v1().job.class_id).ok_or("shared frontier: original class absent")?;
+    let layout=crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state,record.facts.class_id)
+        .ok_or("shared frontier: registered layout absent")?;
+    let source=frame.source_v1(record,layout,frame.descriptor_v1().maximum_leaves)?;
+    let profile_id=shared_native_profile_id_v1(service.profile_id);
+    let set=TirSharedRequestSetV1::new(frame,&source,profile_id)?;
+    let c=SharedTirContextV1 {version:1,claim,allocation_id:p.allocation_id,source_id:p.source_id,rules_id:p.rules_id,profile_id,
+        scope_id:set.scope_id()?,queries:set.len(),original_accepted_daa:p.terms.accepted_daa,hard_daa:binding.hard_deadline_daa,
+        material_until_daa:p.terms.material_until_daa};
+    c.check(&Key::CourtSharedContext(claim))?;
+    Ok(c)
+}
 pub(crate) fn context(state:&PalwChainStateV2,claim:Hash64)->Result<&SharedTirContextV1,String> {
     match state.staged_court_row_v1(&Key::CourtSharedContext(claim)) {
         Some(Row::CourtSharedContext(c))=>Ok(c),_=>Err("no installed native shared context".into()),
