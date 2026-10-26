@@ -6,7 +6,12 @@
 > `binaries`(3 台とも sha256 一致)、各 host で `stage` と `DRY_RUN=1 upgrade`。DRY_RUN は 3 台とも最後まで通り、`nothing … was changed`。
 > 稼働中の node・pinner は 1 台も再起動していない(全部 247ade1f90b6 のまま)。各 host の旧 `fleet.env` は
 > `/root/t12-rel/kit/fleet.env.bak-before-24d7560777f0`、5.104 の旧 `install-5104.sh` は同じ名前の `.bak-…` に残した。
-> **手順 2 以降(実際の upgrade と b5 の退役)は未実施。**
+> **手順 2(ibm)実施済み(2026-10-26 09:43〜09:52 UTC)**: pinner → b0 → b1 → b3 の順に `upgrade`。全 node `UPGRADED`(停止は
+> `result=success`、gate は fp・genesis・facts・DB 保持・synced・DAA 前進のすべて通過)、ibm の 3 node と pinner は `24d7560777f0/bin/kaspad`
+> で動作。`CHECK_REGISTRY=1 ./check-fleet.sh` を 09:54 と 09:57 UTC に 2 回: 7 node とも `RESULT: OK`、DAA 15,986 → 15,987、8k
+> `readySeatsNow 9 / 7`。Mac からの seeder・anchor の確認は作業環境の通信制限で FAIL/CLOSED になったため 5.104 から確認した(anchor 3 つ
+> open、seeder 4 台とも両 anchor を返す)。各 seat の `oldest duty has waited ~590 DAA` は upgrade 前からの panel の積み残し。
+> **手順 3(.113)以降は未実施。**
 >
 > **kit の修正(この過程で見つけたもの)**: host の kit の `lib.sh`(main と同じ)は Phase H の IR artifact(`ART_PH`、
 > `PH_MANIFEST_MODE=drop`)と `HOST_EXTRA_ARGS` を launch script に入れない。live の 247ade1f90b6 の launch script は、Mac に残っていない
