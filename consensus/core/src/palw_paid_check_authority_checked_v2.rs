@@ -46,12 +46,11 @@ impl PalwKernelRouteStateV1 {
             )
             .map_err(invalid);
         }
-        // Preserve the existing normal source algorithm/provenance. Its nested
-        // String-returning legacy readers remain an explicit separate boundary;
-        // do not pretend to recover a lost Resource by parsing its display text.
-        let (contract, sources, promises) =
-            self.paid_beacon_material_v5(context).map_err(invalid)?.ok_or_else(|| invalid("paid claim source funding missing"))?;
-        let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, now)
+        // Keep the V5 collector and rooted source ordering, while preserving
+        // typed failures and the retained source/promise demand through use.
+        let material = self.rfc07_normal_paid_material_owned_v5(context)?.ok_or_else(|| invalid("paid claim source funding missing"))?;
+        let (contract, sources, promises) = &*material;
+        let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, contract, sources, promises, now)
             .map_err(|why| invalid(why.to_string()))?;
         let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) = collected else {
             return Err(invalid("paid claim source has not locked"));

@@ -225,3 +225,21 @@ fn paid_check_authority_present_corruption_and_true_absence_are_decode_errors() 
         "String SDK compatibility wrapper keeps the same positive authority"
     );
 }
+
+#[test]
+fn paid_normal_source_initial_authority_keeps_primary_identity_and_corruption_class() {
+    use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
+    let (mut state, _, _, a) = setup();
+    let route = state.kernel_route.as_mut().unwrap();
+    route.aux.insert(
+        (crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, a.context.id().to_vec()),
+        borsh::to_vec(&a.source_target).unwrap(),
+    );
+    let source = route.rfc07_normal_source_authority_checked_v3(&a.context.id()).unwrap();
+    assert_eq!(source.authority(), &a);
+    assert_eq!(source.context(), &a.context);
+    assert_eq!(source.target(), &a.source_target);
+    drop(source);
+    route.aux.insert((PAID_CLAIM_ENROLLMENTS_V2, a.context.id().to_vec()), vec![255]);
+    assert!(matches!(route.rfc07_normal_source_authority_checked_v3(&a.context.id()), Err(E::Decode(_))));
+}
