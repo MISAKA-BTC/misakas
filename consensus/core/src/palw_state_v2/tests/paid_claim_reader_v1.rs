@@ -493,3 +493,6 @@ mod bootstrap_fail_closed_v6;
 
 #[path = "paid_trap_checked_v1.rs"]
 mod paid_trap_checked_v1;
+
+#[path = "paid_check_authority_resource_v2.rs"]
+mod paid_check_authority_resource_v2;
