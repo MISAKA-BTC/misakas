@@ -622,3 +622,10 @@ host に進むのは、前の host の `upgrade` が最後まで通り、`check`
   `systemctl stop` する（旧規則で fence を跨ぐと分裂する。止めた node は新 binary にしてから空 datadir で resync）。
 - **未解決のリスク: 跨いだ後の rollback は未試験**。fence を跨ぐ drill を省いたので、17,000 を越えてから `upgrade-rollback` で旧 binary に
   戻すと旧規則で新 block を拒否し得る。跨いだ後は戻しではなく修正版の前進配備を前提にする（drill をしていないことは記録上もそのまま残す）。
+
+### §15 追記 — lane ROLES: G14 の役割を duty として常時 on(2026-10-27)
+
+- 新 binary では GDN step filer と有料 court ingress は既定 on(fence 前は従来どおり休眠)。停止は緊急用 `--palw-disable-gdn-step-filer` / `--palw-disable-court-paid-ingress` のみ。kit は何も渡さない。
+- kernel-route 検証者・Panel=1 seat は登録 kernel model(PALWKM01)が要る。binary は `<appdir>/misaka-testnet-12/palw-kernel-models/*.palwkm` を flag なしで読む(fence 成立後に初めて開く)。
+- 配備手順: (1) 登録 class の PALWKM01 を各 host の各 node の上記 directory に置く(ARGS 変更なし、UPGRADE_ARGS_CHANGE_OK 不要)。または (2) fleet.env の `KERNEL_MODEL=<path>[,<path>]` に書く — ARGS が変わるので `UPGRADE_ARGS_CHANGE_OK=1 ./… upgrade`。
+- 確認: 起動 log に `kernel verifier: holds the model …` が fence 17,000 以降に出ること。出なければ model 未配置で検証 duty が空回り。
