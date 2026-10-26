@@ -273,6 +273,33 @@ pub fn palw_t12_arm_full_activation_at_v1(params: &mut Params, at: Option<u64>) 
     }
 }
 
+/// **The vertical slice (coordinator plan 2026-10-26)** — the subset of [`PALW_T12_FULL_ACTIVATION_FENCES_V1`] that closes G14 for ONE
+/// slice: the kernel route with Panel=1, its claim deadline, settlement once, Gate C (per-claim drawn approval), and the route-required
+/// fence that leaves every other family route-absent (no new reward, G-01 (b)). Same order as the full list, so each entry's prerequisite
+/// stays earlier. NOT on it, and still refused by validation where needed: `palw_bond_budget_v1` (settlement once needs it at or below;
+/// value lane). Which genesis class and job shape the slice admits is NOT a fence and NOT a record field: records are keyed by (fence,
+/// network, height) only, so the class must be carried by the route's own policy (lane SPINE names it). Nothing here arms anything.
+pub const PALW_T12_KERNEL_SLICE_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    crate::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY,
+    crate::palw_gen_range_twin_v1::PALW_DRILL_GEN_RANGE_TWIN_ENTRY,
+    PALW_T12_MODEL_COURT_WINDOW_ENTRY,
+    crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
+    PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,
+    PALW_T12_FULL_KERNEL_ROUTE_PANEL_ONE_ENTRY,
+    PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
+    PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
+    PALW_T12_FULL_GATE_C_ENTRY,
+    PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
+];
+
+/// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.
+pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {
+    match at {
+        Some(at) => list.iter().for_each(|fence| (fence.set)(params, Some(ForkActivation::new(at)))),
+        None => list.iter().rev().for_each(|fence| (fence.set)(params, None)),
+    }
+}
+
 /// **testnet-12 as its int-13 build ships it** — [`palw_t12_shipped_params`] with the full-activation list set back to dormant: the
 /// baseline the full-activation flag day is judged against (the fork-id comparison, the "only this list moved it" twin). While both the
 /// int-13 height and this list's height are `None`, it equals [`palw_t12_release_v6_params`] (int-12, `5ee7fd8e…`), byte for byte.

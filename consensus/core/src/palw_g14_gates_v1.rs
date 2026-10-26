@@ -700,6 +700,8 @@ impl Params {
             staged_court_from: height(self.palw_staged_public_court_v1_fence()),
             tir_conviction_from: height(self.palw_tir_public_conviction_v1_fence()),
             court_capacity_from: self.palw_court_capacity_v1_fence().map(|f| f.activation.daa_score()),
+            kernel_panel_one_from: height(self.palw_kernel_route_panel_one_v1_fence()),
+            gate_c_from: height(self.palw_independently_work_certified_v1),
         })
     }
 
@@ -765,6 +767,10 @@ pub struct PalwG14RouteMirrorV1 {
     pub tir_conviction_from: Option<u64>,
     /// `palw_court_capacity_v1` (audit G-07): the court-capacity guarantee the fused-leaf adjudication route depends on.
     pub court_capacity_from: Option<u64>,
+    /// `palw_kernel_route_panel_one_v1`, resolved (the Panel=1 kernel route; `KernelRoutePanelOne`).
+    pub kernel_panel_one_from: Option<u64>,
+    /// Gate C, `palw_independently_work_certified_v1` (per-claim drawn approval; `KernelRoutePanelOne`).
+    pub gate_c_from: Option<u64>,
 }
 
 fn in_force(height: Option<u64>, daa: u64) -> bool {
@@ -793,6 +799,7 @@ impl PalwG14RouteMirrorV1 {
                 in_force(self.staged_court_from, d) && in_force(self.legacy_filer_from, d)
             }
             PalwG14RouteFamilyV1::NonPublicEvidence => false,
+            PalwG14RouteFamilyV1::KernelRoutePanelOne => in_force(self.kernel_panel_one_from, d) && in_force(self.gate_c_from, d),
         }
     }
 }
@@ -820,6 +827,33 @@ pub enum PalwG14RouteFamilyV1 {
     FpPrefix,
     FpTokenizer,
     NonPublicEvidence,
+    /// **The kernel route under Panel=1** (coordinator decision 2026-10-26, the 17,000 vertical slice; appended, no existing variant
+    /// renumbered — the enum is not serialized or hashed). Armed where `palw_kernel_route_panel_one_v1` (over the kernel route) and Gate C
+    /// (`palw_independently_work_certified_v1`, per-claim drawn approval) are both in force. Which class and job shape a claim must have to
+    /// belong to it is decided at the claim's classifier (lane SPINE), not here.
+    KernelRoutePanelOne,
+}
+
+/// **The fences a route family's arming needs** — the names a record set must cover before the family can be armed (each fence has its
+/// own record in its own list; a record is keyed by fence, network and height, never by family).
+pub fn palw_g14_route_family_fences_v1(family: PalwG14RouteFamilyV1) -> &'static [&'static str] {
+    match family {
+        PalwG14RouteFamilyV1::KernelRoutePanelOne => &[
+            "palw_probabilistic_constraints_v1",
+            "palw_kernel_route_panel_one_v1",
+            "palw_independently_work_certified_v1",
+            "palw_g14_route_required_v1",
+        ],
+        PalwG14RouteFamilyV1::LegacyPanelAttempt => &["palw_legacy_public_filer_v1", "palw_legacy_held_da_v2", "palw_g14_route_required_v1"],
+        PalwG14RouteFamilyV1::LegacyFusedLeaf => {
+            &["palw_legacy_public_filer_v1", "palw_legacy_held_da_v2", "palw_court_capacity_v1", "palw_g14_route_required_v1"]
+        }
+        PalwG14RouteFamilyV1::FpSelection => &["palw_tir_public_conviction_v1", "palw_g14_route_required_v1"],
+        PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix | PalwG14RouteFamilyV1::FpTokenizer => {
+            &["palw_staged_public_court_v1", "palw_legacy_public_filer_v1", "palw_g14_route_required_v1"]
+        }
+        PalwG14RouteFamilyV1::NonPublicEvidence => &[],
+    }
 }
 
 /// The refusal code for a claim whose family has no armed G14 route (no reward, weight or credit; `ClassNotRewardable`'s `code`).

@@ -269,3 +269,45 @@ fn the_drill_flag_refuses_untouched_until_the_records_exist() {
     let mut mainnet = kaspa_consensus_core::config::params::mainnet_shipped_params();
     assert!(palw_drill_full_activation_at_v1(&mut mainnet, 60).is_err(), "another network");
 }
+
+/// The vertical slice is a subset of the full list, in the full list's order, and arming then clearing it restores the int-13 baseline.
+#[test]
+fn the_kernel_slice_is_an_ordered_subset_and_clears_back() {
+    use kaspa_consensus_core::config::params::{
+        PALW_T12_FULL_ACTIVATION_FENCES_V1, PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_arm_fence_list_at_v1, palw_t12_release_v7_params,
+    };
+    let full: Vec<&str> = PALW_T12_FULL_ACTIVATION_FENCES_V1.iter().map(|f| f.name).collect();
+    let mut last = None;
+    for f in PALW_T12_KERNEL_SLICE_FENCES_V1 {
+        let i = full.iter().position(|n| *n == f.name).unwrap_or_else(|| panic!("{} is not on the full list", f.name));
+        assert!(last.is_none_or(|l| l < i), "{} out of the full list's order", f.name);
+        last = Some(i);
+    }
+    let base = palw_t12_release_v7_params();
+    let mut p = base.clone();
+    palw_t12_arm_fence_list_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
+    assert_ne!(ids(&p), ids(&base));
+    palw_t12_arm_fence_list_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, None);
+    assert_eq!(ids(&p), ids(&base));
+}
+
+/// The slice names the Panel=1 kernel route family: every fence that family needs is on the slice list, and the mirror arms it only
+/// where both the Panel=1 route and Gate C are in force.
+#[test]
+fn the_kernel_slice_covers_the_kernel_route_family() {
+    use kaspa_consensus_core::config::params::{PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_arm_fence_list_at_v1, palw_t12_release_v7_params};
+    use kaspa_consensus_core::palw_g14_gates_v1::{PalwG14RouteFamilyV1 as F, palw_g14_route_family_fences_v1};
+    let slice: Vec<&str> = PALW_T12_KERNEL_SLICE_FENCES_V1.iter().map(|f| f.name).collect();
+    for need in palw_g14_route_family_fences_v1(F::KernelRoutePanelOne) {
+        assert!(slice.contains(need), "{need} is not on the slice");
+    }
+    let base = palw_t12_release_v7_params();
+    assert!(base.palw_g14_route_required_v1_mirror().is_none(), "nothing below the fence");
+    let mut p = base.clone();
+    palw_t12_arm_fence_list_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
+    let m = p.palw_g14_route_required_v1_mirror().expect("the route-required fence is on the slice");
+    assert!(!m.route_armed(F::KernelRoutePanelOne, 16_999, false));
+    assert!(m.route_armed(F::KernelRoutePanelOne, 17_000, false));
+    assert!(!m.route_armed(F::LegacyPanelAttempt, 17_000, false), "other families stay route-absent");
+    assert!(!m.route_armed(F::FpSelection, 17_000, true));
+}
