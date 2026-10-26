@@ -72,14 +72,15 @@ T_ITEMS = [
      'P, Q, F; shipped binaries hashed before/after', ['fence:F0', 'fence:F1', 'fence:F5', 'fence:F6', 'profile:shipped-refuses'],
      'real processes cross H on the shipped release build'),
     # User-approved adversarial items (2026-10-27). In-process (native processor): canonical/spine.rs, canonical/cert.rs.
-    ('T16', '(A) outsider holds no weights; only producer + every seat hold the model and substitute weights for a self-consistent '
-     'wrong trace; the outsider convicts from localization, court-demanded weight openings and the registered root',
-     'P liar + seat (colluders, model holders), O outsider WITHOUT the model', None,
-     'NOT-IMPLEMENTED: the kernel ledger has no court demand for WEIGHT openings (MaterialKeyV1::Param is not a ledger demand); '
-     'needs a fenced kernel-route param-opening demand + response + DA default before a native or real-node test exists'),
-    ('T17', '(B) colluders refuse to disclose -> DA default; forfeited reservation >= the 500 MSK external gain bound',
+    ('T16', '(A) BY DESIGN: kernel classes are limited to public weights (RegisterClass refuses a param root not attested public), '
+     'so an outsider without the weights cannot occur on the kernel route',
+     'P registers a class over an unattested root', None,
+     'in-process: misaka/palw/kernel/tests/k2_ledger_route.rs a_class_registers_commitments_only_over_an_attested_artifact_*; '
+     'OPEN outside the kernel route: a court demand path for non-public weights'),
+    ('T17', '(B) colluders refuse to disclose -> DA default; forfeiture >= obtainable gain (pre-Final: 0, fixed penalty; '
+     'post-Final: whole reservation >= 500/0.9 MSK)',
      'P silent producer (colluder), Q poster + outsider demander', None,
-     'in-process: spine.rs g14_adversarial_b_* (trace material; weight-opening refusal waits on T16); real node: P silent, Q demands'),
+     'in-process: spine.rs g14_adversarial_b_pre_final_* / g14_adversarial_b_post_final_*; real node: P silent, Q demands'),
     ('T18', '(C) Gate C when only the colluders hold the model -> NotCertified, Final reward 0, refund to the poster',
      'P producer + seats (model holders), drawn verifiers WITHOUT the model attest Unavailable', None,
      'in-process: cert.rs g14_adversarial_c_*; real node needs a drawn verifier started without --palw-kernel-model'),
