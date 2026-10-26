@@ -20,6 +20,11 @@ OPS = [
     "position_close_forged", "lookahead_expand", "d2_demand_open",
     "d2_answer_disclosed", "d2_answer_convicted", "d2_sweep", "mldsa87_verify",
 ]
+SCALES = [
+    ("position_close_honest", 8), ("position_close_honest", 16),
+    ("d2_answer_disclosed", 16), ("d2_answer_disclosed", 4096),
+    ("d2_sweep", 16), ("d2_sweep", 4096),
+]
 
 
 def main():
@@ -37,10 +42,11 @@ def main():
 
     save()
     deadline = time.monotonic() + args.max_wait_seconds
-    for op in OPS:
+    for op, scale in [(op, None) for op in OPS] + SCALES:
+        label = op if scale is None else f"{op}-scale-{scale}"
         while True:
             load = os.getloadavg()
-            record["load_waits"].append({"utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "op": op, "load": load})
+            record["load_waits"].append({"utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "op": label, "load": load})
             save()
             if load[0] <= 5.0:
                 break
@@ -50,11 +56,13 @@ def main():
                 return 75
             time.sleep(30)
         command = [sys.executable, str(Path(__file__).with_name("run_court_op.py")),
-                   "--build-record", str(args.build_record), "--out", str(args.out / op),
+                   "--build-record", str(args.build_record), "--out", str(args.out / label),
                    "--op", op, "--n", str(args.n), "--runs", "3", "--baseline-runs", "3"]
+        if scale is not None:
+            command += ["--scale", str(scale)]
         started = time.monotonic()
         result = subprocess.run(command, capture_output=True, text=True)
-        row = {"op": op, "command": command, "exit_code": result.returncode,
+        row = {"op": op, "scale": scale, "command": command, "exit_code": result.returncode,
                "wall_seconds": time.monotonic() - started, "stdout": result.stdout, "stderr": result.stderr}
         record["operations"].append(row)
         save()
