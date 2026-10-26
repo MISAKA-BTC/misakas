@@ -91,3 +91,36 @@ Every failure has the same cause. Validation of the armed ruleset is refused wit
   - With the tokenizer route unarmed, or with no route armed, the answer is identical for both flag values.
 - Run: `cargo test -p kaspa-consensus-core --test g14_close_gates` gave **12 passed / 0 failed**.
 - Not tested: a fold or node test of an unregistered class's FP claim through `objects.rs` (only the function itself is tested).
+
+## 8. Arming push (coordinator, 2026-10-27; target now DAA 17,000, drill skipped)
+
+Merged `claude/g14-panel1-17000` (tip `56c5ca067`) into this branch.
+
+**Run and passed** (debug, buildslot):
+- `cargo test -p kaspa-consensus-core --no-fail-fast --test g14_close_gates --test g14_fptok_candidate` → g14_close_gates 12/12. This includes the new fold-level check in T-N8: with every route armed, an FP claim on the floor class (no class semantics, so no raw tokenizer material) is refused through `objects.rs` with `G14_ROUTE_ABSENT`, and `FpTokenizer` is named among the missing routes.
+- `cargo test -p kaspa-consensus-core --test g14_fptok_candidate` → 2/2:
+  - `fptok_candidate_covers_the_family_in_activation_order`: the candidate is the kernel slice followed by tokenizer_match → LG14-A → outsider lane → staged court, then route-required. `route_armed(FpTokenizer)` is false at 16,999 and true at 17,000.
+  - `fptok_candidate_is_refused_without_records_and_adds_no_refusal_beyond_the_slice`: without records the candidate is refused (first refusal: the kernel-route record). With test-only records for every gated fence it fails with exactly the same error as the kernel slice alone: `palw_settlement_once_v1 stays dormant: open blocker — RFC08-2 (unsourced terms)`. **The FpTokenizer fences add no refusal of their own.**
+- F02/F03 check against the pinned estimates: the staged court's completeness gate passes with `PALW_COURT_SERVICE_PROFILE_V1` = the approved estimate, `palw_court_ingress_schedule_v1()` = `PALW_G14_COURT_INGRESS_ESTIMATE_V1`, and the outsider lane at or below the court. The candidate therefore needs `palw_court_outsider_lane_v1` at or below `palw_staged_public_court_v1`.
+- The real arming lists are unchanged (the test builds its own candidate).
+
+**Waiver items (not run; the user asked to avoid long builds and tests):**
+1. Native E2E of a full-collusion tokenizer lie convicted by one outsider, with its honest control. No in-process harness exists for the staged raw-tokenizer court. Past `palw_fp_tokenizer_match`, a job naming a different tokenizer is dropped at extraction (it is never admitted, so nothing needs convicting). A wrong detokenize under the correct tokenizer has core-level evidence only (2026-10-22 `tokenizer-and-graph-preflight.md`).
+2. Fold-level positive control (a class WITH raw tokenizer material admitted through `objects.rs`). Class semantics cannot be set from an integration test, and a framed FP admission needs the funded-original path. The positive case is covered only at function level.
+3. Restart / reorg / pruned IBD for the tokenizer court and route gate: not run. The route gate is stateless (it reads fence mirrors and class semantics, which are already rooted and carried through pruning snapshots).
+4. Measurement at maximum vocabulary: **not run**. An ignored harness was added, `palw_tokenizer_json_stream_v1::tests::fptok_measure_tokenizer_replay_cost`. It times the verifier and producer separately on synthetic vocabularies of 1k/4k/16k entries and extrapolates per event. Sizes counted with Python, no timing:
+
+| tokenizer.json | bytes | vocab | merges | key events (≈ object keys + vocab ids + added ids) |
+|---|---|---|---|---|
+| Qwen3.6-35B-A3B (largest genesis vocab on disk) | 19,989,343 | 248,044 | 247,587 | ≈ 496,391 |
+| Qwen3.5-2B | 12,807,982 | 248,044 | 247,587 | ≈ 496,335 |
+| Qwen2.5-1.5B | 7,031,645 | 151,643 | 151,387 | ≈ 303,500 |
+
+   Each key event carries a 512-sibling proof, so a verifier does ≈ 512 hashes per event, ≈ 2.5 × 10^8 hashes for Qwen3.6. The local producer's sparse tree holds ≈ 513 nodes per event (≈ 2.5 × 10^8 entries), so producing the material is memory-heavy; this needs measuring before relying on the court's tokenizer budget. Gemma4 (262k vocab) is not on disk. To run: `cargo test --release -p kaspa-consensus-core --lib fptok_measure_tokenizer_replay_cost -- --ignored --nocapture` on an idle host with `uptime` recorded, evidence under `docs/evidence/palw/g14-17000/measurements/`.
+5. `g14_close_legacy` / `g14_court_capacity`: not rerun after the merge (their failures before the merge were base pre-existing, §6).
+
+**Left before arming FpTokenizer at 17,000:**
+- Add tokenizer_match, LG14-A, the outsider lane and the staged court to the real 17,000 list, in the candidate's order, before route-required.
+- Pin their records.
+- Clear the slice's own `palw_settlement_once_v1` blocker (RFC08-2).
+- Get a waiver or a run for items 1–4.

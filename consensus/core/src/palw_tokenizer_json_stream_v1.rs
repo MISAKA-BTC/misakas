@@ -1339,6 +1339,70 @@ pub(crate) mod tests {
         s.tokenizer = Hash64::from_u64_word(0xBAD);
         assert!(s.finish().is_err());
     }
+
+    /// **Lane FPTOK measurement (ignored; run explicitly).** The court-side cost of replaying a raw BPE tokenizer: parser bytes plus
+    /// one 512-level key proof per key event, split into the verifier (stream push + `prove_key`) and the local producer (proof
+    /// construction + insertion into the test `Book`). Synthetic vocabularies of growing size establish the per-event and per-byte
+    /// rates; the maximum genesis vocabulary is extrapolated from them by its counted events and bytes (the test `Book` keeps
+    /// 513 nodes per key, so the full vocabulary is not materialized here).
+    #[test]
+    #[ignore]
+    fn fptok_measure_tokenizer_replay_cost() {
+        for n in [1_024u32, 4_096, 16_384] {
+            let mut raw = String::from(r#"{"added_tokens":[],"model":{"type":"BPE","vocab":{"#);
+            for i in 0..n {
+                if i > 0 {
+                    raw.push(',');
+                }
+                raw.push_str(&format!("\"tok{i:06}\":{i}"));
+            }
+            raw.push_str(r#"},"merges":[]}}"#);
+            let raw = raw.into_bytes();
+            let context = Hash64::from_u64_word(0xF7);
+            let mut s = PalwTokenizerJsonStreamV1::new(context, palw_tokenizer_raw_commitment_v1(&raw), raw.len() as u64, 0);
+            let mut book = Book::new();
+            let (mut verify, mut produce) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+            loop {
+                if let Some((namespace, key)) = s.pending_key() {
+                    let t = std::time::Instant::now();
+                    let proof = book.proof(namespace, key);
+                    produce += t.elapsed();
+                    let t = std::time::Instant::now();
+                    s.prove_key(context, &proof).unwrap();
+                    verify += t.elapsed();
+                    let t = std::time::Instant::now();
+                    book.insert(namespace, key);
+                    produce += t.elapsed();
+                } else if s.offset() < raw.len() as u64 {
+                    let at = s.offset() as usize;
+                    let end = (at + PALW_TOKENIZER_JSON_PART_BYTES_V1).min(raw.len());
+                    let t = std::time::Instant::now();
+                    s.push(context, at as u64, &raw[at..end]).unwrap();
+                    verify += t.elapsed();
+                } else {
+                    let t = std::time::Instant::now();
+                    match s.seal() {
+                        Ok(()) => {
+                            verify += t.elapsed();
+                            break;
+                        }
+                        Err(_) if s.pending_key().is_some() => continue,
+                        other => panic!("seal {other:?}"),
+                    }
+                }
+            }
+            s.finish().unwrap();
+            let events = s.key_events();
+            eprintln!(
+                "[fptok-measure] vocab {n} bytes {} events {events} verify_ms {:.3} produce_ms {:.3} verify_us_per_event {:.3} produce_us_per_event {:.3}",
+                raw.len(),
+                verify.as_secs_f64() * 1e3,
+                produce.as_secs_f64() * 1e3,
+                verify.as_secs_f64() * 1e6 / events as f64,
+                produce.as_secs_f64() * 1e6 / events as f64,
+            );
+        }
+    }
 }
 
 // Read-only native allocation inventory; no state/root/codec field is added.
