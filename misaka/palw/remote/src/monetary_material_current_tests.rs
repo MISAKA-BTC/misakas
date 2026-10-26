@@ -243,5 +243,91 @@ fn initial_native_capacity_and_unavailable_are_not_generation_denials() {
     }
 }
 
+/// RFC08 lifecycle: after provider replacement / cold reopen / reorg / import the
+/// court and query callers must keep local capacity, native unavailability
+/// (e.g. import incomplete), all-generations-denied and local assembly refusal
+/// apart. The String API stays the display form of the same value.
+#[test]
+fn classified_answer_keeps_local_capacity_unavailable_denied_and_local_apart() {
+    use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+    let dir = FixtureDir::new();
+    let (store, preferred, fallback, root, provider) = typed_store(&dir.file());
+    let demand = PalwMonetaryMaterialDemandV1::Kernel { stage: 0, position: 0 };
+    let resource = AuthorityError::Resource(NativeCoverageV1::unsupported::<u64>("authority test", "local reservation refused"));
+    let cases: [(AuthorityError, fn(&MaterialAnswerErrorV4) -> bool, bool); 3] = [
+        (resource, |e| matches!(e, MaterialAnswerErrorV4::Authority(AuthorityError::Resource(_))), true),
+        (AuthorityError::CapacityUnavailable, |e| matches!(e, MaterialAnswerErrorV4::Authority(AuthorityError::CapacityUnavailable)), true),
+        (
+            AuthorityError::Unavailable("material generation import incomplete".into()),
+            |e| matches!(e, MaterialAnswerErrorV4::Authority(AuthorityError::Unavailable(_))),
+            false,
+        ),
+    ];
+    for (refusal, class, local_capacity) in cases {
+        let display = refusal.to_string();
+        let calls = Cell::new(0);
+        let typed = store
+            .answer_current_generation_classified_v4(
+                preferred,
+                root,
+                root,
+                false,
+                |_, _| {
+                    calls.set(calls.get() + 1);
+                    Err(refusal.clone())
+                },
+                |_, _| -> Result<(), String> { panic!("no authority, no assembly") },
+            )
+            .unwrap_err();
+        assert!(class(&typed), "class kept: {typed:?}");
+        assert_eq!(typed.is_local_capacity(), local_capacity);
+        assert_eq!(typed.to_string(), display, "String API is the display form");
+        assert_eq!(calls.get(), 1, "a non-denial never falls back to the other retained generation");
+    }
+    // Every retained generation denied (e.g. replacement rolled back and the
+    // initial one released): a typed "no current generation", not capacity.
+    let typed = store
+        .answer_current_generation_classified_v4(
+            preferred,
+            root,
+            root,
+            false,
+            |_, _| Err(AuthorityError::Denied("generation withdrawn".into())),
+            |_, _| -> Result<(), String> { panic!("denied generations are never assembled") },
+        )
+        .unwrap_err();
+    assert!(matches!(typed, MaterialAnswerErrorV4::NoCurrentGeneration(ref r) if r == "generation withdrawn"));
+    assert!(!typed.is_local_capacity());
+    // Local assembly refusal under current authority stays Local, and the old
+    // generation remains on disk (retention is not decided by a refusal).
+    let typed = store
+        .answer_current_generation_classified_v4(
+            preferred,
+            root,
+            root,
+            false,
+            |_, _| Ok(()),
+            |_, _| -> Result<(), String> { Err("local assembly refused".into()) },
+        )
+        .unwrap_err();
+    assert!(matches!(typed, MaterialAnswerErrorV4::Local(ref r) if r == "local assembly refused"));
+    let mut held = store.held_contracts();
+    held.sort();
+    let mut expected = vec![(preferred, root), (fallback, root)];
+    expected.sort();
+    assert_eq!(held, expected, "both retained generations survive every refusal class");
+    // The current fallback generation still answers once its authority is positive.
+    store
+        .answer_current_generation_classified_v4(
+            preferred,
+            root,
+            root,
+            false,
+            |consent, _| if consent == fallback { Ok(()) } else { Err(AuthorityError::Denied("rolled back".into())) },
+            |consent, _| store.store.provider_answer_action_v1(consent, root, root, provider, demand),
+        )
+        .unwrap();
+}
+
 #[path = "monetary_material_publication_tests.rs"]
 mod publication;

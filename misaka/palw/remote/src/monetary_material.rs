@@ -32,6 +32,29 @@ pub fn replacement_generation_observed_v4(
     Err("native generation advanced without the exact saved replacement consent; acceptance unconfirmed".into())
 }
 
+/// Refusal of a current-generation material answer. `Authority` carries the
+/// native reader's own class; Resource / CapacityUnavailable are local host
+/// capacity and Unavailable is native state availability (e.g. an incomplete
+/// pruning import) — neither is a denial nor evidence about a provider.
+/// `NoCurrentGeneration`: every retained generation was natively denied.
+/// `Local`: this host's provider store / replay / assembly refused.
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum MaterialAnswerErrorV4 {
+    #[error("{0}")]
+    Authority(kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4),
+    #[error("{0}")]
+    NoCurrentGeneration(String),
+    #[error("{0}")]
+    Local(String),
+}
+impl MaterialAnswerErrorV4 {
+    /// Local native capacity: retry on a later pass; never "material missing".
+    pub fn is_local_capacity(&self) -> bool {
+        use kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4 as A;
+        matches!(self, Self::Authority(A::Resource(_) | A::CapacityUnavailable))
+    }
+}
+
 pub struct DurableMonetaryMaterialProviderV1 {
     // The kernel releases this lease on crash; a PID-file lease would strand
     // capacity or allow concurrent snapshots to overwrite accepted material.
@@ -388,6 +411,38 @@ impl DurableMonetaryMaterialProviderV1 {
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
         self.answer_material_generation_v4(consent, root, dependency, provider, pubkey, demand, native, true)
     }
+    /// Typed form of `answer_material_current_v4`: keeps local capacity apart
+    /// from native denial so a lifecycle caller never reports it as missing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn answer_material_current_classified_v4(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        pubkey: &[u8],
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+        native: &dyn kaspa_consensus_core::api::ConsensusApi,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, MaterialAnswerErrorV4>
+    {
+        self.answer_material_generation_classified_v4(preferred, root, dependency, provider, pubkey, demand, native, false)
+    }
+    /// Typed form of `answer_material_exact_current_v4`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn answer_material_exact_current_classified_v4(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        pubkey: &[u8],
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+        native: &dyn kaspa_consensus_core::api::ConsensusApi,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, MaterialAnswerErrorV4>
+    {
+        self.answer_material_generation_classified_v4(consent, root, dependency, provider, pubkey, demand, native, true)
+    }
+    #[allow(clippy::too_many_arguments)]
     fn answer_material_generation_v4(
         &self,
         preferred: Hash64,
@@ -399,11 +454,27 @@ impl DurableMonetaryMaterialProviderV1 {
         native: &dyn kaspa_consensus_core::api::ConsensusApi,
         exact: bool,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        self.answer_material_generation_classified_v4(preferred, root, dependency, provider, pubkey, demand, native, exact)
+            .map_err(|e| e.to_string())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn answer_material_generation_classified_v4(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        pubkey: &[u8],
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+        native: &dyn kaspa_consensus_core::api::ConsensusApi,
+        exact: bool,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, MaterialAnswerErrorV4>
+    {
         use kaspa_consensus_core::{
             palw_attempt_material_v3::verify_ready_signature_v3, palw_kernel_material_context_v4::restore_kernel_material_context_v4,
             palw_material_capacity_v1::PalwMaterialCodecV1,
         };
-        self.answer_current_generation_with_v4(
+        self.answer_current_generation_classified_v4(
             preferred,
             root,
             dependency,
@@ -445,13 +516,32 @@ impl DurableMonetaryMaterialProviderV1 {
         root: Hash64,
         dependency: Hash64,
         exact: bool,
+        authority: impl FnMut(
+            Hash64,
+            &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
+        ) -> Result<(), kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4>,
+        build: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.answer_current_generation_classified_v4(preferred, root, dependency, exact, authority, build).map_err(|e| e.to_string())
+    }
+    /// Same gate, keeping the refusal class: native authority (Resource /
+    /// CapacityUnavailable / Unavailable exactly as the native reader returned
+    /// them), every retained generation denied, or a local store/assembly
+    /// refusal. The String API above is only this value's display form.
+    fn answer_current_generation_classified_v4<T>(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        exact: bool,
         mut authority: impl FnMut(
             Hash64,
             &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
         ) -> Result<(), kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4>,
         mut build: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<T, String>,
-    ) -> Result<T, String> {
-        self.ensure_published_state_v4()?;
+    ) -> Result<T, MaterialAnswerErrorV4> {
+        use kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4 as A;
+        self.ensure_published_state_v4().map_err(MaterialAnswerErrorV4::Local)?;
         let mut last = String::from("no current eligible retained material generation");
         for (consent, scope) in self.store.material_generation_scopes_v4(preferred, root, dependency) {
             if exact && consent != preferred {
@@ -459,21 +549,21 @@ impl DurableMonetaryMaterialProviderV1 {
             }
             if let Err(reason) = authority(consent, scope) {
                 match reason {
-                    kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4::Denied(reason) => {
+                    A::Denied(reason) => {
                         last = reason;
                         continue;
                     }
-                    reason => return Err(reason.to_string()),
+                    reason => return Err(MaterialAnswerErrorV4::Authority(reason)),
                 }
             }
-            let answer = build(consent, scope)?;
+            let answer = build(consent, scope).map_err(MaterialAnswerErrorV4::Local)?;
             // Assembly can outlive the authority read across a reorg. Keep the
             // returned owner (and its allocation ticket) through this recheck;
             // a changed generation drops it before any bytes leave this API.
-            authority(consent, scope).map_err(|why| why.to_string())?;
+            authority(consent, scope).map_err(MaterialAnswerErrorV4::Authority)?;
             return Ok(answer);
         }
-        Err(last)
+        Err(MaterialAnswerErrorV4::NoCurrentGeneration(last))
     }
 
     pub fn open(

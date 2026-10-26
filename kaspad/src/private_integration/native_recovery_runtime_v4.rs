@@ -429,7 +429,7 @@ impl LoopbackNativeProviderV3 {
                     } else {
                         Demand::Kernel { stage: c.stage, position: c.position }
                     };
-                    let action = match store.answer_material_current_v4(
+                    let action = match store.answer_material_current_classified_v4(
                         row.consent,
                         row.terms.root,
                         c.dependency,
@@ -439,6 +439,13 @@ impl LoopbackNativeProviderV3 {
                         &*api,
                     ) {
                         Ok(a) => a,
+                        Err(error) if error.is_local_capacity() => {
+                            // Local host capacity, not missing material: end this
+                            // pass (later demands would meet the same budget) and
+                            // retry on the next tick; the deadline is unchanged.
+                            kaspa_core::warn!("RFC08 V4 court answer deferred on local native capacity: {error}");
+                            return Ok(());
+                        }
                         Err(error) => {
                             kaspa_core::warn!("RFC08 V4 actual court material unavailable: {error}");
                             continue;
