@@ -160,6 +160,16 @@ impl RealRun {
 /// admits the class (module doc). **GAP-62:** the attempt commits the output an honest IR attempt of the class would: the run of the
 /// bound kernel class on the prompt its execution anchor names, under J5's canonical context — so a prefix claim can carry it.
 async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> RealRun {
+    // An unbound prior session row that the canonical selection does not pick (e.g. one enrolled for another purpose) must not
+    // make the harness send a non-custody header: the owned PAV3 form is required (rule unchanged). Enroll and retry once.
+    if let Some(run) = real_attempt_inner(cw, card, class, nonce, false).await {
+        return run;
+    }
+    enroll_native_session(cw, card, class, nonce).await;
+    real_attempt_inner(cw, card, class, nonce, true).await.expect("a freshly enrolled native session is selected")
+}
+
+async fn real_attempt_inner(cw: &mut Cw, card: usize, class: Hash64, nonce: u64, enrolled: bool) -> Option<RealRun> {
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2,
         PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1, challenge_v2, class_ticket_v3, execution_anchor_v3,
@@ -169,7 +179,7 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     // prospective native session the executor and two independent providers signed BEFORE the attempt (the real path).
     let custody = {
         let params = cw.net.chain.vp().palw_state_params_v2.clone().expect("V2 state params");
-        kaspa_consensus_core::palw_attempt_material_v3::palw_native_custody_required_v3(&params, &class, cw.net.daa() + 1)
+        enrolled || kaspa_consensus_core::palw_attempt_material_v3::palw_native_custody_required_v3(&params, &class, cw.net.daa() + 1)
     };
     // One unbound prior session admits one claim; a test may have enrolled it already (to fold against the state that holds it).
     let unbound = cw.net.chain.tip_state().1.monetary_material_rows_v1().into_iter().any(|row| {
@@ -251,6 +261,14 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     } else {
         None
     };
+    // The rule reads the HEADER's DAA (the template can sit past `daa + 1`): re-ask there, and retry in the custody form.
+    let required_at_header = {
+        let params = cw.net.chain.vp().palw_state_params_v2.clone().expect("V2 state params");
+        kaspa_consensus_core::palw_attempt_material_v3::palw_native_custody_required_v3(&params, &class, header.daa_score)
+    };
+    if !enrolled && ((custody && session.as_ref().is_some_and(|row| row.is_none())) || (required_at_header && !custody)) {
+        return None;
+    }
     // PAV3 prices the custody-bound execution (session, consent, roster; never signatures), so the lottery is drawn over the
     // provisional envelope before any provider is asked.
     let ready_for = |attempt: &PalwAttemptUnsignedV2| {
@@ -313,7 +331,7 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     assert!(matches!(row.phase, PalwClaimPhaseV2::Provisional), "a fresh REAL claim: {:?}", row.phase);
     assert_eq!(row.job_identity, anchor, "the claim's job identity is its execution anchor");
     let executor_exposure_sompi = cw.net.chain.tip_state().1.claim(&claim).unwrap().reserved;
-    RealRun { claim, prompt, run, executor_exposure_sompi }
+    Some(RealRun { claim, prompt, run, executor_exposure_sompi })
 }
 
 /// **The executor's prospective native session** (`MonetaryMaterialEnrolledV1` with `native_session`), signed by the executor
