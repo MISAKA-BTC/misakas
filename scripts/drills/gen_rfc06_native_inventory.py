@@ -122,6 +122,7 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        'misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6',
        'misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6',
        'crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6',
+       'crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1',
        'crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2',
        'crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2','crate::palw_step_refute::routing_v2::PalwRoutedLeafEvidenceV2',
        'misaka_palw_kernel::spec::retrieval::SliceResponseV1','misaka_palw_kernel::spec::retrieval::EntryResponseV1','misaka_palw_kernel::spec::retrieval::RetrievalItemV1',

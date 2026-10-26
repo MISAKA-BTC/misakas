@@ -390,6 +390,8 @@ router_arms += '148=>return Err(wire::wire_bad("unallocated selected-source boot
 router_arms += '149 if key_bytes==65 && prefix==1=>misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6::scan_native_wire_v1(frame)?,\n'
 router_arms += '149 if key_bytes==65 && prefix==2=>crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6::scan_native_wire_v1(frame)?,\n'
 router_arms += '149=>return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),\n'
+# G14 F02b/F02c: the slice's court capital row (derived borsh, key (payer, claim)); written only past palw_kernel_route_panel_one_v1.
+router_arms += '150=>crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1::scan_native_wire_v1(frame)?,\n'
 
 code=code.replace(router_marker, router_arms+router_marker, 1)
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)

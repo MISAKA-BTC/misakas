@@ -45,6 +45,7 @@ native_struct!(misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1;
 native_struct!(misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6; version, network, bootstrap_policy, required_sources, maximum_events, anchor_delay, window, settlement_depth, maximum_consumers, source_liability_slack);
 native_struct!(misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6; version, policy, contract, enrollment, original_context, checker_snapshot, liability_until, collector, consumer);
 native_struct!(crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6; version, binding, source, lock);
+native_struct!(crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1; version, payer, claim, amount, hard_deadline_daa);
 native_struct!(crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2; version, claim, execution_root, trace_root, executor_bond, accuser_bond, leaf_index, refutation, artifact_openings, signature);
 native_struct!(crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2; version, step);
 native_struct!(crate::palw_step_refute::routing_v2::PalwRoutedLeafEvidenceV2; refutation, artifact_openings);
@@ -115,7 +116,6 @@ native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1; commi
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1; class_id, accepted_daa, units, final_weight);
 native_struct!(crate::palw_security_certification_v1::PalwClaimCertificationRowV1; claim, class_id, producer_bond, producer_principal, attempt, final_daa, committed_daa, committed_span, anchor, draws, drawn_daa, deadline_daa, attestations, held_reward, payout_payload, outcome);
 native_struct!(crate::palw_security_certification_v1::PalwCertificationClassRowV1; committed, certified, failed);
-native_struct!(crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1; version, claim, producer_bond, producer_payload, poster_bond, poster_payload, amount, held_daa);
 native_struct!(crate::palw_security_certification_v1::PalwCertificationNetworkRowV1; epoch, draws);
 native_struct!(crate::palw_router_binding_v2::PalwRouterBindingRowV2; version, bound_from_daa, readers);
 native_struct!(crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1; version, class_id, block, daa_score, door, admission_digest);
