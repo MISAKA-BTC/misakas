@@ -1812,6 +1812,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         opening: &[u8],
         claim: kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1,
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        self.require_native_routing_job_v2(job).map_err(|e| e.to_string())?;
         let (profile, kernels) = self.interval_kernels_v1()?;
         crate::segment_opening::base0_replay_segment_opening_v2(
             &kernels,
@@ -5761,3 +5762,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "qwen36_backend/segment_routing_tests_v2.rs"]
+mod segment_routing_tests_v2;

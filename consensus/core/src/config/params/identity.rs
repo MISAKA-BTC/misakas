@@ -635,6 +635,22 @@ impl Params {
         if self.palw_settlement_once_v1 == Some(ForkActivation::never()) {
             self.palw_settlement_once_v1 = None;
         }
+        // Lane FLEET: collapse to absent, as above.
+        if self.palw_kernel_route_panel_one_v1 == Some(ForkActivation::never()) {
+            self.palw_kernel_route_panel_one_v1 = None;
+        }
+        if self.palw_tir_bounded_door_v1 == Some(ForkActivation::never()) {
+            self.palw_tir_bounded_door_v1 = None;
+        }
+        if self.palw_tir_designated_answers_v1 == Some(ForkActivation::never()) {
+            self.palw_tir_designated_answers_v1 = None;
+        }
+        if self.palw_court_outsider_lane_v1 == Some(ForkActivation::never()) {
+            self.palw_court_outsider_lane_v1 = None;
+        }
+        if self.palw_court_clock_v2 == Some(ForkActivation::never()) {
+            self.palw_court_clock_v2 = None;
+        }
         if self.palw_paid_claim_trap_v1 == Some(ForkActivation::never()) {
             self.palw_paid_claim_trap_v1 = None;
         }
@@ -2908,12 +2924,12 @@ impl Params {
             palw_tir_public_conviction_v1,
             palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1: _,
-            palw_tir_bounded_door_v1: _,
-            palw_tir_designated_answers_v1: _,
-            palw_court_outsider_lane_v1: _,
+            palw_tir_bounded_door_v1,
+            palw_tir_designated_answers_v1,
+            palw_court_outsider_lane_v1,
             palw_state_row_map_v1: _,
-            palw_kernel_route_panel_one_v1: _,
-            palw_court_clock_v2: _,
+            palw_kernel_route_panel_one_v1,
+            palw_court_clock_v2,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -3919,6 +3935,23 @@ impl Params {
             fork(at, visit);
         }
         if let Some(at) = palw_settlement_once_v1.as_mut() {
+            fork(at, visit);
+        }
+        // Lane FLEET (2026-10-26): full-activation fences the visitor skipped, so an armed future height reached the handshake
+        // identity and a DAA-17,000 build could not peer with the fleet below 17,000.
+        if let Some(at) = palw_kernel_route_panel_one_v1.as_mut() {
+            fork(at, visit);
+        }
+        if let Some(at) = palw_tir_bounded_door_v1.as_mut() {
+            fork(at, visit);
+        }
+        if let Some(at) = palw_tir_designated_answers_v1.as_mut() {
+            fork(at, visit);
+        }
+        if let Some(at) = palw_court_outsider_lane_v1.as_mut() {
+            fork(at, visit);
+        }
+        if let Some(at) = palw_court_clock_v2.as_mut() {
             fork(at, visit);
         }
         if let Some(at) = palw_paid_claim_trap_v1.as_mut() {

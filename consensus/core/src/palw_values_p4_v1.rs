@@ -222,7 +222,8 @@ mod tests {
         assert!(refused(&|q| q.curve.alpha_halves = 4), "alpha = 2 refused");
         assert!(refused(&|q| q.average.as_mut().unwrap().average_days = 30), "the old 30-day average refused");
         assert!(refused(&|q| q.average.as_mut().unwrap().verifier_capital = false));
-        assert!(refused(&|q| q.average.as_mut().unwrap().block_opportunity = false));
+        // block_opportunity = false is the V+ form: the policy validates; the fence decides it against V+.
+        assert!(!refused(&|q| q.average.as_mut().unwrap().block_opportunity = false));
         assert!(refused(&|q| q.epoch_daa = 1_000), "an epoch that does not divide 5,040 DAA");
         assert!(refused(&|q| q.epoch_daa = 0));
         assert!(refused(&|q| q.seasoning_epochs = 0));
@@ -247,6 +248,21 @@ mod tests {
         });
         let PalwModeV2Error::Invalid(why) = both.validate_palw_model_bond_allocation_v1().unwrap_err() else { panic!("Invalid") };
         assert!(why.contains("cannot be armed"), "{why}");
+        // block_opportunity = false without V+ at or below it would apply P_m to blocks nowhere: refused.
+        let mut no_gate = both.clone();
+        no_gate.palw_model_bond_allocation_v1.as_mut().unwrap().policy.average.as_mut().unwrap().block_opportunity = false;
+        let PalwModeV2Error::Invalid(why) = no_gate.validate_palw_model_bond_allocation_v1().unwrap_err() else { panic!("Invalid") };
+        assert!(why.contains("block_opportunity is false exactly"), "{why}");
+        // With V+ at the same height, false is the one-gate form and only the missing approved value refuses it.
+        let mut v_plus = no_gate.clone();
+        v_plus.palw_model_block_rights_v1 = Some(ForkActivation::new(16_000));
+        let PalwModeV2Error::Invalid(why) = v_plus.validate_palw_model_bond_allocation_v1().unwrap_err() else { panic!("Invalid") };
+        assert!(why.contains("no approved policy is pinned"), "{why}");
+        // ... and true under V+ is refused (two gates).
+        let mut twice = both.clone();
+        twice.palw_model_block_rights_v1 = Some(ForkActivation::new(16_000));
+        let PalwModeV2Error::Invalid(why) = twice.validate_palw_model_bond_allocation_v1().unwrap_err() else { panic!("Invalid") };
+        assert!(why.contains("block_opportunity is false exactly"), "{why}");
         // A malformed policy is named first.
         let mut bad = both.clone();
         bad.palw_model_bond_allocation_v1.as_mut().unwrap().policy.epoch_daa = 1_000;
@@ -325,7 +341,18 @@ mod tests {
         assert!(daily.reward_sompi < PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1 / 1_000 * 510, "below the 0.51 collectable");
         let mut armed = t12.clone();
         armed.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(16_000), policy: b.clone() });
-        assert!(armed.validate_palw_bond_budget_v1().is_err(), "still refused (non-value blockers)");
+        // Lane VAL 2026-10-26: the estimate is pinned in the approved list, so a refusal (if any) is never the missing value.
+        assert!(crate::palw_bond_budget_v1::palw_bond_budget_approved_policy_digests_v1().contains(&b.digest()));
+        if let Err(e) = armed.validate_palw_bond_budget_v1() {
+            assert!(!format!("{e:?}").contains("no approved policy"), "{e:?}");
+        }
+        // Any other policy is still refused for the missing approval.
+        let mut other = b.clone();
+        other.claims_per_unit += 1;
+        other.max_open_claims_per_bond += 1;
+        if other.validate().is_ok() {
+            assert!(!crate::palw_bond_budget_v1::palw_bond_budget_approved_policy_digests_v1().contains(&other.digest()));
+        }
         let mut bad = b.clone();
         bad.export_cap_permille = 511;
         assert!(bad.validate().is_err());

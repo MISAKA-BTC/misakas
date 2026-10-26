@@ -71,6 +71,38 @@ pub(super) fn install_court_service_binding_with_profile_v1(
     b.write_court_service_state_v1(next)
 }
 
+/// **ADR-0192 A/A (lane F03b): install the claim-common shared frontier at the original's own accepting point.** Runs after the
+/// claim's service binding is written (F02 plain admission or the RFC-0035 funded all-branch book). `Ok(false)` when the shared
+/// lifecycle is not in force at this DAA or the claim has no binding (dormant: no row, the old behaviour), or when the identical
+/// context is already installed (the funded path calls this twice). A different retained context is refused: the frontier is fixed
+/// at acceptance and no owner, filer or Sybil can replace it. Fails closed: with the lifecycle in force and a binding present, an
+/// underivable frontier refuses the admission instead of accepting a claim no outsider can pursue.
+pub(super) fn install_shared_frontier_context_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+) -> Result<bool, PalwStateV2Error> {
+    if !shared_court_lifecycle_active_v1(b, ctx.daa_score) {
+        return Ok(false);
+    }
+    if !b.state.court_service_state_v1().is_some_and(|s| s.claims.contains_key(&claim)) {
+        return Ok(false);
+    }
+    let derived = crate::palw_court_shared_tir_state_v1::derive_shared_tir_context_v1(&b.state, claim)
+        .map_err(|e| refused(format!("shared frontier install refused: {e}")))?;
+    if derived.original_accepted_daa != ctx.daa_score {
+        return Err(refused("shared frontier installs only at the original's own accepting point"));
+    }
+    let key = Key::CourtSharedContext(claim);
+    match b.state.staged_court_row_v1(&key) {
+        Some(Row::CourtSharedContext(old)) if **old == derived => return Ok(false),
+        Some(_) => return Err(refused("shared frontier context is immutable once installed")),
+        None => {}
+    }
+    b.write_staged_row_v1(key, Some(Row::CourtSharedContext(Box::new(derived))))?;
+    Ok(true)
+}
+
 /// **ADR-0192 A: record this accepting block's actual reserved service supply.** Called once per block after every object. The
 /// unreserved court cost is the block's deterministic court-capacity spend (`charge_court_op_v1`; zero below
 /// `palw_court_capacity_v1`). When unreserved court operations spent reserved capacity, the slot records NO supply (a later

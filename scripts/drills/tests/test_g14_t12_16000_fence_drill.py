@@ -32,14 +32,19 @@ class PlanTests(unittest.TestCase):
         p = D.build_plan(60)
         self.assertEqual((p['partitionStartDaa'], p['partitionEndDaa'], p['restartDaa']), (54, 66, 70))
         self.assertEqual(p['phases'], list(D.PHASES))
-        self.assertEqual(p['publicTarget'], 16_000)
+        self.assertEqual(p['publicTarget'], 17_000)
+        self.assertEqual(D.build_plan(60, public_target=18_000)['publicTarget'], 18_000)
 
     def test_h_must_clear_the_factory_flag_days_and_not_be_the_public_height(self):
         for bad in (0, 28):
             with self.assertRaises(D.PlanError):
                 D.build_plan(bad)
         with self.assertRaises(D.PlanError):
-            D.build_plan(16_000)
+            D.build_plan(17_000)
+        with self.assertRaises(D.PlanError):
+            D.build_plan(16_500, public_target=16_500)
+        with self.assertRaises(D.PlanError):
+            D.build_plan(60, public_target=20)
         with self.assertRaises(D.PlanError):
             D.build_plan(32, partition_lead=6)  # the partition would start at 26 <= 28
 

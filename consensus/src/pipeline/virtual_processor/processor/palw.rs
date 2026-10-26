@@ -7048,10 +7048,15 @@ impl VirtualStateProcessor {
                 }) => {
                     use kaspa_consensus_core::palw_security_certification_v1::{
                         PALW_SECURITY_CERTIFICATION_TABLE_V1, PalwClaimCertificationRowV1,
-                        certification_claim_key_v1, certification_native_key_v39,
+                        certification_claim_key_v1, certification_kernel_claim_key_v1, certification_native_key_v39,
                     };
                     state.kernel_route_state_v1().is_some_and(|route| {
-                        [certification_claim_key_v1(&attestation.exam), certification_native_key_v39(&attestation.exam)]
+                        [
+                            certification_claim_key_v1(&attestation.exam),
+                            certification_native_key_v39(&attestation.exam),
+                            // lane CERT: a kernel-route ledger claim's certification ('K').
+                            certification_kernel_claim_key_v1(&attestation.exam),
+                        ]
                             .iter().any(|key| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, key).is_some())
                     })
                 }

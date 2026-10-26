@@ -1763,6 +1763,22 @@ impl PalwPanelService {
                 );
                 continue;
             }
+            // Refresh the original segment decisions immediately before either
+            // vertex publication or receipt signing, including cached matched masks.
+            // The pre-existing explicit collusion drill deliberately signs a
+            // false licence without replay; keep that fault-injection path explicit.
+            if licensed_by_verified_resume && !colluding {
+                let active = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
+                    f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score())
+                });
+                if let Err(why) = seat_resumes.refresh_routing_with_v2(
+                    duty.claim_id, duty.panel_seat_count.max(1), mask, &mut seat_replays, active, true,
+                    |claim, job| session.palw_native_routing_claim_authority_v2(claim, job),
+                ) {
+                    warn!("[{PALW_PANEL}] claim {}: native segment publication waits: {why}", duty.claim_id);
+                    continue;
+                }
+            }
             // **RFC-0007: past `palw_verification_vertex_v1`, a verdict on a claim whose panel bound at or after the fence is a LEAF of
             // this seat's round vertex, and no receipt is signed** (the chain's path rule: such a claim licenses by tally; one bound
             // before the fence keeps the receipt path to its licence or its void). A role that files no V3 form files no leaf either,

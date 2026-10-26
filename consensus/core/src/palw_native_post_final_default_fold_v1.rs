@@ -128,7 +128,7 @@ pub(super) fn decide_native_post_final_default_v1(
         }
     }
     let unpaid: BTreeSet<PalwBondKeyV2> = std::iter::once(row.producer).collect();
-    crate::palw_court_service_binding_v1::attribute_service_default_v1(service, claim, &clocks, &unpaid, true)
+    crate::palw_court_service_binding_v1::attribute_service_default_v1(service, claim, &clocks, &unpaid, b.extras.court_service_inclusion_premise_v1.as_ref())
 }
 
 /// **Apply a decided post-Final default of `(family, job)`** under an explicit slash amount (fixtures; a future pinned amount).

@@ -233,7 +233,7 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 ];
 
 /// **The full-activation list's height — `None`.** Target: DAA 16,000 (a height no other list uses: not 750, 1,000, 1,300, 1,700,
-/// 2,000, 3,600, 5,300, 5,395, 5,490, 5,585 — the fork id names heights, not fences). It is set to `Some(16_000)` ONLY after every
+/// 2,000, 3,600, 5,300, 5,395, 5,490, 5,585 — the fork id names heights, not fences). It is set to `Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1)` (17,000, user goal 2026-10-26) ONLY after every
 /// arming record each entry's validation asks for is pinned in the binary (G14 arm-readiness records, TIR frame-cost records, RFC-0608
 /// measured records, approved X3 / court-capacity / monetary-material / model-tier policies) AND the user approves; the same change
 /// updates `contrib/t12-deploy-kit/fleet.env.example` (pinned by `t12_deploy_kit_constants`) and re-pins the ids. One constant the preset,
@@ -245,14 +245,34 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = None;
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.
-pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 16_000;
+pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 17_000;
 
 /// **The full-activation flag day, armed** — the list at [`PALW_T12_FULL_ACTIVATION_DAA`] on the ASSEMBLED ruleset, after the int-13
 /// flag day; a no-op while the height is `None` (it leaves the list exactly as the earlier lists set it — in particular it does not clear
 /// the int-13 entries this list shares, should the int-13 list ever take a height of its own).
 pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
     let Some(at) = PALW_T12_FULL_ACTIVATION_DAA else { return };
-    palw_t12_arm_full_activation_at_v1(params, Some(at));
+    palw_t12_arm_after_int13_at_v1(params, PALW_T12_FULL_ACTIVATION_FENCES_V1, Some(at));
+}
+
+/// Is `fence` one of the int-13 list's entries while that list has its own height ([`PALW_T12_INT13_DAA`], DAA 15,500 on the public
+/// fleet)? Those entries keep that height: a later list must neither re-arm them at its own height nor set them dormant.
+pub fn palw_t12_fence_held_by_int13_v1(fence: &PalwPostLaunchFenceV1) -> bool {
+    PALW_T12_INT13_DAA.is_some() && PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == fence.name)
+}
+
+/// **A list that carries the int-13 entries, on the shipped testnet-12 ruleset** — like [`palw_t12_arm_fence_list_at_v1`], but the
+/// int-13 entries are left exactly as the int-13 flag day set them (DAA 15,500). With the slice at 17,000 this moves only the slice's
+/// remaining six entries, so every id below 17,000 is the fleet's. Drills that move the whole list to a low height keep using
+/// [`palw_t12_arm_full_activation_at_v1`] / [`palw_t12_arm_fence_list_at_v1`].
+pub fn palw_t12_arm_after_int13_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {
+    match at {
+        Some(at) => list
+            .iter()
+            .filter(|f| !palw_t12_fence_held_by_int13_v1(f))
+            .for_each(|fence| (fence.set)(params, Some(ForkActivation::new(at)))),
+        None => list.iter().rev().filter(|f| !palw_t12_fence_held_by_int13_v1(f)).for_each(|fence| (fence.set)(params, None)),
+    }
 }
 
 /// **The full-activation flag day at `at`** (`None`: dormant) — the one body the preset, a drill and the tests share. Dormant is set in
@@ -273,11 +293,39 @@ pub fn palw_t12_arm_full_activation_at_v1(params: &mut Params, at: Option<u64>) 
     }
 }
 
+/// **The vertical slice (coordinator plan 2026-10-26)** — the subset of [`PALW_T12_FULL_ACTIVATION_FENCES_V1`] that closes G14 for ONE
+/// slice: the kernel route with Panel=1, its claim deadline, settlement once, Gate C (per-claim drawn approval), and the route-required
+/// fence that leaves every other family route-absent (no new reward, G-01 (b)). Same order as the full list, so each entry's prerequisite
+/// stays earlier. NOT on it, and still refused by validation where needed: `palw_bond_budget_v1` (settlement once needs it at or below;
+/// value lane). Which genesis class and job shape the slice admits is NOT a fence and NOT a record field: records are keyed by (fence,
+/// network, height) only, so the class must be carried by the route's own policy (lane SPINE names it). Nothing here arms anything.
+pub const PALW_T12_KERNEL_SLICE_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    crate::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY,
+    crate::palw_gen_range_twin_v1::PALW_DRILL_GEN_RANGE_TWIN_ENTRY,
+    PALW_T12_MODEL_COURT_WINDOW_ENTRY,
+    crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
+    PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,
+    PALW_T12_FULL_KERNEL_ROUTE_PANEL_ONE_ENTRY,
+    PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
+    PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
+    PALW_T12_FULL_GATE_C_ENTRY,
+    PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
+];
+
+/// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.
+pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {
+    match at {
+        Some(at) => list.iter().for_each(|fence| (fence.set)(params, Some(ForkActivation::new(at)))),
+        None => list.iter().rev().for_each(|fence| (fence.set)(params, None)),
+    }
+}
+
 /// **testnet-12 as its int-13 build ships it** — [`palw_t12_shipped_params`] with the full-activation list set back to dormant: the
 /// baseline the full-activation flag day is judged against (the fork-id comparison, the "only this list moved it" twin). While both the
 /// int-13 height and this list's height are `None`, it equals [`palw_t12_release_v6_params`] (int-12, `5ee7fd8e…`), byte for byte.
 pub fn palw_t12_release_v7_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    palw_t12_arm_full_activation_at_v1(&mut params, None);
+    // The int-13 entries stay at PALW_T12_INT13_DAA (15,500): this baseline is the public fleet's ruleset.
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
     params
 }

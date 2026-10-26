@@ -20,7 +20,7 @@ const AT: u64 = 9_000;
 fn c4r3_observation_a_fence_joining_the_int13_height_leaves_the_fork_id_unchanged() {
     // The shipped ruleset schedules the list nowhere (no DAA-9,000 flag day); the hazard is stated on the list armed at a test height,
     // the shape of the build the future release will deploy.
-    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
+    assert_eq!(PALW_T12_INT13_DAA, Some(15_500), "the int-13 list arms at 15,500 (user, 2026-10-25), not at this test height");
     assert!(!palw_t12_shipped_params().fence_schedule_v1().contains(&AT), "{AT} is not scheduled on the shipped ruleset");
     let mut shipped = palw_t12_shipped_params();
     palw_t12_arm_int13_flag_day_at_v1(&mut shipped, Some(AT));

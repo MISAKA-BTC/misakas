@@ -118,6 +118,8 @@ mod artifact_inventory;
 mod response_presign;
 #[path = "palw_fp_replay_routing_v2.rs"]
 mod fp_replay_routing;
+#[path = "palw_segment_replay_routing_v2.rs"]
+mod segment_replay_routing;
 #[path = "palw_accepted_fp_job_context_v2.rs"]
 mod accepted_fp_job_context;
 #[path = "palw_flat_source_responder.rs"]
@@ -1184,6 +1186,7 @@ enum PalwSeatTaskOutV1 {
     Replay(PalwSeatReplayResultV1),
     RoutedReplay {result:PalwSeatReplayResultV1,original:Arc<fp_replay_routing::FpReplayRoutingGuardV2>},
     Segment(PalwSeatSegmentResultV1),
+    RoutedSegment { result: PalwSeatSegmentResultV1, original: Arc<segment_replay_routing::SegmentRoutingGuardV2> },
 }
 
 struct PalwSeatReplayRunV1 {
@@ -1395,7 +1398,7 @@ impl PalwSeatReplaysV1 {
             None => PalwSeatReplayPollV1::Absent,
             Some(None) => PalwSeatReplayPollV1::Running,
             Some(Some((PalwSeatTaskOutV1::Replay(result)|PalwSeatTaskOutV1::RoutedReplay {result,..}, fresh))) => PalwSeatReplayPollV1::Done { result, fresh },
-            Some(Some((PalwSeatTaskOutV1::Segment(_), fresh))) => {
+            Some(Some((PalwSeatTaskOutV1::Segment(_)|PalwSeatTaskOutV1::RoutedSegment {..}, fresh))) => {
                 PalwSeatReplayPollV1::Done { result: Err("a segment task under a replay's key".into()), fresh }
             }
         }
@@ -1406,7 +1409,7 @@ impl PalwSeatReplaysV1 {
         match self.poll_task(key, now_daa, false).await {
             None => PalwSeatSegmentPollV1::Absent,
             Some(None) => PalwSeatSegmentPollV1::Running,
-            Some(Some((PalwSeatTaskOutV1::Segment(result), fresh))) => PalwSeatSegmentPollV1::Done { result, fresh },
+            Some(Some((PalwSeatTaskOutV1::Segment(result)|PalwSeatTaskOutV1::RoutedSegment {result,..}, fresh))) => PalwSeatSegmentPollV1::Done { result, fresh },
             Some(Some((PalwSeatTaskOutV1::Replay(_)|PalwSeatTaskOutV1::RoutedReplay {..}, fresh))) => PalwSeatSegmentPollV1::Done {
                 result: Err(PalwSeatSegmentRefusalV1::Local("a replay under a segment task's key".into())),
                 fresh,
@@ -1689,7 +1692,7 @@ impl PalwSeatReplaysV1 {
     /// ([`PalwSeatSegmentRefusalV1::Local`]), never the opening's (finding 1). A whole-job replay's
     /// verdict is left alone: its retry is [`Self::retry_refused`]'s.
     pub(crate) fn forget_segment(&mut self, key: &PalwSeatReplayKeyV1) {
-        if self.done.get(key).is_some_and(|done| matches!(done.result, PalwSeatTaskOutV1::Segment(_))) {
+        if self.done.get(key).is_some_and(|done| matches!(done.result, PalwSeatTaskOutV1::Segment(_)|PalwSeatTaskOutV1::RoutedSegment {..})) {
             self.done.remove(key);
         }
     }
@@ -1904,6 +1907,7 @@ pub(crate) enum PalwSeatResumeStepV1 {
 pub(crate) struct PalwSeatResumesV1 {
     started: HashMap<(Hash64, u16), u32>,
     matched: HashSet<(Hash64, u16)>,
+    routing: segment_replay_routing::SegmentMatchBookV2,
     /// The candidate each segment has in flight, polled whatever the pool holds by then: a segment
     /// whose replay runs is never read as unserved (N-5).
     in_flight: HashMap<(Hash64, u16), PalwSeatReplayKeyV1>,
@@ -1946,6 +1950,7 @@ impl PalwSeatResumesV1 {
                             );
                         }
                         self.in_flight.remove(&(claim.claim, segment));
+                        if let Some(original) = replays.segment_original_v2(&key) { self.routing.remember(original); }
                         self.matched.insert((claim.claim, segment));
                         self.served.insert(claim.claim);
                         continue;
@@ -1993,6 +1998,7 @@ impl PalwSeatResumesV1 {
             let request = palw_segment_opening_request_index_v1(claim.seat_count, segment);
             let candidates = openings.get(&(claim.claim, request)).cloned().unwrap_or_default();
             let (mut matched, mut in_flight) = (false, false);
+            let mut matched_key = None;
             let mut dropped: Vec<Vec<u8>> = Vec::new();
             let mut untried: Option<(PalwSeatReplayKeyV1, Vec<u8>)> = None;
             for bytes in candidates {
@@ -2001,6 +2007,7 @@ impl PalwSeatResumesV1 {
                 match replays.poll_segment(&key, claim.now_daa).await {
                     PalwSeatSegmentPollV1::Done { result: Ok(true), .. } => {
                         matched = true;
+                        matched_key = Some(key);
                         break;
                     }
                     // This host's failure: the bytes stay, and are tried again while the bound lasts.
@@ -2034,6 +2041,7 @@ impl PalwSeatResumesV1 {
                 }
             }
             if matched {
+                if let Some(original) = matched_key.and_then(|key| replays.segment_original_v2(&key)) { self.routing.remember(original); }
                 self.matched.insert((claim.claim, segment));
                 self.served.insert(claim.claim);
                 continue;
@@ -2071,6 +2079,7 @@ impl PalwSeatResumesV1 {
     pub(crate) fn retain_live(&mut self, live: impl Fn(&Hash64) -> bool) {
         self.started.retain(|(claim, _), _| live(claim));
         self.matched.retain(|(claim, _)| live(claim));
+        self.routing.retain_live(&live);
         self.in_flight.retain(|(claim, _), _| live(claim));
         self.served.retain(|claim| live(claim));
     }
@@ -14069,16 +14078,31 @@ impl PalwPanelService {
                     seat_count: seats,
                     segment_index: segment,
                 };
-                let (ctx, prompt) = (ctx.clone(), prompt.to_vec());
-                replays.start_segment(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), backend, move |b| {
-                    // Whose an `Err` is — the opening's, or this host's (finding 1) — as the family names it.
-                    b.replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening, segment_claim)
-                        .map(|replay| replay.matches)
-                        .map_err(palw_seat_s4_refusal_v1)
+                let active = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
+                    f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score())
                 });
+                let bound = match segment_replay_routing::BoundSegmentReplayV2::bind_with(
+                    backend, duty.claim_id, segment, ctx, prompt, active,
+                    |claim, job| session.palw_native_routing_claim_authority_v2(claim, job),
+                ) {
+                    Ok(bound) => bound,
+                    Err(why) => {
+                        warn!("[{PALW_PANEL}] claim {} segment {segment}: native segment bind waits: {why}", duty.claim_id);
+                        return false;
+                    }
+                };
+                replays.start_routed_segment_v2(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), bound, opening, segment_claim);
                 true
             })
             .await;
+        let active = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
+            f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score())
+        });
+        if let Err(why) = resumes.refresh_routing_with_v2(duty.claim_id, seats, claim.mask, replays, active, matches!(&step, PalwSeatResumeStepV1::Licensed(_)),
+            |claim, job| session.palw_native_routing_claim_authority_v2(claim, job)) {
+            warn!("[{PALW_PANEL}] claim {}: native segment result waits: {why}", duty.claim_id);
+            return PalwSeatResumeStepV1::Waiting;
+        }
         if let PalwSeatResumeStepV1::Starved { missing, .. } = &step {
             let reask_daa = seat_reask_daa_v1(seat_r_duty.deadline.saturating_sub(duty.bound_daa));
             let fresh: Vec<u32> = missing

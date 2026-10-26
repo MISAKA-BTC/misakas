@@ -97,8 +97,10 @@ impl PalwModelAllocationPolicyV1 {
         if average.average_days != PALW_ALLOCATION_AVERAGE_DAYS_V1 || average.daa_per_day != PALW_BOND_HOLD_DAA_PER_DAY_V1 {
             return Err("the allocation averages over 7 day-equivalents of DAA (user decision 2026-10-16)");
         }
-        if !average.verifier_capital || !average.block_opportunity {
-            return Err("S_m counts miner + claim-bound verifier capital, and P_m applies to block opportunity and coinbase (2026-10-14)");
+        // `block_opportunity` is checked against V+ by `Params::validate_palw_model_bond_allocation_v1` (it is false exactly where
+        // RFC-0016 V+ applies P_m to blocks instead; pin 2026-10-22 ADJUST 1), not here: the policy alone cannot see the fence.
+        if !average.verifier_capital {
+            return Err("S_m counts miner + claim-bound verifier capital (2026-10-14)");
         }
         // A zero epoch is refused here, before the remainder below (`validate`'s own zero check runs after this one).
         if self.epoch_daa == 0 {

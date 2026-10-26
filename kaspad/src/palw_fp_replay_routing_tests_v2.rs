@@ -14,6 +14,9 @@ fn h(n: u64) -> Hash64 {
     Hash64::from_u64_word(n)
 }
 fn native_fp_owner_fixture_v2() -> (Arc<Owner>, Arc<Owner>, Arc<Owner>) {
+    native_owner_fixture_v2(true)
+}
+pub(crate) fn native_owner_fixture_v2(free_prompt: bool) -> (Arc<Owner>, Arc<Owner>, Arc<Owner>) {
     let mut profile =
         kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
             .unwrap();
@@ -113,10 +116,17 @@ fn native_fp_owner_fixture_v2() -> (Arc<Owner>, Arc<Owner>, Arc<Owner>) {
     carriage.class_semantics.insert(class, semantics.clone());
     carriage.claim_semantics.insert(lead, semantics);
     let claim = carriage.claims.get_mut(&lead).unwrap();
-    claim.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
-    claim.job_identity = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&job);
-    carriage.bounded_immature = carriage.bounded_immature.checked_sub(claim.immature_contribution).unwrap();
-    claim.immature_contribution = 0;
+    if free_prompt {
+        claim.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
+        claim.job_identity = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&job);
+    } else {
+        job.job_id = h(0x534547);
+        claim.job_identity = job.job_id;
+    }
+    if free_prompt {
+        carriage.bounded_immature = carriage.bounded_immature.checked_sub(claim.immature_contribution).unwrap();
+        claim.immature_contribution = 0;
+    }
     let key = |prefix, id: Hash64| {
         let mut k = vec![prefix];
         k.extend_from_slice(id.as_byte_slice());

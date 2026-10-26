@@ -30,6 +30,7 @@ use crate::{
 };
 use std::collections::BTreeSet;
 
+/// Lane VAL estimates (not wired): `crate::palw_g14_values_v1` (V2).
 /// **The unadopted admission values** (service profile, per-branch costs and capital). Private fields; the only constructor is
 /// `#[cfg(test)]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +55,38 @@ impl FundedAdmissionScheduleV1 {
         retention_bytes_per_branch: u64,
     ) -> Self {
         Self { service, source_packet_cost, capital_per_turn_sompi, capital_per_source_node_sompi, heap_bytes_per_branch, retention_bytes_per_branch }
+    }
+    /// **Production constructor (lane VAL, 2026-10-26)**: refuses an invalid service profile (zero budget, `controls != 1`, a packet
+    /// larger than one DAA's budget, intervals reaching `a + 10,000`), a source packet larger than the budget, zero capital and
+    /// holdings outside `1..=1 GiB`. Not read by any preset.
+    pub fn new_v1(
+        service: CourtServiceProfileV1,
+        source_packet_cost: ServiceCost,
+        capital_per_turn_sompi: u64,
+        capital_per_source_node_sompi: u64,
+        heap_bytes_per_branch: u64,
+        retention_bytes_per_branch: u64,
+    ) -> Result<Self, &'static str> {
+        let b = service.budget;
+        let fits = |c: ServiceCost| c.controls == 1 && c.bytes <= b.bytes && c.work <= b.work && c.io <= b.io;
+        if service.version != 1 || b.bytes == 0 || b.work == 0 || b.io == 0 || b.controls == 0 || service.packets_per_signer == 0 {
+            return Err("funded admission: invalid service profile");
+        }
+        if !fits(service.packet_cost) || !fits(source_packet_cost) {
+            return Err("funded admission: a packet must fit one DAA's budget and carry one control");
+        }
+        let end = service.packets_per_signer.checked_mul(service.service_span_daa).and_then(|v| v.checked_add(1));
+        if service.service_span_daa == 0 || end.is_none_or(|e| e > crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA) {
+            return Err("funded admission: packet intervals must end before a + 10,000");
+        }
+        if capital_per_turn_sompi == 0 || capital_per_source_node_sompi == 0 {
+            return Err("funded admission: capital must be positive");
+        }
+        const MAX_BRANCH_BYTES: u64 = 1 << 30;
+        if !(1..=MAX_BRANCH_BYTES).contains(&heap_bytes_per_branch) || !(1..=MAX_BRANCH_BYTES).contains(&retention_bytes_per_branch) {
+            return Err("funded admission: holdings per branch must be in 1..=1 GiB");
+        }
+        Ok(Self { service, source_packet_cost, capital_per_turn_sompi, capital_per_source_node_sompi, heap_bytes_per_branch, retention_bytes_per_branch })
     }
     pub fn service_profile(&self) -> CourtServiceProfileV1 {
         self.service

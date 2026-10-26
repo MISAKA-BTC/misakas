@@ -109,6 +109,9 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 // RFC-0008 (2026-10-15): the once-only settlement markers (aux 140, keyed by the 64-byte obligation id; dormant fence).
 140 if key_bytes==64=>crate::palw_settlement_once_v1::PalwSettlementOnceRowV1::scan_native_wire_v1(frame)?,
 140=>return Err(wire::wire_bad("unallocated settlement-once row namespace")),
+// G14 T08 / P1-3 (lane T0308, 2026-10-26): rejected-response replay markers (aux 161, 64-byte key, row = first rejection DAA).
+161 if key_bytes==64=><u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+161=>return Err(wire::wire_bad("unallocated rejected-response marker namespace")),
 // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
 144 if key_bytes==65 && prefix==b'F'=>crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1::scan_native_wire_v1(frame)?,
 144 if key_bytes==65 && prefix==b'R'=>crate::palw_claim_local_v1::PalwClaimLocalRewardHoldV1::scan_native_wire_v1(frame)?,
@@ -117,7 +120,8 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 // 2026-10-22 (integration): no catch-all here — aux 144 is shared with the native liability hold (0x01 held fee,
 // 0x02 post-Final duty), whose arms and the namespace catch-all follow in AUX_SPEC_ARMS; a catch-all here made them unreachable.
 136 if n==72 && ((key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_FRONTIER_FLOOR_PREFIX_V1 && k[1..].iter().all(|b|*b==0)) || k==b"f")=><(u64,[u8;64]) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-136 if key_bytes==65 && matches!(prefix,crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1|crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39)=>crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?,
+136 if key_bytes==65 && matches!(prefix,crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1|crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39|crate::palw_security_certification_v1::CERTIFICATION_KERNEL_CLAIM_PREFIX_V1)=>crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?,
+136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_KERNEL_HOLD_PREFIX_V1=>crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1::scan_native_wire_v1(frame)?,
 136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_CLASS_PREFIX_V1=>crate::palw_security_certification_v1::PalwCertificationClassRowV1::scan_native_wire_v1(frame)?,
 136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_NETWORK_PREFIX_V1=>crate::palw_security_certification_v1::PalwCertificationNetworkRowV1::scan_native_wire_v1(frame)?,
 121 => match (key_bytes,prefix) {

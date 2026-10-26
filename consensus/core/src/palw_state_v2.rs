@@ -20563,6 +20563,11 @@ pub struct PalwTransitionExtrasV1 {
     /// is admitted only WITH its transaction-paired `TFP1` ORIGINAL frame: a frameless one is refused at acceptance, so it earns
     /// no reward, weight or credit. `false` by `Default` and below the fence — byte-identical to before it.
     pub tir_public_conviction_active: bool,
+    /// **Lane F02 (RFC-0026 §4.1 item 4): the explicit delivery / inclusion premise** a non-response default is attributed under.
+    /// The processor copies the pinned
+    /// [`crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1`] (typed-missing: `None`); `None` makes every
+    /// F02 default undecided (no slash). `None` by `Default`.
+    pub court_service_inclusion_premise_v1: Option<crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1>,
     /// `palw_tir_container_identity_v1` at this block (RFC-0002 02-A): a TIR class's `PALWART3` container binding folds, and a
     /// TIR original of an unbound class is refused. False below it (every shipped preset).
     pub tir_container_identity_active: bool,

@@ -374,6 +374,24 @@ pub struct PalwEscrowFeeScheduleV1 {
 }
 
 impl PalwEscrowFeeScheduleV1 {
+    /// **Production constructor (lane VAL, 2026-10-26)**: refuses no dues, more than `max_dues`, a zero amount, a burn with a payee
+    /// or a payment without one, and an overflowing total. Not read by any preset (`palw_escrow_fee_schedule_v1` stays `None`).
+    pub fn new_v1(contract_id: Hash64, dues: Vec<PalwEscrowDueV1>, max_dues: usize) -> Result<Self, &'static str> {
+        if dues.is_empty() || dues.len() > max_dues {
+            return Err("escrow schedule: due count out of range");
+        }
+        let mut total = 0u64;
+        for d in &dues {
+            if d.amount_sompi == 0 {
+                return Err("escrow schedule: zero due");
+            }
+            if (d.kind == PalwEscrowDueKindV1::Burn) != d.payee.is_none() {
+                return Err("escrow schedule: a burn has no payee and a payment has one");
+            }
+            total = total.checked_add(d.amount_sompi).ok_or("escrow schedule: total overflows")?;
+        }
+        Ok(Self { contract_id, dues })
+    }
     /// **Tests only**: a schedule for one contract. There is no production constructor.
     #[cfg(test)]
     pub fn test_only_v1(contract_id: Hash64, dues: Vec<PalwEscrowDueV1>) -> Self {
@@ -382,7 +400,8 @@ impl PalwEscrowFeeScheduleV1 {
 }
 
 /// **The production schedule source: none.** Always `None` until the numbers are adopted; the processor passes this to every
-/// qualified-spend check, so every payee/burn/partial path refuses on every network.
+/// qualified-spend check, so every payee/burn/partial path refuses on every network. Lane VAL estimate of the shares (not wired):
+/// [`crate::palw_g14_values_v1::palw_g14_escrow_split_v1`].
 pub fn palw_escrow_fee_schedule_v1(_row: &PalwFundedEscrowRowV1) -> Option<&'static PalwEscrowFeeScheduleV1> {
     None
 }

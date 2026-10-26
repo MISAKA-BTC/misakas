@@ -399,6 +399,9 @@ pub(super) fn decide_native_post_final_duty_v1(
     }
     // Only the latest turn decides (an earlier no-supply turn was recovered by a later one).
     let turn = mine.iter().map(|d| d.clock.turn).max().unwrap_or(0);
+    // Lane F02: the explicit inclusion premise (typed-missing in production) — without it nothing is attributed.
+    let premise =
+        b.extras.court_service_inclusion_premise_v1.as_ref().ok_or("court service inclusion assumptions are not adopted; no party default")?;
     let mut supplied = true;
     for d in mine.iter().filter(|d| d.clock.turn == turn) {
         if d.clock.response_deadline_daa >= now {
@@ -407,7 +410,7 @@ pub(super) fn decide_native_post_final_duty_v1(
         if answered(b, held, &d.clock)? {
             return Err("the actor answered its duty; no default");
         }
-        if !d.supplied_daa.is_some_and(|s| d.clock.stage_started_before_unit(s)) {
+        if !d.supplied_daa.is_some_and(|s| premise.admits_supplied_unit_v1(&d.clock, s)) {
             supplied = false;
         }
     }

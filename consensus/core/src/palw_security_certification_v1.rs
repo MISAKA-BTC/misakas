@@ -67,6 +67,18 @@ pub const CERTIFICATION_FRONTIER_FLOOR_PREFIX_V1: u8 = 0x46;
 /// drawn-verifier mechanism, two subject kinds. Its `claim` is the native mining claim id, `class_id` the native model id, and
 /// `final_daa` the complete Master's escrow-Final DAA. Certification credits nothing here: the native fold issues the receipt.
 pub const CERTIFICATION_NATIVE_MINING_PREFIX_V39: u8 = 0x56;
+/// **`'K' ‖ kernel certification id`** → [`PalwClaimCertificationRowV1`] of a KERNEL-ROUTE ledger claim (`misaka_palw_kernel::ledger`;
+/// lane CERT 2026-10-26): the same commit-then-draw, global-pool, m-of-k rule, policy, seed anchor, inner-75 attestation and verdict
+/// as a chain claim's — a third subject kind of the one drawn-verifier mechanism. Its `claim` is the kernel claim digest, `class_id`
+/// the claim's class binding, `final_daa` the kernel `Final` DAA. The kernel ledger reaches `Final` from the Panel pass and the
+/// window alone; past Gate C that `Final` is NOT SecurityCertified, and the claim's Final reward is held ([`PalwKernelCertifiedRewardHoldV1`])
+/// until this row certifies (CLAUDE.md: an uncertified claim advances no settlement at any tier).
+pub const CERTIFICATION_KERNEL_CLAIM_PREFIX_V1: u8 = 0x4B;
+/// **`'H' ‖ kernel certification id`** → [`PalwKernelCertifiedRewardHoldV1`]: the kernel claim's escrow-funded Final reward, debited
+/// from the poster at `Final` and held — paid to the producer only at SecurityCertified, returned to the poster otherwise.
+pub const CERTIFICATION_KERNEL_HOLD_PREFIX_V1: u8 = 0x48;
+/// Version of [`PalwKernelCertifiedRewardHoldV1`] (a new versioned row; no existing row's meaning changes).
+pub const PALW_KERNEL_CERTIFIED_REWARD_HOLD_VERSION_V1: u16 = 1;
 
 pub const PALW_CERTIFICATION_ID_DOMAIN_V1: &[u8] = b"misaka-palw/security-certification/id/v1";
 pub const PALW_CERTIFICATION_SEED_DOMAIN_V1: &[u8] = b"misaka-palw/security-certification/seed/v1";
@@ -247,6 +259,21 @@ pub struct PalwCertificationClassRowV1 {
     pub failed: u64,
 }
 
+/// `'H' ‖ kernel certification id`: **a kernel-route claim's Final reward held for SecurityCertified** (lane CERT, version 1). The
+/// poster's escrow was debited at the kernel `Final` (the ledger spent it); `amount` is paid to `producer_bond`'s payout at a certifying
+/// outcome, or returned to `poster_bond`'s payout at any other outcome (never minted, never paid to the producer uncertified).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwKernelCertifiedRewardHoldV1 {
+    pub version: u16,
+    pub claim: [u8; 64],
+    pub producer_bond: [u8; 64],
+    pub producer_payload: [u8; 64],
+    pub poster_bond: [u8; 64],
+    pub poster_payload: [u8; 64],
+    pub amount: u64,
+    pub held_daa: u64,
+}
+
 /// `'N' ‖ 0`: draws in the current epoch.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwCertificationNetworkRowV1 {
@@ -302,6 +329,31 @@ pub fn palw_native_mining_certification_row_v39(state: &PalwChainStateV2, mining
 /// `crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39`, never directly.
 pub fn palw_native_mining_security_certified_v39(state: &PalwChainStateV2, mining_claim: &Hash64) -> bool {
     palw_native_mining_certification_row_v39(state, mining_claim).and_then(|row| row.outcome).is_some_and(|(o, _)| o.certifies())
+}
+
+/// The certification id of a kernel-route ledger claim (domain-separated from every chain and native39 claim's).
+pub fn palw_kernel_claim_certification_id_v1(kernel_claim: &[u8; 64]) -> EligDigestV1 {
+    hash64(PALW_CERTIFICATION_ID_DOMAIN_V1, &[b"kernel-route-claim-v1", kernel_claim])
+}
+pub fn certification_kernel_claim_key_v1(id: &EligDigestV1) -> Vec<u8> {
+    prefixed(CERTIFICATION_KERNEL_CLAIM_PREFIX_V1, id)
+}
+pub fn certification_kernel_hold_key_v1(id: &EligDigestV1) -> Vec<u8> {
+    prefixed(CERTIFICATION_KERNEL_HOLD_PREFIX_V1, id)
+}
+/// The certification row of a kernel-route claim, if any.
+pub fn palw_kernel_claim_certification_row_v1(state: &PalwChainStateV2, kernel_claim: &[u8; 64]) -> Option<PalwClaimCertificationRowV1> {
+    let key = certification_kernel_claim_key_v1(&palw_kernel_claim_certification_id_v1(kernel_claim));
+    state.kernel_route_state_v1().and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
+}
+/// **A kernel-route claim is SecurityCertified** iff its `'K'` row decided a certifying outcome. A kernel `Final` alone never is.
+pub fn palw_kernel_claim_security_certified_v1(state: &PalwChainStateV2, kernel_claim: &[u8; 64]) -> bool {
+    palw_kernel_claim_certification_row_v1(state, kernel_claim).and_then(|row| row.outcome).is_some_and(|(o, _)| o.certifies())
+}
+/// The held Final reward of a kernel-route claim (`None`: nothing held — not Final past Gate C, or already settled).
+pub fn palw_kernel_claim_reward_hold_v1(state: &PalwChainStateV2, kernel_claim: &[u8; 64]) -> Option<PalwKernelCertifiedRewardHoldV1> {
+    let key = certification_kernel_hold_key_v1(&palw_kernel_claim_certification_id_v1(kernel_claim));
+    state.kernel_route_state_v1().and_then(|route| route.aux_row::<PalwKernelCertifiedRewardHoldV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
 }
 
 /// The draw seed: `H(domain ‖ certification id ‖ anchor span ‖ anchor execution key)`.

@@ -95,7 +95,7 @@ fn fence_row(name: &str, activation: Option<ForkActivation>, now_daa: u64, lists
 
 /// **`getPalwFenceSchedule` (op 227): every top-level PALW fence of `params`, named** ([`Params::palw_fences_v1`], the exhaustive,
 /// compiler-forced list), with its height and whether it is armed at `now_daa`, which named release lists carry it, and each list's
-/// adopted height (`null`: not adopted — e.g. the full-activation list's `PALW_T12_FULL_ACTIVATION_DAA`, target 16,000).
+/// adopted height (`null`: not adopted — e.g. the full-activation list's `PALW_T12_FULL_ACTIVATION_DAA`, target `PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1`).
 pub fn palw_fence_schedule_json_v1(params: &Params, now_daa: u64) -> Value {
     let lists = palw_named_fence_lists_v1();
     let fences: Vec<Value> = params

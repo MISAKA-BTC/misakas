@@ -45,7 +45,8 @@ fn the_decided_terms_are_pinned() {
     assert!(bad(&|q| q.curve.alpha_halves = 4), "alpha is decided");
     assert!(bad(&|q| q.average.as_mut().unwrap().average_days = 30), "the superseded 30-day average");
     assert!(bad(&|q| q.average.as_mut().unwrap().verifier_capital = false), "miner + verifier capital");
-    assert!(bad(&|q| q.average.as_mut().unwrap().block_opportunity = false), "P_m applies to block opportunity too");
+    // `false` is the V+ form (pin 2026-10-22 ADJUST 1): the policy validates; the fence checks it against V+.
+    assert!(!bad(&|q| q.average.as_mut().unwrap().block_opportunity = false), "the V+ form is a valid policy");
     assert!(bad(&|q| q.epoch_daa = 1_000), "the epoch divides the span (1,000 does not divide 5,040)");
     assert!(bad(&|q| q.epoch_daa = 0), "a zero epoch is refused, never a division by zero");
     assert!(bad(&|q| q.average = None));

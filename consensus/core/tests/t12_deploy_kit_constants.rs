@@ -205,10 +205,8 @@ fn the_kit_names_the_int11_flag_day_height_and_offset_the_preset_arms() {
     );
 }
 
-/// **The kit's copy of the int-13 list's height is the core's** (the coordinator's brief of 2026-10-08 set DAA 9,000; the user cancelled
-/// that flag day the same day, so the height is `None` and the kit's copy is EMPTY): `fleet.env.example` names exactly what the core has,
-/// the preset arms no fence of the list, and the schedule an operator reads names no int-13 height. When the full-activation release
-/// takes a fresh height, both move together and this reads the height again.
+/// **The kit's copy of the int-13 list's height is the core's** (DAA 15,500, the user's decision of 2026-10-25; there is no
+/// DAA-9,000 flag day): `fleet.env.example` names exactly what the core has, and the preset arms every fence of the list there.
 #[test]
 fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     const FLEET: &str = "contrib/t12-deploy-kit/fleet.env.example";
@@ -216,7 +214,7 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     let kit = shell_value(FLEET, &fleet, "INT13_FLAG_DAY_DAA");
     let core = PALW_T12_INT13_DAA.map(|at| at.to_string()).unwrap_or_default();
     assert_eq!(kit, core, "{FLEET}: INT13_FLAG_DAY_DAA is the preset's (empty = no int-13 flag day)");
-    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
+    assert_eq!(PALW_T12_INT13_DAA, Some(15_500), "the user's decision of 2026-10-25");
     let p = Params::from(t12());
     for fence in PALW_T12_INT13_FENCES_V1 {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
@@ -228,14 +226,10 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     }
     let schedule = p.fence_schedule_v1();
     assert!(!schedule.contains(&9_000), "the cancelled 9,000 is not on the public schedule: {schedule:?}");
-    assert_eq!(
-        schedule.last().copied(),
-        PALW_T12_INT11_RHO1000_DAA,
-        "the schedule ends at the int-11 flag day's last height: {schedule:?}"
-    );
+    assert_eq!(schedule.last().copied(), PALW_T12_INT13_DAA, "the schedule ends at the int-13 flag day: {schedule:?}");
 }
 
-/// **The kit's copy of the full-activation list's height is the core's** (lane g14p/r7-fence-16000): `None` today — target 16,000, set
+/// **The kit's copy of the full-activation list's height is the core's** (lane g14p/r7-fence-16000): `None` today — target 17,000, set
 /// only after every arming record is pinned and the user approves — so the kit's copy is EMPTY, the preset arms no G14-only entry of the
 /// list, and 16,000 is on no schedule. When the height is set, both move together and this reads it again.
 #[test]
@@ -249,7 +243,9 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
     let p = Params::from(t12());
     for fence in PALW_T12_FULL_ACTIVATION_FENCES_V1 {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
-        assert_eq!(armed, PALW_T12_FULL_ACTIVATION_DAA, "{}: dormant on the preset", fence.name);
+        // The int-13 entries keep the int-13 list's height (15,500, the fleet's); the rest are the full list's.
+        let want = if PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == fence.name) { PALW_T12_INT13_DAA } else { PALW_T12_FULL_ACTIVATION_DAA };
+        assert_eq!(armed, want, "{}: on the preset", fence.name);
     }
-    assert!(!p.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1), "16,000 is on no schedule yet");
+    assert!(!p.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1), "17,000 is on no schedule yet");
 }

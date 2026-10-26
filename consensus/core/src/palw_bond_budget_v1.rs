@@ -552,6 +552,22 @@ impl PalwBondBudgetPolicyV1 {
     }
 }
 
+/// **The approved budget policies' digests** (lane VAL 2026-10-26). One entry: the 2026-10-22 V12-b policy
+/// ([`crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1`]), pinned as a **DELEGATED ESTIMATE (目安), NOT A
+/// MEASUREMENT** under the user's 2026-10-22 delegation of value decisions and permission to use estimates. Basis: capital unit
+/// 13,000 KAS (the t12 minimum producer bond), 72 claims / reward blocks / Round rights per unit per day (1 per 10 nominal slots, about
+/// 15 % of a day's blocks at 184 s/DAA), reward 0.25 of the unit per day (below the 0.51 collectable slash), export cap 250 ‰,
+/// liability hold 10,000 DAA (the court-clock v2 horizon). Revise on ADR-0176 Stage 1 (the reference miner's honest rate, measured
+/// S/K) and X3's measured Δ. Not read by any preset: arming still needs the fence height and its own prerequisites.
+pub fn palw_bond_budget_approved_policy_digests_v1() -> Vec<Hash64> {
+    vec![crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1().digest()]
+}
+
+/// **The approved model-allocation policies — EMPTY** (lane ACT 2026-10-26), for the same reason.
+pub fn palw_model_bond_allocation_approved_policies_v1() -> Vec<PalwModelAllocationPolicyV1> {
+    Vec::new()
+}
+
 /// **`Params::palw_bond_budget_v1`'s value**: the activation and the policy. Some-only everywhere: `None` on every preset, hashed into both
 /// fingerprints only when `Some` (value included), collapsed whole from `Some(never())`, its activation alone visited by `for_each_fence`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -877,8 +893,14 @@ impl Params {
                 "palw_bond_budget_v1 requires palw_economic_safety at or below it: Round rights are capped in its windowed mint",
             ));
         }
+        // Lane ACT (2026-10-26): the remaining refusal is the VALUE alone — a policy is armable only when its digest is pinned in
+        // `palw_bond_budget_approved_policy_digests_v1` (lane VAL: the 10-22 V12-b estimate). The reward and
+        // weight fences it bounds carry their own record gates, so they are not re-refused here.
+        if palw_bond_budget_approved_policy_digests_v1().contains(&fence.policy.digest()) {
+            return Ok(());
+        }
         Err(PalwModeV2Error::Invalid(
-            "palw_bond_budget_v1 cannot be armed: ADR-0176's window W, the rho -> Q/B/R/F mapping and the cap values are POLICY the user has not set, and no reward or consensus-weight fence it bounds is armable",
+            "palw_bond_budget_v1 cannot be armed: no approved policy is pinned (not in palw_bond_budget_approved_policy_digests_v1; ADR-0176's window W, the rho -> Q/B/R/F mapping and the cap values come from the value lane)",
         ))
     }
 
@@ -903,8 +925,27 @@ impl Params {
                 "palw_model_bond_allocation_v1 requires palw_bond_budget_v1 at or below it (ADR-0177 D5)",
             ));
         }
+        // `P_m` applies to block opportunity exactly once (pin 2026-10-22 ADJUST 1): the V3 policy reserves block opportunity itself
+        // (`true`) unless RFC-0016 V+ (`palw_model_block_rights_v1`) is armed at or below the allocation, in which case V+ is the one
+        // gate and the policy must say `false` (V+'s own validation refuses `true`).
+        if let Some(average) = fence.policy.average.as_ref() {
+            let v_plus_below = self
+                .palw_model_block_rights_v1
+                .is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.activation.daa_score());
+            if average.block_opportunity == v_plus_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_bond_allocation_v1: block_opportunity is false exactly when palw_model_block_rights_v1 (V+) is at or below it",
+                ));
+            }
+        }
+        // ADR-0177 D6 (an open-versus-closed evaluation of each model) is NOT a gate: model-level review is not adopted
+        // (docs/PRINCIPLES.md §9, frozen 2026-10-15). The remaining refusal is the VALUE alone: an approved policy pinned in
+        // `palw_model_bond_allocation_approved_policies_v1` (empty: typed-missing until the value lane's f / epoch / seasoning are approved).
+        if palw_model_bond_allocation_approved_policies_v1().contains(&fence.policy) {
+            return Ok(());
+        }
         Err(PalwModeV2Error::Invalid(
-            "palw_model_bond_allocation_v1 cannot be armed: the curve f, the allocation epoch and seasoning are POLICY the user has not set, and ADR-0177 D6's open-versus-closed evaluation does not exist",
+            "palw_model_bond_allocation_v1 cannot be armed: no approved policy is pinned (palw_model_bond_allocation_approved_policies_v1 is empty; the curve f, the allocation epoch and seasoning come from the value lane)",
         ))
     }
 

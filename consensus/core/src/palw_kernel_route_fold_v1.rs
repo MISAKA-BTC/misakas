@@ -62,6 +62,32 @@ pub(super) fn source_income_subject_v1(job: &misaka_palw_kernel::hash::Digest, s
     finish(hash)
 }
 
+/// **G14 T08 / P1-3 (lane T0308): a rejected response is judged once.** The route object's signature binds only the network, the
+/// signer and the object bytes (`palw_kernel_route_message_v1`), so anybody can re-carry a signer's old signed `Respond` in a fresh
+/// carrier. A REJECTED response costs its signer `dismissed_proof_fee`; without this marker a third party could replay the same
+/// signed junk to burn that fee again and again. Key: the signer, the demanded position and the exact bytes (not the demand's
+/// filing DAA, so an old signature is never "new" for a later demand either); row: the DAA it was first rejected at (u64). A key
+/// present here drops the object before the ledger classifies or charges anything. A VALID response needs no marker: it closes
+/// the demand and the position is served for good (`already served`).
+pub const PALW_KERNEL_REJECTED_RESPONSE_TABLE_V1: u8 = 161;
+
+pub fn palw_kernel_rejected_response_key_v1(
+    signer: &misaka_palw_kernel::hash::Digest,
+    claim: &misaka_palw_kernel::hash::Digest,
+    stage: u8,
+    position: u32,
+    bytes: &[u8],
+) -> Vec<u8> {
+    let mut hash = keyed(b"misaka-palw/kernel-route/rejected-response/v1");
+    hash.update(signer);
+    hash.update(claim);
+    hash.update(&[stage]);
+    hash.update(&position.to_le_bytes());
+    hash.update(&(bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+    finish(hash).as_byte_slice().to_vec()
+}
+
 /// The fold's signature check is the acceptance layer's (a pure transition holds no crypto): by the time a receipt reaches here its
 /// signature has verified under the seat bond's registered key, so the kernel's structural admission is asked with this.
 struct SignatureAlreadyVerified;
@@ -960,6 +986,29 @@ pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: 
     Ok(())
 }
 
+/// **lane CERT: the producer's escrow Final reward starting at `index`**: `PayJobEscrow(poster, x)`, then — only when the escrow held
+/// more than was paid — `ReleaseJobEscrow(poster)`, then `FinalReward(producer, x)` of the same claim, NOT followed by `CheckFeePaid`
+/// (a verifier's check fee). The kernel's `settle` drops zero-amount instructions, so a fully paid escrow emits no release; this
+/// reader accepts both shapes. Returns `(index of the FinalReward, claim, poster)`. Pure.
+fn kernel_producer_final_reward_v1(
+    events: &[LedgerEventV1],
+    index: usize,
+) -> Option<(usize, misaka_palw_kernel::hash::Digest, misaka_palw_kernel::hash::Digest)> {
+    let settlement = |i: usize| match events.get(i) {
+        Some(LedgerEventV1::Settlement(s)) => Some(*s),
+        _ => None,
+    };
+    let pay = settlement(index).filter(|s| s.kind == SettlementKindV1::PayJobEscrow)?;
+    let claim = pay.claim?;
+    let mut at = index + 1;
+    if settlement(at).is_some_and(|s| s.kind == SettlementKindV1::ReleaseJobEscrow && s.claim == Some(claim) && s.bond == pay.bond) {
+        at += 1;
+    }
+    settlement(at).filter(|s| s.kind == SettlementKindV1::FinalReward && s.claim == Some(claim) && s.amount == pay.amount)?;
+    let check_fee = matches!(events.get(at + 1), Some(LedgerEventV1::CheckFeePaid { claim: c, .. }) if *c == claim);
+    (!check_fee).then_some((at, claim, pay.bond))
+}
+
 /// **Apply a ledger's settlement instructions to the real bonds** (module doc).
 ///
 /// `strict` (every object arm): a slash the real bond cannot pay in full refuses the object (it is dropped, the block stands). The closing
@@ -1039,6 +1088,9 @@ fn apply_settlements_to_exec_vesting(
     // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): the check fees of paid V2 claims this batch HOLDS, by the ordinal of
     // their poster debit (the held row records what that debit actually took). Empty below the fence.
     let mut held_fees: std::collections::BTreeMap<usize, crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1> = Default::default();
+    // lane CERT (Gate C on the kernel route): the event index of each producer escrow `FinalReward` in this batch, with its claim and
+    // poster, so the reward is held for SecurityCertified instead of paid at the ledger's `Final` (a verifier check fee is not one).
+    let mut producer_final_rewards: std::collections::BTreeMap<usize, ([u8; 64], [u8; 64])> = Default::default();
     for (ordinal, event) in events.iter().enumerate() {
         let LedgerEventV1::Settlement(s) = event else { continue };
         if already_settled.contains(&ordinal) {
@@ -1168,6 +1220,12 @@ fn apply_settlements_to_exec_vesting(
                 already_settled.extend([ordinal + 1, ordinal + 2]);
                 continue;
             }
+        }
+        if s.kind == SettlementKindV1::PayJobEscrow
+            && exec_root.is_none()
+            && let Some((reward_at, claim, poster)) = kernel_producer_final_reward_v1(events, ordinal)
+        {
+            producer_final_rewards.insert(reward_at, (claim, poster));
         }
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
@@ -1349,6 +1407,14 @@ fn apply_settlements_to_exec_vesting(
                         crate::palw_work_slice_v2::PalwExecV2RewardFundV1::KernelFee,
                         amount,
                     )?;
+                    continue;
+                }
+                // lane CERT: past Gate C a kernel claim's `Final` is not SecurityCertified — its escrow reward (debited above) is
+                // held in its certification's `'H'` row and paid only when the drawn verifiers certify it (returned otherwise).
+                if s.kind == SettlementKindV1::FinalReward
+                    && let Some((claim, poster)) = producer_final_rewards.get(&ordinal).copied()
+                    && super::palw_security_certification_fold_v1::hold_kernel_final_reward_v1(builder, now, &claim, &s.bond, &poster, amount)?
+                {
                     continue;
                 }
                 if s.kind == SettlementKindV1::FinalReward {
@@ -1924,6 +1990,22 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         KernelRouteObjectV1::Respond { claim, .. } => Some(*claim),
         _ => None,
     };
+    // T08 / P1-3: an old signed response that was already rejected is not a new response (no second classification or fee).
+    let rejected_key = match &object {
+        KernelRouteObjectV1::Respond { claim, stage, position, bytes } => {
+            Some(palw_kernel_rejected_response_key_v1(&kid, claim, *stage, *position, bytes))
+        }
+        _ => None,
+    };
+    if let Some(key) = &rejected_key
+        && builder
+            .state
+            .kernel_route
+            .as_ref()
+            .is_some_and(|route| route.aux.contains_key(&(PALW_KERNEL_REJECTED_RESPONSE_TABLE_V1, key.clone())))
+    {
+        return Ok(());
+    }
     let events = match ledger.apply_object_reserved_v1(object, &AuthV1 { signer_bond: kid }).map_err(PalwStateV2Error::NativeResource)? {
         Ok(events) => events,
         Err(_refusal) => {
@@ -2107,6 +2189,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 )?;
             }
         }
+    }
+    if let Some(key) = rejected_key
+        && events.iter().any(|e| matches!(e, LedgerEventV1::ResponseRejected { .. }))
+    {
+        builder.write_kernel_row(PALW_KERNEL_REJECTED_RESPONSE_TABLE_V1, key, Some(borsh::to_vec(&ctx.daa_score).expect("u64")))?;
     }
     // The object stands: the route has now seen its signer.
     builder.note_kernel_bond(signer)?;
