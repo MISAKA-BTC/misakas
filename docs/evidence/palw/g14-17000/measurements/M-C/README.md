@@ -40,4 +40,21 @@ The three D2 scales provide actual observations of growth, but scheduling load, 
 
 The [kernel Panel=3/1 batch](../M-SHADOW/README.md#common-schedule-native-batch-completed) now measures receipt construction/acceptance, outsider local checking, and public-fault seal/ingress through the native processor at source `f665796d1`. It retains N=0 setup processes and all per-phase timings, but has only three repetitions per case/seat, load 9.409–9.880 and a small fixture. These composite native phases are not interchangeable with the old core harness's isolated verifier operations. No complete quiet M-C table is claimed.
 
-A further test-only harness at source `209ea76ee` measures Panel=1 plus Gate C with 5/3, 75/41 and 90/50 draw/approval thresholds, N=0 uncertified-Final baselines, and native later-anchor/draw, attestation and settlement phases. Its policies are unapproved fixture configurations. The eight harness bonds cannot establish independent responding operators; synthetic signed attestations do not measure honest verifier model recomputation. The binary is building; the runner is scheduled for 20 fresh N=0 and N=1 processes at each scale. No result is claimed until it executes.
+A further test-only harness at source `209ea76ee` measures Panel=1 plus Gate C with 5/3, 75/41 and 90/50 draw/approval thresholds, N=0 uncertified-Final baselines, and native later-anchor/draw, attestation and settlement phases. Its policies are unapproved fixture configurations. The eight harness bonds cannot establish independent responding operators; synthetic signed attestations do not measure honest verifier model recomputation. The build and all 120 processes completed; the measured results follow.
+
+
+## Panel=1 Gate C batch completed
+
+Source `209ea76eea7111b80da7374b82dddc4e42c8eeca`, binary SHA-256 `261c46793f1e199e43c87dfbb084750506cf07333f8f4e2149997072f4fd159e`. [Build record](raw/native-cert-2026-10-26/build-record.json), [raw runs](raw/native-cert-2026-10-26/raw.json), [summary](raw/native-cert-2026-10-26/summary.json), [manifest](raw/native-cert-2026-10-26/manifest.json). All **120 fresh processes exited 0**: three scales, 20 N=0 baselines and 20 N=1 executions each. Every N=0 stops at a kernel Final whose producer is unpaid and whose reward remains held. Every N=1 reaches certification after the later-anchor draw and drawn approvals, releases the reward and removes the hold. This is one release per execution; restart/reorg/double-payment behavior is outside this measurement.
+
+Load **11.376–12.466**: **UNDER_LOAD_FIXTURE_ONLY**. The table reports milliseconds of native elapsed wall time, median / nearest-rank p95 over 20 fresh processes; all first-process observations are included. Draw and decision phases include advancing the local chain. Attestation time is the sum of signing/accepting one attestation per distinct drawn bond, including local carriers and blocks; it is not CPU time for every drawn position.
+
+| Draw / threshold | Distinct drawn bonds | Later anchor + draw ms | All attestation sign + accept ms | Decision + release ms | Median full-process RSS |
+|---|---|---|---|---|---:|
+| 5 / 3 | 2–5 | 36.856 / 40.568 | 20.974 / 25.125 | 130.255 / 142.538 | 78,217,216 B |
+| 75 / 41 | 7 | 37.273 / 41.388 | 39.105 / 41.351 | 114.860 / 127.752 | 79,142,912 B |
+| 90 / 50 | 7 | 33.287 / 49.617 | 38.923 / 54.727 | 120.512 / 144.634 | 79,183,872 B |
+
+Each signed attestation is 4,969 B in the harness's Borsh PALW-object representation. The 75/90 cases each carry seven such attestations (34,783 B); **they do not carry 75 or 90 independent verifier responses**. Repeated positions share their bond's attestation. The lower median draw time at 90 is not evidence that a larger draw is cheaper: scheduling/load and local-chain work are included. N=0 process statistics are retained separately; their subtraction is not an exact isolated working set.
+
+This closes a concrete measurement gap for the native certification path, but not post-commit kernel challenge generation, source independence, randomness withholding, honest verifier recomputation, or real propagation. The policy uses short fixture windows and eight harness bonds; the 54 claim-draw cap is test configuration here, **not approval or a production pin**. M-C as a complete quiet/minimum-node requirement remains NOT_MET.
