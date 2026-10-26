@@ -54,9 +54,14 @@ fn t_campaign_value_gated_paths_are_refused_in_a_node_build() {
         matches!(intake::material_intake_schedule_v1(), Err(intake::MaterialIntakeMissingV1::Schedule)),
         "V5: the material-intake schedule is typed-missing in a node build"
     );
-    // V8 position terminal / lookahead budgets (tags 201–204; T07/T14 terminal deadlines): not adopted.
-    assert!(terminal::PALW_TIR_POSITION_WITNESS_BUDGET_V2.is_none(), "V8: no position witness budget");
-    assert!(terminal::PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2.is_none(), "V8: no lookahead frontier bound");
+    // V8 position terminal / lookahead budgets (tags 201–204; T07/T14 terminal deadlines): pinned as 目安 by the value lane
+    // (cd8142330, user delegation 2026-10-22): one carrier part and 3,072 frontier values. Pinning the value arms nothing by itself.
+    assert_eq!(
+        terminal::PALW_TIR_POSITION_WITNESS_BUDGET_V2,
+        Some(kaspa_consensus_core::palw_mode_v2::palw_close_bytes_for_chunks_v1(1)),
+        "V8: the position witness budget is the pinned estimate"
+    );
+    assert_eq!(terminal::PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2, Some(3_072), "V8: the pinned lookahead frontier bound");
     // T15: the full-activation list has no height, and arming it anyway over the shipped release is refused by validation.
     assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, None, "the full-activation height is not set");
     let mut armed = palw_t12_shipped_params();
