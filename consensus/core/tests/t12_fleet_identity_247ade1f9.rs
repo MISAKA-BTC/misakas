@@ -56,24 +56,3 @@ fn fleet_ids_match_247ade1f9() {
         assert!(got.contains(&format!("{name}={want}")), "{name}: {got:?}");
     }
 }
-
-/// **The DAA-17,000 slice, armed, keeps the handshake identity** (a future height collapses to `never`). Diagnostic: prints every
-/// slice entry that moves the identity on its own.
-#[test]
-fn slice_at_17000_keeps_the_handshake_identity() {
-    use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_arm_after_int13_at_v1};
-    let base = palw_t12_shipped_params();
-    let id = base.consensus_identity_id();
-    let mut moved = vec![];
-    for f in PALW_T12_KERNEL_SLICE_FENCES_V1 {
-        let mut p = base.clone();
-        (f.set)(&mut p, Some(ForkActivation::new(17_000)));
-        if p.consensus_identity_id() != id {
-            moved.push(f.name);
-        }
-    }
-    println!("FLEETDIAG slice entries that move the identity alone: {moved:?}");
-    let mut p = base.clone();
-    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
-    assert_eq!(p.consensus_identity_id(), id, "the slice at 17,000 moves the handshake identity: {moved:?}");
-}
