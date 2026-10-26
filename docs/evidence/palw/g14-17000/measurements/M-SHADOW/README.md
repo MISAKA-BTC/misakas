@@ -78,9 +78,10 @@ The [reduced-cap economic calculation](../M-CAP/README.md#new-source-admission-a
 Commit `d2982b9d0` on the separate `codex/g14-legacy-shadow` branch adds a real
 legacy TIR backend attempt paired with a kernel Panel=1 job over the same fixture
 program, weights, prompt and generated output. It retains distinct route IDs and
-the actual recorded Final DAAs. Its honest preflight is queued behind the shared
-build gate; compilation and execution have **not** been verified. Keeping this
-work separate preserves the already-queued full-cap build's source.
+the actual recorded Final DAAs. It was subsequently merged into the measurement branch at `69178d713`; the
+shared native build at `c89034ce3` includes both comparison and capacity tests.
+Compilation and execution have **not** been verified. The original unstarted
+build jobs were replaced with one build while retaining the first FIFO timestamp.
 
 The runner records pinned source/binary, command, load, CPU/RSS and log hashes.
 It labels success as an honest fixture preflight only. Attack pairs, randomness

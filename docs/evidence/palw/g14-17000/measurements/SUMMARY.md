@@ -47,24 +47,26 @@ Harness commit `969afa31f` adds an explicit cfg(test) cap of 64 and an optional 
 The running real-model 32k process agrees with the finished 8k process at all 512 emitted chunk endpoints in their common prefix; [comparison and bounded logs](M-COST/raw/dolphin-prefix-8192-2026-10-26/comparison.json) are captured. The complete 32k result and the low-load court rerun remain pending.
 
 
-## Legacy comparison implementation checkpoint
+## Shared native build checkpoint
 
-The actual legacy TIR backend / kernel Panel=1 honest comparison is now prepared
-in separate branch `codex/g14-legacy-shadow`, commit `d2982b9d0`. Its pinned build
-and preflight are queued, with no compile or runtime success claimed. The existing
-full-cap source remains unchanged. [Comparison scope](M-SHADOW/README.md#actual-legacykernel-comparison-preflight-prepared)
-records the remaining attack and verification-cost requirements. All five P0
-arming requirements remain NOT_MET.
+The actual legacy/backend comparison (`d2982b9d0`) and independent-carrier capacity
+experiment (`dfd2ccf6a`) are now merged into this measurement branch at
+`c89034ce3`. The only merge conflict was the test module list; both modules remain.
+Python syntax, documentation links and diff checks pass. Rust compilation and
+runtime results are still pending.
 
+Three unstarted native build jobs were consolidated into one `native-fullcap`
+build. Their waiting processes, absent build records and FIFO tickets were checked
+before replacing them; the first job's original FIFO timestamp was preserved.
+The full-cap workflow and the new legacy/capacity runners consume the same pinned
+binary after that build succeeds. No running model or other lane was stopped.
+This avoids two duplicate consensus builds without removing any queued test scope.
 
-## Independent-carrier capacity implementation checkpoint
-
-Commit `dfd2ccf6a` on `codex/g14-court-saturation` prepares an additional native
-capacity experiment. The existing sender serializes same-card change-chain
-transactions, so merely raising its count would not create same-block pressure.
-The new test normally mines independent funding UTXOs, then offers 12 or 72 junk
-proofs through the unchanged mempool/template and records each carrying/folding
-block. An outsider's valid proof is also co-offered with a fresh junk batch. The
-runner distinguishes actually observed cap saturation from transport-limited
-batches. It does not assert continuous-refill service or outsider priority.
-Build and preflight execution are queued; no passing observation is claimed.
+The legacy preflight compares actual TIR backend work with a kernel Panel=1 job,
+retaining separate route identities and Final DAAs. The capacity experiment mines
+independent carrier UTXOs before offering up to 72 junk proofs and an outsider's
+valid prosecution to the unchanged native template. It records observed
+saturation rather than inferring it from the offered count. Neither prepared
+harness establishes a passing measurement, continuous-refill service, honest
+per-seat verification cost or Gate C. All five P0 arming requirements remain
+NOT_MET.
