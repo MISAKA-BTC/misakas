@@ -289,9 +289,12 @@ fn the_backend_commits_the_same_roots_at_every_prefill_run_width() {
                 assert_eq!(resumed.leaf_hashes, by_default.leaf_hashes, "{at} segment {segment}: the same leaf hashes");
             }
             let priced = b.resource_profile_v1(Some(&job), PalwResourceRoleV1::FullSeat).expect("a profile");
+            // Since d3ff09371 the scratch also holds the job's output material, which no width moves: only the run's rows
+            // scale with the width.
+            let output = kaspa_consensus_core::palw_resource_profile_v1::palw_output_material_bytes_v1(&profile, &job);
             assert_eq!(
-                priced.trace_scratch_bytes * u64::from(A16_PREFILL_RUN_POSITIONS as u32),
-                want_profile.trace_scratch_bytes * u64::from(width),
+                (priced.trace_scratch_bytes - output) * u64::from(A16_PREFILL_RUN_POSITIONS as u32),
+                (want_profile.trace_scratch_bytes - output) * u64::from(width),
                 "{at}: the trace scratch is the width's"
             );
             assert_eq!(
@@ -453,7 +456,18 @@ fn a_held_classs_attempt_folds_and_stays_adjudicable() {
     let profile = backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::Producer).expect("derives");
     assert!(matches!(profile.capture, PalwCaptureRetentionV1::Fold { .. }), "{:?}", profile.capture);
     assert_eq!(profile.leaves, leaves);
-    assert!(profile.capture_retained_bytes < 1 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
+    // The fold prices its retained digests plus the one open block it buffers (`palw_fold_capture_bytes_v1`, d3ff09371:
+    // 512 B a digest, 256 B a leaf of the block): a small job is that buffer and almost nothing else.
+    let PalwCaptureRetentionV1::Fold { retain_level } = profile.capture else { unreachable!() };
+    assert_eq!(
+        profile.capture_retained_bytes,
+        kaspa_consensus_core::palw_resource_profile_v1::palw_fold_capture_bytes_v1(leaves, retain_level),
+        "the fold is priced by the one formula"
+    );
+    assert!(
+        leaves <= 1u64 << retain_level,
+        "a small job folds into one block, so its fold is that block's buffer: {leaves} leaves, level {retain_level}"
+    );
 
     // A class outside the regime keeps its tiles, priced as such.
     let dense_backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), v2, (6, 3)).expect("servable");

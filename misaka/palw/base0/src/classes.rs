@@ -1058,6 +1058,32 @@ pub fn resolve_class_v1(
 #[cfg(test)]
 mod tests {
 
+    /// **The free-prompt worker serves the row its artifact states, on the network it runs for.** testnet-12's genesis
+    /// dense row is `graph-v7@8192`; a worker that declared graph-v5@512 refused every job there. The derivation the worker
+    /// now uses must land each network's artifact on that network's registered row.
+    #[test]
+    fn each_networks_dense_artifact_resolves_to_the_row_that_network_registers() {
+        for (network, model_id) in [("testnet-12", A16_GRAPH_V7_8K_MODEL_ID), ("testnet-11", A16_GRAPH_V5_MODEL_ID)] {
+            let court = crate::fp_worker::fp_worker_court_params_v1(network).expect("a ConsensusV2 network");
+            let row = canonical_class_by_model_id_v1(&court, model_id).unwrap_or_else(|| panic!("{network} catalog has {model_id}"));
+            let derived = a16_row_for_artifact_shape_v1(&court, &row.artifact_shape, None, None)
+                .unwrap_or_else(|e| panic!("{network}: {model_id}'s own artifact shape derives no row: {e}"));
+            assert_eq!(derived.model_id, model_id, "{network}");
+            assert_eq!(derived.profile.shape_profile_id(), row.profile.shape_profile_id(), "{network}: the class id");
+        }
+    }
+
+    #[test]
+    fn the_8k_artifact_is_the_testnet_12_genesis_class() {
+        let court = crate::fp_worker::fp_worker_court_params_v1("testnet-12").unwrap();
+        let row = canonical_class_by_model_id_v1(&court, A16_GRAPH_V7_8K_MODEL_ID).unwrap();
+        let derived = a16_row_for_artifact_shape_v1(&court, &row.artifact_shape, None, None).unwrap();
+        assert_eq!(
+            derived.profile.shape_profile_id().to_string(),
+            "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01"
+        );
+    }
+
     /// **A dense row whose declared epsilon is the one its artifact executes — and the older rows
     /// keep theirs.**
     ///

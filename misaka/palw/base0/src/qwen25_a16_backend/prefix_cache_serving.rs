@@ -186,14 +186,15 @@ fn a_prefix_state_is_the_same_cached_or_recomputed_and_a_wrong_one_is_refused() 
 }
 
 /// The objective prefix court's digest matches the actual A16 engine's cache, for both
-/// ordinary and inherited receipts. The proof reads only committed public output tiles;
-/// its tree is reconstructed here by the producer-side fixture, not supplied as trusted state.
+/// ordinary and inherited receipts. The proof reads only committed public output tiles, each opened from the
+/// producer's folded capture the way a seat opens it — never supplied as trusted state.
 #[test]
 fn public_prefix_court_reconstructs_the_actual_a16_cache_and_refutes_a_false_named_root() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
     use kaspa_consensus_core::palw_offence_attribution_v1::{PalwOffenceTargetV1, palw_prefix_state_fault_v1};
     use kaspa_consensus_core::palw_prefix_state_court_v1::{PalwPrefixKvPlanV1, PalwPrefixKvTileV1, palw_prefix_kv_state_root_v1};
-    use kaspa_consensus_core::palw_step_leg::{PalwStepMerkleTreeV1, PalwStepOpeningV1, step_tile_leaf_hash_ctx_v1};
+    use kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1;
     let (artifact, _) = fixture();
     let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(PalwQwen25GeometryV1 {
         layer_count: 2,
@@ -239,27 +240,22 @@ fn public_prefix_court_reconstructs_the_actual_a16_cache_and_refutes_a_false_nam
             let run = producer.execute_free_prompt(&j, &ids).unwrap();
             let retained = crate::produce::base0_material_decode_any_v1(&run.outcome.material).unwrap();
             let binding = retained.binding();
-            let raw = retained.tiles().expect("the non-held dense fixture retains public step tiles");
-            let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(index, tile)| (*index, tile)).collect();
-            let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
-            for (index, tile) in raw {
-                hashes[*index as usize] = step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile.shape_profile_id(), tile);
-            }
-            let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
-            assert_eq!(tree.root(), binding.step_merkle_root, "the public fixture reproduces the committed tree");
+            // The free-prompt lane retains a FOLD, not dense tiles: each tile the court reads is opened from it exactly as a
+            // seat opens one — a refutation's output opening (against the committed step tree) and its preimage.
+            assert!(retained.tiles().is_none(), "the free-prompt lane folds its capture");
             let plan = PalwPrefixKvPlanV1::of_profile(&profile, 2).unwrap();
             let mut tiles = Vec::new();
             for ordinal in 0..plan.tile_count {
                 let (coord, _) = plan.coordinate(&profile, ordinal).unwrap();
                 let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&profile, &binding.job_context, &coord).unwrap();
-                tiles.push(PalwPrefixKvTileV1 {
-                    opening: PalwStepOpeningV1 {
-                        leaf_index: leaf,
-                        leaf_hash: hashes[leaf as usize],
-                        siblings: tree.path_v1(leaf as usize).unwrap(),
-                    },
-                    preimage: (*by_index[&leaf]).clone(),
-                });
+                let opened = producer.refutation_for_free_prompt_index(&run.outcome.material, leaf, &ids32).unwrap();
+                assert_eq!(opened.output_opening.leaf_index, leaf);
+                assert_eq!(
+                    opened.output_opening.leaf_hash,
+                    step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile.shape_profile_id(), &opened.output_preimage),
+                    "the opened preimage is the committed leaf"
+                );
+                tiles.push(PalwPrefixKvTileV1 { opening: opened.output_opening, preimage: opened.output_preimage });
             }
             assert_eq!(
                 palw_prefix_kv_state_root_v1(binding, 2, &tiles, 1 << 22).unwrap(),
