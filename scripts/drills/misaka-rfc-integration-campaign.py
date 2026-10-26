@@ -130,11 +130,24 @@ def main():
     exclusive_json(root / 'campaign-once.json', dict(campaignId=frozen.plan['campaignId'], freezeSha256=marker_sha256,
         candidateSha256=frozen.candidate.sha256, root=str(root), actualExecutionStarted=True))
     once_bytes = (root / 'campaign-once.json').read_bytes()
-    drill = make_campaign_drill(base)(frozen, root)
     result = dict(schemaVersion=1, kind='misaka-rfc-integration-campaign-report-v1', freeze=freeze,
         status='UNKNOWN', actualExecution=True, artifactDirectory=str(root), securitySoundnessMeasured=False,
         releaseApproval=False, baseDrill=dict(status='UNKNOWN'), resourceLimits=limits, resourceLimitsMet=False,
         campaignFreezeSha256=marker_sha256)
+    try:
+        drill = make_campaign_drill(base)(frozen, root)
+    except (Exception, KeyboardInterrupt) as error:
+        result['status'] = 'FAIL'
+        result['fatal'] = 'campaign setup failed: ' + type(error).__name__ + ': ' + str(error)
+        result['baseDrill'].update(status='FAIL', reason=result['fatal'])
+        try:
+            validate_saved_campaign_markers(root, freeze_bytes, once_bytes)
+        except Exception as marker_error:
+            result['fatal'] += '; marker identity failure: ' + repr(marker_error)
+        exclusive_json(args.out, result)
+        print(json.dumps(dict(status=result['status'], campaignId=frozen.plan['campaignId'], report=str(Path(args.out).absolute()),
+            candidateSha256=frozen.candidate.sha256, securitySoundnessMeasured=False)))
+        return 1
     base_passed, resources_passed, fatal = False, False, None
     try:
         frozen.validate()
@@ -150,6 +163,9 @@ def main():
     except CampaignError as error:
         fatal = str(error)
         result['baseDrill'].update(status='FAIL', reason=str(error))
+    except KeyboardInterrupt:
+        fatal = 'KeyboardInterrupt: campaign interrupted'
+        result['baseDrill'].update(status='FAIL', reason=fatal)
     except Exception as error:
         fatal = type(error).__name__ + ': ' + str(error)
         result['baseDrill'].update(status='FAIL', reason=fatal)

@@ -3,10 +3,14 @@ from copy import deepcopy
 import ast
 import hashlib
 import importlib.util
+import io
+import json
+from contextlib import redirect_stdout
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -52,6 +56,31 @@ def plan_and_drill():
 
 
 class FrozenPlanCounterexamples(unittest.TestCase):
+    def test_setup_failure_after_once_marker_still_writes_terminal_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            output = root / 'report.json'
+            owned = root / 'owned'
+            frozen = SimpleNamespace(plan=dict(campaignId='frozen'), drill={}, limits_pin=SimpleNamespace(path='limits.json'),
+                candidate=SimpleNamespace(sha256='11' * 32), manifest=lambda: dict(campaignId='frozen'))
+            base = SimpleNamespace(validate_scenario_bounds=lambda _: None, read_process_limits=lambda _: {})
+
+            def fail_factory(_):
+                def construct(*_args):
+                    raise RuntimeError('setup stopped')
+                return construct
+
+            args = ['campaign', '--plan', str(root / 'plan.json'), '--out', str(output), '--root', str(owned), '--execute']
+            with patch.object(entry, 'FrozenCampaign', return_value=frozen), patch.object(entry, 'load_base_drill', return_value=base), \
+                    patch.object(entry, 'make_campaign_drill', side_effect=fail_factory), patch.object(sys, 'argv', args), \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(entry.main(), 1)
+            report = json.loads(output.read_text())
+            self.assertEqual(report['status'], 'FAIL')
+            self.assertEqual(report['baseDrill']['status'], 'FAIL')
+            self.assertFalse(report['resourceLimitsMet'])
+            self.assertTrue((owned / 'campaign-once.json').is_file())
+
     def test_saved_campaign_markers_cannot_be_replaced_before_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
