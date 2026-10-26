@@ -250,8 +250,11 @@ fn drill_with_the_earlier_flag_days_low() -> Params {
 #[test]
 fn the_drill_flag_refuses_untouched_until_the_records_exist() {
     let before = drill_with_the_earlier_flag_days_low();
+    let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     for name in LIST {
-        assert_eq!(fence_at(&before, name), None, "{name}: dormant on the drill ruleset before the flag");
+        // The drill genesis carries the shipped int-13 height (15,500); every other entry is dormant before the flag.
+        let want = if int13.contains(&name) { Some(15_500) } else { None };
+        assert_eq!(fence_at(&before, name), want, "{name}: on the drill ruleset before the flag");
     }
     let mut p = before.clone();
     match palw_drill_full_activation_at_v1(&mut p, 60) {

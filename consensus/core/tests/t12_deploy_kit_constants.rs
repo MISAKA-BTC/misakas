@@ -243,7 +243,9 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
     let p = Params::from(t12());
     for fence in PALW_T12_FULL_ACTIVATION_FENCES_V1 {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
-        assert_eq!(armed, PALW_T12_FULL_ACTIVATION_DAA, "{}: dormant on the preset", fence.name);
+        // The int-13 entries keep the int-13 list's height (15,500, the fleet's); the rest are the full list's.
+        let want = if PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == fence.name) { PALW_T12_INT13_DAA } else { PALW_T12_FULL_ACTIVATION_DAA };
+        assert_eq!(armed, want, "{}: on the preset", fence.name);
     }
     assert!(!p.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1), "17,000 is on no schedule yet");
 }
