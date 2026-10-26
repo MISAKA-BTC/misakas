@@ -3821,6 +3821,7 @@ dependencies = [
  "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
  "misaka-palw-tir-exec",
  "misaka-palw-tir-lower",
  "misaka-palw-tir-sketch",

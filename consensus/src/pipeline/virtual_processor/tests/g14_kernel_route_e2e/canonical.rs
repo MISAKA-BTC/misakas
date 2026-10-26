@@ -1354,3 +1354,6 @@ mod t0308;
 mod measurement;
 
 mod capacity_measurement;
+
+// Real legacy Panel and kernel-route shared-input measurement (explicit ignored run).
+mod legacy_shadow;

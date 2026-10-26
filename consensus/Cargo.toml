@@ -66,6 +66,7 @@ misaka-palw-base0.workspace = true
 misaka-palw-kernel.workspace = true
 
 [dev-dependencies]
+misaka-palw-tir-artifact = { path = "../misaka/palw/tir/artifact" }
 # Fresh pruned-import fixture reuses the shipped trusted-subdag conversion.
 kaspa-p2p-lib.workspace = true
 # Retained-source TCP fixture uses the shipping flows and native manager staging.

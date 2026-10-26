@@ -28,6 +28,22 @@ impl T12Chain {
     /// Uses ordinary producer facts, the shared producer/remote assembler and
     /// full block admission. Only the harness's existing network PoW skip applies.
     pub(in crate::pipeline::virtual_processor::tests) async fn real_attempt(&mut self, card: usize, step_ms: u64) -> RealAttemptV1 {
+        let artifact = self.ctx.consensus
+            .palw_producer_facts_v2(self.bundle.base_class_id, Some(self.bonds[card].0))
+            .expect("floor producer facts").artifact_root;
+        let backend = backend(self, artifact);
+        self.real_attempt_with_backend(card, step_ms, self.bundle.base_class_id, &backend).await
+    }
+
+    /// Measurement adapter using the registered class's backend and unchanged producer admission.
+    /// The caller retains the accepted capture for a same-work comparison.
+    pub(in crate::pipeline::virtual_processor::tests) async fn real_attempt_with_backend(
+        &mut self,
+        card: usize,
+        step_ms: u64,
+        class: Hash64,
+        backend: &dyn PalwExecutionBackendV1,
+    ) -> RealAttemptV1 {
         self.ctx.simulated_time += step_ms;
         self.arm_clock();
         let mut template = self
@@ -43,7 +59,7 @@ impl T12Chain {
         let header = &template.block.header;
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         let bond = self.bonds[card];
-        let facts = self.ctx.consensus.palw_producer_facts_v2(self.bundle.base_class_id, Some(bond.0)).expect("producer facts");
+        let facts = self.ctx.consensus.palw_producer_facts_v2(class, Some(bond.0)).expect("producer facts");
         facts.ready_to_produce(&card_pubkey(card)).expect("normal registered producer is ready");
         let chain_facts = PalwAttemptChainFactsV1 {
             class_id: facts.class_id,
@@ -53,7 +69,6 @@ impl T12Chain {
             witness_chunks: facts.witness_chunks,
             operator_id: facts.bond.as_ref().expect("registered bond").operator_id,
         };
-        let backend = backend(self, facts.artifact_root);
         let prefill = self.config.params.palw_prefill_draw_active_at(header.daa_score);
         let started = std::time::Instant::now();
         eprintln!(
