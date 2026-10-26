@@ -186,12 +186,14 @@ fn the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates() {
     assert_eq!(flag_day, 3_600, "the user's decision of 2026-10-01");
     assert!(!release.palw_tir_fence2_active_at(flag_day - 1) && release.palw_tir_fence2_active_at(flag_day), "fence2 from 3,600");
     assert_eq!(PALW_T12_MODEL_COURT_WINDOW_DAA, None, "the model court window has no list-of-its-own height");
-    // The int-13 list (the model court window's one carrier) is armed NOWHERE on the shipped ruleset — the user cancelled the
-    // DAA-9,000 flag day on 2026-10-08, so the list waits for the full-activation release: the window is dormant at every height
-    // and the schedule above names no int-13 height.
-    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
-    for height in [0, 1, 750, 5_300, 9_000, u64::MAX / 2, u64::MAX - 1] {
+    // The int-13 list carries the window at DAA 15,500 (user, 2026-10-25). There is no DAA-9,000 flag day.
+    let int13 = PALW_T12_INT13_DAA.expect("the int-13 flag day");
+    assert_eq!(int13, 15_500, "the user's decision of 2026-10-25");
+    for height in [0, 1, 750, 5_300, 9_000, int13 - 1] {
         assert!(!release.palw_model_court_window_active_at(height), "the model-window rule is dormant at {height}");
+    }
+    for height in [int13, int13 + 1, u64::MAX / 2, u64::MAX - 1] {
+        assert!(release.palw_model_court_window_active_at(height), "the model-window rule is in force at {height}");
     }
     assert!(
         !palw_t12_release_v6_params().palw_model_court_window_active_at(u64::MAX / 2),

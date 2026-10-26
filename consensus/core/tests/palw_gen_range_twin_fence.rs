@@ -47,17 +47,20 @@ fn every_preset_leaves_the_fence_unarmed() {
         nets.push(Params::from(NetworkId::with_suffix(NetworkType::Testnet, suffix)));
     }
     nets.push(palw_t12_release_v6_params());
-    // Testnet-12 as shipped arms it NOWHERE (the int-13 list has no height): the element twin at every height.
-    nets.push(Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)));
-    nets.push(palw_t12_shipped_params());
     for p in nets {
         assert_eq!(p.palw_gen_range_twin_v1, None, "{}: dormant", p.net);
         assert!(!p.palw_gen_range_twin_active_at(u64::MAX));
         assert_eq!(p.palw_gen_close_twin_at(u64::MAX), PalwTirCloseTwinV1::Element);
     }
-    // Armed through the int-13 list at a test height (the way a drill or the future release arms it): the range twin from there, the
-    // element twin below.
-    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
+    // Testnet-12 as shipped arms the range twin at the int-13 flag day and not below it.
+    assert_eq!(PALW_T12_INT13_DAA, Some(15_500), "the int-13 list arms the range twin at 15,500 (user, 2026-10-25)");
+    let flag = PALW_T12_INT13_DAA.unwrap();
+    for p in [Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)), palw_t12_shipped_params()] {
+        assert_eq!(p.palw_gen_range_twin_v1, Some(ForkActivation::new(flag)), "{}: armed at the flag day", p.net);
+        assert_eq!(p.palw_gen_close_twin_at(flag - 1), PalwTirCloseTwinV1::Element);
+        assert_eq!(p.palw_gen_close_twin_at(flag), PalwTirCloseTwinV1::Range);
+    }
+    // Re-armed through the int-13 list at a test height: the range twin from there, the element twin below.
     let at = 9_000;
     for mut p in [Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)), palw_t12_shipped_params()] {
         palw_t12_arm_int13_flag_day_at_v1(&mut p, Some(at));

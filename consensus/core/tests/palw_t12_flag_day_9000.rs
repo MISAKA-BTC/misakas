@@ -28,8 +28,8 @@ use kaspa_consensus_core::config::drill::{
     palw_drill_tir_fence_at_v1, palw_drill_tir_fence2_at_v1,
 };
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO100_FENCES_V1,
-    PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO1000_FENCES_V1,
+    ForkActivation, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_FENCES_V1,
+    PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_FENCES_V1,
     PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
     PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1,
     Params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
@@ -92,10 +92,7 @@ fn refused(p: &Params) -> Option<String> {
 
 #[test]
 fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
-    assert_eq!(
-        PALW_T12_INT13_DAA, None,
-        "no DAA-9,000 flag day on testnet-12 (user, 2026-10-08): the list waits for the full-activation release"
-    );
+    assert_eq!(PALW_T12_INT13_DAA, Some(15_500), "the int-13 list arms at 15,500 (user, 2026-10-25)");
     let names: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, LIST, "the int-13 list, in the order its prerequisites need");
     // On no earlier flag day's list — the court window has a list of its own (a drill's and a later release's), which holds the same entry.
@@ -129,33 +126,32 @@ fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
         "the court window's own list stays heightless: the int-13 list carries its entry"
     );
 
-    // **The shipped ruleset arms the list nowhere.**
+    // **The shipped ruleset arms the whole list at 15,500.**
+    let flag = PALW_T12_INT13_DAA.unwrap();
     let shipped = palw_t12_shipped_params();
     for name in LIST {
-        assert_eq!(fence_at(&shipped, name), None, "{name} is dormant on the shipped ruleset");
+        assert_eq!(fence_at(&shipped, name), Some(flag), "{name} arms at the flag day on the shipped ruleset");
     }
     let schedule = shipped.fence_schedule_v1();
     assert!(!schedule.contains(&H), "the cancelled 9,000 is not on the shipped schedule ({schedule:?})");
     for earlier in [750, 1_000, 1_300, 1_700, 2_000, 3_600] {
         assert!(schedule.contains(&earlier), "{earlier}: an earlier flag day, still scheduled ({schedule:?})");
     }
-    assert_eq!(
-        &schedule[schedule.len() - 4..],
-        [
-            PALW_T12_INT11_FLAG_DAY_DAA.unwrap(),
-            PALW_T12_INT11_RHO100_DAA.unwrap(),
-            PALW_T12_INT11_RHO250_DAA.unwrap(),
-            PALW_T12_INT11_RHO1000_DAA.unwrap()
-        ],
-        "the int-11 flag day's four heights are the schedule's last ({schedule:?})"
-    );
-    assert_eq!(schedule, palw_t12_release_v6_params().fence_schedule_v1(), "the shipped schedule is the int-12 release's");
-    // Every entry is dormant at every height.
-    for daa in [0, 1, 749, 750, 5_300, H - 1, H, H + 1, 1_000_000, u64::MAX - 1] {
+    assert_eq!(schedule.last().copied(), Some(flag), "the int-13 height is the schedule's last ({schedule:?})");
+    let mut int12 = palw_t12_release_v6_params().fence_schedule_v1();
+    int12.push(flag);
+    assert_eq!(schedule, int12, "the shipped schedule is the int-12 release's plus the flag day");
+    for daa in [0, 1, 749, 750, 5_300, H, flag - 1] {
         assert!(!shipped.palw_audit_1004_active_at(daa), "audit 1004 at {daa}");
         assert!(!shipped.palw_gen_range_twin_active_at(daa), "the range twin at {daa}");
         assert!(!shipped.palw_model_court_window_active_at(daa), "the court window at {daa}");
         assert!(!shipped.palw_receipt_spend_v4_active_at(daa), "V4 receipt redemption at {daa}");
+    }
+    for daa in [flag, flag + 1, u64::MAX - 1] {
+        assert!(shipped.palw_audit_1004_active_at(daa), "audit 1004 at {daa}");
+        assert!(shipped.palw_gen_range_twin_active_at(daa), "the range twin at {daa}");
+        assert!(shipped.palw_model_court_window_active_at(daa), "the court window at {daa}");
+        assert!(shipped.palw_receipt_spend_v4_active_at(daa), "V4 receipt redemption at {daa}");
     }
 
     // **Armed explicitly** at a test height, the list is at ONE height, and a height no other fence uses.
@@ -189,8 +185,11 @@ fn the_release_v6_baseline_is_int12s_ruleset_to_the_id() {
     let mut armed = palw_t12_release_v5_params();
     palw_t12_arm_int11_flag_day_at_v1(&mut armed, PALW_T12_INT11_FLAG_DAY_DAA);
     assert_eq!(ids(&armed), (params.clone(), identity.clone(), schedule.clone()), "int-12 = int-10 + the int-11 flag day at 5,300");
-    // **The shipped ruleset IS the int-12 release** while the list is unscheduled: the same three ids, to the byte.
-    assert_eq!(ids(&palw_t12_shipped_params()), (params, identity, schedule), "testnet-12 as shipped = the fleet's int-12 ruleset");
+    // The shipped ruleset keeps the int-12 handshake identity. The params id and the schedule name 15,500.
+    let (sp, si, ss) = ids(&palw_t12_shipped_params());
+    assert_eq!(si, identity, "a future height is not a handshake split");
+    assert_ne!(sp, params, "the params id names the flag day");
+    assert_ne!(ss, schedule, "the schedule names 15,500");
     // Every older baseline carries the list dormant too.
     for (name, p) in [
         ("palw_t12_launch_params_v1", palw_t12_launch_params_v1()),
@@ -212,10 +211,22 @@ fn testnet12_ships_the_list_dormant_and_arming_it_moves_the_fingerprint_and_noth
     let baseline = palw_t12_release_v6_params();
     let shipped = palw_t12_shipped_params();
     shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
-    assert_eq!(ids(&shipped), ids(&baseline), "testnet-12 as shipped arms the list nowhere: it IS the int-12 release");
+    let (bp, bi, bs) = ids(&baseline);
+    let (sp, si, ss) = ids(&shipped);
+    assert_eq!(si, bi, "the handshake identity stays the int-12 release's");
+    assert_ne!(sp, bp, "the params id names the flag day");
+    assert_ne!(ss, bs, "the schedule names 15,500");
     assert_eq!(ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))), ids(&shipped), "the node's door");
-    assert_eq!(shipped.palw_fences_v1(), baseline.palw_fences_v1(), "no fence differs from int-12's");
     assert_eq!(shipped.genesis.hash, baseline.genesis.hash, "the genesis does not move");
+    for ((name, now), (was_name, was)) in shipped.palw_fences_v1().into_iter().zip(baseline.palw_fences_v1()) {
+        assert_eq!(name, was_name);
+        if LIST.contains(&name) {
+            assert_eq!(was, None, "{name} is dormant on the int-12 baseline");
+            assert_eq!(now.map(|f| f.daa_score()), PALW_T12_INT13_DAA, "{name} is armed at 15,500");
+        } else {
+            assert_eq!(now, was, "{name}: the flag day moves only its own list");
+        }
+    }
 
     // **Armed at a test height** over int-12 — the shape the future release's re-pin will take.
     let armed = with_list(baseline.clone(), Some(H));
@@ -287,13 +298,26 @@ fn once_armed_the_rules_are_live_from_the_test_height_and_not_below() {
 #[test]
 fn the_fork_id_of_the_shipped_ruleset_is_int12s_and_an_armed_list_is_refused_from_its_height() {
     let old = palw_t12_release_v6_params();
-    // **Shipped = int-12**: the fork id cannot tell the two apart at any height (no node runs an int-13 binary).
+    let flag = PALW_T12_INT13_DAA.unwrap();
     let shipped = palw_t12_shipped_params();
-    for daa in [0, 5_585, 7_000, H - 1, H, H + 1, 12_000] {
-        let (o, s) = (fork_id_v1(&old, daa), fork_id_v1(&shipped, daa));
-        assert_eq!(o, s, "the fork id of shipped and int-12 agree at {daa}");
+    for daa in [0, 5_584, 5_585, 7_000, 12_000, flag - 1] {
+        let o = fork_id_v1(&old, daa);
+        let s = fork_id_v1(&shipped, daa);
+        if daa >= 5_585 {
+            assert_eq!(s.next, flag, "past the int-11 heights, the shipped build announces 15,500 next at {daa}");
+        } else {
+            assert!(s.next < flag, "an earlier gate is still next at {daa} ({})", s.next);
+        }
         assert!(!evaluate_fork_id_v1(&shipped, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "shipped keeps int-12 at {daa}");
+        assert!(!evaluate_fork_id_v1(&old, daa, s.fired.as_bytes().as_slice(), s.next).refuses(), "int-12 keeps shipped at {daa}");
     }
+    for daa in [flag, flag + 1] {
+        let o = fork_id_v1(&old, daa);
+        let s = fork_id_v1(&shipped, daa);
+        assert!(evaluate_fork_id_v1(&shipped, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "shipped refuses int-12 at {daa}");
+        assert!(evaluate_fork_id_v1(&old, daa, s.fired.as_bytes().as_slice(), s.next).refuses(), "int-12 refuses shipped at {daa}");
+    }
+    assert!(fork_id_gate_fences_v1(&shipped).contains(&flag), "15,500 is a gate of the shipped ruleset");
     assert!(!fork_id_gate_fences_v1(&shipped).contains(&H), "9,000 is not a gate of the shipped ruleset");
 
     // **If armed** at a test height: an int-12 node is kept below it in both directions and refused from it.
@@ -410,15 +434,16 @@ fn drill_with_the_earlier_flag_days_low() -> Params {
 #[test]
 fn the_drill_arms_the_whole_list_at_a_low_height_and_moves_nothing_else() {
     let before = drill_with_the_earlier_flag_days_low();
-    // The drill ruleset carries the list dormant like every shipped ruleset (no DAA-9,000 flag day): the drill ARMS it.
+    // The drill ruleset starts at the shipping height. The flag MOVES the list down.
+    let flag = PALW_T12_INT13_DAA;
     for name in LIST {
-        assert_eq!(fence_at(&before, name), None, "{name}: dormant on the drill ruleset before the flag");
+        assert_eq!(fence_at(&before, name), flag, "{name}: the drill starts at the shipping height");
     }
     let mut moved = before.clone();
     let moves = palw_drill_int13_at_v1(&mut moved, 60).expect("a salted drill crosses the int-13 flag day low");
     assert_eq!(moves.iter().map(|m| m.name).collect::<Vec<_>>(), LIST, "exactly the list, in its order");
     for m in &moves {
-        assert_eq!((m.at, m.was), (60, None), "{} is armed at 60 (it was dormant)", m.name);
+        assert_eq!((m.at, m.was), (60, PALW_T12_INT13_DAA), "{} moves from the shipping height to 60", m.name);
     }
     moved.validate_palw_v2().expect("the result validates");
     for ((name, was), (_, now)) in before.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
@@ -468,12 +493,12 @@ fn the_drill_arms_the_whole_list_at_a_low_height_and_moves_nothing_else() {
 
 #[test]
 fn the_per_fence_court_window_flag_arms_its_entry_and_leaves_the_rest_of_the_list_dormant() {
-    // `--palw-drill-model-court-at` is the one per-fence flag of the list: it arms the window alone and the rest stays dormant.
+    // `--palw-drill-model-court-at` moves the window alone. The rest of the list stays at the shipping height.
     let mut p = drill_with_the_earlier_flag_days_low();
     palw_drill_model_court_window_at_v1(&mut p, 36).expect("--palw-drill-model-court-at=36");
     assert_eq!(fence_at(&p, "palw_model_court_window"), Some(36));
     for name in ["palw_audit_1004_v1", "palw_gen_range_twin_v1", "palw_receipt_spend_v4"] {
-        assert_eq!(fence_at(&p, name), None, "{name} stays dormant");
+        assert_eq!(fence_at(&p, name), PALW_T12_INT13_DAA, "{name} stays at the shipping height");
     }
     p.validate_palw_v2().expect("validates");
 }
@@ -506,7 +531,10 @@ fn print_the_release_fence_table() {
     println!("SHIPPED  params {sp}\n         identity {si}\n         schedule {ss}");
     println!("INT-12   params {bp}\n         identity {bi}\n         schedule {bs}");
     println!("SCHEDULE {:?}", shipped.fence_schedule_v1());
-    // The shipped table is the int-12 release's: no int-13 row, nothing at the cancelled 9,000.
-    assert!(rows.iter().all(|(at, name)| *at != H && !LIST.contains(name)), "no int-13 row on the shipped ruleset ({rows:?})");
-    assert_eq!(ids(&shipped), ids(&baseline), "the shipped table IS the int-12 release's");
+    let flag = PALW_T12_INT13_DAA.unwrap();
+    assert!(rows.iter().any(|(at, name)| *at == flag && LIST.contains(name)), "the flag day is on the shipped table ({rows:?})");
+    assert!(rows.iter().all(|(at, _)| *at != H), "the cancelled 9,000 is not on the shipped table");
+    assert_eq!(si, bi, "the handshake identity stays the int-12 release's");
+    assert_ne!(sp, bp);
+    assert_ne!(ss, bs);
 }

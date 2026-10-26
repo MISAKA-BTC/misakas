@@ -11942,17 +11942,15 @@ pub const PALW_T12_INT13_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
 ];
 
-/// **The int-13 list's height — `None`** (it was DAA 9,000 in the coordinator's brief of 2026-10-08, until the user cancelled that flag day), ONE named constant that the preset, a drill's
-/// `--palw-drill-int13-at` and the deploy kit's copy (`contrib/t12-deploy-kit/fleet.env.example`, pinned to this value by
-/// `t12_deploy_kit_constants`) share. A height no other fence uses — not 750, 1,000, 1,300, 1,700, 2,000, 3,600, 5,300, 5,395, 5,490 or
-/// 5,585: the fork id names heights, not fences. `None` is the dormant release.
+/// **The int-13 list's height — DAA 15,500** (the user's decision of 2026-10-25; the public fleet's rev `247ade1f9`), ONE named constant
+/// that the preset, a drill's `--palw-drill-int13-at` and the deploy kit's copy (`contrib/t12-deploy-kit/fleet.env.example`, pinned to
+/// this value by `t12_deploy_kit_constants`) share. There is still no DAA-9,000 flag day (the user's decision of 2026-10-08).
 ///
-/// **`None` — there is no DAA-9,000 flag day on testnet-12** (the user's decision of 2026-10-08, ~20:00). The four fences of this list wait
-/// for ONE future release — the full-activation release, which also enables RFC-0008, RFC-0010, RFC-0011's K2 route, RFC-0012, RFC-0014 and
-/// RFC-0015 once all RFC implementation is complete — and that release takes a fresh height then. Until it does, the shipped testnet-12
-/// ruleset arms the list nowhere and every shipped id is the int-12 release's, byte for byte. The list, [`palw_t12_arm_int13_flag_day_at_v1`]
-/// and the drill flag `--palw-drill-int13-at` stay: they are how the list is tested and how it will be scheduled.
-pub const PALW_T12_INT13_DAA: Option<u64> = None;
+/// **DAA 15,500 arms every entry of [`PALW_T12_INT13_FENCES_V1`] together** (`palw_audit_1004_v1`, `palw_gen_range_twin_v1`,
+/// `palw_model_court_window`, `palw_receipt_spend_v4`). A scheduled height is normalised out of the handshake identity, so a rolling
+/// upgrade peers until 15,500 and forks there. The full-activation list and the kernel slice carry these four entries too, but the
+/// preset's later lists leave them at this height (`full_activation_v1::palw_t12_arm_after_int13_at_v1`): 17,000 re-arms only the rest.
+pub const PALW_T12_INT13_DAA: Option<u64> = Some(15_500);
 
 /// **The int-13 flag day, armed** — every entry of [`PALW_T12_INT13_FENCES_V1`] at [`PALW_T12_INT13_DAA`], each through its own `set`,
 /// on the ASSEMBLED ruleset, after the int-11 flag day whose `palw_gen_v1` the range twin needs below it; a no-op while the height is
