@@ -90,19 +90,18 @@ fn court_f02_completeness_gate_clears_each_half_on_its_own_evidence() {
     let fence = PalwG14GatedFenceV1::TirPublicConvictionV1;
     let mut p = palw_t12_shipped_params();
     p.palw_tir_public_conviction_v1 = Some(ForkActivation::new(20_000));
-    let both = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
-    assert!(both.contains("OneOutsiderCapacityIncomplete") && both.contains("ServiceOpportunityIncomplete"), "{both}");
+    // V1 (service profile) and V4 (paid ingress) are pinned from the user-approved estimates (2026-10-26): F02 clears; F03 still
+    // needs the court-owner outsider lane in force at or below the fence.
+    let lane_missing = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
+    assert!(lane_missing.contains("OneOutsiderCapacityIncomplete") && !lane_missing.contains("ServiceOpportunityIncomplete"), "{lane_missing}");
     p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(20_001));
     let above = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
     assert!(above.contains("OneOutsiderCapacityIncomplete"), "{above}");
-    // audit B-07 (fix-b): the outsider lane alone no longer clears F03 — the paid ingress (typed-missing in every non-test build)
-    // is required too, so both halves keep refusing at and below the fence.
     for at in [19_999, 20_000] {
         p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(at));
-        let lane_only = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
-        assert!(lane_only.contains("OneOutsiderCapacityIncomplete"), "{lane_only}");
-        assert!(lane_only.contains("ServiceOpportunityIncomplete"), "{lane_only}");
+        p.validate_palw_court_policy_completeness_v1(fence).unwrap_or_else(|e| panic!("lane at {at} <= fence: complete: {e:?}"));
     }
-    assert!(kaspa_consensus_core::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1().is_err());
-    assert!(!kaspa_consensus_core::palw_court_service_binding_v1::palw_court_service_opportunity_complete_v1());
+    // V4 / V1 pinned from the user-approved estimates (2026-10-26).
+    assert!(kaspa_consensus_core::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1().is_ok());
+    assert!(kaspa_consensus_core::palw_court_service_binding_v1::palw_court_service_opportunity_complete_v1());
 }

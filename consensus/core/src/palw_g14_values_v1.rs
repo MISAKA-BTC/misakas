@@ -427,9 +427,15 @@ mod tests {
     }
 
     #[test]
-    fn val_production_sites_stay_typed_missing() {
-        assert!(crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1.is_none());
-        assert!(crate::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1().is_err());
-        assert!(crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1().is_err());
+    fn val_production_sites_take_the_user_approved_estimates() {
+        assert_eq!(crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1, Some(PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1));
+        assert_eq!(
+            crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.map(|p| (p.version, p.inclusion_delay_daa)),
+            Some((1, PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1))
+        );
+        assert_eq!(crate::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1(), Ok(PALW_G14_COURT_INGRESS_ESTIMATE_V1));
+        assert_eq!(crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1(), Ok(PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1));
+        // Not approved / no estimate: stays typed-missing.
+        assert!(crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_none());
     }
 }

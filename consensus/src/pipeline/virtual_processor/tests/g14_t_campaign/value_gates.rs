@@ -20,8 +20,8 @@ fn t_campaign_value_gated_paths_are_refused_in_a_node_build() {
         palw_funded_escrow_v1 as escrow, palw_funded_original_coordinator_v1 as funded, palw_state_v2::PalwTransitionExtrasV1,
         palw_tir_position_terminal_v2 as terminal,
     };
-    // V1 court service profile (T01/T02/T06/T07/T12 shared-original service book): not adopted.
-    assert!(service::PALW_COURT_SERVICE_PROFILE_V1.is_none(), "V1: no court service profile is adopted");
+    // V1 court service profile: pinned from the user-approved estimate (2026-10-26).
+    assert!(service::PALW_COURT_SERVICE_PROFILE_V1.is_some(), "V1: the approved court service profile estimate");
     // V2 funded-original admission schedule (T01/T06/T07/T09/T10/T12): every production resolution is typed-missing, so no funded
     // original is ever admitted and no `PalwFundedEscrowRowV1` is ever installed on a node.
     assert_eq!(
@@ -43,17 +43,9 @@ fn t_campaign_value_gated_paths_are_refused_in_a_node_build() {
     )
     .expect("a well-formed fresh row");
     assert!(escrow::palw_escrow_fee_schedule_v1(&row).is_none(), "V3: no escrow settlement schedule exists for any row");
-    // V4 paid public court ingress fee (T01/T04/T05/T14): typed-missing; the fold keeps the court-owner lane rule byte for byte.
-    assert_eq!(
-        ingress::palw_court_ingress_schedule_v1(),
-        Err(ingress::PalwCourtIngressMissingV1::Schedule),
-        "V4: the paid-ingress schedule is typed-missing in a node build"
-    );
-    // V5 material intake storage schedule (tag 255 `MaterialIntakeV1`; T04 native intake): typed-missing, every intake refused.
-    assert!(
-        matches!(intake::material_intake_schedule_v1(), Err(intake::MaterialIntakeMissingV1::Schedule)),
-        "V5: the material-intake schedule is typed-missing in a node build"
-    );
+    // V4 paid public court ingress fee / V5 material intake: pinned from the user-approved estimates (2026-10-26).
+    assert!(ingress::palw_court_ingress_schedule_v1().is_ok(), "V4: the approved paid-ingress estimate");
+    assert!(intake::material_intake_schedule_v1().is_ok(), "V5: the approved material-intake estimate");
     // V8 position terminal / lookahead budgets (tags 201–204; T07/T14 terminal deadlines): pinned as 目安 by the value lane
     // (cd8142330, user delegation 2026-10-22): one carrier part and 3,072 frontier values. Pinning the value arms nothing by itself.
     assert_eq!(

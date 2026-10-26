@@ -81,14 +81,14 @@ thread_local! {
 pub(crate) fn set_material_intake_test_schedule_v1(schedule: Option<MaterialIntakeScheduleV1>) {
     TEST_SCHEDULE.with(|c| c.set(schedule));
 }
-/// Production: always `Err(Schedule)`. Nothing here adopts an amount. Lane VAL estimate (not wired):
-/// [`crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1`].
+/// Production: **V5 — USER-APPROVED 2026-10-26 (estimate used as is; 「目安の値をそのまま使う」承認). Review condition: replace by measurement.** Basis: lane VAL [`crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1`].
+/// A test may still inject its own schedule per thread.
 pub fn material_intake_schedule_v1() -> Result<MaterialIntakeScheduleV1, MaterialIntakeMissingV1> {
     #[cfg(test)]
     if let Some(schedule) = TEST_SCHEDULE.with(|c| c.get()) {
         return Ok(schedule);
     }
-    Err(MaterialIntakeMissingV1::Schedule)
+    Ok(crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1)
 }
 
 // ---------------------------------------------------------------------------
@@ -605,9 +605,9 @@ impl RootedMaterialV1 {
 mod tests {
     use super::*;
     #[test]
-    fn material_schedule_is_typed_missing_until_injected() {
+    fn material_schedule_is_the_approved_estimate_unless_injected() {
         set_material_intake_test_schedule_v1(None);
-        assert_eq!(material_intake_schedule_v1(), Err(MaterialIntakeMissingV1::Schedule));
+        assert_eq!(material_intake_schedule_v1(), Ok(crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1));
     }
     #[test]
     fn material_ids_bind_claim_target_and_literal_submitter() {

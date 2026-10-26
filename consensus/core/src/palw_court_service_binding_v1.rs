@@ -46,9 +46,10 @@ impl CourtServiceProfileV1 {
     }
 }
 
-/// **Typed-missing (user decision).** No reviewed capacity profile is pinned; see the lane notes. The lane VAL estimate is
-/// [`crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1`] (pinned here only by the integrator).
-pub const PALW_COURT_SERVICE_PROFILE_V1: Option<CourtServiceProfileV1> = None;
+/// **V1 — USER-APPROVED 2026-10-26 (estimate used as is; 「目安の値をそのまま使う」承認). Review condition: replace by measurement.** Basis: lane VAL [`crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1`].
+/// Read only past an armed court fence.
+pub const PALW_COURT_SERVICE_PROFILE_V1: Option<CourtServiceProfileV1> =
+    Some(crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1);
 
 /// **RFC-0026 §4.1 item 4 / ADR-0192 A: the explicit delivery / inclusion premise** (lane F02, 2026-10-26). A non-response default
 /// is attributed only UNDER this premise: a correctly formed response an honest actor broadcasts at a supplied reserved unit `u` is
@@ -75,10 +76,13 @@ impl CourtServiceInclusionPremiseV1 {
     }
 }
 
-/// **Typed-missing (value lane / user decision).** No reviewed inclusion premise is adopted, so no default is attributed on any
-/// build. The processor copies this into `PalwTransitionExtrasV1::court_service_inclusion_premise_v1`; fixtures set their own
-/// explicitly named test premise.
-pub const PALW_COURT_SERVICE_INCLUSION_PREMISE_V1: Option<CourtServiceInclusionPremiseV1> = None;
+/// **Inclusion delay — USER-APPROVED 2026-10-26 (estimate used as is; 「目安の値をそのまま使う」承認). Review condition: replace by measurement.** Basis: lane VAL
+/// [`crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1`] (4 DAA). The processor copies this into
+/// `PalwTransitionExtrasV1::court_service_inclusion_premise_v1`; fixtures set their own explicitly named test premise.
+pub const PALW_COURT_SERVICE_INCLUSION_PREMISE_V1: Option<CourtServiceInclusionPremiseV1> = Some(CourtServiceInclusionPremiseV1 {
+    version: 1,
+    inclusion_delay_daa: crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1,
+});
 
 /// RFC-0026 F02 is operational only once every piece is wired AND its profile is pinned. The pieces (attribution, binding at
 /// ordinary admission, shared lifecycle dispatch with bottom effects, native notice intake) are present in this lane; the profile
@@ -404,7 +408,7 @@ mod tests {
             Err(CourtServiceBindingRefusalV1::NoLiableSigner)
         );
         assert_eq!(court_service_packets_v1(h(1), h(2), h(3), u64::MAX - 10, &signers, &profile()), Err(CourtServiceBindingRefusalV1::Overflow));
-        assert!(!palw_court_service_opportunity_complete_v1(), "no reviewed profile is pinned");
+        assert!(palw_court_service_opportunity_complete_v1(), "V1 pinned from the user-approved estimate (2026-10-26)");
     }
 
     #[test]
@@ -534,6 +538,6 @@ mod tests {
         assert_eq!(with(gap), Ok(CourtServiceAttributionV1::PartyDefault));
         assert!(matches!(with(gap + 1), Ok(CourtServiceAttributionV1::NoSlashHold(_))));
         assert!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, None).is_err());
-        assert!(PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.is_none(), "production premise is typed-missing");
+        assert!(PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.is_some(), "production premise: the user-approved 4-DAA estimate");
     }
 }

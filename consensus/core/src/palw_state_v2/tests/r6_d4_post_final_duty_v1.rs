@@ -492,5 +492,5 @@ fn f02_t02_t07_silent_supplied_actor_deadline_and_inclusion_premise_boundaries()
     // Negative controls: no adopted premise, or an unknown premise version, never defaults.
     assert!(run(None, after).is_err(), "typed-missing premise: undecided, no slash");
     assert!(matches!(run(Some(Premise { version: 2, inclusion_delay_daa: 0 }), after), Ok(CourtServiceAttributionV1::NoSlashHold(_))));
-    assert!(crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.is_none());
+    assert!(crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.is_some(), "approved 4-DAA estimate");
 }

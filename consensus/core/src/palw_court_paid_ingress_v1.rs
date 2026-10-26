@@ -45,14 +45,14 @@ pub(crate) fn set_palw_court_ingress_test_schedule_v1(schedule: Option<PalwCourt
     TEST_SCHEDULE.with(|c| c.set(schedule));
 }
 
-/// Production: always `Err(Schedule)`. Nothing here adopts an amount. Lane VAL estimate (not wired):
-/// [`crate::palw_g14_values_v1::PALW_G14_COURT_INGRESS_ESTIMATE_V1`].
+/// Production: **V4 — USER-APPROVED 2026-10-26 (estimate used as is; 「目安の値をそのまま使う」承認). Review condition: replace by measurement.** Basis: lane VAL [`crate::palw_g14_values_v1::PALW_G14_COURT_INGRESS_ESTIMATE_V1`].
+/// A test may still inject its own schedule per thread.
 pub fn palw_court_ingress_schedule_v1() -> Result<PalwCourtIngressScheduleV1, PalwCourtIngressMissingV1> {
     #[cfg(test)]
     if let Some(schedule) = TEST_SCHEDULE.with(|c| c.get()) {
         return Ok(schedule);
     }
-    Err(PalwCourtIngressMissingV1::Schedule)
+    Ok(crate::palw_g14_values_v1::PALW_G14_COURT_INGRESS_ESTIMATE_V1)
 }
 
 /// **How many claims may hold an outside-side reservation at once**: `⌊cap / 2⌋`. The non-reserved room is then at least
@@ -66,9 +66,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn r5_f03_ingress_schedule_is_typed_missing_until_injected() {
+    fn r5_f03_ingress_schedule_is_the_approved_estimate_unless_injected() {
         set_palw_court_ingress_test_schedule_v1(None);
-        assert_eq!(palw_court_ingress_schedule_v1(), Err(PalwCourtIngressMissingV1::Schedule));
+        assert_eq!(palw_court_ingress_schedule_v1(), Ok(crate::palw_g14_values_v1::PALW_G14_COURT_INGRESS_ESTIMATE_V1));
         let s = PalwCourtIngressScheduleV1 { fee_sompi_per_session: 7 };
         set_palw_court_ingress_test_schedule_v1(Some(s));
         assert_eq!(palw_court_ingress_schedule_v1(), Ok(s));
