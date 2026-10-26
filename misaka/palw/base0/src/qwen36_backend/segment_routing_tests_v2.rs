@@ -46,9 +46,13 @@ fn segment_routing_q36_selected_reader_plan_replays_from_real_recurrence_checkpo
             })
             .collect();
         assert_eq!(routers.len(), 2);
+        // A combine reader must name the immutable selected (first) router;
+        // only non-combine readers are retargeted to the independent one.
+        let combine = reader.kernel_semantics_id
+            == kernel_semantics_id_v1(kaspa_consensus_core::palw_step_refute::KDESC_Q36_MOE_COMBINE);
         bindings.push(PalwReaderRouterBindingV2 {
             reader_slot,
-            router_slot: routers[layer.unwrap_or(0) as usize % 2],
+            router_slot: routers[if combine { 0 } else { layer.unwrap_or(0) as usize % 2 }],
         });
     }
     let declaration = PalwReaderRouterDeclarationV2 {
