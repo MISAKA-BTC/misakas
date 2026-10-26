@@ -91,6 +91,9 @@ fn g14_dolphin_long_context_cost() {
             "logits_sha256": logits_digest})
         );
     }
+    // Input integrity reads are outside the forward timings and occur in N=0 too.
+    assert_eq!(hash_file(path), artifact_sha, "artifact changed during measurement");
+    assert_eq!(hash_file(Path::new(&tokens_name)), tokens_sha, "token file changed during measurement");
     println!(
         "G14_MODEL_RESULT {}",
         json!({"positions_executed": n, "total_forward_wall_ns": total_wall_ns,
