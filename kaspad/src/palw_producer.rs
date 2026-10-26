@@ -546,6 +546,7 @@ pub(crate) fn palw_floor_anchor_duty_v1(
             class_refusal: facts.class_admission_refusal.as_deref(),
             due_slots,
             after_slots,
+            real_attempts_refused: facts.real_attempts_refused,
             stagger,
         },
     )
@@ -1182,9 +1183,10 @@ impl PalwProducerService {
                 // **ADR-0165 §00.9: anchor duty under the idle-only hold.** One binder, then the wait starts again.
                 info!(
                     "[{PALW_PRODUCER}] anchor duty: the floor is held as the idle-only fallback, and a claim has waited {due_slots} slots \
-                     (since DAA {}) for an operator attempt — mining ONE binder, refused by the fold (no claim, no weight) and still an \
+                     (since DAA {}) for an operator attempt{} — mining ONE binder, refused by the fold (no claim, no weight) and still an \
                      operator attempt that binds the due claims",
-                    anchor_duty_wait.since().unwrap_or(facts.daa_score)
+                    anchor_duty_wait.since().unwrap_or(facts.daa_score),
+                    if facts.real_attempts_refused { " (every REAL class refuses a new attempt: the short wait)" } else { "" }
                 );
                 anchor_duty_wait.fired(facts.daa_score);
             } else if let Err(hold) = ready {
@@ -3531,6 +3533,18 @@ mod p6_tests {
         assert!(!duty(&f, &floor_hold, AFTER + 3, AFTER, 4), "the stagger: this bond waits four slots longer");
         assert!(duty(&f, &floor_hold, AFTER + 4, AFTER, 4));
         assert!(duty(&f, &floor_hold, 5, 5, 0) && !duty(&f, &floor_hold, 4, 5, 0), "a drill's shorter wait is the wait");
+        // The facts say every REAL class refuses a new attempt (live t12, 2026-10-26: the 8k room full): the short wait, read
+        // through this wrapper from the facts alone.
+        use kaspa_consensus_core::palw_real_share_v1::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1 as SHORT;
+        let mut no_real = f.clone();
+        no_real.real_attempts_refused = true;
+        assert!(duty(&no_real, &floor_hold, SHORT, AFTER, 0), "no REAL attempt is coming: the short wait is over");
+        assert!(!duty(&no_real, &floor_hold, SHORT - 1, AFTER, 0), "…not before it");
+        assert!(
+            !duty(&no_real, &floor_hold, SHORT + 5, AFTER, 6) && duty(&no_real, &floor_hold, SHORT + 6, AFTER, 6),
+            "the stagger still adds"
+        );
+        assert!(!duty(&f, &floor_hold, SHORT, AFTER, 0), "without the fact the release's wait stands");
         // Nothing else gives way: no claim due, a REAL class, another hold, another registry refusal.
         let mut none_due = f.clone();
         none_due.binder_due = false;

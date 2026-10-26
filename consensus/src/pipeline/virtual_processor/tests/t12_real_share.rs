@@ -49,9 +49,10 @@ use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV
 use kaspa_consensus_core::palw_model_registry_v1::{PalwModelLifecycleV1, PalwSeatReadinessRowV1};
 use kaspa_consensus_core::palw_real_share_v1::PalwFloorModeV1::{Idle, Normal, Probe};
 use kaspa_consensus_core::palw_real_share_v1::{
-    PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as DUTY_AFTER, PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1 as DUTY_STAGGER,
-    PALW_FLOOR_IDLE_SLOTS_V1 as IDLE, PALW_FLOOR_PROBE_SLOTS_V1 as PROBE, PALW_T12_USEFUL_WORK_FENCES_V1, PalwFloorAnchorDutyInputV1,
-    PalwFloorAnchorDutyWaitV1, PalwFloorStateV1, palw_floor_anchor_duty_stagger_v1, palw_floor_anchor_duty_v1,
+    PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1 as DUTY_AFTER_NO_REAL, PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as DUTY_AFTER,
+    PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1 as DUTY_STAGGER, PALW_FLOOR_IDLE_SLOTS_V1 as IDLE, PALW_FLOOR_PROBE_SLOTS_V1 as PROBE,
+    PALW_T12_USEFUL_WORK_FENCES_V1, PalwFloorAnchorDutyInputV1, PalwFloorAnchorDutyWaitV1, PalwFloorStateV1,
+    palw_floor_anchor_duty_stagger_v1, palw_floor_anchor_duty_v1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
 use kaspa_hashes::Hash64;
@@ -1053,13 +1054,20 @@ struct Operators {
     waits: Vec<PalwFloorAnchorDutyWaitV1>,
     /// `(card, virtual DAA)` of every binder an operator mined.
     fired: Vec<(usize, u64)>,
+    /// For each of `fired`: the floor's facts said every REAL class refuses a new attempt (the short wait applied).
+    short: Vec<bool>,
     /// The wait, in slots (the release's unless a test shortens it).
     after: u64,
 }
 
 impl Operators {
     fn new(operators: usize) -> Operators {
-        Operators { waits: vec![PalwFloorAnchorDutyWaitV1::default(); operators], fired: Vec::new(), after: DUTY_AFTER }
+        Operators {
+            waits: vec![PalwFloorAnchorDutyWaitV1::default(); operators],
+            fired: Vec::new(),
+            short: Vec::new(),
+            after: DUTY_AFTER,
+        }
     }
 
     /// One pass of every operator's producer loop at the current virtual DAA.
@@ -1079,10 +1087,12 @@ impl Operators {
                 class_refusal: facts.class_admission_refusal.as_deref(),
                 due_slots,
                 after_slots: self.after,
+                real_attempts_refused: facts.real_attempts_refused,
                 stagger: palw_floor_anchor_duty_stagger_v1(bond.0.transaction_id.as_byte_slice()[0]),
             });
             if fire {
                 self.fired.push((card, facts.daa_score));
+                self.short.push(facts.real_attempts_refused);
                 self.waits[card].fired(facts.daa_score);
                 rig.rogue_floor(card, 1_000).await;
             }
@@ -1186,6 +1196,81 @@ async fn real_share_under_normal_a_non_operator_real_claim_binds_through_anchor_
     assert!(matches!(rig.floor_state().mode, Normal { .. }), "REAL work still holds the floor: the binder was the only floor");
 }
 
+/// **The short wait (live testnet-12, 2026-10-26): when every REAL class refuses a new attempt, the duty does not wait thirty slots.**
+/// Card 5 (not an operator) lands a REAL claim as a chain block; seventeen slots later four more non-operators land REAL claims at once,
+/// filling the 8k class (its in-flight cap and panel budget, about five open claims in a harness that resolves none) — so no operator's
+/// REAL attempt can come, and the last of them keeps the chain Normal for the floor's idle window. The first claim's slot passes; the
+/// operators' facts say `real_attempts_refused`, and one of them mines ONE binder within the short wait plus its stagger — far inside
+/// the thirty-slot wait, which on this chain would not end before the floor went Idle. Asserted: the facts flip only once the class is
+/// full; exactly one binder; it falls inside `[slot + 4, slot + 4 + 7 + slack]`; the claim is bound; the chain is still Normal.
+#[tokio::test]
+async fn real_share_anchor_duty_waits_short_when_every_real_class_refuses() {
+    use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2 as Phase;
+    let mut ops = Operators::new(4);
+    let mut rig = Rig::new_lane_a(4, true).await;
+    let delay = rig.c.bundle.panel.anchor_delay();
+    rig.plant();
+    let (r0, claim_id) = rig.real_now(5, 1_000).await;
+    let x0 = rig.c.daa_of(r0.header.hash);
+    let slot = rig.state().claim(&claim_id).expect("the REAL claim is accepted").bind_base_daa() + delay;
+    let mut meter = AnchorMeter::default();
+    meter.sample(&rig);
+    let refused_now = |rig: &Rig| -> bool {
+        rig.c
+            .ctx
+            .consensus
+            .palw_producer_facts_v2(rig.floor(), Some(rig.c.bonds[0].0))
+            .expect("the floor's facts")
+            .real_attempts_refused
+    };
+    while rig.c.ctx.consensus.get_virtual_daa_score() < slot.saturating_sub(3).max(x0 + 1) {
+        slot_with_operators(&mut rig, &mut meter, &mut ops).await;
+    }
+    assert!(ops.fired.is_empty(), "nothing is due yet: {:?}", ops.fired);
+    // Fill the class: REAL attempts by non-operators until the class gate refuses the next one.
+    let mut landed = 0;
+    for card in [6usize, 7, 4, 5, 6, 7, 4] {
+        rig.plant();
+        let facts = rig.c.ctx.consensus.palw_producer_facts_v2(rig.k8, Some(rig.c.bonds[card].0)).expect("the 8k facts");
+        if facts.class_admission_refusal.is_some() {
+            break;
+        }
+        rig.real_now(card, 1_000).await;
+        landed += 1;
+    }
+    assert!(landed >= 1, "at least one more REAL claim lands before the class is full");
+    let full_refusal =
+        rig.c.ctx.consensus.palw_producer_facts_v2(rig.k8, Some(rig.c.bonds[6].0)).expect("the 8k facts").class_admission_refusal;
+    assert!(full_refusal.is_some(), "the 8k class refuses a new attempt once it is full");
+    let last_real = rig.c.ctx.consensus.get_virtual_daa_score();
+    assert!(matches!(rig.floor_state().mode, Normal { .. }), "the REAL claims keep the chain Normal");
+    let bound = |rig: &Rig| !matches!(rig.state().claim(&claim_id).map(|c| c.phase.clone()), Some(Phase::Provisional));
+    let mut saw_refused = false;
+    while !bound(&rig) && rig.c.ctx.consensus.get_virtual_daa_score() < slot + DUTY_AFTER_NO_REAL + DUTY_STAGGER + 6 {
+        saw_refused |= refused_now(&rig);
+        slot_with_operators(&mut rig, &mut meter, &mut ops).await;
+    }
+    let phase = rig.state().claim(&claim_id).expect("the claim stays").phase.clone();
+    eprintln!(
+        "[real-share] short wait: REAL claim slot DAA {slot} (accepted {x0}), class full at DAA {last_real} ({landed} more REAL claims: \
+         {full_refusal:?}); now DAA {}: {phase:?}; binders mined {:?}",
+        rig.c.ctx.consensus.get_virtual_daa_score(),
+        ops.fired
+    );
+    assert!(saw_refused, "the floor's facts say every REAL class refuses while the claim is due");
+    assert_eq!(ops.fired.len(), 1, "exactly one binder is mined: {:?}", ops.fired);
+    let (card, at) = ops.fired[0];
+    assert!(card < 4, "an operator's");
+    assert!(at >= slot + DUTY_AFTER_NO_REAL, "nobody fires before the short wait: fired at DAA {at}, slot {slot}");
+    assert!(
+        at <= slot + DUTY_AFTER_NO_REAL + DUTY_STAGGER + 3,
+        "within the short wait plus the stagger (and the slots a pass lags the DAA by): fired at DAA {at}, slot {slot}"
+    );
+    assert!(at < slot + DUTY_AFTER, "inside the thirty-slot wait the release had: fired at DAA {at}, slot {slot}");
+    assert!(!matches!(phase, Phase::Provisional), "the binder anchors the claim: {phase:?}");
+    assert!(matches!(rig.floor_state().mode, Normal { .. }), "the binder was the only floor: the chain is still Normal");
+}
+
 /// **The control: the same claim binds with no duty when an OPERATOR is the REAL producer** — an operator's REAL attempt, merged beside
 /// the chain, is an operator attempt like its floors were; the claim is bound inside the wait, so no producer fires.
 #[tokio::test]
@@ -1204,9 +1289,11 @@ async fn real_share_control_an_operators_real_attempts_anchor_a_non_operators_cl
     let _ = meter;
 }
 
-/// **Anchor duty is rare: a claim that binds is bound for good, and nothing else fires.** The same non-operator claim as the duty test,
-/// run on past its binding for thirty more slots: no second binder is mined (the claims left Provisional, `binder_due` is false, every
-/// operator's wait is broken).
+/// **Anchor duty is rare: a claim that binds is bound for good, and the release's wait fires once.** The same non-operator claim as the
+/// duty test, run on past its binding for thirty more slots: no second binder is mined on the release's wait (the claims left Provisional,
+/// `binder_due` is false, every operator's wait is broken). A later REAL claim that falls due while the 8k class's room is full (its
+/// panel budget about five open claims in a harness that resolves none) has no REAL attempt coming, so it takes its own binder on the
+/// SHORT wait (2026-10-26) — asserted to be exactly that kind, and never the first claim's again.
 #[tokio::test]
 async fn real_share_anchor_duty_fires_once_and_then_the_floor_stays_held() {
     let mut ops = Operators::new(4);
@@ -1224,7 +1311,10 @@ async fn real_share_anchor_duty_fires_once_and_then_the_floor_stays_held() {
     while rig.c.ctx.consensus.get_virtual_daa_score() < bound_at + 30 {
         slot_with_operators(&mut rig, &mut meter, &mut ops).await;
     }
-    assert_eq!(ops.fired.len(), 1, "no second binder: {:?}", ops.fired);
+    let release_wait = ops.fired.iter().zip(&ops.short).filter(|(_, short)| !**short).count();
+    assert_eq!(release_wait, 1, "no second binder on the release's wait: {:?} (short: {:?})", ops.fired, ops.short);
+    assert!(ops.short[1..].iter().all(|short| *short), "any later binder is a short-wait one: {:?} {:?}", ops.fired, ops.short);
+    assert!(ops.fired.windows(2).all(|w| w[1].1 >= w[0].1 + DUTY_AFTER_NO_REAL), "binders are a wait apart: {:?}", ops.fired);
     assert!(
         !matches!(
             rig.state().claim(&claim_id).map(|c| c.phase.clone()),
