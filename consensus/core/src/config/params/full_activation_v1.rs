@@ -106,7 +106,18 @@ pub const PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY: PalwPostLaunchFenceV1 = PalwP
                 installed.activation = at;
                 Some(installed)
             }
-            (Some(at), None) => Some(crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at)),
+            // G14 lane CLOCK (review part 2, B-1): the DECIDED policy — the windows' composition with the user's 2026-10-22 目安
+            // (`PALW_X3_DECIDED_DELTA_TERMS_V1`, `c_retain` 36,058; replaced by Codex's M-X3 measurement) — never the probe, wherever
+            // a V2 bundle supplies the windows. Without one (no V2 consensus) the probe stays and validation refuses it.
+            (Some(at), None) => Some(match &params.palw_consensus_mode {
+                crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                    match crate::palw_ruling_fences_v1::palw_x3_decided_policy_v1(&bundle.state, at) {
+                        Ok(policy) => crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1 { activation: at, policy },
+                        Err(_) => crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at),
+                    }
+                }
+                _ => crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at),
+            }),
         };
         palw_full_activation_sync_mirrors_v1(params);
     },
@@ -306,6 +317,10 @@ pub const PALW_T12_KERNEL_SLICE_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
     PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,
     PALW_T12_FULL_KERNEL_ROUTE_PANEL_ONE_ENTRY,
+    // G14 lane CLOCK (review part 2, M-1): the court scope's 4-dismissed-per-accuser-per-claim cap (`palw_provider_court_v1`), the
+    // same record gate as the kernel route above it.
+    PALW_T12_FULL_PROVIDER_COURT_ENTRY,
+    // X3 with the decided policy; past it the kernel route's claims run on its notice / hard clock (`misaka_palw_kernel::claim_clock`).
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
     PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
     PALW_T12_FULL_GATE_C_ENTRY,

@@ -176,3 +176,9 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 - **本番 Gate C policy — m/k = 75/41 ユーザー承認 2026-10-26、目安から**: `PalwSecurityCertificationPolicyV1::approved_v1(day_daa)`（他の項は RFC-0018 の設計値）。f = 0.25 で誤認証 3.99e-8/claim、4,096 position 上限で 54 件/日・年 7.9e-4、正直認証 0.9926（応答 90%）。e2e の TEST_ONLY policy はこれに置き換えられる。
 - **V1〜V5、V11、inclusion_delay_daa — ユーザー承認済みの目安 2026-10-26、実測で置換**: 値は「2026-10-26 lane VAL」節（V1 は 1 packet/DAA、V11 ρ_court 3,125、inclusion_delay_daa 4 DAA を含む改定後の値）。measured record・arming record には入れない。
 - 範囲: どれも本番 preset には入れていない（slice の武装は統括の統合時）。panel v3 の fence は未武装なので、approved 一覧が consensus に効くのは panel v3 か slice が武装されてから。
+
+## 2026-10-26 lane CLOCK — X3 を kernel route の claim に適用（fence は未武装、preset は未変更）
+- **X3 の値 — ユーザー承認の目安（2026-10-22「パラメーターは目安で決めていい」）、実測で置換**: slice の X3 entry（`PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY`）は試験用 probe（hard = a+300）を入れず、`palw_x3_decided_policy_v1`（窓の合成 + Δ 512/512/512/120/360 + `c_retain` 36,058 sompi/DAA）を入れる。Codex の M-X3 実測が来たら `PALW_X3_DECIDED_DELTA_TERMS_V1` を置き換える。measured record・arming record には入れない（X3 の G14 arming record は空のまま）。
+- **kernel route の時計**: X3 の高さ以降に commit された kernel claim の `liability_until` の下限を `committed + 3,120 + court_deadline (20) + proof_grace (10)` とする（`misaka_palw_kernel::claim_clock`、consumer 注入、root 外）。ADR-0198 の notice a+3,120（inclusive）と hard a+10,000 の内側。報酬保留・signer lock・reservation はこの horizon に従う。
+- **M-1 飽和費用の不等式（X3 以降の Panel=1 class 登録条件）**: `runs × dismissal_fee × max(check+challenge+liability, 3,150) > claim_collateral + claim_reward + 外部利得上限`。interim policy で `64 × 0.1 MSK × 3,150 = 20,160 MSK > 1,000 + 5 + 500 = 1,505 MSK`（13.4 倍）。外部利得上限 500 MSK はユーザー承認（2026-10-26）。前提: DAA あたり 1 block（最悪側）、fee の市場は未 pin（第 1 部 MAJOR-2）。告発者・claim ごとの却下 4 件の上限（`palw_provider_court_v1` の court scope）を slice に追加。
+- 見直し: M-X3 実測、DAA あたり block 数の実測、mempool の fee 優先順位。

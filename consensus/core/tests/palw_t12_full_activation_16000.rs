@@ -296,7 +296,7 @@ fn the_kernel_slice_is_an_ordered_subset_and_clears_back() {
     let mut p = base.clone();
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
     assert_ne!(ids(&p), ids(&base));
-    // 17,000 moves only the slice's six non-int-13 entries; the int-13 four stay at the fleet's 15,500.
+    // 17,000 moves only the slice's seven non-int-13 entries (lane CLOCK added the provider court); the int-13 four stay at 15,500.
     let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     let mut at_17000 = 0;
     for f in PALW_T12_KERNEL_SLICE_FENCES_V1 {
@@ -307,7 +307,7 @@ fn the_kernel_slice_is_an_ordered_subset_and_clears_back() {
             at_17000 += 1;
         }
     }
-    assert_eq!(at_17000, 6);
+    assert_eq!(at_17000, 7);
     for ((name, was), (_, now)) in base.palw_fences_v1().iter().zip(p.palw_fences_v1().iter()) {
         if !PALW_T12_KERNEL_SLICE_FENCES_V1.iter().any(|f| f.name == *name) || int13.contains(name) {
             assert_eq!(was, now, "{name} did not move");
