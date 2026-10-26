@@ -14536,6 +14536,49 @@ impl PalwPanelService {
         }
     }
 
+    /// **G14 lane FPSEL (coordinator decision 2026-10-26): a TIR frame original from the RFC-0009 stage B evidence providers.** A
+    /// node-less producer's rail publishes the claim's FPC1 capture to a provider (`--evidence-out` + `palw-evidence publish`); a
+    /// custodian that retains no original of the claim (`fp_retained_payload_paths`) fetches it here, root-checked against the CHAIN's
+    /// roots and every chunk against the manifest, and keeps it under `retention/foreign/<claim>.material`, where the frame custodian's
+    /// reader (`retained_original_v1`) finds it and still checks it against the frame. `Ok(false)`: no provider dir, or a copy is
+    /// already retained. A provider's silence is the claimant's DA no-response (a DA default), never a computation fault: nothing here
+    /// files or accuses anything, and no responsibility moves to the provider (no provider court).
+    pub(crate) async fn fetch_tir_original_from_evidence_providers_v1(&self, network_domain: Hash64, claim: Hash64) -> Result<bool, String> {
+        if self.config.evidence_provider_dirs.is_empty() || self.fp_retained_payload_paths(&claim).iter().any(|p| p.is_file()) {
+            return Ok(false);
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let (state, _, _) = session.palw_derived_artifacts_v1(claim).ok_or("the claim's committed roots are not readable")?;
+        let roots = misaka_palw_remote::evidence::ClaimRoots {
+            network_domain,
+            trace_root: state.trace_root,
+            output_root: state.output_root,
+            execution_root: state.execution_root,
+            trace_chunk_count: state.trace_chunk_count,
+            retention_deadline: state.trace_retention_daa,
+        };
+        let dirs = self.config.evidence_provider_dirs.clone();
+        let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
+        tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let (bytes, report) = misaka_palw_remote::evidence::fs::fetch_claim_material(
+                &dirs,
+                &claim.to_string(),
+                &roots,
+                &misaka_palw_remote::evidence::ManifestLimits::default(),
+                claim,
+            )
+            .map_err(|why| format!("no evidence provider served the frame original ({why:?})"))?;
+            let parent = target.parent().ok_or("retention path has no parent")?;
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            let partial = target.with_extension("material.partial");
+            std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &target)).map_err(|e| e.to_string())?;
+            info!("[{PALW_PANEL}] claim {claim}: TIR frame original ({} B) from evidence provider(s) {:?}", bytes.len(), report.served_by);
+            Ok(true)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
     /// **The signed whole-capture pull** (ADR-0077 SA-2's last sentence). The attempt lane keeps
     /// the whole-capture transport — Decision 8 retires it on the FREE-PROMPT lane only — so the
     /// pull stays, with a bond in front of it. Falls back to the unsigned form for a node with no

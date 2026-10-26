@@ -50,3 +50,20 @@ Route: `route_armed(FpSelection) = framed && palw_tir_public_conviction_v1 in fo
 2. Choice of op number (above).
 
 **(3) Checked:** `routing_v2::...routed_retrieval...` also fails at base d8aded6de with the same `ProfileNotCanonical` error. The failure predates this lane.
+
+## Follow-up 2: op approval and serving frame originals (2026-10-26/27)
+
+- **Op 248 (proto 1332/1333) was approved by the coordinator on 2026-10-26.** The approval is recorded in the doc comment in `rpc/core/src/api/ops.rs`.
+- **Rail → provider:** no new code was needed. The rail's `--evidence-out` already writes `palw_fp_capture_encode_v1` (FPC1) material and its manifest, and `palw-evidence publish` sends them to HTTP providers. FPC1 is the same format the frame custodian reads (`retained_original_v1` accepts `FPC1`), so I added no new endpoint.
+- **Custodian ← provider (new):** `PalwPanelService::fetch_tir_original_from_evidence_providers_v1`. A frame custodian with no retained original now fetches it, before it opens the original, from the provider directories given by `--palw-evidence-provider-dir`. The material is checked against the chain's roots and against the manifest, then saved to `retention/foreign/<claim>.material`. Seats were already reading from providers.
+- **DA responsibility:** if no provider answers, the fetch only logs it. The claim then goes to DA default as the claimant's no-response, and is never treated as a computation fault. There is no provider court.
+- **Verification:** `cargo check -p kaspad --lib --bins` passes.
+
+**E2E (2) not run.** A local devnet needs all of the following, and none of them exist yet:
+- the devnet preset with `palw_tir_public_conviction_v1` armed at genesis (with the TEST-ONLY frame cost) and the TIR fence set;
+- a TIR class registered and onboarded to Active (jury, probation);
+- seat services that have a TIR backend;
+- a TIR fp-worker binary;
+- an HTTP-to-directory sync step for `palw-evidence serve`.
+
+The existing `misaka-palw-fp-devnet-e2e.sh` covers only the A16 legacy class. The closest existing test is the in-process harness `palw_service_tir_frame_e2e.rs` (T-N1), whose honest run takes up to 2 hours, and the rail path is not wired into it.
