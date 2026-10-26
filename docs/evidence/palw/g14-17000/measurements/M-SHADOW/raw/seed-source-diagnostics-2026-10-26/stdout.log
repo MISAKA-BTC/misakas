@@ -1,0 +1,13 @@
+
+running 2 tests
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::seed::lane_seed_an_unprosecuted_sybil_covered_final_earns_nothing_and_gate_c_failure_alone_does_not_slash ... FAILED
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::seed::lane_seed_panel_one_seat_is_drawn_after_the_commit_and_a_sybil_covered_lie_is_slashed_by_one_outsider ... FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::seed::lane_seed_an_unprosecuted_sybil_covered_final_earns_nothing_and_gate_c_failure_alone_does_not_slash
+    pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::seed::lane_seed_panel_one_seat_is_drawn_after_the_commit_and_a_sybil_covered_lie_is_slashed_by_one_outsider
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1205 filtered out; finished in 0.05s
+
