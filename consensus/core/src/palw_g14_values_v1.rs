@@ -96,8 +96,9 @@ pub const PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1: u64 = 4;
 /// ledger as shipped: `dismissed_proof_fee` 0.1 MSK × `max_adjudications_per_block` 64 = 6.4 MSK per block, over the ledger's
 /// `liability_daa` 200 → 1,280 MSK, 2.56 × the bound. A consumer who stakes more than this on one Panel=1 claim is outside the
 /// guarantee. Revise: any change of the ledger's fee / adjudication cap / liability window, or evidence of larger misdirection value.
-/// F03k's branch (d801d4eb3) declares this name as `None`; this value replaces it at integration.
-pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1: Option<u64> = Some(500 * SOMPI_PER_MSK_V1);
+/// Integration (2026-10-26): kept as a separate estimate. The production bound above stays `None` (typed-missing) until the user
+/// approves this value; then the production constant takes `Some(..._ESTIMATE_V1)`.
+pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1: u64 = 500 * SOMPI_PER_MSK_V1;
 
 // ---------------------------------------------------------------- V2 funded original / admission
 
@@ -403,7 +404,7 @@ mod tests {
 
     #[test]
     fn val_external_gain_bound_is_below_the_ledger_censorship_cost() {
-        let gain = PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.expect("estimate");
+        let gain = PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1;
         let censorship = (SOMPI_PER_MSK_V1 / 10) * 64 * 200;
         assert!(censorship > gain && censorship * 100 >= gain * 250, "censorship {censorship} gain {gain}");
         assert!(gain >= 5 * SOMPI_PER_MSK_V1 + PALW_G14_FUNDED_FEE_SOMPI_V1, "covers reward + escrow fee");
