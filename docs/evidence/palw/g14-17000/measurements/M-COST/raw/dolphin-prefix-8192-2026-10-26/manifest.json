@@ -1,0 +1,8 @@
+{
+  "files_sha256": {
+    "comparison.json": "2230813c12f1a4811496523efb7f08e61fa9a8cd22a69197fcb4c4f7f78fa3b6",
+    "long-prefix.stdout.log": "8c405a6f8c91a138e9d3c8d432d79a98fd7561bd51bc4e3b60d5984bbee2ef90",
+    "short-prefix.stdout.log": "6236cba74d66057cfdf65c8f0c8c2b61e0bd4fb526ab7f783cf5b16992af89c9"
+  },
+  "analyzer_sha256": "57bf0dad82141f78d3a498090f8f0cb4ea9df5375541576e9f0ebb1b50a43d4e"
+}

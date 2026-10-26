@@ -43,3 +43,7 @@ The pinned binary above executed **8,192 positions in 512 chunks**, exit 0, with
 The first 1,024 positions took 53.018 s and the final 1,024 took 206.337 s. Both growing context and changing host load contribute; a constant per-token extrapolation to 32k is unsupported. Detailed 1,024-position windows preserve the observed growth, with within-run chunk quantiles labeled as descriptive. The 32k run uses the same binary/input and fresh process; results remain pending.
 
 This is a real 1.5B artifact measurement, **not 9B-8k**, not K2 native claim validation, and not the full M-COST requirement. No claim monetary price or X3 deadline is derived from this CPU/RSS observation alone. Missing cold transfer, retained encoded material, court work and minimum-node observations stay unmeasured.
+
+## 8k prefix consistency during the 32k run
+
+A [captured comparison](raw/dolphin-prefix-8192-2026-10-26/comparison.json) at 09:27 UTC compared the finished 8k run against the first 8,192 positions of the still-running 32k process. All **512 chunk-terminal logits digests agree**, using identical artifact, token input, shape and binary identities. The byte-for-byte bounded stdout snapshots and their hashes are retained. This checks the emitted 16-position endpoints; it does not compare every position's logits or complete internal traces and does not certify a claim. Timing and allocation fields may differ. The remainder of 32k is still pending; the prefix result is not a completed 32k cost measurement.
