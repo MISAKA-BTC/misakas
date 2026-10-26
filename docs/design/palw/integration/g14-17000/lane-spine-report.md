@@ -95,3 +95,17 @@ The same test (`..._ibd_node_convicts_a_covered_lie_before_final`) fails at `can
 
 ### Current stage table (`g14_spine_`, 4 tests run, all FAIL as designed or for a real gap)
 PASS: S3a, S3c (deadline-only). FAIL: S3b×2 (G-K1 assert), S3c'' (premise bypassed), S4×2 (reorg gate). UNIMPLEMENTED: S1, S2, S3a' (CERT), S3b', S3c', S3c'''.
+
+## 7. Third round (2026-10-26): coordinator's decisions applied
+
+- **G-K1, canonical S3b assert updated by the G14 coordinator on the owner's (G14C) behalf.** The decision: 5bdd427fb is an intended rule.
+  - `canonical()` now reads each covering seat's `PalwKernelSignerLockRowV1.amount` before the filing. It asserts that the seat is charged exactly that amount, and that every covering seat holds a lock.
+  - The producer-slash and bounty asserts are unchanged.
+  - Result: **S3b ×2 PASS**.
+- **S4 PASS ×2** (`recarried_node`). The strict economic win rule is kept.
+  - A reorg whose fork sits below the claim is refused by design. Measured result: `DominanceViolation`, an all-economic tie deeper than `PALW_REORG_SHALLOW_TIE_DAA_V1` = 2 DAA.
+  - So the fork is the last selected-chain block below the deciding DAA. B re-mines A's blocks above the fork with the same non-coinbase transactions, then adds heartbeats until it out-works A.
+  - On Z, the deciding branch is the same. Collateral and reservation are the same. Queued plus coinbase-delivered amounts are equal for the producer and the demander (paid once). A DAG-IBD node holds the same root.
+  - **Limit:** a reorg of the claim and receipt blocks themselves (fork below the claim) cannot be won under the strict rule while the economics tie. Reaching that would need a branch that carries more economic content, which is outside the slice.
+- **S3b'** goes to F03k (claude/g14-f03k). **S3c''** (premise wiring into the kernel default) goes to F02.
+- Current status: PASS S3a, S3b×2, S3c, S4×2. FAIL S3c'' (F02). UNIMPLEMENTED S1, S2, S3c' (F02), S3a' (CERT), S3b' (F03k), S3c''' (F02/central).
