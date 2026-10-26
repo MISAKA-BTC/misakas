@@ -2158,6 +2158,8 @@ impl VirtualStateProcessor {
             tir_public_originals: Default::default(),
             // G14 G-03: the route's own fence (not whether its rules resolved), so a frameless TIR original is refused past it.
             tir_public_conviction_active: self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa_score)),
+            // Lane F02: the pinned inclusion premise (typed-missing `None`: no F02 default is attributed).
+            court_service_inclusion_premise_v1: kaspa_consensus_core::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1,
             // RFC-0002 02-A: the TIR container identity's own fence.
             tir_container_identity_active: self.palw_tir_container_identity_v1.is_some_and(|f| f.is_active(daa_score)),
             // Compute-claim audit CX-01/CX-02: the answer accounting's own fence. Its answers (`fp_claim_answers`) are filled by native

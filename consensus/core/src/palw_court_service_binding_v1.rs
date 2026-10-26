@@ -50,6 +50,36 @@ impl CourtServiceProfileV1 {
 /// [`crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1`] (pinned here only by the integrator).
 pub const PALW_COURT_SERVICE_PROFILE_V1: Option<CourtServiceProfileV1> = None;
 
+/// **RFC-0026 §4.1 item 4 / ADR-0192 A: the explicit delivery / inclusion premise** (lane F02, 2026-10-26). A non-response default
+/// is attributed only UNDER this premise: a correctly formed response an honest actor broadcasts at a supplied reserved unit `u` is
+/// assumed included in the accepting chain no later than `u + inclusion_delay_daa`. A supplied unit therefore counts as the
+/// actor's opportunity only when `u + inclusion_delay_daa <= response_deadline_daa` (and inside the duty's window). The premise is
+/// a stated assumption of the attribution, never measured here and never evidence of personal delivery; when it is not adopted
+/// (typed-missing) every default is undecided (`Err`), which is a no-slash outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CourtServiceInclusionPremiseV1 {
+    pub version: u16,
+    /// Assumed worst-case DAA between an honest broadcast at a supplied unit and its inclusion.
+    pub inclusion_delay_daa: u64,
+}
+
+impl CourtServiceInclusionPremiseV1 {
+    pub fn id(&self) -> Hash64 {
+        keyed(b"misaka-palw/court-service-inclusion-premise/v1", &borsh::to_vec(self).expect("premise serialization"))
+    }
+    /// A supplied unit at `daa` is the actor's opportunity for the duty `clock` under this premise.
+    pub fn admits_supplied_unit_v1(&self, clock: &CourtDutyClockV1, daa: u64) -> bool {
+        self.version == 1
+            && clock.stage_started_before_unit(daa)
+            && daa.checked_add(self.inclusion_delay_daa).is_some_and(|included| included <= clock.response_deadline_daa)
+    }
+}
+
+/// **Typed-missing (value lane / user decision).** No reviewed inclusion premise is adopted, so no default is attributed on any
+/// build. The processor copies this into `PalwTransitionExtrasV1::court_service_inclusion_premise_v1`; fixtures set their own
+/// explicitly named test premise.
+pub const PALW_COURT_SERVICE_INCLUSION_PREMISE_V1: Option<CourtServiceInclusionPremiseV1> = None;
+
 /// RFC-0026 F02 is operational only once every piece is wired AND its profile is pinned. The pieces (attribution, binding at
 /// ordinary admission, shared lifecycle dispatch with bottom effects, native notice intake) are present in this lane; the profile
 /// is not, so this is `false` on every build until a reviewed change pins [`PALW_COURT_SERVICE_PROFILE_V1`].
@@ -192,7 +222,7 @@ pub fn attribute_service_default_v1(
     claim: Hash64,
     clocks: &[&CourtDutyClockV1],
     unpaid: &BTreeSet<PalwBondKeyV2>,
-    inclusion_premise_adopted: bool,
+    premise: Option<&CourtServiceInclusionPremiseV1>,
 ) -> Result<CourtServiceAttributionV1, &'static str> {
     let binding = service.claims.get(&claim).ok_or("court service binding is missing")?;
     if service.check_live_v1().is_err() {
@@ -214,8 +244,11 @@ pub fn attribute_service_default_v1(
             "court service supply is missing for a reserved unit; no party default, hold and recover",
         ));
     }
-    if !inclusion_premise_adopted {
+    let Some(premise) = premise else {
         return Err("court service inclusion assumptions are not adopted; no party default");
+    };
+    if premise.version != 1 {
+        return Err("court service inclusion premise version is unknown; no party default");
     }
     if unpaid.is_empty() {
         return Err("court service default names no responsible actor");
@@ -232,7 +265,7 @@ pub fn attribute_service_default_v1(
             let own = court_service_packet_id_v1(claim, binding.allocation_id, binding.source_id, actor, c.turn);
             binding.packet_ids.contains(&own)
                 && service.book.assess(&own) == ServiceAssessment::OpportunityProvided
-                && service.book.assigned_daa(&own).is_some_and(|daa| c.stage_started_before_unit(daa))
+                && service.book.assigned_daa(&own).is_some_and(|daa| premise.admits_supplied_unit_v1(c, daa))
         });
         if !had {
             return Ok(CourtServiceAttributionV1::NoSlashHold(
@@ -289,6 +322,8 @@ mod tests {
     fn bond(n: u32) -> PalwBondKeyV2 {
         PalwBondKeyV2(TransactionOutpoint::new(h(0xB0), n))
     }
+    /// TEST-ONLY premise (not a production value): zero inclusion delay.
+    const TEST_ONLY_PREMISE: CourtServiceInclusionPremiseV1 = CourtServiceInclusionPremiseV1 { version: 1, inclusion_delay_daa: 0 };
     fn profile() -> CourtServiceProfileV1 {
         let unit = ServiceCost { bytes: 10, work: 10, io: 1, controls: 1 };
         CourtServiceProfileV1 {
@@ -378,9 +413,9 @@ mod tests {
         observe_all(&mut s, 1_001, 1_101, None);
         let unpaid: BTreeSet<_> = [bond(1)].into_iter().collect();
         let c = clock(bond(1), 1_001, 1_200);
-        assert_eq!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, true), Ok(CourtServiceAttributionV1::PartyDefault));
+        assert_eq!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)), Ok(CourtServiceAttributionV1::PartyDefault));
         // Without the explicit inclusion premise: still undecided, never a default.
-        assert!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, false).is_err());
+        assert!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, None).is_err());
     }
 
     #[test]
@@ -391,7 +426,7 @@ mod tests {
         let unpaid: BTreeSet<_> = [bond(1)].into_iter().collect();
         let c = clock(bond(1), 1_001, 1_200);
         assert!(matches!(
-            attribute_service_default_v1(&s, h(1), &[&c], &unpaid, true),
+            attribute_service_default_v1(&s, h(1), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)),
             Ok(CourtServiceAttributionV1::NoSlashHold(_))
         ));
     }
@@ -405,7 +440,7 @@ mod tests {
         let late = clock(bond(2), 1_150, 1_200);
         let other = clock(bond(1), 1_001, 1_200);
         assert!(matches!(
-            attribute_service_default_v1(&s, h(1), &[&late, &other], &unpaid, true),
+            attribute_service_default_v1(&s, h(1), &[&late, &other], &unpaid, Some(&TEST_ONLY_PREMISE)),
             Ok(CourtServiceAttributionV1::NoSlashHold(_))
         ));
     }
@@ -423,14 +458,14 @@ mod tests {
         current.duty_id = h(20);
         // Alone, the current turn is a no-slash hold (correct).
         assert!(matches!(
-            attribute_service_default_v1(&s, h(1), &[&current], &unpaid, true),
+            attribute_service_default_v1(&s, h(1), &[&current], &unpaid, Some(&TEST_ONLY_PREMISE)),
             Ok(CourtServiceAttributionV1::NoSlashHold(_))
         ));
         // With the actor's earlier turn-0 clock in the claim's history (what `court_duty_clocks_for_claim_v1` returns): fix-b binds
         // the attribution to the defaulted (latest) turn and its own packet, so the earlier window no longer attributes it.
         let earlier = clock(bond(2), 1_001, 1_040);
         assert!(matches!(
-            attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, true),
+            attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, Some(&TEST_ONLY_PREMISE)),
             Ok(CourtServiceAttributionV1::NoSlashHold(_))
         ), "B-03 fixed: the turn-1 default is not attributed from the turn-0 window");
     }
@@ -447,8 +482,8 @@ mod tests {
         current.turn = 1;
         current.duty_id = h(20);
         let earlier = clock(bond(2), 1_001, 1_040);
-        let alone = attribute_service_default_v1(&s, h(1), &[&current], &unpaid, true);
-        let with_history = attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, true);
+        let alone = attribute_service_default_v1(&s, h(1), &[&current], &unpaid, Some(&TEST_ONLY_PREMISE));
+        let with_history = attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, Some(&TEST_ONLY_PREMISE));
         eprintln!("[verify2-b03] current turn alone: {alone:?}; with the earlier turn's clock in history: {with_history:?}");
         assert!(matches!(alone, Ok(CourtServiceAttributionV1::NoSlashHold(_))));
         assert!(
@@ -463,8 +498,8 @@ mod tests {
         observe_all(&mut s, 1_001, 1_020, None);
         let unpaid: BTreeSet<_> = [bond(1)].into_iter().collect();
         let c = clock(bond(1), 1_001, 1_200);
-        assert_eq!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, true), Err("court service opportunity is still pending"));
-        assert_eq!(attribute_service_default_v1(&s, h(77), &[&c], &unpaid, true), Err("court service binding is missing"));
+        assert_eq!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)), Err("court service opportunity is still pending"));
+        assert_eq!(attribute_service_default_v1(&s, h(77), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)), Err("court service binding is missing"));
     }
 
     #[test]
@@ -480,5 +515,25 @@ mod tests {
         assert!(classify_shared_notice_v1(a, a + 5, Some(a + 6)).is_err(), "no follow-up before its notice");
         assert!(classify_shared_notice_v1(a, a + 4_000, Some(a + 3_121)).is_err(), "a recorded notice outside A is refused");
         assert!(classify_shared_notice_v1(u64::MAX - 5_000, u64::MAX - 5_000, None).is_err(), "hard overflow refuses");
+    }
+
+    /// Lane F02 T07 (component): the TIR attribution's inclusion premise at unit + delay = deadline -1 / = / +1, and no premise.
+    #[test]
+    fn f02_t07_inclusion_premise_boundaries_on_tir_attribution() {
+        let (mut s, _) = bound(1_000);
+        observe_all(&mut s, 1_001, 1_101, None);
+        let unpaid: BTreeSet<_> = [bond(1)].into_iter().collect();
+        let unit = s.book.assigned_daa(&court_service_packet_id_v1(h(1), h(2), h(3), &bond(1), 0)).unwrap();
+        let c = clock(bond(1), 1_001, 1_200);
+        let with = |delay: u64| {
+            let premise = CourtServiceInclusionPremiseV1 { version: 1, inclusion_delay_daa: delay };
+            attribute_service_default_v1(&s, h(1), &[&c], &unpaid, Some(&premise))
+        };
+        let gap = c.response_deadline_daa - unit;
+        assert_eq!(with(gap - 1), Ok(CourtServiceAttributionV1::PartyDefault));
+        assert_eq!(with(gap), Ok(CourtServiceAttributionV1::PartyDefault));
+        assert!(matches!(with(gap + 1), Ok(CourtServiceAttributionV1::NoSlashHold(_))));
+        assert!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, None).is_err());
+        assert!(PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.is_none(), "production premise is typed-missing");
     }
 }
