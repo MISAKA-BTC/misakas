@@ -1,0 +1,85 @@
+{
+  "build": {
+    "source_commit": "b5c35166072499eb3a4ef6eb8e007b17d2a35391",
+    "source_trees": "3bd3a787c017e087e008027f4f411b6938fa061da42ff98ec9c0758f7ad44b57",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--release",
+      "-p",
+      "kaspa-consensus",
+      "--lib",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "shared_slot": true,
+    "stage": "BUILT",
+    "features": "default",
+    "minimum_hardware": false,
+    "load_before": [
+      9.365234375,
+      15.552734375,
+      15.79150390625
+    ],
+    "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+    "builder_sha256": "24b38ae19ff71dd6a68bea8b69f9dde464fa53a37bf1b83127ce258ae1799a0b",
+    "exit_code": 0,
+    "wall_seconds": 725.899113792,
+    "load_after": [
+      18.2470703125,
+      17.17333984375,
+      16.41650390625
+    ],
+    "binary": {
+      "path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-maxtrace-kaspa_consensus-d80b6d194a277fef",
+      "sha256": "eff993f638f0503b60b1632ae52e2e050dd5af920c11f8d90b1d0413aca57633"
+    },
+    "source_unchanged": true
+  },
+  "runner_sha256": "0b937c69b022e000e64585cd9e421a5793d64b1e12d99957a389d92e03c65c9f",
+  "status": "FAILED",
+  "minimum_hardware": false,
+  "arming_evidence": false,
+  "samples": [
+    {
+      "label": "m5-n0-00",
+      "utc_start": "2026-10-26T12:05:17.648854+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-maxtrace-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::cert::g14_cert_panel_one_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CERT_M": "5",
+        "G14_CERT_N": "0"
+      },
+      "exit_code": 101,
+      "monitor_wall_seconds": 0.04240395799999999,
+      "load_before": [
+        5.86474609375,
+        12.28564453125,
+        26.66845703125
+      ],
+      "load_after": [
+        5.86474609375,
+        12.28564453125,
+        26.66845703125
+      ],
+      "under_load": true,
+      "stdout_sha256": "396ff36fc75dd3a5162a44aab8452e4a17b31b6db16edb8995cf4d09937980d7",
+      "stderr_sha256": "9193a410436dd09869b9a3637cf6429640c1190b2abe31e36380f98256d0db5e",
+      "measurement": null,
+      "rss_bytes": 49823744.0,
+      "real_seconds": 0.03,
+      "user_seconds": 0.02,
+      "sys_seconds": 0.01
+    }
+  ]
+}

@@ -93,3 +93,14 @@ priorities makes the measurement start time uncertain. The one-minute host load
 was recorded with the snapshot. No other lane was stopped or reprioritized.
 The low-load rerun still requires load at or below five; queued/running work is
 not a measurement completion. Coordination for a quiet interval has been requested.
+
+
+## Gate C diagnostic failure — 21:05 JST
+
+The independent preflight at source `b5c351660`, binary `eff993f6…`, exited 101
+at `g14_kernel_route_e2e.rs:764`: `the class registered through the real path`.
+[Raw evidence](raw/maxtrace-cert-preflight-2026-10-26/raw.json) and its manifest preserve the failed N=0 process.
+The runner stopped before the remaining conditions; it did not measure the requested
+work. This is consistent with the previously documented cap4 versus 500 MSK gain
+mismatch, but the panic itself does not establish that causal link. The cap64
+follow-up is building; no passing result is asserted.

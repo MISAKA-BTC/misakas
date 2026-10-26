@@ -93,3 +93,15 @@ batch; native capacity and actual legacy/kernel comparison still await the
 shared native build. X3's [latest candidate review](M-X3/README.md#clock-follow-up-at-ee96b7b9f)
 retains provisional values and identifies outstanding contract/boundary evidence.
 No result here supplies missing real-model transfer/court/retention or 9B data.
+
+
+## Post-commit diagnostics — 21:05 JST
+
+The three old-cap preflights have now run and failed independently. Shadow's
+Panel=3 N=0/N=1 and Panel=1 N=0 controls passed; Panel=1 N=1 never obtained a
+post-commit seat. Its 32 admitted attempts all stayed at DAA/span 6 because the
+helper omitted heartbeat blocks, which alone advance this chain's DAA. A test-only
+heartbeat fix is prepared outside the currently compiling source. Gate C and
+maximum-trace capacity stopped at class registration before their measured work.
+[Evidence and diagnosis](M-SHADOW/README.md#detailed-post-commit-diagnostics--2105-jst).
+The consolidated native build has acquired its slot at source `a2e212207`.

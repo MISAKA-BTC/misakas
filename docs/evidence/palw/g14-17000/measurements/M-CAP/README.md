@@ -63,3 +63,14 @@ At the production cap 64, the same formula gives **2,240 MSK > 505 MSK**. This i
 The next isolated-process harness supports `--adjudication-cap 64`, selecting 64 only through a cfg(test) hook. Ordinary tests retain the reduced default 4, and the hook is absent from shipped binaries. The harness asserts that the external-gain bound remains 500 MSK. Six filings under this setting exercise a full-cap policy but do **not** saturate its 64-adjudication limit; outputs therefore continue to report `production_cap_measured=false`. Material at the exact 64-position trace maximum is measured separately from claim-count saturation.
 
 `--early-anchor-window` explicitly moves only the measurement fixture's anchor-retention activation to DAA 0 in both parameter mirrors. Public t12 already activates that prerequisite at DAA 5,300, before the intended slice height; the short fixture would otherwise start below it. Source inspection shows that span boundaries clear an anchor before kernel tick when retention is inactive, while a new attempt anchor is written after that tick. This is a hypothesis for the missing deferred assignment, to be tested against the separately preserved unmodified-clock diagnostic. Neither this fixture clock nor its shortened Gate C windows is a production policy adoption. Runtime success is pending.
+
+
+## Maximum-trace capacity diagnostic failure — 21:05 JST
+
+The independent preflight at source `b5c351660`, binary `eff993f6…`, exited 101
+at `g14_kernel_route_e2e.rs:764`: `the class registered through the real path`.
+[Raw evidence](raw/maxtrace-capacity-preflight-2026-10-26/raw.json) and its manifest preserve the failed N=0 process.
+The runner stopped before the remaining conditions; it did not measure the requested
+work. This is consistent with the previously documented cap4 versus 500 MSK gain
+mismatch, but the panic itself does not establish that causal link. The cap64
+follow-up is building; no passing result is asserted.

@@ -87,3 +87,27 @@ The runner records pinned source/binary, command, load, CPU/RSS and log hashes.
 It labels success as an honest fixture preflight only. Attack pairs, randomness
 withholding, Gate C and honest per-seat verification costs remain open. The
 previous 60-process kernel-only comparison does not satisfy those missing cases.
+
+
+## Detailed post-commit diagnostics — 21:05 JST
+
+The queued build `b5c351660` (binary `eff993f6…`) executed the three independent
+preflights. [Shadow raw data](raw/maxtrace-shadow-preflight-2026-10-26/raw.json)
+retains three successful controls and one failed Panel=1 N=1 process. All 32
+attempts were admitted, but every diagnostic had **DAA=commit=anchor span=6**,
+with a one-DAA span. No strictly later anchor could exist in that sequence.
+[Machine-checked diagnostic extraction and source identities](postcommit-heartbeat-diagnosis-2026-10-26.json)
+pin this finding.
+
+`T12Chain::attempt` advances simulated wall time but, after the anchor-clock
+fence, only `heartbeat` advances DAA. `until_seated` emits attempts only. Thus
+anchor retention alone cannot repair this observed failure: an ordinary heartbeat
+must advance the clock before the later attempt. A test-only change is prepared
+outside the compiling source tree; its execution is not yet verified. It retains
+the 32-attempt budget, strict post-commit predicate and actual native acceptance.
+The no-early-retention control remains separate.
+
+The independent Gate C and exact-maximum-trace capacity preflights both failed
+at class registration, before their measured work. They supply no capacity or
+certification timing. The cap64 follow-up retains the approved 500 MSK gain;
+its actual behavior and the heartbeat change still require execution.
