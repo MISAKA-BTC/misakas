@@ -2189,6 +2189,18 @@ pub fn palw_claim_phase_deadline_v1(
         // after a no-capable-panel — the backstop its acceptance set (`accepted + window_bind`).
         P::Provisional => crate::palw_state_v2::palw_provisional_bind_deadline_v1(state, state_params, claim_id, claim).ok(),
         P::PanelBound { bound_daa } => Some(bound_daa.saturating_add(state_params.window_receipt())),
+        // **ADR-0160 F-Q: a credited licence awaiting its audit has no date** — the fold arms no deadline for it
+        // (`palw_rcore_deadline_v1`'s audit row), so printing `L + window_challenge` here told operators the claim
+        // was overdue when it was waiting on its audit (the t12 BASE-0 stall of 2026-10-26).
+        P::ReceiptLicensed { .. }
+            if court_backstop.is_none()
+                && matches!(
+                    crate::palw_audit_door_v1::palw_capacity_audit_gate_v1(state_params, claim, state.audit_status_of_v1(claim_id)),
+                    Some(None)
+                ) =>
+        {
+            None
+        }
         P::ReceiptLicensed { licensed_daa } => court_backstop.or_else(|| {
             crate::palw_state_v2::palw_claim_final_floor_v1(state, state_params, claim_id, claim, *licensed_daa)
                 .ok()
