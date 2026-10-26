@@ -120,7 +120,8 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 // 2026-10-22 (integration): no catch-all here — aux 144 is shared with the native liability hold (0x01 held fee,
 // 0x02 post-Final duty), whose arms and the namespace catch-all follow in AUX_SPEC_ARMS; a catch-all here made them unreachable.
 136 if n==72 && ((key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_FRONTIER_FLOOR_PREFIX_V1 && k[1..].iter().all(|b|*b==0)) || k==b"f")=><(u64,[u8;64]) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-136 if key_bytes==65 && matches!(prefix,crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1|crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39)=>crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?,
+136 if key_bytes==65 && matches!(prefix,crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1|crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39|crate::palw_security_certification_v1::CERTIFICATION_KERNEL_CLAIM_PREFIX_V1)=>crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?,
+136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_KERNEL_HOLD_PREFIX_V1=>crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1::scan_native_wire_v1(frame)?,
 136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_CLASS_PREFIX_V1=>crate::palw_security_certification_v1::PalwCertificationClassRowV1::scan_native_wire_v1(frame)?,
 136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_NETWORK_PREFIX_V1=>crate::palw_security_certification_v1::PalwCertificationNetworkRowV1::scan_native_wire_v1(frame)?,
 121 => match (key_bytes,prefix) {

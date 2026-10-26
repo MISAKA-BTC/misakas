@@ -986,6 +986,29 @@ pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: 
     Ok(())
 }
 
+/// **lane CERT: the producer's escrow Final reward starting at `index`**: `PayJobEscrow(poster, x)`, then — only when the escrow held
+/// more than was paid — `ReleaseJobEscrow(poster)`, then `FinalReward(producer, x)` of the same claim, NOT followed by `CheckFeePaid`
+/// (a verifier's check fee). The kernel's `settle` drops zero-amount instructions, so a fully paid escrow emits no release; this
+/// reader accepts both shapes. Returns `(index of the FinalReward, claim, poster)`. Pure.
+fn kernel_producer_final_reward_v1(
+    events: &[LedgerEventV1],
+    index: usize,
+) -> Option<(usize, misaka_palw_kernel::hash::Digest, misaka_palw_kernel::hash::Digest)> {
+    let settlement = |i: usize| match events.get(i) {
+        Some(LedgerEventV1::Settlement(s)) => Some(*s),
+        _ => None,
+    };
+    let pay = settlement(index).filter(|s| s.kind == SettlementKindV1::PayJobEscrow)?;
+    let claim = pay.claim?;
+    let mut at = index + 1;
+    if settlement(at).is_some_and(|s| s.kind == SettlementKindV1::ReleaseJobEscrow && s.claim == Some(claim) && s.bond == pay.bond) {
+        at += 1;
+    }
+    settlement(at).filter(|s| s.kind == SettlementKindV1::FinalReward && s.claim == Some(claim) && s.amount == pay.amount)?;
+    let check_fee = matches!(events.get(at + 1), Some(LedgerEventV1::CheckFeePaid { claim: c, .. }) if *c == claim);
+    (!check_fee).then_some((at, claim, pay.bond))
+}
+
 /// **Apply a ledger's settlement instructions to the real bonds** (module doc).
 ///
 /// `strict` (every object arm): a slash the real bond cannot pay in full refuses the object (it is dropped, the block stands). The closing
@@ -1065,6 +1088,9 @@ fn apply_settlements_to_exec_vesting(
     // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): the check fees of paid V2 claims this batch HOLDS, by the ordinal of
     // their poster debit (the held row records what that debit actually took). Empty below the fence.
     let mut held_fees: std::collections::BTreeMap<usize, crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1> = Default::default();
+    // lane CERT (Gate C on the kernel route): the event index of each producer escrow `FinalReward` in this batch, with its claim and
+    // poster, so the reward is held for SecurityCertified instead of paid at the ledger's `Final` (a verifier check fee is not one).
+    let mut producer_final_rewards: std::collections::BTreeMap<usize, ([u8; 64], [u8; 64])> = Default::default();
     for (ordinal, event) in events.iter().enumerate() {
         let LedgerEventV1::Settlement(s) = event else { continue };
         if already_settled.contains(&ordinal) {
@@ -1194,6 +1220,12 @@ fn apply_settlements_to_exec_vesting(
                 already_settled.extend([ordinal + 1, ordinal + 2]);
                 continue;
             }
+        }
+        if s.kind == SettlementKindV1::PayJobEscrow
+            && exec_root.is_none()
+            && let Some((reward_at, claim, poster)) = kernel_producer_final_reward_v1(events, ordinal)
+        {
+            producer_final_rewards.insert(reward_at, (claim, poster));
         }
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
@@ -1375,6 +1407,14 @@ fn apply_settlements_to_exec_vesting(
                         crate::palw_work_slice_v2::PalwExecV2RewardFundV1::KernelFee,
                         amount,
                     )?;
+                    continue;
+                }
+                // lane CERT: past Gate C a kernel claim's `Final` is not SecurityCertified — its escrow reward (debited above) is
+                // held in its certification's `'H'` row and paid only when the drawn verifiers certify it (returned otherwise).
+                if s.kind == SettlementKindV1::FinalReward
+                    && let Some((claim, poster)) = producer_final_rewards.get(&ordinal).copied()
+                    && super::palw_security_certification_fold_v1::hold_kernel_final_reward_v1(builder, now, &claim, &s.bond, &poster, amount)?
+                {
                     continue;
                 }
                 if s.kind == SettlementKindV1::FinalReward {

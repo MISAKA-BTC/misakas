@@ -115,6 +115,7 @@ native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1; commi
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1; class_id, accepted_daa, units, final_weight);
 native_struct!(crate::palw_security_certification_v1::PalwClaimCertificationRowV1; claim, class_id, producer_bond, producer_principal, attempt, final_daa, committed_daa, committed_span, anchor, draws, drawn_daa, deadline_daa, attestations, held_reward, payout_payload, outcome);
 native_struct!(crate::palw_security_certification_v1::PalwCertificationClassRowV1; committed, certified, failed);
+native_struct!(crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1; version, claim, producer_bond, producer_payload, poster_bond, poster_payload, amount, held_daa);
 native_struct!(crate::palw_security_certification_v1::PalwCertificationNetworkRowV1; epoch, draws);
 native_struct!(crate::palw_router_binding_v2::PalwRouterBindingRowV2; version, bound_from_daa, readers);
 native_struct!(crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1; version, class_id, block, daa_score, door, admission_digest);
