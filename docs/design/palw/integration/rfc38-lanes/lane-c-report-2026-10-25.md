@@ -55,7 +55,7 @@
 - **D-C1 RFC35 schedule の値**：fee/capital の額、retention 期間、settlement policy ID、requirement budgets、role の契約 4 bit。
 - **D-C2 payee settlement**：payee の決め方、void/refund のときの返還先、reward の一回精算（RFC08 `palw_settlement_once_v1` と統合するか）。補足：現行の規則では、hard deadline 後に liability が閉じると payer の返還経路が未払いの dues より優先される。これが意図どおりかも、この票で決めてほしい。
 - **D-C3 RFC33**：1.3M fee の徴収 movement と返還条件、300M slash の適用条件と責任者。
-- **D-C4 RFC34 S1**：詳細仕様化と隔離実装の承認。
+- **D-C4 RFC34 S1**：~~詳細仕様化と隔離実装の承認。~~ 訂正（2026-10-26 レビュー `3589fab5f`）：詳細仕様化・隔離実装は ADR-0201 と RFC34 末尾で 2026-10-21 にユーザー選択済み。再承認待ちではない。本番採択・料金・有効化は別。
 - **D-C5 RFC27**：AccountID と lot の採択。
 - **D-C6 native39→RFC12 写像**：W/PWU 変換、operator、anchor、retention、成熟、void。
 
