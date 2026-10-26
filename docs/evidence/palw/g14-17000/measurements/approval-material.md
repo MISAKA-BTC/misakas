@@ -51,3 +51,10 @@ VAL2 separately committed a provisional bond-budget approval in `46b6c60b9`; thi
 ## Independent review packet
 
 Review source-defined counter units, stake weighting, repeated positions and responding stake, post-commit randomness/withholding, the cap across all subject kinds, the four M-SHADOW attacks and honest twins, actual delivery under reserved capacity, and collectible rewards versus measured costs. This arithmetic pass is separate from VAL's calculation but does not substitute for the independent verification-method review. Product constants and record lists are unchanged by this measurement branch.
+
+
+## Integration update — source 648544c46
+
+The integration branch now contains `approved_v1` constructors and records user approval of beacon k/D and Gate C 75/41, plus provisional values. This measurement branch does not revoke that recorded approval. However, the counter-unit finding **still exists**: the approved constructor delegates to the design policy with cap 4,096, while both fold consumers still increment the counter once per claim. Approval of 75/41 does not make the 54-claim probability calculation apply to a 4,096-claim implementation. Preserve the 75/41 threshold and resolve the cap's actual unit before relying on the risk bound.
+
+The new deferred Panel=1 seed implementation is progress beyond the measured source, and requires its own execution evidence. Previous kernel comparison and Gate C timings are not silently reassigned to it. The [X3 scope audit](M-X3/README.md#latest-source-scope-finding--648544c46) further finds that retaining an X3 list entry and provisional value does not make that contract govern kernel claims. This must be reconciled by the slice owner before arming; no estimated parameter alone resolves it.

@@ -19,3 +19,18 @@ Retain X3 in the current slice and retain its existing **provisional** policy ca
 The candidate is not established for the newly available Dolphin 32k profile. Its check-term comment assumes 4,096 tokens at 60 s per 16 tokens (128 DAA at the 120 s target), then multiplies by 4 to get 512. Substituting 8,192 or 32,768 tokens at that same assumed rate gives 256 or 1,024 DAA **before** the 4× factor. Do not silently reuse the 4k coverage for those profiles. The forthcoming real execution measures the rate; it still cannot establish minimum-node performance. Likewise 2,250,000 B in the retention-price formula is one maximum close, not an observed entire 32k claim's retained material. Recompute on the selected legal profile and actual retention obligation.
 
 The arithmetic T06 margin (303 DAA under the old candidate) remains conditional. Any enlarged measured term must be propagated through the complete deadline/retention composition before ACT pins it.
+
+
+## Latest-source scope finding — 648544c46
+
+The integration branch advanced to `648544c4628387a63e51824098b88cda5843dc2d`, including an independent review and a deferred Panel=1 draw. [Exact source blobs and line evidence](latest-source-scope-2026-10-26.json) pin this audit separately from the timing binaries.
+
+The earlier recommendation to retain the provisional X3 candidate does **not** establish that X3 governs kernel claims:
+
+1. `full_activation_v1.rs` includes X3 in the kernel slice. Its setter preserves/re-times an installed policy, but when none exists it creates `unapproved_probe_at`; an estimated numeric table is not an installed policy or arming record.
+2. `palw_ruling_fences_v1.rs::palw_claim_deadlines_v1` takes `PalwClaimStateV2`. The kernel ledger has its own claim lifecycle and does not call that helper. Its challenge/court/grace/liability windows are separate from X3's fixed deadline/retention contract.
+3. The kernel settlement and admission branches in `palw_settlement_liability_fold_v1.rs` read `paid_claim_signed_lifetime_v2(...).liability_until` and the material covenant. They do **not** call `native_claim_signed_hard_deadline_v1`. The latter's X3-required error belongs to the NativeClaim branch. This resolves that specific caller ambiguity in the independent review; it does not prove the ordinary canonical kernel claim has every required paid-lifetime/covenant input.
+
+**Revised judgment:** keeping Δ=2,016 as a documented estimate is acceptable, but pinning it alone cannot complete this kernel slice. Before ACT arms the slice, its owner must explicitly reconcile the fence list and the actual claim contract: implement the adopted X3 contract for kernel claims, or adopt a kernel scope that excludes X3 while retaining its required liability/retention guarantees and reviewing all other enabled consumers. This branch changes neither semantics nor the slice list. Simply deleting the entry, or recording the A16 runtime as its evidence, would not close that dependency review.
+
+The measured Dolphin 8k forward time is 1,030.075 s on a loaded Mac; it does not measure the kernel deadline contract, minimum-node tails, cold fetch, legal inclusion, reorg slack or retention price. Every non-measured term remains nonzero provisional material, not an arming result. The earlier numerical candidate and T06 arithmetic are retained as history; their applicability to kernel claims is now explicitly unresolved.
