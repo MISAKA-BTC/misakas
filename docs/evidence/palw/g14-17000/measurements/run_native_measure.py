@@ -71,9 +71,11 @@ def main():
                         report['status'] = 'FAILED'; save(); return 1
             pair = [s['measurement'] for s in report['samples'][-4:] if s['measurement']['n'] == 1]
             assert len(pair) == 2
-            checks = {key: pair[0][key] == pair[1][key] for key in ['class', 'job', 'claim', 'verdict', 'final_daa']}
-            report['comparisons'].append({'case': case, 'ordinal': ordinal, 'equal': checks})
-            if not all(checks.values()):
+            checks = {key: pair[0][key] == pair[1][key] for key in ['class', 'job', 'claim', 'verdict', 'final_daa', 'final_after_cover_daa']}
+            report['comparisons'].append({'case': case, 'ordinal': ordinal, 'equal': checks, 'absolute_final_daa': [r['final_daa'] for r in pair], 'covered_daa': [r['covered_daa'] for r in pair]})
+            # Crossing twins intentionally enter at different DAA. Keep the raw
+            # Final DAA difference; require identical claim and Final window.
+            if not all(v for k, v in checks.items() if k != 'final_daa'):
                 report['status'] = 'MISMATCH'; save(); return 1
     report['status'] = 'UNDER_LOAD_FIXTURE_ONLY' if any(s['under_load'] for s in report['samples']) else 'FIXTURE_ONLY'
     save(); return 0

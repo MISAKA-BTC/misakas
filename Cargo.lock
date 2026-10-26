@@ -6291,11 +6291,13 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
  "libc",
+ "misaka-palw-base0",
  "misaka-palw-kernel",
  "misaka-palw-remote",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
  "serde_json",
+ "sha2 0.10.8",
 ]
 
 [[package]]

@@ -37,11 +37,15 @@ async fn g14_native_panel_measure() {
     assert!(n <= 1, "repeat in fresh processes, never reuse mutable claim state");
     let (config, mut bundle, premine, floats) = canonical_config(false);
     let mut params = config.params.clone();
-    params.palw_kernel_route_panel_one_v1 = (seats == 1).then(|| ForkActivation::new(0));
+    // Both twins declare the SAME fork schedule and register the class before
+    // crossing it. Different schedules bind different ruleset digests into the
+    // evidence and therefore cannot produce byte-identical claims.
+    const CROSSING_DAA: u64 = 4;
+    params.palw_kernel_route_panel_one_v1 = Some(ForkActivation::new(CROSSING_DAA));
     // The fold reads the mirror in its bundle, not the public Params field.
-    bundle.state = bundle.state.clone().with_kernel_route_panel_one_from_daa((seats == 1).then_some(0));
+    bundle.state = bundle.state.clone().with_kernel_route_panel_one_from_daa(Some(CROSSING_DAA));
     if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(node_bundle) = &mut params.palw_consensus_mode {
-        node_bundle.state = node_bundle.state.clone().with_kernel_route_panel_one_from_daa((seats == 1).then_some(0));
+        node_bundle.state = node_bundle.state.clone().with_kernel_route_panel_one_from_daa(Some(CROSSING_DAA));
     }
     assert!(params.validate_palw_v2().is_err());
     let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
@@ -64,7 +68,13 @@ async fn g14_native_panel_measure() {
     let mut verdict = "SETUP_ONLY";
     let mut actual_seats = None;
     let mut final_daa = None;
+    let mut admitted_daa = None;
+    let mut covered_daa = None;
+    let mut final_after_cover_daa = None;
     let mut challenge = Value::Null;
+    if seats == 1 {
+        w.net.beat_to(CROSSING_DAA).await;
+    }
     if n == 1 {
         let o = w.net.route(0, &seal);
         send(&mut rows, &mut w.net, "claim_seal", vec![(0, o)]).await;
@@ -85,6 +95,7 @@ async fn g14_native_panel_measure() {
             let o = w.net.route(0, &reveal_object);
             send(&mut rows, &mut w.net, "claim_reveal_and_assignment", vec![(0, o)]).await;
             assert!(w.net.ledger().claims.contains_key(&claim.id));
+            admitted_daa = Some(w.net.daa());
             let assigned = w.seats(&claim.id);
             actual_seats = Some(assigned.len());
             assert_eq!(assigned.len(), seats, "measure the requested seat policy, not the test's name");
@@ -106,6 +117,7 @@ async fn g14_native_panel_measure() {
             );
             send(&mut rows, &mut w.net, "constraint_receipt_accept", receipts).await;
             assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::ProbabilisticPass { .. }));
+            covered_daa = Some(w.net.daa());
             let before = w.net.daa();
             let start = Instant::now();
             let finding = w.fresh(0x66).check(claim.id, &claim.published(&w.fx, &[]), &w.fx.params);
@@ -143,17 +155,20 @@ async fn g14_native_panel_measure() {
                 phase(&mut rows, "advance_to_final", start, before, &w.net, 0);
                 assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
                 final_daa = Some(w.net.daa());
+                final_after_cover_daa = Some(w.net.daa() - covered_daa.unwrap());
                 verdict = if case == "duplicate" { "COPY_REJECTED_ORIGINAL_FINAL" } else { "FINAL" };
             }
         }
     }
     println!(
         "G14_MEASURE {}",
-        json!({"schema": 1, "fixture_only": true, "arming_evidence": false,
+        json!({"schema": 2, "fixture_only": true, "arming_evidence": false,
         "scope": "native_kernel_interim_panel3_vs_panel1", "legacy_model_route_compared": false,
         "gate_c_certification_measured": false, "post_commit_beacon_measured": false,
         "randomness_withholding_measured": false, "class": digest(&w.class), "job": digest(&job.id()),
         "claim": digest(&claim.id), "case": case, "n": n, "requested_seats": seats, "actual_seats": actual_seats,
-        "verdict": verdict, "final_daa": final_daa, "challenge": challenge, "phases": rows})
+        "verdict": verdict, "final_daa": final_daa, "admitted_daa": admitted_daa, "covered_daa": covered_daa,
+        "final_after_cover_daa": final_after_cover_daa, "panel_one_from_daa": CROSSING_DAA,
+        "challenge": challenge, "phases": rows})
     );
 }
