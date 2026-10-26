@@ -109,13 +109,18 @@ fn g14_lg() -> Lg {
 }
 
 fn g14_lg_on(full: bool) -> Lg {
+    g14_lg_over(full, TestConsensus::new)
+}
+
+/// [`g14_lg_on`] over a consensus `make` builds (lane ARM-LEGACY: a database-backed one for the restart cases).
+pub(super) fn g14_lg_over(full: bool, make: impl FnOnce(&Config) -> TestConsensus) -> Lg {
     let (config, bundle, premine, floats, newcomer_funding) = g14_close_config(full);
     assert_eq!(
         bundle.state.court_capacity_v1().map(|m| m.policy),
         full.then(|| measured_court().policy().expect("a policy")),
         "the court-capacity mirror"
     );
-    let chain = t12_genesis_chain_on(TestConsensus::new(&config), &config, &bundle, &premine, &floats);
+    let chain = t12_genesis_chain_on(make(&config), &config, &bundle, &premine, &floats);
     let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         config.params.net.to_string().as_bytes(),
         Some(config.params.genesis.hash),
@@ -273,8 +278,10 @@ async fn full_collusion_outside_bond_convicts(court: bool) {
     assert_eq!(v.step(&mut lg, &produced, &|_| false).await, None, "the engine reserves first");
     assert!(lg.view(id).record.is_some_and(|r| r.live.contains_key(&newcomer)), "the reservation landed");
     // Every seat colludes.
+    let t_panel = std::time::Instant::now();
     let seats = lg.bind(id).await;
     let licensed = lg.license(id, &seats).await;
+    let panel_ns = t_panel.elapsed().as_nanos();
     let (_, state) = lg.chain.tip_state();
     let safe_before = state.safe_weight();
     let producer_before = lg.collateral(EXECUTOR);
@@ -288,6 +295,7 @@ async fn full_collusion_outside_bond_convicts(court: bool) {
     assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the reservation holds Final past its floor");
     assert_eq!(lg.view(id).deadline_daa, None, "held: no Final deadline");
     // The pursuit: binding read, consecutive authenticated ranges against the verifier's own run, to the located leaf.
+    let (t_pursuit, daa_pursuit) = (std::time::Instant::now(), lg.daa());
     let lie = pursue_to_terminal(&mut v, &mut lg, &produced, 400).await;
     assert_eq!(Some(lie), produced.lie_leaf, "localized at the lie");
     assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "still held while the pursuit runs");
@@ -334,7 +342,8 @@ async fn full_collusion_outside_bond_convicts(court: bool) {
             &lg.bundle.court,
             lg.config.params.palw_court_ladder_active_at(daa),
         );
-        let mut samples: Vec<u128> = (0..5)
+        // Lane ARM-LEGACY (M-CAP): 31 samples per process (median and nearest-rank p95 printed; raw list on the same line).
+        let mut samples: Vec<u128> = (0..31)
             .map(|_| {
                 let t = std::time::Instant::now();
                 let verdict =
@@ -350,15 +359,17 @@ async fn full_collusion_outside_bond_convicts(court: bool) {
         samples.sort_unstable();
         let object = Obj::ShardCourtAccused { accusation: Box::new(accusation.clone()) };
         eprintln!(
-            "[court-op timing] one-move verdict (floor class, real rows): {} B object, {} rows; ns min {} median {} max {} — {}-{} {} build, NOT a measured record",
+            "[court-op timing] one-move verdict (floor class, real rows): {} B object, {} rows; ns min {} median {} p95 {} max {} — {}-{} {} build, NOT a measured record; raw {:?}",
             borsh::to_vec(&object).map(|b| b.len()).unwrap_or(0),
             own_rows.len(),
             samples[0],
             samples[samples.len() / 2],
+            samples[(samples.len() * 95).div_ceil(100) - 1],
             samples[samples.len() - 1],
             std::env::consts::OS,
             std::env::consts::ARCH,
             if cfg!(debug_assertions) { "debug" } else { "release" },
+            samples,
         );
     }
     lg.send(vec![(NEWCOMER, Obj::ShardCourtAccused { accusation: Box::new(accusation) })]).await;
@@ -394,6 +405,14 @@ async fn full_collusion_outside_bond_convicts(court: bool) {
     }
     assert!(!filings.is_empty(), "the colluding seats are liable for the located lie");
     lg.send(filings).await;
+    // Lane ARM-LEGACY (M-CAP / court processing time): wall time and DAA of the whole pursuit, reservation-held to the last slash.
+    eprintln!(
+        "[arm-legacy timing] court={court} panel bind+license {} seats {panel_ns} ns; pursuit+court+slash {} ns over {} DAA; licensed {licensed} floor {floor} window_court {}",
+        seats.len(),
+        t_pursuit.elapsed().as_nanos(),
+        lg.daa() - daa_pursuit,
+        lg.bundle.state.window_court(),
+    );
     let (_, state) = lg.chain.tip_state();
     for (card, before) in &seat_before {
         let seat = lg.bond(*card);
@@ -507,6 +526,9 @@ async fn legacy_v2_attempt_held_da_withholding_ends_in_da_default() {
 
 // The external audit's acceptance tests D, E, F and G (2026-10-17, lane integ/g14-drill) over this module's validated network.
 mod g14_acceptance;
+
+// Lane ARM-LEGACY (2026-10-27): the held-DA default and the honest twin across a restart, a reorg, a full IBD and a pruned import.
+mod g14_arm_legacy_d;
 
 /// **An honest V2 Attempt under G14 fully armed reaches `Final` and is paid after the liability-horizon hold** (user decision
 /// 2026-10-16: the testnet-12 fence moves only once G14 is fully armed with option (b) kept AND PALW rewards, block production and
