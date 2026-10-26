@@ -25,7 +25,15 @@ fn seed_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     params.palw_kernel_route_panel_one_v1 = Some(ForkActivation::new(0));
     params.sync_palw_g14_gates_v1();
     let mut bundle = bundle;
-    bundle.state = bundle.state.clone().with_kernel_route_panel_one_from_daa(Some(0));
+    // The class relation needs the external gain bound; the 4-run test seam uses F03k2's TEST-ONLY bound (as `panel_one_config`).
+    bundle.state = bundle
+        .state
+        .clone()
+        .with_kernel_route_panel_one_from_daa(Some(0))
+        .with_test_only_kernel_panel_one_external_gain_bound_v1(Some(super::f03k::TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI));
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(node_bundle) = &mut params.palw_consensus_mode {
+        *node_bundle = bundle.clone();
+    }
     if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(node_bundle) = &params.palw_consensus_mode {
         assert_eq!(node_bundle.state.kernel_route_panel_one_from_daa(), Some(0), "the node's fold reads the Panel=1 mirror");
     }

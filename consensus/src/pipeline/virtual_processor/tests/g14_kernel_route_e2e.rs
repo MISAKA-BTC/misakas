@@ -834,6 +834,19 @@ impl World {
         Claim { id, producer, trace: produced.trace, at }
     }
 
+    /// **lane SEED fixture**: advance attempt blocks (which record round seed anchors) until `claim` has its interim assignment —
+    /// immediately below Panel=1, at the first post-commit anchor in force past it. Panics after 32 rounds (never hides a missing draw).
+    async fn until_seated_v1(&mut self, claim: &Digest) {
+        let ttpb = self.net.ttpb();
+        for round in 0..32u64 {
+            if self.net.chain.tip_state().1.kernel_route().and_then(|k| k.assignment_of(claim)).is_some() {
+                return;
+            }
+            self.net.chain.attempt(5 + (round % 3) as usize, ttpb, Vec::new(), &|_| true).await;
+        }
+        panic!("no post-commit seed anchor seated the claim in 32 rounds");
+    }
+
     /// The cards the interim assignment seated for `claim` (while its receipts are being counted).
     fn seats(&self, claim: &Digest) -> Vec<usize> {
         let state = self.net.chain.tip_state().1;
