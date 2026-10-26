@@ -58,6 +58,9 @@ pub const PALW_BOND_BUDGET_STATE_VERSION_V2: u16 = 2;
 /// The V2 carriage tail of the engine (the Lead's allocation; present only when the engine exists).
 pub const PALW_CARRIAGE_BOND_BUDGET_TAIL_V1: u8 = 0xEF;
 /// The object tag of a bond's signed capital assignment (the Lead's allocation 140–149).
+/// **Namespace note (AUDIT-2 m3):** the number 140 is reused in three separate namespaces — `PalwConsensusObjectV2` object tag
+/// 140 (`CapitalAssignment`, `PALW_CAPITAL_ASSIGNMENT_TAG_V1`), the aux table id `PALW_SETTLEMENT_ONCE_TABLE_V1`, and the
+/// `PalwVoidReasonV2::PanelDaDisclosureDefault` Borsh number. They never collide (different enums / key spaces); THIS one is the object tag.
 pub const PALW_CAPITAL_ASSIGNMENT_TAG_V1: u8 = 140;
 /// The ML-DSA-87 context of a capital assignment's signature.
 pub const PALW_CAPITAL_ASSIGNMENT_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/capital-assignment/object/v1";

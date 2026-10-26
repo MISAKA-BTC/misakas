@@ -128,6 +128,43 @@ def pick(d, *names, default=None):
     return default
 
 
+G14_FIELDS = (
+    # (label, method, candidate field names) — read-only monitoring for the DAA 17,000 G14 slice (AUDIT-4 M4). A method that errors
+    # or an answer without any candidate field prints "unavailable": no new RPC is added for this, and field names are best-effort.
+    ("kernel claims posted", "getPalwKernelFinals", ("claimsPosted", "committedClaims", "claims")),
+    ("kernel demands", "getPalwKernelFinals", ("demandsOpened", "openDemands", "demands")),
+    ("kernel demands answered", "getPalwKernelFinals", ("demandsAnswered", "answeredDemands")),
+    ("SecurityCertified", "getPalwKernelFinals", ("securityCertified", "certified", "certifiedFinals")),
+    ("Final", "getPalwKernelFinals", ("finals", "finalCount", "final")),
+    ("court admissions", "getPalwCourtState", ("admissions", "openedSessions", "sessions", "openSessions")),
+    ("court convictions", "getPalwCourtState", ("convictions", "convicted")),
+    ("PanelDa disclosure defaults", "getPalwCourtState", ("panelDaDisclosureDefaults", "panelDaDefaults")),
+)
+
+
+def g14_report(a):
+    """--g14: read-only G14 counters, then `G14TIP fp=… tip=… daa=…` for check-fleet.sh's 3-host comparison."""
+    methods = sorted({m for _, m, _ in G14_FIELDS})
+    try:
+        res = call_all(a.port, [(m, {}) for m in methods] + [("getPalwNodeStatus", {}), ("getBlockDagInfo", {})], a.timeout)
+    except Exception as e:  # noqa: BLE001 — any transport failure is "did not answer"
+        print(f"  G14 UNREACHABLE 127.0.0.1:{a.port}: {e}")
+        print("G14TIP unreachable")
+        return 2
+    for label, m, names in G14_FIELDS:
+        r = res.get(m)
+        v = None if not isinstance(r, dict) or "error" in r else pick(r, *names)
+        if isinstance(v, list):
+            v = len(v)
+        print(f"  G14 {label}: {'unavailable' if v is None else v}")
+    st, dag = res.get("getPalwNodeStatus") or {}, res.get("getBlockDagInfo") or {}
+    fp = "?" if "error" in st else pick(st, "consensusParamsId", default="?")
+    tips = pick(dag, "tipHashes", default=None)
+    tip = pick(dag, "sink", default=None) or (sorted(tips)[0] if isinstance(tips, list) and tips else "?")
+    print(f"G14TIP fp={str(fp)[:16]} tip={str(tip)[:16]} daa={pick(dag, 'virtualDaaScore', default='?')}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
@@ -149,7 +186,10 @@ def main():
     ap.add_argument("--state-line", action="store_true",
                     help="append one 'STATE fp=… genesis=… facts=… synced=… peers=… daa=… blocks=… ready=…' line (lib.sh upgrade)")
     ap.add_argument("--timeout", type=float, default=20)
+    ap.add_argument("--g14", action="store_true", help="print the read-only G14 slice counters (AUDIT-4 M4) and a G14TIP line")
     a = ap.parse_args()
+    if a.g14:
+        return g14_report(a)
     if a.probe:
         try:
             res = call_all(a.port, [("getPalwNodeStatus", {}), ("getBlockDagInfo", {})], a.timeout)

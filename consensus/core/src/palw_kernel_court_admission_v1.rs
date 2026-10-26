@@ -103,6 +103,10 @@ pub fn kernel_court_branch_packet_id_v1(
 }
 
 /// The kernel route aux table of the court capital rows (unused by every other table id).
+/// **Namespace note (AUDIT-2 m3):** 150/151 are reused in separate namespaces — `PalwConsensusObjectV2` object tags 150/151 (the
+/// provider lease / challenge, `PALW_PROVIDER_LEASE_TAG_V1` / `PALW_PROVIDER_CHALLENGE_TAG_V1`), the kernel-route aux table id
+/// `PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1` = 150, and `PalwDeltaEntryV2::SeatRootReadiness` = 150. No collision (different key
+/// spaces); THIS one is the kernel-route aux table id.
 pub const PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1: u8 = 150;
 pub const KERNEL_COURT_CAPITAL_ROW_VERSION_V1: u16 = 1;
 

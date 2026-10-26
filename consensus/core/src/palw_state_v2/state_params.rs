@@ -781,6 +781,11 @@ impl PalwStateParamsV2 {
     }
 
     /// **TEST ONLY (lane F03k2)**: a fixture's external gain bound for the Panel=1 class censorship relation. No preset calls this.
+    ///
+    /// **WARNING (AUDIT-2 m4): test-only, but NOT `#[cfg(test)]`** — the `kaspa-consensus` crate's G14 kernel-route e2e tests call it,
+    /// and gating it behind a feature would need that crate's test build to enable one. Production code must never call it: the
+    /// production external gain bound comes only from the pinned 17,000 values. Release check:
+    /// `grep -rn with_test_only_kernel_panel_one_external_gain_bound_v1 --include=*.rs . | grep -v /tests` must list only this definition.
     pub fn with_test_only_kernel_panel_one_external_gain_bound_v1(mut self, bound: Option<u64>) -> Self {
         self.kernel_panel_one_test_only_external_gain_bound_v1 = bound;
         self
