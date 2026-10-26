@@ -11,4 +11,20 @@ Network: `testnet-12`; genesis hash: `a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00
 | prerequisites `palw_bond_budget_v1`, `palw_model_bond_allocation_v1`, `palw_material_income_v3` | — | **未充足**: M-P15 and M-COST / economic audit absent. |
 | beacon/selected-verifier policy and independent review | — | **未充足**: source independence, paired attack data, reviewer decision and measured `k/D` absent. |
 
-The public wRPC observation under [M-OPS](measurements/M-OPS/README.md) is an operational data point, not an arming-requirement digest. Each future requirement needs its own file and SHA-256 only after it has actually been run and independently checked. Other G14 fence requirements (node E2E, restart/IBD/reorg, shipped-binary drills) are likewise unfilled here.
+For the two measured G14 fences, the exact requirement order in `palw_g14_gates_v1.rs` remains entirely blank:
+
+| Fence / index | Requirement from the source | Evidence SHA-256 | Reason |
+|---|---|---|---|
+| X3 / 1 | V1 build, regressions, boundary decode | — | No suite run for this source. |
+| X3 / 2 | Measured five `B_*` terms and `c_retain` | — | M-X3 NOT_MET, including minimum node and retention price. |
+| X3 / 3 | Node E2E of fixed deadline and non-extension | — | No node E2E run. |
+| X3 / 4 | Shipped-binary fence/restart/reorg drill | — | No drill run. |
+| Court capacity / 1 | V1 build, regressions, boundary decode | — | No complete suite run for this source. |
+| Court capacity / 2 | Measured every operation, bytes, working set and block allotment | — | M-C incomplete; minimum node absent. |
+| Court capacity / 3 | Measured `rho_court`, session weight and occupancy economics | — | M-CAP NOT_MET. |
+| Court capacity / 4 | Full-slot coalition, independent verifier meets deadline | — | No saturation drill. |
+| Court capacity / 5 | Continuously refilling coalition, queued prosecution first | — | No refill drill. |
+| Court capacity / 6 | Maximum-load block validation within resource bounds | — | No maximum-load drill. |
+| Court capacity / 7 | Restart/IBD/pruned/reorg mid-queue | — | No replay drill. |
+
+The public wRPC observation under [M-OPS](measurements/M-OPS/README.md) is an operational data point, not an arming-requirement digest. Each future requirement needs its own file and SHA-256 only after it has actually been run and independently checked. Other G14 fence requirements remain unfilled here.
