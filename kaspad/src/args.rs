@@ -253,6 +253,9 @@ pub struct Args {
     pub palw_kernel_producer: bool,
     /// **Lane KNODE**: post one kernel job `<tok,tok,..>:<max_new_tokens>` (`--palw-kernel-post-job`).
     pub palw_kernel_post_job: Option<String>,
+    /// **Lane ROLES**: submit one encoded kernel `RegisterClass` (`--palw-kernel-register-class=<file>`), and the dry run.
+    pub palw_kernel_register_class: Option<String>,
+    pub palw_kernel_register_class_dry_run: bool,
     /// **Lane KNODE**: the producer also writes each demand answer here as a `.palwresp` file (`--palw-kernel-export-dir`).
     pub palw_kernel_export_dir: Option<String>,
     /// **Lane KNODE**: a relay carries the `.palwresp` answers in this directory for open demands (`--palw-kernel-relay-dir`).
@@ -1002,6 +1005,8 @@ impl Default for Args {
             palw_kernel_model: Vec::new(),
             palw_kernel_producer: false,
             palw_kernel_post_job: None,
+            palw_kernel_register_class: None,
+            palw_kernel_register_class_dry_run: false,
             palw_kernel_export_dir: None,
             palw_kernel_relay_dir: None,
             palw_drill_kernel_inject: Vec::new(),
@@ -3294,6 +3299,23 @@ pub fn cli() -> Command {
                 .help("PALW (lane KNODE): post one greedy kernel job <tok,tok,..>:<max_new_tokens> of the held model's class."),
         )
         .arg(
+            Arg::new("palw-kernel-register-class")
+                .long("palw-kernel-register-class")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW (lane ROLES): submit one encoded kernel RegisterClass object (gen-wide128-palwkm's .register-class.bin), \
+                     signed by --palw-producer-bond and carried with --palw-fee-outpoint, until the class is on the route. Inert \
+                     unless the kernel route's fence is in force.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-kernel-register-class-dry-run")
+                .long("palw-kernel-register-class-dry-run")
+                .action(clap::ArgAction::SetTrue)
+                .help("PALW (lane ROLES): with --palw-kernel-register-class, only log the class id, root and bond; submit nothing."),
+        )
+        .arg(
             Arg::new("palw-kernel-export-dir")
                 .long("palw-kernel-export-dir")
                 .env("KASPAD_PALW_KERNEL_EXPORT_DIR")
@@ -4194,6 +4216,8 @@ impl Args {
                 .unwrap_or(defaults.palw_kernel_model),
             palw_kernel_producer: m.get_one::<bool>("palw-kernel-producer").copied().unwrap_or(defaults.palw_kernel_producer),
             palw_kernel_post_job: m.get_one::<String>("palw-kernel-post-job").cloned().or(defaults.palw_kernel_post_job),
+            palw_kernel_register_class: m.get_one::<String>("palw-kernel-register-class").cloned(),
+            palw_kernel_register_class_dry_run: m.get_flag("palw-kernel-register-class-dry-run"),
             palw_kernel_export_dir: m.get_one::<String>("palw-kernel-export-dir").cloned().or(defaults.palw_kernel_export_dir),
             palw_kernel_relay_dir: m.get_one::<String>("palw-kernel-relay-dir").cloned().or(defaults.palw_kernel_relay_dir),
             palw_drill_kernel_inject: m

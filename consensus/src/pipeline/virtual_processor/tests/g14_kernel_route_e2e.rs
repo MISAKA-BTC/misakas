@@ -3620,3 +3620,5 @@ mod source_verifier_economics_v2;
 // RFC08: signed material generations and exact finalized GC intent binding.
 mod material_gc_v4;
 mod material_typed_ingress_v4;
+// Lane ROLES: the slice root attested past the Panel=1 fence only: `g14_kernel_route_e2e/roles_slice_attest.rs`.
+mod roles_slice_attest;

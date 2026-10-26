@@ -676,6 +676,14 @@ pub fn palw_kernel_interim_challenge_v1(claim: &Digest) -> (Digest, Digest) {
     (derive(0), derive(1))
 }
 
+/// **Lane ROLES (user decision 2026-10-27): the testnet-12 Panel=1 slice class's parameter root, attested public from
+/// `palw_kernel_route_panel_one_v1`** (the DAA 17,000 slice fence, `PALW_T12_KERNEL_SLICE_FENCES_V1`). It is
+/// `ParamCommitmentsV1::of(&wide128_v1(7).params).root()`: a synthetic fixture whose every parameter is regenerated from the seed
+/// (`misaka/palw/kernel/examples/gen-wide128-palwkm.rs`), so its publication is self-evident. One fixed row; no model review or
+/// judgement is made on chain (PRINCIPLES §9). Below the fence the attested set is byte-identical. Registered after genesis, the class
+/// takes the 0.3 tier like every registered model. A hash is data identity only, never a proof of computation (PRINCIPLES §8).
+pub const PALW_T12_KERNEL_SLICE_ATTESTED_ROOT_V1: [u8; 64] = [0x44, 0xc6, 0x28, 0x70, 0xde, 0xa5, 0xd1, 0x91, 0xff, 0x2b, 0xc2, 0xeb, 0x8a, 0x0a, 0x11, 0x42, 0xce, 0x40, 0x22, 0x21, 0x2e, 0x6b, 0xe7, 0xf1, 0x9a, 0xd5, 0x89, 0x3f, 0x05, 0x2f, 0x22, 0xea, 0x7f, 0x90, 0x33, 0xda, 0xba, 0x21, 0x88, 0x5d, 0x65, 0x5e, 0x61, 0x9a, 0xf5, 0x57, 0xab, 0x8e, 0x02, 0x09, 0x1e, 0x13, 0x9b, 0x46, 0xbb, 0x31, 0x69, 0x53, 0x53, 0x13, 0xed, 0xcb, 0x96, 0x0e];
+
 /// **lane SEED (G14 independent review MAJOR-1 / MINOR-1): the Panel=1 seed domain.** Past `palw_kernel_route_panel_one_v1` a
 /// committed claim's seat draw, challenge anchor and sample seed are keyed by the claim id AND a round seed anchor (ADR-0130/ADR-0170)
 /// recorded strictly after the commit — the same kind of post-commit anchor RFC-0018 Gate C draws its verifiers from — so a producer
