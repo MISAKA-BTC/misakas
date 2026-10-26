@@ -620,10 +620,10 @@ impl Params {
         Ok(())
     }
 
-    /// **PanelDa mandatory disclosure gate (DORMANT, lane g14-fam-panelda, ADR-0206 proposed).** Needs `palw_panel_da` and
+    /// **PanelDa mandatory disclosure gate (lane g14-fam-panelda, ADR-0206 accepted).** Needs `palw_panel_da` and
     /// `palw_court_clock_v2` in force at or below it, and window arithmetic that leaves the outsider its notice window. **Refused when
-    /// armed on any network for now**: the carrier, fold row, deposit and Final hold are wired and fold-tested, but the real-node E2E
-    /// (mempool → template → processor) has not run (lane report). Lift only with that E2E's record.
+    /// armed only where a piece of its wiring is missing** (carrier tag 233, delta 236, void reason 140, the deposit, the bundle mirror).
+    /// Real-node E2E waived by user decision 2026-10-27 (armed at DAA 17,000 with the slice).
     pub fn validate_palw_panel_da_disclosure_v1(&self) -> Result<(), PalwModeV2Error> {
         let Some(at) = self.palw_panel_da_disclosure_v1_fence() else { return Ok(()) };
         let below = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at.daa_score());
@@ -638,10 +638,40 @@ impl Params {
         ) {
             return Err(PalwModeV2Error::Invalid("palw_panel_da_disclosure_v1: the deadline leaves the outsider no notice window"));
         }
-        Err(PalwModeV2Error::Invalid(
-            "palw_panel_da_disclosure_v1: the carrier (tag 233), fold row, deposit lock/burn, Final hold and route input are wired and \
-             fold-tested, but no real-node (mempool/template/processor) E2E has run yet; arming is refused until it has (ADR-0206)",
-        ))
+        // The arming wiring (user decision 2026-10-27: armed at 17,000 with the slice; real-node E2E waived): refused only if a piece
+        // is missing — the carrier's kind and fence (tag 233), the row's delta (236), the default's void reason (140), a non-zero
+        // deposit, and the bundle mirror the fold's admission and Final hold read.
+        use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_NEW_KINDS_V1, PalwLifecycleKindFenceV1};
+        use crate::palw_panel_da_disclosure_v1::{PALW_PANEL_DA_DISCLOSURE_DELTA_V1, PALW_PANEL_DA_DISCLOSURE_TAG_V1};
+        let missing = |why: &'static str| Err(PalwModeV2Error::Invalid(why));
+        if !PALW_LIFECYCLE_NEW_KINDS_V1.contains(&(
+            PALW_PANEL_DA_DISCLOSURE_TAG_V1,
+            "PanelDaPromptDisclosedV1",
+            PalwLifecycleKindFenceV1::PanelDaDisclosureV1,
+        )) {
+            return missing("palw_panel_da_disclosure_v1: the disclosure kind (tag 233) is not owned by its fence");
+        }
+        let object =
+            crate::palw_state_v2::PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: Hash64::default(), prompt_token_ids: vec![1] };
+        if borsh::to_vec(&object).ok().and_then(|b| b.first().copied()) != Some(PALW_PANEL_DA_DISCLOSURE_TAG_V1) {
+            return missing("palw_panel_da_disclosure_v1: the disclosure object does not encode as tag 233");
+        }
+        let delta = crate::palw_state_v2::PalwDeltaEntryV2::PanelDaDisclosure { key: Hash64::default(), old: None, new: None };
+        if borsh::to_vec(&delta).ok().and_then(|b| b.first().copied()) != Some(PALW_PANEL_DA_DISCLOSURE_DELTA_V1) {
+            return missing("palw_panel_da_disclosure_v1: the disclosure row's delta is not 236");
+        }
+        if borsh::to_vec(&crate::palw_state_v2::PalwVoidReasonV2::PanelDaDisclosureDefault).ok().as_deref() != Some(&[140u8][..]) {
+            return missing("palw_panel_da_disclosure_v1: the default's void reason is not 140");
+        }
+        if crate::palw_g14_values_v1::PALW_G14_PANEL_DA_DISCLOSURE_DEPOSIT_SOMPI_V1 == 0 {
+            return missing("palw_panel_da_disclosure_v1: no disclosure deposit to lock or burn");
+        }
+        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.panel_da_disclosure_from_daa() != Some(at.daa_score())
+        {
+            return missing("palw_panel_da_disclosure_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1");
+        }
+        Ok(())
     }
 
     /// **The TIR frame cost gate** (audit §10): `Ok` when `palw_tir_public_conviction_v1` is not armed; otherwise the ruleset must
