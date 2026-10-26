@@ -1,0 +1,29 @@
+{
+  "observed_utc": "2026-10-26T11:54:00.392151+00:00",
+  "raw_status": "UNDER_LOAD_RUNTIME_ONLY",
+  "arming_evidence": false,
+  "steps": [
+    {
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/model-completion-tools/summarize_model_measure.py",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/dolphin-long-n32768-2026-10-26"
+      ],
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/model-completion-tools/compare_model_prefix.py",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/dolphin-long-n8192-2026-10-26",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/dolphin-long-n32768-2026-10-26",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/dolphin-completed-prefix-comparison-2026-10-26"
+      ],
+      "exit_code": 0,
+      "stderr": ""
+    }
+  ],
+  "summary_sha256": "0c1bb939e038a39d5bb13e17c5204632e917383b1d4bb2b7b82c5595278f303d",
+  "status": "VALIDATED_RUNTIME_ONLY"
+}

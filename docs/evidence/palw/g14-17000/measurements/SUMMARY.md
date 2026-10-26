@@ -8,7 +8,7 @@ Existing core timing executable source: `84d7186471454c050c85fd3170b1ba9dea0d998
 | P0 M-C | **NOT_MET**. Source-pinned release harness built successfully (binary SHA-256 `bc13a045…`). The continuation adds five conditions (signature, root admission, D2 sweep 16/256/4096), 30 processes and 15,000 timed calls at load 7.870–12.180. All expected outcomes pass; the batch is UNDER_LOAD_FIXTURE_ONLY. The earlier forged-close operation ran with N=1000 ×3 and N=0 ×3 at load 8.07–15.72: median of process medians 383,708 ns, largest process p95 3,165,917 ns. It is **UNDER_LOAD**, excluded from arming. A 30-minute quiet batch held a build slot but ran zero operations because load never fell below 5 (minimum 5.253). Earlier load 51–61 run is also excluded. | A later native Gate C batch completed 120 processes (5/3, 75/41, 90/50; 20 N=0 and 20 N=1 each), all exit 0, under load 11.376–12.466. Complete the remaining kernel classes and run under load≤5; repeat on minimum hardware. The prior 14-operation batch took about 80 minutes under severe load, which is history rather than a quiet-run ETA. [Detail](M-C/README.md). |
 | P0 M-CAP | **NOT_MET**. Eight native reduced-budget preflight processes pass under load 9.959–10.130. Six filings exercise cap 4, two over-budget drops, block reset and a later outsider conviction. Full 320-process batch also completed, all exit 0, under load 10.351–19.690; 20 repetitions per profile/count/baseline condition. No production-cap or simultaneous-court node run. | Complete F02/F03 fixture integration, M-C, minimum-node saturation/refill and restart/reorg/pruned drills. ETA unknown until those prerequisites finish. [Detail](M-CAP/README.md). |
 | P0 M-SHADOW | **NOT_MET**. Limited kernel Panel=3/1 batch completed: 60 fresh processes, 15 pairs; claim IDs/verdicts and relative Final windows agree. Absolute Final is 54/57 after shifted admission; all differences retained. Under load 9.409–9.880; legacy-route, Gate C and randomness-withholding comparison remain absent. | Reviewed source `2119c943b` now includes kernel certification (`bc2c750f3`); its lane reports passing integration tests, not a paired measurement by this branch. Run honest + four attack twins on both routes after that gate, retaining every verdict/Final/cost mismatch. [Detail](M-SHADOW/README.md). |
-| P0 M-COST | **NOT_MET**. Dolphin 1.5B 32k A16 artifact and 32,768-token input are now pinned; all existing artifact hashes match fresh reads. Pinned runtime preflight passed at N=0 and N=32 under load: 32-position forward 1.316720 s, peak RSS 2,085,158,912 B. The real 1.5B 8k run completed: forward 1,030.075 s, peak RSS 2.582 GiB, load 5.112–13.085. The 32k run is executing. 9B-8k has no artifact (user confirmed). | Complete 32k A16 execution; keep it separate from the K2 fixture slice. Court/transfer/DA economics remain separate measurements. [Detail](M-COST/README.md). |
+| P0 M-COST | **NOT_MET**. Dolphin 1.5B 32k A16 artifact and 32,768-token input are now pinned; all existing artifact hashes match fresh reads. Pinned runtime preflight passed at N=0 and N=32 under load: 32-position forward 1.316720 s, peak RSS 2,085,158,912 B. The real 1.5B 8k run completed: forward 1,030.075 s, peak RSS 2.582 GiB, load 5.112–13.085. The 32k run also completed: 14,447.501 s forward, peak RSS 3.775 GiB, load 6.671–92.291; exact 2,048-chunk validation passed. 9B-8k has no artifact (user confirmed). | Both A16 runtime runs are complete; keep them separate from the K2 fixture slice. Court/transfer/DA economics remain separate measurements. [Detail](M-COST/README.md). |
 | P1 M-P15 | **NOT_RUN**. | Original admission curves on isolated local devnet, including restart/rejection and simultaneous load; after P0. |
 | P1 M-L | **NOT_RUN**. | Rebuild and run court/carrier rejection and 1k–1M row clone harnesses after P0. |
 | P1 M-DA | **NOT_RUN**. | Per-class material and retained bytes for fixture plus authenticated real artifact. |
@@ -29,7 +29,7 @@ Raw Rust stdout logs retain their emitted trailing blank line byte-for-byte (cov
 
 ## Native and real-model continuation
 
-Central source `2119c943b` is now merged into this branch at `99a5a7adc`. Test-only additions through `94d08757d` add: (1) an explicitly mirrored Panel=1 fence compared with interim kernel Panel=3 on identical class/job/claim IDs, and (2) real Dolphin 1.5B A16 graph-v7 execution from the existing 32k artifact. The initial native preflight revealed different claim IDs under different fork schedules; all logs are preserved and that pair is rejected as a same-claim comparison. The common-schedule, fork-crossing revision completed all 60 processes; identical claims/verdicts, 50-DAA Final windows, absolute Final 54/57. It remains a loaded kernel-only comparison. The real-model release binary is built from `3872a488c`, with successful N=0/N=32 resource preflights; 8k completed under load; 32k is in progress. The old core binary and its timings above remain identified by their own old source.
+Central source `2119c943b` is now merged into this branch at `99a5a7adc`. Test-only additions through `94d08757d` add: (1) an explicitly mirrored Panel=1 fence compared with interim kernel Panel=3 on identical class/job/claim IDs, and (2) real Dolphin 1.5B A16 graph-v7 execution from the existing 32k artifact. The initial native preflight revealed different claim IDs under different fork schedules; all logs are preserved and that pair is rejected as a same-claim comparison. The common-schedule, fork-crossing revision completed all 60 processes; identical claims/verdicts, 50-DAA Final windows, absolute Final 54/57. It remains a loaded kernel-only comparison. The real-model release binary is built from `3872a488c`, with successful N=0/N=32 resource preflights; 8k and 32k completed under load; the completed 32k results are in M-COST. The old core binary and its timings above remain identified by their own old source.
 
 The native intermediate comparison is not the complete legacy-model-versus-kernel M-SHADOW: it excludes Gate C certification, post-commit beacon selection and randomness withholding. Its `withheld_reveal` case tests an unrevealed claim seal and is explicitly not a beacon-withholding result. Current interim challenge seeds are claim-derived. Runtime and script provenance accompany future results. [Dolphin inputs](M-COST/dolphin-input-inventory-2026-10-26.json) are verified now; the user instructed leaving 9B-8k unmeasured.
 
@@ -44,7 +44,7 @@ The [latest X3 scope audit](M-X3/README.md#latest-source-scope-finding--648544c4
 
 Harness commit `969afa31f` adds an explicit cfg(test) cap of 64 and an optional early activation of the already-shipped anchor-retention prerequisite in both fixture parameter mirrors. The approved external-gain bound is asserted at 500 MSK. Source remains frozen while its new build waits for a shared slot. The queued workflow first preserves a no-retention control, then runs independent shadow, Gate C and maximum-trace preflights. Only a passing preflight advances its own repeated batch. Six filings with cap 64 are not a saturation test; no production capacity or arming result is claimed.
 
-The running real-model 32k process agrees with the finished 8k process at all 512 emitted chunk endpoints in their common prefix; [comparison and bounded logs](M-COST/raw/dolphin-prefix-8192-2026-10-26/comparison.json) are captured. The complete 32k result and the low-load court rerun remain pending.
+A snapshot captured while the real-model 32k process was running agrees with the finished 8k process at all 512 emitted chunk endpoints in their common prefix; [comparison and bounded logs](M-COST/raw/dolphin-prefix-8192-2026-10-26/comparison.json) are captured. The complete 32k result is now validated (see M-COST); the low-load court rerun remains pending.
 
 
 ## Shared native build checkpoint
@@ -76,3 +76,20 @@ Public deadline context at 19:42 JST: [read-only wRPC](M-OPS/README.md#evening-o
 reports DAA 16,003, leaving 997 DAA to 17,000. The recent two-point average is
 169.2198 seconds per net DAA advance; it is not an inclusion or wall-clock
 activation guarantee. This observation does not complete any P0 requirement.
+
+
+## Completed Dolphin 32k checkpoint — 20:54 JST
+
+The available real 1.5B A16 artifact completed all 32,768 positions, exit 0,
+with validated contiguous chunks and final digest. Forward time was
+14,447.501413 s; process real/user/sys was 14,468.08/34,897.99/241.03 s;
+peak RSS was 4,053,598,208 B. Load ranged from 6.671 to 92.291, so this is
+**UNDER_LOAD_RUNTIME_ONLY**. All 512 shared chunk endpoints agree with the
+finished 8k run. [Evidence and scope](M-COST/README.md#completed-32k-real-artifact-run).
+
+M-COST's runtime subtask advanced, but all five complete P0 arming requirements
+remain NOT_MET. The M-C workflow now requests a shared slot for its low-load
+batch; native capacity and actual legacy/kernel comparison still await the
+shared native build. X3's [latest candidate review](M-X3/README.md#clock-follow-up-at-ee96b7b9f)
+retains provisional values and identifies outstanding contract/boundary evidence.
+No result here supplies missing real-model transfer/court/retention or 9B data.
