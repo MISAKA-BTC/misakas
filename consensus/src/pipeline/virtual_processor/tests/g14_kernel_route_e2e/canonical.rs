@@ -1332,3 +1332,6 @@ mod spine;
 
 /// lane T0308 (2026-10-26): T03 forged/fake objects and T08 offline miner, distinct signer, relay, no replay — on the same slice.
 mod t0308;
+
+// Test-only measurements; the native network validation remains unchanged.
+mod measurement;
