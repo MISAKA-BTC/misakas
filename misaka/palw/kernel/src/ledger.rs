@@ -944,7 +944,11 @@ pub fn single_class_id_v1(
 }
 
 pub(crate) fn settle(out: &mut Vec<LedgerEventV1>, bond: Digest, amount: u64, kind: SettlementKindV1, claim: Option<Digest>) {
-    if amount > 0 {
+    // A zero remainder is still the terminal release marker for a fully paid
+    // job escrow. Keep that semantic event in the receipt stream so consumers
+    // can recognize the one-time escrow-final reward; other zero-value
+    // settlements remain elided.
+    if amount > 0 || kind == SettlementKindV1::ReleaseJobEscrow {
         out.push(LedgerEventV1::Settlement(SettlementInstructionV1 { bond, amount, kind, claim }));
     }
 }
