@@ -613,6 +613,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
         first.lane.push(carry_slice(&mut cw, first.real.claim, index as u32, &slice.claim).await);
     }
     let poster_before = cw.net.collateral(REGISTRANT);
+    let before_final = cw.net.ledger();
     let (final_daa, licence) = finalize_native_root(&mut cw, &first).await;
     let state = cw.net.chain.tip_state().1;
     let native = state.vesting_row(&first.real.claim).unwrap().clone();
@@ -628,7 +629,10 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::KernelFee && leg.amount > 0));
     let actual_fees: u64 =
         receipt.legs.iter().filter(|((_, fund), _)| *fund == PalwExecV2RewardFundV1::KernelFee).map(|(_, leg)| leg.amount).sum();
-    assert_eq!(poster_before - cw.net.collateral(REGISTRANT), actual_fees);
+    // The registrant's other paid jobs that settled in the same span are recomputed from the rows (as the funds-each-leg test does).
+    let session_jobs: Vec<Digest> = std::iter::once(&first.prefix).chain(first.slices.iter()).map(|k| k.job.id()).collect();
+    let others = other_paid_escrows(&before_final, &cw.net.ledger(), cw.net.kid(REGISTRANT), &session_jobs);
+    assert_eq!(poster_before - cw.net.collateral(REGISTRANT), actual_fees + others);
     assert_eq!(receipt.total_sompi_u128() + u128::from(native.producer.amount), u128::from(receipt.allocation_sompi));
     assert_eq!(state.settled_attempt_finals(), native.settled_at_final);
     assert!(native.expiry_daa > receipt.liability_until && native.final_daa == final_daa);

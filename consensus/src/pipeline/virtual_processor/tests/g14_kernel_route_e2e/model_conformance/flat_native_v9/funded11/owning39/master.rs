@@ -581,7 +581,10 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
         );
     }
     // ---- the prosecution window, then both certify and receive their receipts (77) ----
-    let until = drawn.final_daa + cert.prosecution_window_daa + 2;
+    // The verdict reads the CERTIFICATION ROW's final_daa (the DAA its row recorded the Final, which can trail the mining claim's
+    // own Final by a few DAA), so wait past the later of the two rows' windows — the window itself is not shortened.
+    let row_final = [&bad_claim, &good_claim].iter().map(|c| cert_row(&net, c).unwrap().final_daa).max().unwrap();
+    let until = drawn.final_daa.max(row_final) + cert.prosecution_window_daa + 2;
     eprintln!("g14n2/node: prosecution wait from DAA {} to {until} (Final {}, window {})", net.daa(), drawn.final_daa, cert.prosecution_window_daa);
     net.beat_to(until).await;
     for c in [&bad_claim, &good_claim] {
