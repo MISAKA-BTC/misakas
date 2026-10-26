@@ -1163,14 +1163,27 @@ async fn lie_convicted_using(mode: Mode, start: Start, lie: Lie, commitments_onl
         Lie::Decode => assert!(matches!(proof, ProsecutionV1::Decode(_)), "{lie:?}: the decode court's fault"),
         _ => assert!(matches!(proof, ProsecutionV1::Kernel(_)), "{lie:?}: a kernel relation's fault"),
     }
-    let seats_slashed: Vec<(usize, u64)> = seats.iter().map(|c| (*c, w.net.slashed(*c))).collect();
+    // G-K1 (5bdd427fb): each covering seat's passing receipt holds a signer liability lock, charged at the conviction.
+    // Same rule as the S3b assert updated in 22c3daa4f; this second harness path was not updated there.
+    let seats_slashed: Vec<(usize, u64, u64)> = seats
+        .iter()
+        .map(|c| {
+            use kaspa_consensus_core::palw_g14_lane_closure_v1::*;
+            let key = palw_kernel_signer_lock_key_v1(&w.net.kid(*c), &claim.id);
+            let row = w.net.api().expect("the route").aux.get(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key)).cloned();
+            let lock = borsh::from_slice::<PalwKernelSignerLockRowV1>(&row.expect("every covering seat holds a G-K1 lock"))
+                .expect("a lock row")
+                .amount;
+            (*c, w.net.slashed(*c), lock)
+        })
+        .collect();
     Rules::file_proof(&mut node, NEWCOMER, claim.id, proof).await;
     sync(&node, &mut w.net).await;
     assert!(w.net.ledger().claims[&claim.id].convicted, "{lie:?}: convicted");
     assert_eq!(w.net.collateral(0), before - slashed, "{lie:?}: the REAL producer bond lost the reservation");
     assert_eq!(w.net.owed(NEWCOMER), Rules::bounty(&policy, slashed), "{lie:?}: the participant's share");
-    for (card, before) in &seats_slashed {
-        assert_eq!(w.net.slashed(*card), *before, "the colluding seats are not charged");
+    for (card, before, lock) in &seats_slashed {
+        assert_eq!(w.net.slashed(*card), *before + *lock, "{lie:?}: each colluding seat is charged exactly its G-K1 signer lock");
     }
     let read = Rpc::of(&node.chain).claim(&claim.id);
     let phase = if after_final { "Final" } else { "Convicted" };
