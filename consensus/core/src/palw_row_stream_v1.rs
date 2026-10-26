@@ -93,7 +93,8 @@ pub enum PalwRowStreamErrorV1 {
     /// malformed. The spill is unusable; nothing is resumed from it.
     #[error("stored spill cannot be resumed: {0}")]
     ResumeSpill(String),
-    /// Resume (local): a local limit or allocation refusal while replaying the stored spill. Not peer misbehaviour.
+    /// Resume (local): a local limit, allocation refusal or local I/O failure (permission, timeout, device) while
+    /// replaying the stored spill. Not spill damage and not peer misbehaviour.
     #[error("local limit while replaying the stored spill: {0}")]
     ResumeLocalLimit(String),
 }

@@ -3,7 +3,8 @@
 //! itself re-matched against the header-derived root, and the byte budget is re-charged for the replayed rows.
 //! Nothing authenticated is skipped, and the resumed total can never exceed what an uninterrupted stream would have
 //! been allowed. A torn final collection (crash mid-write, `UnexpectedEof`) is dropped back to the last complete
-//! boundary; any other damage — mismatch, duplicate label, malformed framing — refuses the whole spill.
+//! boundary; any other damage — mismatch, duplicate label, malformed framing — refuses the whole spill. A local limit
+//! or local I/O failure while reading the spill is a local refusal, not damage.
 use super::{
     PALW_ROW_STREAM_MAX_PREIMAGE_BYTES_V1, PalwCollectionRootStreamV1, PalwRowProjectionV1, PalwRowSpillEventV1, PalwRowSpillLimitsV1,
     PalwRowStreamErrorV1, PalwRowStreamVerifierV1, Rooter, is_non_standard, palw_visit_row_spill_v1,
@@ -159,8 +160,11 @@ pub fn palw_resume_row_stream_v1<W: Write>(
         match error.kind() {
             // A crash mid-write leaves a prefix; everything after the last END is discarded and re-fetched.
             ErrorKind::UnexpectedEof => torn_tail = true,
-            ErrorKind::Other | ErrorKind::OutOfMemory => return Err(PalwRowStreamErrorV1::ResumeLocalLimit(error.to_string())),
-            _ => return Err(PalwRowStreamErrorV1::ResumeSpill(error.to_string())),
+            // Only malformed framing (`InvalidData`) is damage in the stored spill. Local limits (`Other`), allocation
+            // refusal (`OutOfMemory`) and every local I/O failure (permission, timeout, device, ...) are this node's
+            // condition, never evidence against the spill or a peer (ADR-0204 capacity/I/O is local).
+            ErrorKind::InvalidData => return Err(PalwRowStreamErrorV1::ResumeSpill(error.to_string())),
+            _ => return Err(PalwRowStreamErrorV1::ResumeLocalLimit(error.to_string())),
         }
     }
     if torn_tail {

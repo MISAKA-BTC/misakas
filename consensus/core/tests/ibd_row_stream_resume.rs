@@ -166,6 +166,22 @@ fn local_spill_limits_are_a_local_refusal_not_a_peer_fault() {
 }
 
 #[test]
+fn local_spill_io_failures_are_a_local_refusal_not_spill_damage() {
+    struct Failing(std::io::ErrorKind);
+    impl std::io::Read for Failing {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(self.0, "local spill read failed"))
+        }
+    }
+    let c = three();
+    for kind in [std::io::ErrorKind::PermissionDenied, std::io::ErrorKind::TimedOut, std::io::ErrorKind::BrokenPipe] {
+        let err =
+            palw_resume_row_stream_v1(c.root, c.preimage.clone(), Failing(kind), limits(), 1 << 20, |_| None, |_| Ok(Vec::new())).err().unwrap();
+        assert!(matches!(err, PalwRowStreamErrorV1::ResumeLocalLimit(_)), "{kind:?}: {err:?}");
+    }
+}
+
+#[test]
 fn coverage_refuses_missing_extra_mislocated_and_duplicated_layouts() {
     let c = three();
     let build = |names: &[usize]| {
