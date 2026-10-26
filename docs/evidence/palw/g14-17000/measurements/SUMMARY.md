@@ -45,3 +45,13 @@ The [latest X3 scope audit](M-X3/README.md#latest-source-scope-finding--648544c4
 Harness commit `969afa31f` adds an explicit cfg(test) cap of 64 and an optional early activation of the already-shipped anchor-retention prerequisite in both fixture parameter mirrors. The approved external-gain bound is asserted at 500 MSK. Source remains frozen while its new build waits for a shared slot. The queued workflow first preserves a no-retention control, then runs independent shadow, Gate C and maximum-trace preflights. Only a passing preflight advances its own repeated batch. Six filings with cap 64 are not a saturation test; no production capacity or arming result is claimed.
 
 The running real-model 32k process agrees with the finished 8k process at all 512 emitted chunk endpoints in their common prefix; [comparison and bounded logs](M-COST/raw/dolphin-prefix-8192-2026-10-26/comparison.json) are captured. The complete 32k result and the low-load court rerun remain pending.
+
+
+## Legacy comparison implementation checkpoint
+
+The actual legacy TIR backend / kernel Panel=1 honest comparison is now prepared
+in separate branch `codex/g14-legacy-shadow`, commit `d2982b9d0`. Its pinned build
+and preflight are queued, with no compile or runtime success claimed. The existing
+full-cap source remains unchanged. [Comparison scope](M-SHADOW/README.md#actual-legacykernel-comparison-preflight-prepared)
+records the remaining attack and verification-cost requirements. All five P0
+arming requirements remain NOT_MET.

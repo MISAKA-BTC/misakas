@@ -71,3 +71,18 @@ The same pinned binary ran the existing `canonical::seed::lane_seed_` filter: **
 The next test build adds failure-only per-attempt diagnostic detail without changing the 32-attempt limit, the draw predicate or production code. Separate shadow, Gate C and exact-maximum-trace capacity preflights will retain their individual outcomes instead of letting a shadow failure prevent collection of the other diagnostic results.
 
 The [reduced-cap economic calculation](../M-CAP/README.md#new-source-admission-and-the-approved-external-gain-bound) identifies a concrete mismatch between the four-adjudication test policy and the newly approved 500 MSK gain: cost 140 MSK versus gain 505 MSK. This is consistent with the seed tests' registration failure; it is a separate issue from the crossing comparison's later missing assignment. No gain or admission check has been weakened.
+
+
+## Actual legacy/kernel comparison preflight prepared
+
+Commit `d2982b9d0` on the separate `codex/g14-legacy-shadow` branch adds a real
+legacy TIR backend attempt paired with a kernel Panel=1 job over the same fixture
+program, weights, prompt and generated output. It retains distinct route IDs and
+the actual recorded Final DAAs. Its honest preflight is queued behind the shared
+build gate; compilation and execution have **not** been verified. Keeping this
+work separate preserves the already-queued full-cap build's source.
+
+The runner records pinned source/binary, command, load, CPU/RSS and log hashes.
+It labels success as an honest fixture preflight only. Attack pairs, randomness
+withholding, Gate C and honest per-seat verification costs remain open. The
+previous 60-process kernel-only comparison does not satisfy those missing cases.
