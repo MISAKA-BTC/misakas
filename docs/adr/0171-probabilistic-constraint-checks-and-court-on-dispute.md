@@ -1,5 +1,7 @@
 # ADR-0171 — Probabilistic constraint checks are the normal large-model verifier; the court resolves disputes exactly
 
+> **2026-10-15 ユーザー恒久決定による除外:** 本文に残る GKR・sum-check・FRI 等を計算 validity argument として使う記述、暗号学的な計算証明・集約の候補は履歴であり、採用・実装・研究候補から除外する。[PRINCIPLES §8](../PRINCIPLES.md) を優先する。直接の確率的スポットチェック、公開証拠による局所化、決定論的裁定と、前提を明示した抽選検証者の承認を用いる。
+
 > **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
 
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
