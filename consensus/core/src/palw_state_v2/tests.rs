@@ -32770,19 +32770,28 @@ mod rcore_s1_api {
                     assert!(paid_court_cap_admits_v1(&s, &p, target, bond_key(0x901), false, 1_000).is_err());
                 }
             }
-            // Below the lane fence (or with the schedule missing) the reservation does not exist: the lane rule alone.
+            // Production pins the V4 estimate (user-approved 2026-10-26), so a missing schedule no longer happens; below the lane
+            // fence the reservation still does not exist: the lane rule alone.
             set_palw_court_ingress_test_schedule_v1(None);
-            assert!(crate::palw_state_v2::palw_court_capacity_fold_v1::court_ingress_schedule_at_v1(&p, 1_000).is_none());
-            palw_court_ingress_claim_admits_v1(&s, &p, &h64(0xC1), 1_000).expect("dormant without the schedule");
+            assert_eq!(
+                crate::palw_state_v2::palw_court_capacity_fold_v1::court_ingress_schedule_at_v1(&p, 1_000),
+                Some(crate::palw_g14_values_v1::PALW_G14_COURT_INGRESS_ESTIMATE_V1),
+                "past the lane fence the pinned V4 schedule is in effect"
+            );
+            let below = lane(false);
+            assert!(crate::palw_state_v2::palw_court_capacity_fold_v1::court_ingress_schedule_at_v1(&below, 1_000).is_none());
+            palw_court_ingress_claim_admits_v1(&s, &below, &h64(0xC1), 1_000).expect("dormant below the lane fence");
         }
 
         /// G14 item 3 (2): the ingress fee is burned ONCE, at the session's admission, from the opener — and a refused try burns
         /// nothing. Through the fold's own `court_ingress_admission_v1` on a `TransitionBuilder` (court capacity dormant: the legacy
-        /// path). With the schedule missing nothing is burned.
+        /// path). Without an injected schedule the pinned V4 estimate (1.1 M sompi) is charged. The outsider holds 10 MSK, a
+        /// realistic bonded verifier (the earlier 10,000-sompi fixture could not pay any adopted fee).
         #[test]
         fn r5_f03_the_ingress_fee_is_charged_once_and_never_for_a_refused_try() {
             use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
             use crate::palw_state_v2::palw_court_capacity_fold_v1::{PalwCourtAdmissionV1, court_ingress_admission_v1};
+            const COLLATERAL: u64 = 10 * crate::palw_g14_values_v1::SOMPI_PER_MSK_V1;
             let p = lane(true);
             let extras = PalwTransitionExtrasV1::default();
             let at = ctx(0x77, 1_000, 1_000);
@@ -32790,13 +32799,13 @@ mod rcore_s1_api {
             let target = h64(0x7A60);
             claimed(&mut s, target, bond_key(0x80), &[bond_key(0x81)]);
             let outsider = bond_key(0x900);
-            s.bonds.insert(outsider, bond(10_000, PalwBondStatusV2::Active));
-            for (schedule, fee) in [(None, 0u64), (Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), 5)] {
+            s.bonds.insert(outsider, bond(COLLATERAL, PalwBondStatusV2::Active));
+            for (schedule, fee) in [(None, crate::palw_g14_values_v1::PALW_G14_COURT_INGRESS_ESTIMATE_V1.fee_sompi_per_session), (Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), 5)] {
                 set_palw_court_ingress_test_schedule_v1(schedule);
                 let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
                 let admitted = court_ingress_admission_v1(&mut b, &at, target, outsider, false, 20).expect("admitted");
                 assert_eq!(admitted, PalwCourtAdmissionV1::Legacy);
-                assert_eq!(b.state.bonds[&outsider].collateral, 10_000 - fee, "{schedule:?}: charged once at admission");
+                assert_eq!(b.state.bonds[&outsider].collateral, COLLATERAL - fee, "{schedule:?}: charged once at admission");
                 assert_eq!(b.state.bonds[&outsider].slashed, fee);
             }
             // A refused try (the cap is full) burns nothing.
@@ -32808,7 +32817,7 @@ mod rcore_s1_api {
             }
             let mut b = TransitionBuilder::new(&full, &p, false, false, false, false, &extras);
             assert!(court_ingress_admission_v1(&mut b, &at, target, outsider, false, 20).is_err());
-            assert_eq!(b.state.bonds[&outsider].collateral, 10_000, "a refused try is not charged");
+            assert_eq!(b.state.bonds[&outsider].collateral, COLLATERAL, "a refused try is not charged");
             set_palw_court_ingress_test_schedule_v1(None);
         }
     }
@@ -34862,7 +34871,8 @@ fn memory_routing_held_claim_mercy_preserves_acceptance_cohort_and_fails_closed(
 
 /// **G14 lane court-f02: the F02 / RFC-0028 / RFC-0029 fold pieces are dormant below their fences.** No service binding is
 /// installed, no supply is observed, and the shared lifecycle dispatcher refuses as dormant — the builder journals nothing. Past the
-/// conviction fence F02 still waits on a pinned service profile; the shared lifecycle also needs the outsider lane at or below.
+/// conviction fence F02 is active (the V1 service profile is pinned from the user-approved estimate, 2026-10-26); the shared
+/// lifecycle also needs the outsider lane at or below.
 #[test]
 fn court_f02_lifecycle_is_dormant_below_its_fences() {
     use super::palw_court_service_lifecycle_fold_v1 as lifecycle;
@@ -34883,7 +34893,7 @@ fn court_f02_lifecycle_is_dormant_below_its_fences() {
     let mut armed = extras.clone();
     armed.tir_public_conviction_active = true;
     let b = TransitionBuilder::new(&state, &p, false, false, false, false, &armed);
-    assert!(!lifecycle::court_service_f02_active_v1(&b), "no court service profile is pinned");
+    assert!(lifecycle::court_service_f02_active_v1(&b), "past the fence, with the pinned V1 profile");
     assert!(!lifecycle::shared_court_lifecycle_active_v1(&b, 100), "outsider lane not armed");
     let lane = p.clone().with_court_outsider_lane_from_daa(Some(50));
     let b = TransitionBuilder::new(&state, &lane, false, false, false, false, &armed);

@@ -25,7 +25,15 @@ fn seed_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     params.palw_kernel_route_panel_one_v1 = Some(ForkActivation::new(0));
     params.sync_palw_g14_gates_v1();
     let mut bundle = bundle;
-    bundle.state = bundle.state.clone().with_kernel_route_panel_one_from_daa(Some(0));
+    // The class relation needs the external gain bound; the 4-run test seam uses F03k2's TEST-ONLY bound (as `panel_one_config`).
+    bundle.state = bundle
+        .state
+        .clone()
+        .with_kernel_route_panel_one_from_daa(Some(0))
+        .with_test_only_kernel_panel_one_external_gain_bound_v1(Some(super::f03k::TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI));
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(node_bundle) = &mut params.palw_consensus_mode {
+        *node_bundle = bundle.clone();
+    }
     if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(node_bundle) = &params.palw_consensus_mode {
         assert_eq!(node_bundle.state.kernel_route_panel_one_from_daa(), Some(0), "the node's fold reads the Panel=1 mirror");
     }
@@ -111,7 +119,7 @@ async fn lane_seed_panel_one_seat_is_drawn_after_the_commit_and_a_sybil_covered_
 
 /// **(c) + (d)**: an UNPROSECUTED Sybil-covered lie reaches the kernel `Final`. (d) That `Final` exports no beacon event (no RFC07
 /// source), pays the producer nothing (the escrow reward is held for Gate C) and is not SecurityCertified. (c) Gate C's drawn
-/// verifiers do not approve: NotCertified, the held reward returns whole to the poster — and the lying producer is NOT slashed by
+/// verifiers do not approve: NotCertified, the held reward less the V3 burn share returns to the poster — and the lying producer is NOT slashed by
 /// that outcome (only a conviction slashes). Recorded as the residual, not hidden.
 #[tokio::test]
 async fn lane_seed_an_unprosecuted_sybil_covered_final_earns_nothing_and_gate_c_failure_alone_does_not_slash() {
@@ -148,7 +156,11 @@ async fn lane_seed_an_unprosecuted_sybil_covered_final_earns_nothing_and_gate_c_
     let decided = cert_row(&w.net, &lie.id).unwrap();
     assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::NotCertified), "(c) {:?}", decided.outcome);
     assert_eq!(w.net.owed(0), producer_before, "(c) never paid");
-    assert_eq!(w.net.owed(1), poster_before + Rules::final_reward(&policy), "(c) the held reward returns to the poster");
+    // lane CERT a116c149b (PROVISIONAL): a failed certification burns the V3 share and returns the rest to the poster.
+    let (burn, refund) =
+        kaspa_consensus_core::palw_security_certification_v1::palw_kernel_uncertified_split_v1(Rules::final_reward(&policy));
+    assert_eq!(burn + refund, Rules::final_reward(&policy), "(c) conservation");
+    assert_eq!(w.net.owed(1), poster_before + refund, "(c) the held reward less the burn share returns to the poster");
     assert!(!w.net.ledger().claims[&lie.id].convicted, "(c) NotCertified convicts nothing");
     assert_eq!(
         w.net.slashed(0),

@@ -39,7 +39,7 @@ Optional --private-probe-source-verifier-economics-policy=ABSOLUTE_BORSH supplie
 population-v1 additionally requires --private-probe-bonds=N (actual funded registry only).
 g14-v1 (the G14 collusion drill, scripts/drills/g14_collusion_drill.py): --private-probe-g14-at=N (0: every G14 fence from
   genesis; N > 0: testnet-12's shipped rules below N and the DAA-14,000 candidate set from N), --private-probe-g14-set=full|
-  route-required-only (default full), --private-probe-panel-seats=3..5 (default 3; R-core+ fixes the quorum at 3). Armed through drill arming records naming
+  route-required-only | kernel-slice (default full), --private-probe-panel-seats=3..5 (default 3; R-core+ fixes the quorum at 3). Armed through drill arming records naming
   this genesis and height, never pinned; the shipped validation still refuses the ruleset.
 Any profile: --private-probe-retirement-daa=N (N >= 2) arms palw_dns_retirement_v1 at DAA N instead of DAA 1, so a private
   run accumulates DNS-validator history before the fence (RFC-0012 §4.4); Rule E and its commitment stay at DAA 1. The
@@ -199,7 +199,8 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let g14_set = match flags.values.remove("--private-probe-g14-set").as_deref() {
         None | Some("full") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::Full,
         Some("route-required-only") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::RouteRequiredOnly,
-        Some(other) => return Err(format!("unknown G14 drill set {other} (full | route-required-only)")),
+        Some("kernel-slice") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::KernelSlice,
+        Some(other) => return Err(format!("unknown G14 drill set {other} (full | route-required-only | kernel-slice)")),
     };
     let panel_seats = flags
         .values

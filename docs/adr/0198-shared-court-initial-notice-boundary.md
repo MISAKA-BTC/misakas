@@ -18,3 +18,7 @@ Status: **Proposed / Review Required** (2026-10-21)。利用者は2026-10-21にA
 ## 判断の範囲
 
 承認範囲はAによる詳細仕様化と隔離実装である。[docs/AGENTS.md](../AGENTS.md)の設計凍結に従い、旧規則の置換や本番採択・pre統合・武装・配備へ広げない。数値foldを保つ非排他的frontier、資本・全graphの調査と検証も継続する。
+
+## 補記 2026-10-26(G14 lane CLOCK、未武装)
+
+独立レビュー第 2 部 B-1 への対処として、kernel route の claim にも本 ADR の時計を適用する方式を選んだ(「X3 は kernel slice に適用しない」案は採らない)。X3(`palw_claim_hard_deadline_v1`)の高さ以降に commit された kernel claim は、Final 後・pre-Final default 後の liability horizon を `committed + 3,120 + court_deadline + proof_grace` 以上に保つ(`misaka_palw_kernel::claim_clock`)。notice a+3,120(inclusive)に filing した告発は同じ block で裁かれ、demand の経路も horizon に収まり、horizon は a+10,000 を超えない。hard a+10,000 と notice の値は変えていない。fence 未満は byte 同一。`palw_court_clock_v2` は legacy V2 dispute record 用(`palw_legacy_public_filer_v1` が前提)なので、slice には入れていない。

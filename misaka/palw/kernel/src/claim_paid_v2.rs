@@ -217,15 +217,6 @@ pub enum PaidClaimObjectV2 {
         round: u32,
         proof: crate::claim_compact_v1::native_v4::NativeCompactProofV4,
     },
-    /// **RFC-0007 §4.1 T6** (consumer-owned; dormant `palw_paid_claim_trap_v1`, appended — every earlier discriminant and encoding
-    /// is unchanged): the producer's ONE salted commitment of a paid claim, to a planted fault (a trap) or to the null fault (an
-    /// ordinary claim), posted before the claim's beacon seal window. Past the fence every non-staged paid claim carries exactly
-    /// one and no seat is drawn without it, so its presence, size and poster say nothing. Opened, for a trap only, by the audit
-    /// mesh's existing reveal object.
-    TrapCommitment {
-        enrollment: Digest,
-        commitment: Digest,
-    },
     /// Appended index 15. The generation is signed separately from the exact
     /// historical V2 commit; none of its fields enter enrollment.id() or a draw.
     CommitWithMaterialGenerationV5 {
@@ -259,6 +250,15 @@ pub enum PaidClaimObjectV2 {
         source_policy: Digest,
         generation: crate::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5,
         original_signature: Vec<u8>,
+    },
+    /// **RFC-0007 §4.1 T6** (consumer-owned; dormant `palw_paid_claim_trap_v1`, appended index 20 — every earlier discriminant and encoding
+    /// is unchanged; 2026-10-26: moved from 15, where a merge had placed it ahead of the separately appended V5..V7 15..19): the producer's ONE salted commitment of a paid claim, to a planted fault (a trap) or to the null fault (an
+    /// ordinary claim), posted before the claim's beacon seal window. Past the fence every non-staged paid claim carries exactly
+    /// one and no seat is drawn without it, so its presence, size and poster say nothing. Opened, for a trap only, by the audit
+    /// mesh's existing reveal object.
+    TrapCommitment {
+        enrollment: Digest,
+        commitment: Digest,
     },
 }
 

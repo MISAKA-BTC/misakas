@@ -1,0 +1,34 @@
+{
+  "kind": "misaka-g14-tnode-slice/v1/requirement",
+  "family": "kernel-route",
+  "fence": "palw_probabilistic_constraints_v1",
+  "requirementIndex": 7,
+  "tItems": {
+    "T14": "BLOCKED",
+    "T15": "BLOCKED"
+  },
+  "passed": false,
+  "exitCode": 1,
+  "waiver": null,
+  "estimate": false,
+  "testOnlyValues": [
+    "drill salt",
+    "drill records (labelled, never pinned)",
+    "drill keys of one host (not independence evidence)"
+  ],
+  "sourceCommit": "c335f4e4ef01cafc3ea2953222086580b664ccdf",
+  "treeDirty": false,
+  "buildCommand": "cargo build --release -p kaspad -p misaka-cli --features kaspad/private-integration-config",
+  "binaries": {
+    "misaka-rfc12-private-node": "143b7f2a72533e3a656320402afb6b3ea64a92baff03ed49370edbfb945fc867",
+    "kaspad": "d4f6d9c5d62924892ba37db0135fb75409d2a0a45ab53c667c170766ab9abed8",
+    "misaka": "6be1a4fa234835cd2bdd8f1c8ef13e34492e50ea27f551c25d4088856edba343"
+  },
+  "startedAt": 1793009156.7214222,
+  "binariesEnd": {
+    "misaka-rfc12-private-node": "143b7f2a72533e3a656320402afb6b3ea64a92baff03ed49370edbfb945fc867",
+    "kaspad": "d4f6d9c5d62924892ba37db0135fb75409d2a0a45ab53c667c170766ab9abed8",
+    "misaka": "6be1a4fa234835cd2bdd8f1c8ef13e34492e50ea27f551c25d4088856edba343"
+  },
+  "command": "/opt/homebrew/opt/python@3.14/bin/python3.14 scripts/drills/g14_tnode_slice.py --salt f981ba331e2313ccc249a5b384f1aa89b0d1034b6834731dd141f8e08c20a198 --at 60 --work /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-g14-public-prosecution-integration-9bee39/6ce940f9-b449-48d6-9c14-cb580c868421/scratchpad/work --out-dir /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-g14-public-prosecution-integration-9bee39/6ce940f9-b449-48d6-9c14-cb580c868421/scratchpad/out"
+}

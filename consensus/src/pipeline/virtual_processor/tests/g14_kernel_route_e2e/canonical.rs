@@ -603,6 +603,9 @@ async fn claimed(w: &mut World, mode: Mode, producer: usize, lie: bool) -> (Clai
     let claim = w.claim(producer, &job, lie).await;
     let seats = match mode {
         Mode::Panel => {
+            // lane SEED: under Panel=1 the seat is drawn at the first block holding a seed anchor recorded after the commit, not at
+            // the commit. Attempt blocks (which record round seed anchors) until the draw happens; the rule itself is unchanged.
+            w.until_seated_v1(&claim.id).await;
             let seats = w.seats(&claim.id);
             // lane F03k2: the seat count is the route's policy at the draw (interim 3-of-3, or 1 in a Panel=1 world).
             let (expected, _) = w.net.bundle.state.kernel_route_seats_and_quorum_v1(w.net.daa());
@@ -623,6 +626,8 @@ async fn claimed(w: &mut World, mode: Mode, producer: usize, lie: bool) -> (Clai
 /// **One canonical G14 case** (module doc): `mode` × how the participant's node starts × the outcome the participant reaches.
 async fn canonical(mode: Mode, start: Start, outcome: Outcome) {
     kaspa_core::log::try_init_logger("warn");
+    // The inclusion-premise override is process-wide: run on the production premise, serialized against the TEST-ONLY override.
+    let _production = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::production_guard_v1();
     let mut w = world(mode).await;
     let funding = newcomer_funding(&w.net);
     let before = w.net.collateral(0) - Rules::admission_cost(&w, mode);
@@ -1163,14 +1168,27 @@ async fn lie_convicted_using(mode: Mode, start: Start, lie: Lie, commitments_onl
         Lie::Decode => assert!(matches!(proof, ProsecutionV1::Decode(_)), "{lie:?}: the decode court's fault"),
         _ => assert!(matches!(proof, ProsecutionV1::Kernel(_)), "{lie:?}: a kernel relation's fault"),
     }
-    let seats_slashed: Vec<(usize, u64)> = seats.iter().map(|c| (*c, w.net.slashed(*c))).collect();
+    // G-K1 (5bdd427fb): each covering seat's passing receipt holds a signer liability lock, charged at the conviction.
+    // Same rule as the S3b assert updated in 22c3daa4f; this second harness path was not updated there.
+    let seats_slashed: Vec<(usize, u64, u64)> = seats
+        .iter()
+        .map(|c| {
+            use kaspa_consensus_core::palw_g14_lane_closure_v1::*;
+            let key = palw_kernel_signer_lock_key_v1(&w.net.kid(*c), &claim.id);
+            let row = w.net.api().expect("the route").aux.get(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key)).cloned();
+            let lock = borsh::from_slice::<PalwKernelSignerLockRowV1>(&row.expect("every covering seat holds a G-K1 lock"))
+                .expect("a lock row")
+                .amount;
+            (*c, w.net.slashed(*c), lock)
+        })
+        .collect();
     Rules::file_proof(&mut node, NEWCOMER, claim.id, proof).await;
     sync(&node, &mut w.net).await;
     assert!(w.net.ledger().claims[&claim.id].convicted, "{lie:?}: convicted");
     assert_eq!(w.net.collateral(0), before - slashed, "{lie:?}: the REAL producer bond lost the reservation");
     assert_eq!(w.net.owed(NEWCOMER), Rules::bounty(&policy, slashed), "{lie:?}: the participant's share");
-    for (card, before) in &seats_slashed {
-        assert_eq!(w.net.slashed(*card), *before, "the colluding seats are not charged");
+    for (card, before, lock) in &seats_slashed {
+        assert_eq!(w.net.slashed(*card), *before + *lock, "{lie:?}: each colluding seat is charged exactly its G-K1 signer lock");
     }
     let read = Rpc::of(&node.chain).claim(&claim.id);
     let phase = if after_final { "Final" } else { "Convicted" };
@@ -1342,6 +1360,8 @@ async fn g14_canonical_opv_a_borrowed_trace_of_another_prompt_is_refused_at_incl
 
 /// lane SPINE (2026-10-26): the Panel=1 kernel-route vertical slice, stage by stage.
 mod cert;
+/// lane CLOCK (2026-10-26): the kernel route claim on X3's notice / hard clock.
+mod clock;
 mod f03k;
 /// lane SEED (2026-10-26): the Panel=1 seat draw and sample seed from a post-commit seed anchor (G14 review MAJOR-1).
 mod seed;

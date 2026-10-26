@@ -45,6 +45,20 @@ macro_rules! palw_full_activation_bare_entry_v1 {
     };
 }
 
+/// `palw_bond_budget_v1` (ADR-0176) as an entry: the height with the lane VAL 2026-10-26 approved V3 policy (the 2026-10-22 V12-b
+/// 目安, `palw_bond_budget_approved_policy_digests_v1`, replaced by ADR-0176 Stage 1 measurement), then every mirror. Settlement once
+/// needs it at or below (lane CLOCK, coordinator 2026-10-26).
+pub const PALW_T12_FULL_BOND_BUDGET_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_bond_budget_v1",
+    set: |params, at| {
+        params.palw_bond_budget_v1 = at.map(|activation| crate::palw_bond_budget_v1::PalwBondBudgetFenceV1 {
+            activation,
+            policy: crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1(),
+        });
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
+
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY, palw_probabilistic_constraints_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_KERNEL_ROUTE_PANEL_ONE_ENTRY, palw_kernel_route_panel_one_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_SIGNED_REGISTRATION_ENTRY, palw_signed_registration_v1);
@@ -106,7 +120,18 @@ pub const PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY: PalwPostLaunchFenceV1 = PalwP
                 installed.activation = at;
                 Some(installed)
             }
-            (Some(at), None) => Some(crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at)),
+            // G14 lane CLOCK (review part 2, B-1): the DECIDED policy — the windows' composition with the user's 2026-10-22 目安
+            // (`PALW_X3_DECIDED_DELTA_TERMS_V1`, `c_retain` 36,058; replaced by Codex's M-X3 measurement) — never the probe, wherever
+            // a V2 bundle supplies the windows. Without one (no V2 consensus) the probe stays and validation refuses it.
+            (Some(at), None) => Some(match &params.palw_consensus_mode {
+                crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                    match crate::palw_ruling_fences_v1::palw_x3_decided_policy_v1(&bundle.state, at) {
+                        Ok(policy) => crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1 { activation: at, policy },
+                        Err(_) => crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at),
+                    }
+                }
+                _ => crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at),
+            }),
         };
         palw_full_activation_sync_mirrors_v1(params);
     },
@@ -213,6 +238,7 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_COURT_MODEL_SCOPE_ENTRY,
     PALW_T12_FULL_PUBLIC_EVIDENCE_REWARD_ENTRY,
     PALW_T12_FULL_FP_ANSWER_ACCOUNTING_ENTRY,
+    PALW_T12_FULL_BOND_BUDGET_ENTRY,
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
     PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
     PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY,
@@ -296,8 +322,7 @@ pub fn palw_t12_arm_full_activation_at_v1(params: &mut Params, at: Option<u64>) 
 /// **The vertical slice (coordinator plan 2026-10-26)** — the subset of [`PALW_T12_FULL_ACTIVATION_FENCES_V1`] that closes G14 for ONE
 /// slice: the kernel route with Panel=1, its claim deadline, settlement once, Gate C (per-claim drawn approval), and the route-required
 /// fence that leaves every other family route-absent (no new reward, G-01 (b)). Same order as the full list, so each entry's prerequisite
-/// stays earlier. NOT on it, and still refused by validation where needed: `palw_bond_budget_v1` (settlement once needs it at or below;
-/// value lane). Which genesis class and job shape the slice admits is NOT a fence and NOT a record field: records are keyed by (fence,
+/// stays earlier. The bond budget is on it (settlement once needs it at or below; lane VAL's approved policy). Which genesis class and job shape the slice admits is NOT a fence and NOT a record field: records are keyed by (fence,
 /// network, height) only, so the class must be carried by the route's own policy (lane SPINE names it). Nothing here arms anything.
 pub const PALW_T12_KERNEL_SLICE_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     crate::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY,
@@ -306,6 +331,12 @@ pub const PALW_T12_KERNEL_SLICE_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
     PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,
     PALW_T12_FULL_KERNEL_ROUTE_PANEL_ONE_ENTRY,
+    // G14 lane CLOCK (review part 2, M-1): the court scope's 4-dismissed-per-accuser-per-claim cap (`palw_provider_court_v1`), the
+    // same record gate as the kernel route above it.
+    PALW_T12_FULL_PROVIDER_COURT_ENTRY,
+    // ADR-0176 bond budget with the approved V3 目安 policy: settlement once needs it at or below.
+    PALW_T12_FULL_BOND_BUDGET_ENTRY,
+    // X3 with the decided policy; past it the kernel route's claims run on its notice / hard clock (`misaka_palw_kernel::claim_clock`).
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
     PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
     PALW_T12_FULL_GATE_C_ENTRY,

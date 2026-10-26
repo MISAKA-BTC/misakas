@@ -1,0 +1,159 @@
+{
+  "kind": "misaka-g14-tnode-slice/v1",
+  "sourceCommit": "c335f4e4ef01cafc3ea2953222086580b664ccdf",
+  "treeDirty": false,
+  "buildCommand": "cargo build --release -p kaspad -p misaka-cli --features kaspad/private-integration-config",
+  "binaries": {
+    "misaka-rfc12-private-node": "143b7f2a72533e3a656320402afb6b3ea64a92baff03ed49370edbfb945fc867",
+    "kaspad": "d4f6d9c5d62924892ba37db0135fb75409d2a0a45ab53c667c170766ab9abed8",
+    "misaka": "6be1a4fa234835cd2bdd8f1c8ef13e34492e50ea27f551c25d4088856edba343"
+  },
+  "startedAt": 1793009156.7214222,
+  "binariesEnd": {
+    "misaka-rfc12-private-node": "143b7f2a72533e3a656320402afb6b3ea64a92baff03ed49370edbfb945fc867",
+    "kaspad": "d4f6d9c5d62924892ba37db0135fb75409d2a0a45ab53c667c170766ab9abed8",
+    "misaka": "6be1a4fa234835cd2bdd8f1c8ef13e34492e50ea27f551c25d4088856edba343"
+  },
+  "command": "/opt/homebrew/opt/python@3.14/bin/python3.14 scripts/drills/g14_tnode_slice.py --salt f981ba331e2313ccc249a5b384f1aa89b0d1034b6834731dd141f8e08c20a198 --at 60 --work /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-g14-public-prosecution-integration-9bee39/6ce940f9-b449-48d6-9c14-cb580c868421/scratchpad/work --out-dir /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-g14-public-prosecution-integration-9bee39/6ce940f9-b449-48d6-9c14-cb580c868421/scratchpad/out",
+  "at": 60,
+  "ledger": [
+    {
+      "t": "T01",
+      "what": "honest miner + wrong challenger through shared-original duties and funded outcomes",
+      "roles": "producer P (card 0) + hosted Panel=1 seat (card 1) + bonded outsider O as challenger",
+      "status": "NOT-IMPLEMENTED",
+      "note": "needs a node producer that emits KernelClaim for the slice class under g14-v1 and a node-side wrong-challenge filer; in-process: canonical/spine.rs, cert.rs",
+      "rows": {}
+    },
+    {
+      "t": "T02",
+      "what": "permanent miner silence, supplied opportunity, duty authority, eligible default",
+      "roles": "P stopped for good after acceptance; O/relay observe the default",
+      "status": "NOT-IMPLEMENTED",
+      "note": "needs kernel-slice claims on the node and the CLOCK lane deadlines (palw_provider_court_v1 / claim hard deadline)",
+      "rows": {}
+    },
+    {
+      "t": "T03",
+      "what": "forged signatures and fake Panel completion reports rejected before any monetary effect",
+      "roles": "P submits forged seat signature via wRPC; all nodes refuse",
+      "status": "NOT-IMPLEMENTED",
+      "note": "no node-side injection flag for a forged kernel-route seat report; in-process: canonical/cert.rs",
+      "rows": {}
+    },
+    {
+      "t": "T04",
+      "what": "normal-tx / paid-court / invalid-codec floods; bounded native intake",
+      "roles": "flood driver against P and relay F",
+      "status": "NOT-IMPLEMENTED",
+      "note": "no flood driver exists for the native intake; needs V-values (intake bounds)",
+      "rows": {}
+    },
+    {
+      "t": "T05",
+      "what": "every owner occupied by colluders, one external verifier finishes through paid public ingress",
+      "roles": "colluding P + Panel=1 seat, outsider O",
+      "status": "NOT-IMPLEMENTED",
+      "note": "g14_collusion_drill convicts on the LEGACY route only (tamper leaf on V2 attempts); the kernel route has no node tamper flag",
+      "rows": {}
+    },
+    {
+      "t": "T06",
+      "what": "last inclusive notice and latest lawful response fit the original hard deadline",
+      "roles": "P, O",
+      "status": "WAITING-INTEGRATION",
+      "note": "WAITING-INTEGRATION: CLOCK lane (kernel route deadline/clock)",
+      "rows": {}
+    },
+    {
+      "t": "T07",
+      "what": "-1 / = / +1 at every connected native deadline",
+      "roles": "P, O",
+      "status": "WAITING-INTEGRATION",
+      "note": "WAITING-INTEGRATION: CLOCK lane",
+      "rows": {}
+    },
+    {
+      "t": "T08",
+      "what": "miner PC offline, distinct court signer, third-party relay with current-duty authority",
+      "roles": "P offline, signer S, relay F",
+      "status": "NOT-IMPLEMENTED",
+      "note": "needs kernel-slice claims on the node; no separate court-signer process flag for the kernel route",
+      "rows": {}
+    },
+    {
+      "t": "T09",
+      "what": "shortest signed dependency leases, multiple claims sharing one bond, aggregate reservation",
+      "roles": "P, O",
+      "status": "WAITING-INTEGRATION",
+      "note": "WAITING-INTEGRATION: CLOCK lane (palw_provider_court_v1 leases); settlement once needs palw_bond_budget_v1 values",
+      "rows": {}
+    },
+    {
+      "t": "T10",
+      "what": "internal numerical fold-only lie rejected without dropping fold arithmetic",
+      "roles": "P lying, all nodes",
+      "status": "NOT-IMPLEMENTED",
+      "note": "in-process only (fold); no node fault flag for the kernel route",
+      "rows": {}
+    },
+    {
+      "t": "T11",
+      "what": "1..10,000 concurrent pursuits, last stage alone false",
+      "roles": "many claims, O",
+      "status": "NOT-IMPLEMENTED",
+      "note": "needs kernel-slice claim volume on the node; F02 lane aux table 150",
+      "rows": {}
+    },
+    {
+      "t": "T12",
+      "what": "hard-boundary concentration with every accepted duty funded",
+      "roles": "P, O",
+      "status": "WAITING-INTEGRATION",
+      "note": "WAITING-INTEGRATION: CLOCK + F02",
+      "rows": {}
+    },
+    {
+      "t": "T13",
+      "what": "oldest claim loses service, independent claim still progresses, no false slash",
+      "roles": "P, O",
+      "status": "NOT-IMPLEMENTED",
+      "note": "needs kernel-slice claims on the node",
+      "rows": {}
+    },
+    {
+      "t": "T14",
+      "what": "shared path across reorg / restart / pruned IBD",
+      "roles": "P, Q (partition), restart P, fresh relay F",
+      "status": "BLOCKED",
+      "note": "real processes: partition+merge across H, restart over own app dir, fresh relay IBD from genesis (pruned IBD: not forced at this chain length \u2014 recorded as not shown) | blocked: the kernel-slice ruleset does not build: private RFC12 node: the drill ruleset fails the whole V2 validation with its drill records: Invalid(\"palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it\")\n",
+      "rows": {
+        "fence:F2": null,
+        "fence:F3": null,
+        "fence:F4": null,
+        "fence:F7": null
+      }
+    },
+    {
+      "t": "T15",
+      "what": "old/new fence boundary, old claims keep old rules, shipping identity unchanged, activation refusal remains",
+      "roles": "P, Q, F; shipped binaries hashed before/after",
+      "status": "BLOCKED",
+      "note": "real processes cross H on the shipped release build | blocked: the kernel-slice ruleset does not build: private RFC12 node: the drill ruleset fails the whole V2 validation with its drill records: Invalid(\"palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it\")\n",
+      "rows": {
+        "fence:F0": null,
+        "fence:F1": null,
+        "fence:F5": null,
+        "fence:F6": null,
+        "profile:shipped-refuses": {
+          "status": "BLOCKED",
+          "evidence": {
+            "exit": 1
+          },
+          "note": "private RFC12 node: the drill ruleset fails the whole V2 validation with its drill records: Invalid(\"palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it\")\n"
+        }
+      }
+    }
+  ],
+  "blocked": "the kernel-slice ruleset does not build: private RFC12 node: the drill ruleset fails the whole V2 validation with its drill records: Invalid(\"palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it\")\n"
+}

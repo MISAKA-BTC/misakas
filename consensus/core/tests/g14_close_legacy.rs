@@ -838,7 +838,7 @@ fn testnet12_identity_did_not_move() {
     let (params, identity, schedule) =
         (t12.consensus_params_id().to_string(), t12.consensus_identity_id().to_string(), t12.consensus_schedule_id().to_string());
     eprintln!("[t12 ids] params {params} identity {identity} schedule {schedule}");
-    assert!(params.starts_with("5ee7fd8e") && identity.starts_with("5de80e64") && schedule.starts_with("1678e073"));
+    assert!(params.starts_with("ef379378") && identity.starts_with("5de80e64") && schedule.starts_with("9ef2b1a7"));
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     for p in [launch, t12] {
         assert_eq!((p.palw_legacy_public_filer_v1, p.palw_legacy_held_da_v2), (None, None));

@@ -1442,7 +1442,7 @@ def main():
     ap.add_argument('--positive-finals', type=int, default=3, help='positive: stop once this many claims past the fence are Final')
     ap.add_argument('--positive-every', type=int, default=180)
     ap.add_argument('--at', type=int, default=40, help='cross mode: the fence height H (DAA)')
-    ap.add_argument('--set', choices=['full', 'route-required-only'], default='full')
+    ap.add_argument('--set', choices=['full', 'route-required-only', 'kernel-slice'], default='full')
     ap.add_argument('--seats', type=int, default=3)
     ap.add_argument('--salt', required=True, help='64 hex, this drill only (openssl rand -hex 32)')
     ap.add_argument('--work', required=True, help='fresh directory for app dirs, logs and the keyring (scratch, never ~/.misaka)')
