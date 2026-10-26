@@ -93,3 +93,52 @@ async fn g14_clock_x3_outsider_convicts_after_the_old_kernel_horizon() {
 async fn g14_clock_control_without_x3_the_old_horizon_refuses_the_same_filing() {
     late_outsider(false, 50).await;
 }
+
+/// **Honest under X3**: the claim reaches Final, is never convicted, its producer is not slashed, and its horizon carries the
+/// clock's floor (the honest producer's reservation is held through the notice window, the cost of B-1's guarantee).
+#[tokio::test]
+async fn g14_clock_x3_honest_claim_is_final_unslashed_and_held_to_the_notice_floor() {
+    kaspa_core::log::try_init_logger("warn");
+    let mode = Mode::Panel;
+    let mut w = World::on(Net::over_cfg(clock_config(true), TestConsensus::new)).await;
+    let before = w.net.collateral(0);
+    let (claim, seats) = claimed(&mut w, mode, 0, false).await;
+    assert_eq!(seats.len(), 1, "Panel=1");
+    let floor = final_floor(&w, mode, &claim.id);
+    let policy = w.policy();
+    w.net.beat_to(floor).await;
+    assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&claim.id));
+    let row = w.net.ledger().claims[&claim.id].clone();
+    assert!(!row.convicted, "honest: never convicted");
+    let until = row.liability_until.expect("Final sets the horizon");
+    assert!(until >= row.committed_daa + 3_120 + policy.court_deadline_daa + policy.proof_grace_daa, "the clock's floor: {until}");
+    assert!(until <= row.committed_daa + 10_000, "inside the hard window: {until}");
+    assert_eq!(w.net.slashed(0), 0, "honest: nothing slashed");
+    assert!(w.net.collateral(0) <= before, "only admission costs left the bond");
+}
+
+/// **A lie convicted before Final under X3** (inside the notice window): the reservation is slashed and the outsider is paid.
+#[tokio::test]
+async fn g14_clock_x3_outsider_convicts_a_lie_before_final() {
+    kaspa_core::log::try_init_logger("warn");
+    let mode = Mode::Panel;
+    let mut w = World::on(Net::over_cfg(clock_config(true), TestConsensus::new)).await;
+    let before = w.net.collateral(0);
+    let (claim, seats) = claimed(&mut w, mode, 0, true).await;
+    let slashed = reservation(&w, mode);
+    let policy = w.policy();
+    assert!(!matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }), "still before Final");
+    let outsider = w.outsiders(&claim, &seats, 1)[0];
+    let fresh = Rpc::of(&w.net.chain).verifier(&claim.id, 0x5A);
+    let model =
+        acquire(&[ModelPeer::Serves(w.fx.params.clone())], &registered_root(&fresh, &claim.id)).expect("a peer serves the model");
+    let da = claim.published(&w.fx, &[]);
+    let OutsiderFindingV1::Prosecute(proof) = fresh.check(claim.id, &da, &model) else {
+        panic!("the outsider's verifier finds the lie from public material")
+    };
+    let owed_before = w.net.owed(outsider);
+    Rules::file_proof(&mut w.net, outsider, claim.id, proof).await;
+    assert!(w.net.ledger().claims[&claim.id].convicted, "convicted before Final");
+    assert_eq!(w.net.collateral(0), before - slashed, "the producer bond lost the reservation");
+    assert_eq!(w.net.owed(outsider) - owed_before, Rules::bounty(&policy, slashed), "the outsider's bounty");
+}
