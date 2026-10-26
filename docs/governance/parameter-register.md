@@ -176,3 +176,14 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 - **本番 Gate C policy — m/k = 75/41 ユーザー承認 2026-10-26、目安から**: `PalwSecurityCertificationPolicyV1::approved_v1(day_daa)`（他の項は RFC-0018 の設計値）。f = 0.25 で誤認証 3.99e-8/claim、4,096 position 上限で 54 件/日・年 7.9e-4、正直認証 0.9926（応答 90%）。e2e の TEST_ONLY policy はこれに置き換えられる。
 - **V1〜V5、V11、inclusion_delay_daa — ユーザー承認済みの目安 2026-10-26、実測で置換**: 値は「2026-10-26 lane VAL」節（V1 は 1 packet/DAA、V11 ρ_court 3,125、inclusion_delay_daa 4 DAA を含む改定後の値）。measured record・arming record には入れない。
 - 範囲: どれも本番 preset には入れていない（slice の武装は統括の統合時）。panel v3 の fence は未武装なので、approved 一覧が consensus に効くのは panel v3 か slice が武装されてから。
+
+## 2026-10-26 lane PANELDA — PanelDa 必須公開の目安（未実測・未配線、fence `palw_panel_da_disclosure_v1` は未武装）
+
+ADR-0206(proposed)。値は `consensus/core/src/palw_g14_values_v1.rs` 末尾。すべて目安。
+
+| 値 | 目安 | 根拠 | 見直し条件 |
+|---|---|---|---|
+| `PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1` | 1,040 DAA | notice 窓 3,120 の 1/3。外部者に 2,080 DAA が残る | notice 窓・turn 期限・外部者 replay 実測 |
+| `PALW_G14_PANEL_DA_OUTSIDER_MIN_WINDOW_DAA_V1` | 2,000 DAA | 包含遅延 4+最大 class replay+turn 42 の 2 倍を大きく上回る | 外部者 replay 実測 |
+| `PALW_G14_PANEL_DA_MAX_DISCLOSED_IDS_V1` | 32,768 | t12 最大 8K class に余裕 | 長 context class の提供 |
+| `PALW_G14_PANEL_DA_DISCLOSURE_DEPOSIT_SOMPI_V1` | 13,107,200 sompi | 2 × 32,768 × 4 B × 50 sompi/B | 料率・最大 ids |

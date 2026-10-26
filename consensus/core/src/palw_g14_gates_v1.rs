@@ -620,6 +620,29 @@ impl Params {
         Ok(())
     }
 
+    /// **PanelDa mandatory disclosure gate (DORMANT, lane g14-fam-panelda, ADR-0206 proposed).** Needs `palw_panel_da` and
+    /// `palw_court_clock_v2` in force at or below it, and window arithmetic that leaves the outsider its notice window. **Refused when
+    /// armed on any network for now**: the disclosure carrier, its fold row and the deposit lock are not wired (lane report), so the
+    /// family is implemented-as-rules, not activatable.
+    pub fn validate_palw_panel_da_disclosure_v1(&self) -> Result<(), PalwModeV2Error> {
+        let Some(at) = self.palw_panel_da_disclosure_v1_fence() else { return Ok(()) };
+        let below = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at.daa_score());
+        if !below(self.palw_panel_da) || !below(self.palw_court_clock_v2) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_panel_da_disclosure_v1 needs palw_panel_da and palw_court_clock_v2 in force at or below it (lane g14-fam-panelda)",
+            ));
+        }
+        if !crate::palw_panel_da_disclosure_v1::palw_panel_da_disclosure_window_sound_v1(
+            crate::palw_g14_values_v1::PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1,
+            crate::palw_g14_values_v1::PALW_G14_PANEL_DA_OUTSIDER_MIN_WINDOW_DAA_V1,
+        ) {
+            return Err(PalwModeV2Error::Invalid("palw_panel_da_disclosure_v1: the deadline leaves the outsider no notice window"));
+        }
+        Err(PalwModeV2Error::Invalid(
+            "palw_panel_da_disclosure_v1: the disclosure carrier, fold row and deposit lock are not wired; arming is refused (ADR-0206 proposed)",
+        ))
+    }
+
     /// **The TIR frame cost gate** (audit §10): `Ok` when `palw_tir_public_conviction_v1` is not armed; otherwise the ruleset must
     /// carry a well-formed `palw_tir_frame_cost_v1` and — unless its genesis is an isolated G14 test genesis — a record in `records`
     /// must name this network, the fence's height and exactly that model.
@@ -702,6 +725,7 @@ impl Params {
             court_capacity_from: self.palw_court_capacity_v1_fence().map(|f| f.activation.daa_score()),
             kernel_panel_one_from: height(self.palw_kernel_route_panel_one_v1_fence()),
             gate_c_from: height(self.palw_independently_work_certified_v1),
+            panel_da_disclosure_from: self.palw_panel_da_disclosure_v1_fence().map(|f| f.daa_score()),
         })
     }
 
@@ -771,6 +795,8 @@ pub struct PalwG14RouteMirrorV1 {
     pub kernel_panel_one_from: Option<u64>,
     /// Gate C, `palw_independently_work_certified_v1` (per-claim drawn approval; `KernelRoutePanelOne`).
     pub gate_c_from: Option<u64>,
+    /// `palw_panel_da_disclosure_v1` (lane g14-fam-panelda; `FpPanelDaDisclosure`).
+    pub panel_da_disclosure_from: Option<u64>,
 }
 
 fn in_force(height: Option<u64>, daa: u64) -> bool {
@@ -800,6 +826,9 @@ impl PalwG14RouteMirrorV1 {
             }
             PalwG14RouteFamilyV1::NonPublicEvidence => false,
             PalwG14RouteFamilyV1::KernelRoutePanelOne => in_force(self.kernel_panel_one_from, d) && in_force(self.gate_c_from, d),
+            // Lane g14-fam-panelda: the disclosure duty itself; the disclosed material is then judged by the public FP families the
+            // job also names (validation keeps `palw_panel_da` and `palw_court_clock_v2` at or below this fence).
+            PalwG14RouteFamilyV1::FpPanelDaDisclosure => in_force(self.panel_da_disclosure_from, d),
         }
     }
 }
@@ -814,7 +843,8 @@ impl PalwG14RouteMirrorV1 {
 /// | `FpConstraint` | FP Job V6 (constraint) | the staged Constraint family: `palw_staged_public_court_v1` + LG14-A |
 /// | `FpPrefix` | prefix state / inherit (11 / 12) | the staged PublicPrefix family: `palw_staged_public_court_v1` + LG14-A |
 /// | `FpTokenizer` | every FP job (its ids ↔ text through its tokenizer) | the staged raw-tokenizer family: `palw_staged_public_court_v1` + LG14-A |
-/// | `NonPublicEvidence` | FP Job V5 (images / source ids), PanelDa | none can exist (the material never reaches the chain) |
+/// | `NonPublicEvidence` | FP Job V5 (images / source ids); PanelDa below `palw_panel_da_disclosure_v1` | none can exist (the material never reaches the chain) |
+/// | `FpPanelDaDisclosure` | a PanelDa TEXT job accepted past `palw_panel_da_disclosure_v1` (with the public FP families it names) | mandatory disclosure by `a + 1,040` (ADR-0206 proposed) |
 ///
 /// The legacy FP lane's selection proofs are refused on FP claims and contradiction 14–18 sit under LG14-A (R5, R6), so even LG14-A +
 /// LG14-B give an unframed FP claim no selection route: a plain FP claim regains reward only through the frame.
@@ -832,6 +862,11 @@ pub enum PalwG14RouteFamilyV1 {
     /// (`palw_independently_work_certified_v1`, per-claim drawn approval) are both in force. Which class and job shape a claim must have to
     /// belong to it is decided at the claim's classifier (lane SPINE), not here.
     KernelRoutePanelOne,
+    /// **PanelDa text prompts under mandatory disclosure** (lane g14-fam-panelda, ADR-0206 proposed; appended, no variant renumbered,
+    /// not serialized or hashed). Armed where `palw_panel_da_disclosure_v1` is in force: the prompt ids must be public by
+    /// `a + PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1`, after which the claim is judged through the public FP families (③〜⑥) it also
+    /// names. V5 (image) jobs never route here.
+    FpPanelDaDisclosure,
 }
 
 /// **The fences a route family's arming needs** — the names a record set must cover before the family can be armed (each fence has its
@@ -853,6 +888,9 @@ pub fn palw_g14_route_family_fences_v1(family: PalwG14RouteFamilyV1) -> &'static
             &["palw_staged_public_court_v1", "palw_legacy_public_filer_v1", "palw_g14_route_required_v1"]
         }
         PalwG14RouteFamilyV1::NonPublicEvidence => &[],
+        PalwG14RouteFamilyV1::FpPanelDaDisclosure => {
+            &["palw_panel_da", "palw_court_clock_v2", "palw_panel_da_disclosure_v1", "palw_g14_route_required_v1"]
+        }
     }
 }
 
@@ -868,6 +906,31 @@ pub fn palw_g14_fp_route_families_v1(job: &PalwFreePromptJobV3) -> Vec<PalwG14Ro
         return vec![PalwG14RouteFamilyV1::NonPublicEvidence];
     }
     let mut families = vec![PalwG14RouteFamilyV1::FpSelection];
+    if job.is_constraint() {
+        families.push(PalwG14RouteFamilyV1::FpConstraint);
+    }
+    if job.is_prefix_state() {
+        families.push(PalwG14RouteFamilyV1::FpPrefix);
+    }
+    families.push(PalwG14RouteFamilyV1::FpTokenizer);
+    families
+}
+
+/// **The route families an FP job needs at `accepted_daa` under `mirror`** (lane g14-fam-panelda). Identical to
+/// [`palw_g14_fp_route_families_v1`] except for a PanelDa TEXT job where `palw_panel_da_disclosure_v1` is in force: that job needs
+/// [`PalwG14RouteFamilyV1::FpPanelDaDisclosure`] plus the public families a PublicDa job of the same shape needs. Below that fence
+/// (and for every V5 job) the answer is byte-for-byte the old one, `NonPublicEvidence`.
+pub fn palw_g14_fp_route_families_at_v1(
+    job: &PalwFreePromptJobV3,
+    mirror: &PalwG14RouteMirrorV1,
+    accepted_daa: u64,
+) -> Vec<PalwG14RouteFamilyV1> {
+    if !crate::palw_panel_da_disclosure_v1::palw_panel_da_disclosable_job_v1(job)
+        || !mirror.route_armed(PalwG14RouteFamilyV1::FpPanelDaDisclosure, accepted_daa, false)
+    {
+        return palw_g14_fp_route_families_v1(job);
+    }
+    let mut families = vec![PalwG14RouteFamilyV1::FpPanelDaDisclosure, PalwG14RouteFamilyV1::FpSelection];
     if job.is_constraint() {
         families.push(PalwG14RouteFamilyV1::FpConstraint);
     }
@@ -931,7 +994,7 @@ pub fn palw_g14_route_fp_refusal_v1(
     let Some(commitment) = commitment else {
         return Some((PALW_G14_ROUTE_ABSENT_CODE_V1, "palw_g14_route_required_v1: no signed commitment shows this claim's job".into()));
     };
-    let families = palw_g14_fp_route_families_v1(&commitment.job);
+    let families = palw_g14_fp_route_families_at_v1(&commitment.job, &mirror, accepted_daa);
     let missing: Vec<PalwG14RouteFamilyV1> =
         families.iter().copied().filter(|f| !mirror.route_armed(*f, accepted_daa, framed)).collect();
     if missing.is_empty() {

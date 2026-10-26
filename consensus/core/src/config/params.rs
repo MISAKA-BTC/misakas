@@ -2470,6 +2470,12 @@ pub struct Params {
     /// `a + 10,000` once disputed — one rooted extension); older claims keep the old clock (T15). `None` on every shipped preset;
     /// hashed Some-only. Needs `palw_legacy_public_filer_v1` at or below it (validation).
     pub palw_court_clock_v2: Option<ForkActivation>,
+    /// **PanelDa mandatory disclosure (DORMANT, lane g14-fam-panelda; ADR-0206 proposed, arming is the user's decision).** A PanelDa
+    /// free-prompt claim accepted at/after this height owes the public disclosure of its prompt ids (bound by `prompt_token_ids_hash`)
+    /// by `a + PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1`; once disclosed it rides the public FP routes, and an undisclosed claim defaults
+    /// (no reward, disclosure deposit forfeited, never a computation conviction). `None` on every shipped preset; hashed Some-only.
+    /// Needs `palw_panel_da` and `palw_court_clock_v2` at or below it (validation).
+    pub palw_panel_da_disclosure_v1: Option<ForkActivation>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -5126,6 +5132,10 @@ impl Params {
     pub fn palw_court_clock_v2_fence(&self) -> Option<ForkActivation> {
         self.palw_court_clock_v2.filter(|f| *f != ForkActivation::never())
     }
+    /// PanelDa mandatory disclosure fence (dormant: `None` on every shipped preset).
+    pub fn palw_panel_da_disclosure_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_panel_da_disclosure_v1.filter(|f| *f != ForkActivation::never())
+    }
 
     pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
         let never = ForkActivation::never();
@@ -6201,6 +6211,7 @@ impl Params {
             palw_state_row_map_v1: self.palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1: self.palw_kernel_route_panel_one_v1,
             palw_court_clock_v2: self.palw_court_clock_v2,
+            palw_panel_da_disclosure_v1: self.palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -7382,6 +7393,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_court_clock_v2: None,
+    palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7755,6 +7767,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_court_clock_v2: None,
+    palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -8110,6 +8123,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_court_clock_v2: None,
+    palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13648,6 +13662,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_court_clock_v2: None,
+    palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
