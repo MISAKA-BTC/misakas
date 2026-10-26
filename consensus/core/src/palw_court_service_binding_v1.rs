@@ -68,6 +68,16 @@ impl CourtServiceInclusionPremiseV1 {
     pub fn id(&self) -> Hash64 {
         keyed(b"misaka-palw/court-service-inclusion-premise/v1", &borsh::to_vec(self).expect("premise serialization"))
     }
+    /// **G14 S3c''' (kernel route):** a reserved unit `unit` of a packet whose service interval is `[release_daa, service_before)` is
+    /// the producer's opportunity to answer a demand due at `response_deadline_daa` under this premise — the same F02 rule as
+    /// [`Self::admits_supplied_unit_v1`]: inside the duty window and `unit + inclusion_delay_daa <= response_deadline_daa`.
+    pub fn admits_reserved_unit_v1(&self, release_daa: u64, service_before: u64, unit: u64, response_deadline_daa: u64) -> bool {
+        self.version == 1
+            && release_daa <= unit
+            && unit < service_before
+            && unit.checked_add(self.inclusion_delay_daa).is_some_and(|included| included <= response_deadline_daa)
+    }
+
     /// A supplied unit at `daa` is the actor's opportunity for the duty `clock` under this premise.
     pub fn admits_supplied_unit_v1(&self, clock: &CourtDutyClockV1, daa: u64) -> bool {
         self.version == 1

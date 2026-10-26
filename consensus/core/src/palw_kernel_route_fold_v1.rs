@@ -154,6 +154,63 @@ impl PalwChainStateV2 {
             .collect()
     }
 
+    /// **G14 S3c''' (lane LEGACY, 2026-10-27): the kernel claims whose producer default may NOT be attributed now**, with the
+    /// horizon at which a held default is released without slash. [`Self::kernel_court_default_held_v1`]'s set, plus every kernel
+    /// claim with an open demand for which the producer had no opportunity to answer:
+    ///
+    /// * premise typed-missing: every demanded kernel claim is held (bound: to its hard deadline; unbound: to the demand's
+    ///   deadline plus the ledger's court + proof-grace + liability tail);
+    /// * premise adopted, claim bound: held unless some reserved packet's assigned unit `u` has recorded supply, lies inside the
+    ///   packet's service interval and satisfies `u + inclusion_delay_daa <= ` the demand's response deadline
+    ///   ([`crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1::admits_reserved_unit_v1`]).
+    ///
+    /// Residual (reported): a kernel claim with NO court service binding under an adopted premise keeps the kernel ledger's
+    /// deadline default until RFC-0026 S1/S2 binds every kernel claim at admission.
+    pub fn kernel_court_default_held_v2(
+        &self,
+        premise: Option<&crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1>,
+        ledger: &KernelLedgerV1,
+    ) -> std::collections::BTreeMap<[u8; 64], u64> {
+        let mut held = self.kernel_court_default_held_v1(premise);
+        let Some(k) = self.kernel_route.as_ref() else { return held };
+        let mut due: std::collections::BTreeMap<[u8; 64], u64> = std::collections::BTreeMap::new();
+        for ((claim, ..), demand) in ledger.demands.iter() {
+            let d = due.entry(*claim).or_insert(0);
+            *d = (*d).max(demand.deadline_daa);
+        }
+        let service = self.court_service_state_v1();
+        let tail = ledger
+            .policy
+            .court_deadline_daa
+            .saturating_add(ledger.policy.proof_grace_daa)
+            .saturating_add(ledger.policy.liability_daa);
+        for (claim, deadline) in due {
+            if held.contains_key(&claim) || k.kernel_claim_row_v1(&Hash64::from_bytes(claim)).is_none() {
+                continue;
+            }
+            let binding = service.and_then(|s| s.claims.get(&Hash64::from_bytes(claim)).map(|b| (s, b)));
+            match (premise, binding) {
+                (None, Some((_, b))) => {
+                    held.insert(claim, b.hard_deadline_daa);
+                }
+                (None, None) => {
+                    held.insert(claim, deadline.saturating_add(tail));
+                }
+                (Some(p), Some((s, b))) => {
+                    let opportunity = b.packet_ids.iter().any(|id| {
+                        let (Some(packet), Some(&unit)) = (s.book.packets.get(id), s.book.assignments.get(id)) else { return false };
+                        s.book.supply.contains_key(&unit) && p.admits_reserved_unit_v1(packet.release_daa, packet.service_before, unit, deadline)
+                    });
+                    if !opportunity {
+                        held.insert(claim, b.hard_deadline_daa);
+                    }
+                }
+                (Some(_), None) => {}
+            }
+        }
+        held
+    }
+
     /// What the kernel route has reserved against `bond` (0 with no kernel route): V2's committed-collateral ledger adds it.
     pub fn kernel_reserved(&self, bond: &PalwBondKeyV2) -> u128 {
         self.kernel_route.as_ref().map(|k| k.reserved_of(bond) as u128).unwrap_or(0)
@@ -475,7 +532,8 @@ fn load_ledger_with_projection_v9(
         .map_err(refused)?;
     // G14 lane F02b: a court-service-bound claim's producer default is held (no slash) without an adopted inclusion premise or
     // while a reserved unit has no recorded supply (S3c'), and released without slash at its hard deadline.
-    let held = builder.state.kernel_court_default_held_v1(builder.extras.court_service_inclusion_premise_v1.as_ref());
+    // G14 S3c''': and no default without the producer's opportunity under the premise (`kernel_court_default_held_v2`).
+    let held = builder.state.kernel_court_default_held_v2(builder.extras.court_service_inclusion_premise_v1.as_ref(), &ledger);
     if !held.is_empty() {
         ledger.install_court_default_held_v1(held).map_err(PalwStateV2Error::NativeResource)?;
     }
