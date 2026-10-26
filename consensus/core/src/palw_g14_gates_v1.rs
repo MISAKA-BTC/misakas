@@ -856,6 +856,18 @@ pub fn palw_g14_route_family_fences_v1(family: PalwG14RouteFamilyV1) -> &'static
     }
 }
 
+/// **The family-specific evidence for `FpConstraint` / `FpPrefix`** (lane FPCP, 2026-10-26). Records stay keyed by fence: these are the
+/// cases the `palw_staged_public_court_v1` record's V2–V7 digests (and LG14-A's) must include before the constraint / prefix families are
+/// counted as armed. Withholding is a DA default, never a computation fault.
+pub const PALW_FP_CONSTRAINT_PREFIX_ROUTE_EVIDENCE_V1: &[&str] = &[
+    "V2/V3 Constraint: producer + every seat Valid on a forbidden / premature-stop / beaten token; one outside bond convicts from the \
+     staged Constraint court's public material; producer and Valid seats slashed, reward / weight refused, Final held while open",
+    "V2/V3 PublicPrefix: a lied prefix state (11) or inherit (12) convicted by an outsider from the published prefix material alone",
+    "V4 every Constraint / PublicPrefix violation and its honest twin; withheld material ends in DA default, not a computation fault",
+    "V5 staged court config (V9): collection + acquisition cover a + 10,000 + max(W_disclose, reorg_retention) at the maximum profile",
+    "V7 restart / reorg / pruned IBD mid-pursuit for both families: identical rows, deadlines and releases",
+];
+
 /// The refusal code for a claim whose family has no armed G14 route (no reward, weight or credit; `ClassNotRewardable`'s `code`).
 pub const PALW_G14_ROUTE_ABSENT_CODE_V1: &str = "G14_ROUTE_ABSENT";
 /// The refusal code for a G-05 job version (selection, constraint, prefix, tokenizer) admitted before its route is armed.
