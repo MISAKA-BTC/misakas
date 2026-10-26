@@ -254,8 +254,19 @@ impl CourtServiceStateV2 {
     pub fn check_context(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), String> {
         self.check_live_v1()?;
         for binding in self.claims.values() {
-            let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, binding.claim)
-                .ok_or("service recovery lost its original frame")?;
+            let Some(frame) = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, binding.claim) else {
+                // Lane F02b: a kernel-route original (no TIR frame) is bound to its kernel claim row: job, class, commit DAA.
+                let row = state
+                    .kernel_route()
+                    .and_then(|route| route.kernel_claim_row_v1(&binding.claim))
+                    .ok_or("service recovery lost its original frame")?;
+                if (Hash64::from_bytes(row.job_id), Hash64::from_bytes(row.class_binding_id), row.committed_daa)
+                    != (binding.allocation_id, binding.source_id, binding.original_accepted_daa)
+                {
+                    return Err("service recovery substitutes the kernel original".into());
+                }
+                continue;
+            };
             let plan = frame.plan_v1();
             if (plan.allocation_id, plan.source_id, plan.terms.accepted_daa)
                 != (binding.allocation_id, binding.source_id, binding.original_accepted_daa)

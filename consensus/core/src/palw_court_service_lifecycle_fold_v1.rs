@@ -124,7 +124,11 @@ pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx:
     // supply recorded too, or its packets stay `Pending` and its liability never closes. Bindings exist only past the conviction
     // fence (F02 with a pinned profile, or a funded admission), and an empty book returns below, so gating on the fence alone
     // changes nothing where no binding exists.
-    if !(court_service_f02_active_v1(b) || (b.extras.tir_public_conviction_active && !b.state.funded_escrows_v1().is_empty())) {
+    // Lane F02b: a kernel-route admission schedule in force records supply for the bindings it installed.
+    if !(court_service_f02_active_v1(b)
+        || b.extras.kernel_court_admission_v1.is_some()
+        || (b.extras.tir_public_conviction_active && !b.state.funded_escrows_v1().is_empty()))
+    {
         return Ok(());
     }
     let Some(old) = b.state.court_service_state_v1() else { return Ok(()) };

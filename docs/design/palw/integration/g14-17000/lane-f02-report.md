@@ -44,3 +44,37 @@ SPINE が呼ぶもの: kernel route・Panel=1 の post-Final 経路 `observe_nat
 - TEST: native adversarial campaign（T01 の誤った challenger を tag 178 経路で全段、reorg 下の premise 境界）。実ノード E2E は未実施。
 - 値: `PALW_COURT_SERVICE_PROFILE_V1`、`PALW_COURT_SERVICE_INCLUSION_PREMISE_V1`（inclusion_delay_daa）を値 lane が決める。f=0.25 と整合する根拠が必要。
 - EXTERNAL: なし。
+
+
+# Lane F02b (2026-10-26, branch `claude/g14-f02b` from `1179a9a3d`)
+
+対象 slice: kernel route・Panel=1・card 1 の genesis class・一 prompt の decode job（`ClaimBodyV1::Program`、`PanelLicensed`）。
+
+## 実装
+1. **原子的な paid admission**（`palw_kernel_court_admission_v1.rs`、`palw_kernel_route_fold_v1::kernel_court_admissions_v1` / `write_kernel_court_admissions_v1`）。
+   - 受付時に、producer と抽選 seat 全員の、全 turn・全 branch の packet を rooted court service book に all-or-nothing で予約する。
+   - 同時に capital（packet 数 × `capital_per_packet_sompi`）を producer の free collateral から確保する。free collateral は committed 分、この object の未 flush の kernel reservation、同じ object 内で先に受けた admission の分を差し引いた値。
+   - 判定は書き込みの前に行う pure な計算。拒否すると、既存の budget 拒否と同じく object を drop し、何も残さない。
+   - 書き込み（book と capital lock）は ledger の flush の後に行う。
+   - capital は既存の `slashable_locks` に、claim id を持たない派生 id（`kernel_court_funding_lock_id_v1`）で置く。`palw_bond_committed_v1` に hard deadline まで計上される。どの claim id とも一致しないので、conviction はこれを取れない。**schema の新しい使い方なので、統括の判断が必要。**
+   - `check_context` は、TIR frame がない binding を kernel claim row（job、class、commit DAA）と照合する。
+   - 供給の記録（`observe_court_service_block_v1`）は、schedule がある時に動く。
+2. **follow-up turn の全 adaptive branch**: turn 0 は 1 branch、turn k≥1 は `follow_up_branches_per_turn` 個の branch を持つ。packet は (turn, branch) に結び付く（path には結び付かない）ので数は turn に比例して増える。branch 0 の ID は従来の `court_service_packet_id_v1` と同じ。
+3. **kernel の default が premise を読む**: `KernelLedgerV1::court_default_held` は transient で、root に入らない（`provider_liable` と同じ扱い）。
+   - premise が `None` の時、court で bound された kernel claim の期限到来 demand は開いたまま残る。slash も Unavailable もせず、reservation は保持され、Final にも進めない。
+   - premise を採用すると、通常の default に戻る。
+   - Final・reward の部分には触れていない。
+4. **試験専用の premise setter**: `set_test_only_inclusion_premise_v1!(TEST_ONLY_…)` を `cfg(test)` で追加した。名前が `TEST_ONLY_` で始まらない値は panic で拒否する。設定はプロセス全体に効き、guard が直列化し、drop で解除する。そのため `palw_accept` を `pub(in virtual_processor)` に変更した。
+- 本番の値: `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1 = None`、premise も `None`。試験の値は `test_only_g14_estimate_v1()`（VAL の目安）で、fan-out 2 は `TEST_ONLY_` の値。
+
+## 試験
+- `cargo test -p kaspa-consensus-core --lib -- f02b court_f02 f02_t r6_d4 r5_f02`: 36 passed / 1 failed（base 既存の `r5_f02_wire_missing_supply…`）。新規 5 件はすべて pass（branch 導出、all-or-nothing と容量拒否、不正な schedule、fold の原子的成功と reorg の undo と restart の replay、拒否時の無変更と schedule なしの陰性対照）。
+- `cargo test -p misaka-palw-kernel --test f02b_court_default_held`: 1 passed（hold 中は課金なし、解除で通常 default）。
+- `cargo test -p kaspa-consensus --lib f02b_premise_override`: 1 passed。
+
+## 残件
+- CODE: hold は horizon で終わらない（premise が無いままだと demand が開き続ける）。horizon で無 slash release にする扱いが要る。
+- CODE: premise ありの kernel default は、まだ供給（`OpportunityProvided`）を見ていない（S3c'）。
+- CODE: book の release 判定に kernel claim はまだ入っていない。
+- TEST: processor 経由の E2E（SPINE の canonical）は SPINE 側。
+- 値: `follow_up_branches_per_turn` に VAL の値がない。

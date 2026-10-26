@@ -890,6 +890,11 @@ pub struct KernelLedgerV1 {
     /// state, its rows or its root. A demand on such a claim that nobody answers by its deadline is a
     /// [`LedgerEventV1::ProviderLiableDefault`] — the providers' failure, never the producer's; and [`Self::provider_lapse`] voids it.
     pub provider_liable: BTreeSet<Digest>,
+    /// **G14 lane F02b: claims whose producer availability default is HELD** (no slash, no Unavailable): court-service-bound claims
+    /// while the consumer has adopted no explicit inclusion premise (RFC-0026 §4.1 item 4). Consumer-derived and re-injected at every
+    /// load like [`Self::provider_liable`]; NOT part of this state, its rows or its root. A due demand on such a claim stays open
+    /// (the claim cannot reach Final past it, its reservation stays held); once the premise is adopted the ordinary default applies.
+    pub court_default_held: BTreeSet<Digest>,
     /// Consumer-resolved commitment-only court scope. Only claims committed at or after this
     /// activation omit model-dependent node values. Never a ledger row; a consensus consumer
     /// must derive it from authenticated configuration at every load, including public reads.
@@ -994,6 +999,7 @@ impl KernelLedgerV1 {
             seg_progress: BTreeMap::new(),
             typed: crate::spec::TypedStateV1::default(),
             provider_liable: BTreeSet::new(),
+            court_default_held: BTreeSet::new(),
             commitment_scope_from_daa: None,
             verifier_pay_policy: None,
             verifier_pay: BTreeMap::new(),
@@ -3172,6 +3178,11 @@ impl KernelLedgerV1 {
             let Some(d) = self.demands.remove(&(claim, stage, position)) else { continue };
             let last = d.last_class();
             let post_final = self.claims.get(&claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Final { .. }));
+            // G14 F02b: no adopted inclusion premise → no attributable default: hold the demand open, charge nothing.
+            if self.court_default_held.contains(&claim) {
+                self.demands.insert((claim, stage, position), d);
+                continue;
+            }
             // DA16: a transferred claim's material is its providers' obligation — the producer is not charged for this failure.
             if self.provider_liable.contains(&claim) {
                 self.provider_liable_default(claim, stage, position, last, post_final, d, out);
