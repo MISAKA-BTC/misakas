@@ -894,7 +894,10 @@ pub struct KernelLedgerV1 {
     /// while the consumer has adopted no explicit inclusion premise (RFC-0026 §4.1 item 4). Consumer-derived and re-injected at every
     /// load like [`Self::provider_liable`]; NOT part of this state, its rows or its root. A due demand on such a claim stays open
     /// (the claim cannot reach Final past it, its reservation stays held); once the premise is adopted the ordinary default applies.
-    pub court_default_held: BTreeSet<Digest>,
+    /// The value is the claim's horizon (its original hard deadline): a held demand still due there is released WITHOUT slash — the
+    /// claim turns `Unavailable { producer_defaulted: false }` (pre-Final; its reservation is returned by the tick's release), the
+    /// demand bonds are refunded and the claim's other demands are moot.
+    pub court_default_held: BTreeMap<Digest, u64>,
     /// Consumer-resolved commitment-only court scope. Only claims committed at or after this
     /// activation omit model-dependent node values. Never a ledger row; a consensus consumer
     /// must derive it from authenticated configuration at every load, including public reads.
@@ -999,7 +1002,7 @@ impl KernelLedgerV1 {
             seg_progress: BTreeMap::new(),
             typed: crate::spec::TypedStateV1::default(),
             provider_liable: BTreeSet::new(),
-            court_default_held: BTreeSet::new(),
+            court_default_held: BTreeMap::new(),
             commitment_scope_from_daa: None,
             verifier_pay_policy: None,
             verifier_pay: BTreeMap::new(),
@@ -3179,8 +3182,16 @@ impl KernelLedgerV1 {
             let last = d.last_class();
             let post_final = self.claims.get(&claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Final { .. }));
             // G14 F02b: no adopted inclusion premise → no attributable default: hold the demand open, charge nothing.
-            if self.court_default_held.contains(&claim) {
-                self.demands.insert((claim, stage, position), d);
+            if let Some(&horizon) = self.court_default_held.get(&claim) {
+                if daa < horizon {
+                    self.demands.insert((claim, stage, position), d);
+                } else {
+                    if !post_final && let Some(row) = self.claims.get_mut(&claim) {
+                        let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: false });
+                    }
+                    self.refund(&claim, &d, out);
+                    self.settle_demands_moot(&claim, out);
+                }
                 continue;
             }
             // DA16: a transferred claim's material is its providers' obligation — the producer is not charged for this failure.

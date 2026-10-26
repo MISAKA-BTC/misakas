@@ -4,7 +4,7 @@
 use super::super::palw_kernel_route_fold_v1::{kernel_court_admissions_v1, load_ledger, write_kernel_court_admissions_v1};
 use super::*;
 use crate::palw_kernel_court_admission_v1::{
-    KernelCourtAdmissionScheduleV1, PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1, kernel_court_funding_lock_id_v1, kernel_court_packets_v1,
+    KernelCourtAdmissionScheduleV1, KernelCourtCapitalRowV1, PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1, kernel_court_packets_v1,
 };
 use misaka_palw_kernel::ledger::{ClaimBodyV1, ClaimRowV1, LedgerEventV1};
 
@@ -20,6 +20,10 @@ fn test_only_estimate_extras() -> PalwTransitionExtrasV1 {
         kernel_route: Some(route_extras()),
         ..Default::default()
     }
+}
+/// The slice's fence `palw_kernel_route_panel_one_v1` in force from DAA 0 (fixture only).
+fn slice_params() -> PalwStateParamsV2 {
+    params().with_kernel_route_panel_one_from_daa(Some(0))
 }
 fn route_extras() -> crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
     crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 { network_domain: h64(1), ruleset_digest: h64(2), ..Default::default() }
@@ -112,17 +116,21 @@ fn admit(b: &mut TransitionBuilder<'_>) -> bool {
 #[test]
 fn f02b_kernel_admission_reserves_every_branch_and_its_capital_atomically() {
     let state = parent(1_000_000_000_000);
-    let (p, e) = (params(), test_only_estimate_extras());
+    let (p, e) = (slice_params(), test_only_estimate_extras());
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
     let committed_before = b.committed_at(&producer(), COMMIT_DAA);
     let mark = b.entries.len();
     assert!(admit(&mut b), "admitted with enough free collateral");
     let book = b.state.court_service_state_v1().expect("book written").clone();
     let binding = &book.claims[&Hash64::from_bytes(CLAIM)];
-    let lock = b.state.slashable_locks[&(producer(), kernel_court_funding_lock_id_v1(Hash64::from_bytes(CLAIM)))];
+    let rows = b.state.kernel_court_capital_rows_v1();
+    assert_eq!(rows.len(), 1);
+    let lock: KernelCourtCapitalRowV1 = rows[0];
+    assert_eq!((lock.payer, lock.claim, lock.version), (producer(), Hash64::from_bytes(CLAIM), 1));
+    assert!(b.state.slashable_locks.is_empty(), "the capital is not a slashable lock");
     let s = KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1();
     assert_eq!(lock.amount, binding.packet_ids.len() as u128 * s.capital_per_packet_sompi as u128, "capital of every packet");
-    assert_eq!(lock.expiry_daa, COMMIT_DAA + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
+    assert_eq!(lock.hard_deadline_daa, COMMIT_DAA + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
     assert!(binding.packet_ids.len() as u64 >= 1 + (s.profile.packets_per_signer - 1) * s.follow_up_branches_per_turn);
     assert_eq!(b.committed_at(&producer(), COMMIT_DAA), committed_before + lock.amount, "capital is committed collateral");
     book.check_context(&b.state).unwrap_or_else(|e| panic!("kernel binding passes the context check: {e}"));
@@ -133,7 +141,7 @@ fn f02b_kernel_admission_reserves_every_branch_and_its_capital_atomically() {
         apply_delta_entry(&mut back, entry, true).unwrap();
     }
     assert_eq!(back.state_root(), state.state_root(), "reorg undoes the book and the lock");
-    assert!(back.court_service_state_v1().is_none());
+    assert!(back.court_service_state_v1().is_none() && back.kernel_court_capital_rows_v1().is_empty());
     for entry in &b.entries[mark..] {
         apply_delta_entry(&mut back, entry, false).unwrap();
     }
@@ -151,17 +159,71 @@ fn f02b_kernel_admission_refusal_changes_nothing() {
     let alone = (1 + (s.profile.packets_per_signer - 1) * s.follow_up_branches_per_turn) as u128 * s.capital_per_packet_sompi as u128;
     assert!(alone <= capital_needed());
     let state = parent((alone - 1) as u64);
-    let (p, e) = (params(), test_only_estimate_extras());
+    let (p, e) = (slice_params(), test_only_estimate_extras());
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
     let root = b.state.state_root();
     assert!(!admit(&mut b), "insufficient free collateral refuses");
     assert_eq!(b.state.state_root(), root, "nothing changed");
-    assert!(b.state.court_service_state_v1().is_none() && b.state.slashable_locks.is_empty(), "no book, no lock");
+    assert!(b.state.court_service_state_v1().is_none() && b.state.kernel_court_capital_rows_v1().is_empty(), "no book, no row");
     // Positive control on the same fixture with ample collateral is the test above. Production: no schedule, no admission.
     let state = parent(1_000_000_000_000);
     let e = PalwTransitionExtrasV1 { kernel_route: Some(route_extras()), ..Default::default() };
     assert!(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_none());
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
     assert!(admit(&mut b));
-    assert!(b.state.court_service_state_v1().is_none() && b.state.slashable_locks.is_empty(), "typed-missing schedule writes nothing");
+    assert!(b.state.court_service_state_v1().is_none() && b.state.kernel_court_capital_rows_v1().is_empty(), "typed-missing schedule writes nothing");
+}
+
+/// Below the slice's fence nothing is admitted or written, even with a schedule.
+#[test]
+fn f02b_kernel_admission_is_dormant_below_the_slice_fence() {
+    let state = parent(1_000_000_000_000);
+    let (p, e) = (params(), test_only_estimate_extras());
+    let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+    assert!(admit(&mut b));
+    assert!(b.state.court_service_state_v1().is_none() && b.state.kernel_court_capital_rows_v1().is_empty());
+}
+
+/// Held set: premise None -> held; premise adopted and every packet supplied -> not held; one missing supply -> held (S3c').
+/// Release: the resolved book drops the binding and the capital row goes with it; at hard the row is released regardless.
+#[test]
+fn f02b_held_set_supply_check_and_capital_release() {
+    use crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1 as Premise;
+    use crate::palw_court_service_v1::ServiceCost;
+    let state = parent(1_000_000_000_000);
+    let (p, e) = (slice_params(), test_only_estimate_extras());
+    let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+    assert!(admit(&mut b));
+    let claim = Hash64::from_bytes(CLAIM);
+    const TEST_ONLY_PREMISE: Premise = Premise { version: 1, inclusion_delay_daa: 4 };
+    let hard = COMMIT_DAA + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+    assert_eq!(b.state.kernel_court_default_held_v1(None).get(&CLAIM), Some(&hard), "no premise: held until hard");
+    // Supply every DAA through hard, skipping the first assigned slot once.
+    let mut book = b.state.court_service_state_v1().unwrap().clone();
+    let skipped = *book.book.assignments.values().min().unwrap();
+    for daa in COMMIT_DAA + 1..=hard {
+        if daa != skipped {
+            book.book.observe_block(daa, [1; 64], ServiceCost::default()).unwrap();
+        }
+    }
+    let mut with_gap = b.state.clone();
+    with_gap.staged_courts.insert(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
+        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(book).into()));
+    assert!(with_gap.kernel_court_default_held_v1(Some(&TEST_ONLY_PREMISE)).contains_key(&CLAIM), "missing supply: held (S3c')");
+    let mut full = b.state.court_service_state_v1().unwrap().clone();
+    for daa in COMMIT_DAA + 1..=hard {
+        full.book.observe_block(daa, [1; 64], ServiceCost::default()).unwrap();
+    }
+    let mut supplied = b.state.clone();
+    supplied.staged_courts.insert(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
+        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(full).into()));
+    assert!(supplied.kernel_court_default_held_v1(Some(&TEST_ONLY_PREMISE)).is_empty(), "all supplied: ordinary default");
+    assert!(supplied.court_service_release_eligible_v1(&claim), "a fully decided kernel binding is release-eligible");
+    // Capital release: the row stays before hard while bound, and goes at hard.
+    let committed = b.committed_at(&producer(), COMMIT_DAA);
+    super::super::palw_kernel_route_fold_v1::release_kernel_court_capital_v1(&mut b, &ctx(3, hard - 1, 3)).unwrap();
+    assert_eq!(b.state.kernel_court_capital_rows_v1().len(), 1, "hard - 1: still reserved");
+    super::super::palw_kernel_route_fold_v1::release_kernel_court_capital_v1(&mut b, &ctx(4, hard, 4)).unwrap();
+    assert!(b.state.kernel_court_capital_rows_v1().is_empty(), "= hard: released");
+    assert!(b.committed_at(&producer(), COMMIT_DAA) < committed, "the collateral is returned");
 }

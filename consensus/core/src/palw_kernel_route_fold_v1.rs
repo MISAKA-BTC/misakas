@@ -108,6 +108,52 @@ impl PalwChainStateV2 {
         self.kernel_route.as_ref()
     }
 
+    /// **Lane F02b:** the court capital the slice's admissions reserved against `bond` (its rows in the dedicated aux table).
+    pub fn kernel_court_capital_reserved_v1(&self, bond: &PalwBondKeyV2) -> u128 {
+        use crate::palw_kernel_court_admission_v1::*;
+        let Some(k) = self.kernel_route.as_ref() else { return 0 };
+        let prefix = kernel_court_capital_payer_prefix_v1(bond);
+        k.aux
+            .range((PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, prefix.clone())..)
+            .take_while(|((table, key), _)| *table == PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1 && key.starts_with(&prefix))
+            .filter_map(|(_, bytes)| borsh::from_slice::<KernelCourtCapitalRowV1>(bytes).ok())
+            .fold(0u128, |sum, row| sum.saturating_add(row.amount))
+    }
+
+    /// **Lane F02b:** every court capital row (the release sweep's input).
+    pub fn kernel_court_capital_rows_v1(&self) -> Vec<crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1> {
+        use crate::palw_kernel_court_admission_v1::*;
+        let Some(k) = self.kernel_route.as_ref() else { return Vec::new() };
+        k.aux
+            .range((PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, Vec::new())..)
+            .take_while(|((table, _), _)| *table == PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1)
+            .filter_map(|(_, bytes)| borsh::from_slice::<KernelCourtCapitalRowV1>(bytes).ok())
+            .collect()
+    }
+
+    /// **Lane F02b: the court-bound kernel claims whose producer default is held, with the release horizon (hard deadline).** Held
+    /// while no inclusion premise is adopted, or (premise adopted, S3c') while any reserved packet of the claim is recorded as
+    /// `MissingSupply`. A held default is released without slash at the horizon (the kernel ledger's tick).
+    pub fn kernel_court_default_held_v1(
+        &self,
+        premise: Option<&crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1>,
+    ) -> std::collections::BTreeMap<[u8; 64], u64> {
+        let Some(service) = self.court_service_state_v1() else { return Default::default() };
+        let Some(k) = self.kernel_route.as_ref() else { return Default::default() };
+        service
+            .claims
+            .values()
+            .filter(|binding| k.kernel_claim_row_v1(&binding.claim).is_some())
+            .filter(|binding| {
+                premise.is_none()
+                    || binding.packet_ids.iter().any(|id| {
+                        service.book.assess(id) == crate::palw_court_service_v1::ServiceAssessment::MissingSupply
+                    })
+            })
+            .map(|binding| (binding.claim.as_bytes(), binding.hard_deadline_daa))
+            .collect()
+    }
+
     /// What the kernel route has reserved against `bond` (0 with no kernel route): V2's committed-collateral ledger adds it.
     pub fn kernel_reserved(&self, bond: &PalwBondKeyV2) -> u128 {
         self.kernel_route.as_ref().map(|k| k.reserved_of(bond) as u128).unwrap_or(0)
@@ -424,19 +470,11 @@ fn load_ledger_with_projection_v9(
         .expect("created")
         .apply_paid_claim_consumer_inputs_v2(ledger.paid_consumer_projection_mut_v1())
         .map_err(refused)?;
-    // G14 lane F02b: without an adopted inclusion premise, a court-service-bound claim's producer default is held (no slash).
-    if builder.extras.court_service_inclusion_premise_v1.is_none()
-        && let Some(service) = builder.state.court_service_state_v1()
-    {
-        let held: std::collections::BTreeSet<[u8; 64]> = service
-            .claims
-            .keys()
-            .filter(|claim| builder.state.kernel_route.as_ref().is_some_and(|k| k.kernel_claim_row_v1(claim).is_some()))
-            .map(|claim| claim.as_bytes())
-            .collect();
-        if !held.is_empty() {
-            ledger.install_court_default_held_v1(held).map_err(PalwStateV2Error::NativeResource)?;
-        }
+    // G14 lane F02b: a court-service-bound claim's producer default is held (no slash) without an adopted inclusion premise or
+    // while a reserved unit has no recorded supply (S3c'), and released without slash at its hard deadline.
+    let held = builder.state.kernel_court_default_held_v1(builder.extras.court_service_inclusion_premise_v1.as_ref());
+    if !held.is_empty() {
+        ledger.install_court_default_held_v1(held).map_err(PalwStateV2Error::NativeResource)?;
     }
     let caps = builder.kernel_final_reward_caps_v1(&ledger);
     ledger.install_final_reward_caps_v1(caps).map_err(PalwStateV2Error::NativeResource)?;
@@ -1543,6 +1581,10 @@ pub(super) fn kernel_court_admissions_v1(
     signer: &PalwBondKeyV2,
 ) -> Result<Option<Vec<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionV1>>, PalwStateV2Error> {
     let Some(schedule) = builder.extras.kernel_court_admission_v1 else { return Ok(Some(Vec::new())) };
+    // The slice's own fence: below `palw_kernel_route_panel_one_v1` nothing is admitted or written.
+    if builder.params.kernel_route_panel_one_from_daa().is_none_or(|from| ctx.daa_score < from) {
+        return Ok(Some(Vec::new()));
+    }
     let mut out: Vec<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionV1> = Vec::new();
     for event in events {
         let LedgerEventV1::ClaimCommitted { claim } = event else { continue };
@@ -1594,19 +1636,36 @@ pub(super) fn write_kernel_court_admissions_v1(
 ) -> Result<(), PalwStateV2Error> {
     let Some(last) = admissions.last() else { return Ok(()) };
     builder.write_court_service_state_v1(last.book.clone())?;
+    use crate::palw_kernel_court_admission_v1::*;
     for a in &admissions {
-        if builder.state.slashable_locks.contains_key(&(a.payer, a.lock_id)) {
-            return Err(refused("kernel court capital lock already exists"));
+        let claim = a.claim;
+        let key = kernel_court_capital_key_v1(&a.payer, claim);
+        if builder.state.kernel_route.as_ref().is_some_and(|k| k.aux.contains_key(&(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, key.clone()))) {
+            return Err(refused("kernel court capital row already exists"));
         }
-        let lock = crate::palw_panel_var_v1::PalwSlashableLockV1 {
-            claim: a.lock_id,
+        let row = KernelCourtCapitalRowV1 {
+            version: KERNEL_COURT_CAPITAL_ROW_VERSION_V1,
+            payer: a.payer,
+            claim,
             amount: a.capital,
-            expiry_daa: a.hard_deadline_daa,
-            settled_at_final: builder.state.settled_attempt_finals,
-            attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
-            segments: 0,
+            hard_deadline_daa: a.hard_deadline_daa,
         };
-        builder.write_slashable_lock((a.payer, a.lock_id), Some(lock))?;
+        row.check_v1().map_err(refused)?;
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, key, Some(borsh::to_vec(&row).expect("row serializes")))?;
+    }
+    Ok(())
+}
+
+/// **Lane F02b: release the court capital rows** whose claim left the live book (resolved-book release) or whose hard deadline was
+/// reached. Removing the row returns the collateral; nothing is charged. Runs once per block in the kernel route's closing step.
+pub(super) fn release_kernel_court_capital_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    use crate::palw_kernel_court_admission_v1::*;
+    let rows = builder.state.kernel_court_capital_rows_v1();
+    for row in rows {
+        let bound = builder.state.court_service_state_v1().is_some_and(|s| s.claims.contains_key(&row.claim));
+        if !bound || ctx.daa_score >= row.hard_deadline_daa {
+            builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, kernel_court_capital_key_v1(&row.payer, row.claim), None)?;
+        }
     }
     Ok(())
 }
@@ -2640,6 +2699,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // DA16: a demand on a transferred claim that nobody answered is its providers' failure — charge them (never the producer).
     super::palw_provider_court_fold_v1::settle_provider_liable_defaults_v1(builder, ctx, &events)?;
     super::palw_claim_challenge_fold_v2::tick_paid_claim_final_projection_v2(builder, ctx)?;
+    release_kernel_court_capital_v1(builder, ctx)?;
     Ok(())
 }
 

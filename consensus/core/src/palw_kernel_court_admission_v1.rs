@@ -17,6 +17,11 @@
 //! derived id ([`kernel_court_funding_lock_id_v1`]) that no claim has, so it counts in `palw_bond_committed_v1` until the original's
 //! hard deadline and no conviction path can take it.
 //!
+//! **2026-10-26 (coordinator decision):** the capital is NOT a `slashable_locks` entry. It is a dedicated versioned row
+//! [`KernelCourtCapitalRowV1`] in the kernel route's aux table [`PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1`], written only past the
+//! slice's fence `palw_kernel_route_panel_one_v1`. No conviction or default path reads that table: the row is released (removed,
+//! returning the collateral) exactly when the claim's binding leaves the live book (resolved-book release) or at its hard deadline.
+//!
 //! Values: production is typed-missing ([`PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1`] = `None`): no admission happens on any build.
 //! [`KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1`] is built from lane VAL's PROVISIONAL ESTIMATES
 //! (`palw_g14_values_v1`) for tests; `follow_up_branches_per_turn` has no VAL value and is a test-only 2 there.
@@ -97,9 +102,36 @@ pub fn kernel_court_branch_packet_id_v1(
     *keyed(b"misaka-palw/kernel-court-branch-packet/v1", &bytes).as_byte_slice()
 }
 
-/// The id of the producer's court-capital lock for `claim` (never a claim id).
-pub fn kernel_court_funding_lock_id_v1(claim: Hash64) -> Hash64 {
-    keyed(b"misaka-palw/kernel-court-funding-lock/v1", claim.as_byte_slice())
+/// The kernel route aux table of the court capital rows (unused by every other table id).
+pub const PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1: u8 = 150;
+pub const KERNEL_COURT_CAPITAL_ROW_VERSION_V1: u16 = 1;
+
+/// **The court capital a kernel-route original reserved from its producer's collateral** (counts in `palw_bond_committed_v1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct KernelCourtCapitalRowV1 {
+    pub version: u16,
+    pub payer: PalwBondKeyV2,
+    pub claim: Hash64,
+    pub amount: u128,
+    /// The original's hard deadline `a + 10,000`: the row is released no later than here.
+    pub hard_deadline_daa: u64,
+}
+
+impl KernelCourtCapitalRowV1 {
+    pub fn check_v1(&self) -> Result<(), &'static str> {
+        if self.version != KERNEL_COURT_CAPITAL_ROW_VERSION_V1 || self.amount == 0 {
+            return Err("invalid kernel court capital row");
+        }
+        Ok(())
+    }
+}
+
+/// Row key: the payer first, so a bond's capital is one prefix range.
+pub fn kernel_court_capital_key_v1(payer: &PalwBondKeyV2, claim: Hash64) -> Vec<u8> {
+    borsh::to_vec(&(payer, claim)).expect("capital key serialization")
+}
+pub fn kernel_court_capital_payer_prefix_v1(payer: &PalwBondKeyV2) -> Vec<u8> {
+    borsh::to_vec(payer).expect("bond key serialization")
 }
 
 /// Every legal branch's packet of one original. Refused (never truncated) when an interval would reach the hard deadline.
@@ -154,8 +186,8 @@ pub fn kernel_court_packets_v1(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelCourtAdmissionV1 {
     pub book: CourtServiceStateV2,
+    pub claim: Hash64,
     pub payer: PalwBondKeyV2,
-    pub lock_id: Hash64,
     pub capital: u128,
     pub hard_deadline_daa: u64,
     pub packets: usize,
@@ -214,8 +246,8 @@ pub fn kernel_court_admission_candidate_v1(
     book.check_live_v1().map_err(|_| R::Inconsistent)?;
     Ok(KernelCourtAdmissionV1 {
         book,
+        claim,
         payer,
-        lock_id: kernel_court_funding_lock_id_v1(claim),
         capital,
         hard_deadline_daa: hard,
         packets: packets.len(),
@@ -301,6 +333,16 @@ mod tests {
         assert!(!book.claims.contains_key(&h(n)), "the refused original reserved nothing");
         book.check().unwrap();
         assert!(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_none(), "production is typed-missing");
+    }
+
+    #[test]
+    fn f02b_capital_row_key_and_check() {
+        let row = KernelCourtCapitalRowV1 { version: 1, payer: bond(1), claim: h(1), amount: 5, hard_deadline_daa: 10 };
+        row.check_v1().unwrap();
+        assert!(KernelCourtCapitalRowV1 { version: 2, ..row }.check_v1().is_err());
+        assert!(KernelCourtCapitalRowV1 { amount: 0, ..row }.check_v1().is_err());
+        assert!(kernel_court_capital_key_v1(&bond(1), h(1)).starts_with(&kernel_court_capital_payer_prefix_v1(&bond(1))));
+        assert!(!kernel_court_capital_key_v1(&bond(2), h(1)).starts_with(&kernel_court_capital_payer_prefix_v1(&bond(1))));
     }
 
     #[test]
