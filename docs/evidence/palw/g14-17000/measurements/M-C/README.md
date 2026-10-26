@@ -9,6 +9,7 @@ This preexisting harness still lacks the requested Panel=1 approval, post-commit
 ## Exploratory loaded sample — not an arming input
 
 One operation completed on the pinned binary: `close_cone_forged_last_stage`, three fresh processes with `MEASURE_N=1000` and three separate `MEASURE_N=0` setup baselines. The first verification in each process is reported separately. All six processes had `under_load=true`; 1-minute load before/after ranged **8.07–15.72**. [Raw JSON and per-process stdout/stderr](raw/loaded-preliminary-close-cone-forged/raw.json) contain every command, exit 0, timestamp/load, CPU/RSS and harness line.
+The raw JSON SHA-256 is `dbc1e9aa2c0baff470c9529f00d55572ede0ef5004a0767a4e2298b39c85efaf`; the build-record JSON SHA-256 is `d9e73954372ede293fec0185aa0b4067a6ebcb77ec23e6bbe306f784b4abdb6b`.
 
 | Fixture operation | Median of three process medians | Largest process p95 | Largest item | Warm-up range | Exemplar body | Distinct fixtures | Median process peak RSS / N=0 RSS |
 |---|---:|---:|---:|---:|---:|---:|---:|
