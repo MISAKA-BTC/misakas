@@ -62,6 +62,32 @@ pub(super) fn source_income_subject_v1(job: &misaka_palw_kernel::hash::Digest, s
     finish(hash)
 }
 
+/// **G14 T08 / P1-3 (lane T0308): a rejected response is judged once.** The route object's signature binds only the network, the
+/// signer and the object bytes (`palw_kernel_route_message_v1`), so anybody can re-carry a signer's old signed `Respond` in a fresh
+/// carrier. A REJECTED response costs its signer `dismissed_proof_fee`; without this marker a third party could replay the same
+/// signed junk to burn that fee again and again. Key: the signer, the demanded position and the exact bytes (not the demand's
+/// filing DAA, so an old signature is never "new" for a later demand either); row: the DAA it was first rejected at (u64). A key
+/// present here drops the object before the ledger classifies or charges anything. A VALID response needs no marker: it closes
+/// the demand and the position is served for good (`already served`).
+pub const PALW_KERNEL_REJECTED_RESPONSE_TABLE_V1: u8 = 161;
+
+pub fn palw_kernel_rejected_response_key_v1(
+    signer: &misaka_palw_kernel::hash::Digest,
+    claim: &misaka_palw_kernel::hash::Digest,
+    stage: u8,
+    position: u32,
+    bytes: &[u8],
+) -> Vec<u8> {
+    let mut hash = keyed(b"misaka-palw/kernel-route/rejected-response/v1");
+    hash.update(signer);
+    hash.update(claim);
+    hash.update(&[stage]);
+    hash.update(&position.to_le_bytes());
+    hash.update(&(bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+    finish(hash).as_byte_slice().to_vec()
+}
+
 /// The fold's signature check is the acceptance layer's (a pure transition holds no crypto): by the time a receipt reaches here its
 /// signature has verified under the seat bond's registered key, so the kernel's structural admission is asked with this.
 struct SignatureAlreadyVerified;
@@ -1924,6 +1950,22 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         KernelRouteObjectV1::Respond { claim, .. } => Some(*claim),
         _ => None,
     };
+    // T08 / P1-3: an old signed response that was already rejected is not a new response (no second classification or fee).
+    let rejected_key = match &object {
+        KernelRouteObjectV1::Respond { claim, stage, position, bytes } => {
+            Some(palw_kernel_rejected_response_key_v1(&kid, claim, *stage, *position, bytes))
+        }
+        _ => None,
+    };
+    if let Some(key) = &rejected_key
+        && builder
+            .state
+            .kernel_route
+            .as_ref()
+            .is_some_and(|route| route.aux.contains_key(&(PALW_KERNEL_REJECTED_RESPONSE_TABLE_V1, key.clone())))
+    {
+        return Ok(());
+    }
     let events = match ledger.apply_object_reserved_v1(object, &AuthV1 { signer_bond: kid }).map_err(PalwStateV2Error::NativeResource)? {
         Ok(events) => events,
         Err(_refusal) => {
@@ -2107,6 +2149,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 )?;
             }
         }
+    }
+    if let Some(key) = rejected_key
+        && events.iter().any(|e| matches!(e, LedgerEventV1::ResponseRejected { .. }))
+    {
+        builder.write_kernel_row(PALW_KERNEL_REJECTED_RESPONSE_TABLE_V1, key, Some(borsh::to_vec(&ctx.daa_score).expect("u64")))?;
     }
     // The object stands: the route has now seen its signer.
     builder.note_kernel_bond(signer)?;

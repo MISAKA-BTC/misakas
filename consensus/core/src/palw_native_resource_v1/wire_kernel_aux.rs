@@ -109,6 +109,9 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 // RFC-0008 (2026-10-15): the once-only settlement markers (aux 140, keyed by the 64-byte obligation id; dormant fence).
 140 if key_bytes==64=>crate::palw_settlement_once_v1::PalwSettlementOnceRowV1::scan_native_wire_v1(frame)?,
 140=>return Err(wire::wire_bad("unallocated settlement-once row namespace")),
+// G14 T08 / P1-3 (lane T0308, 2026-10-26): rejected-response replay markers (aux 161, 64-byte key, row = first rejection DAA).
+161 if key_bytes==64=><u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+161=>return Err(wire::wire_bad("unallocated rejected-response marker namespace")),
 // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
 144 if key_bytes==65 && prefix==b'F'=>crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1::scan_native_wire_v1(frame)?,
 144 if key_bytes==65 && prefix==b'R'=>crate::palw_claim_local_v1::PalwClaimLocalRewardHoldV1::scan_native_wire_v1(frame)?,

@@ -1327,3 +1327,6 @@ async fn g14_canonical_opv_a_borrowed_trace_of_another_prompt_is_refused_at_incl
 
 /// lane SPINE (2026-10-26): the Panel=1 kernel-route vertical slice, stage by stage.
 mod spine;
+
+/// lane T0308 (2026-10-26): T03 forged/fake objects and T08 offline miner, distinct signer, relay, no replay — on the same slice.
+mod t0308;
