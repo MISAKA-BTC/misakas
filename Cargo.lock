@@ -6197,6 +6197,7 @@ dependencies = [
  "kaspa-rpc-core",
  "kaspa-txscript",
  "kaspa-wrpc-client",
+ "misaka-endpoints",
  "misaka-palw",
  "misaka-palw-base0",
  "misaka-palw-constraint",

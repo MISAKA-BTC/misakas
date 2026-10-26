@@ -37,6 +37,7 @@ pub fn endpoints(output: OutputFormat, network: &str) -> CliResult {
                 "evm_rpc_http": evm,
                 "public_wrpc": (network == "testnet-12").then(misaka_endpoints::testnet12_public_wrpc_v1),
                 "evidence_provider": (network == "testnet-12").then(misaka_endpoints::testnet12_evidence_provider_v1),
+                "evidence_providers": (network == "testnet-12").then(misaka_endpoints::testnet12_evidence_providers_v1),
             })
         ),
         OutputFormat::Human => {
@@ -52,7 +53,7 @@ pub fn endpoints(output: OutputFormat, network: &str) -> CliResult {
                 for node in misaka_endpoints::testnet12_public_wrpc_v1() {
                     println!("    {}  borsh {}  json {}", node.name, node.wrpc_borsh, node.wrpc_json);
                 }
-                println!("  evidence provider: {}", misaka_endpoints::testnet12_evidence_provider_v1());
+                println!("  evidence providers: {}", misaka_endpoints::testnet12_evidence_provider_list_v1());
             }
         }
     }

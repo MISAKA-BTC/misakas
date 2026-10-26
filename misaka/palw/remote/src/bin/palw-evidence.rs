@@ -65,9 +65,9 @@ fn read_roots(path: &Path) -> ClaimRoots {
     }
 }
 
-/// `--providers` when the caller named one, otherwise the public testnet-12 evidence provider.
+/// `--providers` when the caller named them, otherwise every public testnet-12 evidence provider.
 fn providers_arg(providers: &Option<String>) -> String {
-    providers.clone().unwrap_or_else(|| misaka_endpoints::testnet12_evidence_provider_v1().to_string())
+    providers.clone().unwrap_or_else(misaka_endpoints::testnet12_evidence_provider_list_v1)
 }
 
 fn providers_of(arg: &str) -> Vec<ProviderSpecV1> {

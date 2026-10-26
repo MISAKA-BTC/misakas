@@ -119,9 +119,28 @@ pub fn testnet12_public_wrpc_v1() -> &'static [Testnet12PublicWrpcV1] {
     ]
 }
 
-/// The public evidence provider a remote miner publishes to and a fleet panel reads.
+/// The public evidence providers a remote miner publishes to and a fleet panel reads, in preference order. Every entry is an
+/// `http(s)://` provider; a gateway publishes to all of them and a seat reads from any. Deployment adds entries here.
+pub fn testnet12_evidence_providers_v1() -> &'static [&'static str] {
+    &["http://169.58.232.113:8088"]
+}
+
+/// The first public evidence provider (kept for callers that name one).
 pub fn testnet12_evidence_provider_v1() -> &'static str {
-    "http://169.58.232.113:8088"
+    testnet12_evidence_providers_v1()[0]
+}
+
+/// The providers as one comma-separated list — the form `--evidence-provider`, `--providers` and
+/// `kaspad --palw-evidence-provider-dir=` parse (`misaka_palw_remote::transport::parse_provider_list_v1`).
+pub fn testnet12_evidence_provider_list_v1() -> String {
+    testnet12_evidence_providers_v1().join(",")
+}
+
+/// A wRPC endpoint as a URL: `host:port` becomes `ws://host:port`; a full `ws://` or `wss://` URL (the public testnet-12 wRPC is
+/// only reachable as `wss://…/t12/wrpc/borsh`) is used as given. The same rule as the gateway's `chain::normalize_endpoint`.
+pub fn wrpc_url(endpoint: &str) -> String {
+    let e = endpoint.trim();
+    if e.contains("://") { e.to_string() } else { format!("ws://{e}") }
 }
 
 /// Resolve one endpoint, design §7.3: an `explicit` value (CLI/env/config, already merged
@@ -174,6 +193,19 @@ mod tests {
         assert!(nodes.iter().all(|n| n.wrpc_borsh.starts_with("wss://") && n.wrpc_json.starts_with("wss://")));
         assert_ne!(nodes[0].wrpc_borsh, nodes[1].wrpc_borsh);
         assert!(testnet12_evidence_provider_v1().starts_with("http://") || testnet12_evidence_provider_v1().starts_with("https://"));
+        let all = testnet12_evidence_providers_v1();
+        assert!(!all.is_empty() && all.iter().all(|p| p.starts_with("http://") || p.starts_with("https://")));
+        assert_eq!(testnet12_evidence_provider_list_v1().split(',').count(), all.len());
+    }
+
+    #[test]
+    fn wrpc_url_accepts_hostport_and_full_urls() {
+        assert_eq!(wrpc_url("127.0.0.1:27210"), "ws://127.0.0.1:27210");
+        assert_eq!(wrpc_url("wss://llm.misakascan.com/t12/wrpc/borsh"), "wss://llm.misakascan.com/t12/wrpc/borsh");
+        assert_eq!(wrpc_url("ws://1.2.3.4:9"), "ws://1.2.3.4:9");
+        for n in testnet12_public_wrpc_v1() {
+            assert_eq!(wrpc_url(n.wrpc_borsh), n.wrpc_borsh);
+        }
     }
 
     #[test]

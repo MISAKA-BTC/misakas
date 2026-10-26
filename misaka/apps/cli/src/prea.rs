@@ -73,7 +73,7 @@ pub async fn gate_root_op(ctx: &Ctx) -> CliResult {
     let net = NetworkId::from_str(&ctx.network)
         .map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{}': {e}", ctx.network)))?;
     let hostport = ctx.rpc.clone().unwrap_or_else(|| format!("127.0.0.1:{}", net.network_type().default_borsh_rpc_port()));
-    let url = format!("ws://{hostport}");
+    let url = misaka_endpoints::wrpc_url(&hostport);
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
         .map_err(|e| CliError::new(exit::CONNECTION, format!("build wRPC client: {e}")))?;
     let options = ConnectOptions {
