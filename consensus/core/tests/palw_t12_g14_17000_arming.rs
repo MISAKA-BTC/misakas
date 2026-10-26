@@ -16,15 +16,16 @@ fn the_17000_list_covers_the_slice_six_families_and_panel_da() {
     for f in PALW_T12_KERNEL_SLICE_FENCES_V1 {
         assert!(names.contains(&f.name), "slice entry {} missing", f.name);
     }
-    for fam in FAMILIES {
+    let shipped = palw_t12_shipped_params();
+    let live: Vec<&str> =
+        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 17_000)).map(|(n, _)| *n).collect();
+    // Each family fence is either on the list or already in force on testnet-12 below 17,000 (`palw_fp_tokenizer_match` @5,300,
+    // `palw_panel_da` @0) — never both (re-arming a live fence would fork below 17,000).
+    for fam in FAMILIES.into_iter().chain([F::FpPanelDaDisclosure]) {
         for n in palw_g14_route_family_fences_v1(fam) {
-            assert!(names.contains(n), "{fam:?} needs {n}");
+            assert!(names.contains(n) != live.contains(n), "{fam:?} needs {n} (listed {}, live {})", names.contains(n), live.contains(n));
         }
     }
-    for n in palw_g14_route_family_fences_v1(F::FpPanelDaDisclosure) {
-        assert!(names.contains(n) || *n == "palw_panel_da", "PanelDa needs {n}");
-    }
-    assert!(palw_t12_shipped_params().palw_panel_da.is_some(), "palw_panel_da is in force on testnet-12");
     assert!(!names.contains(&"palw_claim_challenge_v2"), "RFC07 probe is not on the list");
     let mut sorted = names.clone();
     sorted.sort();

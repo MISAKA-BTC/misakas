@@ -367,7 +367,7 @@ pub const PALW_T12_FP_CONSTRAINT_PREFIX_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 /// the user, never recorded as run).** The union of [`PALW_T12_KERNEL_SLICE_FENCES_V1`], every name
 /// [`crate::palw_g14_gates_v1::palw_g14_route_family_fences_v1`] returns for those families, and the fences their validation requires
 /// at or below them, in [`PALW_T12_FULL_ACTIVATION_FENCES_V1`]'s order (prerequisites first) so one height satisfies every "at or below".
-/// `palw_fp_tokenizer_match` and `palw_panel_da_disclosure_v1` (not on the full list) sit right before route-required (PanelDa added
+/// `palw_panel_da_disclosure_v1` (not on the full list) sits right before route-required (PanelDa added
 /// to scope by the user 2026-10-27). RFC07 `palw_claim_challenge_v2` is NOT here. The preset does NOT read this list: arming it is [`PALW_T12_G14_17000_DAA_V1`] through [`palw_t12_arm_after_int13_at_v1`]
 /// after review, and every entry's own validation (records, measured values) still applies.
 pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
@@ -391,7 +391,8 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
     PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
     PALW_T12_FULL_GATE_C_ENTRY,
-    crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_ENTRY,
+    // `palw_fp_tokenizer_match` (FpTokenizer) is NOT here: testnet-12 already runs it from DAA 5,300; re-arming it at 17,000
+    // would move a live fence below 17,000. The FpTokenizer family's other fences are above.
     // PanelDa (user 2026-10-27, added to scope): `palw_panel_da` is already in force on testnet-12 (RC DA court fence); the
     // disclosure needs it and `palw_court_clock_v2` at or below.
     PALW_T12_G14_PANEL_DA_DISCLOSURE_ENTRY,

@@ -489,7 +489,7 @@ mod tests {
             payload,
         );
         let mut block = Block::from_precomputed_hash(hash.into(), vec![parent.into()]);
-        block.transactions = Arc::new(vec![coinbase]);
+        block.transactions = Arc::new(vec![coinbase]).into();
         block
     }
 
