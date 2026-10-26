@@ -77,7 +77,13 @@ fn kernel_config_panel_one() -> (Config, PalwConsensusParamsV2, Premine, Premine
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         unreachable!("testnet-12 is ConsensusV2")
     };
-    let bundle = bundle.clone();
+    // The Panel=1 class relation (F03k2) needs the external gain bound; this mechanics world carries the same TEST-ONLY bound as
+    // `canonical::f03k::TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI` (1 MSK), never the production value.
+    let mut bundle = bundle.clone();
+    bundle.state = bundle.state.clone().with_test_only_kernel_panel_one_external_gain_bound_v1(Some(100_000_000));
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(node_bundle) = &mut params.palw_consensus_mode {
+        *node_bundle = bundle.clone();
+    }
     assert_eq!(bundle.state.kernel_route_panel_one_from_daa(), Some(0));
     assert!(params.validate_palw_v2().is_err(), "the public arming record is still absent");
     (Config::new(params), bundle, premine, floats)
@@ -834,6 +840,19 @@ impl World {
         Claim { id, producer, trace: produced.trace, at }
     }
 
+    /// **lane SEED fixture**: advance attempt blocks (which record round seed anchors) until `claim` has its interim assignment —
+    /// immediately below Panel=1, at the first post-commit anchor in force past it. Panics after 32 rounds (never hides a missing draw).
+    async fn until_seated_v1(&mut self, claim: &Digest) {
+        let ttpb = self.net.ttpb();
+        for round in 0..32u64 {
+            if self.net.chain.tip_state().1.kernel_route().and_then(|k| k.assignment_of(claim)).is_some() {
+                return;
+            }
+            self.net.chain.attempt(5 + (round % 3) as usize, ttpb, Vec::new(), &|_| true).await;
+        }
+        panic!("no post-commit seed anchor seated the claim in 32 rounds");
+    }
+
     /// The cards the interim assignment seated for `claim` (while its receipts are being counted).
     fn seats(&self, claim: &Digest) -> Vec<usize> {
         let state = self.net.chain.tip_state().1;
@@ -975,6 +994,8 @@ async fn g14_kernel_route_panel_one_assignment_and_outsider_conviction() {
     let mut w = World::on(Net::over_cfg(kernel_config_panel_one(), TestConsensus::new)).await;
     let job = w.job().await;
     let lie = w.claim(0, &job, true).await;
+    // lane SEED (648544c46): the Panel=1 seat is drawn at the first post-commit seed anchor, not at the commit.
+    w.until_seated_v1(&lie.id).await;
     let state = w.net.chain.tip_state().1;
     let assignment = state.kernel_route().and_then(|r| r.assignment_of(&lie.id)).expect("the native draw wrote an assignment");
     assert_eq!(assignment.seats.len(), 1);

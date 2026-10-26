@@ -333,8 +333,13 @@ fn private_g14_drill_of_config_v1(
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
         return Err("the G14 drill needs its ConsensusV2 bundle".into());
     };
-    let set =
-        if config.params.palw_legacy_public_filer_v1.is_some() { PrivateG14DrillSetV1::Full } else { PrivateG14DrillSetV1::RouteRequiredOnly };
+    let set = if config.params.palw_legacy_public_filer_v1.is_some() {
+        PrivateG14DrillSetV1::Full
+    } else if config.params.palw_probabilistic_constraints_v1.is_some_and(|f| f != ForkActivation::never()) {
+        PrivateG14DrillSetV1::KernelSlice
+    } else {
+        PrivateG14DrillSetV1::RouteRequiredOnly
+    };
     private_g14_drill_v1(salt, PrivateG14DrillModeV1::from_daa(at.daa_score()), set, bundle.panel.seat_count()).map(Some)
 }
 
@@ -534,10 +539,13 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
             return Err("a private probe must never name a public genesis monetary outpoint".into());
         }
     }
-    let private_complete = config.params.palw_probabilistic_constraints_v1.is_some()
-        || config.params.palw_signed_registration_v1.is_some()
-        || config.params.palw_panel_free_v1.is_some();
-    if let Some(drill) = private_g14_drill_of_config_v1(config)? {
+    let g14_drill = private_g14_drill_of_config_v1(config)?;
+    // The kernel-slice G14 drill arms the kernel route too: it is the G14 drill, not the complete-only bootstrap profile.
+    let private_complete = g14_drill.is_none()
+        && (config.params.palw_probabilistic_constraints_v1.is_some()
+            || config.params.palw_signed_registration_v1.is_some()
+            || config.params.palw_panel_free_v1.is_some());
+    if let Some(drill) = g14_drill {
         // The G14 collusion drill (`g14-v1`): the exact salted factory ruleset, validated through the test arming-record path with
         // its own drill records. The shipped validation still refuses it (`private_g14_drill_v1` asserts that).
         if config.private_population.is_some() {
@@ -547,7 +555,10 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
             return Err("private G14 drill Config differs from its exact salted factory policy".into());
         }
         config.params.validate_palw_v1().map_err(|error| error.to_string())?;
-        config.params.validate_palw_v2_with_arming_records_v1(&drill.records).map_err(|error| format!("{error:?}"))?;
+        config
+            .params
+            .validate_palw_v2_with_g14_and_kernel_route_records_v1(&drill.records, &drill.kernel_records)
+            .map_err(|error| format!("{error:?}"))?;
     }
     if config.params.palw_selected_source_bootstrap_v1.is_some() {
         if config.private_population.is_some() {

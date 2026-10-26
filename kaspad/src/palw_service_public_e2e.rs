@@ -546,6 +546,7 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         retention_dir: dir.join("empty-retention"),
         evidence_provider_dirs: vec![],
         kernel_models: vec![],
+        kernel_roles: Default::default(),
         register_class: None,
         chain_classes: false,
         register_bond: false,

@@ -1339,7 +1339,8 @@ mod tests {
         assert!(borrowed_native_action_v1(&collect).is_ok());
         assert!(KernelRouteObjectV1::decode(&collect).is_ok());
         let mut unknown = collect;
-        unknown[2] = 80;
+        // 80 is the G-N2 post-Final mining accusation (2805df00a); 81 is the first unallocated stage action.
+        unknown[2] = 81;
         assert!(borrowed_native_action_v1(&unknown).is_err());
         assert!(KernelRouteObjectV1::decode(&unknown).is_err());
     }
@@ -1385,7 +1386,7 @@ mod tests {
         }
         assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
         // Funded actions run to 46: 45/46 are the typed window class v37 register/attach (RFC02 §II.14.60), as the decoder admits.
-        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 80)] {
+        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 81)] {
             let mut raw = vec![1, tag, last, 0, 0, 0, 0];
             assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
             raw[2] = unknown;

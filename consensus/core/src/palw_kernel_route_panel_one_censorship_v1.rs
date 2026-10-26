@@ -54,6 +54,79 @@ pub fn panel_one_censorship_check_v1(
     Ok(())
 }
 
+/// **G14 lane CLOCK (review part 2, M-1): the relation past X3.** A clocked claim (`misaka_palw_kernel::claim_clock`) can be convicted
+/// by an outsider's filing at any DAA up to its liability floor, so a censor must saturate EVERY block of
+/// `max(check + challenge + liability, NOTICE + court + grace)` DAA (one block per DAA, the worst case). What the censor saves is not
+/// only the reward: a convicted claim forfeits its reservation, so past the clock the gain is
+/// `claim_collateral + claim_reward + external gain bound`:
+///
+/// `runs × dismissal_fee(worst) × exposure_clocked > claim_collateral + claim_reward + external gain`.
+///
+/// On the interim policy at the 64-run budget and 0.1 MSK fee: `64 × 0.1 × 3,150 = 20,160 MSK > 1,000 + 5 + 500 = 1,505 MSK`
+/// (13.4×). Below X3 (`clocked == false`) it is [`panel_one_censorship_check_v1`] exactly.
+pub fn panel_one_censorship_cost_clocked_v1(policy: &LedgerPolicyV1, worst_court_work: u64) -> u128 {
+    let by_work = (policy.max_court_work_per_block as u128).div_ceil(worst_court_work.max(1) as u128);
+    let runs = (policy.max_adjudications_per_block as u128).min(by_work).max(1);
+    let legacy = policy.check_window_daa as u128 + policy.challenge_window_daa as u128 + policy.liability_daa as u128;
+    // A policy the clock refuses (notice + court + grace past the hard window) counts the hard window.
+    let clocked = misaka_palw_kernel::claim_clock::claim_clock_exposure_daa_v1(policy)
+        .unwrap_or(misaka_palw_kernel::claim_clock::KERNEL_CLAIM_HARD_DAA_V1) as u128;
+    runs.saturating_mul(policy.dismissal_fee_v1(worst_court_work) as u128).saturating_mul(legacy.max(clocked))
+}
+
+/// [`panel_one_censorship_check_v1`] below the clock; past it, the clocked relation above.
+pub fn panel_one_censorship_check_clocked_v1(
+    policy: &LedgerPolicyV1,
+    worst_court_work: u64,
+    external_gain_bound: Option<u64>,
+    clocked: bool,
+) -> Result<(), PanelOneCensorshipRefusalV1> {
+    if !clocked {
+        return panel_one_censorship_check_v1(policy, worst_court_work, external_gain_bound);
+    }
+    let external = external_gain_bound.ok_or(PanelOneCensorshipRefusalV1::ExternalGainBoundMissing)?;
+    let cost = panel_one_censorship_cost_clocked_v1(policy, worst_court_work);
+    let gain = policy.claim_collateral as u128 + policy.claim_reward as u128 + external as u128;
+    if cost <= gain {
+        return Err(PanelOneCensorshipRefusalV1::CensorshipTooCheap { cost, gain });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+    use crate::palw_kernel_route_v1::palw_kernel_route_policy_v1;
+
+    const MSK: u128 = 100_000_000;
+
+    #[test]
+    fn clock_m1_saturation_cost_beats_reservation_reward_and_external_gain() {
+        let p = palw_kernel_route_policy_v1(Default::default(), Default::default());
+        let gain = crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1;
+        let cost = panel_one_censorship_cost_clocked_v1(&p, 1);
+        assert_eq!(cost, 64 * (MSK / 10) * 3_150, "64 runs x 0.1 MSK x (3,120 + 20 + 10) DAA");
+        assert!(panel_one_censorship_check_clocked_v1(&p, 1, gain, true).is_ok());
+        assert!(cost > 13 * (p.claim_collateral as u128 + p.claim_reward as u128 + gain.unwrap() as u128));
+        assert_eq!(panel_one_censorship_check_clocked_v1(&p, 1, gain, false), panel_one_censorship_check_v1(&p, 1, gain));
+        assert_eq!(
+            panel_one_censorship_check_clocked_v1(&p, 1, None, true),
+            Err(PanelOneCensorshipRefusalV1::ExternalGainBoundMissing)
+        );
+    }
+
+    #[test]
+    fn clock_constants_are_adr0198s() {
+        assert_eq!(misaka_palw_kernel::claim_clock::KERNEL_CLAIM_NOTICE_DAA_V1, crate::palw_court_policy_v1::NOTICE_WINDOW_DAA);
+        assert_eq!(misaka_palw_kernel::claim_clock::KERNEL_CLAIM_HARD_DAA_V1, crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
+        let p = palw_kernel_route_policy_v1(Default::default(), Default::default());
+        assert_eq!(misaka_palw_kernel::claim_clock::claim_clock_floor_v1(&p, 19_000), Ok(19_000 + 3_150));
+        let mut q = p.clone();
+        q.court_deadline_daa = 7_000;
+        assert!(misaka_palw_kernel::claim_clock::claim_clock_floor_v1(&q, 0).is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

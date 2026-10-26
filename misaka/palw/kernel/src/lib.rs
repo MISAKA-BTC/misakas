@@ -84,6 +84,7 @@ pub mod beacon_source_fee;
 pub mod budget;
 pub mod challenge;
 pub mod check;
+pub mod claim_clock;
 pub mod claim_subject;
 pub mod claim_paid_material_generation_v5;
 pub mod court_scope;

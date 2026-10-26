@@ -248,6 +248,19 @@ pub struct Args {
     /// **Lane G14-K: registered kernel models** (`--palw-kernel-model`, repeatable): `PALWKM01` files the node's kernel-route public
     /// verifier re-executes claims with (ADR-0177 D7). Each is used only for a class whose REGISTERED parameter commitments it opens to.
     pub palw_kernel_model: Vec<String>,
+    /// **Lane KNODE** (`palw_panel::palw_kernel_roles`): produce kernel-route claims for open jobs of a held model's class and answer
+    /// demands on them (`--palw-kernel-producer`).
+    pub palw_kernel_producer: bool,
+    /// **Lane KNODE**: post one kernel job `<tok,tok,..>:<max_new_tokens>` (`--palw-kernel-post-job`).
+    pub palw_kernel_post_job: Option<String>,
+    /// **Lane KNODE**: the producer also writes each demand answer here as a `.palwresp` file (`--palw-kernel-export-dir`).
+    pub palw_kernel_export_dir: Option<String>,
+    /// **Lane KNODE**: a relay carries the `.palwresp` answers in this directory for open demands (`--palw-kernel-relay-dir`).
+    pub palw_kernel_relay_dir: Option<String>,
+    /// **Lane KNODE, DRILL ONLY**: kernel-route injections (`--palw-drill-kernel-inject`, repeatable; needs a drill salt).
+    pub palw_drill_kernel_inject: Vec<String>,
+    /// **Lane KNODE, DRILL ONLY**: junk demands per claim for `junk-flood` (`--palw-drill-kernel-flood`).
+    pub palw_drill_kernel_flood: u32,
     /// **Token tables for constrained claims** (ADR-0096 Decision 8; repeatable): files a class's worker wrote with
     /// `--emit-token-table`. A seat can judge a decode-constrained claim only through the table the claim names (by Merkle root),
     /// and abstains (`Unverifiable`) for one whose table it does not hold. Each file is decoded, bounded and its root derived on
@@ -986,6 +999,12 @@ impl Default for Args {
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
             palw_kernel_model: Vec::new(),
+            palw_kernel_producer: false,
+            palw_kernel_post_job: None,
+            palw_kernel_export_dir: None,
+            palw_kernel_relay_dir: None,
+            palw_drill_kernel_inject: Vec::new(),
+            palw_drill_kernel_flood: 0,
             palw_token_table: Vec::new(),
             palw_class_cache_bytes: 0,
             palw_class_resident_bytes: None,
@@ -3240,6 +3259,61 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-kernel-producer")
+                .long("palw-kernel-producer")
+                .env("KASPAD_PALW_KERNEL_PRODUCER")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (lane KNODE): produce kernel-route claims (seal, reveal) for open jobs of a class a held \
+                     --palw-kernel-model opens to, and answer demands on them. Needs --palw-fee-outpoint and a bond. Inert \
+                     unless the kernel route's fence is in force.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-kernel-post-job")
+                .long("palw-kernel-post-job")
+                .env("KASPAD_PALW_KERNEL_POST_JOB")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW (lane KNODE): post one greedy kernel job <tok,tok,..>:<max_new_tokens> of the held model's class."),
+        )
+        .arg(
+            Arg::new("palw-kernel-export-dir")
+                .long("palw-kernel-export-dir")
+                .env("KASPAD_PALW_KERNEL_EXPORT_DIR")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW (lane KNODE): the producer also writes each demand answer here (.palwresp) for a relay."),
+        )
+        .arg(
+            Arg::new("palw-kernel-relay-dir")
+                .long("palw-kernel-relay-dir")
+                .env("KASPAD_PALW_KERNEL_RELAY_DIR")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW (lane KNODE): carry, signed by this bond, the .palwresp answers in this directory for open demands."),
+        )
+        .arg(
+            Arg::new("palw-drill-kernel-inject")
+                .long("palw-drill-kernel-inject")
+                .env("KASPAD_PALW_DRILL_KERNEL_INJECT")
+                .require_equals(true)
+                .action(clap::ArgAction::Append)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW DRILL ONLY (lane KNODE): inject lie | silent | forged-receipt | wrong-challenge | junk-flood on the \
+                     kernel route. Refused without --palw-drill-genesis-salt.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-kernel-flood")
+                .long("palw-drill-kernel-flood")
+                .env("KASPAD_PALW_DRILL_KERNEL_FLOOD")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u32))
+                .help("PALW DRILL ONLY (lane KNODE): junk demands per claim for --palw-drill-kernel-inject=junk-flood."),
+        )
+        .arg(
             Arg::new("palw-kernel-model")
                 .long("palw-kernel-model")
                 .env("KASPAD_PALW_KERNEL_MODEL")
@@ -4100,6 +4174,15 @@ impl Args {
                 .get_many::<String>("palw-kernel-model")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_kernel_model),
+            palw_kernel_producer: m.get_one::<bool>("palw-kernel-producer").copied().unwrap_or(defaults.palw_kernel_producer),
+            palw_kernel_post_job: m.get_one::<String>("palw-kernel-post-job").cloned().or(defaults.palw_kernel_post_job),
+            palw_kernel_export_dir: m.get_one::<String>("palw-kernel-export-dir").cloned().or(defaults.palw_kernel_export_dir),
+            palw_kernel_relay_dir: m.get_one::<String>("palw-kernel-relay-dir").cloned().or(defaults.palw_kernel_relay_dir),
+            palw_drill_kernel_inject: m
+                .get_many::<String>("palw-drill-kernel-inject")
+                .map(|v| v.cloned().collect())
+                .unwrap_or(defaults.palw_drill_kernel_inject),
+            palw_drill_kernel_flood: m.get_one::<u32>("palw-drill-kernel-flood").copied().unwrap_or(defaults.palw_drill_kernel_flood),
             palw_token_table: m
                 .get_many::<String>("palw-token-table")
                 .map(|v| v.cloned().collect())

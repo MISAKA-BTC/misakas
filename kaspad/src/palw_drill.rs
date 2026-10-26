@@ -622,6 +622,12 @@ pub fn palw_drill_salt_of_v1(args: &Args) -> ConfigResult<Option<PalwDrillSaltV1
 /// it only refuses the keyring export (which needs one) and returns.
 pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
     let Some(salt) = palw_drill_salt_of_v1(args)? else {
+        if !args.palw_drill_kernel_inject.is_empty() || args.palw_drill_kernel_flood != 0 {
+            return Err(refused(
+                "--palw-drill-kernel-inject / --palw-drill-kernel-flood inject lies, forgeries and junk on the kernel route and are \
+                 DRILL ONLY: they need --palw-drill-genesis-salt (and its datadir marker); no shipped network starts with them",
+            ));
+        }
         if args.palw_drill_write_keyring.is_some() {
             return Err(refused("--palw-drill-write-keyring writes a drill's keyring and needs --palw-drill-genesis-salt"));
         }
@@ -1461,6 +1467,30 @@ mod tests {
 
     /// **`--palw-drill-anchor-duty-after-slots` is a drill node's flag and nobody else's** (ADR-0165 §00.9): refused without the salt,
     /// by name, on public testnet-12 too; a salted drill node takes it; off by default; the range is 1..=3600.
+    /// **Lane KNODE: the kernel-route injections are a drill node's flags and nobody else's** — refused without the salt (public
+    /// testnet-12 too), taken by a salted drill node, off by default; the slice roles that are not injections need no salt.
+    #[test]
+    fn the_kernel_injections_are_refused_off_a_salted_chain() {
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let with = |extra: &[&str]| {
+            let mut argv: Vec<&str> = base.to_vec();
+            argv.extend_from_slice(extra);
+            parse(&argv)
+        };
+        let salt_flag = format!("--palw-drill-genesis-salt={SALT}");
+        for flag in ["--palw-drill-kernel-inject=lie", "--palw-drill-kernel-inject=junk-flood", "--palw-drill-kernel-flood=10"] {
+            let why = refusal(&with(&[flag]));
+            assert!(why.contains("DRILL ONLY") && why.contains("--palw-drill-genesis-salt"), "{flag}: {why}");
+            assert!(refusal(&parse(&["--testnet", "--netsuffix=12", flag])).contains("DRILL ONLY"), "public testnet-12 refuses {flag}");
+        }
+        let salted = with(&[&salt_flag, "--palw-drill-kernel-inject=lie", "--palw-drill-kernel-inject=wrong-challenge"]);
+        assert_eq!(salted.palw_drill_kernel_inject, vec!["lie".to_string(), "wrong-challenge".to_string()]);
+        palw_drill_validate_args_v1(&salted).expect("a salted drill node takes them");
+        let plain = with(&["--palw-kernel-producer", "--palw-kernel-post-job=3,17,9:3", "--palw-kernel-relay-dir=/x"]);
+        assert!(plain.palw_kernel_producer && plain.palw_drill_kernel_inject.is_empty() && plain.palw_drill_kernel_flood == 0);
+        palw_drill_validate_args_v1(&plain).expect("the non-injection roles need no salt");
+    }
+
     #[test]
     fn the_anchor_duty_wait_flag_is_refused_off_a_salted_chain() {
         let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
