@@ -1335,3 +1335,5 @@ mod t0308;
 
 // Test-only measurements; the native network validation remains unchanged.
 mod measurement;
+
+mod capacity_measurement;
