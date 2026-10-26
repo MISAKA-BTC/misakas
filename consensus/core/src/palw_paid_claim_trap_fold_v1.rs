@@ -376,6 +376,13 @@ pub(super) fn check_fee_hold_admits_v1(
     if builder.settled_row_checked_v1(obligation)?.is_some() {
         return Ok(false);
     }
+    if builder.native_writers_tracking_v1() {
+        // The key constructor allocates exactly 137 bytes (prefix + claim +
+        // verifier + slot), even when no held row is present.
+        let mut q = super::native_writers::NativeWriteQuoteV1::new("held check fee lookup key");
+        q.exact::<u8>(137)?;
+        builder.admit_native_write_v1(q)?;
+    }
     let key = palw_paid_trap_held_fee_key_v1(&obligation.subject, &obligation.party, obligation.ordinal);
     Ok(!builder.state.kernel_route.as_ref().is_some_and(|route| route.aux.contains_key(&(PALW_PAID_CLAIM_TRAP_TABLE_V1, key))))
 }
