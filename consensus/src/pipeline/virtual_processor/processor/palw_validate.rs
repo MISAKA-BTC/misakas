@@ -2559,9 +2559,13 @@ impl VirtualStateProcessor {
                     }
                     let signer = state.bond(&answer.provider).ok_or("routed material provider bond absent")?;
                     if !Self::verify_mldsa87_with_context_bool(
-                        &signer.pubkey, answer.message(self.palw_network_domain_v2()).as_byte_slice(),
-                        &answer.signature, kaspa_consensus_core::palw_routed_material_v2::PALW_ROUTED_MATERIAL_CONTEXT_V2,
-                    ) { return Err("routed material answer lacks its exact provider signature".into()); }
+                        &signer.pubkey,
+                        answer.message(self.palw_network_domain_v2()).as_byte_slice(),
+                        &answer.signature,
+                        kaspa_consensus_core::palw_routed_material_v2::PALW_ROUTED_MATERIAL_CONTEXT_V2,
+                    ) {
+                        return Err("routed material answer lacks its exact provider signature".into());
+                    }
                     // Native membership and local workspace admission run in the
                     // typed fold. A local refusal is not a peer-object verdict.
                 }

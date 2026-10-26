@@ -3425,7 +3425,10 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         crate::float_public_source::write_float_public_source_v1(material, out)
     }
 
-    fn public_execution_binding_header_v1(&self,material:&[u8])->Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,String> {
+    fn public_execution_binding_header_v1(
+        &self,
+        material: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1, String> {
         crate::flat_public_source::original_public_binding_header_v1(material)
     }
 

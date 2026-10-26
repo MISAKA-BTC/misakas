@@ -504,12 +504,24 @@ impl<'a> PreparedV1<'a> {
     /// Canonical V2 state continuity under a distinct32 context. Virtual job
     /// inputs remain explicit PC entries; only authenticated original post
     /// writers are added. This never fabricates an encoder binding.
-    pub(crate) fn without_stage_v32(program:&'a TirProgramV1,source:&misaka_palw_tir::program_v2::TirProgramV2)->Result<Self,String>{
-        if source.v1_view()!=*program{return Err("stage32 view differs from canonical actual V2 source".into());}
-        misaka_palw_tir::validate_v2::validate_v2(source).map_err(|e|e.to_string())?;
-        let last=u16::try_from(source.occurrences().len().checked_sub(1).ok_or("stage32 post occurrence absent")?).map_err(|_|"stage32 occurrence overflow")?;
-        let binding=crate::trace::StageBindingV1{first_input:u16::MAX,inputs:0,post_writers:source.post_writes().into_iter().map(|(node,state)|(state,last,node)).collect()};
-        let mut prepared=Self::without_scope(program,None)?;prepared.w=WiringV1::for_stage_v32(program,&binding).map_err(|e|e.to_string())?;Ok(prepared)
+    pub(crate) fn without_stage_v32(
+        program: &'a TirProgramV1,
+        source: &misaka_palw_tir::program_v2::TirProgramV2,
+    ) -> Result<Self, String> {
+        if source.v1_view() != *program {
+            return Err("stage32 view differs from canonical actual V2 source".into());
+        }
+        misaka_palw_tir::validate_v2::validate_v2(source).map_err(|e| e.to_string())?;
+        let last = u16::try_from(source.occurrences().len().checked_sub(1).ok_or("stage32 post occurrence absent")?)
+            .map_err(|_| "stage32 occurrence overflow")?;
+        let binding = crate::trace::StageBindingV1 {
+            first_input: u16::MAX,
+            inputs: 0,
+            post_writers: source.post_writes().into_iter().map(|(node, state)| (state, last, node)).collect(),
+        };
+        let mut prepared = Self::without_scope(program, None)?;
+        prepared.w = WiringV1::for_stage_v32(program, &binding).map_err(|e| e.to_string())?;
+        Ok(prepared)
     }
 
     /// Choose the disclosure/court profile: the frozen v4/v5 one ([`seg_value_modes_v1`], with G14-S hiding tiles) or a

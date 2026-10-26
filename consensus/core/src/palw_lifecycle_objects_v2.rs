@@ -1463,9 +1463,10 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         O::SourceBootstrapV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::SelectedSourceBootstrapV1),
-        O::GdnStepAccusedV2 { .. } | O::ReaderRouterDeclaredV2 { .. } | O::RoutedStepAccusedV2 { .. } | O::RoutedMaterialAnsweredV2 { .. } => {
-            PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2)
-        }
+        O::GdnStepAccusedV2 { .. }
+        | O::ReaderRouterDeclaredV2 { .. }
+        | O::RoutedStepAccusedV2 { .. }
+        | O::RoutedMaterialAnsweredV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // The TIR and greedy Float32 routes' forms appended inside the staged court's kinds are owned by their own fences

@@ -266,9 +266,12 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
 
     if protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_PREFIX_HISTORY {
         flows.push(Box::new(palw_prefix_history_flow::PalwPrefixHistoryFlow::new(
-            ctx.clone(), router.clone(), router.subscribe_with_capacity(vec![
-                KaspadMessagePayloadType::PalwPrefixHistoryRequest, KaspadMessagePayloadType::PalwPrefixHistoryRecord,
-            ], 2),
+            ctx.clone(),
+            router.clone(),
+            router.subscribe_with_capacity(
+                vec![KaspadMessagePayloadType::PalwPrefixHistoryRequest, KaspadMessagePayloadType::PalwPrefixHistoryRecord],
+                2,
+            ),
         )));
     }
 

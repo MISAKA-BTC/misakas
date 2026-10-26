@@ -124,9 +124,11 @@ impl WindowGraphV37 {
             }
         }
         // KV/state binding of the selection: it must read a continuity-bound image.
-        if !self.appends.iter().any(|a| {
-            a.history == self.selection.source && a.dtype == self.selection.dtype && a.row_shape == self.selection.row_shape
-        }) {
+        if !self
+            .appends
+            .iter()
+            .any(|a| a.history == self.selection.source && a.dtype == self.selection.dtype && a.row_shape == self.selection.row_shape)
+        {
             return Err("window37 selection reads a history no append relation builds".into());
         }
         Ok(())

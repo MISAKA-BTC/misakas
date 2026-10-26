@@ -146,7 +146,11 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             // common source admission still requires an ordinary seal at S.
             if daa >= target.terms.seal_end
                 || (daa < target.terms.seal_start
-                    && !matches!(target.context.subject_kind, misaka_palw_challenge::SubjectKindV1::PanelAssignment | misaka_palw_challenge::SubjectKindV1::ClaimVerification))
+                    && !matches!(
+                        target.context.subject_kind,
+                        misaka_palw_challenge::SubjectKindV1::PanelAssignment
+                            | misaka_palw_challenge::SubjectKindV1::ClaimVerification
+                    ))
             {
                 continue;
             }
@@ -206,7 +210,9 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             .finals_read_v1()?
             .into_iter()
             .filter_map(|f| {
-                if ledger.paid_claim_consumers_v2.contains_key(&f.receipt.claim) { return None; }
+                if ledger.paid_claim_consumers_v2.contains_key(&f.receipt.claim) {
+                    return None;
+                }
                 let bytes = f.event?;
                 let w: misaka_palw_challenge::AttributedWorkV1 = borsh::from_slice(&bytes).ok()?;
                 Some((f.receipt.claim, w.event))

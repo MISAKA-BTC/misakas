@@ -110,7 +110,13 @@ impl PalwPanelService {
                 })
                 .await
                 .map_err(|e| format!("TIR prefix responder worker failed: {e}"))??;
-                let answer = PalwTirPrefixLeafAnswerV1 { answerer: signer, seed_id: row.seed_id(), ordinal, values_le: leaf.0, opening: leaf.1 };
+                let answer = PalwTirPrefixLeafAnswerV1 {
+                    answerer: signer,
+                    seed_id: row.seed_id(),
+                    ordinal,
+                    values_le: leaf.0,
+                    opening: leaf.1,
+                };
                 answer.check_wire_v1()?;
                 let mut movement = PalwConstraintStreamMoveV1 {
                     version: 1,

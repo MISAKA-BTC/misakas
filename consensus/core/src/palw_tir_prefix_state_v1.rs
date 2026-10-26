@@ -43,7 +43,9 @@ fn leaf_prelude_v1(leaf: &crate::palw_tir_step_v1::PalwTirLeafV1) -> Result<Vec<
     let mut out = Vec::with_capacity(32);
     let (kind, state, layer, first, position) = match leaf.kind {
         PalwTirLeafKindV1::State { state, layer, first_element, .. } => (0u8, state, layer, first_element, 0u32),
-        PalwTirLeafKindV1::HistTile { state, layer, first_lane, first_position, .. } => (1u8, state, layer, first_lane, first_position),
+        PalwTirLeafKindV1::HistTile { state, layer, first_lane, first_position, .. } => {
+            (1u8, state, layer, first_lane, first_position)
+        }
         PalwTirLeafKindV1::Commit { .. } => return Err("a commit leaf is not prefix state".into()),
     };
     out.push(kind);
@@ -60,7 +62,9 @@ fn leaf_prelude_v1(leaf: &crate::palw_tir_step_v1::PalwTirLeafV1) -> Result<Vec<
 pub enum PalwTirPrefixStateVerdictV1 {
     Honest,
     /// The claim's own boundary leaves re-derive another state root than the job declared.
-    StateRootMismatch { derived: Hash64 },
+    StateRootMismatch {
+        derived: Hash64,
+    },
 }
 
 /// Restartable authenticated digest over one claim's prefix boundary leaves.
@@ -202,7 +206,8 @@ impl PalwTirPrefixStateStreamV1 {
         next.hashed += (prelude.len() + values_le.len()) as u128;
         next.ordinal += 1;
         if next.ordinal == next.total {
-            let derived = crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&self.class_id, self.prefix_tokens, &next.digest.finish());
+            let derived =
+                crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&self.class_id, self.prefix_tokens, &next.digest.finish());
             next.verdict = Some(if derived == self.declared_state_root {
                 PalwTirPrefixStateVerdictV1::Honest
             } else {

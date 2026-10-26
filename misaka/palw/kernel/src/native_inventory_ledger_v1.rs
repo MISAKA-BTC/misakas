@@ -2,8 +2,57 @@ use super::*;
 
 // Generated read-only native inventory bridge; every ledger field is exhaustive.
 impl KernelLedgerV1 {
-    pub fn native_inventory_hidden_v1(&self) -> (&BTreeSet<Digest>,&BTreeMap<Digest, BTreeSet<Digest>>,&BlockBudgetV1,) {
-        let Self { flat_conformance_classes_v9: _, native_flat_candidate_ids_v9, flat_conformance_classes_v7: _, policy: _, schedule: _, consumer_final_reward_caps: _, consumer_minimum_payouts_v1: _, known: _, daa: _, bonds: _, classes: _, conformance_classes: _, conformance_class_owners, pipeline_classes: _, jobs: _, pipeline_jobs: _, claims: _, demands: _, served: _, attested_artifacts: _, job_claims: _, seals: _, proof_seals: _, job_escrows: _, exec_reward_holds: _, beacon_sources: _, beacon_source_inputs: _, paid_claim_consumers_v2: _, beacon_source_fee_inputs: _, beacon_source_fees: _, beacon_source_fee_promises: _, served_demands: _, claim_beacon_salts: _, forfeited_claim_seals: _, job_posters: _, burned: _, opv: _, tiled_jobs: _, seg_progress: _, typed: _, provider_liable: _, commitment_scope_from_daa: _, verifier_pay_policy: _, verifier_pay: _, court_scope_policy: _, court_scope: _, sealed_bounty_policy: _, budget } = self;
-        (native_flat_candidate_ids_v9, conformance_class_owners, budget,)
+    pub fn native_inventory_hidden_v1(&self) -> (&BTreeSet<Digest>, &BTreeMap<Digest, BTreeSet<Digest>>, &BlockBudgetV1) {
+        let Self {
+            flat_conformance_classes_v9: _,
+            native_flat_candidate_ids_v9,
+            flat_conformance_classes_v7: _,
+            policy: _,
+            schedule: _,
+            consumer_final_reward_caps: _,
+            consumer_minimum_payouts_v1: _,
+            known: _,
+            daa: _,
+            bonds: _,
+            classes: _,
+            conformance_classes: _,
+            conformance_class_owners,
+            pipeline_classes: _,
+            jobs: _,
+            pipeline_jobs: _,
+            claims: _,
+            demands: _,
+            served: _,
+            attested_artifacts: _,
+            job_claims: _,
+            seals: _,
+            proof_seals: _,
+            job_escrows: _,
+            exec_reward_holds: _,
+            beacon_sources: _,
+            beacon_source_inputs: _,
+            paid_claim_consumers_v2: _,
+            beacon_source_fee_inputs: _,
+            beacon_source_fees: _,
+            beacon_source_fee_promises: _,
+            served_demands: _,
+            claim_beacon_salts: _,
+            forfeited_claim_seals: _,
+            job_posters: _,
+            burned: _,
+            opv: _,
+            tiled_jobs: _,
+            seg_progress: _,
+            typed: _,
+            provider_liable: _,
+            commitment_scope_from_daa: _,
+            verifier_pay_policy: _,
+            verifier_pay: _,
+            court_scope_policy: _,
+            court_scope: _,
+            sealed_bounty_policy: _,
+            budget,
+        } = self;
+        (native_flat_candidate_ids_v9, conformance_class_owners, budget)
     }
 }

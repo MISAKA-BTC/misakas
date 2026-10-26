@@ -34,9 +34,14 @@ pub(super) struct InventorySnapshotV1<'a> {
 pub(super) enum InventoryDecisionV1 {
     // Read by the restart regression; the service only needs readiness itself.
     #[cfg_attr(not(test), allow(dead_code))]
-    Ready { actual_bytes: u64 },
+    Ready {
+        actual_bytes: u64,
+    },
     Wait,
-    Move { movement: PalwConstraintStreamMoveV1, until_daa: u64 },
+    Move {
+        movement: PalwConstraintStreamMoveV1,
+        until_daa: u64,
+    },
 }
 pub(super) struct ArtifactInventoryActorV1 {
     pub class_id: Hash64,

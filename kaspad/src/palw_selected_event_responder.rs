@@ -135,7 +135,9 @@ impl PalwPanelService {
                         session.palw_producer_facts_v2(class, None).ok_or("TIR selected response has no registered artifact")?;
                     let need = self
                         .backends()
-                        .role_memory_need_or_chain_v1(class, facts.artifact_root, FULL_SEAT_V1, |id| self.chain_carriage_v1(session, id))
+                        .role_memory_need_or_chain_v1(class, facts.artifact_root, FULL_SEAT_V1, |id| {
+                            self.chain_carriage_v1(session, id)
+                        })
                         .ok_or("TIR selected responder resource profile unavailable")?;
                     let execution = self.reserve_replay_v1("public-tir-selected-answer", &need, class, claim)?;
                     let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
@@ -158,7 +160,8 @@ impl PalwPanelService {
                         let mut found = None;
                         for path in paths {
                             let Ok(material) = std::fs::read(&path) else { continue };
-                            if let Ok(event) = backend.disclose_tir_selected_event_v1(&material, &header, coordinate.row, coordinate.tile, maximum)
+                            if let Ok(event) =
+                                backend.disclose_tir_selected_event_v1(&material, &header, coordinate.row, coordinate.tile, maximum)
                             {
                                 found = Some(event);
                                 break;

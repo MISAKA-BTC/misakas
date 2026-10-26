@@ -336,13 +336,43 @@ impl State {
     }
 }
 
+/// Signal numbers the supervisor sends. The supervisor drives processes with POSIX signals and
+/// runs on Unix only; on other targets the constants exist so the CLI still builds, and
+/// [`alive`]/[`signal`] report that nothing could be signalled.
+pub(crate) mod sig {
+    #[cfg(unix)]
+    pub(crate) use libc::{SIGKILL, SIGTERM, SIGUSR1};
+    #[cfg(unix)]
+    pub(crate) type Signal = libc::c_int;
+    #[cfg(not(unix))]
+    pub(crate) type Signal = i32;
+    #[cfg(not(unix))]
+    pub(crate) const SIGTERM: Signal = 15;
+    #[cfg(not(unix))]
+    pub(crate) const SIGKILL: Signal = 9;
+    #[cfg(not(unix))]
+    pub(crate) const SIGUSR1: Signal = 10;
+}
+
+#[cfg(unix)]
 pub(crate) fn alive(pid: u32) -> bool {
     // Signal 0 checks for existence and permission without delivering anything.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-pub(crate) fn signal(pid: u32, sig: libc::c_int) -> bool {
+#[cfg(unix)]
+pub(crate) fn signal(pid: u32, sig: sig::Signal) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, sig) == 0 }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn alive(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(not(unix))]
+pub(crate) fn signal(_pid: u32, _sig: sig::Signal) -> bool {
+    false
 }
 
 /// The supervisor for this network, if one runs.
@@ -597,6 +627,7 @@ fn xml(s: &str) -> String {
 /// Run the same supervisor in the background (`relaunch` is `misaka`'s own arguments for
 /// `mining run`), in a session of its own, and wait until it says it is up or failed.
 async fn detach(plan: &Plan, relaunch: &[String]) -> CliResult {
+    #[cfg(unix)]
     use std::os::unix::process::CommandExt;
     std::fs::create_dir_all(&plan.run_dir).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", plan.run_dir.display())))?;
     let log = std::fs::OpenOptions::new()
@@ -609,6 +640,7 @@ async fn detach(plan: &Plan, relaunch: &[String]) -> CliResult {
     cmd.args(relaunch);
     cmd.stdin(std::process::Stdio::null()).stdout(log.try_clone().map_err(|e| CliError::generic(e.to_string()))?).stderr(log);
     // A session of its own: closing this terminal must not hang the supervisor up.
+    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
@@ -670,20 +702,25 @@ pub(crate) fn spawn(cmd: &Cmd, run_dir: &Path) -> Result<Child, String> {
         .open(run_dir.join(format!("{}.out", cmd.name)))
         .map_err(|e| format!("{}.out: {e}", cmd.name))?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
-    use std::os::unix::process::CommandExt as _;
-    let child = std::process::Command::new(&cmd.program)
+    let mut command = std::process::Command::new(&cmd.program);
+    command
         .args(&cmd.args)
         .envs(cmd.env.iter().cloned())
         // No stdin: a kaspad prompt (a database from another version) reads EOF, refuses and exits
         // — it never deletes anything on a supervisor's behalf.
         .stdin(std::process::Stdio::null())
         .stdout(out)
-        .stderr(err)
-        // **A process group of its own, so a terminal's Ctrl-C reaches the supervisor only.** In the
-        // terminal's group, kaspad got the SIGINT too and stopped at once — under a supervisor whose
-        // Ctrl-C means "drain": the claims it was defending lost their node, and the supervisor then
-        // restarted it as a crash. Stopping the children, and in which order, is the supervisor's.
-        .process_group(0)
+        .stderr(err);
+    // **A process group of its own, so a terminal's Ctrl-C reaches the supervisor only.** In the
+    // terminal's group, kaspad got the SIGINT too and stopped at once — under a supervisor whose
+    // Ctrl-C means "drain": the claims it was defending lost their node, and the supervisor then
+    // restarted it as a crash. Stopping the children, and in which order, is the supervisor's.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let child = command
         .spawn()
         .map_err(|e| format!("{}: {e}", cmd.program.display()))?;
     Ok(Child { cmd: cmd.clone(), child, started: Instant::now() })
@@ -695,7 +732,7 @@ pub(crate) async fn stop_child(c: &mut Child, grace: Duration) -> String {
     if !matches!(c.child.try_wait(), Ok(None)) {
         return format!("{} had already exited", c.cmd.name);
     }
-    signal(pid, libc::SIGTERM);
+    signal(pid, sig::SIGTERM);
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
         if !matches!(c.child.try_wait(), Ok(None)) {
@@ -703,7 +740,7 @@ pub(crate) async fn stop_child(c: &mut Child, grace: Duration) -> String {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    signal(pid, libc::SIGKILL);
+    signal(pid, sig::SIGKILL);
     let _ = c.child.wait();
     format!("{} did not stop within {} s and was killed", c.cmd.name, grace.as_secs())
 }
@@ -724,6 +761,12 @@ enum Mode {
 
 /// **The supervisor**: spawn, gate, keep alive, stop in order. `interactive` prints the gates and
 /// the live line, and turns Ctrl-C into a safe stop.
+#[cfg(not(unix))]
+pub(crate) async fn run_supervisor(_plan: Plan, _interactive: bool, _reprofile: &dyn Fn() -> Result<Profile, CliError>) -> CliResult {
+    Err(CliError::generic("the mining supervisor drives its processes with POSIX signals and runs on Unix only"))
+}
+
+#[cfg(unix)]
 pub(crate) async fn run_supervisor(plan: Plan, interactive: bool, reprofile: &dyn Fn() -> Result<Profile, CliError>) -> CliResult {
     use tokio::signal::unix::{SignalKind, signal as sig};
     std::fs::create_dir_all(&plan.run_dir).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", plan.run_dir.display())))?;
@@ -1175,7 +1218,7 @@ pub(crate) async fn stop(ctx: &crate::node::Ctx, profile: Profile, drain_: bool,
         } else if drain_ {
             return match &supervised {
                 Some(state) => {
-                    signal(state.supervisor_pid, libc::SIGUSR1);
+                    signal(state.supervisor_pid, sig::SIGUSR1);
                     println!("draining: the supervisor (pid {}) stops drawing now and exits when the last of {} claim(s) ends", state.supervisor_pid, owed.len());
                     println!("  misaka mining status shows how many are left");
                     Ok(())
@@ -1192,7 +1235,7 @@ pub(crate) async fn stop(ctx: &crate::node::Ctx, profile: Profile, drain_: bool,
     match supervised {
         Some(state) => {
             let grace = Duration::from_secs(grace.unwrap_or(profile.stop_grace_secs) + 90);
-            signal(state.supervisor_pid, libc::SIGTERM);
+            signal(state.supervisor_pid, sig::SIGTERM);
             println!(
                 "stopping: the supervisor (pid {}) stops the rail, the gateway, then kaspad (up to {} s)",
                 state.supervisor_pid, profile.stop_grace_secs
@@ -1225,14 +1268,14 @@ pub(crate) async fn stop(ctx: &crate::node::Ctx, profile: Profile, drain_: bool,
                 );
             }
             let grace = Duration::from_secs(grace.unwrap_or(profile.stop_grace_secs));
-            signal(proc_.pid, libc::SIGTERM);
+            signal(proc_.pid, sig::SIGTERM);
             println!("stopping kaspad (pid {}): one SIGTERM, then up to {} s", proc_.pid, grace.as_secs());
             let deadline = Instant::now() + grace;
             while Instant::now() < deadline && alive(proc_.pid) {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             if alive(proc_.pid) {
-                signal(proc_.pid, libc::SIGKILL);
+                signal(proc_.pid, sig::SIGKILL);
                 println!("{}", paint::yellow(&format!("! kaspad did not stop within {} s and was killed", grace.as_secs())));
             } else {
                 println!("{}", paint::green("✓ kaspad stopped"));

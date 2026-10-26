@@ -23,7 +23,7 @@ impl NativeCarrierCandidateV22 {
     /// unit in a block, never many variants against an immutable old counter.
     pub fn key(&self) -> (u8, u8, [u8; 64], u16) {
         let (kind, id, part) = match self.request {
-            NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,index,..}=>(4,pending,index),
+            NativePaidCarrierRequestV22::ProducerAnswerPartV29 { pending, index, .. } => (4, pending, index),
             NativePaidCarrierRequestV22::SourceAnswer { pending } => (0, pending, 0),
             NativePaidCarrierRequestV22::TraceAnswer { pending } => (1, pending, 0),
             NativePaidCarrierRequestV22::OwnProofPart { seal, index, .. } => (2, seal, index as u16),
@@ -72,11 +72,15 @@ pub fn native_carrier_candidate_v22(tx: &Transaction) -> Option<NativeCarrierCan
                         count: part.count,
                     }
                 }
-                (misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11,37)
-                |(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,32)=>{
-                    let p=crate::palw_native_reply_parts_v29::borrowed_native_reply_metadata_v29(a.body)?;
+                (misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11, 37)
+                | (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 32) => {
+                    let p = crate::palw_native_reply_parts_v29::borrowed_native_reply_metadata_v29(a.body)?;
                     NativePaidCarrierRequestV22::ProducerAnswerPartV29 {
-                        pending:p.pending,group:p.group,index:p.index,count:p.count,total:p.total,
+                        pending: p.pending,
+                        group: p.group,
+                        index: p.index,
+                        count: p.count,
+                        total: p.total,
                     }
                 }
                 _ => return None,
@@ -159,18 +163,20 @@ impl NativeCarriageSnapshotV22 {
         // Stage's separate physical consent/lease must be connected before its
         // carriers can enter this lane. Sharing a tag or source pending ID is
         // never enough to reinterpret a text native23 lease as a stage grant.
-        let route=self.state.kernel_route()?;
-        let e=match c.namespace {
-            misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11=>
-                route.native_paid_carrier_eligibility_v22(&c.request,self.now,&self.mass,&self.service)?,
-            misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14=>match &c.request {
-                NativePaidCarrierRequestV22::SourceAnswer{pending}=>
-                    route.stage_paid_answer_eligibility_v28(*pending,self.now,&self.mass,&self.service)?,
-                NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,group,index,count,total}=>
-                    route.stage_paid_reply_eligibility_v28(*pending,*group,*index,*count,*total,self.now,&self.mass,&self.service)?,
-                _=>return None,
+        let route = self.state.kernel_route()?;
+        let e = match c.namespace {
+            misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 => {
+                route.native_paid_carrier_eligibility_v22(&c.request, self.now, &self.mass, &self.service)?
+            }
+            misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => match &c.request {
+                NativePaidCarrierRequestV22::SourceAnswer { pending } => {
+                    route.stage_paid_answer_eligibility_v28(*pending, self.now, &self.mass, &self.service)?
+                }
+                NativePaidCarrierRequestV22::ProducerAnswerPartV29 { pending, group, index, count, total } => route
+                    .stage_paid_reply_eligibility_v28(*pending, *group, *index, *count, *total, self.now, &self.mass, &self.service)?,
+                _ => return None,
             },
-            _=>return None,
+            _ => return None,
         };
         (e.owner == c.owner && e.deadline >= self.now && e.original_service == self.service.root()).then_some(e)
     }
@@ -182,8 +188,10 @@ impl NativeCarriageSnapshotV22 {
             if (0..tx.tx().inputs.len()).any(|i| tx.utxo(i).is_none_or(|e| e.block_daa_score > self.selected_parent_daa)) {
                 return None;
             }
-        } else if matches!(c.request, NativePaidCarrierRequestV22::OwnProofPartV29 { .. }
-            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }) {
+        } else if matches!(
+            c.request,
+            NativePaidCarrierRequestV22::OwnProofPartV29 { .. } | NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }
+        ) {
             return None;
         }
         Some(e)

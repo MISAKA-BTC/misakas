@@ -137,12 +137,15 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                 let authority = self.paid_claim_source_authority_v3(context)?;
                 let sponsor = authority.sponsor.ok_or("paid claim sponsor consent missing")?;
                 let derived = BeaconSourceFeeTargetV1 {
-                    target: target.clone(), sponsor: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor),
+                    target: target.clone(),
+                    sponsor: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor),
                     minimum_fee: fence.policy.minimum_fee_for(target)?,
                     max_sources: fence.policy.max_funded_sources.min(target.terms.max_total),
                 };
                 if self.beacon_source_fee_target_v5(context)? != derived
-                    || self.beacon_source_cost_bounds_v5(context)? != fence.policy.cost_bounds.ok_or("paid claim cost scope missing")? {
+                    || self.beacon_source_cost_bounds_v5(context)?
+                        != fence.policy.cost_bounds.ok_or("paid claim cost scope missing")?
+                {
                     return Err("paid claim source sponsor/floor/cap/cost authority substituted".into());
                 }
                 inputs.targets.insert(*context, derived);

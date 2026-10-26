@@ -165,7 +165,12 @@ pub fn native_paged_file_v29(
 }
 /// Action 32: the exact 32-KiB parts of one paid file. The last part's assembly
 /// reveals it; there is no separate reveal action (34 is closed).
-pub fn prepare_paged_parts_v29(job: &Digest, seal: &Digest, owner: &Digest, file: &[u8]) -> Result<Vec<PreparedNativePayloadV29>, String> {
+pub fn prepare_paged_parts_v29(
+    job: &Digest,
+    seal: &Digest,
+    owner: &Digest,
+    file: &[u8],
+) -> Result<Vec<PreparedNativePayloadV29>, String> {
     let count = file.len().div_ceil(TEXT_STOP_PART_BYTES_V29);
     if file.is_empty() || count > TEXT_STOP_MAX_PARTS_V29 as usize {
         return Err("paged29 part count".into());
@@ -575,7 +580,10 @@ pub fn decode_native_payload_v29(
         }
         "text-collect29" => {
             let d = |at: usize| -> Result<Digest, String> {
-                raw.get(at..at + 64).ok_or("text29 collection digest absent")?.try_into().map_err(|_| "text29 collection digest".to_string())
+                raw.get(at..at + 64)
+                    .ok_or("text29 collection digest absent")?
+                    .try_into()
+                    .map_err(|_| "text29 collection digest".to_string())
             };
             let kind = match (raw.first(), raw.len()) {
                 (Some(0), 129) => NativeTextCollectV29::Owner { job: d(1)?, owner: d(65)? },
@@ -591,9 +599,9 @@ pub fn decode_native_payload_v29(
             }
             prepare_window_attach_v37(&raw[..64].try_into().unwrap(), &raw[64..].try_into().unwrap())
         }
-        "window-class37" => prepare_window_class_v37(
-            &kaspa_consensus_core::palw_window_class_v37::NativeWindowClassRegisterV37::from_bytes(raw)?,
-        ),
+        "window-class37" => {
+            prepare_window_class_v37(&kaspa_consensus_core::palw_window_class_v37::NativeWindowClassRegisterV37::from_bytes(raw)?)
+        }
         "stage-bundle28" => {
             let b = kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28::from_bytes(raw)?;
             prepare_stage_bundle_v28(&b)

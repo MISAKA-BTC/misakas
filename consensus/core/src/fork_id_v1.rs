@@ -812,7 +812,10 @@ mod tests {
             "palw_panel_lifetime_v2" => {
                 params.palw_panel_lifetime_v2 = Some(crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at))
             }
-            "palw_material_release_recovery_v2"=> {params.palw_material_release_recovery_v2=Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));}
+            "palw_material_release_recovery_v2" => {
+                params.palw_material_release_recovery_v2 =
+                    Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));
+            }
             "palw_monetary_material_v1" => {
                 params.palw_monetary_material_v1 = Some(crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1 {
                     activation: at,

@@ -723,11 +723,7 @@ impl PalwTirStepSpaceV1 {
     /// leaves: the `Fixed` checkpoints at position `k − 1` and every `Hist` chunk of rows `0..k`.
     pub fn prefix_state_leaf_count_v1(&self, ctx: &PalwJobContextV2, k: u32) -> Option<u64> {
         let job = self.job_shape(ctx).ok()?;
-        if k == 0
-            || k >= job.prefill
-            || !k.is_multiple_of(self.layout.checkpoint_interval)
-            || !k.is_multiple_of(self.layout.h_tile)
-        {
+        if k == 0 || k >= job.prefill || !k.is_multiple_of(self.layout.checkpoint_interval) || !k.is_multiple_of(self.layout.h_tile) {
             return None;
         }
         let chunks = u64::from(k / self.layout.h_tile);

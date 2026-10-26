@@ -58,10 +58,13 @@ fn hex(b: u8) -> String {
 }
 
 fn key_file(dir: &Path, name: &str, seed: u8) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let p = dir.join(name);
     std::fs::write(&p, [seed; 32].iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     p
 }
 

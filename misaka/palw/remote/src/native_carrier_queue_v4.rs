@@ -545,7 +545,7 @@ mod tests {
         bytes.push(2);
         bytes.extend([0u8; 192]);
         bytes.extend(u32::MAX.to_le_bytes());
-        assert!(preflight_native_value_v1::<Snapshot>(&bytes, bytes.len() as u64).is_err());
+        assert!(preflight_native_value_v1::<Snapshot>(bytes.as_slice(), bytes.len() as u64).is_err());
         assert!(decode_owned(&bytes, || borsh::from_slice::<Snapshot>(&bytes)).is_err());
     }
 }

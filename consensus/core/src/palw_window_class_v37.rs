@@ -132,8 +132,8 @@ mod tests {
     use super::*;
     use misaka_palw_kernel::{
         flat_history8::{HistoryNodeV8, HistorySelectionPlanV8},
-        flat_lengths36::ModalityLengthV36,
         flat_lengths7::FlatLengthAxisV7,
+        flat_lengths36::ModalityLengthV36,
         flat_window37::WindowAppendV37,
     };
     use misaka_palw_tir::DType;

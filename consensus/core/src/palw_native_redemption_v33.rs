@@ -229,11 +229,11 @@ pub fn derive_native_redemption_v33(
     if r.namespace != 28
         && Hash64::from_bytes(r.payout_queue)
             != crate::palw_native_audit_v27::native_final_credit_queue_v27(
-            r.job,
-            r.funding,
-            r.settlement,
-            Hash64::from_bytes(r.payout_payload),
-        )
+                r.job,
+                r.funding,
+                r.settlement,
+                Hash64::from_bytes(r.payout_payload),
+            )
     {
         return Err("native redemption33 original unique credit queue identity differs".into());
     }

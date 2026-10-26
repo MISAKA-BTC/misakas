@@ -66,6 +66,8 @@ pub mod bootstrap_check;
 pub mod census;
 /// Bounded complete-check builder and verifier over a rooted public snapshot.
 pub mod complete_check;
+/// RFC07/RFC08 signed economic contracts (inner 39, 67–69): offline drafts and signing; dormant.
+pub mod econ_contracts_v1;
 /// Protected native candidate preparation and private actor-bound seal/reveal material.
 pub mod flat_candidate_v6;
 /// Explicit v7 mixed-court candidate metadata registration.
@@ -86,22 +88,20 @@ pub mod kernel_params;
 pub mod kernel_rows;
 pub mod native_audit_io_v32;
 pub mod native_audit_v32;
+pub mod native_lifecycle_v32;
+pub mod native_master_v32;
 pub mod native_params_v34;
 pub mod native_payload_v29;
 pub mod native_redemption_v33;
 pub mod native_spend_v35;
-pub mod native_master_v32;
-pub mod native_lifecycle_v32;
 /// Same native derivation for full25 / first-EOS29 maximum contracts.
 pub mod native_text_v29;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
-pub mod panel_source_fee_v2;
-pub mod panel_lifetime_v2;
-/// RFC07/RFC08 signed economic contracts (inner 39, 67–69): offline drafts and signing; dormant.
-pub mod econ_contracts_v1;
 pub mod onboarding_snapshot;
+pub mod panel_lifetime_v2;
+pub mod panel_source_fee_v2;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
 pub mod preflight;
 /// RFC-0002 Part II: runtime packs — the manifest that makes an artifact reproducible and its claims checkable.

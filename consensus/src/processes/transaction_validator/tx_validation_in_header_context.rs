@@ -60,14 +60,20 @@ impl TransactionValidator {
             && tx.payload.starts_with(kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
         {
             if !self.palw_staged_public_court_fence.is_some_and(|fence| fence.is_active(ctx_daa_score)) {
-                return Err(TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable));
+                return Err(TxRuleError::InvalidPalwFpPayload(
+                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
+                ));
             }
-            let envelope = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload)
-                .map_err(|_| TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable))?;
+            let envelope =
+                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload).map_err(|_| {
+                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
+                })?;
             let mut inner = tx.clone();
             inner.payload = envelope.original_payload;
             Some(inner)
-        } else { None };
+        } else {
+            None
+        };
         let tx = history_inner.as_ref().unwrap_or(tx);
         self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)?;

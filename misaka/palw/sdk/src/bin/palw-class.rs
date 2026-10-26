@@ -278,9 +278,7 @@ fn apply_own_native_params_v34(args: &mut Vec<String>, base: &mut Params) -> Res
     if let Some(file) = file {
         let root: kaspa_hashes::Hash64 =
             root.ok_or("--own-params-snapshot-root required")?.parse().map_err(|e| format!("snapshot root: {e}"))?;
-        let hash = misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(
-            &sha.ok_or("--own-params-snapshot-sha256 required")?,
-        )?;
+        let hash = misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(&sha.ok_or("--own-params-snapshot-sha256 required")?)?;
         let owned = misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
             base,
             std::path::Path::new(&file),
@@ -1022,7 +1020,15 @@ fn run(args: &[String]) -> Result<(), String> {
             let parent = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(&parent_path))?;
             let aux = misaka_palw_sdk::native_audit_io_v32::read_native_fact_proof_v32(std::path::Path::new(&aux_path))?;
             let checked = misaka_palw_sdk::native_lifecycle_v32::derive_anchored_lifecycle_v32(
-                &child, child_pin, &parent, parent_pin, &view.params, None, &aux, stage, id,
+                &child,
+                child_pin,
+                &parent,
+                parent_pin,
+                &view.params,
+                None,
+                &aux,
+                stage,
+                id,
             )?;
             let a = checked.anchor();
             let hex = misaka_palw_sdk::runtime_pack::commit::hex;
@@ -1090,7 +1096,17 @@ fn run(args: &[String]) -> Result<(), String> {
             )?)
             .map_err(|e| e.to_string())?;
             let checked = misaka_palw_sdk::native_master_v32::derive_anchored_master_composite_v32(
-                &child, child_pin, &parent, parent_pin, &view.params, None, &aux, master, &jobs, &values, &generated,
+                &child,
+                child_pin,
+                &parent,
+                parent_pin,
+                &view.params,
+                None,
+                &aux,
+                master,
+                &jobs,
+                &values,
+                &generated,
             )?;
             let hex = misaka_palw_sdk::runtime_pack::commit::hex;
             let report = serde_json::json!({"schema":"misaka.palw.audit-time-master-composite.v32",

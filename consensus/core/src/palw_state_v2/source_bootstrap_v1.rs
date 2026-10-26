@@ -43,7 +43,10 @@ impl PalwChainStateV2 {
         route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
         ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
         epoch: &PalwSourceBootstrapEpochRowV1,
-        id: Hash64, now: u64, consumer_liability_until: u64, liability_slack: u64,
+        id: Hash64,
+        now: u64,
+        consumer_liability_until: u64,
+        liability_slack: u64,
     ) -> Result<Option<misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1>, PalwStateV2Error> {
         current_paid_source_event_v6(route, ledger, epoch, id, now, consumer_liability_until, liability_slack)
     }
@@ -719,63 +722,100 @@ pub(crate) fn current_paid_source_event_v6(
     liability_slack: u64,
 ) -> Result<Option<misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1>, PalwStateV2Error> {
     use crate::palw_native_resource_v1::NativeHeapV1;
-    let epoch_overlap = epoch.native_heap_v1("V6 source cohort validation overlap").bytes()
-        .and_then(|n| n.checked_mul(4)).and_then(|n| n.checked_add(65536))
-        .ok_or_else(|| PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwSourceBootstrapEpochRowV1>("V6 epoch validation")))?;
-    let _epoch_overlap = crate::palw_native_resource_v1::reserve_native_requests_v1(epoch_overlap)
-        .map_err(PalwStateV2Error::NativeResource)?;
+    let epoch_overlap = epoch
+        .native_heap_v1("V6 source cohort validation overlap")
+        .bytes()
+        .and_then(|n| n.checked_mul(4))
+        .and_then(|n| n.checked_add(65536))
+        .ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwSourceBootstrapEpochRowV1>("V6 epoch validation"))
+        })?;
+    let _epoch_overlap =
+        crate::palw_native_resource_v1::reserve_native_requests_v1(epoch_overlap).map_err(PalwStateV2Error::NativeResource)?;
     validate_cohort(epoch)?;
-    if epoch.draw_refused || epoch.context.anchor.is_none()
+    if epoch.draw_refused
+        || epoch.context.anchor.is_none()
         || consumer_liability_until.checked_add(liability_slack).is_none_or(|until| until > epoch.context.policy.stake_release_daa)
     {
         return Ok(None);
     }
     let bytes = crate::palw_material_challenge_checkpoint_v4::material_challenge_fixed_row_v4(
-        route, PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1, &key(1, id),
-    ).map_err(PalwStateV2Error::NativeResource)?;
+        route,
+        PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1,
+        &key(1, id),
+    )
+    .map_err(PalwStateV2Error::NativeResource)?;
     let Some(bytes) = bytes else { return Ok(None) };
-    let row = retain_native_value_decode_classified_v1::<PalwSourceBootstrapWorkRowV1, _>(
-        bytes, || borsh::from_slice(bytes),
-    ).map_err(decode_error)?;
+    let row = retain_native_value_decode_classified_v1::<PalwSourceBootstrapWorkRowV1, _>(bytes, || borsh::from_slice(bytes))
+        .map_err(decode_error)?;
     validate_work(epoch, &row)?;
-    if row.work.id() != id { return Err(refuse("V6 bootstrap source key differs from its own statement")); }
+    if row.work.id() != id {
+        return Err(refuse("V6 bootstrap source key differs from its own statement"));
+    }
     let Some((final_position, settlement_position)) = row.settlement else { return Ok(None) };
     let Some(source) = ledger.claims.get(&row.work.claim.as_bytes()) else { return Ok(None) };
-    let source_overlap = source.body.native_heap_v1("V6 direct source identity serialization overlap").bytes()
-        .and_then(|n| n.checked_mul(4)).and_then(|n| n.checked_add(
-            (row.approvals.len() as u64).checked_mul(512)?))
-        .ok_or_else(|| PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwSourceBootstrapWorkRowV1>("V6 source validation")))?;
-    let _source_overlap = crate::palw_native_resource_v1::reserve_native_requests_v1(source_overlap)
-        .map_err(PalwStateV2Error::NativeResource)?;
+    let source_overlap = source
+        .body
+        .native_heap_v1("V6 direct source identity serialization overlap")
+        .bytes()
+        .and_then(|n| n.checked_mul(4))
+        .and_then(|n| n.checked_add((row.approvals.len() as u64).checked_mul(512)?))
+        .ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwSourceBootstrapWorkRowV1>("V6 source validation"))
+        })?;
+    let _source_overlap =
+        crate::palw_native_resource_v1::reserve_native_requests_v1(source_overlap).map_err(PalwStateV2Error::NativeResource)?;
     let Some(until) = source.liability_until else { return Ok(None) };
-    if source.convicted || until >= epoch.context.policy.stake_release_daa
+    if source.convicted
+        || until >= epoch.context.policy.stake_release_daa
         || ledger.paid_claim_consumers_v2.contains_key(&row.work.claim.as_bytes())
         || now < settlement_position
-    { return Ok(None); }
+    {
+        return Ok(None);
+    }
     let native = match derive_native_work(epoch, ledger, row.work.claim) {
         Ok(native) => native,
         Err(PalwStateV2Error::NativeResource(error)) => return Err(PalwStateV2Error::NativeResource(error)),
         Err(_) => return Ok(None),
     };
-    if native != row.work { return Ok(None); }
+    if native != row.work {
+        return Ok(None);
+    }
     let Some(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Settled { final_daa, settled_from_daa }) =
         crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(ledger, &row.work.claim.as_bytes(), now)
-    else { return Ok(None) };
-    if final_daa != final_position || settled_from_daa > settlement_position || settlement_position > epoch.context.policy.stake_release_daa {
+    else {
+        return Ok(None);
+    };
+    if final_daa != final_position
+        || settled_from_daa > settlement_position
+        || settlement_position > epoch.context.policy.stake_release_daa
+    {
         return Ok(None);
     }
     let anchor = epoch.context.anchor.expect("checked anchor").0;
     Ok(Some(misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1 {
-        version: 1, network: epoch.context.policy.network.as_bytes(),
-        bootstrap_epoch: row.work.epoch.as_bytes(), bootstrap_policy: row.work.policy.as_bytes(),
-        frozen_population: epoch.context.population_root().map_err(refuse)?, frozen_block: epoch.context.frozen_block.as_bytes(),
-        anchor: anchor.as_bytes(), anchor_position: epoch.context.policy.anchor_cutoff_daa,
-        source_profile: row.work.source_profile.as_bytes(), checker_scope: row.work.checker_scope.as_bytes(),
-        claim: row.work.claim.as_bytes(), canonical_work: row.work.canonical_work.as_bytes(), statement: id.as_bytes(),
-        material_scope: row.work.material_scope.as_bytes(), execution_commitment: row.work.execution_commitment.as_bytes(),
+        version: 1,
+        network: epoch.context.policy.network.as_bytes(),
+        bootstrap_epoch: row.work.epoch.as_bytes(),
+        bootstrap_policy: row.work.policy.as_bytes(),
+        frozen_population: epoch.context.population_root().map_err(refuse)?,
+        frozen_block: epoch.context.frozen_block.as_bytes(),
+        anchor: anchor.as_bytes(),
+        anchor_position: epoch.context.policy.anchor_cutoff_daa,
+        source_profile: row.work.source_profile.as_bytes(),
+        checker_scope: row.work.checker_scope.as_bytes(),
+        claim: row.work.claim.as_bytes(),
+        canonical_work: row.work.canonical_work.as_bytes(),
+        statement: id.as_bytes(),
+        material_scope: row.work.material_scope.as_bytes(),
+        execution_commitment: row.work.execution_commitment.as_bytes(),
         approval_root: hash_serialized(b"MISAKA/PALW/SOURCE-APPROVAL-ROOT/V1", &row.approvals),
-        producer: row.work.producer.as_bytes(), consumer: row.work.consumer.as_bytes(), accepted_position: row.work.accepted_daa,
-        final_position, settlement_position, approved_slots: row.approvals.len() as u16,
+        producer: row.work.producer.as_bytes(),
+        consumer: row.work.consumer.as_bytes(),
+        accepted_position: row.work.accepted_daa,
+        final_position,
+        settlement_position,
+        approved_slots: row.approvals.len() as u16,
         required_slots: epoch.context.policy.selection.quorum,
     }))
 }

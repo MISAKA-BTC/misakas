@@ -96,12 +96,12 @@ mod artifact_inventory;
 mod flat_source_responder;
 #[path = "palw_float_source_responder.rs"]
 mod float_source_responder;
-#[path = "palw_tir_prefix_responder.rs"]
-mod tir_prefix_responder;
 /// Paid public history recovery: the literal custodians' answers (producer and granted Valid
 /// seats) and the outside owner's native Demand/Collect when every peer and archive lacks a link.
 #[path = "palw_history_recovery_actor.rs"]
 mod history_recovery_actor;
+#[path = "palw_tir_prefix_responder.rs"]
+mod tir_prefix_responder;
 
 /// Which literal answer slot one public-source responder pass serves: this seat's own bond, or
 /// an external producer's slot this node accepted as custodian (signed with this node's key,
@@ -11130,21 +11130,21 @@ impl PalwPanelService {
                 debug!("[{PALW_PANEL}] public history custody response remains pending: {why}");
             }
             if let Err(why) = self
-                .history_custody_grant_tick_v1(
-                    &session,
-                    bond_key,
-                    &own_receipts,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
-                )
+                .history_custody_grant_tick_v1(&session, bond_key, &own_receipts, &mut court_pending, &mut court_due, &mut court_moved)
                 .await
             {
                 debug!("[{PALW_PANEL}] public history custody grant remains pending: {why}");
             }
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
-                self.delegated_slots_tick_v1(&session, bond_key, &mut delegated_slots, &mut court_pending, &mut court_due, &mut court_moved)
-                    .await;
+                self.delegated_slots_tick_v1(
+                    &session,
+                    bond_key,
+                    &mut delegated_slots,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await;
             }
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);

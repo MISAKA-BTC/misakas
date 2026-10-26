@@ -98,8 +98,19 @@ fn rotation_by_early_valid_is_blocked() {
     let mut j = Vec::new();
     s.release_due(10, &mut j);
     for n in 0..5 {
-        s.reserve_claim_moded_v1(&b, capital, id(n), bond(1), None, 10, ask, PalwBudgetOriginV1::Attempt, PalwHoldModeV1::PanelOne, &mut j)
-            .expect("five claims of 100 BILI fill φ·C");
+        s.reserve_claim_moded_v1(
+            &b,
+            capital,
+            id(n),
+            bond(1),
+            None,
+            10,
+            ask,
+            PalwBudgetOriginV1::Attempt,
+            PalwHoldModeV1::PanelOne,
+            &mut j,
+        )
+        .expect("five claims of 100 BILI fill φ·C");
     }
     assert_eq!(
         s.preview_claim_moded_v1(&b, capital, bond(1), None, ask, PalwHoldModeV1::PanelOne),
@@ -148,10 +159,21 @@ fn the_decomposition_is_consistent() {
             assert_eq!(s.capacity_recovery_daa, 1_000 + b.hold.unwrap().window_daa(t.mode()), "fixed at acceptance");
             assert_eq!(s.mode, t.mode());
             let json = s.audit_json();
-            for key in ["\"weight\"", "\"right\"", "\"penalty\"", "\"other\"", "\"total\"", "\"weightHold\"", "\"otherHold\"", "\"capacityRecoveryDaa\""] {
+            for key in [
+                "\"weight\"",
+                "\"right\"",
+                "\"penalty\"",
+                "\"other\"",
+                "\"total\"",
+                "\"weightHold\"",
+                "\"otherHold\"",
+                "\"capacityRecoveryDaa\"",
+            ] {
                 assert!(json.contains(key), "{key} in {json}");
             }
-            assert!(matches!(s.other_hold, PalwComponentHoldV2::RetentionAndCourtClosed { not_before_daa } if not_before_daa == 1_000 + 2 * DAY));
+            assert!(
+                matches!(s.other_hold, PalwComponentHoldV2::RetentionAndCourtClosed { not_before_daa } if not_before_daa == 1_000 + 2 * DAY)
+            );
         }
     }
 }
@@ -230,8 +252,24 @@ fn the_concurrent_check_and_the_period_caps_both_bind() {
     let f = formula();
     let capital = 13_000 * KAS;
     // (a) u = 500 ‰: open + locks + accusation reserves + outstanding + new ≤ 6,500 BILI — each ledger counted once.
-    assert!(palw_bond_formula_concurrent_admits_v2(&f, capital, 3_000 * KAS as u128, 2_000 * KAS as u128, 1_000 * KAS as u128, 0, 500 * KAS as u128));
-    assert!(!palw_bond_formula_concurrent_admits_v2(&f, capital, 3_000 * KAS as u128, 2_000 * KAS as u128, 1_000 * KAS as u128, 1, 500 * KAS as u128));
+    assert!(palw_bond_formula_concurrent_admits_v2(
+        &f,
+        capital,
+        3_000 * KAS as u128,
+        2_000 * KAS as u128,
+        1_000 * KAS as u128,
+        0,
+        500 * KAS as u128
+    ));
+    assert!(!palw_bond_formula_concurrent_admits_v2(
+        &f,
+        capital,
+        3_000 * KAS as u128,
+        2_000 * KAS as u128,
+        1_000 * KAS as u128,
+        1,
+        500 * KAS as u128
+    ));
     // (b) the period caps bind with collateral to spare: tiny reservations, the day view refuses at the daily count.
     let b = budget(1);
     let small = PalwBudgetAskV1 { block_units: 0, reward_sompi: 1, final_weight: 1, liability_sompi: 1 };
@@ -242,7 +280,20 @@ fn the_concurrent_check_and_the_period_caps_both_bind() {
     for n in 0..10 * daily {
         let now = 1 + n; // one per DAA: the burst view spreads them, the day view caps them
         s.release_due(now, &mut j);
-        if s.reserve_claim_moded_v1(&b, capital, id(n), bond(2), None, now, small, PalwBudgetOriginV1::Attempt, PalwHoldModeV1::PanelOne, &mut j).is_ok() {
+        if s.reserve_claim_moded_v1(
+            &b,
+            capital,
+            id(n),
+            bond(2),
+            None,
+            now,
+            small,
+            PalwBudgetOriginV1::Attempt,
+            PalwHoldModeV1::PanelOne,
+            &mut j,
+        )
+        .is_ok()
+        {
             admitted += 1;
         }
         if now >= DAY {
@@ -270,7 +321,8 @@ fn a_model_class_takes_the_reduced_reservation_only_with_a_measured_capacity_rec
 
 #[test]
 fn the_fence_is_dormant_hashed_some_only_and_refused() {
-    let p = Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12));
+    let p =
+        Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12));
     assert!(p.palw_bond_formula_v2.is_none());
     assert!(!p.palw_bond_formula_v2_active_at(u64::MAX));
     assert!(p.validate_palw_bond_formula_v2().is_ok());

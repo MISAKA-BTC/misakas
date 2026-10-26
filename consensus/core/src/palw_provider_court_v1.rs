@@ -447,7 +447,10 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     /// What the provider court holds against `bond` (0 with no kernel route): V2's committed-collateral ledger and both withdrawal gates
     /// add it beside the kernel's and the onboarding's reservations.
     pub fn provider_court_reserved(&self, bond: &PalwBondKeyV2) -> u128 {
-        self.kernel_route().map(|k| k.provider_court_reserved_v1(bond) as u128).unwrap_or(0).saturating_add(self.monetary_material_reserved_v1(bond))
+        self.kernel_route()
+            .map(|k| k.provider_court_reserved_v1(bond) as u128)
+            .unwrap_or(0)
+            .saturating_add(self.monetary_material_reserved_v1(bond))
     }
 
     /// **The availability of `subject` at `daa`**: its live, uncharged leases that serve through `need_until`, by distinct operators,

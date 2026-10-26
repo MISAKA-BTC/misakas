@@ -3,10 +3,10 @@
 use crate::{Hash64, palw_flat_execution_v11::NativeExecutionPoliciesV11};
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::hash::{Digest, object_id};
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwStageExecutionFenceV28 {
-    pub activation:crate::config::params::ForkActivation,
-    pub policies:NativeStagePoliciesV28,
+    pub activation: crate::config::params::ForkActivation,
+    pub policies: NativeStagePoliciesV28,
 }
 pub const STAGE_ACTION_FIRST_V28: u8 = 19;
 pub const STAGE_ACTION_LAST_V28: u8 = 33;
@@ -17,17 +17,56 @@ pub const STAGE_PROOF_PARTS_MAX_V28: u16 = 512;
 /// kinds0..2 are real-PC Header/Subtree/Leaf, kinds3..6 are trace Node/flat
 /// hash/flat value/legacy leaf. Trace param=occurrence,layer_code=position,
 /// index=(leaf<<16)|node; all coordinates are independently bounded natively.
-pub type NativeStageRequestV28=crate::palw_flat_execution_v11::NativeSourceRequestV16;
-#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+pub type NativeStageRequestV28 = crate::palw_flat_execution_v11::NativeSourceRequestV16;
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NativeStagePendingV28 {
-    pub version:u16,pub id:Digest,pub unit:Digest,pub request:NativeStageRequestV28,
-    pub original:Digest,pub consent:Digest,pub contract:Digest,pub source_plan:Digest,pub caller_plan:Digest,
-    pub requester:crate::palw_state_v2::PalwBondKeyV2,pub requester_operator:Digest,pub requester_payout:Hash64,
-    pub producer:crate::palw_state_v2::PalwBondKeyV2,pub producer_operator:Digest,
-    pub claim:Digest,pub pc:Digest,pub bond:u64,pub filed:u64,pub deadline:u64,pub proof_until:u64,pub attempts:u8,pub settled:bool,
+    pub version: u16,
+    pub id: Digest,
+    pub unit: Digest,
+    pub request: NativeStageRequestV28,
+    pub original: Digest,
+    pub consent: Digest,
+    pub contract: Digest,
+    pub source_plan: Digest,
+    pub caller_plan: Digest,
+    pub requester: crate::palw_state_v2::PalwBondKeyV2,
+    pub requester_operator: Digest,
+    pub requester_payout: Hash64,
+    pub producer: crate::palw_state_v2::PalwBondKeyV2,
+    pub producer_operator: Digest,
+    pub claim: Digest,
+    pub pc: Digest,
+    pub bond: u64,
+    pub filed: u64,
+    pub deadline: u64,
+    pub proof_until: u64,
+    pub attempts: u8,
+    pub settled: bool,
 }
 impl NativeStagePendingV28 {
-    pub fn original_id(&self)->Digest{object_id(b"misaka-palw/native/stage-original-source-trace-demand/v28",&(28u16,self.unit,&self.request,self.original,self.consent,self.contract,self.requester,self.requester_operator,self.producer,self.producer_operator,self.claim,self.pc,self.bond,self.filed,self.deadline,self.proof_until))}
+    pub fn original_id(&self) -> Digest {
+        object_id(
+            b"misaka-palw/native/stage-original-source-trace-demand/v28",
+            &(
+                28u16,
+                self.unit,
+                &self.request,
+                self.original,
+                self.consent,
+                self.contract,
+                self.requester,
+                self.requester_operator,
+                self.producer,
+                self.producer_operator,
+                self.claim,
+                self.pc,
+                self.bond,
+                self.filed,
+                self.deadline,
+                self.proof_until,
+            ),
+        )
+    }
 }
 pub fn stage_source_protocol_root_v28() -> Digest {
     object_id(
@@ -183,10 +222,10 @@ pub struct StageAcceptSourceV28 {
     pub physical_service: Digest,
     pub fee_plan: Digest,
     pub policy28: Digest,
-    pub physical_plan:Digest,
-    pub maximum_contract:Digest,
-    pub queue_plan:Digest,
-    pub queue_policy:Digest,
+    pub physical_plan: Digest,
+    pub maximum_contract: Digest,
+    pub queue_plan: Digest,
+    pub queue_policy: Digest,
 }
 impl StageAcceptSourceV28 {
     pub fn from_bytes(raw: &[u8]) -> Result<Self, String> {
@@ -217,10 +256,10 @@ pub struct NativeStageConsentV28 {
     pub physical_service: Digest,
     pub fee_plan: Digest,
     pub policy28: Digest,
-    pub physical_plan:Digest,
-    pub maximum_contract:Digest,
-    pub queue_plan:Digest,
-    pub queue_policy:Digest,
+    pub physical_plan: Digest,
+    pub maximum_contract: Digest,
+    pub queue_plan: Digest,
+    pub queue_policy: Digest,
     pub accepted_block: Hash64,
 }
 impl NativeStageConsentV28 {
@@ -242,87 +281,319 @@ impl NativeStageConsentV28 {
                     self.fee_plan,
                     self.policy28,
                 ),
-                (self.physical_plan,self.maximum_contract,self.queue_plan,self.queue_policy,self.accepted_block),
+                (self.physical_plan, self.maximum_contract, self.queue_plan, self.queue_policy, self.accepted_block),
             ),
         )
     }
 }
 
-#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NativeStageMaximumV28 {
-    pub version:u16,pub class:Digest,pub source:Digest,pub job:Digest,pub admission:Digest,
-    pub maximum_scope:Digest,pub maximum_resources:Digest,pub actual_scope:Digest,pub actual_resources:Digest,
-    pub quota:Digest,pub source_plan:Digest,pub caller_source:Digest,pub paged_plan:Digest,
-    pub source_proof25:Digest,pub temporal:NativeStageTemporalV28,pub final_basis:crate::palw_native_final_v27::NativeFinalClassBasisV27,
-    pub final_policy:Digest,pub physical:Digest,pub physical_plan:Digest,pub queue_plan:Digest,pub queue_policy:Digest,pub delivery_fee_terms:Digest,pub producer_delivery_fee_cap:u64,
+    pub version: u16,
+    pub class: Digest,
+    pub source: Digest,
+    pub job: Digest,
+    pub admission: Digest,
+    pub maximum_scope: Digest,
+    pub maximum_resources: Digest,
+    pub actual_scope: Digest,
+    pub actual_resources: Digest,
+    pub quota: Digest,
+    pub source_plan: Digest,
+    pub caller_source: Digest,
+    pub paged_plan: Digest,
+    pub source_proof25: Digest,
+    pub temporal: NativeStageTemporalV28,
+    pub final_basis: crate::palw_native_final_v27::NativeFinalClassBasisV27,
+    pub final_policy: Digest,
+    pub physical: Digest,
+    pub physical_plan: Digest,
+    pub queue_plan: Digest,
+    pub queue_policy: Digest,
+    pub delivery_fee_terms: Digest,
+    pub producer_delivery_fee_cap: u64,
 }
-impl NativeStageMaximumV28 {pub fn root(&self)->Digest {object_id(b"misaka-palw/native/stage-complete-maximum-contract/v28",self)}}
+impl NativeStageMaximumV28 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/stage-complete-maximum-contract/v28", self)
+    }
+}
 /// Public rederivation produces immutable documentary roots. Native additionally
 /// authenticates trusted Params authority, the original producer signature,
 /// source membership, permanent nonce and genuine coin/quota/physical receipts.
 pub struct CheckedNativeStageMaximumV28 {
-    record:NativeStageMaximumV28,
-    source:misaka_palw_kernel::flat_quota11::source16::SourcePlanV16,
-    caller:misaka_palw_kernel::flat_quota11::stage14::source26::CheckedStageSourcePlanV26,
-    paged:crate::palw_native_paged_proof_v29::CheckedNativePagedProofPlanV29,
-    conditions:crate::palw_native_final_v27::CheckedNativeFinalConditionsV27,
-    queue:crate::palw_native_queue_v30::CheckedNativeQueuePlanV30,
+    record: NativeStageMaximumV28,
+    source: misaka_palw_kernel::flat_quota11::source16::SourcePlanV16,
+    caller: misaka_palw_kernel::flat_quota11::stage14::source26::CheckedStageSourcePlanV26,
+    paged: crate::palw_native_paged_proof_v29::CheckedNativePagedProofPlanV29,
+    conditions: crate::palw_native_final_v27::CheckedNativeFinalConditionsV27,
+    queue: crate::palw_native_queue_v30::CheckedNativeQueuePlanV30,
 }
 impl CheckedNativeStageMaximumV28 {
-    pub fn record(&self)->&NativeStageMaximumV28 {&self.record}
-    pub fn source(&self)->&misaka_palw_kernel::flat_quota11::source16::SourcePlanV16 {&self.source}
-    pub fn caller(&self)->&misaka_palw_kernel::flat_quota11::stage14::source26::CheckedStageSourcePlanV26 {&self.caller}
-    pub fn paged(&self)->&crate::palw_native_paged_proof_v29::CheckedNativePagedProofPlanV29 {&self.paged}
-    pub fn conditions(&self)->&crate::palw_native_final_v27::CheckedNativeFinalConditionsV27 {&self.conditions}
-    pub fn carriage(&self)->&crate::palw_native_paged_carriage_v29::CheckedNativePagedCarriagePlanV29 {self.queue.paged_carriage().expect("derived original paged28 queue")}
-    pub fn queue(&self)->&crate::palw_native_queue_v30::CheckedNativeQueuePlanV30 {&self.queue}
-    pub fn derive(p:&NativeStagePoliciesV28,class:&misaka_palw_kernel::flat_inputs12::bounded28::CheckedStageClassV28,job:&misaka_palw_kernel::flat_inputs12::bounded28::CheckedStageJobV28,quota:&misaka_palw_kernel::flat_quota11::stage14::bounded28::CheckedStageQuotaV28,final_policy:&crate::palw_native_final_v27::NativeFinalPolicyV27,ledger:&misaka_palw_kernel::ledger::LedgerPolicyV1,service:&crate::palw_flat_execution_capacity_v22::NativeCarriageServiceV22,mass:&crate::palw_native_carriage_v22::NativeCarriageMassParamsV22)->Result<Self,String>{
-        use misaka_palw_kernel::{flat_quota11::stage14::source26::derive_stage_source_caller_plan_v28,flat_resources10::ResourceAxisV10 as A};
+    pub fn record(&self) -> &NativeStageMaximumV28 {
+        &self.record
+    }
+    pub fn source(&self) -> &misaka_palw_kernel::flat_quota11::source16::SourcePlanV16 {
+        &self.source
+    }
+    pub fn caller(&self) -> &misaka_palw_kernel::flat_quota11::stage14::source26::CheckedStageSourcePlanV26 {
+        &self.caller
+    }
+    pub fn paged(&self) -> &crate::palw_native_paged_proof_v29::CheckedNativePagedProofPlanV29 {
+        &self.paged
+    }
+    pub fn conditions(&self) -> &crate::palw_native_final_v27::CheckedNativeFinalConditionsV27 {
+        &self.conditions
+    }
+    pub fn carriage(&self) -> &crate::palw_native_paged_carriage_v29::CheckedNativePagedCarriagePlanV29 {
+        self.queue.paged_carriage().expect("derived original paged28 queue")
+    }
+    pub fn queue(&self) -> &crate::palw_native_queue_v30::CheckedNativeQueuePlanV30 {
+        &self.queue
+    }
+    pub fn derive(
+        p: &NativeStagePoliciesV28,
+        class: &misaka_palw_kernel::flat_inputs12::bounded28::CheckedStageClassV28,
+        job: &misaka_palw_kernel::flat_inputs12::bounded28::CheckedStageJobV28,
+        quota: &misaka_palw_kernel::flat_quota11::stage14::bounded28::CheckedStageQuotaV28,
+        final_policy: &crate::palw_native_final_v27::NativeFinalPolicyV27,
+        ledger: &misaka_palw_kernel::ledger::LedgerPolicyV1,
+        service: &crate::palw_flat_execution_capacity_v22::NativeCarriageServiceV22,
+        mass: &crate::palw_native_carriage_v22::NativeCarriageMassParamsV22,
+    ) -> Result<Self, String> {
+        use misaka_palw_kernel::{
+            flat_quota11::stage14::source26::derive_stage_source_caller_plan_v28, flat_resources10::ResourceAxisV10 as A,
+        };
         p.check(p.network_domain)?;
-        if class.wire().policy!=p.root()||final_policy.root()!=p.final_policy||service.root()!=p.physical_service||!service.implemented{return Err("stage28 maximum lacks exact independently configured class/Final/actual delivery policy".into());}
-        let source=quota.source_plan(class,&p.execution.quota,&p.execution.discovery)?;
-        let caller=derive_stage_source_caller_plan_v28(class,job,quota,&p.execution.quota,&p.execution.execution,&p.execution.discovery)?;
+        if class.wire().policy != p.root()
+            || final_policy.root() != p.final_policy
+            || service.root() != p.physical_service
+            || !service.implemented
+        {
+            return Err("stage28 maximum lacks exact independently configured class/Final/actual delivery policy".into());
+        }
+        let source = quota.source_plan(class, &p.execution.quota, &p.execution.discovery)?;
+        let caller = derive_stage_source_caller_plan_v28(
+            class,
+            job,
+            quota,
+            &p.execution.quota,
+            &p.execution.execution,
+            &p.execution.discovery,
+        )?;
         // Only real original weights are in this source court. Actual inputs
         // retain their independent declared namespace and immutable public PC.
-        let mut real=class.source().program().v1_view();real.params.truncate(class.source().program().params.len());
-        let source_bound=crate::palw_native_source_proof_v25::derive_native_source_proof_bound_v25(&real,class.source().parameters())?;
-        let restore=class.source_restore_bytes().checked_add(borsh::to_vec(class.wire()).map_err(|e|e.to_string())?.len() as u64).and_then(|n|n.checked_add(u64::try_from(job.input_raw_bytes()).ok()?)).and_then(|n|n.checked_add(32768)).ok_or("stage28 exact native restore extent overflow")?;
-        let paged=crate::palw_native_paged_proof_v29::CheckedNativePagedProofPlanV29::derive(class.maximum_scope(),class.maximum_resources(),&p.execution.quota,source_bound.maximum_bytes as u64,source_bound.work,source_bound.scratch,restore)?;
-        let temporal=NativeStageTemporalV28::derive(p,class.root(),class.maximum_scope().root(),class.maximum_resources().root(),quota.requests_per_owner())?;
-        let carriage=crate::palw_native_paged_carriage_v29::CheckedNativePagedCarriagePlanV29::derive(&real,class.source().parameters(),real.params.len(),&paged,class.root(),quota.plan().record().root(),temporal.root(),temporal.answer_window,temporal.proof_window.checked_sub(temporal.seal_maturity).ok_or("stage28 original proof window exhausted")?,service,mass)?;
-        let queue=crate::palw_native_queue_v30::CheckedNativeQueuePlanV30::derive_paged(&final_policy.queue_policy,mass,carriage)?;
-        let q=&class.maximum_resources().quantities;
-        let cold=[A::Macs,A::ScalarSteps,A::IndexSteps,A::ValidatedElements,A::ParameterHashBytes,A::TraceHashBytes,A::MetadataWork,A::CopiedReferenceBytes,A::RawParameterStorage,A::DeliveryBytes,A::StoredEvidenceBytes,A::CourtWork].into_iter().try_fold(0u128,|n,a|n.checked_add(q.get(a)).ok_or("stage28 cold resource monetary extent overflow"))?;
-        let acquisition=caller.request_cost().get(A::MetadataWork).checked_mul(caller.attempts() as u128).ok_or("stage28 complete acquisition monetary overflow")?;
-        let work=cold.checked_add(acquisition).and_then(|n|n.checked_add(paged.record().court_work as u128*2)).and_then(|n|n.checked_add(paged.record().guarantee.get(A::MetadataWork))).ok_or("stage28 complete pursuit monetary overflow")?;
-        let reference_cost=ledger.dismissal_fee_v1(u64::try_from(work).map_err(|_|"stage28 complete monetary work exceeds public range")?).checked_add(ledger.demand_bond.checked_mul(caller.requests() as u64).ok_or("stage28 complete source bonds overflow")?).ok_or("stage28 full finder cost overflow")?;
-        let execution=&p.execution.execution;
-        let finder=u64::try_from((execution.required_producer_reserve as u128)*(execution.finder_permille as u128)/1000).map_err(|_|"stage28 finder extent overflow")?;
-        let basis=crate::palw_native_final_v27::NativeFinalClassBasisV27{class:class.root(),program:class.source().program_root(),inventory:class.source().inventory_root(),real_parameter:class.source().parameters().root(),original_max_scope:class.maximum_scope().root(),original_max_resource:class.maximum_resources().root(),execution_policy:execution.root(),quota_policy:p.execution.quota.root(),discovery_policy:p.execution.discovery.root(),source_protocol:p.source_protocol,verifier_profile:class.maximum_scope().court_set(),physical_service:p.physical_service,complete_reference_cost_sompi:reference_cost,maximum_producer_gain_sompi:execution.reward_cap.checked_add(execution.external_gain_cap).ok_or("stage28 gain overflow")?,original_producer_reserve_sompi:execution.required_producer_reserve,original_finder_award_sompi:finder,original_default_obligation_sompi:execution.default_obligation,maximum_reference_bytes:u64::try_from(q.get(A::RawParameterStorage).checked_add(q.get(A::ReferenceTensorPayload)).and_then(|n|n.checked_add(q.get(A::StoredEvidenceBytes))).ok_or("stage28 complete reference byte overflow")?).map_err(|_|"stage28 complete reference byte overflow")?,maximum_court_bytes:paged.record().maximum_bytes as u64,maximum_court_work:paged.record().court_work,maximum_court_scratch:paged.record().court_scratch};
-        let conditions=final_policy.check_class(p.network_domain,&basis,temporal.source_acquisition.checked_add(temporal.proof_window).ok_or("stage28 complete pursuit clock overflow")?,true,service.implemented)?;
-        if execution.horizons.challenge_window<conditions.complete_path_daa(){return Err("stage28 original challenge interval shorter than measured independent complete reference/source/proof/delivery path".into());}
-        let delivery_fee_terms=object_id(b"misaka-palw/native/stage-original-burned-delivery-fees/v28",&(28u16,source.root(),caller.root(),object_id(b"misaka-palw/native/stage-original-ledger-terms/v28",ledger),ledger.demand_bond,0u64));
-        let record=NativeStageMaximumV28{version:28,class:class.root(),source:class.source().id(),job:job.job().root(),admission:job.admission().root(),maximum_scope:class.maximum_scope().root(),maximum_resources:class.maximum_resources().root(),actual_scope:job.scope().root(),actual_resources:job.resources().root(),quota:quota.root(),source_plan:source.root(),caller_source:caller.root(),paged_plan:paged.record().root(),source_proof25:source_bound.root(),temporal,final_basis:basis,final_policy:p.final_policy,physical:p.physical_service,physical_plan:queue.record().original_carriage,queue_plan:queue.record().root(),queue_policy:queue.record().policy,delivery_fee_terms,producer_delivery_fee_cap:0};
-        Ok(Self{record,source,caller,paged,conditions,queue})
+        let mut real = class.source().program().v1_view();
+        real.params.truncate(class.source().program().params.len());
+        let source_bound =
+            crate::palw_native_source_proof_v25::derive_native_source_proof_bound_v25(&real, class.source().parameters())?;
+        let restore = class
+            .source_restore_bytes()
+            .checked_add(borsh::to_vec(class.wire()).map_err(|e| e.to_string())?.len() as u64)
+            .and_then(|n| n.checked_add(u64::try_from(job.input_raw_bytes()).ok()?))
+            .and_then(|n| n.checked_add(32768))
+            .ok_or("stage28 exact native restore extent overflow")?;
+        let paged = crate::palw_native_paged_proof_v29::CheckedNativePagedProofPlanV29::derive(
+            class.maximum_scope(),
+            class.maximum_resources(),
+            &p.execution.quota,
+            source_bound.maximum_bytes as u64,
+            source_bound.work,
+            source_bound.scratch,
+            restore,
+        )?;
+        let temporal = NativeStageTemporalV28::derive(
+            p,
+            class.root(),
+            class.maximum_scope().root(),
+            class.maximum_resources().root(),
+            quota.requests_per_owner(),
+        )?;
+        let carriage = crate::palw_native_paged_carriage_v29::CheckedNativePagedCarriagePlanV29::derive(
+            &real,
+            class.source().parameters(),
+            real.params.len(),
+            &paged,
+            class.root(),
+            quota.plan().record().root(),
+            temporal.root(),
+            temporal.answer_window,
+            temporal.proof_window.checked_sub(temporal.seal_maturity).ok_or("stage28 original proof window exhausted")?,
+            service,
+            mass,
+        )?;
+        let queue = crate::palw_native_queue_v30::CheckedNativeQueuePlanV30::derive_paged(&final_policy.queue_policy, mass, carriage)?;
+        let q = &class.maximum_resources().quantities;
+        let cold = [
+            A::Macs,
+            A::ScalarSteps,
+            A::IndexSteps,
+            A::ValidatedElements,
+            A::ParameterHashBytes,
+            A::TraceHashBytes,
+            A::MetadataWork,
+            A::CopiedReferenceBytes,
+            A::RawParameterStorage,
+            A::DeliveryBytes,
+            A::StoredEvidenceBytes,
+            A::CourtWork,
+        ]
+        .into_iter()
+        .try_fold(0u128, |n, a| n.checked_add(q.get(a)).ok_or("stage28 cold resource monetary extent overflow"))?;
+        let acquisition = caller
+            .request_cost()
+            .get(A::MetadataWork)
+            .checked_mul(caller.attempts() as u128)
+            .ok_or("stage28 complete acquisition monetary overflow")?;
+        let work = cold
+            .checked_add(acquisition)
+            .and_then(|n| n.checked_add(paged.record().court_work as u128 * 2))
+            .and_then(|n| n.checked_add(paged.record().guarantee.get(A::MetadataWork)))
+            .ok_or("stage28 complete pursuit monetary overflow")?;
+        let reference_cost = ledger
+            .dismissal_fee_v1(u64::try_from(work).map_err(|_| "stage28 complete monetary work exceeds public range")?)
+            .checked_add(ledger.demand_bond.checked_mul(caller.requests() as u64).ok_or("stage28 complete source bonds overflow")?)
+            .ok_or("stage28 full finder cost overflow")?;
+        let execution = &p.execution.execution;
+        let finder = u64::try_from((execution.required_producer_reserve as u128) * (execution.finder_permille as u128) / 1000)
+            .map_err(|_| "stage28 finder extent overflow")?;
+        let basis = crate::palw_native_final_v27::NativeFinalClassBasisV27 {
+            class: class.root(),
+            program: class.source().program_root(),
+            inventory: class.source().inventory_root(),
+            real_parameter: class.source().parameters().root(),
+            original_max_scope: class.maximum_scope().root(),
+            original_max_resource: class.maximum_resources().root(),
+            execution_policy: execution.root(),
+            quota_policy: p.execution.quota.root(),
+            discovery_policy: p.execution.discovery.root(),
+            source_protocol: p.source_protocol,
+            verifier_profile: class.maximum_scope().court_set(),
+            physical_service: p.physical_service,
+            complete_reference_cost_sompi: reference_cost,
+            maximum_producer_gain_sompi: execution
+                .reward_cap
+                .checked_add(execution.external_gain_cap)
+                .ok_or("stage28 gain overflow")?,
+            original_producer_reserve_sompi: execution.required_producer_reserve,
+            original_finder_award_sompi: finder,
+            original_default_obligation_sompi: execution.default_obligation,
+            maximum_reference_bytes: u64::try_from(
+                q.get(A::RawParameterStorage)
+                    .checked_add(q.get(A::ReferenceTensorPayload))
+                    .and_then(|n| n.checked_add(q.get(A::StoredEvidenceBytes)))
+                    .ok_or("stage28 complete reference byte overflow")?,
+            )
+            .map_err(|_| "stage28 complete reference byte overflow")?,
+            maximum_court_bytes: paged.record().maximum_bytes as u64,
+            maximum_court_work: paged.record().court_work,
+            maximum_court_scratch: paged.record().court_scratch,
+        };
+        let conditions = final_policy.check_class(
+            p.network_domain,
+            &basis,
+            temporal.source_acquisition.checked_add(temporal.proof_window).ok_or("stage28 complete pursuit clock overflow")?,
+            true,
+            service.implemented,
+        )?;
+        if execution.horizons.challenge_window < conditions.complete_path_daa() {
+            return Err(
+                "stage28 original challenge interval shorter than measured independent complete reference/source/proof/delivery path"
+                    .into(),
+            );
+        }
+        let delivery_fee_terms = object_id(
+            b"misaka-palw/native/stage-original-burned-delivery-fees/v28",
+            &(
+                28u16,
+                source.root(),
+                caller.root(),
+                object_id(b"misaka-palw/native/stage-original-ledger-terms/v28", ledger),
+                ledger.demand_bond,
+                0u64,
+            ),
+        );
+        let record = NativeStageMaximumV28 {
+            version: 28,
+            class: class.root(),
+            source: class.source().id(),
+            job: job.job().root(),
+            admission: job.admission().root(),
+            maximum_scope: class.maximum_scope().root(),
+            maximum_resources: class.maximum_resources().root(),
+            actual_scope: job.scope().root(),
+            actual_resources: job.resources().root(),
+            quota: quota.root(),
+            source_plan: source.root(),
+            caller_source: caller.root(),
+            paged_plan: paged.record().root(),
+            source_proof25: source_bound.root(),
+            temporal,
+            final_basis: basis,
+            final_policy: p.final_policy,
+            physical: p.physical_service,
+            physical_plan: queue.record().original_carriage,
+            queue_plan: queue.record().root(),
+            queue_policy: queue.record().policy,
+            delivery_fee_terms,
+            producer_delivery_fee_cap: 0,
+        };
+        Ok(Self { record, source, caller, paged, conditions, queue })
     }
 }
 
-use misaka_palw_kernel::{flat_inputs12::{bounded28::{CheckedStageBundleV28,check_stage_bundle_v28},source28::{CheckedStageSourceV28,FlatStageSourceWireV28,STAGE_SOURCE_MAX_BYTES_V28}},flat_component_source28::CompleteComponentManifestV28};
-use std::io::{Cursor,Read};
-#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
-pub struct NativeStageSourceBundleV28 {pub version:u16,pub manifest:Vec<u8>,pub sources:Vec<Vec<u8>>}
+use misaka_palw_kernel::{
+    flat_component_source28::CompleteComponentManifestV28,
+    flat_inputs12::{
+        bounded28::{CheckedStageBundleV28, check_stage_bundle_v28},
+        source28::{CheckedStageSourceV28, FlatStageSourceWireV28, STAGE_SOURCE_MAX_BYTES_V28},
+    },
+};
+use std::io::{Cursor, Read};
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStageSourceBundleV28 {
+    pub version: u16,
+    pub manifest: Vec<u8>,
+    pub sources: Vec<Vec<u8>>,
+}
 impl NativeStageSourceBundleV28 {
-    pub fn from_bytes(raw:&[u8])->Result<Self,String>{
-        if raw.len()>16<<20||raw.len()<10||raw[..2]!=28u16.to_le_bytes(){return Err("stage28 source bundle bound/version".into());}
-        let mut r=Cursor::new(raw);let version=u16::deserialize_reader(&mut r).map_err(|e|e.to_string())?;
-        fn blob(r:&mut Cursor<&[u8]>,cap:usize)->Result<Vec<u8>,String>{let n=u32::deserialize_reader(r).map_err(|e|e.to_string())? as usize;if n>cap||n>r.get_ref().len().saturating_sub(r.position() as usize){return Err("stage28 source bundle bounded nested count".into());}let mut b=vec![0;n];r.read_exact(&mut b).map_err(|e|e.to_string())?;Ok(b)}
-        let manifest=blob(&mut r,4<<20)?;let n=u32::deserialize_reader(&mut r).map_err(|e|e.to_string())? as usize;if n==0||n>64{return Err("stage28 source stage count".into());}let mut sources=Vec::with_capacity(n);for _ in 0..n{sources.push(blob(&mut r,STAGE_SOURCE_MAX_BYTES_V28)?);}if r.position() as usize!=raw.len(){return Err("stage28 source bundle surplus bytes".into());}Ok(Self{version,manifest,sources})
+    pub fn from_bytes(raw: &[u8]) -> Result<Self, String> {
+        if raw.len() > 16 << 20 || raw.len() < 10 || raw[..2] != 28u16.to_le_bytes() {
+            return Err("stage28 source bundle bound/version".into());
+        }
+        let mut r = Cursor::new(raw);
+        let version = u16::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        fn blob(r: &mut Cursor<&[u8]>, cap: usize) -> Result<Vec<u8>, String> {
+            let n = u32::deserialize_reader(r).map_err(|e| e.to_string())? as usize;
+            if n > cap || n > r.get_ref().len().saturating_sub(r.position() as usize) {
+                return Err("stage28 source bundle bounded nested count".into());
+            }
+            let mut b = vec![0; n];
+            r.read_exact(&mut b).map_err(|e| e.to_string())?;
+            Ok(b)
+        }
+        let manifest = blob(&mut r, 4 << 20)?;
+        let n = u32::deserialize_reader(&mut r).map_err(|e| e.to_string())? as usize;
+        if n == 0 || n > 64 {
+            return Err("stage28 source stage count".into());
+        }
+        let mut sources = Vec::with_capacity(n);
+        for _ in 0..n {
+            sources.push(blob(&mut r, STAGE_SOURCE_MAX_BYTES_V28)?);
+        }
+        if r.position() as usize != raw.len() {
+            return Err("stage28 source bundle surplus bytes".into());
+        }
+        Ok(Self { version, manifest, sources })
     }
-    pub fn check(&self)->Result<(CheckedStageBundleV28,Vec<CheckedStageSourceV28>),String>{
-        let manifest=CompleteComponentManifestV28::from_bytes(&self.manifest).map_err(|e|format!("{e:?}"))?;
-        let sources=self.sources.iter().map(|raw|FlatStageSourceWireV28::from_bytes(raw)?.check()).collect::<Result<Vec<_>,String>>()?;
-        let checked=check_stage_bundle_v28(&manifest,&sources)?;
-        if checked.bytes()!=borsh::to_vec(self).map_err(|e|e.to_string())?.len() as u64{return Err("stage28 original full-source canonical extent changed".into());}
-        Ok((checked,sources))
+    pub fn check(&self) -> Result<(CheckedStageBundleV28, Vec<CheckedStageSourceV28>), String> {
+        let manifest = CompleteComponentManifestV28::from_bytes(&self.manifest).map_err(|e| format!("{e:?}"))?;
+        let sources =
+            self.sources.iter().map(|raw| FlatStageSourceWireV28::from_bytes(raw)?.check()).collect::<Result<Vec<_>, String>>()?;
+        let checked = check_stage_bundle_v28(&manifest, &sources)?;
+        if checked.bytes() != borsh::to_vec(self).map_err(|e| e.to_string())?.len() as u64 {
+            return Err("stage28 original full-source canonical extent changed".into());
+        }
+        Ok((checked, sources))
     }
 }

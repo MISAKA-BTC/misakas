@@ -24,10 +24,10 @@ mod discovery;
 mod final27;
 #[path = "palw_flat_execution_gc_fold_v24.rs"]
 mod gc;
-#[path = "palw_flat_execution_source_fold_v16.rs"]
-pub(super) mod source;
 #[path = "palw_native_paged_fold_v29.rs"]
 mod paged;
+#[path = "palw_flat_execution_source_fold_v16.rs"]
+pub(super) mod source;
 /// Text29 (original-maximum EOS text jobs) inside the funded namespace,
 /// actions 27..=40; dormant below the funded and Final27 fences.
 #[path = "palw_native_text_fold_v29.rs"]

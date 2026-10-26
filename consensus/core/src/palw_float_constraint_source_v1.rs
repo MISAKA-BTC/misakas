@@ -448,7 +448,9 @@ impl PalwFloatConstraintSourceSessionV1 {
     /// Opening does not move either paid clock; the first phase keeps at least the reserved row span.
     pub fn check_open_window_v1(&self, now: u64) -> Result<(), String> {
         let span = self.respond_until_daa.checked_sub(self.nomination_until_daa).ok_or("Float32 clock underflow")?;
-        if now < self.reserved_daa || now >= self.nomination_until_daa || now.checked_add(span).is_none_or(|end| end > self.nomination_until_daa)
+        if now < self.reserved_daa
+            || now >= self.nomination_until_daa
+            || now.checked_add(span).is_none_or(|end| end > self.nomination_until_daa)
         {
             return Err("Float32 source opened too late for its original paid ids window".into());
         }
@@ -633,7 +635,8 @@ pub fn write_float_public_sidecar_v1(
     mut row: impl FnMut(u32) -> Result<Vec<f32>, String>,
 ) -> Result<(), String> {
     let bytes = borsh::to_vec(header).map_err(|e| e.to_string())?;
-    let length = u32::try_from(bytes.len()).ok().filter(|n| *n <= SIDECAR_HEADER_MAX_V1).ok_or("Float32 sidecar header exceeds its bound")?;
+    let length =
+        u32::try_from(bytes.len()).ok().filter(|n| *n <= SIDECAR_HEADER_MAX_V1).ok_or("Float32 sidecar header exceeds its bound")?;
     let vocab = header.ids.summary.vocab_size as usize;
     if header.events.len() != header.ids.generated_token_ids.len() {
         return Err("Float32 sidecar events are not one per generated id".into());
@@ -705,7 +708,8 @@ impl PalwFloatPublicSidecarReaderV1 {
             || decode == 0
             || crate::palw_v2::trace_event_merkle_root_v2(&header.events).map_err(|e| e.to_string())?
                 != header.ids.ordered_event_commitment
-            || decode.checked_mul(vocab).and_then(|n| n.checked_mul(4)).and_then(|n| n.checked_add(rows_offset)) != Some(source.len_v1())
+            || decode.checked_mul(vocab).and_then(|n| n.checked_mul(4)).and_then(|n| n.checked_add(rows_offset))
+                != Some(source.len_v1())
         {
             return Err("Float32 sidecar is not one committed trace".into());
         }
@@ -965,7 +969,10 @@ pub(crate) mod tests {
             let action = match cursor {
                 PalwFloatSourceCursorV1::RowPart { offset } => PalwFloatSourceActionV1::RowPart {
                     offset,
-                    bytes: forged[offset as usize..forged.len().min(offset as usize + 4096)].iter().flat_map(|v| v.to_le_bytes()).collect(),
+                    bytes: forged[offset as usize..forged.len().min(offset as usize + 4096)]
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect(),
                 },
                 _ => float_source_action_v1(&capture, cursor, case.position, 4096).unwrap(),
             };
@@ -1004,21 +1011,22 @@ pub(crate) mod tests {
             trace_chunk_count: 1,
             trace_retention_daa: 100_000,
         };
-        let court = crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1::new_from_float_pin_with_original_stop_context_v1(
-            crate::palw_freeprompt_v3::fp_claim_id_v3(&original),
-            owner,
-            10,
-            binding.committed_execution_root,
-            &binding,
-            &job,
-            &pin,
-            None,
-            case.eog.ids.len() as u32,
-            &case.eog.opening,
-            &original,
-            None,
-        )
-        .unwrap();
+        let court =
+            crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1::new_from_float_pin_with_original_stop_context_v1(
+                crate::palw_freeprompt_v3::fp_claim_id_v3(&original),
+                owner,
+                10,
+                binding.committed_execution_root,
+                &binding,
+                &job,
+                &pin,
+                None,
+                case.eog.ids.len() as u32,
+                &case.eog.opening,
+                &original,
+                None,
+            )
+            .unwrap();
         assert_eq!(court.selection_for_tests_v1(), (case.position, Some(case.beat), true));
         // A seeded job never reaches the court.
         let mut seeded = job.clone();

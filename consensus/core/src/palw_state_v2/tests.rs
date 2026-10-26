@@ -2,12 +2,12 @@
 //! `crate::palw_state_v2::tests` and every test in it are unchanged; only the file moved).
 #![cfg(test)]
 
+mod gdn_court_v2;
 mod kernel_route_locator_v1;
 mod public_filer_targeting_v1;
 mod public_prefix_fold_v1;
 mod reward_gate_genesis;
 mod terminal_carriage_v1;
-mod gdn_court_v2;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;

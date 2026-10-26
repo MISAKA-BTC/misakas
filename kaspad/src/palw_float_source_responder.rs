@@ -145,7 +145,8 @@ impl PalwPanelService {
                         .map_err(|e| e.to_string())?;
                     let reader: Box<dyn PalwFloatPublicSourceReaderV1> = if sidecar.is_file() {
                         tokio::task::spawn_blocking(move || {
-                            let source = Arc::new(misaka_palw_base0::flat_public_source::Base0OriginalCaptureFileV1::open_v1(&sidecar)?);
+                            let source =
+                                Arc::new(misaka_palw_base0::flat_public_source::Base0OriginalCaptureFileV1::open_v1(&sidecar)?);
                             kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatPublicSidecarReaderV1::open_v1(source)
                                 .map(|reader| Box::new(reader) as Box<dyn PalwFloatPublicSourceReaderV1>)
                         })
@@ -174,7 +175,8 @@ impl PalwPanelService {
                         .await
                         .map_err(|e| format!("Float32 reader factory failed: {e}"))??
                     };
-                    book.readers.insert(id, ReaderV1 { claim, owner, reader: Arc::new(std::sync::Mutex::new(reader)), _memory: memory });
+                    book.readers
+                        .insert(id, ReaderV1 { claim, owner, reader: Arc::new(std::sync::Mutex::new(reader)), _memory: memory });
                 }
                 let slot = book.readers.get(&id).ok_or("Float32 source reader disappeared")?;
                 if (slot.claim, slot.owner) != (claim, owner) {

@@ -704,9 +704,78 @@ pub(super) fn owner_open(r: &PalwKernelRouteStateV1, job: Digest, owner: Digest)
     }
     Ok(n)
 }
-pub(super) fn collect_step(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeExecutionPoliciesV11,job:Digest)->Result<(),PalwStateV2Error>{let r=builder.state.kernel_route.as_ref().unwrap();let h=original_header(r,job)?;let mut c=counts(r,job)?;if c.collected==c.next{return Err(refused("text29 original indexed public cache already collected"));}let(id,unit):(Digest,Digest)=read(r,EXECUTION_DEMAND_TABLE_V11,2,&(job,c.collected),128).ok_or_else(||refused("text29 original indexed pending row absent"))?;let mut d=demand(r,id)?;if d.request.job!=job||d.ordinal!=c.collected||d.request.unit_id()!=unit||ctx.daa_score<=d.proof_until{return Err(refused("text29 original indexed answer/default cache retained"));}
-    let mut bytes=4096usize;for attempt in 1u8..=2{for index in 0u16..4{if let Some(row)=r.aux.get(&(EXECUTION_SERVED_TABLE_V11,k(3,&(id,attempt,index)))){if row.len()>32<<10{return Err(refused("text29 original reply cache extent differs"));}bytes=bytes.checked_add(row.len()).ok_or_else(||refused("text29 original reply cache journal overflow"))?;}}}if let Some(row)=r.aux.get(&(EXECUTION_SERVED_TABLE_V11,k(0,&unit))){if row.len()>128<<10{return Err(refused("text29 original served response extent differs"));}bytes=bytes.checked_add(row.len()).ok_or_else(||refused("text29 original response cache journal overflow"))?;}
-    if !paid_restore(builder,ctx,signer,p,Some(h.class),bytes)?{return Ok(());} // current actual restore/journal, no prior resource refund.
-    if !d.settled {let r=builder.state.kernel_route.as_ref().unwrap();let b=original_book(r,&h)?;if b.terminal()==NativeTextTerminalV29::Challengeable{return Err(refused("text29 unresolved original default must adjudicate before collection"));}d.settled=true;c.open=c.open.checked_sub(1).ok_or_else(||refused("text29 original open collection count underflow"))?;if d.request.paid_owner==[0;64]{c.open_ordinary=c.open_ordinary.checked_sub(1).ok_or_else(||refused("text29 original ordinary collection count underflow"))?;}builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11,k(0,&(d.requester,d.request.slot)),None);}
-    c.collected+=1;builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11,k(0,&job),Some(key(&c)));for(table,kk)in[(EXECUTION_DEMAND_TABLE_V11,k(0,&id)),(EXECUTION_DEMAND_TABLE_V11,k(1,&unit)),(EXECUTION_DEMAND_TABLE_V11,k(2,&(job,d.ordinal))),(EXECUTION_DEMAND_TABLE_V11,k(3,&id)),(EXECUTION_SERVED_TABLE_V11,k(0,&unit))]{builder.write_kernel_row(table,kk,None);}for attempt in 1u8..=2{for index in 0u16..4{builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11,k(3,&(id,attempt,index)),None);}}Ok(())}
-pub(super) fn all_collected(r:&PalwKernelRouteStateV1,job:Digest)->Result<bool,PalwStateV2Error>{let c=counts(r,job)?;Ok(c.open==0&&c.collected==c.next)}
+pub(super) fn collect_step(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV11,
+    job: Digest,
+) -> Result<(), PalwStateV2Error> {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let h = original_header(r, job)?;
+    let mut c = counts(r, job)?;
+    if c.collected == c.next {
+        return Err(refused("text29 original indexed public cache already collected"));
+    }
+    let (id, unit): (Digest, Digest) = read(r, EXECUTION_DEMAND_TABLE_V11, 2, &(job, c.collected), 128)
+        .ok_or_else(|| refused("text29 original indexed pending row absent"))?;
+    let mut d = demand(r, id)?;
+    if d.request.job != job || d.ordinal != c.collected || d.request.unit_id() != unit || ctx.daa_score <= d.proof_until {
+        return Err(refused("text29 original indexed answer/default cache retained"));
+    }
+    let mut bytes = 4096usize;
+    for attempt in 1u8..=2 {
+        for index in 0u16..4 {
+            if let Some(row) = r.aux.get(&(EXECUTION_SERVED_TABLE_V11, k(3, &(id, attempt, index)))) {
+                if row.len() > 32 << 10 {
+                    return Err(refused("text29 original reply cache extent differs"));
+                }
+                bytes = bytes.checked_add(row.len()).ok_or_else(|| refused("text29 original reply cache journal overflow"))?;
+            }
+        }
+    }
+    if let Some(row) = r.aux.get(&(EXECUTION_SERVED_TABLE_V11, k(0, &unit))) {
+        if row.len() > 128 << 10 {
+            return Err(refused("text29 original served response extent differs"));
+        }
+        bytes = bytes.checked_add(row.len()).ok_or_else(|| refused("text29 original response cache journal overflow"))?;
+    }
+    if !paid_restore(builder, ctx, signer, p, Some(h.class), bytes)? {
+        return Ok(());
+    } // current actual restore/journal, no prior resource refund.
+    if !d.settled {
+        let r = builder.state.kernel_route.as_ref().unwrap();
+        let b = original_book(r, &h)?;
+        if b.terminal() == NativeTextTerminalV29::Challengeable {
+            return Err(refused("text29 unresolved original default must adjudicate before collection"));
+        }
+        d.settled = true;
+        c.open = c.open.checked_sub(1).ok_or_else(|| refused("text29 original open collection count underflow"))?;
+        if d.request.paid_owner == [0; 64] {
+            c.open_ordinary =
+                c.open_ordinary.checked_sub(1).ok_or_else(|| refused("text29 original ordinary collection count underflow"))?;
+        }
+        builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, k(0, &(d.requester, d.request.slot)), None);
+    }
+    c.collected += 1;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, k(0, &job), Some(key(&c)));
+    for (table, kk) in [
+        (EXECUTION_DEMAND_TABLE_V11, k(0, &id)),
+        (EXECUTION_DEMAND_TABLE_V11, k(1, &unit)),
+        (EXECUTION_DEMAND_TABLE_V11, k(2, &(job, d.ordinal))),
+        (EXECUTION_DEMAND_TABLE_V11, k(3, &id)),
+        (EXECUTION_SERVED_TABLE_V11, k(0, &unit)),
+    ] {
+        builder.write_kernel_row(table, kk, None);
+    }
+    for attempt in 1u8..=2 {
+        for index in 0u16..4 {
+            builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(id, attempt, index)), None);
+        }
+    }
+    Ok(())
+}
+pub(super) fn all_collected(r: &PalwKernelRouteStateV1, job: Digest) -> Result<bool, PalwStateV2Error> {
+    let c = counts(r, job)?;
+    Ok(c.open == 0 && c.collected == c.next)
+}

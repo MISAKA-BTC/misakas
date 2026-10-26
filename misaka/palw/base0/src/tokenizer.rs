@@ -685,7 +685,8 @@ mod tests {
     #[test]
     fn json_rendering_uses_the_consensus_rule_and_refuses_duplicate_ids_without_dense_allocation() {
         use kaspa_consensus_core::palw_tokenizer_rendering_v1::PalwQwenRenderingMapV1;
-        let raw = "{\"model\":{\"vocab\":{\"a\":0,\"b\":2},\"merges\":[]},\"added_tokens\":[{\"id\":2,\"content\":\"漢\"}]}".as_bytes();
+        let raw =
+            "{\"model\":{\"vocab\":{\"a\":0,\"b\":2},\"merges\":[]},\"added_tokens\":[{\"id\":2,\"content\":\"漢\"}]}".as_bytes();
         let tokenizer = super::QwenTokenizer::from_json(raw).unwrap();
         let canonical = PalwQwenRenderingMapV1::parse(raw).unwrap();
         for id in 0..4 {

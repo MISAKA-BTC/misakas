@@ -2,10 +2,10 @@
 
 use super::*;
 
-#[path = "source_bootstrap_v1.rs"]
-mod source_bootstrap_v1;
 #[path = "routed_material_v2.rs"]
 mod routed_material_v2;
+#[path = "source_bootstrap_v1.rs"]
+mod source_bootstrap_v1;
 
 impl VirtualStateProcessor {
     /// **The 2026-09-23 Position route matrix, P-B3, at the mempool and at the template: the fold's

@@ -49,10 +49,8 @@ fn main() {
     let material_out = material_out.unwrap_or_else(|| die("--material-out is required"));
     let params = kaspad_lib::palw_attempt_exec::params_for_network_v1(&network).unwrap_or_else(|e| die(e));
     let (floor_class, floor_root) = kaspad_lib::palw_attempt_exec::floor_class_and_root_v1(&params).unwrap_or_else(|e| die(e));
-    let class_id = class
-        .as_deref()
-        .map(|s| s.parse::<Hash64>().unwrap_or_else(|_| die("--class is not a 128-hex hash")))
-        .unwrap_or(floor_class);
+    let class_id =
+        class.as_deref().map(|s| s.parse::<Hash64>().unwrap_or_else(|_| die("--class is not a 128-hex hash"))).unwrap_or(floor_class);
     let root = artifact_root
         .as_deref()
         .map(|s| s.parse::<Hash64>().unwrap_or_else(|_| die("--artifact-root is not a 128-hex hash")))

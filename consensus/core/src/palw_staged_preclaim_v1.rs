@@ -82,7 +82,18 @@ pub fn staged_preclaim_quote_with_gates_v1(
     let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(header) = header else {
         return Err("a TIR header is quoted by staged_preclaim_tir_quote_v1 against its registered record".into());
     };
-    legacy_preclaim_quote_v1(geometry, original, header, profile, semantics, inventory, maximum_custodians, maximum_leaves, config, gates)
+    legacy_preclaim_quote_v1(
+        geometry,
+        original,
+        header,
+        profile,
+        semantics,
+        inventory,
+        maximum_custodians,
+        maximum_leaves,
+        config,
+        gates,
+    )
 }
 
 fn check_preclaim_identity_v1(
@@ -228,7 +239,8 @@ pub fn staged_preclaim_tir_quote_v1(
         // The TIR prefix-state family (`palw_tir_prefix_owned_v1`): the class's published layout
         // rebuilds its step space; the boundary must be aligned and fit one carrier per leaf.
         let layout = layout.ok_or("a TIR prefix-state claim needs its class's layout published first (tag 169)")?;
-        let context = crate::palw_staged_court_state_v1::palw_tir_prefix_context_v1(record, layout, header, &original.job, maximum_leaves)?;
+        let context =
+            crate::palw_staged_court_state_v1::palw_tir_prefix_context_v1(record, layout, header, &original.job, maximum_leaves)?;
         families.push((
             PalwStagedFamilyV1::PublicPrefix,
             crate::palw_tir_prefix_owned_v1::tir_prefix_resource_plan_v1(

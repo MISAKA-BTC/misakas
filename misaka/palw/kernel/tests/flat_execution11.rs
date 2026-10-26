@@ -946,162 +946,302 @@ fn historical_source_theorem_burns_same_operator_bounty_and_never_pays_a_close_c
     assert_eq!(state.root(), before);
 }
 
-
 fn source16_fixture() -> (
-    CheckedNativeExecutionClassV11, QuotaPolicyV11, TrustedEpochV11,
-    ExecutionJobStateV11, misaka_palw_kernel::flat_quota11::CheckedJobQuotaPlanV11,
+    CheckedNativeExecutionClassV11,
+    QuotaPolicyV11,
+    TrustedEpochV11,
+    ExecutionJobStateV11,
+    misaka_palw_kernel::flat_quota11::CheckedJobQuotaPlanV11,
     misaka_palw_kernel::flat_quota11::QuotaStateV11,
     misaka_palw_kernel::flat_quota11::source16::SourcePlanV16,
 ) {
-    use misaka_palw_kernel::flat_quota11::*;
     use misaka_palw_kernel::flat_quota11::source16::*;
+    use misaka_palw_kernel::flat_quota11::*;
     let (_, mut quota, mut policy, source, candidate) = fixture();
     quota.future_attempts[2] = 48;
     policy.quota_policy_root = quota.root();
     let full = derive_execution_class_v11(&candidate, &source, &policy, &quota, 10).unwrap();
     let light = restore_native_execution_class_header_v11(&candidate, &source, Some(full.record()), &policy, &quota, 10).unwrap();
     let witness = NativeClassEligibilityV11 {
-        class_id:light.record().id(),active_descriptor:source.descriptor,active_binding:source.id(),
-        execution_policy_root:policy.root(),quota_policy_root:quota.root(),block_hash:[3;64],current_daa:10,
+        class_id: light.record().id(),
+        active_descriptor: source.descriptor,
+        active_binding: source.id(),
+        execution_policy_root: policy.root(),
+        quota_policy_root: quota.root(),
+        block_hash: [3; 64],
+        current_daa: 10,
     };
-    let class = authorize_native_execution_class_header_v11(light,&source,&witness).unwrap();
-    let epoch = TrustedEpochV11::from_chain(&quota,[3;64],10).unwrap();
-    let input = funded(&full,&quota).job.input;
-    let plan = derive_job_quota_plan_from_checked_native_class_v11(&class,input.positions).unwrap();
-    let prep = bind_native_execution_preparation_v11(&class,&quota,input,plan,[6;64],[7;64],nonce_bytes_v11(0),100).unwrap();
-    let prepared = prepare_execution_job_from_checked_plan_v11(&class,&quota,&epoch,prep,100,[9;64]).unwrap();
+    let class = authorize_native_execution_class_header_v11(light, &source, &witness).unwrap();
+    let epoch = TrustedEpochV11::from_chain(&quota, [3; 64], 10).unwrap();
+    let input = funded(&full, &quota).job.input;
+    let plan = derive_job_quota_plan_from_checked_native_class_v11(&class, input.positions).unwrap();
+    let prep = bind_native_execution_preparation_v11(&class, &quota, input, plan, [6; 64], [7; 64], nonce_bytes_v11(0), 100).unwrap();
+    let prepared = prepare_execution_job_from_checked_plan_v11(&class, &quota, &epoch, prep, 100, [9; 64]).unwrap();
     let book = ExecutionJobStateV11::from_native_funded_job(prepared.job).unwrap();
-    let op = [42;64];
-    let nonce = NativeRequesterNonceWitnessV11 {requester:book.job().requester,requester_operator_id:op,
-        counter_root:native_requester_nonce_counter_root_v11(&op,1),next_nonce:1};
-    let anchor = NativeQuotaAdmissionAnchorV11 {job_id:book.job().id(),funded_job_root:book.job().root(),book_root:book.root(),
-        request_key:book.job().request_key(),nonce_witness:nonce,terminal_book_root:None};
-    let admission = check_native_quota_admission_v11(&class,&book,&anchor).unwrap();
-    let mut state = QuotaStateV11::new(&quota,epoch.clone()).unwrap();
-    state.admit_baseline(&quota,&epoch,book.job().producer,&admission,&prepared.quota_plan).unwrap();
-    let discovery = discovery13::DiscoveryPolicyV13 {version:13,quota_policy_root:quota.root(),requests_per_session:2,ordinary_lifetime_requests:32};
-    let source_plan = derive_source_plan_v16(&class,&prepared.quota_plan,&quota,&discovery).unwrap();
-    (class,quota,epoch,book,prepared.quota_plan,state,source_plan)
+    let op = [42; 64];
+    let nonce = NativeRequesterNonceWitnessV11 {
+        requester: book.job().requester,
+        requester_operator_id: op,
+        counter_root: native_requester_nonce_counter_root_v11(&op, 1),
+        next_nonce: 1,
+    };
+    let anchor = NativeQuotaAdmissionAnchorV11 {
+        job_id: book.job().id(),
+        funded_job_root: book.job().root(),
+        book_root: book.root(),
+        request_key: book.job().request_key(),
+        nonce_witness: nonce,
+        terminal_book_root: None,
+    };
+    let admission = check_native_quota_admission_v11(&class, &book, &anchor).unwrap();
+    let mut state = QuotaStateV11::new(&quota, epoch.clone()).unwrap();
+    state.admit_baseline(&quota, &epoch, book.job().producer, &admission, &prepared.quota_plan).unwrap();
+    let discovery = discovery13::DiscoveryPolicyV13 {
+        version: 13,
+        quota_policy_root: quota.root(),
+        requests_per_session: 2,
+        ordinary_lifetime_requests: 32,
+    };
+    let source_plan = derive_source_plan_v16(&class, &prepared.quota_plan, &quota, &discovery).unwrap();
+    (class, quota, epoch, book, prepared.quota_plan, state, source_plan)
 }
 #[test]
 fn source16_original_producer_consent_shared_guarantee_and_failed_answers_preserve_frozen11() {
-    use misaka_palw_kernel::flat_quota11::*;
     use misaka_palw_kernel::flat_quota11::source16::*;
+    use misaka_palw_kernel::flat_quota11::*;
     use misaka_palw_kernel::flat_resources10::ResourceAxisV10;
-    let (class,quota,epoch,book,_,state,plan)=source16_fixture();
-    let global=state.global_row(); let producer=state.actor_row(&book.job().producer).unwrap();
-    let subject=state.subject(&book.job().id()).unwrap();
-    let mut shard=SourceShardV16::from_native_rows(&quota,&plan,&global,&global.root(),(&producer,&producer.root()),(subject,&subject.row_root()),None).unwrap();
-    let mut consent=NativeSourceConsentV16 {job_id:book.job().id(),funded_job_root:book.job().root(),book_root:book.root(),producer:book.job().producer,
-        producer_operator:[43;64],original_consent_root:[44;64],original_source_plan_root:plan.root(),original_trace_plan_root:[45;64],accepted_daa:9,expires_daa:11};
+    let (class, quota, epoch, book, _, state, plan) = source16_fixture();
+    let global = state.global_row();
+    let producer = state.actor_row(&book.job().producer).unwrap();
+    let subject = state.subject(&book.job().id()).unwrap();
+    let mut shard = SourceShardV16::from_native_rows(
+        &quota,
+        &plan,
+        &global,
+        &global.root(),
+        (&producer, &producer.root()),
+        (subject, &subject.row_root()),
+        None,
+    )
+    .unwrap();
+    let mut consent = NativeSourceConsentV16 {
+        job_id: book.job().id(),
+        funded_job_root: book.job().root(),
+        book_root: book.root(),
+        producer: book.job().producer,
+        producer_operator: [43; 64],
+        original_consent_root: [44; 64],
+        original_source_plan_root: plan.root(),
+        original_trace_plan_root: [45; 64],
+        accepted_daa: 9,
+        expires_daa: 11,
+    };
     for field in 0..5 {
-        let original=(consent.job_id,consent.original_consent_root,consent.producer,consent.expires_daa,consent.funded_job_root);
-        match field {0=>consent.job_id=[1;64],1=>consent.original_consent_root=[0;64],2=>consent.producer=[1;64],3=>consent.expires_daa=9,_=>consent.funded_job_root=[1;64]}
-        assert!(check_native_source_admission_v16(&class,&book,&epoch,&plan,&consent).is_err());
-        (consent.job_id,consent.original_consent_root,consent.producer,consent.expires_daa,consent.funded_job_root)=original;
+        let original = (consent.job_id, consent.original_consent_root, consent.producer, consent.expires_daa, consent.funded_job_root);
+        match field {
+            0 => consent.job_id = [1; 64],
+            1 => consent.original_consent_root = [0; 64],
+            2 => consent.producer = [1; 64],
+            3 => consent.expires_daa = 9,
+            _ => consent.funded_job_root = [1; 64],
+        }
+        assert!(check_native_source_admission_v16(&class, &book, &epoch, &plan, &consent).is_err());
+        (consent.job_id, consent.original_consent_root, consent.producer, consent.expires_daa, consent.funded_job_root) = original;
     }
-    let checked=check_native_source_admission_v16(&class,&book,&epoch,&plan,&consent).unwrap();
-    let baseline=subject.clone();
-    let before=shard.global_row().clone();
-    shard.admit(&quota,&epoch,&plan,&checked).unwrap();
-    assert_eq!(shard.global_row().network.reserved,before.network.reserved.checked_add(plan.guarantee()).unwrap());
-    assert_eq!(shard.producer_row().interval.reserved,producer.interval.reserved.checked_add(plan.guarantee()).unwrap());
-    for axis in [ResourceAxisV10::ParameterHashBytes,ResourceAxisV10::RawParameterStorage,ResourceAxisV10::ParameterTreeScratch,ResourceAxisV10::CopiedReferenceBytes,ResourceAxisV10::OwnedPeakBytes] {
-        assert!(plan.answer().get(axis)>0,"{axis:?}");
+    let checked = check_native_source_admission_v16(&class, &book, &epoch, &plan, &consent).unwrap();
+    let baseline = subject.clone();
+    let before = shard.global_row().clone();
+    shard.admit(&quota, &epoch, &plan, &checked).unwrap();
+    assert_eq!(shard.global_row().network.reserved, before.network.reserved.checked_add(plan.guarantee()).unwrap());
+    assert_eq!(shard.producer_row().interval.reserved, producer.interval.reserved.checked_add(plan.guarantee()).unwrap());
+    for axis in [
+        ResourceAxisV10::ParameterHashBytes,
+        ResourceAxisV10::RawParameterStorage,
+        ResourceAxisV10::ParameterTreeScratch,
+        ResourceAxisV10::CopiedReferenceBytes,
+        ResourceAxisV10::OwnedPeakBytes,
+    ] {
+        assert!(plan.answer().get(axis) > 0, "{axis:?}");
     }
-    let raw=borsh::to_vec(shard.source_row().unwrap()).unwrap();
-    assert_eq!(raw.len() as u64,SOURCE_ROW_BYTES_V16);
-    assert!(SourceObligationV16::from_rooted_bytes(&raw,&[0;64]).is_err());
-    assert!(SourceObligationV16::from_rooted_bytes(&raw[..raw.len()-1],&shard.source_row().unwrap().root()).is_err());
-    let before=shard.global_row().clone();
-    assert!(shard.debit_answer(&quota,&epoch,&plan,&book.job().producer,65536).is_err());
-    assert_eq!(*shard.global_row(),before);
-    shard.admit_valid_request(&quota,&epoch,&plan,&book.job().id()).unwrap();
-    assert!(shard.debit_answer(&quota,&epoch,&plan,&[1;64],65536).is_err());
-    assert!(shard.debit_answer(&quota,&epoch,&plan,&book.job().producer,SOURCE_ANSWER_MAX_BYTES_V16+1).is_err());
+    let raw = borsh::to_vec(shard.source_row().unwrap()).unwrap();
+    assert_eq!(raw.len() as u64, SOURCE_ROW_BYTES_V16);
+    assert!(SourceObligationV16::from_rooted_bytes(&raw, &[0; 64]).is_err());
+    assert!(SourceObligationV16::from_rooted_bytes(&raw[..raw.len() - 1], &shard.source_row().unwrap().root()).is_err());
+    let before = shard.global_row().clone();
+    assert!(shard.debit_answer(&quota, &epoch, &plan, &book.job().producer, 65536).is_err());
+    assert_eq!(*shard.global_row(), before);
+    shard.admit_valid_request(&quota, &epoch, &plan, &book.job().id()).unwrap();
+    assert!(shard.debit_answer(&quota, &epoch, &plan, &[1; 64], 65536).is_err());
+    assert!(shard.debit_answer(&quota, &epoch, &plan, &book.job().producer, SOURCE_ANSWER_MAX_BYTES_V16 + 1).is_err());
     // Persist both charged failed decoder attempts; no callback outcome refunds.
-    shard.debit_answer(&quota,&epoch,&plan,&book.job().producer,65536).unwrap();
-    shard.debit_answer(&quota,&epoch,&plan,&book.job().producer,65536).unwrap();
-    let after=shard.global_row().clone();
-    assert!(shard.debit_answer(&quota,&epoch,&plan,&book.job().producer,65536).is_err());
-    assert_eq!(*shard.global_row(),after);
-    assert_eq!(shard.source_row().unwrap().answers_used,2);
-    assert_eq!(state.subject(&book.job().id()).unwrap(),&baseline);
-    assert_eq!(shard.source_row().unwrap().consumed,plan.admission().checked_add(&plan.answer().checked_add(plan.answer()).unwrap()).unwrap());
-    let g=shard.global_row();let a=shard.producer_row();let r=shard.source_row().unwrap();
-    SourceShardV16::from_native_rows(&quota,&plan,g,&g.root(),(a,&a.root()),(&baseline,&baseline.row_root()),Some((r,&r.root()))).unwrap();
+    shard.debit_answer(&quota, &epoch, &plan, &book.job().producer, 65536).unwrap();
+    shard.debit_answer(&quota, &epoch, &plan, &book.job().producer, 65536).unwrap();
+    let after = shard.global_row().clone();
+    assert!(shard.debit_answer(&quota, &epoch, &plan, &book.job().producer, 65536).is_err());
+    assert_eq!(*shard.global_row(), after);
+    assert_eq!(shard.source_row().unwrap().answers_used, 2);
+    assert_eq!(state.subject(&book.job().id()).unwrap(), &baseline);
+    assert_eq!(
+        shard.source_row().unwrap().consumed,
+        plan.admission().checked_add(&plan.answer().checked_add(plan.answer()).unwrap()).unwrap()
+    );
+    let g = shard.global_row();
+    let a = shard.producer_row();
+    let r = shard.source_row().unwrap();
+    SourceShardV16::from_native_rows(
+        &quota,
+        &plan,
+        g,
+        &g.root(),
+        (a, &a.root()),
+        (&baseline, &baseline.row_root()),
+        Some((r, &r.root())),
+    )
+    .unwrap();
     for field in 0..4 {
-        let mut wrong=r.clone();match field {0=>wrong.requests_admitted=0,1=>wrong.original_consent_root=[0;64],2=>wrong.guarantee_remaining.0[0]+=1,_=>wrong.parameter=[1;64]}
-        assert!(SourceShardV16::from_native_rows(&quota,&plan,g,&g.root(),(a,&a.root()),(&baseline,&baseline.row_root()),Some((&wrong,&wrong.root()))).is_err());
+        let mut wrong = r.clone();
+        match field {
+            0 => wrong.requests_admitted = 0,
+            1 => wrong.original_consent_root = [0; 64],
+            2 => wrong.guarantee_remaining.0[0] += 1,
+            _ => wrong.parameter = [1; 64],
+        }
+        assert!(
+            SourceShardV16::from_native_rows(
+                &quota,
+                &plan,
+                g,
+                &g.root(),
+                (a, &a.root()),
+                (&baseline, &baseline.row_root()),
+                Some((&wrong, &wrong.root()))
+            )
+            .is_err()
+        );
     }
-    let next=TrustedEpochV11::from_chain(&quota,[8;64],1000).unwrap();
-    assert!(shard.admit_valid_request(&quota,&next,&plan,&book.job().id()).is_err());
-    assert!(shard.debit_answer(&quota,&next,&plan,&book.job().producer,65536).is_err());
-    assert_eq!(*shard.global_row(),after);
+    let next = TrustedEpochV11::from_chain(&quota, [8; 64], 1000).unwrap();
+    assert!(shard.admit_valid_request(&quota, &next, &plan, &book.job().id()).is_err());
+    assert!(shard.debit_answer(&quota, &next, &plan, &book.job().producer, 65536).is_err());
+    assert_eq!(*shard.global_row(), after);
 }
 
 #[test]
 fn source16_fixed_native_quote_cache_cannot_rebind_price_job_policy_or_root() {
     use misaka_palw_kernel::flat_quota11::source16::*;
-    let (_,quota,_,_,job,_,plan)=source16_fixture();
-    let record=plan.record(); let bytes=borsh::to_vec(&record).unwrap();
-    assert_eq!(record.root(),plan.root());
-    assert_eq!(bytes.len() as u64,SOURCE_PLAN_RECORD_BYTES_V16);
-    let decoded=SourcePlanRecordV16::from_rooted_bytes(&bytes,&plan.root()).unwrap();
-    let restored=SourcePlanV16::restore(&decoded,&plan.root(),&quota,&job.record().root()).unwrap();
-    assert_eq!(restored.root(),plan.root());
-    assert!(SourcePlanRecordV16::from_rooted_bytes(&bytes[..bytes.len()-1],&plan.root()).is_err());
-    assert!(SourcePlanRecordV16::from_rooted_bytes(&bytes,&[0;64]).is_err());
-    assert!(SourcePlanV16::restore(&decoded,&plan.root(),&quota,&[0;64]).is_err());
+    let (_, quota, _, _, job, _, plan) = source16_fixture();
+    let record = plan.record();
+    let bytes = borsh::to_vec(&record).unwrap();
+    assert_eq!(record.root(), plan.root());
+    assert_eq!(bytes.len() as u64, SOURCE_PLAN_RECORD_BYTES_V16);
+    let decoded = SourcePlanRecordV16::from_rooted_bytes(&bytes, &plan.root()).unwrap();
+    let restored = SourcePlanV16::restore(&decoded, &plan.root(), &quota, &job.record().root()).unwrap();
+    assert_eq!(restored.root(), plan.root());
+    assert!(SourcePlanRecordV16::from_rooted_bytes(&bytes[..bytes.len() - 1], &plan.root()).is_err());
+    assert!(SourcePlanRecordV16::from_rooted_bytes(&bytes, &[0; 64]).is_err());
+    assert!(SourcePlanV16::restore(&decoded, &plan.root(), &quota, &[0; 64]).is_err());
     for field in 0..5 {
-        let mut r=record.clone();match field {0=>r.answer.0[0]^=1,1=>r.requests+=1,2=>r.class=[1;64],3=>r.guarantee.0[0]^=1,_=>r.quota=[1;64]}
-        assert!(SourcePlanV16::restore(&r,&plan.root(),&quota,&job.record().root()).is_err());
+        let mut r = record.clone();
+        match field {
+            0 => r.answer.0[0] ^= 1,
+            1 => r.requests += 1,
+            2 => r.class = [1; 64],
+            3 => r.guarantee.0[0] ^= 1,
+            _ => r.quota = [1; 64],
+        }
+        assert!(SourcePlanV16::restore(&r, &plan.root(), &quota, &job.record().root()).is_err());
     }
 }
 #[test]
 fn source16_public_expired_collection_charges_only_current_caller_and_never_revives_old_guarantees() {
-    use misaka_palw_kernel::flat_quota11::*;
     use misaka_palw_kernel::flat_quota11::source16::*;
-    let (class,quota,epoch,mut book,job_plan,state,plan)=source16_fixture();
-    let g=state.global_row();let a=state.actor_row(&book.job().producer).unwrap();let s=state.subject(&book.job().id()).unwrap();
-    let mut source=SourceShardV16::from_native_rows(&quota,&plan,&g,&g.root(),(&a,&a.root()),(s,&s.row_root()),None).unwrap();
-    let consent=NativeSourceConsentV16 {job_id:book.job().id(),funded_job_root:book.job().root(),book_root:book.root(),producer:book.job().producer,
-        producer_operator:[43;64],original_consent_root:[44;64],original_source_plan_root:plan.root(),original_trace_plan_root:[45;64],accepted_daa:9,expires_daa:11};
-    let checked=check_native_source_admission_v16(&class,&book,&epoch,&plan,&consent).unwrap();
-    source.admit(&quota,&epoch,&plan,&checked).unwrap();
-    let row=source.source_row().unwrap().clone();
-    let g=source.global_row();let a=source.producer_row();
-    let mut producer=CheckedQuotaShardV11::from_native_rows(&quota,g,&g.root(),a.actor,book.job().id(),None,
-        Some((a,&a.root())),Some((s,&s.row_root())),None).unwrap();
-    let closed_at=TrustedEpochV11::from_chain(&quota,[46;64],16).unwrap();
-    let binding=book.job().quota_subject(class.record()).unwrap();
-    let debit=producer.debit_terminal(&quota,&closed_at,&binding,&job_plan,&[]).unwrap();
-    let settlement=book.cancel_unclaimed(class.record(),16).unwrap();assert_eq!(settlement.requester_refund,100);
-    let op=[42;64];
-    let anchor=NativeQuotaTerminalAnchorV11 {job_id:book.job().id(),funded_job_root:book.job().root(),terminal_book_root:book.root(),
-        request_key:book.job().request_key(),nonce_witness:NativeRequesterNonceWitnessV11 {requester:book.job().requester,requester_operator_id:op,
-            counter_root:native_requester_nonce_counter_root_v11(&op,1),next_nonce:1}};
-    let terminal=check_native_quota_terminal_v11(&class,&book,&anchor).unwrap();
-    producer.mark_terminal_closed(&quota,&closed_at,&terminal,&debit).unwrap();
+    use misaka_palw_kernel::flat_quota11::*;
+    let (class, quota, epoch, mut book, job_plan, state, plan) = source16_fixture();
+    let g = state.global_row();
+    let a = state.actor_row(&book.job().producer).unwrap();
+    let s = state.subject(&book.job().id()).unwrap();
+    let mut source =
+        SourceShardV16::from_native_rows(&quota, &plan, &g, &g.root(), (&a, &a.root()), (s, &s.row_root()), None).unwrap();
+    let consent = NativeSourceConsentV16 {
+        job_id: book.job().id(),
+        funded_job_root: book.job().root(),
+        book_root: book.root(),
+        producer: book.job().producer,
+        producer_operator: [43; 64],
+        original_consent_root: [44; 64],
+        original_source_plan_root: plan.root(),
+        original_trace_plan_root: [45; 64],
+        accepted_daa: 9,
+        expires_daa: 11,
+    };
+    let checked = check_native_source_admission_v16(&class, &book, &epoch, &plan, &consent).unwrap();
+    source.admit(&quota, &epoch, &plan, &checked).unwrap();
+    let row = source.source_row().unwrap().clone();
+    let g = source.global_row();
+    let a = source.producer_row();
+    let mut producer = CheckedQuotaShardV11::from_native_rows(
+        &quota,
+        g,
+        &g.root(),
+        a.actor,
+        book.job().id(),
+        None,
+        Some((a, &a.root())),
+        Some((s, &s.row_root())),
+        None,
+    )
+    .unwrap();
+    let closed_at = TrustedEpochV11::from_chain(&quota, [46; 64], 16).unwrap();
+    let binding = book.job().quota_subject(class.record()).unwrap();
+    let debit = producer.debit_terminal(&quota, &closed_at, &binding, &job_plan, &[]).unwrap();
+    let settlement = book.cancel_unclaimed(class.record(), 16).unwrap();
+    assert_eq!(settlement.requester_refund, 100);
+    let op = [42; 64];
+    let anchor = NativeQuotaTerminalAnchorV11 {
+        job_id: book.job().id(),
+        funded_job_root: book.job().root(),
+        terminal_book_root: book.root(),
+        request_key: book.job().request_key(),
+        nonce_witness: NativeRequesterNonceWitnessV11 {
+            requester: book.job().requester,
+            requester_operator_id: op,
+            counter_root: native_requester_nonce_counter_root_v11(&op, 1),
+            next_nonce: 1,
+        },
+    };
+    let terminal = check_native_quota_terminal_v11(&class, &book, &anchor).unwrap();
+    producer.mark_terminal_closed(&quota, &closed_at, &terminal, &debit).unwrap();
     // The producer is absent. A fresh public collector loads its own absent
     // current actor row, not the old producer allowance.
-    let g=producer.global_row();let s=producer.subject_row().unwrap();let caller_id=[47;64];
-    let mut caller=CheckedQuotaShardV11::from_native_rows(&quota,&g,&g.root(),caller_id,book.job().id(),None,None,
-        Some((s,&s.row_root())),None).unwrap();
-    let next=TrustedEpochV11::from_chain(&quota,[48;64],1000).unwrap();let before=caller.global_row();
-    assert!(retire_expired_source_v16(&mut caller,&quota,&next,&plan,&row,&[0;64],&terminal).is_err());
-    assert_eq!(caller.global_row(),before);
-    assert!(retire_expired_source_v16(&mut caller,&quota,&closed_at,&plan,&row,&row.root(),&terminal).is_err());
-    assert_eq!(caller.global_row(),before);
-    let retired=retire_expired_source_v16(&mut caller,&quota,&next,&plan,&row,&row.root(),&terminal).unwrap();
+    let g = producer.global_row();
+    let s = producer.subject_row().unwrap();
+    let caller_id = [47; 64];
+    let mut caller = CheckedQuotaShardV11::from_native_rows(
+        &quota,
+        &g,
+        &g.root(),
+        caller_id,
+        book.job().id(),
+        None,
+        None,
+        Some((s, &s.row_root())),
+        None,
+    )
+    .unwrap();
+    let next = TrustedEpochV11::from_chain(&quota, [48; 64], 1000).unwrap();
+    let before = caller.global_row();
+    assert!(retire_expired_source_v16(&mut caller, &quota, &next, &plan, &row, &[0; 64], &terminal).is_err());
+    assert_eq!(caller.global_row(), before);
+    assert!(retire_expired_source_v16(&mut caller, &quota, &closed_at, &plan, &row, &row.root(), &terminal).is_err());
+    assert_eq!(caller.global_row(), before);
+    let retired = retire_expired_source_v16(&mut caller, &quota, &next, &plan, &row, &row.root(), &terminal).unwrap();
     assert!(retired.retired);
-    assert_eq!(retired.guarantee_remaining,QuotaQuantitiesV11::default());
-    assert_eq!(caller.global_row().network.reserved,QuotaQuantitiesV11::default());
-    assert_eq!(caller.actor_row().actor,caller_id);
-    assert_eq!(caller.actor_row().interval.consumed,caller.global_row().network.consumed);
-    assert!(caller.global_row().network.consumed.0.iter().any(|n|*n>0));
-    assert_ne!(caller.global_row().network.consumed,row.guarantee_remaining);
-    let after=caller.global_row();
-    assert!(retire_expired_source_v16(&mut caller,&quota,&next,&plan,&retired,&retired.root(),&terminal).is_err());
-    assert_eq!(caller.global_row(),after);
+    assert_eq!(retired.guarantee_remaining, QuotaQuantitiesV11::default());
+    assert_eq!(caller.global_row().network.reserved, QuotaQuantitiesV11::default());
+    assert_eq!(caller.actor_row().actor, caller_id);
+    assert_eq!(caller.actor_row().interval.consumed, caller.global_row().network.consumed);
+    assert!(caller.global_row().network.consumed.0.iter().any(|n| *n > 0));
+    assert_ne!(caller.global_row().network.consumed, row.guarantee_remaining);
+    let after = caller.global_row();
+    assert!(retire_expired_source_v16(&mut caller, &quota, &next, &plan, &retired, &retired.root(), &terminal).is_err());
+    assert_eq!(caller.global_row(), after);
 }

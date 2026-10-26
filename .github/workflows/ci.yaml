@@ -651,6 +651,7 @@ jobs:
         continue-on-error: true
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get update
           sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
           # Make Clang 15 default
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100
@@ -739,6 +740,7 @@ jobs:
         continue-on-error: true
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get update
           sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
           # Make Clang 15 default
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100
@@ -829,6 +831,7 @@ jobs:
         continue-on-error: true
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get update
           sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
           # Make Clang 15 default
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100

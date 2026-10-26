@@ -104,10 +104,8 @@ mod tests {
 
     #[test]
     fn the_panel_flag_accepts_an_http_provider_beside_a_directory() {
-        let specs = misaka_palw_remote::transport::parse_provider_list_v1(
-            "http://169.58.232.113:8088,/var/lib/palw-evidence",
-        )
-        .unwrap();
+        let specs =
+            misaka_palw_remote::transport::parse_provider_list_v1("http://169.58.232.113:8088,/var/lib/palw-evidence").unwrap();
         assert!(matches!(specs[0], misaka_palw_remote::transport::ProviderSpecV1::Http(_)));
         assert!(matches!(specs[1], misaka_palw_remote::transport::ProviderSpecV1::Dir(_)));
     }

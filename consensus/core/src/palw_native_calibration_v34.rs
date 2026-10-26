@@ -226,9 +226,12 @@ pub fn local_validation_snapshot_v34(
     let mut final_policy =
         crate::palw_native_final_v27::PalwNativeFinalFenceV27::unapproved_probe_at(ForkActivation::always(), domain).policy;
     final_policy.purpose = match purpose {
-        LocalNativePurposeV34::Measurement => {
-            NativeFinalPurposeV34::IsolatedCalibration { version: 34, isolation, base_genesis: base.genesis.hash, measurement_manifest }
-        }
+        LocalNativePurposeV34::Measurement => NativeFinalPurposeV34::IsolatedCalibration {
+            version: 34,
+            isolation,
+            base_genesis: base.genesis.hash,
+            measurement_manifest,
+        },
         LocalNativePurposeV34::LocalQualified => NativeFinalPurposeV34::LocalQualifiedValidation {
             version: 34,
             isolation,
@@ -240,7 +243,8 @@ pub fn local_validation_snapshot_v34(
     calibrations.sort_by_key(|c| c.profile);
     final_policy.calibrations = calibrations;
     let stage = with_stage28.then(|| {
-        let mut s = crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(ForkActivation::always(), domain).policies;
+        let mut s =
+            crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(ForkActivation::always(), domain).policies;
         s.execution = funded.clone();
         s.final_policy = final_policy.root();
         s.physical_service = physical_service;

@@ -2979,7 +2979,10 @@ impl PalwPanelService {
                         header_bundle_dispatched = true;
                         book.cases.get_mut(&claim).expect("pursued").staged_bundle_pending = true;
                         let context = book.cases.get(&claim).and_then(|case| {
-                            case.binding.as_ref().zip(case.public_fp_job_v1()).map(|(binding, job)| (Some(binding.clone()), job.clone()))
+                            case.binding
+                                .as_ref()
+                                .zip(case.public_fp_job_v1())
+                                .map(|(binding, job)| (Some(binding.clone()), job.clone()))
                         });
                         // A TIR claim has no legacy binding: its context is the natively derived view
                         // (behind `palw_staged_tir_route_v1`; `None` below that fence or for a legacy claim).
@@ -4652,8 +4655,11 @@ impl PalwPanelService {
                 }
                 FloatSourceScheduleV1::Nominate { source_id } => {
                     due = float.session.nomination_until_daa.saturating_sub(1);
-                    let plan =
-                        book.cases.get(&claim).and_then(|case| case.constraint_plan).ok_or("Float32 owner nomination is unavailable")?;
+                    let plan = book
+                        .cases
+                        .get(&claim)
+                        .and_then(|case| case.constraint_plan)
+                        .ok_or("Float32 owner nomination is unavailable")?;
                     PalwConstraintStreamActionV1::FloatSourceNominate { source_id, position: plan.position, beat: plan.beat_lane }
                 }
                 FloatSourceScheduleV1::Collect => {
@@ -4824,7 +4830,8 @@ impl PalwPanelService {
                 return Ok((None, false));
             }
         }
-        let accepted = if progress.cursor.is_some() { session.palw_staged_owned_native_seed_v1((claim, progress.reserver))? } else { None };
+        let accepted =
+            if progress.cursor.is_some() { session.palw_staged_owned_native_seed_v1((claim, progress.reserver))? } else { None };
         let case = book.cases.get_mut(&claim).ok_or("TIR constraint pursuit disappeared")?;
         case.constraint_stage_pending = true;
         let worker = case.staged_constraint.get_or_insert_with(|| Arc::new(std::sync::Mutex::new(None))).clone();
@@ -5011,8 +5018,9 @@ impl PalwPanelService {
                     action: PalwConstraintStreamActionV1::NativeTirPrefixCollect,
                     signature: Vec::new(),
                 };
-                movement.signature =
-                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR prefix owner signing key")?;
+                movement.signature = self
+                    .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
+                    .ok_or("no TIR prefix owner signing key")?;
                 movement.check()?;
                 PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
             }
@@ -5136,7 +5144,8 @@ impl PalwPanelService {
                 return Ok((Some(filing), false));
             }
             TokenizerScheduleV1::NativeSeed(mut seed) => {
-                seed.signature = self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
                 seed.check(90_000)?;
                 PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
             }
@@ -5252,16 +5261,14 @@ impl PalwPanelService {
                 table,
                 &crate::palw_memory_ledger::host_ledger_v1(),
             )?
-            .or_else(
-                    || {
-                        (replayed && !event.generated_token_ids.is_empty()).then(|| constraint::TiledPlanV1 {
-                            position: 0,
-                            committed: event.generated_token_ids[0],
-                            witness: None,
-                            beat_lane: None,
-                        })
-                    },
-                );
+            .or_else(|| {
+                (replayed && !event.generated_token_ids.is_empty()).then(|| constraint::TiledPlanV1 {
+                    position: 0,
+                    committed: event.generated_token_ids[0],
+                    witness: None,
+                    beat_lane: None,
+                })
+            });
             book.cases.get_mut(&claim).ok_or("selected pursuit disappeared")?.constraint_plan = nominee;
         }
         let plan = book.cases.get(&claim).and_then(|case| case.constraint_plan);
@@ -5447,8 +5454,20 @@ impl PalwPanelService {
                             .await?
                         }
                         PalwStagedFamilyV1::PublicPrefix => {
-                            self.fraud_filer_tir_prefix_stage_v1(session, book, claim, target, job, tir, child, maximum, file_by, court_pending, court_due)
-                                .await?
+                            self.fraud_filer_tir_prefix_stage_v1(
+                                session,
+                                book,
+                                claim,
+                                target,
+                                job,
+                                tir,
+                                child,
+                                maximum,
+                                file_by,
+                                court_pending,
+                                court_due,
+                            )
+                            .await?
                         }
                     };
                     return Ok((result.0, false));
@@ -5588,7 +5607,9 @@ impl PalwPanelService {
                             job,
                             selected.as_ref().map(|(events, _)| events.clone()),
                             flat.as_ref()
-                                .map(|(pin, source, signer, _)| (constraint_scheduler::StreamedPinV1::Flat(pin.clone()), *source, *signer))
+                                .map(|(pin, source, signer, _)| {
+                                    (constraint_scheduler::StreamedPinV1::Flat(pin.clone()), *source, *signer)
+                                })
                                 .or(float.as_ref().map(|(pin, source, signer, _)| {
                                     (constraint_scheduler::StreamedPinV1::Float(pin.clone()), *source, *signer)
                                 }))
@@ -6322,9 +6343,7 @@ impl PalwPanelService {
                     PalwConstraintStreamActionV1::SelectedEventCollect { .. }
                     | PalwConstraintStreamActionV1::FlatSourceCollect
                     | PalwConstraintStreamActionV1::FloatSourceCollect
-                    | PalwConstraintStreamActionV1::NativeTirPrefixCollect => {
-                        progress.terms.collect_until_daa.saturating_sub(1)
-                    }
+                    | PalwConstraintStreamActionV1::NativeTirPrefixCollect => progress.terms.collect_until_daa.saturating_sub(1),
                     _ => palw_fraud_filer_staged_due_v1(&object, &progress.terms),
                 }
             }
@@ -6605,13 +6624,16 @@ impl PalwPanelService {
             return retry(book, "no replay room on this host".into());
         }
         let snapshot = candidate.clone();
-        let payload = match session.clone().spawn_blocking(move |c| palw_fraud_filer_fp_payload_v1(c, &snapshot, network_domain)).await {
+        let payload = match session.clone().spawn_blocking(move |c| palw_fraud_filer_fp_payload_v1(c, &snapshot, network_domain)).await
+        {
             Ok(payload) => input::PalwFraudFilerFpDescriptorV1::Accepted(payload),
             Err(why) => return retry(book, format!("the accepted public FP job is unavailable: {why}")),
         };
         let job = payload.job().clone();
         let accepted_pin = match &payload {
-            input::PalwFraudFilerFpDescriptorV1::Accepted(p) => kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&p.commitment),
+            input::PalwFraudFilerFpDescriptorV1::Accepted(p) => {
+                kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&p.commitment)
+            }
             input::PalwFraudFilerFpDescriptorV1::Disclosed { job_identity, .. } => *job_identity,
         };
         if job.network_domain != network_domain
@@ -6627,12 +6649,15 @@ impl PalwPanelService {
         };
         let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
             match self.resolve_backend(session, job.class_id, artifact_root) {
-            Ok(backend) => Arc::from(backend),
-            Err(why) => {
-                book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(format!("its TIR class does not resolve on this host ({why})")));
-                return;
-            }
-        };
+                Ok(backend) => Arc::from(backend),
+                Err(why) => {
+                    book.settle(
+                        &claim,
+                        PalwFraudFilerVerdictV1::Unjudged(format!("its TIR class does not resolve on this host ({why})")),
+                    );
+                    return;
+                }
+            };
         let prompt_form = self.class_prompt_ids_form(job.class_id);
         let prompt = match input::palw_fraud_filer_fp_descriptor_input_v1(backend.as_ref(), &payload, prompt_form, public_material) {
             Ok(input) => input.prompt_ids,

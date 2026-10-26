@@ -353,7 +353,12 @@ fn load_ledger_with_projection_v9(
             .map_err(refused)?;
         ledger.set_beacon_source_fee_inputs(inputs).map_err(refused)?;
     }
-    builder.state.kernel_route.as_ref().expect("created").apply_paid_claim_consumer_inputs_checked_v6(&mut ledger)
+    builder
+        .state
+        .kernel_route
+        .as_ref()
+        .expect("created")
+        .apply_paid_claim_consumer_inputs_checked_v6(&mut ledger)
         .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.consumer_final_reward_caps = builder.kernel_final_reward_caps_v1(&ledger);
     // RFC08 R8-ECON (`palw_minimum_price_v1`): every governed job's contracted claim carries its signed funded minimum as a payout

@@ -1314,13 +1314,13 @@ impl<'a> Wizard<'a> {
                 self.ui.sub(&paint::dim(&said));
             }
             None => {
-                supervisor::signal(own.pid, libc::SIGTERM);
+                supervisor::signal(own.pid, supervisor::sig::SIGTERM);
                 let deadline = Instant::now() + Duration::from_secs(90);
                 while supervisor::alive(own.pid) && Instant::now() < deadline {
                     tokio::time::sleep(Duration::from_millis(250)).await;
                 }
                 if supervisor::alive(own.pid) {
-                    supervisor::signal(own.pid, libc::SIGKILL);
+                    supervisor::signal(own.pid, supervisor::sig::SIGKILL);
                 }
             }
         }

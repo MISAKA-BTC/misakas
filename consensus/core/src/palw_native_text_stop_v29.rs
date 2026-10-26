@@ -581,7 +581,10 @@ impl NativeTextBookV29 {
             finder: [0; 64],
             finder_credit: 0,
             burned: 0,
-            proof: object_id(b"misaka-palw/native/text-original-final-conditions-receipt/v29", &(conditions.policy_root(),conditions.basis_root())),
+            proof: object_id(
+                b"misaka-palw/native/text-original-final-conditions-receipt/v29",
+                &(conditions.policy_root(), conditions.basis_root()),
+            ),
         })
     }
 }

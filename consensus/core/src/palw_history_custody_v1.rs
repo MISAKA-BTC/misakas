@@ -1052,8 +1052,13 @@ mod tests {
                 committed_execution_root: pledge.execution_root,
             },
         );
-        let envelope =
-            PalwHistoryFpEnvelopeV1 { version: 1, original_payload: vec![3, 0, 8], pledge, original_binding, custody_delegation: None };
+        let envelope = PalwHistoryFpEnvelopeV1 {
+            version: 1,
+            original_payload: vec![3, 0, 8],
+            pledge,
+            original_binding,
+            custody_delegation: None,
+        };
         let encoded = envelope.encode_v1().unwrap();
         assert_eq!(PalwHistoryFpEnvelopeV1::decode_v1(&encoded).unwrap(), envelope);
         assert!(envelope.original_fp_v1().is_err());
@@ -1077,7 +1082,11 @@ mod tests {
         let encoded2 = delegated.encode_v1().unwrap();
         assert_eq!(PalwHistoryFpEnvelopeV1::decode_v1(&encoded2).unwrap(), delegated);
         assert!(PalwHistoryFpEnvelopeV1 { version: 2, custody_delegation: None, ..envelope.clone() }.encode_v1().is_err());
-        assert!(PalwHistoryFpEnvelopeV1 { version: 1, custody_delegation: Some(delegation.clone()), ..envelope.clone() }.encode_v1().is_err());
+        assert!(
+            PalwHistoryFpEnvelopeV1 { version: 1, custody_delegation: Some(delegation.clone()), ..envelope.clone() }
+                .encode_v1()
+                .is_err()
+        );
         let short = PalwProducerCustodyDelegationV1 { valid_until_daa: envelope.pledge.material_until_daa - 1, ..delegation.clone() };
         assert!(PalwHistoryFpEnvelopeV1 { version: 2, custody_delegation: Some(short), ..envelope.clone() }.encode_v1().is_err());
         let foreign = PalwProducerCustodyDelegationV1 { producer: bond(78), ..delegation.clone() };
@@ -1105,23 +1114,32 @@ mod tests {
             custodian_signature: Vec::new(),
         };
         let sign = |kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair, message: Hash64| {
-            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), PALW_PRODUCER_CUSTODY_DELEGATION_CONTEXT_V1, [0; 32])
-                .unwrap()
-                .as_ref()
-                .to_vec()
+            libcrux_ml_dsa::ml_dsa_87::sign(
+                &kp.signing_key,
+                message.as_byte_slice(),
+                PALW_PRODUCER_CUSTODY_DELEGATION_CONTEXT_V1,
+                [0; 32],
+            )
+            .unwrap()
+            .as_ref()
+            .to_vec()
         };
         delegation.producer_signature = sign(&producer, delegation.signing_message_v1());
         delegation.custodian_signature = sign(&custodian, delegation.signing_message_v1());
         let verify = crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1;
         delegation.validate_signatures_v1(producer.verification_key.as_ref(), custodian.verification_key.as_ref(), verify).unwrap();
-        assert!(delegation
-            .validate_signatures_v1(custodian.verification_key.as_ref(), producer.verification_key.as_ref(), verify)
-            .is_err(), "roles are not interchangeable");
+        assert!(
+            delegation
+                .validate_signatures_v1(custodian.verification_key.as_ref(), producer.verification_key.as_ref(), verify)
+                .is_err(),
+            "roles are not interchangeable"
+        );
         let mut stretched = delegation.clone();
         stretched.valid_until_daa += 1;
-        assert!(stretched
-            .validate_signatures_v1(producer.verification_key.as_ref(), custodian.verification_key.as_ref(), verify)
-            .is_err(), "a signed window cannot be extended");
+        assert!(
+            stretched.validate_signatures_v1(producer.verification_key.as_ref(), custodian.verification_key.as_ref(), verify).is_err(),
+            "a signed window cannot be extended"
+        );
     }
     #[test]
     fn history_parts_and_envelope_reject_declared_allocation_bombs_before_reading_body() {

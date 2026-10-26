@@ -399,7 +399,8 @@ impl super::PalwPanelService {
                 Ok(duty) => duty.is_some(),
             }
         });
-        let mut queued = pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (HISTORY_GRANT_ROUND_V1, true)).count();
+        let mut queued =
+            pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (HISTORY_GRANT_ROUND_V1, true)).count();
         for (claim, (receipt, _)) in own_receipts {
             if queued >= HISTORY_GRANTS_QUEUED_V1 {
                 break;
@@ -430,7 +431,10 @@ impl super::PalwPanelService {
                 .ok_or("history grant signing key unavailable")?;
             movement.action = PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt: receipt.clone() };
             movement.signature = self
-                .sign(&movement.signing_message(), kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1)
+                .sign(
+                    &movement.signing_message(),
+                    kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1,
+                )
                 .ok_or("history grant carrier signing key unavailable")?;
             movement.check()?;
             pending.push((key.0, key.1, key.2, PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }));

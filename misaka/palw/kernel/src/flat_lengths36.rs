@@ -92,7 +92,11 @@ impl LengthContractV36 {
     }
     /// `program_history_bound` is the v1 program's frozen header field; `plan` must be
     /// supplied for `Window8` and must hash to the declared root.
-    pub fn check(&self, program_history_bound: u32, plan: Option<&HistorySelectionPlanV8>) -> Result<CheckedLengthContractV36, String> {
+    pub fn check(
+        &self,
+        program_history_bound: u32,
+        plan: Option<&HistorySelectionPlanV8>,
+    ) -> Result<CheckedLengthContractV36, String> {
         if self.version != LENGTH_CONTRACT_VERSION_V36 || self.program_root == [0; 64] || self.maximum_positions == 0 {
             return Err("length36 version/program/maximum".into());
         }

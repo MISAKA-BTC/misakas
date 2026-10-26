@@ -194,9 +194,7 @@ impl crate::config::params::Params {
             .map(|fence| (fence.activation.daa_score(), fence.policy));
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
             if bundle.state.source_economics_v1 != mirror {
-                return Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned(
-                    "source economics mirror is not synchronized".into(),
-                ));
+                return Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned("source economics mirror is not synchronized".into()));
             }
         }
         if let Some(fence) = self.palw_source_economics_v1 {
@@ -229,11 +227,7 @@ fn key(action: u8, enrollment: &[u8; 64], actor: &[u8; 64]) -> [u8; 129] {
 }
 
 fn nonempty(id: &[u8; 64]) -> Result<(), String> {
-    if *id == [0; 64] {
-        Err("source economics id is empty".into())
-    } else {
-        Ok(())
-    }
+    if *id == [0; 64] { Err("source economics id is empty".into()) } else { Ok(()) }
 }
 
 impl PalwSourceEconomicsActionV1 {
@@ -330,12 +324,7 @@ impl PalwSourceEconomicsBookV1 {
     /// Settled non-convicted actors are enqueued once. Unused prepaid is
     /// refunded once. Convicted actors are not enqueued.
     pub fn release_at(&mut self, daa: u64) -> Result<EconomicsReportV1, String> {
-        let mut report = EconomicsReportV1 {
-            enqueued_sompi: 0,
-            coinbase_paid_sompi: 0,
-            refunded_sompi: 0,
-            queue_acknowledged: false,
-        };
+        let mut report = EconomicsReportV1 { enqueued_sompi: 0, coinbase_paid_sompi: 0, refunded_sompi: 0, queue_acknowledged: false };
         self.stage(|book| {
             let courts: Vec<_> = book.court.values().copied().collect();
             for court in courts {
@@ -401,12 +390,7 @@ impl PalwSourceEconomicsBookV1 {
 
     /// Record that the queue row was seen. Does not pay coinbase.
     pub fn acknowledge(&mut self, enrollment: &[u8; 64], actor: &[u8; 64]) -> Result<EconomicsReportV1, String> {
-        let mut report = EconomicsReportV1 {
-            enqueued_sompi: 0,
-            coinbase_paid_sompi: 0,
-            refunded_sompi: 0,
-            queue_acknowledged: false,
-        };
+        let mut report = EconomicsReportV1 { enqueued_sompi: 0, coinbase_paid_sompi: 0, refunded_sompi: 0, queue_acknowledged: false };
         self.stage(|book| {
             let id = key(ACTION_QUEUE, enrollment, actor);
             let row = book.queue.get_mut(&id).ok_or("source queue row is absent")?;
@@ -426,7 +410,8 @@ impl PalwSourceEconomicsBookV1 {
             if id[0] != PALW_SOURCE_ECONOMICS_ACTION_FUND_V1 {
                 return Err("funding key action".into());
             }
-            if funding.r_cap_sompi > 0 && funding.r_cap_sompi == funding.reserved_sompi && funding.r_cap_sompi == funding.prepaid_sompi {
+            if funding.r_cap_sompi > 0 && funding.r_cap_sompi == funding.reserved_sompi && funding.r_cap_sompi == funding.prepaid_sompi
+            {
                 return Err("R cap was used as the funded amount".into());
             }
             let hold = self.holds.get(&key(ACTION_HOLD, &funding.enrollment, &funding.actor)).ok_or("funding without hold")?;
@@ -435,10 +420,8 @@ impl PalwSourceEconomicsBookV1 {
             }
         }
         for court in self.court.values() {
-            let liability = self
-                .liability
-                .get(&key(ACTION_LIABILITY, &court.enrollment, &court.actor))
-                .ok_or("court without liability")?;
+            let liability =
+                self.liability.get(&key(ACTION_LIABILITY, &court.enrollment, &court.actor)).ok_or("court without liability")?;
             if liability.inclusive_until_daa != court.inclusive_until_daa {
                 return Err("liability horizon is not the court horizon".into());
             }
@@ -447,10 +430,8 @@ impl PalwSourceEconomicsBookV1 {
             if id[0] != ACTION_QUEUE || queue.coinbase_paid_sompi != 0 {
                 return Err("queue row is not an unpaid acknowledgement".into());
             }
-            let entitle = self
-                .entitlement
-                .get(&key(ACTION_ENTITLEMENT, &queue.enrollment, &queue.actor))
-                .ok_or("queue without entitlement")?;
+            let entitle =
+                self.entitlement.get(&key(ACTION_ENTITLEMENT, &queue.enrollment, &queue.actor)).ok_or("queue without entitlement")?;
             if entitle.amount_sompi != queue.amount_sompi {
                 return Err("queue amount is not the entitlement".into());
             }
@@ -473,7 +454,8 @@ impl PalwSourceEconomicsBookV1 {
                 .court
                 .get(&key(PALW_SOURCE_ECONOMICS_ACTION_COURT_V1, &refund.enrollment, &refund.actor))
                 .ok_or("refund without court")?;
-            let expect = if court.convicted { funding.prepaid_sompi } else { funding.prepaid_sompi.saturating_sub(funding.reserved_sompi) };
+            let expect =
+                if court.convicted { funding.prepaid_sompi } else { funding.prepaid_sompi.saturating_sub(funding.reserved_sompi) };
             if refund.amount_sompi != expect || refund.payer != funding.payer {
                 return Err("refund is not the unused prepaid".into());
             }
@@ -717,7 +699,7 @@ mod tests {
 
     #[test]
     fn public_presets_leave_economics_dormant() {
-        use crate::config::params::{MAINNET_PARAMS, SIMNET_PARAMS, TESTNET11_PARAMS, TESTNET_PARAMS};
+        use crate::config::params::{MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
         for params in [&MAINNET_PARAMS, &TESTNET_PARAMS, &TESTNET11_PARAMS, &SIMNET_PARAMS] {
             assert!(params.palw_source_economics_v1.is_none());
             params.validate_palw_source_economics_v1().unwrap();

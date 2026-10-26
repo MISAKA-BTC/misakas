@@ -653,7 +653,9 @@ pub(super) fn native_pin_v1(
         return Err("selected row changes the nominated committed token".into());
     }
     let check_tile = |event: &kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedTiledEventV1, tile: u64| {
-        if event.generated_token_ids != first.generated_token_ids || event.row_root != first.row_root || event.row_opening != first.row_opening
+        if event.generated_token_ids != first.generated_token_ids
+            || event.row_root != first.row_root
+            || event.row_opening != first.row_opening
         {
             return Err("selected tiles change the authenticated generated row".to_string());
         }

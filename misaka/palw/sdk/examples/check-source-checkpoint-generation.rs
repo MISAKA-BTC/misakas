@@ -197,8 +197,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // portable provenance, and neither changes committed TIR arithmetic.
     let portable_math = meta["math"] == "libm-v1"
         || meta["math"].as_object().is_some_and(|m| m.len() == 1 && m.get("mode").is_some_and(|v| v == "libm-v1"));
-    if artifact.plan().program.token_bound != p.vocab || artifact.plan().program.history_bound < p.context || !portable_math
-    {
+    if artifact.plan().program.token_bound != p.vocab || artifact.plan().program.history_bound < p.context || !portable_math {
         return Err("generation artifact vocabulary/context/arithmetic".into());
     }
     let started = std::time::Instant::now();

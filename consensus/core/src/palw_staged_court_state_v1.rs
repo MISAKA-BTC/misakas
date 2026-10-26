@@ -78,14 +78,22 @@ impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_) => None,
+            Self::Claim(_)
+            | Self::ClaimBundle(_)
+            | Self::ArtifactInventoryOpen(_)
+            | Self::ArtifactInventory(_)
+            | Self::TirLayout(_) => None,
             _ => Some(self),
         }
     }
     pub fn active_row_mut_v1(&mut self) -> Option<&mut Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_) => None,
+            Self::Claim(_)
+            | Self::ClaimBundle(_)
+            | Self::ArtifactInventoryOpen(_)
+            | Self::ArtifactInventory(_)
+            | Self::TirLayout(_) => None,
             _ => Some(self),
         }
     }
@@ -619,8 +627,7 @@ pub fn palw_staged_tir_view_v1(
     let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &contract.original_binding else {
         return Ok(None);
     };
-    let record =
-        state.tir_class_v1(&header.job_context.shape_profile_id).ok_or("TIR claim's registered class record is absent")?;
+    let record = state.tir_class_v1(&header.job_context.shape_profile_id).ok_or("TIR claim's registered class record is absent")?;
     let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, maximum_leaves)?;
     let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &claim).ok_or("TIR view claim target absent")?;
     if view.committed_execution_root != target.execution_root || view.class_id != target.class_id {

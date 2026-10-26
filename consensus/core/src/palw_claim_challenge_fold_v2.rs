@@ -721,9 +721,8 @@ fn admit_review(
     let claimed = misaka_palw_challenge::effective_false_accept_bits_v1(&arithmetic).map_err(|e| refused(e.to_string()))?;
     let actual = if let Some(plan) = a.class.interactive_plan.as_ref().filter(|p| p.version == 4) {
         let registration = r.paid_compact_contract_v4(&plan.id()).map_err(refused)?.registration;
-        let ledger = r
-            .ledger_checked_v1()
-            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+        let ledger =
+            r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
         let bits = registration.validate_for_class(&a.class, &ledger).map_err(refused)?.effective_bits;
         let bits = u16::try_from(bits).map_err(|_| refused("compact union bound is nonpositive/unrepresentable"))?;
         misaka_palw_challenge::EffectiveBitsV1::Bits(bits)
