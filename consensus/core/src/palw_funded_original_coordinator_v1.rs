@@ -54,6 +54,7 @@ pub const PALW_FUNDED_ROLE_SERVICE_OPERATOR_V1: u8 = 2;
 pub const PALW_FUNDED_ROLE_FEE_CAPITAL_BODIES_V1: u8 = 4;
 pub const PALW_FUNDED_ROLE_SEMANTIC_PROVIDER_V1: u8 = 8;
 
+/// Lane VAL estimates (not wired): `crate::palw_g14_values_v1::PALW_G14_FUNDED_*`.
 /// **The unadopted values, as one parameter.** Private fields; the ONLY constructor is `#[cfg(test)]`, so a production build holds
 /// no value and [`palw_funded_original_schedule_v1`] always answers [`PalwFundedOriginalMissingV1::Schedule`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -81,7 +81,8 @@ thread_local! {
 pub(crate) fn set_material_intake_test_schedule_v1(schedule: Option<MaterialIntakeScheduleV1>) {
     TEST_SCHEDULE.with(|c| c.set(schedule));
 }
-/// Production: always `Err(Schedule)`. Nothing here adopts an amount.
+/// Production: always `Err(Schedule)`. Nothing here adopts an amount. Lane VAL estimate (not wired):
+/// [`crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1`].
 pub fn material_intake_schedule_v1() -> Result<MaterialIntakeScheduleV1, MaterialIntakeMissingV1> {
     #[cfg(test)]
     if let Some(schedule) = TEST_SCHEDULE.with(|c| c.get()) {

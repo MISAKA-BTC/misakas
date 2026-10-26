@@ -46,7 +46,8 @@ impl CourtServiceProfileV1 {
     }
 }
 
-/// **Typed-missing (user decision).** No reviewed capacity profile is pinned; see the lane notes.
+/// **Typed-missing (user decision).** No reviewed capacity profile is pinned; see the lane notes. The lane VAL estimate is
+/// [`crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1`] (pinned here only by the integrator).
 pub const PALW_COURT_SERVICE_PROFILE_V1: Option<CourtServiceProfileV1> = None;
 
 /// RFC-0026 F02 is operational only once every piece is wired AND its profile is pinned. The pieces (attribution, binding at

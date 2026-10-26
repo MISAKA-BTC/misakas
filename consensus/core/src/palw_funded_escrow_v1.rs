@@ -382,7 +382,8 @@ impl PalwEscrowFeeScheduleV1 {
 }
 
 /// **The production schedule source: none.** Always `None` until the numbers are adopted; the processor passes this to every
-/// qualified-spend check, so every payee/burn/partial path refuses on every network.
+/// qualified-spend check, so every payee/burn/partial path refuses on every network. Lane VAL estimate of the shares (not wired):
+/// [`crate::palw_g14_values_v1::palw_g14_escrow_split_v1`].
 pub fn palw_escrow_fee_schedule_v1(_row: &PalwFundedEscrowRowV1) -> Option<&'static PalwEscrowFeeScheduleV1> {
     None
 }

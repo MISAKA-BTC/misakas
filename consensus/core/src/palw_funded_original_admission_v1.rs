@@ -30,6 +30,7 @@ use crate::{
 };
 use std::collections::BTreeSet;
 
+/// Lane VAL estimates (not wired): `crate::palw_g14_values_v1` (V2).
 /// **The unadopted admission values** (service profile, per-branch costs and capital). Private fields; the only constructor is
 /// `#[cfg(test)]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
