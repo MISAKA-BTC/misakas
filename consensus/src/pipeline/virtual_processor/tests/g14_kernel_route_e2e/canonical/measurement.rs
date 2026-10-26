@@ -35,9 +35,14 @@ async fn g14_native_panel_measure() {
     assert!(["honest", "forged_output", "fake_state", "duplicate", "withheld_reveal"].contains(&case.as_str()));
     let n: usize = std::env::var("G14_MEASURE_N").unwrap().parse().unwrap();
     assert!(n <= 1, "repeat in fresh processes, never reuse mutable claim state");
-    let (config, bundle, premine, floats) = canonical_config(false);
+    let (config, mut bundle, premine, floats) = canonical_config(false);
     let mut params = config.params.clone();
     params.palw_kernel_route_panel_one_v1 = (seats == 1).then(|| ForkActivation::new(0));
+    // The fold reads the mirror in its bundle, not the public Params field.
+    bundle.state = bundle.state.clone().with_kernel_route_panel_one_from_daa((seats == 1).then_some(0));
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(node_bundle) = &mut params.palw_consensus_mode {
+        node_bundle.state = node_bundle.state.clone().with_kernel_route_panel_one_from_daa((seats == 1).then_some(0));
+    }
     assert!(params.validate_palw_v2().is_err());
     let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
     let job = w.job().await;
