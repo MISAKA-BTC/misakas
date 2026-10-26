@@ -33,6 +33,24 @@ fn seed_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     (Config::new(params), bundle, premine, floats)
 }
 
+/// Measurement-only early clock: public t12's anchor-retention fence is already
+/// active at DAA 17,000, but the tiny harness starts before its shipped DAA 5,300.
+/// Both parameter mirrors must carry the same explicit test activation.
+pub(super) fn measurement_anchor_window(params: &mut kaspa_consensus_core::config::params::Params, bundle: &mut PalwConsensusParamsV2) -> bool {
+    let enabled = std::env::var("G14_MEASURE_EARLY_ANCHOR_WINDOW").as_deref() == Ok("1");
+    assert_eq!(bundle.state.kernel_panel_one_external_gain_bound_v1(), Some(500 * kaspa_consensus_core::constants::SOMPI_PER_KASPA));
+    if enabled {
+        params.palw_anchor_window_v1 = Some(ForkActivation::new(0));
+        params.sync_palw_anchor_window_v1();
+        bundle.state = bundle.state.clone().with_anchor_window_from_daa(Some(0));
+        assert!(bundle.state.anchor_window_active_at(0));
+        if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &params.palw_consensus_mode {
+            assert!(b.state.anchor_window_active_at(0));
+        }
+    }
+    enabled
+}
+
 /// Attempt blocks (which record round seed anchors) until the claim's Panel=1 assignment exists. Returns the anchor the draw block's
 /// state held and the DAA it appeared at.
 pub(super) async fn until_seated(

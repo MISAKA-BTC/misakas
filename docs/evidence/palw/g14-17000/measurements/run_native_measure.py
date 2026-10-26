@@ -19,6 +19,8 @@ def main():
     p.add_argument('--runs', type=int, default=3)
     p.add_argument('--case', action='append', choices=CASES)
     p.add_argument('--allow-under-load', action='store_true')
+    p.add_argument('--adjudication-cap', type=int, choices=[4,64], default=4)
+    p.add_argument('--early-anchor-window', action='store_true')
     a = p.parse_args()
     assert a.runs >= 1
     build = json.loads(a.build_record.read_text())
@@ -39,7 +41,7 @@ def main():
                     before = os.getloadavg()
                     if before[0] > 5 and not a.allow_under_load:
                         report['status'] = 'NOT_RUN_LOAD'; save(); return 75
-                    env = dict(os.environ, TMPDIR='/private/tmp', G14_MEASURE_CASE=case,
+                    env = dict(os.environ, G14_CAP_ADJUDICATION_CAP=str(a.adjudication_cap), G14_MEASURE_EARLY_ANCHOR_WINDOW=str(int(a.early_anchor_window)), TMPDIR='/private/tmp', G14_MEASURE_CASE=case,
                                G14_MEASURE_N=str(n), G14_MEASURE_SEATS=str(seats))
                     cmd = ['/usr/bin/time', '-l', binary, TEST, '--exact', '--ignored', '--nocapture', '--test-threads=1']
                     label = f'{case}-p{seats}-n{n}-{ordinal:02d}'
@@ -58,7 +60,7 @@ def main():
                     raw = (a.out / (label+'.stdout.log')).read_text()
                     err = (a.out / (label+'.stderr.log')).read_text()
                     lines = re.findall(r'^(?:test \S+ \.\.\. )?G14_MEASURE (\{.*\})$', raw, re.MULTILINE)
-                    row = {'label': label, 'command': cmd, 'env': {k: env[k] for k in ['TMPDIR', 'G14_MEASURE_CASE', 'G14_MEASURE_N', 'G14_MEASURE_SEATS']},
+                    row = {'label': label, 'command': cmd, 'env': {k: env[k] for k in ['TMPDIR', 'G14_MEASURE_CASE', 'G14_MEASURE_N', 'G14_MEASURE_SEATS', 'G14_CAP_ADJUDICATION_CAP', 'G14_MEASURE_EARLY_ANCHOR_WINDOW']},
                            'exit_code': rc, 'wall_seconds': time.monotonic()-start, 'load_before': before, 'load_after': after,
                            'under_load': max(before[0], after[0]) > 5,
                            'stdout_sha256': sha(a.out/(label+'.stdout.log')), 'stderr_sha256': sha(a.out/(label+'.stderr.log'))}

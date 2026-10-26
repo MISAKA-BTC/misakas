@@ -36,8 +36,11 @@ async fn g14_kernel_capacity_measure() {
     let count: usize = std::env::var("G14_CAP_CLAIMS").unwrap().parse().unwrap();
     let positions: u32 = std::env::var("G14_CAP_POSITIONS").unwrap().parse().unwrap();
     assert!(n <= 1 && [1, 2, 4, 6].contains(&count) && [6, 64, 65].contains(&positions));
+    let cap: u32 = std::env::var("G14_CAP_ADJUDICATION_CAP").unwrap_or_else(|_| "4".into()).parse().unwrap();
+    crate::pipeline::virtual_processor::processor::kernel_route_test_set_adjudication_cap_v1(cap);
     let (config, mut bundle, premine, floats) = canonical_config(false);
     let mut params = config.params.clone();
+    let early_anchor_window = seed::measurement_anchor_window(&mut params, &mut bundle);
     params.palw_kernel_route_panel_one_v1 = Some(ForkActivation::new(0));
     bundle.state = bundle.state.clone().with_kernel_route_panel_one_from_daa(Some(0));
     if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode {
@@ -109,7 +112,7 @@ async fn g14_kernel_capacity_measure() {
     }
     let setup_ns = setup.elapsed().as_nanos();
     let policy = w.policy();
-    assert_eq!(policy.max_adjudications_per_block, 4, "explicit reduced test cap");
+    assert_eq!(policy.max_adjudications_per_block, cap, "explicit measurement cap");
     let per_work = w.net.ledger().bounds_of(&w.class).unwrap().max_court_work;
     assert!(per_work > 0);
     let capacity = (policy.max_court_work_per_block / per_work).min(policy.max_adjudications_per_block as u64) as usize;
@@ -164,7 +167,7 @@ async fn g14_kernel_capacity_measure() {
     }
     println!(
         "G14_CAP_MEASURE {}",
-        json!({"schema":2,"n":n,"claims":count,"positions":positions,
+        json!({"schema":3,"production_cap_configured":cap == 64,"early_anchor_window_test_policy":early_anchor_window,"n":n,"claims":count,"positions":positions,
         "setup_wall_ns":setup_ns,"material_profiles":material_profiles,"artifact_tensor_wire_bytes":artifact_tensor_wire_bytes,"program_bytes":program_bytes,"claim_states_at_measurement":initial_states,"test_adjudication_cap":policy.max_adjudications_per_block,
         "reserved_prosecution_runs":policy.prosecution_reserved_runs(),"work_cap":policy.max_court_work_per_block,
         "per_claim_worst_work":per_work,"calculated_adjudications":capacity,"rounds":rounds,"outsider":conviction,

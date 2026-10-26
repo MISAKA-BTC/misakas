@@ -35,8 +35,11 @@ async fn g14_native_panel_measure() {
     assert!(["honest", "forged_output", "fake_state", "duplicate", "withheld_reveal"].contains(&case.as_str()));
     let n: usize = std::env::var("G14_MEASURE_N").unwrap().parse().unwrap();
     assert!(n <= 1, "repeat in fresh processes, never reuse mutable claim state");
+    let cap: u32 = std::env::var("G14_CAP_ADJUDICATION_CAP").unwrap_or_else(|_| "4".into()).parse().unwrap();
+    crate::pipeline::virtual_processor::processor::kernel_route_test_set_adjudication_cap_v1(cap);
     let (config, mut bundle, premine, floats) = canonical_config(false);
     let mut params = config.params.clone();
+    let early_anchor_window = seed::measurement_anchor_window(&mut params, &mut bundle);
     // Both twins declare the SAME fork schedule and register the class before
     // crossing it. Different schedules bind different ruleset digests into the
     // evidence and therefore cannot produce byte-identical claims.
@@ -146,8 +149,7 @@ async fn g14_native_panel_measure() {
                 assert!(matches!(finding, OutsiderFindingV1::Clean), "honest public check: {finding:?}");
                 if case == "duplicate" {
                     let K::CommitClaim { claim: original, evidence, commitments } = produced.object else { unreachable!() };
-                    let copied =
-                        K::CommitClaim { claim: KernelClaimV1 { producer_bond: w.net.kid(4), ..original }, evidence, commitments };
+                    let copied = K::CommitClaim { claim: KernelClaimV1 { producer_bond: w.net.kid(4), ..original }, evidence, commitments };
                     let before = w.net.daa();
                     let start = Instant::now();
                     let (_, accepted) = reveal(&mut w, 4, &copied).await;
@@ -169,7 +171,7 @@ async fn g14_native_panel_measure() {
     }
     println!(
         "G14_MEASURE {}",
-        json!({"schema": 3, "fixture_only": true, "arming_evidence": false,
+        json!({"schema": 4, "test_adjudication_cap":cap, "early_anchor_window_test_policy": early_anchor_window, "fixture_only": true, "arming_evidence": false,
         "scope": "native_kernel_interim_panel3_vs_deferred_panel1", "legacy_model_route_compared": false,
         "gate_c_certification_measured": false, "post_commit_beacon_measured": false, "post_commit_panel_anchor_measured": seats == 1 && n == 1 && case != "withheld_reveal",
         "randomness_withholding_measured": false, "class": digest(&w.class), "job": digest(&job.id()),

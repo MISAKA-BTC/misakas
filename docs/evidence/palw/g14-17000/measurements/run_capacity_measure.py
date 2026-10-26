@@ -30,6 +30,8 @@ def main():
     p.add_argument('--allow-under-load', action='store_true')
     p.add_argument('--claims', type=int, action='append', choices=[1, 2, 4, 6])
     p.add_argument('--positions', type=int, action='append', choices=[6, 64, 65])
+    p.add_argument('--adjudication-cap', type=int, choices=[4,64], default=4)
+    p.add_argument('--early-anchor-window', action='store_true')
     a = p.parse_args()
     assert a.runs >= 1
     build = json.loads(a.build_record.read_text())
@@ -48,7 +50,7 @@ def main():
         if before[0] > 5 and not a.allow_under_load:
             report['status'] = 'NOT_RUN_LOAD'; save(); return 75
         label = f'p{positions}-c{count}-n{n}-{ordinal:02d}'
-        env = dict(os.environ, TMPDIR='/private/tmp', G14_CAP_POSITIONS=str(positions), G14_CAP_CLAIMS=str(count), G14_CAP_N=str(n))
+        env = dict(os.environ, G14_CAP_ADJUDICATION_CAP=str(a.adjudication_cap), G14_MEASURE_EARLY_ANCHOR_WINDOW=str(int(a.early_anchor_window)), TMPDIR='/private/tmp', G14_CAP_POSITIONS=str(positions), G14_CAP_CLAIMS=str(count), G14_CAP_N=str(n))
         cmd = ['/usr/bin/time', '-l', binary, TEST, '--exact', '--ignored', '--nocapture', '--test-threads=1']
         utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
         start = time.monotonic()
@@ -65,7 +67,7 @@ def main():
         out = a.out / (label + '.stdout.log'); err = a.out / (label + '.stderr.log')
         records = re.findall(r'^(?:test \S+ \.\.\. )?G14_CAP_MEASURE (\{.*\})$', out.read_text(), re.MULTILINE)
         row = {'label': label, 'utc_start': utc, 'command': cmd,
-               'env': {k: env[k] for k in ['TMPDIR', 'G14_CAP_POSITIONS', 'G14_CAP_CLAIMS', 'G14_CAP_N']},
+               'env': {k: env[k] for k in ['TMPDIR', 'G14_CAP_POSITIONS', 'G14_CAP_CLAIMS', 'G14_CAP_N', 'G14_CAP_ADJUDICATION_CAP', 'G14_MEASURE_EARLY_ANCHOR_WINDOW']},
                'exit_code': rc, 'monitor_wall_seconds': time.monotonic() - start,
                'load_before': before, 'load_after': after, 'under_load': max(before[0], after[0]) > 5,
                'stdout_sha256': sha(out), 'stderr_sha256': sha(err),

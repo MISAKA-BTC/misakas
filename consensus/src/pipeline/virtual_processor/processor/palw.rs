@@ -8756,9 +8756,9 @@ impl VirtualStateProcessor {
                 attested_artifacts: kernel_route_test_attestations_v1(daa_score),
                 #[cfg(not(test))]
                 attested_artifacts: Vec::new(),
-                // Tests run with a four-adjudication block so the cross-object budget is reachable with a handful of carriers.
+                // Tests default to four adjudications; isolated measurement processes may explicitly select the shipped cap 64.
                 #[cfg(test)]
-                max_adjudications_per_block: Some(4),
+                max_adjudications_per_block: Some(kernel_route_test_adjudication_cap_v1()),
                 #[cfg(not(test))]
                 max_adjudications_per_block: None,
                 // RFC-0008 v2 (X8R): the composed run's seam (`exec_v2_test_admit_class_v1`); nothing outside a test.

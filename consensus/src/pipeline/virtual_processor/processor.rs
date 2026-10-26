@@ -294,6 +294,23 @@ struct PalwChainAnchorV1 {
     permissionless: Option<Vec<kaspa_consensus_core::palw_rfc0018_v1::PalwAnchorContributionV1>>,
 }
 
+// Measurement processes run one ignored test at a time. Normal tests retain
+// the reduced cap; this hook selects the production cap without lowering the
+// approved gain bound. Neither the state nor setter exists in shipped binaries.
+#[cfg(test)]
+static KERNEL_ROUTE_TEST_ADJUDICATION_CAP_V1: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(4);
+
+#[cfg(test)]
+pub(crate) fn kernel_route_test_set_adjudication_cap_v1(cap: u32) {
+    assert!([4, 64].contains(&cap));
+    KERNEL_ROUTE_TEST_ADJUDICATION_CAP_V1.store(cap, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn kernel_route_test_adjudication_cap_v1() -> u32 {
+    KERNEL_ROUTE_TEST_ADJUDICATION_CAP_V1.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// **G14 lane D, TEST ONLY: the artifact attestations a kernel route E2E supplies.** There is no on-chain artifact availability or
 /// conformance fact yet — a kernel class registers only over an artifact the consumer attests public, and the consumer has nothing
 /// to attest from (GAP: onboarding conformance + availability) — so under `cfg(test)` a test names the roots it treats as public,

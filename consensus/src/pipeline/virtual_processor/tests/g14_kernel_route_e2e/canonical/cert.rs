@@ -38,11 +38,8 @@ pub(super) fn cert_config() -> (Config, PalwConsensusParamsV2, Premine, Premine)
     let mut tmp = params.clone();
     tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     tmp.sync_palw_rfc0018_v1();
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(mut bundle) = tmp.palw_consensus_mode else {
-        unreachable!()
-    };
-    let mirror =
-        PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*bundle.state.rfc0018_v1().expect("Gate C mirrored") };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(mut bundle) = tmp.palw_consensus_mode else { unreachable!() };
+    let mirror = PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*bundle.state.rfc0018_v1().expect("Gate C mirrored") };
     assert!(mirror.gate_c_at(0), "Gate C governs from DAA 0 in this harness");
     TEST_ONLY_KERNEL_CERT_POLICY_V1.validate().expect("the test policy is well-formed");
     bundle.state = bundle.state.clone().with_rfc0018_v1(Some(mirror));
@@ -198,11 +195,7 @@ pub(super) async fn s3a_prime_certified_reorg_ibd() {
     assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::Certified), "SecurityCertified");
     assert!(palw_kernel_claim_security_certified_v1(&w.net.chain.tip_state().1, &claim));
     assert!(decided.outcome.is_some_and(|(_, at)| at >= row.final_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa));
-    assert_eq!(
-        w.net.owed(0),
-        producer_before + Rules::final_reward(&policy),
-        "S3a' positive: certified, the producer is paid the held reward"
-    );
+    assert_eq!(w.net.owed(0), producer_before + Rules::final_reward(&policy), "S3a' positive: certified, the producer is paid the held reward");
     assert!(hold(&w.net, &claim).is_none(), "the hold is settled once: it can never pay again");
 
     // ---- IBD: a cold node agrees on the certified chain ----
@@ -289,8 +282,11 @@ async fn g14_cert_panel_one_measure() {
     };
     let policy = PalwSecurityCertificationPolicyV1 { m, k, draws_per_epoch: 54, ..TEST_ONLY_KERNEL_CERT_POLICY_V1 };
     policy.validate().unwrap();
+    let cap: u32 = std::env::var("G14_CAP_ADJUDICATION_CAP").unwrap_or_else(|_| "4".into()).parse().unwrap();
+    crate::pipeline::virtual_processor::processor::kernel_route_test_set_adjudication_cap_v1(cap);
     let (config, mut bundle, premine, floats) = cert_config();
     let mut params = config.params.clone();
+    let early_anchor_window = seed::measurement_anchor_window(&mut params, &mut bundle);
     params.palw_kernel_route_panel_one_v1 = Some(ForkActivation::new(0));
     let mirror = PalwRfc0018MirrorV1 { certification: policy, ..*bundle.state.rfc0018_v1().unwrap() };
     bundle.state = bundle.state.clone().with_rfc0018_v1(Some(mirror)).with_kernel_route_panel_one_from_daa(Some(0));
@@ -369,7 +365,7 @@ async fn g14_cert_panel_one_measure() {
     println!(
         "G14_CERT_MEASURE {}",
         json!({"schema":1,"n":n,"m":m,"k":k,"panel_seats":1,
-        "test_policy":true,"fixture_only":true,"arming_evidence":false,"honest_verifier_compute_measured":false,
+        "test_policy":true,"early_anchor_window_test_policy":early_anchor_window,"test_adjudication_cap":cap,"fixture_only":true,"arming_evidence":false,"honest_verifier_compute_measured":false,
         "independent_operators_measured":false,"withholding_measured":false,
         "claim":claim.id.iter().map(|b|format!("{b:02x}")).collect::<String>(),
         "setup_wall_ns":setup_ns,"unique_drawn_bonds":unique_bonds,"certified":certified,"phases":phases})

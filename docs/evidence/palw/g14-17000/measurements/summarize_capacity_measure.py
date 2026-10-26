@@ -37,16 +37,23 @@ def summarize(folder):
         records = re.findall(r'^(?:test \S+ \.\.\. )?G14_CAP_MEASURE (\{.*\})$', stdout.read_text(), re.M)
         assert len(records) == 1 and json.loads(records[0]) == row['measurement']
         m = row['measurement']
-        assert row['exit_code'] == 0 and m['schema'] in (1, 2)
+        assert row['exit_code'] == 0 and m['schema'] in (1, 2, 3)
         for key in ('arming_evidence', 'production_cap_measured', 'continuous_adversary_inclusion_guaranteed', 'gate_c_measured', 'real_model_measured'):
             assert m[key] is False
         assert m['fixture_only'] and m['test_policy']
         count, positions, n = m['claims'], m['positions'], m['n']
         assert count in (1, 2, 4, 6) and positions in (6, 64, 65) and n in (0, 1)
         assert all(int(row['env'][key]) == value for key, value in [('G14_CAP_CLAIMS', count), ('G14_CAP_POSITIONS', positions), ('G14_CAP_N', n)])
-        assert m['test_adjudication_cap'] == 4 and m['reserved_prosecution_runs'] == 2
+        assert m['test_adjudication_cap'] in (4, 64)
+        assert m['reserved_prosecution_runs'] == m['test_adjudication_cap'] // 2
+        if m['schema'] < 3:
+            assert m['test_adjudication_cap'] == 4
+        else:
+            assert m['test_adjudication_cap'] == int(row['env']['G14_CAP_ADJUDICATION_CAP'])
+            assert m['production_cap_configured'] == (m['test_adjudication_cap'] == 64)
+            assert m['early_anchor_window_test_policy'] == bool(int(row['env']['G14_MEASURE_EARLY_ANCHOR_WINDOW']))
         assert len(m['claim_states_at_measurement']) == count
-        if m['schema'] == 2:
+        if m['schema'] >= 2:
             assert len(m['material_profiles']) == count
             for profile in m['material_profiles']:
                 assert profile['job_token_total'] == positions
@@ -58,7 +65,7 @@ def summarize(folder):
                 assert profile['includes_transport_framing'] is False
         else:
             assert positions != 65
-        cap = min(4, m['work_cap'] // m['per_claim_worst_work'])
+        cap = min(m['test_adjudication_cap'], m['work_cap'] // m['per_claim_worst_work'])
         assert m['calculated_adjudications'] == cap
         pair = re.sub(r'-n[01]-', '-', label)
         pairs.setdefault(pair, set()).add(n)
@@ -94,7 +101,13 @@ def summarize(folder):
                  'process_real_seconds': stats([r['real_seconds'] for r in rows]),
                  'peak_rss_bytes': stats([r['rss_bytes'] for r in rows]),
                  'setup_wall_ms': stats([r['measurement']['setup_wall_ns'] / 1e6 for r in rows])}
-        if all(r['measurement']['schema'] == 2 for r in rows):
+        if all(r['measurement']['schema'] >= 3 for r in rows):
+            caps = {r['measurement']['test_adjudication_cap'] for r in rows}
+            anchors = {r['measurement']['early_anchor_window_test_policy'] for r in rows}
+            assert len(caps) == len(anchors) == 1, 'mixed configuration within condition'
+            entry['test_adjudication_cap'] = caps.pop()
+            entry['early_anchor_window_test_policy'] = anchors.pop()
+        if all(r['measurement']['schema'] >= 2 for r in rows):
             profiles = [profile for r in rows for profile in r['measurement']['material_profiles']]
             entry['trace_positions'] = sorted({p['trace_positions'] for p in profiles})
             entry['fault_positions'] = sorted({p['fault_position'] for p in profiles})
