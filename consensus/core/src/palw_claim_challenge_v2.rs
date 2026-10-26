@@ -996,3 +996,10 @@ pub(crate) use bootstrap_read_v6::with_checker_v6 as with_bootstrap_checker_v6;
 
 #[path = "palw_paid_claim_base_checked_v1.rs"]
 mod paid_base_checked_v1;
+
+// The native checked sibling is registered for the coordinated RED staging;
+// the two fold callers still use the legacy String API until RED is observed.
+#[path = "palw_paid_check_authority_checked_v2.rs"]
+mod paid_check_authority_checked_v2;
+#[cfg(test)]
+pub(crate) use paid_check_authority_checked_v2::{before_check_authority_v2, with_before_check_authority_v2};

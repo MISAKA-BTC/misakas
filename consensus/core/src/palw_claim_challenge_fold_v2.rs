@@ -822,6 +822,8 @@ fn receipt_fold(
         r.paid_bootstrap_check_authority_v6(&a, ctx.daa_score)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
     } else {
+        #[cfg(test)]
+        crate::palw_claim_challenge_v2::before_check_authority_v2("ordinary-receipt");
         r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)?
     };
     if !lock.source_valid
@@ -1171,6 +1173,8 @@ fn round_message(
             return Err(refused("FS initial source invalid"));
         }
         // Revalidate initial source before accepting another adaptive query.
+        #[cfg(test)]
+        crate::palw_claim_challenge_v2::before_check_authority_v2("fs-initial-source");
         r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)?;
         (a.subject.clone(), a.context.clone(), a.source_target.clone(), a.sponsor)
     };
