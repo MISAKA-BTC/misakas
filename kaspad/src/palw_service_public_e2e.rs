@@ -1693,6 +1693,9 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         None
     };
     let mut public_prefix_monitor = case.native_prefix().then(public_prefix::Monitor::default);
+    // The harness's own answer carriers: bond 0's float, unless an automatic producer service (recovery runs) spends that float
+    // itself — then the spare card 7's float, so no carrier re-spends an outpoint the service already used (lane FPCP).
+    let harness_payer = if automatic_recovery { 7 } else { 0 };
     let mut recovery = if automatic_recovery {
         Some(
             recovery::RecoveryRun::start(
@@ -2213,7 +2216,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     |m, c| Some(signed(0, m, c)),
                 )
                 .unwrap();
-                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[0]).await;
+                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[harness_payer], harness_payer).await;
                 assert!(chain.view(claim).unit_was_answered_v1(&unit));
                 if matches!(unit, PalwDaUnitV1::Event { row: 2, .. }) {
                     selected_tiles_submitted.insert(unit);
@@ -2252,7 +2255,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     |message, context| Some(signed(0, message, context)),
                 )
                 .unwrap();
-                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[0]).await;
+                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[harness_payer], harness_payer).await;
                 assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)));
                 prefix_tiles_submitted.insert(unit);
                 eprintln!("[service-prefix] canonical public CKW {unit:?} authenticated through ordinary H1/PQ");
@@ -2314,7 +2317,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     |message, context| Some(signed(0, message, context)),
                 )
                 .unwrap();
-                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[0]).await;
+                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[harness_payer], harness_payer).await;
                 assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)), "the lane {unit:?} is answered");
                 held_lanes_submitted.insert(unit);
             }

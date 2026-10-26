@@ -581,9 +581,12 @@ pub(super) async fn carry_public_rpc_answer(
     flow: &Arc<FlowContext>,
     object: &PalwConsensusObjectV2,
     funding: &mut Funding,
+    payer: usize,
 ) {
+    // `payer`: whose key funds the carrier (the object itself is signed separately). Under the automatic recovery runs the producer
+    // service spends bond 0's float itself, so the harness pays from a spare card's float instead of re-spending it (lane FPCP).
     let tx =
-        palw_carrier_fees::build_lifecycle_carrier_v2(&chain.config, key(0), object, funding.0, &funding.1, &[], None, chain.daa())
+        palw_carrier_fees::build_lifecycle_carrier_v2(&chain.config, key(payer), object, funding.0, &funding.1, &[], None, chain.daa())
             .unwrap();
     let session = manager.consensus().unguarded_session();
     flow.submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden)
