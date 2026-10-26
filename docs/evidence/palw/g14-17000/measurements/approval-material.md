@@ -4,6 +4,8 @@
 
 The shipped `approved_panel_beacon_policies_v1()` is empty. `PostCommitChallengePolicyV1` separately carries `work_count_k` and `settlement_depth_d`; choosing them requires observed eligible-source arrivals, independence by operator/consumer, abort/withholding, reorg and latency distributions. M-SHADOW has not run, so no `k` or `D` is supported by this record.
 
+The SPINE checkpoint `ebb8b911f` additionally reports that the selected card 1 kernel-route claim can reach Final from a Panel pass and window without claim-level `SecurityCertified`. The approval consumer itself must be connected before any numerical `m/k` can be an arming candidate. An optimistic Final or matching replay cannot stand in for selected-verifier approval.
+
 For a **conditional** selected-verifier calculation, assume `f=0.25` means the *maximum malicious fraction*, each seat is sampled independently with equal weight, and a malicious approval requires at least `m` of `k` malicious seats. Then `P(false approval) = Σ(i=m..k) C(k,i) f^i(1-f)^(k-i)`. The illustrative majority thresholds below show `1-P(false approval)`; they are **not measured detection rates** and are invalid for correlated operators, weighted selections, withholding or missing replies. They also do not establish correct-claim liveness.
 
 | k | m | Conditional rejection probability |
