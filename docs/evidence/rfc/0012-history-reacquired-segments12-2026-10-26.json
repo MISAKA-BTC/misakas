@@ -1,0 +1,124 @@
+{
+  "schema": "misaka.public-history.coverage.v1",
+  "coverage_status": "UNKNOWN_PARTIAL",
+  "compatibility_status": "UNKNOWN",
+  "original_identity": {
+    "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+    "consensusParamsId": "ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e",
+    "consensusScheduleId": "9ef2b1a795c74d6faced545752f2d17c7e731e8e94155d078bc00cbee6c878f5",
+    "importSessionEpoch": 0,
+    "importSessionPhase": "legacy-stable",
+    "pruningPointHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+  },
+  "anchor": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+  "anchor_header": {
+    "acceptedIdMerkleRoot": "7a85f8b26bb598b78136acf692672e49b2009500231401519d76bfd483e922d6c368bdcce7831b4690182ff13ca758f08f563baa05723d2b4142942133171d2f",
+    "bits": 545259519,
+    "blueScore": 53418,
+    "blueWork": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005dc9072e2",
+    "daaScore": 15477,
+    "evmCommitmentRoot": "940dc0a66deea5c37d9a114513753fdf2b5b7484d2077f9875aa2d0828d8682cdd1e4f39bfce6cd145f8b2e14c3ecc4e0e6ed6b78c743a3f834f3afbe7f6392a",
+    "evmPayloadHash": "877fcd175efdb52807879d7fca7f28b3257f5afdc596c39557d1fe3d6c30f85c9d3da6c0a8bb8b96dfbbd2c136408414ad59cf473c1646042499566e02d676b1",
+    "hash": "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2",
+    "hashMerkleRoot": "668705cd95d663581c044b869ef6f555229fec6bc779143e05740266ba7cd360f0bc8f450f999fb3b3320b0b894a06c5579894f678e77c08c0c3ee0afaaf5300",
+    "nonce": 9396570,
+    "overlayCommitmentRoot": "1170a63b5413037dbde426d61585f6662dc8c8f82a782b0b991bc8449a2406ccd67946c35cca7e018a84fdbf482d0e02f55af44f8ea48e3eabadf2b067382a62",
+    "palwCommitment": [],
+    "palwStateRoot": "ff82074b0d71fe30914838147bd231734bacecfc9ee6d96cea1c23e0e80578ac6b185b071067ed5474c5a26332005430c34b7f2b42833f5170ed9f8a601bdfc0",
+    "parentsByLevel": [
+      [
+        "e2faa2eb97fbe2d3bf3afa55f601e807878c6794e17cb74f78520480adaeff40a1ca16b9829d0e79d1f5645f55c6e376797f61a9661f827a2d9c3e30a8652154"
+      ]
+    ],
+    "powAlgoId": 8,
+    "pruningPoint": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+    "timestamp": 1792922408275,
+    "utxoCommitment": "db49ce1bc1f278a5f7e7c9d29e483a026815a0571df8a75f5446e2646bddb4f3ccee2e74afcf5ea8b912e938fb363cda2faddd4a94979cc9ba9219b4b9d30740",
+    "version": 2
+  },
+  "segments": [
+    {
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/history-reacquired-segment1.ndjson",
+      "sha256": "4fc445d494cc254bbb918d82b4d014eedfc8454d8abdb4fa464304dd07e2efa8",
+      "observed_bytes": 3823325170,
+      "storage_bytes": 3823325170,
+      "storage_sha256": "4fc445d494cc254bbb918d82b4d014eedfc8454d8abdb4fa464304dd07e2efa8",
+      "encoding": "identity",
+      "parse_faults": [],
+      "pages": 776,
+      "errors": [],
+      "bounded_stops": [
+        {
+          "kind": "stopped",
+          "reason": "max_seconds",
+          "cursor": "3c87d173627a4c49cb0e93e4337a405e49c176fb507feef2948059d9ae01b6c8628a0c092195aca3c68239e04759ab187ffe4c042c8cddbcc55946f006349b82"
+        }
+      ],
+      "last_complete_page_cursor": "3c87d173627a4c49cb0e93e4337a405e49c176fb507feef2948059d9ae01b6c8628a0c092195aca3c68239e04759ab187ffe4c042c8cddbcc55946f006349b82"
+    },
+    {
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/history-reacquired-segment2.ndjson",
+      "sha256": "91a19384cc44bec3c358e71bf980f4096da459c343fe8a2007306e6307f1b02d",
+      "observed_bytes": 847997982,
+      "storage_bytes": 847997982,
+      "storage_sha256": "91a19384cc44bec3c358e71bf980f4096da459c343fe8a2007306e6307f1b02d",
+      "encoding": "identity",
+      "parse_faults": [],
+      "pages": 155,
+      "errors": [],
+      "bounded_stops": [
+        {
+          "kind": "stopped",
+          "reason": "max_seconds",
+          "cursor": "6ace934b154e08903906b6528a4edf3f408afba722ff2b6c9b73b401f84ad08b9cd50b417ba84bdbc566feeb6d6c833d6f5817036364d6d61824c0ec233e9625"
+        }
+      ],
+      "last_complete_page_cursor": "6ace934b154e08903906b6528a4edf3f408afba722ff2b6c9b73b401f84ad08b9cd50b417ba84bdbc566feeb6d6c833d6f5817036364d6d61824c0ec233e9625"
+    }
+  ],
+  "faults": [],
+  "unique_blocks": 145719,
+  "max_daa": 13723,
+  "anchor_present": false,
+  "ancestor_closure_count": 0,
+  "ancestor_holes": [],
+  "selected_chain_count": 0,
+  "selected_chain_holes": [
+    "af1fbb4db37e5e98106cd75e1f9a0a92d5efff0448734036e620b88286d8041a283cb5e01616630a89db45db7eebdea85a3195a2735f669050f219be223480e2"
+  ],
+  "selected_chain_reaches_genesis": false,
+  "last_complete_page_cursor": "6ace934b154e08903906b6528a4edf3f408afba722ff2b6c9b73b401f84ad08b9cd50b417ba84bdbc566feeb6d6c833d6f5817036364d6d61824c0ec233e9625",
+  "block_kinds": {
+    "EXEC": 92373,
+    "LEGACY_HEARTBEAT": 27352,
+    "LEGACY_FLOOR": 20295,
+    "FALLBACK": 1091,
+    "REAL": 4607,
+    "": 1
+  },
+  "observed_node_verdicts": {
+    "unknown": 92373
+  },
+  "round_header_count": 92373,
+  "verdict_observation_policy": "All observations in segment/page order. Counts and merge traversal use first observed metadata; no latest substitution.",
+  "conflicting_known_verdicts": [],
+  "missing_merge_views": [],
+  "limits": [
+    "Coverage is header ancestry only; granted/refused/unknown is bounded volatile node telemetry.",
+    "Round merge membership is not a permit verdict. Missing merge view remains unknown.",
+    "No derived EVM gas-header read or upgraded-binary replay; EVM compatibility always UNKNOWN."
+  ],
+  "verdict_observations_count": 92373,
+  "verdict_transitions_count": 0,
+  "selected_chain_round_merge_hashes_count": 0,
+  "round_headers_without_exec_count": 0,
+  "raw_artifact": {
+    "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/history-reacquired-segment1.ndjson",
+    "bytes": 3823325170,
+    "sha256": "4fc445d494cc254bbb918d82b4d014eedfc8454d8abdb4fa464304dd07e2efa8"
+  },
+  "wall_seconds": 150.79,
+  "omitted_details": "Per-header observations/transitions/merge-hash lists omitted from compact summary, reproducible from preserved closed raw. No EVM compatibility or campaign acceptance.",
+  "collector_segment2_exit_code": 0,
+  "scope": "Read-only public header coverage only. Not signed history, EVM replay, or campaign acceptance."
+}
