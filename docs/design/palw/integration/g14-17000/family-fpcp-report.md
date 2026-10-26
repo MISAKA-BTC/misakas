@@ -72,3 +72,30 @@ branch `claude/g14-fam-fpcp`（基点 `d8aded6de`）。push・配備・activatio
 - V1〜V7 の record と実測値（`needs_measured_value`）。
 - Float32 の row を保持する producer（matrix 881 行で欠落）と greedy 以外の job は対象外。
 - 全員共謀の Float32 constraint node E2E と出荷 binary の drill。
+
+## 追補 2 2026-10-27（統括の指示: 原因の bisect・harness の修正）
+
+### native public prefix の不受理（`palw_service_public_e2e.rs:1267`）
+
+`--exact …native_public_prefix_initial_convicts_all_custodians` を各 commit で 1 回ずつ実行した結果:
+
+| commit（first-parent） | 日付 | 結果 |
+|---|---|---|
+| d8aded6de / cd6a901fb（Codex merge f7886b098 の前）/ 671e8316f | 10-26 | FAIL（carried but not admitted） |
+| 02c18db0c | 10-24 | FAIL（同上） |
+| 5469a14b8 | 10-23 | build 不能（E0053 `openings`） |
+| aea05e60c | 10-21 | FAIL（同上、1265 行） |
+| c68d385d0 | 10-17 | FAIL（別の原因: fixture `:233` の unwrap） |
+
+結論: 候補の Codex merge f7886b098・SEED（648544c46）・F02b（9d9ccae58 以降）は**原因ではない**。10-21 にはすでに不受理で、10-17 は fixture の段階で落ちて比較できない。最後の PASS 記録は 10-15 の validation log（`docs/audit/g14-review-2026-10-13/evidence/validation-1015/`）。原因 commit は 10-15〜10-21 の first-parent 区間にある（未特定）。rehearsal の `None` は carrier payload が `PalwLifecycleTxPayloadV2` として decode できないだけで、拒否理由は分からない。修正していない。
+
+### recovery harness
+
+- `f37e9d25b`（試験側だけ）: automatic recovery では producer service が bond 0 の float を自分で使う。harness の answer carrier は card 7 の float から払うようにし、4 件の `#[ignore]` を外した。
+- 再実行（1 invocation）: 0 passed / 4 failed。
+  - constraint の Restart/Reorg: mempool 拒否は消えたが `:2394`「disclosed job fraud must reach exact conviction, not DA default」で FAIL。recovery 下では claim が DA default で終わる。tiled constraint の tile 回答と automatic producer の関係を harness 側で直す必要がある（未了）。
+  - prefix の Restart/Reorg: 上の不受理（`:1267`）で FAIL。
+
+### (3) staged Constraint court を通る全員共謀 node E2E
+
+時間切れのため未着手。
