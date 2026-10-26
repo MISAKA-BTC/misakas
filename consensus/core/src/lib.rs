@@ -1182,3 +1182,7 @@ pub mod palw_paid_bootstrap_source_v6;
 pub mod palw_paid_claim_observation_v6;
 
 pub mod palw_exec_origin_coverage_v1;
+
+// RFC07 normal V5 source chain, typed Resource / owned rows. Native caller:
+// `paid_claim_check_authority_checked_v2` (Receipt / FS folds).
+mod rfc07_normal_source_owned_draft;

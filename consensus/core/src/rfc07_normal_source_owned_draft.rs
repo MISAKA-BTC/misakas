@@ -41,6 +41,8 @@ fn codec_capacity(bytes: u64) -> Result<u64, E<String>> { Ok(mul(bytes, 2)?.max(
 fn row<T: NativeWireScanV1 + BorshDeserialize, const N: usize>(
     route: &PalwKernelRouteStateV1, table: u8, key: &[u8; N],
 ) -> Result<Option<NativeRetainedV1<T>>, E<String>> {
+    #[cfg(test)]
+    normal_source_before_row_v1(table, key);
     let Some(raw) = crate::palw_material_challenge_checkpoint_v4::material_challenge_fixed_row_v4(route, table, key)
         .map_err(E::Resource)? else { return Ok(None) };
     // Codec shape failure is Decode. Actual reservation failure remains Resource.
@@ -266,4 +268,24 @@ impl PalwKernelRouteStateV1 {
         let (sources, source_owner) = sources.into_parts_v1();
         Ok(Some(Rfc07NormalPaidMaterialV5 { value:(contract,sources,promises), _sources:source_owner, _promises:promise_owner }))
     }
+}
+
+// Test scheduling only: supplies no authority, row, result or approval.
+#[cfg(test)]
+thread_local! {
+    static NORMAL_SOURCE_BEFORE_ROW: std::cell::RefCell<Option<Box<dyn FnMut(u8, &[u8])>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn normal_source_before_row_v1(table: u8, key: &[u8]) {
+    NORMAL_SOURCE_BEFORE_ROW.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() { callback(table, key); }
+    });
+}
+#[cfg(test)]
+pub(crate) fn with_normal_source_before_row_v1<T>(callback: impl FnMut(u8, &[u8]) + 'static, run: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { NORMAL_SOURCE_BEFORE_ROW.with(|slot| *slot.borrow_mut() = None); } }
+    NORMAL_SOURCE_BEFORE_ROW.with(|slot| { assert!(slot.borrow().is_none()); *slot.borrow_mut() = Some(Box::new(callback)); });
+    let _reset = Reset;
+    run()
 }

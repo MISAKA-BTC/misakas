@@ -11,6 +11,19 @@ fn setup() -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, Palw
     setup_mode(false)
 }
 fn setup_mode(fs: bool) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2) {
+    setup_mode_contract(fs, false)
+}
+fn setup_mode_contract(fs: bool, staged: bool) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2) {
+    setup_mode_contract_opv(fs, staged, None)
+}
+/// Same fixture with the route folded from genesis under an OPV policy (the
+/// kernel's source-fee gate requires `optimistic_allowed`). The policy binds
+/// the stored route, so it cannot be added to the extras afterwards.
+fn setup_mode_contract_opv(
+    fs: bool,
+    staged: bool,
+    opv: Option<misaka_palw_kernel::opv::OpvPolicyV1>,
+) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2) {
     use fixture::{
         chain::{T, block_of, salted, seals_for},
         ledger_world::World,
@@ -20,7 +33,7 @@ fn setup_mode(fs: bool) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionE
     let network = h64(1);
     let rules = h64(2);
     let policy = palw_kernel_route_policy_v1(network, rules);
-    let mut route = PalwKernelRouteStateV1::new(policy, None, Default::default());
+    let mut route = PalwKernelRouteStateV1::new(policy, opv, Default::default());
     let mut l = route.template();
     let mut w = World::new();
     let candidates: Vec<_> =
@@ -72,10 +85,10 @@ fn setup_mode(fs: bool) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionE
         interactive_plan: None,
     };
     if fs {
-        let mode = misaka_palw_challenge::InteractiveModeV1::TranscriptBoundFiatShamir;
+        let mode = if staged { misaka_palw_challenge::InteractiveModeV1::StagedBeacon } else { misaka_palw_challenge::InteractiveModeV1::TranscriptBoundFiatShamir };
         class.maximum_rounds = 2;
         class.source_policy.interactive_mode = mode;
-        class.source_policy.transcript_transform_id = misaka_palw_challenge::ImplementedV1::transcript_fiat_shamir();
+        class.source_policy.transcript_transform_id = if staged { misaka_palw_challenge::ImplementedV1::transcript_staged_beacon() } else { misaka_palw_challenge::ImplementedV1::transcript_fiat_shamir() };
         class.interactive_plan = Some(
             misaka_palw_kernel::claim_interactive_v3::CompiledClaimProofPlanV3::compile(
                 class.target,
@@ -189,7 +202,20 @@ fn setup_mode(fs: bool) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionE
     fence.policy.bootstrap_seed = Some([12; 64]);
     p.palw_claim_challenge_v2 = Some(fence);
     let extras = PalwTransitionExtrasV1 {
-        kernel_route: Some(PalwKernelRouteExtrasV1 { network_domain: network, ruleset_digest: rules, ..Default::default() }),
+        kernel_route: Some(PalwKernelRouteExtrasV1 {
+            network_domain: network,
+            ruleset_digest: rules,
+            opv: opv.map(|policy| crate::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
+                policy,
+                denied_classes: vec![],
+                min_effective_bits: 0,
+                sampled_conformance_gates_reward: false,
+                test_eligible: vec![],
+                reward_gate: None,
+                budget_required: false,
+            }),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     (state, p, extras, a)
@@ -496,3 +522,6 @@ mod paid_trap_checked_v1;
 
 #[path = "paid_check_authority_resource_v2.rs"]
 mod paid_check_authority_resource_v2;
+
+#[path = "rfc07_normal_source_owned_tests.rs"]
+mod rfc07_normal_source_owned_tests;
