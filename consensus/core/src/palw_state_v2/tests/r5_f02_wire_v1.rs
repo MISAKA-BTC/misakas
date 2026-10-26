@@ -26,9 +26,13 @@ fn claim() -> Hash64 {
 fn armed() -> PalwStateParamsV2 {
     params().with_settlement_once_from(Some(0)).with_native_liability_horizon_from(Some(100))
 }
+/// TEST-ONLY inclusion premise (lane F02): not a production value; production is typed-missing.
+const TEST_ONLY_INCLUSION_PREMISE: crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1 =
+    crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1 { version: 1, inclusion_delay_daa: 0 };
 fn conviction_extras() -> PalwTransitionExtrasV1 {
     let mut e = PalwTransitionExtrasV1::default();
     e.tir_public_conviction_active = true;
+    e.court_service_inclusion_premise_v1 = Some(TEST_ONLY_INCLUSION_PREMISE);
     e
 }
 fn profile() -> CourtServiceProfileV1 {
@@ -288,7 +292,7 @@ fn r5_f02_wire_missing_supply_is_a_no_slash_hold_and_the_sweep_resumes_once_supp
             claim(),
             &[&clock(77, 1_900)],
             &[producer()].into_iter().collect(),
-            true
+            Some(&TEST_ONLY_INCLUSION_PREMISE)
         ),
         Ok(CourtServiceAttributionV1::PartyDefault),
         "the moved slot is supplied inside the actor's window"

@@ -32,6 +32,9 @@ fn armed() -> PalwStateParamsV2 {
 fn conviction_extras() -> PalwTransitionExtrasV1 {
     let mut e = PalwTransitionExtrasV1::default();
     e.tir_public_conviction_active = true;
+    // TEST-ONLY inclusion premise (lane F02), not a production value.
+    e.court_service_inclusion_premise_v1 =
+        Some(crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1 { version: 1, inclusion_delay_daa: 0 });
     e
 }
 fn profile() -> CourtServiceProfileV1 {
@@ -456,4 +459,38 @@ fn r6_d4_measure_post_final_duty_wall_time() {
         let row = native_post_final_duty_row_v1(&observed_state, family, &job(0)).unwrap();
         eprintln!("MEASURE_DA in_crate=true op=post_final_duty_row bytes={} answer_payload_bytes=12", borsh::to_vec(&row).unwrap().len());
     }
+}
+
+/// **Lane F02 T02/T07 (native):** the miner stays permanently silent after an actually supplied unit. Decision boundaries at
+/// -1/=/+1 on (a) the response deadline and (b) the explicit inclusion premise's `unit + delay <= deadline`. Every premise here is
+/// a TEST-ONLY value (production is typed-missing): without one, a supplied-and-silent actor is undecided.
+#[test]
+fn f02_t02_t07_silent_supplied_actor_deadline_and_inclusion_premise_boundaries() {
+    use crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1 as Premise;
+    let p = armed();
+    let unit = ACCUSED + 1;
+    let gap = deadline(&p) - unit;
+    let run = |premise: Option<Premise>, now: u64| {
+        let state = parent();
+        let mut e = conviction_extras();
+        e.court_service_inclusion_premise_v1 = premise;
+        let mut b = accused(&state, &p, &e, PALW_NATIVE_FAMILY_TEXT_V29);
+        observe_native_post_final_duties_with_v1(&mut b, &ctx(3, unit, 3), &profile()).unwrap();
+        assert_eq!(native_post_final_duty_row_v1(&b.state, PALW_NATIVE_FAMILY_TEXT_V29, &JOB).unwrap().duties[0].supplied_daa, Some(unit));
+        decide_native_post_final_default_v1(&b, &held(PALW_NATIVE_FAMILY_TEXT_V29), now, &production)
+    };
+    let zero = Some(Premise { version: 1, inclusion_delay_daa: 0 });
+    // (a) response deadline D: D-1 and D are still open (undecided); D+1 decides.
+    assert!(run(zero, deadline(&p) - 1).is_err());
+    assert!(run(zero, deadline(&p)).is_err());
+    assert_eq!(run(zero, deadline(&p) + 1), Ok(CourtServiceAttributionV1::PartyDefault));
+    // (b) inclusion premise: unit + delay = D-1 and = D default; = D+1 is a no-slash hold (no assumed opportunity).
+    let after = deadline(&p) + 1;
+    assert_eq!(run(Some(Premise { version: 1, inclusion_delay_daa: gap - 1 }), after), Ok(CourtServiceAttributionV1::PartyDefault));
+    assert_eq!(run(Some(Premise { version: 1, inclusion_delay_daa: gap }), after), Ok(CourtServiceAttributionV1::PartyDefault));
+    assert!(matches!(run(Some(Premise { version: 1, inclusion_delay_daa: gap + 1 }), after), Ok(CourtServiceAttributionV1::NoSlashHold(_))));
+    // Negative controls: no adopted premise, or an unknown premise version, never defaults.
+    assert!(run(None, after).is_err(), "typed-missing premise: undecided, no slash");
+    assert!(matches!(run(Some(Premise { version: 2, inclusion_delay_daa: 0 }), after), Ok(CourtServiceAttributionV1::NoSlashHold(_))));
+    assert!(crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.is_none());
 }

@@ -159,7 +159,7 @@ impl CourtServiceStateV2 {
         frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
         defaulted: &[&crate::palw_court_duty_clock_v1::CourtDutyClockV1],
         unpaid: &BTreeSet<crate::palw_state_v2::PalwBondKeyV2>,
-        inclusion_premise_adopted: bool,
+        premise: Option<&crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1>,
     ) -> Result<crate::palw_court_service_binding_v1::CourtServiceAttributionV1, &'static str> {
         let plan = frame.plan_v1();
         let binding = self.claims.get(&plan.original_claim).ok_or("court service binding is missing")?;
@@ -177,7 +177,7 @@ impl CourtServiceStateV2 {
             plan.original_claim,
             defaulted,
             unpaid,
-            inclusion_premise_adopted,
+            premise,
         )
     }
 }
