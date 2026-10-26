@@ -807,10 +807,7 @@ impl NodeEthProvider {
         let session = self.consensus_manager.consensus().session().await;
         session
             .spawn_blocking(move |c| -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
-                with_resolved_state_selector(c, &block, |l1| {
-                    let Some(l1) = l1 else {
-                        return Err(EthRpcError::invalid_params("eth_call/eth_estimateGas: the requested block is unknown"));
-                    };
+                with_resolved_simulation_target(c, &block, |l1| {
                     // §12.6 env from the TARGET block's committed header.
                     let header = match c.get_evm_header_of(l1) {
                         Ok(Some(h)) => h,
@@ -1116,6 +1113,25 @@ fn with_resolved_state_selector<T>(
         }
     };
     then(l1)
+}
+
+/// Simulation requires an executed target. Missing certified heads are local
+/// unavailability; missing explicit historical blocks are invalid selectors.
+fn with_resolved_simulation_target<T>(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    block: &BlockId,
+    then: impl FnOnce(kaspa_consensus_core::BlockHash) -> EthResult<T>,
+) -> EthResult<T> {
+    with_resolved_state_selector(c, block, |l1| {
+        let l1 = l1.ok_or_else(|| {
+            if matches!(block, BlockId::Tag(t) if matches!(t.as_str(), "safe" | "finalized")) {
+                EthRpcError::server("requested executed EVM head unavailable")
+            } else {
+                EthRpcError::invalid_params("eth_call/eth_estimateGas: the requested block is unknown")
+            }
+        })?;
+        then(l1)
+    })
 }
 
 #[cfg(test)]

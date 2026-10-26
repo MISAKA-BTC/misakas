@@ -1,0 +1,151 @@
+{
+  "head": "f8068656066e1a8bafedf2def71e93cad0cf310b",
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "288fab6f6c4aff360a22f53e4f75bae60027a49afa1ef74326cc43d56de566c9"
+    },
+    {
+      "path": "components/consensusmanager/Cargo.toml",
+      "sha256": "a93633ac943f962bb17b35afc6b8d16bfd855b151ee3ca5f49663d69ce0f23ac"
+    },
+    {
+      "path": "components/consensusmanager/src/session.rs",
+      "sha256": "c0d76e3785f2fedf714d6015fbcaeb52d8d100c0b6698b2c60fb9af0d3b6ed51"
+    },
+    {
+      "path": "consensus/Cargo.toml",
+      "sha256": "623586e150fed14d9df4c55465be33374427a1730d4f763c4289316bc34b9c83"
+    },
+    {
+      "path": "consensus/core/Cargo.toml",
+      "sha256": "ba7e84c40620b97d32e323613fcf22623df3a1f80b60ef89cbcac4c622968e80"
+    },
+    {
+      "path": "consensus/core/src/config/params/full_activation_v1.rs",
+      "sha256": "982293432351e14d12b5b749c36d3e45152eb9558bb66d34968902de100e431f"
+    },
+    {
+      "path": "consensus/core/src/palw_claim_challenge_fold_v2.rs",
+      "sha256": "b3d1ae0ecf817375beb8dcd6383cfede2e408c42425e73290ef970facafbbbb9"
+    },
+    {
+      "path": "consensus/core/src/palw_claim_challenge_v2.rs",
+      "sha256": "3cffbe031ff2d362e1ddc25026950fb27ce069d2c3a21fb0b1f162a42f80dafb"
+    },
+    {
+      "path": "consensus/core/src/palw_paid_check_authority_checked_v2.rs",
+      "sha256": "ab316e9957d762b7887ccedc32cb93d04dc6f24feccb84afb60c8c01d0f87d9d"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/tests/paid_check_authority_resource_v2.rs",
+      "sha256": "e06be31f6e2ea191118183d9ce1567508dbe0724a35a155c39ad04a9618a6832"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/tests/paid_claim_reader_v1.rs",
+      "sha256": "3a7ce0d2d2bedff5819128aae681c37499ab2dfc755fdf29a837f5e102a6bea9"
+    },
+    {
+      "path": "consensus/core/src/rfc07_normal_source_owned_draft.rs",
+      "sha256": "0d3e130fb1a68eb58b4c402207c37770b08998a3b370b2624eaf2ab9da759954"
+    },
+    {
+      "path": "consensus/core/src/rfc07_normal_source_projection_draft.rs",
+      "sha256": "adb4052ce9dd615206d75f95d20fe45f87f3f68c5cc456fc999750966347e24e"
+    },
+    {
+      "path": "kaspad/Cargo.toml",
+      "sha256": "e7a9c98ef2c74e09be69ac66bf1cbf20f3bc7d644281dba5cad8071438c5a78f"
+    },
+    {
+      "path": "kaspad/src/eth_rpc.rs",
+      "sha256": "63cf5f3502c8e025c7c75e68987b5b277f099cd5ac6a870cef09bf8b33643792"
+    },
+    {
+      "path": "kaspad/src/eth_rpc_state_selector_tests.rs",
+      "sha256": "80ce69a7c33a01eb1930c6c273c988cfbc4aa5cc2190b8c7b1ea6d644864f79c"
+    },
+    {
+      "path": "misaka/evm/core/Cargo.toml",
+      "sha256": "44bd39f36d62f54c0b8e3b60f54bd0412d7e8023b8b803ca93aa89717ac49db2"
+    },
+    {
+      "path": "misaka/palw/sdk/Cargo.toml",
+      "sha256": "5db4c9200ef3695cd613e48ddd05e6660f55cdc19e7ffd1d1d876cab23d3ea45"
+    },
+    {
+      "path": "rpc/eth/Cargo.toml",
+      "sha256": "c98fb8bedd276e0d58312ccc7358ac6a63087bf57efdc8cad1953d3f98900daa"
+    }
+  ],
+  "build_result": "PASS",
+  "scope": "Simulation target error classification and actual continuation tests. Unit contract only; no real EVM campaign acceptance.",
+  "host_boot": "kern.boottime: { sec = 1792930279, usec = 697486 } Sun Oct 25 21:11:19 2026",
+  "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+  "command": [
+    "/Users/wata/Downloads/MISAKA-wt-b/buildslot.sh",
+    "env",
+    "CARGO_PROFILE_DEV_DEBUG=0",
+    "CARGO_PROFILE_TEST_DEBUG=0",
+    "cargo",
+    "test",
+    "--offline",
+    "-p",
+    "kaspa-consensus-core",
+    "-p",
+    "kaspa-consensus",
+    "-p",
+    "kaspad",
+    "-p",
+    "kaspa-eth-rpc",
+    "-p",
+    "misaka-palw-sdk",
+    "-p",
+    "kaspa-evm",
+    "--lib",
+    "--features",
+    "kaspa-consensus/evm,kaspad/evm,kaspad/private-integration-config",
+    "--no-run",
+    "--config",
+    "profile.test.package.kaspa-consensus-core.opt-level=0"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/artifacts/rfc06-12-20261025/build-target",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_MIN_STACK": "67108864",
+    "TMPDIR": "/private/tmp"
+  },
+  "exit_code": 0,
+  "wall_seconds": 59.24,
+  "identity_matches": true,
+  "pinned_binary": {
+    "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/simulation-target-pins/kaspad_lib-dc4a53db44615501",
+    "sha256": "4c1b2215abd5a62e2e3ecdcb49d9c618d550ad516cf1887075d0aa7dccfddf11"
+  },
+  "test_command": [
+    "/Users/wata/.codex/artifacts/rfc06-12-20261025/simulation-target-pins/kaspad_lib-dc4a53db44615501",
+    "eth_rpc::state_selector_tests::",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "test_exit_code": 0,
+  "test_log": "\nrunning 6 tests\ntest eth_rpc::state_selector_tests::simulation_certified_missing_or_unreadable_head_stops_before_snapshot ... ok\ntest eth_rpc::state_selector_tests::simulation_exact_target_and_historical_absence_remain_distinct ... ok\ntest eth_rpc::state_selector_tests::state_selector_api_errors_stop_actual_continuation_instead_of_empty_or_unknown ... ok\ntest eth_rpc::state_selector_tests::state_selector_canonical_denial_is_not_a_read_error_and_opt_out_does_not_read ... ok\ntest eth_rpc::state_selector_tests::state_selector_existing_tags_use_exact_canonical_head_source ... ok\ntest eth_rpc::state_selector_tests::state_selector_real_absence_and_exact_target_remain_distinct ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1030 filtered out; finished in 0.01s\n\n",
+  "changed_source": [
+    {
+      "path": "kaspad/src/eth_rpc.rs",
+      "sha256": "63cf5f3502c8e025c7c75e68987b5b277f099cd5ac6a870cef09bf8b33643792"
+    },
+    {
+      "path": "kaspad/src/eth_rpc_state_selector_tests.rs",
+      "sha256": "80ce69a7c33a01eb1930c6c273c988cfbc4aa5cc2190b8c7b1ea6d644864f79c"
+    }
+  ],
+  "campaign_15_gates": "UNKNOWN",
+  "activation": "None",
+  "limitations": "Six native selector continuation unit tests (two added), synthetic ConsensusApi. No actual EVM execution, multiprocess, restart/reorg/pruning or campaign acceptance."
+}

@@ -10,11 +10,12 @@ use std::sync::Mutex;
 struct Reader {
     result: ConsensusResult<Option<EvmBlockResponse>>,
     canonical: ConsensusResult<bool>,
+    heads: ConsensusResult<Option<CanonicalEvmHeads>>,
     calls: Mutex<Vec<String>>,
 }
 impl Reader {
     fn new(result: ConsensusResult<Option<EvmBlockResponse>>) -> Self {
-        Self { result, canonical: Ok(true), calls: Mutex::new(Vec::new()) }
+        Self { result, canonical: Ok(true), heads: Ok(Some(CanonicalEvmHeads { latest: hash(1), safe: hash(2), finalized: hash(3) })), calls: Mutex::new(Vec::new()) }
     }
     fn record(&self, call: String) {
         self.calls.lock().unwrap().push(call);
@@ -35,7 +36,7 @@ impl ConsensusApi for Reader {
     }
     fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<CanonicalEvmHeads>> {
         self.record("heads".into());
-        Ok(Some(CanonicalEvmHeads { latest: hash(1), safe: hash(2), finalized: hash(3) }))
+        self.heads.clone()
     }
 }
 fn hash(n: u8) -> BlockHash {
@@ -104,4 +105,33 @@ fn state_selector_existing_tags_use_exact_canonical_head_source() {
     let reader = Reader::new(Ok(None));
     assert_eq!(with_resolved_state_selector(&reader, &BlockId::Tag("earliest".into()), Ok).unwrap(), None);
     assert_eq!(*reader.calls.lock().unwrap(), vec!["number:0"]);
+}
+
+#[test]
+fn simulation_certified_missing_or_unreadable_head_stops_before_snapshot() {
+    for tag in ["safe", "finalized"] {
+        for heads in [Ok(None), Ok(Some(CanonicalEvmHeads { latest: hash(1), safe: hash(0), finalized: hash(0) })), Err(ConsensusError::General("head read fault"))] {
+            let mut reader = Reader::new(Ok(None));
+            reader.heads = heads;
+            let result: EthResult<()> = with_resolved_simulation_target(&reader, &BlockId::Tag(tag.into()), |_| {
+                panic!("snapshot/environment must not run without an executed target")
+            });
+            assert_eq!(result.unwrap_err().code, -32000);
+            assert_eq!(*reader.calls.lock().unwrap(), vec!["heads"]);
+        }
+    }
+}
+
+#[test]
+fn simulation_exact_target_and_historical_absence_remain_distinct() {
+    for (tag, expected) in [("safe", 2), ("finalized", 3)] {
+        let reader = Reader::new(Ok(None));
+        assert_eq!(with_resolved_simulation_target(&reader, &BlockId::Tag(tag.into()), Ok).unwrap(), hash(expected));
+        assert_eq!(*reader.calls.lock().unwrap(), vec!["heads"]);
+    }
+    for selector in selectors() {
+        let reader = Reader::new(Ok(None));
+        let result: EthResult<()> = with_resolved_simulation_target(&reader, &selector, |_| panic!("missing historical target"));
+        assert_eq!(result.unwrap_err().code, -32602);
+    }
 }
