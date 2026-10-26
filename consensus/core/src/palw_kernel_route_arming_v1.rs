@@ -164,7 +164,9 @@ pub struct PalwKernelRouteArmingRecordV1 {
 }
 
 /// **The pinned records — EMPTY.** Every kernel route fence armed at a real height on a real network is refused.
-pub const PALW_KERNEL_ROUTE_ARMING_RECORDS_V1: &[PalwKernelRouteArmingRecordV1] = &[];
+// Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
+pub const PALW_KERNEL_ROUTE_ARMING_RECORDS_V1: &[PalwKernelRouteArmingRecordV1] =
+    crate::palw_t12_17000_records_v1::PALW_T12_17000_KERNEL_ROUTE_RECORDS_V1;
 
 /// A record's own form (not whether it is pinned).
 pub fn palw_kernel_route_arming_record_form_v1(record: &PalwKernelRouteArmingRecordV1) -> Result<(), PalwG14ArmingRefusalV1> {
@@ -185,6 +187,17 @@ pub fn palw_kernel_route_arming_record_form_v1(record: &PalwKernelRouteArmingRec
         if *digest == [0; 32] || *digest == record.review || record.evidence[..i].contains(digest) {
             return Err(PalwG14ArmingRefusalV1::Evidence(i));
         }
+    }
+    // Lane ACT2: a slot that is a pinned waiver must be that waiver's own slot (`crate::palw_arming_waiver_v1`).
+    if let Err((i, _)) = crate::palw_arming_waiver_v1::palw_arming_record_waivers_hold_v1(
+        record.fence.name(),
+        record.genesis,
+        record.activation_daa,
+        record.evidence,
+        &record.review,
+        crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,
+    ) {
+        return Err(PalwG14ArmingRefusalV1::Evidence(i));
     }
     Ok(())
 }
@@ -293,7 +306,7 @@ mod tests {
 
     #[test]
     fn kernel_route_fences_are_dormant_and_refused_without_a_record() {
-        assert!(PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.is_empty(), "no record is pinned in this binary");
+        assert!(PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_000 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
         for p in [MAINNET_PARAMS, TESTNET_PARAMS] {
             for fence in PalwKernelRouteGatedFenceV1::ALL {
                 assert_eq!(fence.armed(&p), None);

@@ -590,7 +590,7 @@ fn d2_and_x3_are_refused_without_a_record_and_admitted_exactly_at_the_records_ne
     let other = [arm_record(G::CourtModelScopeV1, other_net, FENCE), arm_record(G::ClaimHardDeadlineV1, other_net, FENCE)];
     assert!(p.validate_palw_2026_10_12_ruling_fences_in_v1(&other).is_err(), "another network: refused");
     // The shipped list stays empty, so the binary's own validation still refuses both on testnet-12.
-    assert!(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1.is_empty());
+    assert!(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_000 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
     assert!(p.validate_palw_2026_10_12_ruling_fences_v1().is_err());
     // A record of the wrong form (zero review digest) is refused even when it names the right network and height.
     let mut bad = both;

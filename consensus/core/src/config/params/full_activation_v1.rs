@@ -389,8 +389,12 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_COURT_CAPACITY_ENTRY,
     PALW_T12_FULL_BOND_BUDGET_ENTRY,
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
-    PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
+    // `palw_settlement_once_v1` (RFC08-2) is NOT here (lane ACT2 recommendation (ii), 2026-10-27): its open blocker
+    // (`PALW_RFC0608_OPEN_BLOCKERS_V1`, unsourced liability terms) is a safety refusal no waiver lifts, and armed it would refuse
+    // native mining receipts and other legs with no signed deadline. No entry of this list needs it at or below; each pay point keeps
+    // its own once-guard (escrow row removal / phase / paid flag), as testnet-12 runs today.
     PALW_T12_FULL_GATE_C_ENTRY,
+    // Slot for lane ROLES: the wide128 test-class root pinned as "public attest" (a constant ROLES adds here, before route-required).
     // `palw_fp_tokenizer_match` (FpTokenizer) is NOT here: testnet-12 already runs it from DAA 5,300; re-arming it at 17,000
     // would move a live fence below 17,000. The FpTokenizer family's other fences are above.
     // PanelDa (user 2026-10-27, added to scope): `palw_panel_da` is already in force on testnet-12 (RC DA court fence); the

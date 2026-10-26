@@ -160,7 +160,7 @@ fn reservation(s: &PalwChainStateV2, claim: Hash64, reserver: PalwBondKeyV2) -> 
 /// route at the release height — the only change option (b)'s gate reads.
 #[test]
 fn lg14_arming_needs_a_record_naming_the_network_and_height() {
-    assert!(PALW_G14_ARMING_RECORDS_V1.is_empty(), "no record is pinned in this binary");
+    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_000 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     // Both new gated fences: listed, measured, refused without a record.

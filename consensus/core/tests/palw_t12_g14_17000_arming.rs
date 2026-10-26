@@ -14,7 +14,8 @@ const FAMILIES: [F; 7] =
 fn the_17000_list_covers_the_slice_six_families_and_panel_da() {
     let names: Vec<&str> = PALW_T12_G14_17000_FENCES_V1.iter().map(|f| f.name).collect();
     for f in PALW_T12_KERNEL_SLICE_FENCES_V1 {
-        assert!(names.contains(&f.name), "slice entry {} missing", f.name);
+        // settlement once is taken off the 17,000 list (RFC08-2 open blocker; ACT2 recommendation (ii)).
+        assert!(names.contains(&f.name) != (f.name == "palw_settlement_once_v1"), "slice entry {}", f.name);
     }
     let shipped = palw_t12_shipped_params();
     let live: Vec<&str> =
@@ -64,4 +65,79 @@ fn list_every_refusal_at_17000() {
         }
     }
     println!("ACT2COUNT refused={refused} of {}", PALW_T12_G14_17000_FENCES_V1.len());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Typed waivers (lane ACT2, user decision 2026-10-27)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+use kaspa_consensus_core::palw_arming_waiver_v1::{
+    PALW_ARMING_WAIVER_REVIEW_V1, PALW_ARMING_WAIVERS_V1, PalwArmingEvidenceV1, palw_arming_evidence_kind_v1,
+};
+
+/// Every slot of every pinned 17,000 record is a waiver (the Python digests match the Rust ones); none is reported as a run.
+#[test]
+fn every_pinned_17000_slot_is_a_typed_waiver_never_a_run() {
+    use kaspa_consensus_core::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1;
+    use kaspa_consensus_core::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1;
+    use kaspa_consensus_core::palw_rfc0018_v1::PALW_RFC0018_ARMING_RECORDS_V1;
+    type Slots = (&'static str, kaspa_consensus_core::Hash64, u64, Vec<[u8; 32]>, [u8; 32]);
+    let mut slots: Vec<Slots> = vec![];
+    slots.extend(PALW_G14_ARMING_RECORDS_V1.iter().map(|r| (r.fence.name(), r.genesis, r.activation_daa, r.evidence.to_vec(), r.review)));
+    slots.extend(
+        PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().map(|r| (r.fence.name(), r.genesis, r.activation_daa, r.evidence.to_vec(), r.review)),
+    );
+    slots.extend(PALW_RFC0018_ARMING_RECORDS_V1.iter().map(|r| (r.fence.name(), r.genesis, r.activation_daa, r.evidence.to_vec(), r.review)));
+    assert_eq!(slots.len(), 11);
+    for (fence, g, h, ev, review) in slots {
+        for (i, d) in ev.iter().enumerate() {
+            let kind = palw_arming_evidence_kind_v1(fence, g, h, i as u16, d, PALW_ARMING_WAIVERS_V1).expect("well-formed");
+            assert!(matches!(kind, PalwArmingEvidenceV1::Waived(_)), "{fence} slot {i} is not a pinned waiver");
+        }
+        let kind = palw_arming_evidence_kind_v1(fence, g, h, PALW_ARMING_WAIVER_REVIEW_V1, &review, PALW_ARMING_WAIVERS_V1).unwrap();
+        assert!(matches!(kind, PalwArmingEvidenceV1::Waived(_)), "{fence} review is not a pinned waiver");
+    }
+    assert!(PALW_ARMING_WAIVERS_V1.iter().all(|w| w.decided_by == "user 2026-10-27" && w.form().is_ok()));
+}
+
+/// **A waiver admits its record AND lifts no safety refusal — at the same time.**
+#[test]
+fn a_waiver_admits_its_record_but_lifts_no_safety_refusal() {
+    use kaspa_consensus_core::palw_g14_gates_v1::{
+        PALW_G14_ARMING_RECORDS_V1, PalwG14ArmingRecordV1, PalwG14GatedFenceV1, palw_g14_arming_record_admits_v1,
+        palw_g14_arming_record_form_v1,
+    };
+    let at = PALW_T12_G14_17000_DAA_V1;
+    let base = palw_t12_shipped_params();
+    let g = base.genesis.hash;
+    let set = |p: &mut kaspa_consensus_core::config::params::Params, name: &str| {
+        let f = PALW_T12_G14_17000_FENCES_V1.iter().find(|f| f.name == name).expect("on the list");
+        (f.set)(p, Some(ForkActivation::new(at)));
+    };
+    // 1. The waived record admits exactly its own (fence, network, height).
+    for fence in [PalwG14GatedFenceV1::LegacyPublicFilerV1, PalwG14GatedFenceV1::LegacyHeldDaV2, PalwG14GatedFenceV1::G14RouteRequiredV1] {
+        assert_eq!(palw_g14_arming_record_admits_v1(fence, g, at, PALW_G14_ARMING_RECORDS_V1), Ok(()), "{fence:?}");
+        assert!(palw_g14_arming_record_admits_v1(fence, g, at + 1, PALW_G14_ARMING_RECORDS_V1).is_err());
+    }
+    // 2. A waiver moved to another slot is refused.
+    let r = PALW_G14_ARMING_RECORDS_V1.iter().find(|r| r.fence == PalwG14GatedFenceV1::G14RouteRequiredV1).unwrap();
+    let swapped: &'static [[u8; 32]] = Box::leak(vec![r.evidence[1], r.evidence[0], r.evidence[2], r.evidence[3]].into_boxed_slice());
+    assert!(palw_g14_arming_record_form_v1(&PalwG14ArmingRecordV1 { evidence: swapped, ..*r }).is_err());
+    // 3. Ordering: held DA v2 has its waived record, but without the filer at or below it the refusal stands.
+    let mut p = base.clone();
+    set(&mut p, "palw_legacy_held_da_v2");
+    let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
+    assert!(e.contains("needs palw_legacy_public_filer_v1"), "{e}");
+    // 4. Missing value: court capacity has its waived record, the placeholder policy is still refused.
+    let mut p = base.clone();
+    for name in ["palw_legacy_public_filer_v1", "palw_court_outsider_lane_v1", "palw_court_capacity_v1"] {
+        set(&mut p, name);
+    }
+    let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
+    assert!(e.contains("palw_court_capacity_v1") && !e.contains("no arm-readiness record"), "{e}");
+    // 5. Open blocker: settlement once with its prerequisites and records is still refused by RFC08-2.
+    let mut p = base.clone();
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(at));
+    let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
+    assert!(e.contains("open blocker") && e.contains("RFC08-2"), "{e}");
 }
