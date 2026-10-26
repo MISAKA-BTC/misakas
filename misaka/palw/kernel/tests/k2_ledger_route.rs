@@ -789,8 +789,12 @@ fn a_final_reward_is_paid_once_out_of_the_posters_escrow_and_nothing_is_ever_iss
     assert_eq!(w.block(60, vec![]), vec![E::Final { claim: id, reward: 7 }]);
     assert_eq!(
         settlements(&w, 60),
-        vec![ix(POSTER, 7, K::PayJobEscrow, id), ix(PRODUCER, 7, K::FinalReward, id)],
-        "the poster pays exactly what the producer is paid"
+        vec![
+            ix(POSTER, 7, K::PayJobEscrow, id),
+            ix(POSTER, 0, K::ReleaseJobEscrow, id),
+            ix(PRODUCER, 7, K::FinalReward, id),
+        ],
+        "the poster pays exactly what the producer is paid, and the zero remainder retains its terminal release marker"
     );
     assert!(w.l.job_escrows.is_empty(), "an escrow pays once");
     assert_eq!((w.l.bonds[&POSTER].collateral, w.l.bonds[&POSTER].reserved), (POSTER_COLLATERAL - 2 - 7, 0));
@@ -879,6 +883,7 @@ fn every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_min
             ix(PRODUCER, 1000, K::ReserveClaim, hid),
             // GAP-5: the Final reward is the poster's escrow, debited and routed to the producer — never issued.
             ix(common::chain::POSTER, 7, K::PayJobEscrow, hid),
+            ix(common::chain::POSTER, 0, K::ReleaseJobEscrow, hid),
             ix(PRODUCER, 7, K::FinalReward, hid),
             ix(PRODUCER, 1000, K::ReleaseClaim, hid)
         ]

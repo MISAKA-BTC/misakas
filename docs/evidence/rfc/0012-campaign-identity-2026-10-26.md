@@ -1,0 +1,11 @@
+# RFC-0012 campaign evidence identity guard (2026-10-26)
+
+The 15-gate campaign remains **unexecuted**. No gate is promoted from UNKNOWN to PASS by this change.
+
+Before this guard, `gates_report` collected observed facts with a dictionary comprehension. If the same fact ID appeared twice, a later PASS replaced an earlier FAIL when the gate was assembled. The campaign plan requires unique fact IDs, but the runtime aggregate did not enforce uniqueness or recheck the observed fact's scenario, kind, role and claim against the frozen plan. The report also rechecked `campaign-freeze.json` but did not recheck the durable `campaign-once.json` marker before writing its final result.
+
+Now any duplicate, unplanned, reserved or reassigned observed fact, duplicate or mismatched scenario, or absent planned scenario fails every gate with an explicit `integrityErrors` entry. A fact ID cannot take the reserved `base-drill-mechanics` identity in the plan. Final aggregation requires both durable markers to retain their original exact bytes, and refuses a symlinked campaign root. If campaign-drill setup fails after the once marker, a terminal FAIL report is written; an interactive interruption during the run is also recorded as FAIL. These checks preserve failed and incomplete observations instead of allowing a later row or marker replacement to claim a different campaign. They cannot record an uncatchable OS kill; the durable once marker remains for that case.
+
+An integrity FAIL at any gate now makes the overall campaign FAIL. Previously the final status checked scenario failures but returned UNKNOWN for a failed gate. Malformed scenario rows also fail the campaign, and the finalizer can still append unobserved planned scenarios without crashing on such a row.
+
+Validation: `python3 -m unittest scripts.drills.tests.test_rfc_integration_campaign` → **19 passed**. The controls include a complete synthetic plan that still aggregates to PASS, FAIL→PASS duplicate ID and altered role that aggregate to FAIL, a malformed fact identity, mutations of either durable marker that are rejected, and a setup exception after the once marker that leaves a terminal FAIL report. These are unit controls over the reporting logic; they do not execute multiple processes, 100k work, pruned IBD, OS crash, EVM Latest/Safe/Finalized, bridge/market fill or historical signatures.

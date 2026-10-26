@@ -1,0 +1,53 @@
+{
+  "head": "8bbfaba0ef8c3e44db6162deae3a26c1ecd3465e",
+  "files": [
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs",
+      "sha256": "f13a9356b7f83ce8615c2b4005612d4f4aa76a7cd3bac8c99b9562976b1e4f24"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_arming_v1.rs",
+      "sha256": "ce350d4312a79486e2112e5ad27a52ed785d77edce3c2a9f6694e815890f983b"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_v1.rs",
+      "sha256": "136250cb16b69d1c81ee38b199b253a2a84094b0b9ad99c9c9f17caeb7871d89"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "sha256": "337b09494ebebaf16f4bfe7e67fa99ee0a4cf79a3702b23fce548b608e976dd2"
+    },
+    {
+      "path": "consensus/core/src/config/params.rs",
+      "sha256": "321c2d708a28b7ae97abdae9feceafe76bcb6fb2551b7fddc35908966de25dcb"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+    }
+  ],
+  "scope": "in-process actual Panel=1 draw, quorum and outsider conviction; not public activation",
+  "command": [
+    "/Users/wata/Downloads/MISAKA-wt-b/buildslot.sh",
+    "env",
+    "CARGO_PROFILE_DEV_DEBUG=0",
+    "CARGO_PROFILE_TEST_DEBUG=0",
+    "cargo",
+    "test",
+    "--offline",
+    "-p",
+    "kaspa-consensus",
+    "--lib",
+    "--features",
+    "evm,private-integration-config",
+    "g14_kernel_route_panel_one_assignment_and_outsider_conviction",
+    "--config",
+    "profile.test.package.kaspa-consensus-core.opt-level=0",
+    "--",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 1414.6,
+  "identity_matches": true
+}

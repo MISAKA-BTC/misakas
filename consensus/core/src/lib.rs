@@ -206,6 +206,7 @@ pub mod palw_batch_licence_v1;
 /// N3 (REQ-N3-1/2/3): the Work Beacon's independent bootstrap, apart from the ordinary Beacon and Panel=0 — dormant.
 pub mod palw_beacon_bootstrap_v1;
 pub mod palw_beacon_source_fee_v1;
+mod palw_paid_normal_source_owned_v1;
 pub mod palw_beacon_source_opt_in_v1;
 /// RFC-0007 RFC07-3 (user decision 2026-10-15): the seal-before-commit order of beacon sources — no source cycle of any length.
 pub mod palw_beacon_source_order_v1;

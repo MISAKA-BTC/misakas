@@ -2,14 +2,24 @@
 from copy import deepcopy
 import ast
 import hashlib
+import importlib.util
+import io
+import json
+from contextlib import redirect_stdout
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import rfc_integration_campaign as campaign
+
+entry_path = Path(campaign.__file__).with_name('misaka-rfc-integration-campaign.py')
+entry_spec = importlib.util.spec_from_file_location('misaka_rfc_integration_campaign_entry', entry_path)
+entry = importlib.util.module_from_spec(entry_spec)
+entry_spec.loader.exec_module(entry)
 
 
 def h(number):
@@ -46,6 +56,72 @@ def plan_and_drill():
 
 
 class FrozenPlanCounterexamples(unittest.TestCase):
+    def test_setup_failure_after_once_marker_still_writes_terminal_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            output = root / 'report.json'
+            owned = root / 'owned'
+            frozen = SimpleNamespace(plan=dict(campaignId='frozen'), drill={}, limits_pin=SimpleNamespace(path='limits.json'),
+                candidate=SimpleNamespace(sha256='11' * 32), manifest=lambda: dict(campaignId='frozen'))
+            base = SimpleNamespace(validate_scenario_bounds=lambda _: None, read_process_limits=lambda _: {})
+
+            def fail_factory(_):
+                def construct(*_args):
+                    raise RuntimeError('setup stopped')
+                return construct
+
+            args = ['campaign', '--plan', str(root / 'plan.json'), '--out', str(output), '--root', str(owned), '--execute']
+            with patch.object(entry, 'FrozenCampaign', return_value=frozen), patch.object(entry, 'load_base_drill', return_value=base), \
+                    patch.object(entry, 'make_campaign_drill', side_effect=fail_factory), patch.object(sys, 'argv', args), \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(entry.main(), 1)
+            report = json.loads(output.read_text())
+            self.assertEqual(report['status'], 'FAIL')
+            self.assertEqual(report['baseDrill']['status'], 'FAIL')
+            self.assertFalse(report['resourceLimitsMet'])
+            self.assertTrue((owned / 'campaign-once.json').is_file())
+
+    def test_saved_campaign_markers_cannot_be_replaced_before_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            freeze = b'{"campaignId":"frozen"}\n'
+            once = b'{"campaignId":"frozen","actualExecutionStarted":true}\n'
+            (root / 'campaign-freeze.json').write_bytes(freeze)
+            (root / 'campaign-once.json').write_bytes(once)
+            entry.validate_saved_campaign_markers(root, freeze, once)
+            (root / 'campaign-once.json').write_bytes(b'{"campaignId":"other"}\n')
+            with self.assertRaises(campaign.CampaignError):
+                entry.validate_saved_campaign_markers(root, freeze, once)
+            (root / 'campaign-once.json').write_bytes(once)
+            (root / 'campaign-freeze.json').write_bytes(b'{"campaignId":"other"}\n')
+            with self.assertRaises(campaign.CampaignError):
+                entry.validate_saved_campaign_markers(root, freeze, once)
+
+    def test_duplicate_or_reassigned_fact_cannot_promote_a_gate(self):
+        plan, _ = plan_and_drill()
+        normal, attack = plan['scenarios']
+        complete = [dict(id=scenario['id'], kind=scenario['kind'], stage=scenario['stage'], claims=scenario['claims'],
+                         facts=[dict(item, status='PASS') for item in scenario['requirements']]) for scenario in (normal, attack)]
+        gates = entry.gates_report(SimpleNamespace(plan=plan), complete, True, True)
+        self.assertTrue(all(row['status'] == 'PASS' for row in gates.values()))
+        fact = dict(normal['requirements'][0], status='FAIL')
+        rows = [dict(id=normal['id'], kind=normal['kind'], stage=normal['stage'], claims=normal['claims'],
+                     facts=[fact, dict(fact, status='PASS')]),
+                dict(id=attack['id'], kind=attack['kind'], stage=attack['stage'], claims=attack['claims'], facts=[])]
+        gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
+        self.assertTrue(all(row['status'] == 'FAIL' for row in gates.values()))
+        self.assertEqual(campaign.final_status(rows, gates, True, True), 'FAIL')
+        self.assertTrue(any('duplicate observed fact id' in error for error in next(iter(gates.values()))['integrityErrors']))
+        rows[0]['facts'] = [dict(fact, status='PASS', role='B')]
+        gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
+        self.assertTrue(all(row['status'] == 'FAIL' for row in gates.values()))
+        self.assertTrue(any('identity differs' in error for error in next(iter(gates.values()))['integrityErrors']))
+        rows[0]['facts'] = [dict(fact, status='PASS'), {'id': []}]
+        gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
+        self.assertTrue(all(row['status'] == 'FAIL' for row in gates.values()))
+        self.assertTrue(any('no textual identity' in error for error in next(iter(gates.values()))['integrityErrors']))
+        self.assertEqual(campaign.final_status(rows + [None], gates, True, True), 'FAIL')
+
     def test_actual_local_python_import_closure_is_frozen(self):
         root = Path(campaign.__file__).parent
         pinned = set(campaign.SOURCE_LEAVES)

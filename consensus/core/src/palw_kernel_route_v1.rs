@@ -116,7 +116,7 @@ pub const PALW_KERNEL_CHUNK_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/chunk-
 pub const PALW_KERNEL_ROUTE_INTERIM_SEATS_V1: usize = 3;
 pub const PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1: u8 = 3;
 /// **Panel=1** (PRINCIPLES §5, RFC-0010 §0 addendum): one assigned seat per claim, quorum 1 — selected by
-/// `Params::palw_kernel_route_panel_one_v1` (dormant; USER DECISION PENDING between this and the interim 3-of-3). The seat's receipt
+/// `Params::palw_kernel_route_panel_one_v1` (dormant; the 1-seat policy was adopted on 2026-10-22). The seat's receipt
 /// is one input to the claim-level verification; the public court, the challenge window and bond/slash decide a dispute exactly as
 /// under 3-of-3 (a seat's signature never justifies a fault, PRINCIPLES §5).
 pub const PALW_KERNEL_ROUTE_PANEL_ONE_SEATS_V1: usize = 1;

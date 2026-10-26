@@ -31,8 +31,57 @@ def exclusive_json(path, value):
         os.close(parent_fd)
 
 
+def validate_saved_campaign_markers(root, freeze_bytes, once_bytes):
+    require(not root.is_symlink(), 'owned campaign root became a symlink')
+    for name, expected in (('campaign-freeze.json', freeze_bytes), ('campaign-once.json', once_bytes)):
+        path = root / name
+        require(not path.is_symlink() and path.read_bytes() == expected,
+            name + ' changed during campaign')
+
+
 def gates_report(frozen, scenarios, base_passed, resources_passed):
-    facts = {fact['id']: fact for row in scenarios for fact in row.get('facts', [])}
+    planned_scenarios = {row['id']: row for row in frozen.plan['scenarios']}
+    planned_facts = {fact['id']: (fact, row['id']) for row in frozen.plan['scenarios'] for fact in row['requirements']}
+    facts = {}
+    seen_scenarios = set()
+    integrity_errors = []
+    for row in scenarios:
+        if not isinstance(row, dict):
+            integrity_errors.append('observed scenario is not an object')
+            continue
+        scenario_id = row.get('id')
+        if not isinstance(scenario_id, str):
+            integrity_errors.append('observed scenario id is not text')
+            continue
+        if scenario_id not in planned_scenarios or scenario_id in seen_scenarios:
+            integrity_errors.append('unknown or duplicate scenario id: ' + repr(scenario_id))
+        else:
+            expected_scenario = planned_scenarios[scenario_id]
+            if any(row.get(key) != expected_scenario[key] for key in ('kind', 'stage', 'claims')):
+                integrity_errors.append('observed scenario identity differs from frozen plan: ' + repr(scenario_id))
+        seen_scenarios.add(scenario_id)
+        observed_facts = row.get('facts', [])
+        if not isinstance(observed_facts, list):
+            integrity_errors.append('observed facts are not an array: ' + repr(scenario_id))
+            continue
+        for fact in observed_facts:
+            if not isinstance(fact, dict) or not isinstance(fact.get('id'), str):
+                integrity_errors.append('observed fact has no textual identity: ' + repr(scenario_id))
+                continue
+            fact_id = fact.get('id')
+            planned = planned_facts.get(fact_id)
+            if fact_id in facts:
+                integrity_errors.append('duplicate observed fact id: ' + repr(fact_id))
+            if planned is None or fact_id == 'base-drill-mechanics':
+                integrity_errors.append('unplanned or reserved observed fact id: ' + repr(fact_id))
+            elif planned[1] != scenario_id or any(fact.get(key) != planned[0][key] for key in ('kind', 'role', 'claimId')):
+                integrity_errors.append('observed fact identity differs from frozen plan: ' + repr(fact_id))
+            if planned is not None and fact_id in facts and fact.get('status') == 'FAIL':
+                facts[fact_id] = fact
+            elif fact_id not in facts:
+                facts[fact_id] = fact
+    for missing in planned_scenarios.keys() - seen_scenarios:
+        integrity_errors.append('planned scenario absent from aggregate: ' + repr(missing))
     facts['base-drill-mechanics'] = dict(id='base-drill-mechanics', kind='base-drill-mechanics',
         status='PASS' if base_passed and resources_passed else 'UNKNOWN',
         authority='actual inherited MeasuredDrill run + every owned launch/resource sample; no soundness approval')
@@ -42,10 +91,10 @@ def gates_report(frozen, scenarios, base_passed, resources_passed):
         for fact_id in frozen.plan['gates'][name]:
             fact = facts.get(fact_id)
             evidence.append(fact if fact is not None else dict(id=fact_id, status='UNKNOWN', reason='required stage/fact was never observed'))
-        status = 'FAIL' if any(fact.get('status') == 'FAIL' for fact in evidence) else (
+        status = 'FAIL' if integrity_errors or any(fact.get('status') == 'FAIL' for fact in evidence) else (
             'PASS' if all(fact.get('status') == 'PASS' for fact in evidence) else 'UNKNOWN')
         result[name] = dict(status=status,
-            requiredKind=needed_kind, evidence=evidence)
+            requiredKind=needed_kind, evidence=evidence, integrityErrors=integrity_errors.copy())
     return result
 
 
@@ -80,11 +129,25 @@ def main():
     marker_sha256 = hashlib.sha256(freeze_bytes).hexdigest()
     exclusive_json(root / 'campaign-once.json', dict(campaignId=frozen.plan['campaignId'], freezeSha256=marker_sha256,
         candidateSha256=frozen.candidate.sha256, root=str(root), actualExecutionStarted=True))
-    drill = make_campaign_drill(base)(frozen, root)
+    once_bytes = (root / 'campaign-once.json').read_bytes()
     result = dict(schemaVersion=1, kind='misaka-rfc-integration-campaign-report-v1', freeze=freeze,
         status='UNKNOWN', actualExecution=True, artifactDirectory=str(root), securitySoundnessMeasured=False,
         releaseApproval=False, baseDrill=dict(status='UNKNOWN'), resourceLimits=limits, resourceLimitsMet=False,
         campaignFreezeSha256=marker_sha256)
+    try:
+        drill = make_campaign_drill(base)(frozen, root)
+    except (Exception, KeyboardInterrupt) as error:
+        result['status'] = 'FAIL'
+        result['fatal'] = 'campaign setup failed: ' + type(error).__name__ + ': ' + str(error)
+        result['baseDrill'].update(status='FAIL', reason=result['fatal'])
+        try:
+            validate_saved_campaign_markers(root, freeze_bytes, once_bytes)
+        except Exception as marker_error:
+            result['fatal'] += '; marker identity failure: ' + repr(marker_error)
+        exclusive_json(args.out, result)
+        print(json.dumps(dict(status=result['status'], campaignId=frozen.plan['campaignId'], report=str(Path(args.out).absolute()),
+            candidateSha256=frozen.candidate.sha256, securitySoundnessMeasured=False)))
+        return 1
     base_passed, resources_passed, fatal = False, False, None
     try:
         frozen.validate()
@@ -100,6 +163,9 @@ def main():
     except CampaignError as error:
         fatal = str(error)
         result['baseDrill'].update(status='FAIL', reason=str(error))
+    except KeyboardInterrupt:
+        fatal = 'KeyboardInterrupt: campaign interrupted'
+        result['baseDrill'].update(status='FAIL', reason=fatal)
     except Exception as error:
         fatal = type(error).__name__ + ': ' + str(error)
         result['baseDrill'].update(status='FAIL', reason=fatal)
@@ -120,11 +186,11 @@ def main():
             result['resourceObservationError'] = repr(error)
         try:
             frozen.validate()
-            require(hashlib.sha256((root / 'campaign-freeze.json').read_bytes()).hexdigest() == marker_sha256, 'freeze marker changed during campaign')
+            validate_saved_campaign_markers(root, freeze_bytes, once_bytes)
         except Exception as error:
             fatal = 'post-run identity failure: ' + repr(error)
         scenarios = drill.scenario_results
-        observed = {row['id'] for row in scenarios}
+        observed = {row.get('id') for row in scenarios if isinstance(row, dict)}
         for planned in frozen.plan['scenarios']:
             if planned['id'] not in observed:
                 scenarios.append(dict(id=planned['id'], kind=planned['kind'], stage=planned['stage'], claims=planned['claims'],

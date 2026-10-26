@@ -66,6 +66,23 @@ fn kernel_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     kernel_config_with(None)
 }
 
+/// An isolated mechanics world with the adopted one-seat policy. The public
+/// route's arming record remains absent, so this bypasses validation exactly
+/// like `kernel_config` and cannot serve as a public activation drill.
+fn kernel_config_panel_one() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (config, _, premine, floats) = kernel_config();
+    let mut params = config.params.clone();
+    params.palw_kernel_route_panel_one_v1 = Some(ForkActivation::new(0));
+    params.sync_palw_g14_gates_v1();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        unreachable!("testnet-12 is ConsensusV2")
+    };
+    let bundle = bundle.clone();
+    assert_eq!(bundle.state.kernel_route_panel_one_from_daa(), Some(0));
+    assert!(params.validate_palw_v2().is_err(), "the public arming record is still absent");
+    (Config::new(params), bundle, premine, floats)
+}
+
 /// **An OPV network** (RFC-0015): [`kernel_config`] with `Params::palw_panel_free_v1` carrying the interim OPV terms (nothing denied),
 /// activating at DAA 1. Like the route's fence it is armed WITHOUT its validation (which refuses every height). OPV eligibility is
 /// DERIVED from chain state; these mechanics worlds predate the derivation, so they name their classes through the processor's
@@ -948,6 +965,29 @@ async fn g14_kernel_route_a_covered_lie_is_convicted_by_an_outsider_through_the_
     // A second node replaying the chain reaches the same roots, rows and deltas.
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
+}
+
+/// The one-seat policy is consumed by the native draw and receipt tally, not
+/// only by the Params helper. The outsider still reaches the public court.
+#[tokio::test]
+async fn g14_kernel_route_panel_one_assignment_and_outsider_conviction() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::on(Net::over_cfg(kernel_config_panel_one(), TestConsensus::new)).await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let state = w.net.chain.tip_state().1;
+    let assignment = state.kernel_route().and_then(|r| r.assignment_of(&lie.id)).expect("the native draw wrote an assignment");
+    assert_eq!(assignment.seats.len(), 1);
+    assert_eq!(assignment.quorum, 1);
+    let seats = w.seats(&lie.id);
+    assert_eq!(seats.len(), 1);
+    assert!(!seats.contains(&0), "producer cannot be its own seat");
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let da = lie.published(&w.fx, &[]);
+    let proof = w.prosecution(&lie.id, &da, 0x5A);
+    w.proof(outsider, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "the outsider convicts despite the one-seat pass");
 }
 
 /// **A covered lie after Final, inside the liability horizon, is still convicted** — the producer was paid its (INTERIM) reward at

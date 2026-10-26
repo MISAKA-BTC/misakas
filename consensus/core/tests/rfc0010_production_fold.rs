@@ -1926,6 +1926,11 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
     v.step_at(terms.source.final_by + policy.settlement_depth_d, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     let route = v.c.s.kernel_route().unwrap();
     let (contract, sources, promises) = route.paid_beacon_material_v5(&terms.source.context).unwrap().unwrap();
+    let owned = route.rfc07_normal_paid_material_owned_v5(&terms.source.context).unwrap().unwrap();
+    let (owned_contract, owned_sources, owned_promises) = &*owned;
+    assert_eq!(owned_contract, &contract, "typed V5 contract differs from the accepted native source path");
+    assert_eq!(owned_sources, &sources, "typed V5 source inventory differs from the accepted native source path");
+    assert_eq!(owned_promises, &promises, "typed V5 promise inventory differs from the accepted native source path");
     let context = route.beacon_source_target_v4(&terms.source.context).unwrap().context;
     // User decision 2026-10-18 (ADR-0185 note): the Panel v5 beacon reads its opted-in sources by seal-reveal — the commitments
     // sealed after the target, opened after the seal window; no source need be Final. The chain's own history reads the same.

@@ -8,6 +8,11 @@ use crate::palw_native_resource_v1::{
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+// This is a synthetic logical ceiling, not a physical allocation or measured
+// capacity. It must admit the fixture's preexisting conservative reservations;
+// the callback then occupies precisely the remaining quota after first reads.
+const LOGICAL_TEST_LIMIT: u64 = 1 << 60;
+
 fn native(b: &mut TransitionBuilder<'_>, signer: &PalwBondKeyV2, o: &PaidClaimObjectV2) -> Result<(), PalwStateV2Error> {
     super::super::super::palw_claim_challenge_fold_v2::apply_paid_claim_v2(b, &ctx(6, 6, 6), signer, o)
 }
@@ -43,18 +48,11 @@ fn receipt(a: &PalwPaidClaimAuthorityV2, lock: &PalwPaidClaimLockV2, seat: &Palw
         message_root: [0; 64],
     }
 }
-// Declared logical capacity of the isolated child. The earlier 512 MiB fixture
-// failed in the FIRST native reads (logical capacity refusal before the hook,
-// see authority-quota-fixture-runtime.json): that is a fixture error, not RED.
-// A wide logical ceiling lets every base read pass; the hook then makes an
-// independent owner occupy the real remaining quota, so only the second read
-// can observe Resource. Logical accounting only: no physical allocation.
-const CHILD_LOGICAL_LIMIT: u64 = 1 << 40;
 fn occupy_remaining() -> Option<NativeDemandLeaseV1> {
     // Search by real admission, dropping every probe. No payload allocation is
     // simulated; the final lease is a real logical owner until the call ends.
     let mut low = 0;
-    let mut high = CHILD_LOGICAL_LIMIT;
+    let mut high = LOGICAL_TEST_LIMIT;
     while low < high {
         let mid = low + (high - low + 1) / 2;
         match reserve_native_requests_v1(mid) {
@@ -101,7 +99,8 @@ fn paid_check_authority_native_resource_after_first_reads_keeps_receipt_atomic()
     let object = PaidClaimObjectV2::Receipt { receipt: receipt(&a, &lock, &seat) };
     let root = b.state.state_root();
     let journal_len = b.entries.len();
-    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: CHILD_LOGICAL_LIMIT, database_bytes: CHILD_LOGICAL_LIMIT }));
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: LOGICAL_TEST_LIMIT, database_bytes: LOGICAL_TEST_LIMIT }));
+    assert_eq!(crate::palw_native_resource_v1::native_declared_logical_limits_v1().unwrap().memory_bytes, LOGICAL_TEST_LIMIT);
     let reached = Rc::new(Cell::new(false));
     let blocker = Rc::new(RefCell::new(None));
     let (seen, held) = (reached.clone(), blocker.clone());
@@ -182,7 +181,8 @@ fn paid_check_authority_fs_second_read_resource_is_not_a_source_approval() {
         PaidClaimObjectV2::StageMessage { enrollment: a.enrollment.id(), round: 0, prior_transcript: [0; 64], message_root: [22; 64] };
     let root = b.state.state_root();
     let journal_len = b.entries.len();
-    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: CHILD_LOGICAL_LIMIT, database_bytes: CHILD_LOGICAL_LIMIT }));
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: LOGICAL_TEST_LIMIT, database_bytes: LOGICAL_TEST_LIMIT }));
+    assert_eq!(crate::palw_native_resource_v1::native_declared_logical_limits_v1().unwrap().memory_bytes, LOGICAL_TEST_LIMIT);
     let reached = Rc::new(Cell::new(false));
     let blocker = Rc::new(RefCell::new(None));
     let (seen, held) = (reached.clone(), blocker.clone());
@@ -224,4 +224,22 @@ fn paid_check_authority_present_corruption_and_true_absence_are_decode_errors() 
         route.paid_claim_check_authority_v2(&a.context.id(), 6).is_ok(),
         "String SDK compatibility wrapper keeps the same positive authority"
     );
+}
+
+#[test]
+fn paid_normal_source_initial_authority_keeps_primary_identity_and_corruption_class() {
+    use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
+    let (mut state, _, _, a) = setup();
+    let route = state.kernel_route.as_mut().unwrap();
+    route.aux.insert(
+        (crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, a.context.id().to_vec()),
+        borsh::to_vec(&a.source_target).unwrap(),
+    );
+    let source = route.rfc07_normal_source_authority_checked_v3(&a.context.id()).unwrap();
+    assert_eq!(source.authority(), &a);
+    assert_eq!(source.context(), &a.context);
+    assert_eq!(source.target(), &a.source_target);
+    drop(source);
+    route.aux.insert((PAID_CLAIM_ENROLLMENTS_V2, a.context.id().to_vec()), vec![255]);
+    assert!(matches!(route.rfc07_normal_source_authority_checked_v3(&a.context.id()), Err(E::Decode(_))));
 }
