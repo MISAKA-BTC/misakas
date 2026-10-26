@@ -31,7 +31,7 @@ The [full batch](raw/native-capacity-batch-2026-10-26/summary.json) completed **
 
 Load ranged **10.351–19.690**. The following wall times are median / nearest-rank p95 in milliseconds over 20 fresh processes per condition. They include native carrier processing and local blocks; they are not a CPU-only measurement or a population tail bound.
 
-| Positions | Outstanding claims | Filing round 0 ms | Filing round 1 ms | Outsider local check ms | Outsider filing ms | Median full-process RSS |
+| Job token total (trace positions = total − 1) | Outstanding claims | Filing round 0 ms | Filing round 1 ms | Outsider local check ms | Outsider filing ms | Median full-process RSS |
 |---|---:|---|---|---|---|---:|
 | 6 | 1 | 4.988 / 5.855 | 4.641 / 5.264 | 1.464 / 1.482 | 5.103 / 5.874 | 56,942,592 B |
 | 6 | 2 | 6.707 / 7.315 | 6.228 / 7.482 | 1.469 / 1.501 | 5.436 / 5.826 | 59,097,088 B |
@@ -45,3 +45,7 @@ Load ranged **10.351–19.690**. The following wall times are median / nearest-r
 The non-monotone filing medians (for example 64 positions at one versus two claims) coincide with changing machine load and cannot establish a production scaling law. Across both rounds the 1/2/4-claim cases charge all filings; every 6-claim case charges four and drops two without a dismissal fee. The reserve is available to any eligible prosecutor, including the junk coalition; an outsider's later successful filing does not establish priority under continuous same-block saturation.
 
 This completes the reduced-budget fixture curve, **not M-CAP's arming requirement**. The production-cap node, minimum hardware, worst admissible proof, full TIR session reservations, continuous refill/service and restart/reorg/pruned replay remain unmeasured. Results after the post-commit anchor change will be kept under their own source identity.
+
+### Exact meaning of the profile label
+
+The raw `positions` field in these two batches is **prompt tokens plus requested generated tokens**, not the evidence trace length. Source `9c93b6a13` uses a three-token prompt and `max_new_tokens = positions - 3`; `produce` feeds all generated tokens except the final output back into the trace. Thus the 6/64 conditions exercise **5/63 trace positions**. The actual class limit is 64 trace positions, so a maximum legal trace requires a 65-token total with 62 generated tokens. [Pinned source derivation](profile-interpretation-2026-10-26.json) retains the relevant blobs and lines. No completed batch here reaches that exact maximum, and the planted fault at trace position 1 also leaves worst-position localization unmeasured. Raw labels and records are preserved without alteration.
