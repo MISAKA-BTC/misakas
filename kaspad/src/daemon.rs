@@ -2200,6 +2200,8 @@ Do you confirm? (y/n)";
                                 .map(|s| s.parse().unwrap_or_else(|e| panic!("--palw-drill-kernel-inject={s}: {e}")))
                                 .collect(),
                             flood: args.palw_drill_kernel_flood,
+                            // Typed-missing in production (`None`): the producer's admission preflight is a no-op, as the fold's is.
+                            admission_schedule: kaspa_consensus_core::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1,
                         },
                         drill_answer_only: {
                             let drill = palw_private_drill;

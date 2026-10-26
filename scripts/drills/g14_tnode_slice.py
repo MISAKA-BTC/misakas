@@ -97,6 +97,34 @@ def knode_args(role, model, work):
     return ['--palw-kernel-model=%s' % model] + [f.format(work=work) for f in KNODE_ROLE_ARGS[role]]
 
 
+# Lane KNODE: per-T orchestration over the fence drill's nodes — P (card 0, hosts the Panel=1 seat), Q (card 1), F (fresh, UNBONDED:
+# it can take no bonded role). The seat, the outsider filer and the Gate C verifier run on every bonded node holding the model.
+KNODE_T_PLAN = {
+    'T01': {'P': ['producer'], 'Q': ['poster', 'wrong-challenger']},
+    'T02': {'P': ['silent'], 'Q': ['poster', 'outsider-filer']},
+    'T03': {'P': ['producer'], 'Q': ['poster', 'forger']},
+    'T04': {'P': ['producer'], 'Q': ['poster', 'flooder']},
+    'T05': {'P': ['liar'], 'Q': ['poster', 'outsider-filer']},
+    'T08': {'P': ['producer'], 'Q': ['poster', 'relay']},
+    'T10': {'P': ['liar'], 'Q': ['poster']},
+    'T11': {'P': ['producer'], 'Q': ['poster']},
+    'T13': {'P': ['producer'], 'Q': ['poster']},
+}
+
+
+def knode_role_flags(t, model, work):
+    """{node: kaspad flags} for T item `t` (pure; the fence drill's `role_flags`). Unknown T: no roles."""
+    out = {}
+    for node, roles in KNODE_T_PLAN.get(t, {}).items():
+        flags = []
+        for role in roles:
+            for f in knode_args(role, model, work):
+                if f not in flags:
+                    flags.append(f)
+        out[node] = flags
+    return out
+
+
 # Arming requirements this lane can speak to: (family, fence, index, T rows it rests on, waiver text or None).
 REQUIREMENTS = [
     ('kernel-route', 'palw_probabilistic_constraints_v1', 1, ['T01', 'T03', 'T05', 'T14'], None),
@@ -226,6 +254,7 @@ def main():
     ap.add_argument('--knode-role-args', metavar='ROLE', choices=sorted(KNODE_ROLE_ARGS),
                     help='print the kaspad flags of one KNODE role (with --knode-model, --work) and exit')
     ap.add_argument('--knode-model', default='<model.palwkm>')
+    ap.add_argument('--knode-t', choices=sorted(KNODE_T_PLAN), help='run the fence drill with this T item\'s KNODE roles per node')
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument('--knode-role-args', choices=sorted(KNODE_ROLE_ARGS))
     pre.add_argument('--knode-model', default='<model.palwkm>')
@@ -254,7 +283,8 @@ def main():
                                 out=str(out / 'fence-drill.json'), seats=a.seats, pre_claims=2, post_claims=2, partition_lead=6,
                                 partition_tail=6, restart_after=10, extra_node_flag=[], crossing='kernel-slice',
                                 private_node=a.private_node, kaspad=a.kaspad, cli=a.cli, port_base=a.port_base,
-                                stall_s=a.stall_s, step_timeout=a.step_timeout)
+                                stall_s=a.stall_s, step_timeout=a.step_timeout,
+                                role_flags=knode_role_flags(a.knode_t, a.knode_model, a.work) if a.knode_t else {})
         import threading
         stop, rss = threading.Event(), {}
         th = threading.Thread(target=rss_watchdog, args=(str(Path(a.work).resolve()), stop, rss), daemon=True)

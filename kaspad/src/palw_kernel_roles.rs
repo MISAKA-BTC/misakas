@@ -99,6 +99,9 @@ pub struct PalwKernelRolesConfigV1 {
     /// TEST ONLY: validated at start-up to need a drill salt.
     pub inject: Vec<PalwKernelInjectV1>,
     pub flood: u32,
+    /// The court admission schedule the producer preflights against: the build's
+    /// `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1` (typed-missing `None` in production); tests set the TEST-ONLY estimate.
+    pub admission_schedule: Option<kaspa_consensus_core::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1>,
 }
 
 impl PalwKernelRolesConfigV1 {
@@ -294,6 +297,52 @@ pub(crate) fn palw_kernel_cert_duties_v1(route: &PalwKernelRouteStateV1, ledger:
         .collect()
 }
 
+/// **Lane KNODE/F02b: the producer's local preflight of the fold's atomic paid court admission** (`kernel_court_admissions_v1`,
+/// which reserves every branch's packets in the court service book and their capital — aux table 150 past
+/// `palw_kernel_route_panel_one_v1` — all-or-nothing when the reveal folds, and drops the object otherwise).
+///
+/// `Ok(None)`: no admission is in force (the schedule is typed-missing — `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1` is `None` on
+/// every build — or the slice fence is not in force at `committed_daa`): the fold admits nothing either. `Ok(Some(capital))`: the
+/// capital the fold will reserve. `Err`: a LOCAL REFUSAL — the producer neither seals nor reveals. The signer set is the producer and
+/// `seat_count` placeholder seats (the packet count depends only on its size; the fold draws the real seats). The live book's
+/// capacity is NOT readable through the node's API, so it is checked here against an empty book only; a fold-side capacity refusal
+/// is seen as a reveal that never commits (logged by the tick).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn palw_kernel_admission_preflight_v1(
+    schedule: Option<&kaspa_consensus_core::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1>,
+    panel_one_from_daa: Option<u64>,
+    claim: &Digest,
+    job: &KernelJobV1,
+    committed_daa: u64,
+    producer: PalwBondKeyV2,
+    seat_count: usize,
+    free_collateral: u128,
+) -> Result<Option<u128>, String> {
+    let Some(schedule) = schedule else { return Ok(None) };
+    if panel_one_from_daa.is_none_or(|from| committed_daa < from) {
+        return Ok(None);
+    }
+    let mut signers = std::collections::BTreeSet::new();
+    signers.insert(producer);
+    for i in 0..seat_count {
+        // Placeholder seats (never the producer): only the set's size matters to the packet count.
+        signers.insert(PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(0x5EA7), i as u32)));
+    }
+    kaspa_consensus_core::palw_kernel_court_admission_v1::kernel_court_admission_candidate_v1(
+        None,
+        Hash64::from_bytes(*claim),
+        Hash64::from_bytes(job.id()),
+        Hash64::from_bytes(job.class_binding_id),
+        committed_daa,
+        &signers,
+        producer,
+        free_collateral,
+        schedule,
+    )
+    .map(|a| Some(a.capital))
+    .map_err(|why| format!("the atomic court admission would be refused: {why:?}"))
+}
+
 /// A relay file's contents: `(claim, stage, position, response bytes)`.
 pub(crate) type PalwKernelRelayItemV1 = (Digest, u8, u32, Vec<u8>);
 
@@ -406,6 +455,23 @@ impl PalwPanelService {
 
         // -- producer --
         if cfg.producer {
+            // The producer's free collateral (collateral less everything committed), for the admission preflight.
+            let base_class = match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
+                _ => None,
+            };
+            let free_collateral: Option<u128> = match base_class {
+                Some(base) => session
+                    .clone()
+                    .spawn_blocking(move |c| c.palw_producer_facts_v2(base, Some(bond_key.0)))
+                    .await
+                    .and_then(|f| f.bond)
+                    .map(|b| (b.collateral as u128).saturating_sub(b.committed)),
+                None => None,
+            };
+            if free_collateral.is_none() && cfg.admission_schedule.is_some() {
+                warn!("[{PALW_PANEL}] kernel producer: this bond's facts are unreadable — the admission preflight counts 0 free collateral");
+            }
             let lie = cfg.injects(PalwKernelInjectV1::Lie);
             for (job_id, job) in &ledger.jobs {
                 if ledger.job_claims.contains_key(job_id) || ledger.claims.values().any(|c| c.job_id == *job_id && c.producer == me) {
@@ -419,6 +485,25 @@ impl PalwPanelService {
                         continue;
                     }
                 };
+                // F02b: the fold admits the original atomically (packets + capital, aux 150) or drops it — refuse locally first.
+                let committed_daa = current_daa.saturating_add(2);
+                let panel_one = params
+                    .palw_kernel_route_panel_one_v1
+                    .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
+                    .map(|f| f.daa_score());
+                let (seats, _) = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_seats_and_quorum_v1(panel_one, committed_daa);
+                let free = free_collateral.unwrap_or(0);
+                match palw_kernel_admission_preflight_v1(cfg.admission_schedule.as_ref(), panel_one, &id, job, committed_daa, bond_key, seats, free) {
+                    Ok(capital) => {
+                        if let Some(capital) = capital {
+                            info!("[{PALW_PANEL}] kernel producer: job {}: court admission preflight passes (capital {capital} of free {free})", Hash64::from_bytes(*job_id));
+                        }
+                    }
+                    Err(why) => {
+                        warn!("[{PALW_PANEL}] kernel producer: job {}: LOCAL REFUSAL, nothing sealed or revealed — {why}", Hash64::from_bytes(*job_id));
+                        continue;
+                    }
+                }
                 let Some(salt_sig) = self.sign(&id, PALW_KERNEL_CLAIM_SALT_CONTEXT_V1) else { continue };
                 let salt = misaka_palw_kernel::hash::id(b"misaka-palw/kaspad/kernel-producer/salt/v1", &salt_sig);
                 let Some((seal, reveal)) = palw_kernel_seal_and_reveal_v1(ledger, me, &reveal, salt) else { continue };
@@ -668,6 +753,31 @@ mod tests {
         assert!(palw_kernel_post_job_parse_v1("3,17:0").is_err());
         assert!(palw_kernel_post_job_parse_v1("3,x:2").is_err());
         assert!(PalwKernelRolesConfigV1::default().inject.is_empty(), "nothing injected by default");
+    }
+
+    #[test]
+    fn the_admission_preflight_is_typed_missing_in_production_and_refuses_short_capital_with_test_values() {
+        use kaspa_consensus_core::palw_kernel_court_admission_v1::{KernelCourtAdmissionScheduleV1, PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1};
+        let job = KernelJobV1 { class_binding_id: [1; 64], prompt: vec![3, 17, 9], max_new_tokens: 3, decode: DecodeRuleV1::Greedy, nonce: [2; 64] };
+        let producer = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(7), 0));
+        let claim = [9u8; 64];
+        assert_eq!(
+            palw_kernel_admission_preflight_v1(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.as_ref(), Some(0), &claim, &job, 100, producer, 1, 0),
+            Ok(None),
+            "production: typed-missing, no admission"
+        );
+        let test = KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1();
+        assert_eq!(palw_kernel_admission_preflight_v1(Some(&test), None, &claim, &job, 100, producer, 1, 0), Ok(None), "below the slice fence");
+        assert_eq!(palw_kernel_admission_preflight_v1(Some(&test), Some(200), &claim, &job, 100, producer, 1, 0), Ok(None));
+        let refused = palw_kernel_admission_preflight_v1(Some(&test), Some(0), &claim, &job, 100, producer, 1, 0).unwrap_err();
+        assert!(refused.contains("InsufficientCapital"), "{refused}");
+        let capital = palw_kernel_admission_preflight_v1(Some(&test), Some(0), &claim, &job, 100, producer, 1, u128::MAX / 4)
+            .expect("enough free collateral")
+            .expect("in force");
+        assert!(capital > 0 && capital % u128::from(test.capital_per_packet_sompi) == 0);
+        let short = palw_kernel_admission_preflight_v1(Some(&test), Some(0), &claim, &job, 100, producer, 1, capital - 1).unwrap_err();
+        assert!(short.contains("InsufficientCapital"), "one sompi short is a local refusal: {short}");
+        assert!(palw_kernel_admission_preflight_v1(Some(&test), Some(0), &claim, &job, 100, producer, 1, capital).is_ok(), "exactly enough");
     }
 
     #[test]

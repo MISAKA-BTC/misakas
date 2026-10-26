@@ -322,8 +322,10 @@ def run(args):  # pragma: no cover - drives real processes
         obs['identity'].update({'profileStart': p0, 'genesisMatchesKeyring': G.norm(p0['genesis']) == G.norm(d.keyring['genesis_hash'])})
         roles = roles_for(plan, args.seats)
         extra = crossing_flags(args.crossing, args.at) + list(args.extra_node_flag)
-        P = d.add('P', 0, d.producer_flags(0, host_panel=True, honest=True) + extra)
-        Q = d.add('Q', 1, d.producer_flags(roles['Q']['card'], honest=True) + extra)
+        # Lane KNODE: per-node kernel-route role flags (g14_tnode_slice.knode_role_flags), {node: [flags]}; empty by default.
+        role_flags = dict(getattr(args, 'role_flags', None) or {})
+        P = d.add('P', 0, d.producer_flags(0, host_panel=True, honest=True) + extra + list(role_flags.get('P', [])))
+        Q = d.add('Q', 1, d.producer_flags(roles['Q']['card'], honest=True) + extra + list(role_flags.get('Q', [])))
         P.start(); Q.start()
         d.wait_rpc(P); d.wait_rpc(Q); d.peer_all()
         bonds = [d.seat(0)['bond_outpoint'], d.seat(roles['Q']['card'])['bond_outpoint']]
@@ -376,7 +378,7 @@ def run(args):  # pragma: no cover - drives real processes
         obs['claims'] = all_claims(bonds)
 
         # F7: a fresh bondless relay syncs from genesis across H.
-        F = d.add('F', 9, [], bonded=False)
+        F = d.add('F', 9, list(role_flags.get('F', [])), bonded=False)
         if F.appdir.exists():
             shutil.rmtree(F.appdir)
         F.start(); d.wait_rpc(F); d.peer_all()
