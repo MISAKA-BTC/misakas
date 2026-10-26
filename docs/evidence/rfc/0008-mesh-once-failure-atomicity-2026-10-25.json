@@ -1,0 +1,126 @@
+{
+  "build": {
+    "head": "a4973592d722e3020b994cc381730ef0570081e6",
+    "files": [
+      {
+        "path": "Cargo.lock",
+        "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+      },
+      {
+        "path": "Cargo.toml",
+        "sha256": "288fab6f6c4aff360a22f53e4f75bae60027a49afa1ef74326cc43d56de566c9"
+      },
+      {
+        "path": "components/consensusmanager/Cargo.toml",
+        "sha256": "a93633ac943f962bb17b35afc6b8d16bfd855b151ee3ca5f49663d69ce0f23ac"
+      },
+      {
+        "path": "components/consensusmanager/src/session.rs",
+        "sha256": "c0d76e3785f2fedf714d6015fbcaeb52d8d100c0b6698b2c60fb9af0d3b6ed51"
+      },
+      {
+        "path": "consensus/Cargo.toml",
+        "sha256": "623586e150fed14d9df4c55465be33374427a1730d4f763c4289316bc34b9c83"
+      },
+      {
+        "path": "consensus/core/Cargo.toml",
+        "sha256": "ba7e84c40620b97d32e323613fcf22623df3a1f80b60ef89cbcac4c622968e80"
+      },
+      {
+        "path": "consensus/core/src/config/params/full_activation_v1.rs",
+        "sha256": "982293432351e14d12b5b749c36d3e45152eb9558bb66d34968902de100e431f"
+      },
+      {
+        "path": "consensus/core/src/palw_held_da_auth_workspace_tests_v2.rs",
+        "sha256": "2ecc20674fab5a61da7d9a1455ec5b3606554ad292fed2f3d69d3d310b8046ad"
+      },
+      {
+        "path": "consensus/core/src/palw_held_da_auth_workspace_v2.rs",
+        "sha256": "a9132c1fca91841f02b84196c7610d6957644339a218e0a21af478686b9c0570"
+      },
+      {
+        "path": "consensus/core/src/palw_held_da_v1.rs",
+        "sha256": "ce0b739e72023cd1538df5e496f6d2b556954dff53cd6c87d0e73fb3c34d48dc"
+      },
+      {
+        "path": "consensus/core/src/palw_paid_check_authority_checked_v2.rs",
+        "sha256": "06a2ee14409999e2f5ab0239d5732753a618638f1bc825743c16d7cdac7edc1b"
+      },
+      {
+        "path": "consensus/core/src/palw_state_chunk_map.rs",
+        "sha256": "2406ee0dec60856731af51a9cbe1c9366ea73db603ad512e6625aebab750ba7b"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests/mesh_once_atomicity_v1.rs",
+        "sha256": "02bf67412c32158288feef6ee856761c1ef5cbad943841c4e42435f0d8f0cd77"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests/paid_check_authority_resource_v2.rs",
+        "sha256": "a500e9cd9deb1a1f3344ed964b315d4fc779a1932690b71d9ea2fb2123338551"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests/settlement_once_v1.rs",
+        "sha256": "ba0a798b0e714bda8a5b07a539724dcf3aea80d7178c6bf9bba3683683441461"
+      },
+      {
+        "path": "consensus/core/src/palw_step.rs",
+        "sha256": "e5d803b93bf17c9a66febd325528f5538c94935bdedd858a3baf8316e086c0ca"
+      },
+      {
+        "path": "kaspad/Cargo.toml",
+        "sha256": "e7a9c98ef2c74e09be69ac66bf1cbf20f3bc7d644281dba5cad8071438c5a78f"
+      },
+      {
+        "path": "kaspad/src/palw_gdn_held_answer_auth_tests_v2.rs",
+        "sha256": "66c2d94cf2d878076a4d941c624323cdd8d06aeb81a3266b199ffb17b96c9c67"
+      },
+      {
+        "path": "kaspad/src/palw_gdn_held_filer.rs",
+        "sha256": "79c6ffe35717786ac8b8d66dce563f7e531c9648a93c5bc8b37d11835affe4aa"
+      },
+      {
+        "path": "kaspad/src/palw_gdn_held_filer_tests.rs",
+        "sha256": "128bf7d92ec722b7f684b6dec98ca0f66b64b30a50d29ca0d8ba82dc6c493451"
+      },
+      {
+        "path": "misaka/evm/core/Cargo.toml",
+        "sha256": "44bd39f36d62f54c0b8e3b60f54bd0412d7e8023b8b803ca93aa89717ac49db2"
+      },
+      {
+        "path": "misaka/palw/remote/Cargo.toml",
+        "sha256": "cc386ed1719a7bbe67012b452440b3c55242f63a222fe3f7180ded3321442da1"
+      },
+      {
+        "path": "misaka/palw/sdk/Cargo.toml",
+        "sha256": "5db4c9200ef3695cd613e48ddd05e6660f55cdc19e7ffd1d1d876cab23d3ea45"
+      },
+      {
+        "path": "rpc/eth/Cargo.toml",
+        "sha256": "c98fb8bedd276e0d58312ccc7358ac6a63087bf57efdc8cad1953d3f98900daa"
+      }
+    ],
+    "build_result": "PASS",
+    "scope": "core-only diagnostic RED for actual mesh pre-object overflow, before production fix; not native exploit or coinbase acceptance",
+    "exit_code": 0,
+    "wall_seconds": 558.84,
+    "identity_matches": true
+  },
+  "binary": {
+    "path": "/tmp/misaka-rfc-mesh-once-diagnostic-red-core-20261025",
+    "sha256": "64e16662c437e920652915b413fca81f26a2bc1f32b66b11ea2598f8c413e07c"
+  },
+  "command": [
+    "/tmp/misaka-rfc-mesh-once-diagnostic-red-core-20261025",
+    "palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 101,
+  "wall_seconds": 2.77,
+  "log": "/tmp/misaka-rfc-mesh-once-diagnostic-red-runtime-20261025.log",
+  "runtime_log": "\nrunning 2 tests\ntest palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker ... MESH_ONCE_OVERFLOW unexpected_accepted markers=1 reserve=100 queue=18446744073709551615 audit_retained=false\n\nthread 'palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker' (4967821) panicked at consensus/core/src/palw_state_v2/tests/mesh_once_atomicity_v1.rs:81:5:\nactual result: Ok(())\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: kaspa_consensus_core::palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker\n   3: kaspa_consensus_core::palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker::{{closure}}\n   4: core::ops::function::FnOnce::call_once\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nFAILED\ntest palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_dormant_actual_preparation_keeps_historical_overflow_skip ... ok\n\nfailures:\n\nfailures:\n    palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 5218 filtered out; finished in 0.23s\n\n",
+  "scope": "actual Core pre-object fold with artificial queue overflow; not signed native history or actual coinbase",
+  "green": "PENDING",
+  "green_evidence": "0006-0008-gdn-auth-mesh-once-verification-2026-10-26.json",
+  "green_status": "2 new parents and 23 once controls including those two PASS; artificial parent / actual coinbase limits unchanged"
+}

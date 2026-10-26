@@ -215,7 +215,10 @@ pub fn palw_hybrid_state_chunk_map_name_v3() -> String {
 
 /// `state_chunk_map_id` for a hybrid class whose attention half is [v3](tiled_kv_state_chunk_map_id_v3).
 pub fn hybrid_state_chunk_map_id_v3() -> Hash64 {
-    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v3())
+    crate::palw_step::state_chunk_map_id_parts_v1(&[
+        b"palw-hybrid-state/attn=", PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V3.as_bytes(),
+        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(), b"/v3",
+    ])
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -253,7 +256,10 @@ pub fn palw_hybrid_state_chunk_map_name_v4() -> String {
 
 /// `state_chunk_map_id` for a hybrid class under the held map.
 pub fn hybrid_state_chunk_map_id_v4() -> Hash64 {
-    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v4())
+    crate::palw_step::state_chunk_map_id_parts_v1(&[
+        b"palw-hybrid-state/attn=", PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4.as_bytes(),
+        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(), b"/v4",
+    ])
 }
 
 /// **P0a: the held composition whose recurrence half spells the key-head count (v5)** — v4's
@@ -271,7 +277,10 @@ pub fn palw_hybrid_state_chunk_map_name_v5() -> String {
 
 /// `state_chunk_map_id` for a version-3 hybrid class under the held map (P0a).
 pub fn hybrid_state_chunk_map_id_v5() -> Hash64 {
-    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v5())
+    crate::palw_step::state_chunk_map_id_parts_v1(&[
+        b"palw-hybrid-state/attn=", PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4.as_bytes(),
+        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V3.as_bytes(), b"/v5",
+    ])
 }
 
 /// **Is this map the held one?** The one dispatch every reader of a state root goes through, for
@@ -361,6 +370,14 @@ pub fn palw_class_step_ladder_v1(network_ladder: u64, profile: &PalwShapeProfile
     if palw_profile_is_held_v4(profile) { network_ladder.max(PALW_HELD_STEP_LADDER_V1) } else { network_ladder }
 }
 
+/// The actual layer order used by held native layout constructors and their
+/// allocation preflight; this does not construct or validate a layout.
+pub(crate) fn held_state_layer_indices_v4(
+    profile: &PalwShapeProfileV3, kind: PalwLayerKindV1,
+) -> impl Iterator<Item = u16> + '_ {
+    (0..profile.layer_count).filter(move |&layer| profile.layer_kind(layer) == kind)
+}
+
 /// **The v4 geometry of the attention cache** — [`tiled_kv_state_geometry_v3`]'s arithmetic with
 /// the chunk-count cap replaced by the depth cap. Built from the profile rather than from v1/v2,
 /// because those two refuse a chunk count past `PALW_STEP_LEG_MAX_STATE_CHUNKS` before v4 could
@@ -382,7 +399,7 @@ pub fn tiled_kv_state_geometry_v4(
     if row_bytes.saturating_mul(PALW_ATTN_HISTORY_TILE_V4 as u64) > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 {
         return Err(PalwStateChunkMapError::RowExceedsChunk { row_bytes, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
     }
-    let attn_layers: Vec<u16> = (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::Attention).collect();
+    let attn_layers: Vec<u16> = held_state_layer_indices_v4(profile, PalwLayerKindV1::Attention).collect();
     if attn_layers.is_empty() {
         return Err(PalwStateChunkMapError::NoAttentionLayers);
     }
@@ -519,7 +536,7 @@ pub fn palw_state_layout_v4(profile: &PalwShapeProfileV3, positions: u32) -> Res
             conv_head_bytes: 0,
         });
     }
-    let gdn_layers: Vec<u16> = (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet).collect();
+    let gdn_layers: Vec<u16> = held_state_layer_indices_v4(profile, PalwLayerKindV1::GatedDeltaNet).collect();
     let delta_head_bytes = gdn_delta_head_slice_bytes_v1(profile)
         .ok_or(PalwStateChunkMapError::ZeroRowWidth { kv_heads: profile.gdn_heads, head_dim: profile.gdn_head_k_dim })?;
     let conv_head_bytes = gdn_conv_head_slice_bytes_v2(profile)
@@ -1116,7 +1133,10 @@ pub fn palw_hybrid_state_chunk_map_name_v1() -> String {
 
 /// `state_chunk_map_id` for a class with both kinds of layer.
 pub fn hybrid_state_chunk_map_id_v1() -> Hash64 {
-    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v1())
+    crate::palw_step::state_chunk_map_id_parts_v1(&[
+        b"palw-hybrid-state/attn=", PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
+        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V1.as_bytes(), b"/v1",
+    ])
 }
 
 /// **The same recurrence state, enumerated so ONE HEAD's window is one opening (v2).**
@@ -1175,7 +1195,10 @@ pub fn palw_hybrid_state_chunk_map_name_v2() -> String {
 
 /// `state_chunk_map_id` for a hybrid class whose recurrence half is [v2](gdn_state_chunk_map_id_v2).
 pub fn hybrid_state_chunk_map_id_v2() -> Hash64 {
-    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v2())
+    crate::palw_step::state_chunk_map_id_parts_v1(&[
+        b"palw-hybrid-state/attn=", PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
+        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(), b"/v2",
+    ])
 }
 
 // -------------------------------------------------------------------------------------------------

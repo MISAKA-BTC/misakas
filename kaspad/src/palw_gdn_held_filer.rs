@@ -23,7 +23,7 @@
 use kaspa_consensus_core::palw_artifact::{PalwArtifactOpeningV1, PalwProvenOperandsV1};
 use kaspa_consensus_core::palw_held_da_v1::{
     PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldAccusationV1, PalwHeldDisclosureV1, PalwHeldMissingV1,
-    palw_held_da_accusation_message_v1, palw_held_da_check_disclosure_v1,
+    palw_held_da_accusation_message_v1,
 };
 use kaspa_consensus_core::palw_memory_routing_v2::{
     PALW_MEMORY_ROUTING_ACCUSATION_VERSION_V2, PALW_MEMORY_ROUTING_MLDSA87_CONTEXT_V2, PalwMemoryRoutingAccusationV2,
@@ -169,7 +169,8 @@ fn answer_on_chain_v1(
     form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Option<NativeRetainedV1<PalwHeldDisclosureV1>>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
     use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
-    let disclosure = objects.iter().find_map(|object| {
+    use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1;
+    for object in objects {
         let carriage = match object {
             PalwConsensusObjectV2::MaterialDisclosedV2 {
                 claim: c,
@@ -180,13 +181,18 @@ fn answer_on_chain_v1(
             PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } if disclosure.claim == claim.claim && disclosure.missing == *unit => {
                 disclosure.as_ref()
             }
-            _ => return None,
+            _ => continue,
         };
-        palw_held_da_check_disclosure_v1(&claim.execution_root, unit, binding, &carriage.disclosure, max_leaves, form)
-            .ok()
-            .map(|_| &carriage.disclosure)
-    });
-    disclosure.map(NativeRetainedV1::try_from_clone_v1).transpose()
+        let checked = kaspa_consensus_core::palw_held_da_v1::palw_held_da_state_chunk_auth_request_v2(
+            &claim.execution_root, unit, binding, &carriage.disclosure, max_leaves, form,
+        ).and_then(|request| request.check_v2());
+        match checked {
+            Ok(()) => return NativeRetainedV1::try_from_clone_v1(&carriage.disclosure).map(Some),
+            Err(NativeDecodeErrorV1::Decode(_)) => continue,
+            Err(NativeDecodeErrorV1::Resource(capacity)) => return Err(capacity),
+        }
+    }
+    Ok(None)
 }
 
 /// The signing seam: `(message, context) → signature` under the accuser's bond key.

@@ -104,6 +104,10 @@ impl TransitionBuilder<'_> {
             Ok(()) => {}
             // RFC-0006: a local capacity refusal is never "paid nothing" — the transition is refused locally and retried.
             Err(local @ PalwStateV2Error::NativeResource(_)) => return Err(local),
+            // A live once-marker and the value move must commit together. Let
+            // the actual object/block boundary discard this candidate on any
+            // payout failure; only the dormant historical path may skip it.
+            Err(error) if self.params.settlement_once_active_at(now) => return Err(error),
             Err(_) => return Ok(0),
         }
         let reserve = self.state.panel_reserve_sompi() - paid;

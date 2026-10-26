@@ -214,7 +214,11 @@ pub fn transcendental_algorithm_id_v1(descriptor: &str) -> Hash64 {
 /// `state_chunk_map_id`: the identity of the measured checkpoint state chunk geometry
 /// (per-(layer, head) slices; ADR-0030 §3). Opaque until a runtime demonstrates the layout.
 pub fn state_chunk_map_id_v1(map_string: &str) -> Hash64 {
-    keyed64(PALW_STEP_DOMAIN_STATE_CHUNK_MAP, &[map_string.as_bytes()])
+    state_chunk_map_id_parts_v1(&[map_string.as_bytes()])
+}
+/// Identical canonical bytes/domain without a temporary concatenated name.
+pub(crate) fn state_chunk_map_id_parts_v1(parts: &[&[u8]]) -> Hash64 {
+    keyed64(PALW_STEP_DOMAIN_STATE_CHUNK_MAP, parts)
 }
 
 fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {

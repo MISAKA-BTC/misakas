@@ -10,6 +10,9 @@ use crate::palw_settlement_once_v1::*;
 use misaka_palw_kernel::ledger::LedgerEventV1;
 use misaka_palw_kernel::settle::{SettlementInstructionV1, SettlementKindV1};
 
+#[path = "mesh_once_atomicity_v1.rs"]
+mod mesh_once_atomicity_v1;
+
 fn with_route(mut state: PalwChainStateV2) -> PalwChainStateV2 {
     state.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
         crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),

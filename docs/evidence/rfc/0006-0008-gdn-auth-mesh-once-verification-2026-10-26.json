@@ -1,0 +1,448 @@
+{
+  "status": "LOCAL_GREEN_NOT_WHOLE_RFC_ACCEPTANCE",
+  "distinct_parent_tests": 53,
+  "test_names": [
+    "palw_context_ladder::tests::a_class_with_no_state_chunk_map_gets_no_anchored_price: test",
+    "palw_gdn_held_filer::tests::answer_auth_tests::gdn_answer_auth_actual_late_step_refuses_at_auth_before_copy_or_default_and_retries: test",
+    "palw_gdn_held_filer::tests::answer_auth_tests::gdn_answer_auth_reader_preserves_invalid_skip_and_raw_disclosure_bytes: test",
+    "palw_gdn_held_filer::tests::answer_owner_tests::actual_held_answer_capacity_refusal_retries_instead_of_default_and_owns_case_bytes: test",
+    "palw_gdn_held_filer::tests::answer_owner_tests::complete_answer_batch_and_slot_reservations_precede_allocation_and_survive_copy_lifetime: test",
+    "palw_gdn_held_filer::tests::answer_owner_tests::real_held_disclosure_reader_skips_foreign_and_invalid_units_and_retains_authenticated_answer: test",
+    "palw_held_da_v1::auth_workspace::tests::held_chunk_auth_workspace_preserves_raw_identity_and_semantic_order: test",
+    "palw_held_da_v1::auth_workspace::tests::held_chunk_auth_workspace_quota_is_before_raw_validator_and_releases_scalar_scratch: test",
+    "palw_held_da_v1::tests::a_prompt_tile_is_accusable_only_where_the_claims_class_commits_a_tile_tree: test",
+    "palw_held_da_v1::tests::each_unit_is_answered_by_itself_and_its_path: test",
+    "palw_held_da_v1::tests::the_sentinel_is_no_event_an_accusation_can_name: test",
+    "palw_settlement_once_v1::tests::a_row_validates_only_under_its_own_key_and_within_its_debit: test",
+    "palw_settlement_once_v1::tests::every_shipped_preset_keeps_the_registry_dormant_and_arming_is_refused: test",
+    "palw_settlement_once_v1::tests::obligation_ids_are_consumer_independent_and_separate_every_coordinate: test",
+    "palw_state_chunk_map::hybrid_composition_tests::the_composition_covers_every_element_exactly_once: test",
+    "palw_state_chunk_map::hybrid_composition_tests::the_hybrid_sections_are_ordered_by_the_maps_own_name: test",
+    "palw_state_chunk_map::hybrid_composition_tests::the_recurrence_chunks_are_what_the_anchor_is_priced_at: test",
+    "palw_state_chunk_map::tests::a_float_lane_profile_is_refused_by_name: test",
+    "palw_state_chunk_map::tests::a_profile_with_no_attention_layer_has_no_state_to_chunk: test",
+    "palw_state_chunk_map::tests::a_row_reads_only_out_of_a_canonically_sized_chunk: test",
+    "palw_state_chunk_map::tests::a_row_wider_than_a_chunk_is_refused: test",
+    "palw_state_chunk_map::tests::a_zero_length_state_is_refused_rather_than_mapped_empty: test",
+    "palw_state_chunk_map::tests::every_state_chunk_map_has_its_own_identity: test",
+    "palw_state_chunk_map::tests::one_chunk_per_slice_when_the_history_fits: test",
+    "palw_state_chunk_map::tests::positions_are_the_prefill_plus_the_calls_that_have_run: test",
+    "palw_state_chunk_map::tests::the_enumeration_is_kind_major_then_layer_then_position: test",
+    "palw_state_chunk_map::tests::the_layout_and_the_chunk_map_share_a_descriptor_and_not_a_domain: test",
+    "palw_state_chunk_map::tests::the_map_covers_every_element_exactly_once: test",
+    "palw_state_chunk_map::tests::the_map_id_is_the_descriptor_and_nothing_else: test",
+    "palw_state_chunk_map::tests::the_recurrence_terms_are_read_off_the_registered_map: test",
+    "palw_state_chunk_map::tests::the_v2_map_head_slices_the_convolution_and_leaves_the_delta_alone: test",
+    "palw_state_chunk_map::tests::the_v2_map_is_four_bytes_per_element_and_a_distinct_identity: test",
+    "palw_state_v2::tests::settlement_once_v1::a_free_prompt_receipt_quantum_settles_once_even_if_its_spent_set_is_rewound: test",
+    "palw_state_v2::tests::settlement_once_v1::a_marker_under_a_foreign_key_is_refused_not_trusted: test",
+    "palw_state_v2::tests::settlement_once_v1::a_mesh_reserve_payment_is_paid_once_per_claim_and_auditor_across_its_paths: test",
+    "palw_state_v2::tests::settlement_once_v1::a_native_receipt_quantum_and_a_free_prompt_quantum_of_the_same_id_are_different_obligations: test",
+    "palw_state_v2::tests::settlement_once_v1::a_payment_beyond_its_debit_and_an_unmarked_route_both_fail_closed: test",
+    "palw_state_v2::tests::settlement_once_v1::a_source_fee_promise_is_closed_once_and_refused_past_the_fence_for_want_of_sourced_terms: test",
+    "palw_state_v2::tests::settlement_once_v1::a_verifiers_slot_fees_are_marked_once_per_slot_across_the_tick_and_the_object_arm: test",
+    "palw_state_v2::tests::settlement_once_v1::an_improvement_credit_is_credited_once_per_source_row_across_its_paths: test",
+    "palw_state_v2::tests::settlement_once_v1::applying_the_same_producer_settlement_batch_twice_debits_and_pays_at_most_once: test",
+    "palw_state_v2::tests::settlement_once_v1::audit_a4_a_refused_source_fee_payout_returns_the_prepaid_fee_to_the_sponsor: test",
+    "palw_state_v2::tests::settlement_once_v1::below_the_fence_a_check_fee_batch_writes_no_marker: test",
+    "palw_state_v2::tests::settlement_once_v1::below_the_fence_a_mesh_payment_is_the_historical_payment: test",
+    "palw_state_v2::tests::settlement_once_v1::below_the_fence_every_consumer_is_dormant_and_nothing_is_read_or_written: test",
+    "palw_state_v2::tests::settlement_once_v1::every_leg_family_settles_once_across_its_consumers: test",
+    "palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker: test",
+    "palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_dormant_actual_preparation_keeps_historical_overflow_skip: test",
+    "palw_state_v2::tests::settlement_once_v1::reporter_awards_and_their_tranches_settle_once_and_the_predicate_never_binds_a_reporter: test",
+    "palw_state_v2::tests::settlement_once_v1::the_check_fee_quad_is_matched_exactly_and_never_as_a_producer_reward: test",
+    "palw_state_v2::tests::settlement_once_v1::the_producer_reward_triple_is_told_apart_from_a_verifier_check_fee: test",
+    "palw_state_v2::tests::settlement_once_v1::the_same_escrow_reward_through_the_kernel_tick_then_the_exec_fee_route_pays_once: test",
+    "palw_step_leg::tests::a_binding_must_carry_the_state_chunk_map_its_profile_registers: test"
+  ],
+  "build": {
+    "head": "78277650f034f2a1416306b3da741dde10f78b82",
+    "files": [
+      {
+        "path": "Cargo.lock",
+        "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+      },
+      {
+        "path": "Cargo.toml",
+        "sha256": "288fab6f6c4aff360a22f53e4f75bae60027a49afa1ef74326cc43d56de566c9"
+      },
+      {
+        "path": "components/consensusmanager/Cargo.toml",
+        "sha256": "a93633ac943f962bb17b35afc6b8d16bfd855b151ee3ca5f49663d69ce0f23ac"
+      },
+      {
+        "path": "components/consensusmanager/src/session.rs",
+        "sha256": "c0d76e3785f2fedf714d6015fbcaeb52d8d100c0b6698b2c60fb9af0d3b6ed51"
+      },
+      {
+        "path": "consensus/Cargo.toml",
+        "sha256": "623586e150fed14d9df4c55465be33374427a1730d4f763c4289316bc34b9c83"
+      },
+      {
+        "path": "consensus/core/Cargo.toml",
+        "sha256": "ba7e84c40620b97d32e323613fcf22623df3a1f80b60ef89cbcac4c622968e80"
+      },
+      {
+        "path": "consensus/core/src/config/params/full_activation_v1.rs",
+        "sha256": "982293432351e14d12b5b749c36d3e45152eb9558bb66d34968902de100e431f"
+      },
+      {
+        "path": "consensus/core/src/palw_claim_challenge_fold_v2.rs",
+        "sha256": "b3d1ae0ecf817375beb8dcd6383cfede2e408c42425e73290ef970facafbbbb9"
+      },
+      {
+        "path": "consensus/core/src/palw_claim_challenge_v2.rs",
+        "sha256": "3cffbe031ff2d362e1ddc25026950fb27ce069d2c3a21fb0b1f162a42f80dafb"
+      },
+      {
+        "path": "consensus/core/src/palw_held_da_auth_workspace_tests_v2.rs",
+        "sha256": "2ecc20674fab5a61da7d9a1455ec5b3606554ad292fed2f3d69d3d310b8046ad"
+      },
+      {
+        "path": "consensus/core/src/palw_held_da_auth_workspace_v2.rs",
+        "sha256": "a9132c1fca91841f02b84196c7610d6957644339a218e0a21af478686b9c0570"
+      },
+      {
+        "path": "consensus/core/src/palw_held_da_v1.rs",
+        "sha256": "ce0b739e72023cd1538df5e496f6d2b556954dff53cd6c87d0e73fb3c34d48dc"
+      },
+      {
+        "path": "consensus/core/src/palw_mesh_fold_v1.rs",
+        "sha256": "d4b6600d719f0d48c38fa80d2f7949b5dbe7ac2019e92ef6cb4b9c7017a30e01"
+      },
+      {
+        "path": "consensus/core/src/palw_paid_check_authority_checked_v2.rs",
+        "sha256": "ab316e9957d762b7887ccedc32cb93d04dc6f24feccb84afb60c8c01d0f87d9d"
+      },
+      {
+        "path": "consensus/core/src/palw_state_chunk_map.rs",
+        "sha256": "2406ee0dec60856731af51a9cbe1c9366ea73db603ad512e6625aebab750ba7b"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests/mesh_once_atomicity_v1.rs",
+        "sha256": "34c38cb3e721beb3cadcde4c80e0e107a1b17bb22479a772975ae03334bfddf6"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests/paid_check_authority_resource_v2.rs",
+        "sha256": "5647250bb78bdc68076bb3fe6a536976ae52dae53c911d4466550c8b6e4f8f32"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests/paid_claim_reader_v1.rs",
+        "sha256": "3a7ce0d2d2bedff5819128aae681c37499ab2dfc755fdf29a837f5e102a6bea9"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/tests/settlement_once_v1.rs",
+        "sha256": "ba0a798b0e714bda8a5b07a539724dcf3aea80d7178c6bf9bba3683683441461"
+      },
+      {
+        "path": "consensus/core/src/palw_step.rs",
+        "sha256": "e5d803b93bf17c9a66febd325528f5538c94935bdedd858a3baf8316e086c0ca"
+      },
+      {
+        "path": "kaspad/Cargo.toml",
+        "sha256": "e7a9c98ef2c74e09be69ac66bf1cbf20f3bc7d644281dba5cad8071438c5a78f"
+      },
+      {
+        "path": "kaspad/src/palw_gdn_held_answer_auth_tests_v2.rs",
+        "sha256": "9519cfcc78daf5b54a6c36c10c4d8da99aa57d1d6bc05a3af5d2abc2acd39168"
+      },
+      {
+        "path": "kaspad/src/palw_gdn_held_filer.rs",
+        "sha256": "79c6ffe35717786ac8b8d66dce563f7e531c9648a93c5bc8b37d11835affe4aa"
+      },
+      {
+        "path": "kaspad/src/palw_gdn_held_filer_tests.rs",
+        "sha256": "128bf7d92ec722b7f684b6dec98ca0f66b64b30a50d29ca0d8ba82dc6c493451"
+      },
+      {
+        "path": "misaka/evm/core/Cargo.toml",
+        "sha256": "44bd39f36d62f54c0b8e3b60f54bd0412d7e8023b8b803ca93aa89717ac49db2"
+      },
+      {
+        "path": "misaka/palw/sdk/Cargo.toml",
+        "sha256": "5db4c9200ef3695cd613e48ddd05e6660f55cdc19e7ffd1d1d876cab23d3ea45"
+      },
+      {
+        "path": "rpc/eth/Cargo.toml",
+        "sha256": "c98fb8bedd276e0d58312ccc7358ac6a63087bf57efdc8cad1953d3f98900daa"
+      }
+    ],
+    "build_result": "PASS",
+    "scope": "GDN corrected conv fixture, mesh once fix GREEN, paid-authority original native semantics RED staging; previous host reboot interrupted build; no campaign acceptance",
+    "host_boot": "kern.boottime: { sec = 1792930279, usec = 483764 } Sun Oct 25 21:11:19 2026",
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "command": [
+      "/Users/wata/Downloads/MISAKA-wt-b/buildslot.sh",
+      "env",
+      "CARGO_PROFILE_DEV_DEBUG=0",
+      "CARGO_PROFILE_TEST_DEBUG=0",
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "kaspa-consensus-core",
+      "-p",
+      "kaspa-consensus",
+      "-p",
+      "kaspad",
+      "-p",
+      "kaspa-eth-rpc",
+      "-p",
+      "misaka-palw-sdk",
+      "-p",
+      "kaspa-evm",
+      "--lib",
+      "--features",
+      "kaspa-consensus/evm,kaspad/evm,kaspad/private-integration-config",
+      "--no-run",
+      "--config",
+      "profile.test.package.kaspa-consensus-core.opt-level=0"
+    ],
+    "environment": {
+      "CARGO_TARGET_DIR": "/Users/wata/.codex/artifacts/rfc06-12-20261025/build-target",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_INCREMENTAL": "0",
+      "RUST_MIN_STACK": "67108864",
+      "TMPDIR": "/private/tmp"
+    },
+    "exit_code": 0,
+    "wall_seconds": 3510.09,
+    "identity_matches": true
+  },
+  "pins": [
+    {
+      "original": "/Users/wata/.codex/artifacts/rfc06-12-20261025/build-target/debug/deps/kaspa_consensus-0688b95faa5771a9",
+      "pin": "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_consensus-0688b95faa5771a9",
+      "sha256": "3e64111f7ef6f89e9519b3d36ed5ede21e08464041cd4787a58e04003b4dee2b"
+    },
+    {
+      "original": "/Users/wata/.codex/artifacts/rfc06-12-20261025/build-target/debug/deps/kaspa_consensus_core-fe6a5f00954a2f6f",
+      "pin": "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_consensus_core-fe6a5f00954a2f6f",
+      "sha256": "6778a6e2982d7437cf3909bbf198cfb5a7e01a87d51ecb14afb57e2a89a059b6"
+    },
+    {
+      "original": "/Users/wata/.codex/artifacts/rfc06-12-20261025/build-target/debug/deps/kaspa_eth_rpc-81fc2bfef492b943",
+      "pin": "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_eth_rpc-81fc2bfef492b943",
+      "sha256": "ab80f088ec75762d4fa66a5bc95538e3ec909a1beb445a8afea4d83d57ec399c"
+    },
+    {
+      "original": "/Users/wata/.codex/artifacts/rfc06-12-20261025/build-target/debug/deps/kaspa_evm-432e99373139daee",
+      "pin": "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_evm-432e99373139daee",
+      "sha256": "9271a8246e1c2336c714a00ea24177548abbc4c24884d1f690ea79f014e8273a"
+    },
+    {
+      "original": "/Users/wata/.codex/artifacts/rfc06-12-20261025/build-target/debug/deps/kaspad_lib-dc4a53db44615501",
+      "pin": "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspad_lib-dc4a53db44615501",
+      "sha256": "ddff5fd1f897f3edd8e3547f98954939cb1818ed19212dbfe3a691dd2849182e"
+    },
+    {
+      "original": "/Users/wata/.codex/artifacts/rfc06-12-20261025/build-target/debug/deps/misaka_palw_sdk-50891183f01b25df",
+      "pin": "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/misaka_palw_sdk-50891183f01b25df",
+      "sha256": "2d7b2c8a7bd9f664e9b354a80bfdad9ea6609463c3f84b48dc53594c494b21b2"
+    }
+  ],
+  "groups": [
+    {
+      "name": "gdn-core",
+      "expected": "GREEN",
+      "test_names": [
+        "palw_held_da_v1::auth_workspace::tests::held_chunk_auth_workspace_preserves_raw_identity_and_semantic_order: test",
+        "palw_held_da_v1::auth_workspace::tests::held_chunk_auth_workspace_quota_is_before_raw_validator_and_releases_scalar_scratch: test"
+      ],
+      "command": [
+        "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_consensus_core-fe6a5f00954a2f6f",
+        "palw_held_da_v1::auth_workspace::tests",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.04,
+      "result_summaries": [
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "2",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-core-runtime.log",
+      "log_sha256": "96ed51ee5d8b727bd7fd031f14300015dcee65e778dcc55a5a68f136d0289cb2",
+      "log_text": "\nrunning 2 tests\ntest palw_held_da_v1::auth_workspace::tests::held_chunk_auth_workspace_preserves_raw_identity_and_semantic_order ... ok\ntest palw_held_da_v1::auth_workspace::tests::held_chunk_auth_workspace_quota_is_before_raw_validator_and_releases_scalar_scratch ... \nrunning 1 test\ntest palw_held_da_v1::auth_workspace::tests::held_chunk_auth_workspace_quota_is_before_raw_validator_and_releases_scalar_scratch ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5223 filtered out; finished in 0.01s\n\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5222 filtered out; finished in 0.03s\n\n"
+    },
+    {
+      "name": "gdn-node",
+      "test_names": [
+        "palw_gdn_held_filer::tests::answer_auth_tests::gdn_answer_auth_actual_late_step_refuses_at_auth_before_copy_or_default_and_retries: test",
+        "palw_gdn_held_filer::tests::answer_auth_tests::gdn_answer_auth_reader_preserves_invalid_skip_and_raw_disclosure_bytes: test"
+      ],
+      "command": [
+        "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspad_lib-dc4a53db44615501",
+        "palw_gdn_held_filer::tests::answer_auth_tests",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.89,
+      "result_summaries": [
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "2",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-node-runtime.log",
+      "log_sha256": "f4f7eb0a778682fcf9479ffbb6bb7ad813eab792ec9d95771744f0788ffb5053",
+      "log_text": "\nrunning 2 tests\ntest palw_gdn_held_filer::tests::answer_auth_tests::gdn_answer_auth_actual_late_step_refuses_at_auth_before_copy_or_default_and_retries ... \nrunning 1 test\ntest palw_gdn_held_filer::tests::answer_auth_tests::gdn_answer_auth_actual_late_step_refuses_at_auth_before_copy_or_default_and_retries ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1033 filtered out; finished in 2.09s\n\nok\ntest palw_gdn_held_filer::tests::answer_auth_tests::gdn_answer_auth_reader_preserves_invalid_skip_and_raw_disclosure_bytes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1032 filtered out; finished in 3.84s\n\n"
+    },
+    {
+      "name": "mesh-once",
+      "test_names": [
+        "palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker: test",
+        "palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_dormant_actual_preparation_keeps_historical_overflow_skip: test"
+      ],
+      "command": [
+        "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_consensus_core-fe6a5f00954a2f6f",
+        "palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.03,
+      "result_summaries": [
+        [
+          "2",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/Users/wata/.codex/artifacts/rfc06-12-20261025/mesh-once-runtime.log",
+      "log_sha256": "fa52d7ef518f0bf7b87c9b9180fd0fdadc3789038737eafc32a9d11e882d1946",
+      "log_text": "\nrunning 2 tests\ntest palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker ... ok\ntest palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_dormant_actual_preparation_keeps_historical_overflow_skip ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5222 filtered out; finished in 0.02s\n\n"
+    },
+    {
+      "name": "map-controls",
+      "tests": [
+        "palw_context_ladder::tests::a_class_with_no_state_chunk_map_gets_no_anchored_price: test",
+        "palw_state_chunk_map::hybrid_composition_tests::the_composition_covers_every_element_exactly_once: test",
+        "palw_state_chunk_map::hybrid_composition_tests::the_hybrid_sections_are_ordered_by_the_maps_own_name: test",
+        "palw_state_chunk_map::hybrid_composition_tests::the_recurrence_chunks_are_what_the_anchor_is_priced_at: test",
+        "palw_state_chunk_map::tests::a_float_lane_profile_is_refused_by_name: test",
+        "palw_state_chunk_map::tests::a_profile_with_no_attention_layer_has_no_state_to_chunk: test",
+        "palw_state_chunk_map::tests::a_row_reads_only_out_of_a_canonically_sized_chunk: test",
+        "palw_state_chunk_map::tests::a_row_wider_than_a_chunk_is_refused: test",
+        "palw_state_chunk_map::tests::a_zero_length_state_is_refused_rather_than_mapped_empty: test",
+        "palw_state_chunk_map::tests::every_state_chunk_map_has_its_own_identity: test",
+        "palw_state_chunk_map::tests::one_chunk_per_slice_when_the_history_fits: test",
+        "palw_state_chunk_map::tests::positions_are_the_prefill_plus_the_calls_that_have_run: test",
+        "palw_state_chunk_map::tests::the_enumeration_is_kind_major_then_layer_then_position: test",
+        "palw_state_chunk_map::tests::the_layout_and_the_chunk_map_share_a_descriptor_and_not_a_domain: test",
+        "palw_state_chunk_map::tests::the_map_covers_every_element_exactly_once: test",
+        "palw_state_chunk_map::tests::the_map_id_is_the_descriptor_and_nothing_else: test",
+        "palw_state_chunk_map::tests::the_recurrence_terms_are_read_off_the_registered_map: test",
+        "palw_state_chunk_map::tests::the_v2_map_head_slices_the_convolution_and_leaves_the_delta_alone: test",
+        "palw_state_chunk_map::tests::the_v2_map_is_four_bytes_per_element_and_a_distinct_identity: test",
+        "palw_step_leg::tests::a_binding_must_carry_the_state_chunk_map_its_profile_registers: test"
+      ],
+      "command": [
+        "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_consensus_core-fe6a5f00954a2f6f",
+        "state_chunk_map",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.06,
+      "log": "\nrunning 20 tests\ntest palw_context_ladder::tests::a_class_with_no_state_chunk_map_gets_no_anchored_price ... ok\ntest palw_state_chunk_map::hybrid_composition_tests::the_composition_covers_every_element_exactly_once ... ok\ntest palw_state_chunk_map::hybrid_composition_tests::the_hybrid_sections_are_ordered_by_the_maps_own_name ... ok\ntest palw_state_chunk_map::hybrid_composition_tests::the_recurrence_chunks_are_what_the_anchor_is_priced_at ... ok\ntest palw_state_chunk_map::tests::a_float_lane_profile_is_refused_by_name ... ok\ntest palw_state_chunk_map::tests::a_profile_with_no_attention_layer_has_no_state_to_chunk ... ok\ntest palw_state_chunk_map::tests::a_row_reads_only_out_of_a_canonically_sized_chunk ... ok\ntest palw_state_chunk_map::tests::a_row_wider_than_a_chunk_is_refused ... ok\ntest palw_state_chunk_map::tests::a_zero_length_state_is_refused_rather_than_mapped_empty ... ok\ntest palw_state_chunk_map::tests::every_state_chunk_map_has_its_own_identity ... ok\ntest palw_state_chunk_map::tests::one_chunk_per_slice_when_the_history_fits ... ok\ntest palw_state_chunk_map::tests::positions_are_the_prefill_plus_the_calls_that_have_run ... ok\ntest palw_state_chunk_map::tests::the_enumeration_is_kind_major_then_layer_then_position ... ok\ntest palw_state_chunk_map::tests::the_layout_and_the_chunk_map_share_a_descriptor_and_not_a_domain ... ok\ntest palw_state_chunk_map::tests::the_map_covers_every_element_exactly_once ... ok\ntest palw_state_chunk_map::tests::the_map_id_is_the_descriptor_and_nothing_else ... ok\ntest palw_state_chunk_map::tests::the_recurrence_terms_are_read_off_the_registered_map ... ok\ntest palw_state_chunk_map::tests::the_v2_map_head_slices_the_convolution_and_leaves_the_delta_alone ... ok\ntest palw_state_chunk_map::tests::the_v2_map_is_four_bytes_per_element_and_a_distinct_identity ... ok\ntest palw_step_leg::tests::a_binding_must_carry_the_state_chunk_map_its_profile_registers ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 5204 filtered out; finished in 0.05s\n\n",
+      "log_sha256": "fee380ed785fbb414646343afada5049feb01ffa9394d5ba07c47c8503291c09"
+    },
+    {
+      "name": "raw-held-controls",
+      "tests": [
+        "palw_held_da_v1::tests::a_prompt_tile_is_accusable_only_where_the_claims_class_commits_a_tile_tree: test",
+        "palw_held_da_v1::tests::each_unit_is_answered_by_itself_and_its_path: test",
+        "palw_held_da_v1::tests::the_sentinel_is_no_event_an_accusation_can_name: test"
+      ],
+      "command": [
+        "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_consensus_core-fe6a5f00954a2f6f",
+        "palw_held_da_v1::tests",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.04,
+      "log": "\nrunning 3 tests\ntest palw_held_da_v1::tests::a_prompt_tile_is_accusable_only_where_the_claims_class_commits_a_tile_tree ... ok\ntest palw_held_da_v1::tests::each_unit_is_answered_by_itself_and_its_path ... ok\ntest palw_held_da_v1::tests::the_sentinel_is_no_event_an_accusation_can_name ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5221 filtered out; finished in 0.03s\n\n",
+      "log_sha256": "eb1aada78768a923978c9ce4320ae7d5817fa1d0a8226ede929d6cecad0159c4"
+    },
+    {
+      "name": "once-controls",
+      "tests": [
+        "palw_settlement_once_v1::tests::a_row_validates_only_under_its_own_key_and_within_its_debit: test",
+        "palw_settlement_once_v1::tests::every_shipped_preset_keeps_the_registry_dormant_and_arming_is_refused: test",
+        "palw_settlement_once_v1::tests::obligation_ids_are_consumer_independent_and_separate_every_coordinate: test",
+        "palw_state_v2::tests::settlement_once_v1::a_free_prompt_receipt_quantum_settles_once_even_if_its_spent_set_is_rewound: test",
+        "palw_state_v2::tests::settlement_once_v1::a_marker_under_a_foreign_key_is_refused_not_trusted: test",
+        "palw_state_v2::tests::settlement_once_v1::a_mesh_reserve_payment_is_paid_once_per_claim_and_auditor_across_its_paths: test",
+        "palw_state_v2::tests::settlement_once_v1::a_native_receipt_quantum_and_a_free_prompt_quantum_of_the_same_id_are_different_obligations: test",
+        "palw_state_v2::tests::settlement_once_v1::a_payment_beyond_its_debit_and_an_unmarked_route_both_fail_closed: test",
+        "palw_state_v2::tests::settlement_once_v1::a_source_fee_promise_is_closed_once_and_refused_past_the_fence_for_want_of_sourced_terms: test",
+        "palw_state_v2::tests::settlement_once_v1::a_verifiers_slot_fees_are_marked_once_per_slot_across_the_tick_and_the_object_arm: test",
+        "palw_state_v2::tests::settlement_once_v1::an_improvement_credit_is_credited_once_per_source_row_across_its_paths: test",
+        "palw_state_v2::tests::settlement_once_v1::applying_the_same_producer_settlement_batch_twice_debits_and_pays_at_most_once: test",
+        "palw_state_v2::tests::settlement_once_v1::audit_a4_a_refused_source_fee_payout_returns_the_prepaid_fee_to_the_sponsor: test",
+        "palw_state_v2::tests::settlement_once_v1::below_the_fence_a_check_fee_batch_writes_no_marker: test",
+        "palw_state_v2::tests::settlement_once_v1::below_the_fence_a_mesh_payment_is_the_historical_payment: test",
+        "palw_state_v2::tests::settlement_once_v1::below_the_fence_every_consumer_is_dormant_and_nothing_is_read_or_written: test",
+        "palw_state_v2::tests::settlement_once_v1::every_leg_family_settles_once_across_its_consumers: test",
+        "palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker: test",
+        "palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_dormant_actual_preparation_keeps_historical_overflow_skip: test",
+        "palw_state_v2::tests::settlement_once_v1::reporter_awards_and_their_tranches_settle_once_and_the_predicate_never_binds_a_reporter: test",
+        "palw_state_v2::tests::settlement_once_v1::the_check_fee_quad_is_matched_exactly_and_never_as_a_producer_reward: test",
+        "palw_state_v2::tests::settlement_once_v1::the_producer_reward_triple_is_told_apart_from_a_verifier_check_fee: test",
+        "palw_state_v2::tests::settlement_once_v1::the_same_escrow_reward_through_the_kernel_tick_then_the_exec_fee_route_pays_once: test"
+      ],
+      "command": [
+        "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspa_consensus_core-fe6a5f00954a2f6f",
+        "settlement_once_v1",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.04,
+      "log": "\nrunning 23 tests\ntest palw_settlement_once_v1::tests::a_row_validates_only_under_its_own_key_and_within_its_debit ... ok\ntest palw_settlement_once_v1::tests::every_shipped_preset_keeps_the_registry_dormant_and_arming_is_refused ... ok\ntest palw_settlement_once_v1::tests::obligation_ids_are_consumer_independent_and_separate_every_coordinate ... ok\ntest palw_state_v2::tests::settlement_once_v1::a_free_prompt_receipt_quantum_settles_once_even_if_its_spent_set_is_rewound ... ok\ntest palw_state_v2::tests::settlement_once_v1::a_marker_under_a_foreign_key_is_refused_not_trusted ... ok\ntest palw_state_v2::tests::settlement_once_v1::a_mesh_reserve_payment_is_paid_once_per_claim_and_auditor_across_its_paths ... ok\ntest palw_state_v2::tests::settlement_once_v1::a_native_receipt_quantum_and_a_free_prompt_quantum_of_the_same_id_are_different_obligations ... ok\ntest palw_state_v2::tests::settlement_once_v1::a_payment_beyond_its_debit_and_an_unmarked_route_both_fail_closed ... ok\ntest palw_state_v2::tests::settlement_once_v1::a_source_fee_promise_is_closed_once_and_refused_past_the_fence_for_want_of_sourced_terms ... ok\ntest palw_state_v2::tests::settlement_once_v1::a_verifiers_slot_fees_are_marked_once_per_slot_across_the_tick_and_the_object_arm ... ok\ntest palw_state_v2::tests::settlement_once_v1::an_improvement_credit_is_credited_once_per_source_row_across_its_paths ... ok\ntest palw_state_v2::tests::settlement_once_v1::applying_the_same_producer_settlement_batch_twice_debits_and_pays_at_most_once ... ok\ntest palw_state_v2::tests::settlement_once_v1::audit_a4_a_refused_source_fee_payout_returns_the_prepaid_fee_to_the_sponsor ... [fix-a A-4] sponsor payout 50, producer payout 0, marker Some(0)\nok\ntest palw_state_v2::tests::settlement_once_v1::below_the_fence_a_check_fee_batch_writes_no_marker ... ok\ntest palw_state_v2::tests::settlement_once_v1::below_the_fence_a_mesh_payment_is_the_historical_payment ... ok\ntest palw_state_v2::tests::settlement_once_v1::below_the_fence_every_consumer_is_dormant_and_nothing_is_read_or_written ... ok\ntest palw_state_v2::tests::settlement_once_v1::every_leg_family_settles_once_across_its_consumers ... ok\ntest palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_actual_preparation_refuses_overflow_and_same_parent_can_retry_without_phantom_marker ... ok\ntest palw_state_v2::tests::settlement_once_v1::mesh_once_atomicity_v1::mesh_once_dormant_actual_preparation_keeps_historical_overflow_skip ... ok\ntest palw_state_v2::tests::settlement_once_v1::reporter_awards_and_their_tranches_settle_once_and_the_predicate_never_binds_a_reporter ... ok\ntest palw_state_v2::tests::settlement_once_v1::the_check_fee_quad_is_matched_exactly_and_never_as_a_producer_reward ... ok\ntest palw_state_v2::tests::settlement_once_v1::the_producer_reward_triple_is_told_apart_from_a_verifier_check_fee ... ok\ntest palw_state_v2::tests::settlement_once_v1::the_same_escrow_reward_through_the_kernel_tick_then_the_exec_fee_route_pays_once ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 5201 filtered out; finished in 0.03s\n\n",
+      "log_sha256": "e499402fd66203689679615f5edbea7849d9743ac434dec2c93c4b8b2e866bc1"
+    },
+    {
+      "name": "node-answer-controls",
+      "tests": [
+        "palw_gdn_held_filer::tests::answer_owner_tests::actual_held_answer_capacity_refusal_retries_instead_of_default_and_owns_case_bytes: test",
+        "palw_gdn_held_filer::tests::answer_owner_tests::complete_answer_batch_and_slot_reservations_precede_allocation_and_survive_copy_lifetime: test",
+        "palw_gdn_held_filer::tests::answer_owner_tests::real_held_disclosure_reader_skips_foreign_and_invalid_units_and_retains_authenticated_answer: test"
+      ],
+      "command": [
+        "/Users/wata/.codex/artifacts/rfc06-12-20261025/gdn-mesh-approval-stage-pins/kaspad_lib-dc4a53db44615501",
+        "answer_owner_tests",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.41,
+      "log": "\nrunning 3 tests\ntest palw_gdn_held_filer::tests::answer_owner_tests::actual_held_answer_capacity_refusal_retries_instead_of_default_and_owns_case_bytes ... \nrunning 1 test\ntest palw_gdn_held_filer::tests::answer_owner_tests::actual_held_answer_capacity_refusal_retries_instead_of_default_and_owns_case_bytes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1033 filtered out; finished in 1.40s\n\nok\ntest palw_gdn_held_filer::tests::answer_owner_tests::complete_answer_batch_and_slot_reservations_precede_allocation_and_survive_copy_lifetime ... \nrunning 1 test\ntest palw_gdn_held_filer::tests::answer_owner_tests::complete_answer_batch_and_slot_reservations_precede_allocation_and_survive_copy_lifetime ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1033 filtered out; finished in 0.95s\n\nok\ntest palw_gdn_held_filer::tests::answer_owner_tests::real_held_disclosure_reader_skips_foreign_and_invalid_units_and_retains_authenticated_answer ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1031 filtered out; finished in 3.36s\n\n",
+      "log_sha256": "ade14b7bdc3a90056148153ab832a8353269a9d23cf84eafa4fd9d59ab527942"
+    }
+  ],
+  "controller_interruption": "Initial controller key kaspad did not match actual kaspad_lib crate; core group succeeded; remaining groups resumed using existing SHA-verified pins, no rebuild.",
+  "limits": [
+    "GDN StateChunk held v4/v5 only, not all model costs",
+    "Mesh artificial stored parent, no signed history reachability or actual coinbase",
+    "No campaign PASS or activation/bootstrap policy change"
+  ]
+}

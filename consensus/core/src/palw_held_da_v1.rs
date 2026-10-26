@@ -33,6 +33,10 @@ use crate::palw_step_leg::{
     step_range_opening_root_capped_v1, verify_binding_v1,
 };
 
+#[path = "palw_held_da_auth_workspace_v2.rs"]
+mod auth_workspace;
+pub use auth_workspace::{PalwHeldDaStateChunkAuthRequestV2, palw_held_da_state_chunk_auth_request_v2};
+
 pub const PALW_HELD_DA_VERSION_V1: u16 = 1;
 pub const PALW_HELD_DA_DOMAIN_ACCUSATION_V1: &[u8] = b"misaka-palw/held-da/accusation/v1";
 pub const PALW_HELD_DA_DOMAIN_DISCLOSURE_V1: &[u8] = b"misaka-palw/held-da/disclosure/v1";
