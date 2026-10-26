@@ -241,9 +241,10 @@ impl Params {
         }
     }
 
-    /// **U02: the Panel=1 seat policy's gate** (`palw_kernel_route_panel_one_v1`, dormant; the 1-seat vs 3-of-3 choice is a pending
-    /// user decision). `Ok` when not armed. Armed, it needs `palw_probabilistic_constraints_v1` at or below it (the seat draw it
-    /// changes is the kernel route's, which that fence's record gate governs) and the V2 bundle's mirror must agree.
+    /// **U02: the Panel=1 seat policy's gate** (`palw_kernel_route_panel_one_v1`, dormant; the 1-seat policy was adopted on
+    /// 2026-10-22, while activation remains unarmed). `Ok` when not armed. Armed, it needs
+    /// `palw_probabilistic_constraints_v1` at or below it (the seat draw it changes is the kernel route's, which that fence's record
+    /// gate governs) and the V2 bundle's mirror must agree.
     pub fn validate_palw_kernel_route_panel_one_v1(&self) -> Result<(), PalwModeV2Error> {
         let Some(at) = self.palw_kernel_route_panel_one_v1_fence() else { return Ok(()) };
         let route = PalwKernelRouteGatedFenceV1::ProbabilisticConstraintsV1.armed(self);
