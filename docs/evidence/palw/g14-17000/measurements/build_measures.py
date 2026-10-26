@@ -37,3 +37,6 @@ for name,package,target,selector in [('native-verified','kaspa-consensus','kaspa
   r['source_unchanged']=initial==code() and not git('diff','HEAD','--name-only','--','.',':(exclude)docs/**')
  record.write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r),flush=True)
  if child.returncode:raise SystemExit(child.returncode)
+
+# Continue the bounded preflight within the same acquired build slot.
+raise SystemExit(subprocess.run(["python3",str(out/"run_smokes.py")]).returncode)
