@@ -16,7 +16,7 @@ use kaspa_consensus_core::config::drill::{
 use kaspa_consensus_core::config::params::{
     PALW_T12_FULL_ACTIVATION_DAA, PALW_T12_FULL_ACTIVATION_FENCES_V1, PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1,
     PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT13_DAA,
-    PALW_T12_INT13_FENCES_V1, Params, palw_t12_arm_full_activation_at_v1, palw_t12_drill_params_v1, palw_t12_release_v6_params,
+    PALW_T12_INT13_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1, palw_t12_arm_full_activation_at_v1, palw_t12_drill_params_v1, palw_t12_release_v6_params,
     palw_t12_release_v7_params, palw_t12_shipped_params,
 };
 
@@ -152,20 +152,24 @@ fn the_list_is_the_int13_list_then_the_g14_fences_in_prerequisite_order() {
     assert_eq!(fence_at(&shipped, "palw_shard_court"), Some(0), "the held regime's genesis court");
 }
 
+/// With the full-activation height `None`, the shipped ruleset is the public fleet's (`247ade1f9`): int-12's ruleset plus the int-13
+/// list at DAA 15,500, nothing else. The ids themselves are pinned against `247ade1f9` in `t12_fleet_identity_247ade1f9`.
 #[test]
-fn with_the_height_none_every_shipped_id_is_the_int12_release() {
+fn with_the_height_none_the_shipped_ruleset_is_the_fleets_int13_release() {
     assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, None, "nothing armed until the records are pinned and the user approves");
-    assert_eq!(PALW_T12_INT13_DAA, None);
+    assert_eq!(PALW_T12_INT13_DAA, Some(15_500), "the public fleet's int-13 height (user, 2026-10-25)");
+    let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     let shipped = palw_t12_shipped_params();
     for name in LIST {
-        assert_eq!(fence_at(&shipped, name), None, "{name} is dormant on the shipped ruleset");
+        let want = if int13.contains(&name) { Some(15_500) } else { None };
+        assert_eq!(fence_at(&shipped, name), want, "{name} on the shipped ruleset");
     }
-    assert_eq!(ids(&shipped), int12_ids(), "the shipped ruleset is int-12's, byte for byte");
-    assert_eq!(ids(&palw_t12_release_v7_params()), int12_ids(), "the v7 baseline too");
-    assert_eq!(ids(&palw_t12_release_v6_params()), int12_ids(), "and v6");
-    // Dormant twice is dormant: the reverse-order clear of an already-dormant list moves nothing.
+    assert_eq!(ids(&palw_t12_release_v7_params()), ids(&shipped), "the v7 baseline is the shipped (fleet) ruleset");
+    assert_eq!(ids(&palw_t12_release_v6_params()), int12_ids(), "v6 is int-12's, byte for byte");
+    assert_eq!(ids(&shipped).1, int12_ids().1, "a scheduled height is normalised out of the handshake identity");
+    // Dormant twice is dormant: the reverse-order clear of an already-dormant list moves nothing, and keeps 15,500.
     let mut again = shipped.clone();
-    palw_t12_arm_full_activation_at_v1(&mut again, None);
+    palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
     assert_eq!(ids(&again), ids(&shipped));
 }
 
@@ -193,9 +197,11 @@ fn sixteen_thousand_is_used_by_no_other_list_or_schedule() {
 fn armed_at_a_test_height_it_moves_the_params_and_schedule_ids_only_and_comes_back_byte_for_byte() {
     let shipped = palw_t12_shipped_params();
     let mut armed = shipped.clone();
-    palw_t12_arm_full_activation_at_v1(&mut armed, Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
+    palw_t12_arm_after_int13_at_v1(&mut armed, PALW_T12_FULL_ACTIVATION_FENCES_V1, Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
+    let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     for name in LIST {
-        assert_eq!(fence_at(&armed, name), Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1), "{name}");
+        let want = if int13.contains(&name) { 15_500 } else { PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1 };
+        assert_eq!(fence_at(&armed, name), Some(want), "{name}");
     }
     for ((name, was), (_, now)) in shipped.palw_fences_v1().iter().zip(armed.palw_fences_v1().iter()) {
         if !LIST.contains(name) {
@@ -207,7 +213,7 @@ fn armed_at_a_test_height_it_moves_the_params_and_schedule_ids_only_and_comes_ba
     assert_eq!(a.1, b.1, "a future height: the identity is unchanged");
     assert_ne!(a.2, b.2, "the schedule names 17,000");
     assert!(armed.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
-    palw_t12_arm_full_activation_at_v1(&mut armed, None);
+    palw_t12_arm_after_int13_at_v1(&mut armed, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
     assert_eq!(ids(&armed), ids(&shipped), "dormant in reverse order is the shipped ruleset again");
 }
 
@@ -274,7 +280,7 @@ fn the_drill_flag_refuses_untouched_until_the_records_exist() {
 #[test]
 fn the_kernel_slice_is_an_ordered_subset_and_clears_back() {
     use kaspa_consensus_core::config::params::{
-        PALW_T12_FULL_ACTIVATION_FENCES_V1, PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_arm_fence_list_at_v1, palw_t12_release_v7_params,
+        PALW_T12_FULL_ACTIVATION_FENCES_V1, PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_release_v7_params,
     };
     let full: Vec<&str> = PALW_T12_FULL_ACTIVATION_FENCES_V1.iter().map(|f| f.name).collect();
     let mut last = None;
@@ -285,9 +291,26 @@ fn the_kernel_slice_is_an_ordered_subset_and_clears_back() {
     }
     let base = palw_t12_release_v7_params();
     let mut p = base.clone();
-    palw_t12_arm_fence_list_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
     assert_ne!(ids(&p), ids(&base));
-    palw_t12_arm_fence_list_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, None);
+    // 17,000 moves only the slice's six non-int-13 entries; the int-13 four stay at the fleet's 15,500.
+    let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
+    let mut at_17000 = 0;
+    for f in PALW_T12_KERNEL_SLICE_FENCES_V1 {
+        if int13.contains(&f.name) {
+            assert_eq!(fence_at(&p, f.name), Some(15_500), "{}", f.name);
+        } else {
+            assert_eq!(fence_at(&p, f.name), Some(17_000), "{}", f.name);
+            at_17000 += 1;
+        }
+    }
+    assert_eq!(at_17000, 6);
+    for ((name, was), (_, now)) in base.palw_fences_v1().iter().zip(p.palw_fences_v1().iter()) {
+        if !PALW_T12_KERNEL_SLICE_FENCES_V1.iter().any(|f| f.name == *name) || int13.contains(name) {
+            assert_eq!(was, now, "{name} did not move");
+        }
+    }
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, None);
     assert_eq!(ids(&p), ids(&base));
 }
 
@@ -295,7 +318,7 @@ fn the_kernel_slice_is_an_ordered_subset_and_clears_back() {
 /// where both the Panel=1 route and Gate C are in force.
 #[test]
 fn the_kernel_slice_covers_the_kernel_route_family() {
-    use kaspa_consensus_core::config::params::{PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_arm_fence_list_at_v1, palw_t12_release_v7_params};
+    use kaspa_consensus_core::config::params::{PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_release_v7_params};
     use kaspa_consensus_core::palw_g14_gates_v1::{PalwG14RouteFamilyV1 as F, palw_g14_route_family_fences_v1};
     let slice: Vec<&str> = PALW_T12_KERNEL_SLICE_FENCES_V1.iter().map(|f| f.name).collect();
     for need in palw_g14_route_family_fences_v1(F::KernelRoutePanelOne) {
@@ -304,7 +327,7 @@ fn the_kernel_slice_covers_the_kernel_route_family() {
     let base = palw_t12_release_v7_params();
     assert!(base.palw_g14_route_required_v1_mirror().is_none(), "nothing below the fence");
     let mut p = base.clone();
-    palw_t12_arm_fence_list_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
     let m = p.palw_g14_route_required_v1_mirror().expect("the route-required fence is on the slice");
     assert!(!m.route_armed(F::KernelRoutePanelOne, 16_999, false));
     assert!(m.route_armed(F::KernelRoutePanelOne, 17_000, false));

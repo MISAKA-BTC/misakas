@@ -252,7 +252,27 @@ pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 17_000;
 /// the int-13 entries this list shares, should the int-13 list ever take a height of its own).
 pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
     let Some(at) = PALW_T12_FULL_ACTIVATION_DAA else { return };
-    palw_t12_arm_full_activation_at_v1(params, Some(at));
+    palw_t12_arm_after_int13_at_v1(params, PALW_T12_FULL_ACTIVATION_FENCES_V1, Some(at));
+}
+
+/// Is `fence` one of the int-13 list's entries while that list has its own height ([`PALW_T12_INT13_DAA`], DAA 15,500 on the public
+/// fleet)? Those entries keep that height: a later list must neither re-arm them at its own height nor set them dormant.
+pub fn palw_t12_fence_held_by_int13_v1(fence: &PalwPostLaunchFenceV1) -> bool {
+    PALW_T12_INT13_DAA.is_some() && PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == fence.name)
+}
+
+/// **A list that carries the int-13 entries, on the shipped testnet-12 ruleset** — like [`palw_t12_arm_fence_list_at_v1`], but the
+/// int-13 entries are left exactly as the int-13 flag day set them (DAA 15,500). With the slice at 17,000 this moves only the slice's
+/// remaining six entries, so every id below 17,000 is the fleet's. Drills that move the whole list to a low height keep using
+/// [`palw_t12_arm_full_activation_at_v1`] / [`palw_t12_arm_fence_list_at_v1`].
+pub fn palw_t12_arm_after_int13_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {
+    match at {
+        Some(at) => list
+            .iter()
+            .filter(|f| !palw_t12_fence_held_by_int13_v1(f))
+            .for_each(|fence| (fence.set)(params, Some(ForkActivation::new(at)))),
+        None => list.iter().rev().filter(|f| !palw_t12_fence_held_by_int13_v1(f)).for_each(|fence| (fence.set)(params, None)),
+    }
 }
 
 /// **The full-activation flag day at `at`** (`None`: dormant) — the one body the preset, a drill and the tests share. Dormant is set in
@@ -305,6 +325,7 @@ pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunch
 /// int-13 height and this list's height are `None`, it equals [`palw_t12_release_v6_params`] (int-12, `5ee7fd8e…`), byte for byte.
 pub fn palw_t12_release_v7_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    palw_t12_arm_full_activation_at_v1(&mut params, None);
+    // The int-13 entries stay at PALW_T12_INT13_DAA (15,500): this baseline is the public fleet's ruleset.
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
     params
 }
