@@ -1203,7 +1203,22 @@ async fn colluders_license(
 /// **T-N1 at node level, both cases.** `forged`: the producer's service commits a cone lie (drill D-05), its whole Panel colludes,
 /// and one public bond outside the Panel — the actual service — localizes and convicts.
 async fn tn1_node(forged: bool, declared: bool) {
+    tn1_node_with(forged, declared, Tn1ProducerV1::Service).await
+}
+
+async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV1) {
     assert!(!forged || !declared, "the separate forged fixture uses the original semantic identities");
+    let rail = match producer_kind {
+        Tn1ProducerV1::Service => None,
+        Tn1ProducerV1::Rail { node_less, provider_up } => Some((node_less, provider_up)),
+    };
+    let provider_dirs = tempfile::tempdir().unwrap();
+    // The provider the rail publishes to; the services read it only while it is "up" (down: published where no service looks).
+    let provider = provider_dirs.path().join("provider");
+    let provider_read: Vec<std::path::PathBuf> = match rail {
+        Some((_, true)) => vec![provider.clone()],
+        _ => Vec::new(),
+    };
     kaspa_core::log::try_init_logger(&std::env::var("TN1_LOG").unwrap_or_else(|_| "warn,kaspad_lib::palw_panel=info".into()));
     let (mut config, mut bundle, premine, mut floats) = tir_frame_config();
     if forged {
@@ -1235,15 +1250,28 @@ async fn tn1_node(forged: bool, declared: bool) {
         let republish =
             PalwConsensusObjectV2::TirClassLayoutPublishedV1 { class_id: fixture.class_id, layout: Box::new(fixture.layout.clone()) };
         let amount = floats[OUTSIDER].1.amount / 4;
-        let tx = chain.send(OUTSIDER, &republish, &mut floats[OUTSIDER], &[TransactionOutput::new(amount, card_payout_spk(0))]).await;
+        // Two outputs to card 0: the producer service's float and (lane FPSEL) the rail's own, so the two never spend each other's.
+        let tx = chain
+            .send(
+                OUTSIDER,
+                &republish,
+                &mut floats[OUTSIDER],
+                &[TransactionOutput::new(amount, card_payout_spk(0)), TransactionOutput::new(amount, card_payout_spk(0))],
+            )
+            .await;
         eprintln!("[service-tir-frame] producer service float {amount} sompi (from the outsider's premine float)");
-        (TransactionOutpoint::new(tx.id(), 0), UtxoEntry::new(tx.outputs[0].value, tx.outputs[0].script_public_key.clone(), chain.daa(), false))
+        let at = |i: usize| {
+            (TransactionOutpoint::new(tx.id(), i as u32), UtxoEntry::new(tx.outputs[i].value, tx.outputs[i].script_public_key.clone(), chain.daa(), false))
+        };
+        (at(0), at(1))
     };
+    let (producer_float, mut rail_float) = producer_float;
     // The outside verifier's actual service runs from here on (its fraud filer works through the harness's ground probe claims —
     // fabricated roots, rightly pursued — while the chain walks to the frame route, not later inside a frame's owner window).
     let dirs = tempfile::tempdir().unwrap();
     let mut node = Node::new(&chain);
-    let config = service_config(&chain, &dirs.path().join("outsider"), OUTSIDER, outsider, &floats[OUTSIDER], &fixture);
+    let mut config = service_config(&chain, &dirs.path().join("outsider"), OUTSIDER, outsider, &floats[OUTSIDER], &fixture);
+    config.evidence_provider_dirs = provider_read.clone();
     node.start(&chain, config);
     node.connect().await;
     // The frame route is in force only where every rule its verdicts consume is (testnet-12's aggregate liability at DAA 1,700 is the
@@ -1294,33 +1322,47 @@ async fn tn1_node(forged: bool, declared: bool) {
     service_floats[0] = producer_float;
     // Piece 3: the producer's actual service — canonical free-prompt claims on the IR class, published as ORIGINAL frames (`TFP1`).
     let mut producer = service_config(&chain, &dirs.path().join("producer"), 0, chain.bonds[0], &service_floats[0], &fixture);
-    producer.canonical_claims = true;
-    producer.canonical_class = Some(fixture.class_id.to_string());
-    producer.canonical_interval_daa = 200;
-    if forged {
-        producer.drill_tamper_tir_frame = Some(super::super::PalwDrillTirFrameFaultV1::Cone { leaf: 5 });
+    producer.evidence_provider_dirs = provider_read.clone();
+    match rail {
+        None => {
+            producer.canonical_claims = true;
+            producer.canonical_class = Some(fixture.class_id.to_string());
+            producer.canonical_interval_daa = 200;
+            if forged {
+                producer.drill_tamper_tir_frame = Some(super::super::PalwDrillTirFrameFaultV1::Cone { leaf: 5 });
+            }
+            node.start(&chain, producer);
+        }
+        // A rail beside its own node: the node runs every duty but files no canonical claim; it reads the original from the provider.
+        Some((false, _)) => node.start(&chain, producer),
+        // Node-less: the producer runs no node at all.
+        Some((true, _)) => {}
     }
-    node.start(&chain, producer);
     // Piece 4: the honest Panel's seats are actual services (they replay, sign, prepare, grant + Ready and license); in the forged
     // case the whole Panel colludes (harness-scripted below), so no seat service runs. The outside verifier always runs.
     if !forged {
         for card in 1..chain.bonds.len() {
-            let config =
+            let mut config =
                 service_config(&chain, &dirs.path().join(format!("seat{card}")), card, chain.bonds[card], &service_floats[card], &fixture);
+            config.evidence_provider_dirs = provider_read.clone();
             node.start(&chain, config);
         }
     }
     node.connect().await;
     let mut ready_at = chain.daa();
     let deadline = std::time::Instant::now() + Duration::from_secs(7_200);
-    // The producer's first framed claim.
-    let claim = loop {
+    // The producer's first framed claim (lane FPSEL: or the rail's one claim).
+    let claim = if rail.is_some() {
+        step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+        rail_tfp1_claim_v1(&mut chain, &fixture, &mut rail_float, &provider, forged.then_some(5)).await
+    } else { loop {
         assert!(std::time::Instant::now() < deadline, "the producer service carried no TFP1 claim");
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
         if let Some(claim) = framed_claims(&chain).into_iter().find(|c| chain.tc.palw_tir_public_frame_v1(*c).ok().flatten().is_some()) {
             break claim;
         }
-    };
+    } };
+    let provider_down = matches!(rail, Some((_, false)));
     let frame = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap();
     eprintln!("[service-tir-frame] piece 3: framed claim {claim} accepted at DAA {}: {frame:?}", chain.daa());
     if declared {
@@ -1365,6 +1407,7 @@ async fn tn1_node(forged: bool, declared: bool) {
             .collateral
     };
     let before = collateral_of(&chain, producer_bond);
+    let seat_collateral: Vec<(usize, _)> = (1..chain.bonds.len()).map(|card| (card, collateral_of(&chain, chain.bonds[card]))).collect();
     let mut colluders = Vec::new();
     let mut colluder_collateral = std::collections::BTreeMap::new();
     if forged {
@@ -1436,6 +1479,13 @@ async fn tn1_node(forged: bool, declared: bool) {
         match &view.phase {
             PalwClaimPhaseV2::Final { .. } => {
                 assert!(!forged, "a forged claim reached Final: {view:?}");
+                assert!(!provider_down, "no service could read the original, yet the claim reached Final: {view:?}");
+                break;
+            }
+            PalwClaimPhaseV2::Voided { reason, .. } if provider_down => {
+                // Lane FPSEL: the provider's silence is the claimant's DA no-response — a default, never a computation fault.
+                assert_ne!(*reason, PalwVoidReasonV2::CourtFraud, "provider silence convicted the computation: {view:?}");
+                eprintln!("[service-tir-frame] provider down: claim {claim} voided by DA default ({reason:?}) at DAA {}", chain.daa());
                 break;
             }
             PalwClaimPhaseV2::Voided { reason, .. } => {
@@ -1459,6 +1509,28 @@ async fn tn1_node(forged: bool, declared: bool) {
         }
         assert!(spend_one_quantum(&mut chain, 0, claim).await.is_none(), "a voided claim's quanta never spend");
         eprintln!("[service-tir-frame] forged: convicted by the outside service at DAA {}", chain.daa());
+    } else if provider_down {
+        // No seat licensed what it could not replay: no seat (and not the outside verifier) is charged for the claimant's silence.
+        for (card, was) in &seat_collateral {
+            assert_eq!(collateral_of(&chain, chain.bonds[*card]), *was, "seat {card} was charged for the claimant's DA silence");
+        }
+        assert!(spend_one_quantum(&mut chain, 0, claim).await.is_none(), "a defaulted claim's quanta never spend");
+    } else if rail.is_some() {
+        // Lane FPSEL: the rail's one claim is Final with unspent priced quanta (its payment right). A receipt spend needs a winning
+        // quantum among this ONE claim's draws; the producer-service case above proves the spend path, so it is not required here.
+        let mut source = None;
+        chain
+            .tc
+            .palw_tir_public_read_v1(&mut |state| {
+                source = state.claim(&claim).map(|c| (c.source.clone(), c.pwu));
+                Ok(())
+            })
+            .unwrap();
+        let (source, pwu) = source.expect("the Final claim is in the state");
+        let kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, .. } = &source else { panic!("a free-prompt claim: {source:?}") };
+        assert!(*quanta >= 1 && pwu > 0, "the rail's Final claim holds priced quanta: {source:?} pwu {pwu}");
+        assert_eq!(collateral_of(&chain, producer_bond), before, "the honest producer is not charged");
+        eprintln!("[service-tir-frame] rail: claim {claim} Final with {quanta} quanta at DAA {}", chain.daa());
     } else {
         assert_eq!(collateral_of(&chain, producer_bond), before, "the honest producer is not charged");
         // Require a real receipt spend. The producer keeps submitting honest frames: if this
@@ -1565,4 +1637,209 @@ async fn tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_se
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum() {
     on_service_stack(|| tn1_node(false, false)).await;
+}
+
+// ---- lane FPSEL: the free-prompt RAIL's path in T-N1 ---------------------------------------------------------------------------
+
+/// **How the producer's claim reaches the chain in a T-N1 run.** `Service`: the node producer's canonical claims (the original T-N1).
+/// `Rail`: the free-prompt rail's path (gateway → fp-worker → rail) emulated in-process with the rail's OWN pieces — the node's quote
+/// (the read op 248 serves), the ONE pledge assembly (`palw_tir_public_original_pledges_v1`), the TFP1 builder, and the frame original
+/// published to an RFC-0009 stage B provider directory (`publish_fp_claim_material_v1`, what `--evidence-out` writes). `node_less`:
+/// no producer service runs at all (the rail's `--rpc` names someone else's node); otherwise the producer's node runs with no
+/// canonical claims and reads the original from the provider like every seat. `provider_up: false`: the original is published to
+/// a directory no service reads — the provider is down (the claimant's DA no-response).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tn1ProducerV1 {
+    Service,
+    Rail { node_less: bool, provider_up: bool },
+}
+
+/// **The rail's claim on the IR class** (producer card 0): an FP selection job (USER mode, the class's own tokenizer, greedy — V4 past
+/// the decode rules), executed by the class's backend (as the fp-worker), its TIR header, the node's frame quote, the pledges and
+/// the TFP1 carrier, then the FPC1 original published to `provider`. `fault_leaf`: the producer lies at that step leaf (the cone
+/// forgery the producer drill uses), every root re-derived from the corrupted capture.
+async fn rail_tfp1_claim_v1(
+    chain: &mut Chain,
+    fixture: &TirFixture,
+    funding: &mut Funding,
+    provider: &std::path::Path,
+    fault_leaf: Option<u64>,
+) -> Hash64 {
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
+        fp_claim_id_v3, palw_fp_capture_encode_v1,
+    };
+    let params = chain.config.params.clone();
+    assert!(
+        !params.palw_fp_answer_accounting_v1_fence().is_some_and(|f| f.is_active(chain.daa())),
+        "this harness's rail emulation does not wrap the answer-accounting carrier"
+    );
+    let class_id = fixture.class_id;
+    let bond = chain.bonds[0].0;
+    let backend = fixture.backend(chain);
+    let facts = chain.tc.palw_producer_facts_v2(class_id, Some(bond)).expect("producer facts for the IR class");
+    let record = chain.tc.palw_tir_class_record_v1(class_id).expect("the IR class is registered");
+    let network_form = params.palw_prompt_ids_form_v1();
+    let form = chain
+        .tc
+        .palw_registered_class_carriage_v1(class_id)
+        .map(|(profile, _)| kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, &profile))
+        .unwrap_or(network_form);
+    let mut job = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: chain.network_domain,
+        class_id,
+        executor_bond: bond,
+        executor_pubkey: card_pubkey(0),
+        operator_id: facts.bond.as_ref().expect("card 0 is registered").operator_id,
+        anchor_block: facts.chain_point,
+        anchor_daa: facts.daa_score,
+        job_nonce: [0x52; 32],
+        tokenizer_id: record.tokenizer_id,
+        prompt_token_ids_hash: Hash64::default(),
+        prompt_tokens: 0,
+        decode_token_limit: 0,
+        max_context_tokens: 0,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        tail: None,
+    };
+    if params.palw_fp_decode_rules_active_at(chain.daa()) {
+        job = job.into_v4(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+    }
+    let (ctx, prompt) = backend.job_for_anchor(fp_canonical_anchor_v1(&job)).expect("the anchor's prompt");
+    let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+    job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &ids).unwrap();
+    job.prompt_tokens = ids.len() as u32;
+    job.decode_token_limit = ctx.exact_decode_tokens;
+    job.max_context_tokens = ctx.max_context_tokens;
+    assert!(
+        kaspa_consensus_core::palw_g14_gates_v1::palw_g14_fp_route_families_v1(&job)
+            .contains(&kaspa_consensus_core::palw_g14_gates_v1::PalwG14RouteFamilyV1::FpSelection),
+        "the rail's job is an FpSelection job"
+    );
+    // The fp-worker's run (and its retained TIR header, `tir-public-binding.hex`).
+    let run = match fault_leaf {
+        None => backend.execute_free_prompt(&job, &prompt).expect("the honest run"),
+        Some(leaf) => backend.execute_free_prompt_with_injected_fault(&job, &prompt, leaf).expect("the forged run"),
+    };
+    let shape = backend.capture_shape(&run.outcome.material).expect("a TIR capture shape");
+    let commitment = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(
+        &job,
+        &shape.job_context,
+        &run,
+        chain.daa() + facts.min_trace_retention_daa,
+    )
+    .expect("the run assembles into a commitment");
+    let header = backend.public_execution_binding_header_v1(&run.outcome.material).expect("the TIR backend exports its header");
+    let kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(tir) = &header else {
+        panic!("an IR class's header is a TIR header")
+    };
+    // The rail: the node's quote (op 248's read), round-tripped through its wire form, then the one pledge assembly.
+    let (quote_daa, plan) =
+        chain.tc.palw_tir_public_original_quote_v1(commitment.clone(), tir.clone()).expect("the quote").expect("the frame admits it");
+    let plan: kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1 =
+        borsh::from_slice(&borsh::to_vec(&plan).unwrap()).unwrap();
+    let sign = |message: &[u8], context: &[u8]| Ok::<_, String>(signed(0, message, context));
+    let pledges = kaspa_pq_validator_core::palw_tir_public_original_pledges_v1(
+        &sign,
+        &commitment,
+        PalwBondKeyV2(bond),
+        tir,
+        &plan,
+        quote_daa,
+        chain.daa(),
+    )
+    .expect("the rail signs the frame's pledges");
+    let carried = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&commitment.job, &ids);
+    let price = chain
+        .tc
+        .palw_fp_commitment_price_v1(class_id, carried.clone(), job.prompt_tokens, commitment.decode_tokens_executed, commitment.work_leaves, Some(bond))
+        .expect("a price answer")
+        .price
+        .expect("the IR lane prices this job");
+    let signer = kaspa_pq_validator_core::ValidatorKey::from_seed([0xB0; 32]);
+    let build = |fee: u64| {
+        kaspa_pq_validator_core::build_fp_commitment_tx_with_tir_public_original_v1(
+            &signer,
+            chain.network_domain,
+            network_form,
+            commitment.clone(),
+            carried.clone(),
+            kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: price.quanta, pwu: price.pwu },
+            tir,
+            &pledges.pledge,
+            pledges.history.as_ref(),
+            pledges.rent_sompi,
+            funding.0,
+            &funding.1,
+            fee.saturating_add(pledges.rent_sompi),
+        )
+        .expect("the TFP1 carrier")
+    };
+    let mass = kaspa_consensus_core::mass::MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    );
+    let fee = relay_fee_for_compute_mass(mass.calc_non_contextual_masses(&build(250_000)).compute_mass).max(250_000);
+    let mut validated = MutableTransaction::from_tx(build(fee));
+    chain.tc.validate_mempool_transaction(&mut validated, &Default::default()).expect("the node's mempool admits the TFP1 carrier");
+    let tx = validated.tx.as_ref().clone();
+    // The rail's `--evidence-out`: the FPC1 original with its manifest, published BEFORE the carrier (the miner may switch off after).
+    let material = palw_fp_capture_encode_v1(&commitment.job, &ids, &run.outcome.material);
+    let (_, chunks) = misaka_palw_remote::evidence::fs::publish_fp_claim_material_v1(provider, &commitment, &material)
+        .expect("the provider directory takes the original");
+    let claim = fp_claim_id_v3(&commitment);
+    // What the fold makes of the carried object at the tip (a node-policy read), named if the frame is not taken.
+    let rehearsal = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
+        .ok()
+        .map(|envelope| format!("{envelope:?}").chars().take(400).collect::<String>());
+    eprintln!("[service-tir-frame] rail: carrier {} envelope {rehearsal:?}", tx.id());
+    chain.heartbeat(vec![tx.clone()]).await;
+    chain.heartbeat(vec![]).await;
+    let output = tx.outputs.last().unwrap();
+    *funding = (
+        TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
+        UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+    );
+    assert!(chain.tc.palw_tir_public_frame_v1(claim).ok().flatten().is_some(), "the rail's claim {claim} is accepted WITH its TFP1 frame");
+    eprintln!(
+        "[service-tir-frame] rail: TFP1 claim {claim} (fault {fault_leaf:?}) accepted at DAA {}; {} B original in {chunks} chunk(s) at {}",
+        chain.daa(),
+        material.len(),
+        provider.display()
+    );
+    claim
+}
+
+/// **lane FPSEL, rail (with a node), honest**: the rail's TFP1 claim, its original from the provider, licensed by the seats' actual
+/// services and Final with its payment right.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tir_frame_node_tn1_rail_honest_framed_claim_is_final() {
+    on_service_stack(|| tn1_node_with(false, false, Tn1ProducerV1::Rail { node_less: false, provider_up: true })).await;
+}
+
+/// **lane FPSEL, node-less rail, honest**: no producer service at all; the seats read the original from the provider; Final.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tir_frame_node_tn1_nodeless_rail_honest_framed_claim_is_final() {
+    on_service_stack(|| tn1_node_with(false, false, Tn1ProducerV1::Rail { node_less: true, provider_up: true })).await;
+}
+
+/// **lane FPSEL, node-less rail, provider down**: the original reaches no service — a DA default (the claimant's no-response), never
+/// `CourtFraud`, and no seat is slashed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tir_frame_node_tn1_nodeless_rail_provider_down_is_a_da_default() {
+    on_service_stack(|| tn1_node_with(false, false, Tn1ProducerV1::Rail { node_less: true, provider_up: false })).await;
+}
+
+/// **lane FPSEL, node-less rail, forged with the whole Panel colluding**: one outside service convicts — `CourtFraud`, the producer
+/// and every Valid seat slashed, never paid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tir_frame_node_tn1_nodeless_rail_forged_claim_is_convicted_by_one_outside_service() {
+    on_service_stack(|| tn1_node_with(true, false, Tn1ProducerV1::Rail { node_less: true, provider_up: true })).await;
 }

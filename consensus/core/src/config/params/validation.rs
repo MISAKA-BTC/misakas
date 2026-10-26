@@ -130,6 +130,18 @@ impl Params {
         self.validate_palw_v2_inner(false, records, cost_records, crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1)
     }
 
+    /// **All three record lists in place of the binary's pinned ones** (lane FPSEL, 2026-10-27): G14 arm-readiness, TIR frame cost and
+    /// kernel-route records — for a test that arms a candidate list spanning the kernel slice AND the TIR frame route. Every refusal is
+    /// [`Self::validate_palw_v2`]'s; only WHICH records exist differs. The node never calls it.
+    pub fn validate_palw_v2_with_all_records_v1(
+        &self,
+        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
+        cost_records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
+        kernel_records: &[crate::palw_kernel_route_arming_v1::PalwKernelRouteArmingRecordV1],
+    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        self.validate_palw_v2_inner(false, records, cost_records, kernel_records)
+    }
+
     /// Feature-gated private factory exception for release heights only. All
     /// value, dependency and retirement checks run on the actual armed bundle.
     /// Rule E and its commitment stay exactly at DAA 1; the retirement may be armed
