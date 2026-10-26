@@ -73,6 +73,30 @@ T_ITEMS = [
      'real processes cross H on the shipped release build'),
 ]
 
+# Lane KNODE: the kaspad flags each kernel-route role takes (palw_panel::palw_kernel_roles; every role also needs the node's bond:
+# --palw-panel-key, --palw-panel-bond, --palw-fee-outpoint, and the registered model --palw-kernel-model=<PALWKM01 file>). The
+# outsider filer and the Panel=1 seat need no extra flag (identity + model arm them: palw_kernel_verifier), nor does the Gate C drawn
+# verifier. The --palw-drill-* injections are refused without --palw-drill-genesis-salt.
+KNODE_ROLE_ARGS = {
+    'poster': ['--palw-kernel-post-job=3,17,9:3'],
+    'producer': ['--palw-kernel-producer', '--palw-kernel-export-dir={work}/export'],
+    'seat': [],
+    'gate-c-verifier': [],
+    'outsider-filer': [],
+    'relay': ['--palw-kernel-relay-dir={work}/export'],
+    'liar': ['--palw-kernel-producer', '--palw-drill-kernel-inject=lie'],
+    'silent': ['--palw-kernel-producer', '--palw-drill-kernel-inject=silent'],
+    'forger': ['--palw-drill-kernel-inject=forged-receipt'],
+    'wrong-challenger': ['--palw-drill-kernel-inject=wrong-challenge'],
+    'flooder': ['--palw-drill-kernel-inject=junk-flood', '--palw-drill-kernel-flood=200'],
+}
+
+
+def knode_args(role, model, work):
+    """kaspad flags for one KNODE role (pure)."""
+    return ['--palw-kernel-model=%s' % model] + [f.format(work=work) for f in KNODE_ROLE_ARGS[role]]
+
+
 # Arming requirements this lane can speak to: (family, fence, index, T rows it rests on, waiver text or None).
 REQUIREMENTS = [
     ('kernel-route', 'palw_probabilistic_constraints_v1', 1, ['T01', 'T03', 'T05', 'T14'], None),
@@ -199,6 +223,17 @@ def main():
     ap.add_argument('--cli', default=str(REPO / 'target/release/misaka'))
     ap.add_argument('--build-command', default='cargo build --release -p kaspad -p misaka-cli --features kaspad/private-integration-config')
     ap.add_argument('--profile-only', action='store_true', help='only the ruleset check (no node is started)')
+    ap.add_argument('--knode-role-args', metavar='ROLE', choices=sorted(KNODE_ROLE_ARGS),
+                    help='print the kaspad flags of one KNODE role (with --knode-model, --work) and exit')
+    ap.add_argument('--knode-model', default='<model.palwkm>')
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument('--knode-role-args', choices=sorted(KNODE_ROLE_ARGS))
+    pre.add_argument('--knode-model', default='<model.palwkm>')
+    pre.add_argument('--work')
+    k, _ = pre.parse_known_args()
+    if k.knode_role_args:
+        print(' '.join(knode_args(k.knode_role_args, k.knode_model, k.work or '<work>')))
+        return 0
     a = ap.parse_args()
     if 'docs' in Path(a.out_dir).resolve().parts:
         sys.exit('--out-dir must not be under docs/ (the pin script refuses documents)')

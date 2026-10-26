@@ -185,6 +185,11 @@ mod selected_event_responder;
 #[path = "palw_kernel_verifier.rs"]
 pub(crate) mod palw_kernel_verifier;
 
+/// Lane KNODE: the kernel route's Panel=1 slice roles on a node — poster, producer (claims and demand answers), Gate C drawn verifier,
+/// relay, and the drill-only injections (node policy; a clean no-op below the kernel route's fence).
+#[path = "palw_kernel_roles.rs"]
+pub(crate) mod palw_kernel_roles;
+
 #[path = "palw_native_routing_replay_v2.rs"]
 mod native_routing_replay_v2;
 /// ADR-0160 F-Q (stage 2, rcore/cap-s1): the operator's audit duty — an operator node in a credited
@@ -4271,6 +4276,8 @@ pub struct PalwPanelConfig {
     /// ADR-0177 D7). A model is used for a kernel class only when it opens to the class's REGISTERED parameter commitments. Empty: the
     /// kernel-route verifier (`palw_kernel_verifier`) does nothing.
     pub kernel_models: Vec<PathBuf>,
+    /// **Lane KNODE: the kernel route's slice roles** (`palw_kernel_roles`; all off by default, injections drill-only).
+    pub kernel_roles: palw_kernel_roles::PalwKernelRolesConfigV1,
     /// **Register this node's worker class on the running chain, once** (ADR-0049 Decision H).
     ///
     /// A network is born with the classes its ruleset id commits to, and every later one arrives
@@ -9141,6 +9148,8 @@ impl PalwPanelService {
         let mut tir_public_owner = palw_fraud_filer::tir_public_owner::PalwTirPublicOwnerBookV1::default();
         // Lane G14-K: the kernel route's public verifier's book — a cache of the chain and this process's replays; nothing persists.
         let mut kernel_verifier = palw_kernel_verifier::PalwKernelVerifierBookV1::default();
+        // Lane KNODE: the slice roles' book (process memory; every duty re-derives from the chain).
+        let mut kernel_roles = palw_kernel_roles::PalwKernelRolesBookV1::default();
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
         let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
         audit_duty.replays.configure_slots(self.config.seat_replay_slots);
@@ -10251,6 +10260,18 @@ impl PalwPanelService {
             // below the fence.
             self.kernel_verifier_tick_v1(&session, &mut kernel_verifier, current_daa, network_domain, bond_key, &mut court_outbox)
                 .await;
+            // --- lane KNODE: the kernel route's slice roles (`palw_kernel_roles`) — poster, producer, Gate C drawn verifier, relay,
+            // drill-only injections; models shared with the verifier's book. A clean no-op below the fence. ---
+            self.kernel_roles_tick_v1(
+                &session,
+                &mut kernel_roles,
+                &kernel_verifier,
+                current_daa,
+                network_domain,
+                bond_key,
+                &mut court_outbox,
+            )
+            .await;
 
             // --- ADR-0160 F-Q (stage 2): the operator's audit duty (`palw_audit_duty`) ---
             //

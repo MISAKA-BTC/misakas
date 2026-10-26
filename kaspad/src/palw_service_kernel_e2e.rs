@@ -592,6 +592,21 @@ fn start_kernel_service_as(
     model: &std::path::Path,
     keep: &mut Vec<kaspa_database::utils::DbLifetime>,
 ) -> KNode {
+    start_kernel_service_with(chain, dir, bond, card, funding, model, Default::default(), keep)
+}
+
+/// [`start_kernel_service_as`] with lane KNODE's slice roles configured (`palw_kernel_roles`).
+#[allow(clippy::too_many_arguments)]
+fn start_kernel_service_with(
+    chain: &Chain,
+    dir: &std::path::Path,
+    bond: PalwBondKeyV2,
+    card: Option<usize>,
+    funding: &Funding,
+    model: &std::path::Path,
+    roles: crate::palw_panel::palw_kernel_roles::PalwKernelRolesConfigV1,
+    keep: &mut Vec<kaspa_database::utils::DbLifetime>,
+) -> KNode {
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
@@ -639,6 +654,7 @@ fn start_kernel_service_as(
         std::fs::write(&panel.key_path, faster_hex::hex_string(&seed)).unwrap();
     }
     panel.kernel_models = vec![model.to_path_buf()];
+    panel.kernel_roles = roles;
     let service = Arc::new(PalwPanelService::new(panel, manager.clone(), flow.clone(), config));
     assert!(service.keypair.is_some());
     assert_eq!(service.bond, Some(bond.0));
@@ -957,3 +973,7 @@ async fn g14r2_kernel_interim_seats_run_as_services_pay_the_honest_claim_and_ref
     }
 }
 
+
+/// Lane KNODE: the kernel route's slice roles run by kaspad's actual service (`palw_kernel_roles`).
+#[path = "palw_service_kernel_roles_e2e.rs"]
+mod knode_roles;
