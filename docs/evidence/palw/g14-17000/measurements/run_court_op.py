@@ -89,6 +89,11 @@ def main():
     if args.n < 20 or args.runs < 1 or args.baseline_runs < 1:
         parser.error("n must be >=20 and both run counts positive")
     record = json.loads(args.build_record.read_text())
+    if record.get("stage") == "BUILT":
+        if record.get("exit_code") != 0 or record.get("source_unchanged") is not True or not record.get("files"):
+            parser.error("build record does not establish unchanged source and captured inputs")
+        record = dict(record, stage="built", identity_matches=True, head=record["source_commit"],
+                      pinned_binary=record["binary"])
     if record.get("stage") != "built" or record.get("exit_code") != 0 or record.get("identity_matches") is not True:
         parser.error("build record does not establish a matching release executable")
     binary = Path(record["pinned_binary"]["path"])

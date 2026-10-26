@@ -15,12 +15,14 @@ def sha(path):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--target', choices=['native', 'dolphin'], required=True)
+    p.add_argument('--target', choices=['native', 'dolphin', 'court'], required=True)
     p.add_argument('--record-name', required=True)
     p.add_argument('--out', type=Path, required=True)
     a = p.parse_args()
     if a.target == 'native':
         package, target, selector = 'kaspa-consensus', 'kaspa_consensus', ['--lib']
+    elif a.target == 'court':
+        package, target, selector = 'kaspa-consensus-core', 'palw_tir_court_verify_cpu', ['--test', 'palw_tir_court_verify_cpu']
     else:
         # This measurement package has one CLI, unlike BASE-0's many auto bins.
         package, target, selector = 'misaka-palw-opv-meas', 'g14_real_model_measure', ['--test', 'g14_real_model_measure']
@@ -32,6 +34,8 @@ def main():
          'stage': 'BUILDING', 'features': 'default', 'minimum_hardware': False, 'load_before': os.getloadavg(),
          'hardware': subprocess.check_output(['sysctl', 'hw.model', 'hw.memsize', 'hw.ncpu'], text=True),
          'builder_sha256': sha(Path(__file__))}
+    if a.target == 'court':
+        r['files'] = [{'path': name, 'sha256': sha(Path(name))} for name in ['Cargo.lock', 'consensus/core/tests/palw_tir_court_verify_cpu.rs', 'consensus/core/tests/palw_tir_fixture_common.rs']]
     record.write_text(json.dumps(r, indent=2) + '\n')
     env = dict(os.environ, CARGO_TARGET_DIR=str(a.out/'target'), TMPDIR='/private/tmp')
     with (a.out/f'{a.record_name}-build.stdout.log').open('w') as stdout, (a.out/f'{a.record_name}-build.stderr.log').open('w') as stderr:

@@ -75,3 +75,9 @@ The later integration source `648544c46` adds `approved_v1`, while this measured
 | Epoch | 1,000,000 DAA | 720 DAA |
 
 The draw-by deadline is for obtaining a draw; it does not require completion before the longer prosecution window. A matched m/k alone therefore does not make this a production-policy duration or settlement drill. Native kernel liability/retention, bond locks, attestation availability and the full certification lifetime need a composed run. The existing test's 40-DAA prosecution window cannot substantiate the full policy's 5,040-DAA window.
+
+## Latest-source quiet rerun continuation
+
+A finite [workflow](../run_court_after_model.py) is now running from the measurement worktree. It waits for the current native build to finish, builds and pins `palw_tir_court_verify_cpu` from the source actually checked out when it acquires the shared slot, then waits for the existing Dolphin 32k process's terminal record. It subsequently requests all 19 operation/scale conditions (13 default operations and six scale variants), each with three N=0 and three N=1000 processes, using the ≤5 load gate. It never restarts the model or native build. The quiet batch's load-wait budget is two hours; a timeout or partial run remains recorded as such. Machine load can rise during a sample, in which case that result remains UNDER_LOAD.
+
+Live workflow state/logs are local artifacts `quiet-core-workflow.json` / `quiet-core-workflow.log` under `/Users/wata/.codex/artifacts/g14-17000-measure/`; completed records will be copied here. This is a queued measurement, not a result. These old-core operations and the separate native phases have different timing boundaries; completion of this batch alone will not close minimum-node or maximum-profile requirements.
