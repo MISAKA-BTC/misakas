@@ -1,0 +1,312 @@
+{
+  "operation": "d2_sweep",
+  "n": 1000,
+  "runs_requested": 3,
+  "baseline_runs_requested": 3,
+  "scale": 16,
+  "source_commit": "84d7186471454c050c85fd3170b1ba9dea0d9987",
+  "source_files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+    },
+    {
+      "path": "consensus/core/tests/palw_tir_court_verify_cpu.rs",
+      "sha256": "a58ebdd11fcecda426aa0d3daf00423fb64c87a295886e13f0803ac95ccb496c"
+    },
+    {
+      "path": "consensus/core/tests/palw_tir_fixture_common.rs",
+      "sha256": "bb756bad4d221de2451017efe0f8ee258f56d76e64825a6e7315913a79d5b3bc"
+    }
+  ],
+  "binary_path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+  "binary_sha256": "bc13a045eb79b795365c9f21050da122a2e3de479246c9e3beb2a02c9c1e4ac7",
+  "build_command": [
+    "/Users/wata/Downloads/MISAKA-wt-b/buildslot.sh",
+    "cargo",
+    "test",
+    "--offline",
+    "--release",
+    "-p",
+    "kaspa-consensus-core",
+    "--test",
+    "palw_tir_court_verify_cpu",
+    "--no-run"
+  ],
+  "features": "default",
+  "minimum_hardware": false,
+  "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10",
+  "runs": [
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "d2_sweep",
+        "MEASURE_N": "0",
+        "MEASURE_SCALE": "16"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.034609,
+      "before": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 12500992,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=0 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0",
+      "stdout_log": "baseline-00.stdout.log",
+      "stderr_log": "baseline-00.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "d2_sweep",
+        "MEASURE_N": "0",
+        "MEASURE_SCALE": "16"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.03301591599999999,
+      "before": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 12779520,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=0 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0",
+      "stdout_log": "baseline-01.stdout.log",
+      "stderr_log": "baseline-01.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "d2_sweep",
+        "MEASURE_N": "0",
+        "MEASURE_SCALE": "16"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.033746250000000005,
+      "before": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 12386304,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=0 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0",
+      "stdout_log": "baseline-02.stdout.log",
+      "stderr_log": "baseline-02.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "d2_sweep",
+        "MEASURE_N": "1000",
+        "MEASURE_SCALE": "16"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.03501879199999999,
+      "before": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 12566528,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=1000 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=3584 median_wall_ns=750 p95_wall_ns=750 p99_wall_ns=834 max_wall_ns=958 total_wall_ns=748758 observed_expected_outcomes=1000 open_cases=16 registry_entries=17",
+      "stdout_log": "sample-00.stdout.log",
+      "stderr_log": "sample-00.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "d2_sweep",
+        "MEASURE_N": "1000",
+        "MEASURE_SCALE": "16"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.03554808300000001,
+      "before": {
+        "utc": "2026-10-26T06:13:14Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T06:13:15Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 12353536,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=1000 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=2417 median_wall_ns=750 p95_wall_ns=792 p99_wall_ns=792 max_wall_ns=917 total_wall_ns=760913 observed_expected_outcomes=1000 open_cases=16 registry_entries=17",
+      "stdout_log": "sample-01.stdout.log",
+      "stderr_log": "sample-01.stderr.log"
+    },
+    {
+      "status": "PASS",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+        "court_verify_cpu_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "MEASURE_OP": "d2_sweep",
+        "MEASURE_N": "1000",
+        "MEASURE_SCALE": "16"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.03487433299999998,
+      "before": {
+        "utc": "2026-10-26T06:13:15Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "after": {
+        "utc": "2026-10-26T06:13:15Z",
+        "uptime": "15:13  up 18:02, 1 user, load averages: 7.87 11.48 12.95",
+        "load": [
+          7.8701171875,
+          11.48291015625,
+          12.94580078125
+        ]
+      },
+      "under_load": true,
+      "peak_rss_bytes": 12795904,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0,
+      "measure": "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=1000 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=3542 median_wall_ns=750 p95_wall_ns=791 p99_wall_ns=792 max_wall_ns=958 total_wall_ns=752463 observed_expected_outcomes=1000 open_cases=16 registry_entries=17",
+      "stdout_log": "sample-02.stdout.log",
+      "stderr_log": "sample-02.stderr.log"
+    }
+  ],
+  "status": "UNDER_LOAD"
+}

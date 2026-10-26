@@ -1,0 +1,3 @@
+[buildslot] waiting: 4/4 slots busy, place 2 in line, 42 GB free (need 18 + 4 per running build)
+[buildslot] slot-1 acquired at 15:10:24, 40 GB free
+[buildslot] released slot-1 at 15:13:16 (exit 0)

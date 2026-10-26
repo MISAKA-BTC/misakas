@@ -1,0 +1,191 @@
+{
+  "build_record": "docs/evidence/palw/g14-17000/measurements/M-C/build-record.json",
+  "status": "UNDER_LOAD_FIXTURE_ONLY",
+  "operations": [
+    {
+      "op": "mldsa87_verify",
+      "scale": null,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+        "/Users/wata/.codex/worktrees/g14-panel1-measure/MISAKA-testnet/docs/evidence/palw/g14-17000/measurements/run_court_op.py",
+        "--build-record",
+        "docs/evidence/palw/g14-17000/measurements/M-C/build-record.json",
+        "--out",
+        "docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/mldsa87_verify",
+        "--op",
+        "mldsa87_verify",
+        "--n",
+        "1000",
+        "--runs",
+        "3",
+        "--baseline-runs",
+        "3",
+        "--allow-under-load"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.8536073329999999,
+      "stdout": "{\"op\": \"mldsa87_verify\", \"status\": \"UNDER_LOAD\", \"runs\": 6, \"output\": \"docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/mldsa87_verify\"}\n",
+      "stderr": "",
+      "measurement_status": "UNDER_LOAD"
+    },
+    {
+      "op": "root_claim_admit",
+      "scale": null,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+        "/Users/wata/.codex/worktrees/g14-panel1-measure/MISAKA-testnet/docs/evidence/palw/g14-17000/measurements/run_court_op.py",
+        "--build-record",
+        "docs/evidence/palw/g14-17000/measurements/M-C/build-record.json",
+        "--out",
+        "docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/root_claim_admit",
+        "--op",
+        "root_claim_admit",
+        "--n",
+        "1000",
+        "--runs",
+        "3",
+        "--baseline-runs",
+        "3",
+        "--allow-under-load"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 169.44564070799998,
+      "stdout": "{\"op\": \"root_claim_admit\", \"status\": \"UNDER_LOAD\", \"runs\": 6, \"output\": \"docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/root_claim_admit\"}\n",
+      "stderr": "",
+      "measurement_status": "UNDER_LOAD"
+    },
+    {
+      "op": "d2_sweep",
+      "scale": 16,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+        "/Users/wata/.codex/worktrees/g14-panel1-measure/MISAKA-testnet/docs/evidence/palw/g14-17000/measurements/run_court_op.py",
+        "--build-record",
+        "docs/evidence/palw/g14-17000/measurements/M-C/build-record.json",
+        "--out",
+        "docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/d2_sweep-scale-16",
+        "--op",
+        "d2_sweep",
+        "--n",
+        "1000",
+        "--runs",
+        "3",
+        "--baseline-runs",
+        "3",
+        "--scale",
+        "16",
+        "--allow-under-load"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.32920425000000364,
+      "stdout": "{\"op\": \"d2_sweep\", \"status\": \"UNDER_LOAD\", \"runs\": 6, \"output\": \"docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/d2_sweep-scale-16\"}\n",
+      "stderr": "",
+      "measurement_status": "UNDER_LOAD"
+    },
+    {
+      "op": "d2_sweep",
+      "scale": 256,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+        "/Users/wata/.codex/worktrees/g14-panel1-measure/MISAKA-testnet/docs/evidence/palw/g14-17000/measurements/run_court_op.py",
+        "--build-record",
+        "docs/evidence/palw/g14-17000/measurements/M-C/build-record.json",
+        "--out",
+        "docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/d2_sweep-scale-256",
+        "--op",
+        "d2_sweep",
+        "--n",
+        "1000",
+        "--runs",
+        "3",
+        "--baseline-runs",
+        "3",
+        "--scale",
+        "256",
+        "--allow-under-load"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.3566969160000042,
+      "stdout": "{\"op\": \"d2_sweep\", \"status\": \"UNDER_LOAD\", \"runs\": 6, \"output\": \"docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/d2_sweep-scale-256\"}\n",
+      "stderr": "",
+      "measurement_status": "UNDER_LOAD"
+    },
+    {
+      "op": "d2_sweep",
+      "scale": 4096,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+        "/Users/wata/.codex/worktrees/g14-panel1-measure/MISAKA-testnet/docs/evidence/palw/g14-17000/measurements/run_court_op.py",
+        "--build-record",
+        "docs/evidence/palw/g14-17000/measurements/M-C/build-record.json",
+        "--out",
+        "docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/d2_sweep-scale-4096",
+        "--op",
+        "d2_sweep",
+        "--n",
+        "1000",
+        "--runs",
+        "3",
+        "--baseline-runs",
+        "3",
+        "--scale",
+        "4096",
+        "--allow-under-load"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.014226750000006,
+      "stdout": "{\"op\": \"d2_sweep\", \"status\": \"UNDER_LOAD\", \"runs\": 6, \"output\": \"docs/evidence/palw/g14-17000/measurements/M-C/raw/continuation-2026-10-26/d2_sweep-scale-4096\"}\n",
+      "stderr": "",
+      "measurement_status": "UNDER_LOAD"
+    }
+  ],
+  "load_waits": [
+    {
+      "utc": "2026-10-26T06:10:24Z",
+      "op": "mldsa87_verify",
+      "load": [
+        12.1796875,
+        14.04296875,
+        13.990234375
+      ]
+    },
+    {
+      "utc": "2026-10-26T06:10:25Z",
+      "op": "root_claim_admit",
+      "load": [
+        12.1796875,
+        14.04296875,
+        13.990234375
+      ]
+    },
+    {
+      "utc": "2026-10-26T06:13:14Z",
+      "op": "d2_sweep-scale-16",
+      "load": [
+        7.8701171875,
+        11.48291015625,
+        12.94580078125
+      ]
+    },
+    {
+      "utc": "2026-10-26T06:13:15Z",
+      "op": "d2_sweep-scale-256",
+      "load": [
+        7.8701171875,
+        11.48291015625,
+        12.94580078125
+      ]
+    },
+    {
+      "utc": "2026-10-26T06:13:15Z",
+      "op": "d2_sweep-scale-4096",
+      "load": [
+        7.8701171875,
+        11.48291015625,
+        12.94580078125
+      ]
+    }
+  ],
+  "allow_under_load": true,
+  "arming_evidence": false
+}

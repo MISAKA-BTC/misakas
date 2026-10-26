@@ -1,0 +1,183 @@
+{
+  "classification": "SOURCE_REVIEW_AND_CONDITIONAL_ARITHMETIC_NOT_MEASUREMENT",
+  "arming_evidence": false,
+  "source_commit": "2119c943ba8872aadf7d5acd523bb4e595b21fb6",
+  "source_files": [
+    {
+      "path": "consensus/core/src/palw_security_certification_v1.rs",
+      "sha256": "6857d0dcd6e53039a00c4677ac6a968dd4c4d9b1f7aab525d30b112837522646",
+      "counter_lines": []
+    },
+    {
+      "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+      "sha256": "74f55acd27a0b0ff48e6b5cfc6115a6eb156b609f97fb5aa937b72a3dc5e7391",
+      "counter_lines": [
+        {
+          "line": 796,
+          "text": "&& network.draws < policy.draws_per_epoch"
+        },
+        {
+          "line": 806,
+          "text": "network.draws = network.draws.saturating_add(1);"
+        },
+        {
+          "line": 911,
+          "text": "&& network.draws < policy.draws_per_epoch"
+        },
+        {
+          "line": 921,
+          "text": "network.draws = network.draws.saturating_add(1);"
+        }
+      ]
+    },
+    {
+      "path": "consensus/core/src/palw_g14_values_v1.rs",
+      "sha256": "b95cb30245720dbaa0675fcc7ef494c929e4d224dca61fe063cd019532fe1be4",
+      "counter_lines": []
+    },
+    {
+      "path": "docs/design/palw/integration/g14-17000/lane-values-report.md",
+      "sha256": "ef674f0b9b3b08a353fb4eb8a463435bdde0e7f52872cc960b6a12206452aedd",
+      "counter_lines": []
+    }
+  ],
+  "environment": {
+    "utc": "2026-10-26T06:06:11.334349+00:00",
+    "command": [
+      "docs/evidence/palw/g14-17000/measurements/parameter-audit/recompute.py",
+      "--source-ref",
+      "2119c943b",
+      "--out",
+      "docs/evidence/palw/g14-17000/measurements/parameter-audit/result-2026-10-26.json"
+    ],
+    "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10",
+    "uptime": "15:06  up 17:55, 1 user, load averages: 10.30 12.66 13.45",
+    "load": [
+      10.30078125,
+      12.65625,
+      13.45068359375
+    ],
+    "python": "3.9.6 (default, Mar  6 2026, 16:22:43) \n[Clang 21.0.0 (clang-2100.0.123.102)]",
+    "python_sha256": "fb49353c025e39b9253567759fc80f20ed0f6e8b0d0bc6c5fddb47dc235ce22a",
+    "script_sha256": "7c5a8fb0d035e0ad3e9fee964918449ff57fd2aa5346e22d4fe6a9227eebb741"
+  },
+  "assumptions": {
+    "adversarial_stake_fraction": 0.25,
+    "epoch_daa_assumed": 720,
+    "independent_stake_weighted_position_draws": true,
+    "honest_response_definition": "responding honest stake mass (1-f)*a, not merely average count of replying operators",
+    "reference_horizon": "365 epochs; not an unconditional wall-clock year bound",
+    "empirical_source_independence_established": false
+  },
+  "certification": {
+    "counter_increment": 1,
+    "counter_sites": 2,
+    "counter_unit": "claim draw attempt",
+    "candidates": [
+      {
+        "m": 75,
+        "k": 41,
+        "claim_draws_per_epoch": 4096,
+        "positions_per_epoch": 307200,
+        "false_per_claim": 3.993361316121561e-08,
+        "expected_false_per_365_epochs": 0.05970234902054379,
+        "honest_response_90": 0.9926478760444585,
+        "honest_response_85": 0.9589360175384437,
+        "criteria_met": false
+      },
+      {
+        "m": 75,
+        "k": 41,
+        "claim_draws_per_epoch": 54,
+        "positions_per_epoch": 4050,
+        "false_per_claim": 3.993361316121561e-08,
+        "expected_false_per_365_epochs": 0.0007870915154075597,
+        "honest_response_90": 0.9926478760444585,
+        "honest_response_85": 0.9589360175384437,
+        "criteria_met": true
+      },
+      {
+        "m": 75,
+        "k": 41,
+        "claim_draws_per_epoch": 68,
+        "positions_per_epoch": 5100,
+        "false_per_claim": 3.993361316121561e-08,
+        "expected_false_per_365_epochs": 0.0009911522786613717,
+        "honest_response_90": 0.9926478760444585,
+        "honest_response_85": 0.9589360175384437,
+        "criteria_met": true
+      },
+      {
+        "m": 88,
+        "k": 49,
+        "claim_draws_per_epoch": 4096,
+        "positions_per_epoch": 360448,
+        "false_per_claim": 8.50274398035182e-10,
+        "expected_false_per_365_epochs": 0.0012711942360385186,
+        "honest_response_90": 0.9924115246517276,
+        "honest_response_85": 0.9525641941324641,
+        "criteria_met": false
+      },
+      {
+        "m": 89,
+        "k": 50,
+        "claim_draws_per_epoch": 4096,
+        "positions_per_epoch": 364544,
+        "false_per_claim": 3.758966713239474e-10,
+        "expected_false_per_365_epochs": 0.0005619805594961544,
+        "honest_response_90": 0.9904803007098889,
+        "honest_response_85": 0.9433073482877137,
+        "criteria_met": false
+      },
+      {
+        "m": 90,
+        "k": 50,
+        "claim_draws_per_epoch": 4096,
+        "positions_per_epoch": 368640,
+        "false_per_claim": 6.397692818070717e-10,
+        "expected_false_per_365_epochs": 0.0009564806670728446,
+        "honest_response_90": 0.9933807576675382,
+        "honest_response_85": 0.956437605565627,
+        "criteria_met": true
+      }
+    ],
+    "minimal_seats_under_all_three_criteria": {
+      "54": {
+        "m": 75,
+        "k": 41
+      },
+      "4096": {
+        "m": 90,
+        "k": 50
+      }
+    },
+    "max_cap_at_75_41": 68,
+    "proposed_cap": 54,
+    "proposed_status": "recommendation for ACT; product policy unchanged",
+    "at_historical_184_seconds_per_daa": {
+      "epoch_hours": 36.8,
+      "cert_claims_per_wall_day": 35.21739130434783,
+      "court_originals_per_wall_day": 19.565217391304348
+    }
+  },
+  "carrier": {
+    "packet_bytes": 34000,
+    "residual_bytes_per_daa": 13051,
+    "bytes_divided_by_residual_daa": 3,
+    "atomic_packets_fit_per_block": 0,
+    "counterexample": "Repeated residual 13051 cannot carry one atomic 34000-byte packet, regardless of accumulated unused bytes.",
+    "reservation_caveat": "A real reserved-priority implementation or legal fragmentation may remove this example; it must be demonstrated, not inferred from byte division.",
+    "recommended_delay_status": "4 DAA is an estimate only; insufficient for an attributable default bound"
+  },
+  "economics": {
+    "rho_sompi": 3125,
+    "weight": 13,
+    "capacity": 42,
+    "full_10000_daa_jam_sompi": 17062500000,
+    "honest_modeled_cost_sompi": 28350000,
+    "reporter_share_sompi": 147000000,
+    "unmeasured_cpu_io_and_other_cost_headroom_sompi": 118650000,
+    "economic_profitability_measured": false
+  },
+  "checks": "exact rational tail cross-check and bounded exhaustive minimal-seat search passed"
+}

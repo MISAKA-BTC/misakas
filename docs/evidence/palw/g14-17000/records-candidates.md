@@ -6,7 +6,7 @@ Network: `testnet-12`; genesis hash: `a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00
 |---|---|---|
 | `palw_claim_hard_deadline_v1`: measured five `B_*` terms and `c_retain` on slowest supported node | — | **未充足**: M-X3 has no full-route run or real retention price. |
 | `palw_court_capacity_v1`: measured operation classes, block budget, `rho_court` and session weight | — | **未充足**: M-C quiet/minimum-node run and M-CAP concurrency/drills absent. |
-| kernel Panel=1 route: claim-level selected-verifier approval and paired verdict, Final time and attack costs | — | **未充足**: SPINE `ebb8b911f` reports `SecurityCertified` absent; M-SHADOW has not run. |
+| kernel Panel=1 route: claim-level selected-verifier approval and paired verdict, Final time and attack costs | — | **未充足**: CERT is implemented in reviewed source `2119c943b` (lane-reported native tests), but M-SHADOW has not run and the draw-cap unit mismatch remains unresolved. |
 | RFC-0016 / RFC-0006–0008 measured records: real class resources and DA economics | — | **未充足**: M-C missing operation classes and M-COST real artifact absent. |
 | prerequisites `palw_bond_budget_v1`, `palw_model_bond_allocation_v1`, `palw_material_income_v3` | — | **未充足**: M-P15 and M-COST / economic audit absent. |
 | beacon/selected-verifier policy and independent review | — | **未充足**: source independence, paired attack data, reviewer decision and measured `k/D` absent. |
@@ -28,3 +28,5 @@ For the two measured G14 fences, the exact requirement order in `palw_g14_gates_
 | Court capacity / 7 | Restart/IBD/pruned/reorg mid-queue | — | No replay drill. |
 
 The public wRPC observation under [M-OPS](measurements/M-OPS/README.md) is an operational data point, not an arming-requirement digest. Each future requirement needs its own file and SHA-256 only after it has actually been run and independently checked. Other G14 fence requirements remain unfilled here.
+
+Continuation source review: [parameter audit](measurements/approval-material.md) inspects `2119c943b`, separately from the older source of the fixed court binary. It finds a claim/position cap mismatch and an unsupported inclusion-bound derivation. Its arithmetic checks and public observations do not fill any arming digest above. The current kernel slice includes claim hard deadline; M-X3 cannot be omitted without an explicit slice change and dependency review.

@@ -1,0 +1,169 @@
+{
+  "source": "wss://wallet.misakascan.com/t12/wrpc/json",
+  "startedAt": "2026-10-26T06:03:31.793Z",
+  "finishedAt": "2026-10-26T06:03:33.344Z",
+  "environment": {
+    "host": "Mac-Studio.local",
+    "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10",
+    "sourceCommit": "79f64c05cdae199cbc50a368ad677374e3a833e1",
+    "sourceDirty": "",
+    "nodeVersion": "v25.8.2",
+    "binary": "/opt/homebrew/Cellar/node/25.8.2/bin/node",
+    "binarySha256": "1b05cec2d1cf70e7269aaa3707ffbc40e93a9f02315dc96512067b645ce722d3",
+    "command": [
+      "/opt/homebrew/Cellar/node/25.8.2/bin/node",
+      "/Users/wata/.codex/worktrees/g14-panel1-measure/MISAKA-testnet/docs/evidence/palw/g14-17000/measurements/M-OPS/observe-public-wrpc.mjs",
+      "docs/evidence/palw/g14-17000/measurements/M-OPS/public-wrpc-continuation-2026-10-26.json"
+    ],
+    "uptimeBefore": "15:03  up 17:52, 1 user, load averages: 14.14 13.46 13.79",
+    "uptimeAfter": "15:03  up 17:52, 1 user, load averages: 14.05 13.45 13.79"
+  },
+  "requests": [
+    {
+      "id": 1,
+      "method": "getBlockDagInfo",
+      "params": {}
+    },
+    {
+      "id": 2,
+      "method": "getBlock",
+      "params": {
+        "hash": "fd97fe4add58265a1e50b52430b09e20606aecbe24a76fead4fb991020ad8a6c8a9acb8d853c36eda7c28d5ac4f32f67b688cedd130d64c3bab08286008a6301",
+        "includeTransactions": true
+      }
+    }
+  ],
+  "observations": [
+    {
+      "receivedAt": "2026-10-26T06:03:33.105Z",
+      "response": {
+        "id": 1,
+        "method": "getBlockDagInfo",
+        "params": {
+          "blockCount": 15904,
+          "difficulty": 1.0000001192093038,
+          "headerCount": 15904,
+          "network": "testnet-12",
+          "pastMedianTime": 1792993596800,
+          "pruningPointHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+          "sink": "fd97fe4add58265a1e50b52430b09e20606aecbe24a76fead4fb991020ad8a6c8a9acb8d853c36eda7c28d5ac4f32f67b688cedd130d64c3bab08286008a6301",
+          "tipHashes": [
+            "3bb38c12d2c64654ca0432c5b2aec9c92ccfa953d86d5fa538b48030309ea53f710ac54997e0b886dc01a1ba3406bf76bb355e8df2b3ac0340cc41458ffedde6",
+            "54e62acfa2abeddff482133deb9b6bff24d2e7fd0033e1daf79e902c309ebf3fc53b48333d4ee0ea56812024b9d0b01a1e63678d5da83cf99f1a6469885cf1f7",
+            "e2b700303cb5005937fc38320ed6be614568ec789cecd0d6817f5aefef7cf733c544ce78ba7522f0bb50be1152597c829234f6636b4a73d20073a82df90666bc",
+            "e9c1d3d635f41410cf642610294fbe72301e1a714a5edab93a19701f0536f63eaa7c4777cd0b8d63ebc49b23355cf2a5070934df389cdb57c4ed84618719690f",
+            "eb010206ea9f7d30ee276ce89c4a7cf0566c6dc591df9d24de887537373ffb703577cb0937deacb16d040d9cddfda1efefb5a921f7d58a24c81743fdebdc7138",
+            "2cf3d5561f362b5fb513e8630b8fd3b22887efeb33fb71730ae90ef21b274e056b9bbc30bd982f13386cbafdf3b656bd6a69553587a4cb92892a8976bd9f8f4c",
+            "f07c6765b5ff615e8f8d9e798175911c38e2c8da82eeaf146822362327b9e659bbb2167f0963fd6237b162fa9caeecb0cf2e5f062847b21b4c0bf8ddf4a61173",
+            "af061b7f454cda9297aa39718dfa9516d9f7f5016796d71f369457ea2361d1645a24fee15354a21887af4e19daa11042d931e94f8ba48a758d6c96f0e8664a23",
+            "aa48dc3b088725be5434cc33406cb1313ab0487f4271a04858234ba968fa6af89c1a6e24da12c2d95df79e7e705ce0780f0bc65be7f966b3ee34cfbf20793624",
+            "75b0d5489c737d68339c43920acffecd1744a872f6fdb1df5907fa6d05e7a22c540b4cf3ecede5af40a23bbf3c8ea427862018292342bac0cdd5f2d10451b167",
+            "02526f2420ecede9f2ed4e0a616903709ddaea2b7fe038a57aa5caba236fef51333309425d7f550ab8ddc5a02ddaea5a3140f6475b6c7c493136a7c3cd861798",
+            "67e16790686a06af2f210a989380b30c7a967a78d0103a09e3b4aabb34a6097b5bb0ad585d15ce41d133cf59d92bbebf7f440861ccf4b99751f5ee03e138a65b",
+            "f720cf39da4808aa941f1fc80fe47266b69f563a0f5d06afcbf616178a92884c6f16746a64e68a8322200a5ce5eecb58f706334cf34928b87240c9d09b761477",
+            "90382e03fa0cb19a965c117438ba1e04a9eb13c631fee8a3621985966fcf97c9f149c2fc020e577d4bce5c7e9f811a6d2d103fc29186b039d94bf378bb1823a7",
+            "fd97fe4add58265a1e50b52430b09e20606aecbe24a76fead4fb991020ad8a6c8a9acb8d853c36eda7c28d5ac4f32f67b688cedd130d64c3bab08286008a6301",
+            "03dcb22709e8fd9263698209a4a9abed005c028e3ea396ea56fab0bda472aae623f0d5f876bfa63fb89e23b98732377397d4ddce7ceb5b073bfabf4dac479696",
+            "72fec10769cee641d09d65c9a5117f578d3652300a586320a16c858135f0907968e186f4f55f02cb009ebc5ce65b1a0f4caeaa749f1ea277dcbe2294948da704",
+            "b00b9aea0aae27cf60f958e8e58ecc393e43917b23c6bb65a4b51ed62a13b3e9a06a3f757aa039587543fd89e58f605ea37568f490fa572abb8a35b89a35daaa",
+            "147627a12cc17254a724e4ab4756dbbf1cf1d11f84d360e10e9711e2131c712a7cbf18d0609ef092086ac1bd19d77bc56815fdaceb32c7e85ef9f52501d2499e",
+            "6c875b98973580d7821ddfa01893ddbb5e2bbdb8cba800b94b005392e2a48d86fa566c4d245641fe423f1f83598548aa3bf2f59c6e5061e5dfaea8c4c66b825c"
+          ],
+          "virtualDaaScore": 15904,
+          "virtualParentHashes": [
+            "fd97fe4add58265a1e50b52430b09e20606aecbe24a76fead4fb991020ad8a6c8a9acb8d853c36eda7c28d5ac4f32f67b688cedd130d64c3bab08286008a6301"
+          ]
+        }
+      }
+    },
+    {
+      "receivedAt": "2026-10-26T06:03:33.343Z",
+      "response": {
+        "id": 2,
+        "method": "getBlock",
+        "params": {
+          "block": {
+            "evmPayload": [],
+            "header": {
+              "acceptedIdMerkleRoot": "d5435e0e6397b41a30c66361cefe04ce7ab90547b0237a3b2e393c5f7d744aafa0664490b2871acf3e0c0a6cbb8c240e21d668429fe37a70f2d6b15078ad9f13",
+              "bits": 545259519,
+              "blueScore": 54444,
+              "blueWork": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005e6e0763f",
+              "daaScore": 15904,
+              "evmCommitmentRoot": "e4b106159be8d094d352dd64e82b5270ee2a07265e6faf48b6228d6ddc14aaebf8c5659b94c9a105dd08ee0d73e542d5f5adc584cec6cfedd7fd1e0252a93a20",
+              "evmPayloadHash": "877fcd175efdb52807879d7fca7f28b3257f5afdc596c39557d1fe3d6c30f85c9d3da6c0a8bb8b96dfbbd2c136408414ad59cf473c1646042499566e02d676b1",
+              "hash": "fd97fe4add58265a1e50b52430b09e20606aecbe24a76fead4fb991020ad8a6c8a9acb8d853c36eda7c28d5ac4f32f67b688cedd130d64c3bab08286008a6301",
+              "hashMerkleRoot": "b8c21e794342539882273fa7ae3880f5ba49260f1e66db889aef7ce11675b6baad4b48ff2fa3b177496390214262493b1c16a796bc1e770453b9d25c8d576b04",
+              "nonce": 7282376,
+              "overlayCommitmentRoot": "93f5766246504494e4a8a250cc34d675343cf83e1350a599e1862d814e071a40d057c8122afeffb73991f21de6857a2849b52f5801bf359874756e355b8dbf19",
+              "palwCommitment": [],
+              "palwStateRoot": "e98291e04eb301aaad72077b44ad58d201bf7f78976da789570a44674da4b268f7714615ce3df53f969480f9e3c3acc1568d8b678fc533783d4c35a24c1e5aea",
+              "parentsByLevel": [
+                [
+                  "a5a6379c402b1efbdc0dcd40efde5e595a286a4d1a3cca0362e960ccbfef51ef0ea7a95279cd0355d65b5fe689be6a0b7c0a9e6eaa7343427d93fb0038b8c05d"
+                ]
+              ],
+              "powAlgoId": 8,
+              "pruningPoint": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+              "timestamp": 1792994471242,
+              "utxoCommitment": "d8281678769b43c6aa3e360edb20cf46a5a1e02525dd07cf3c3d0de6596fdb3e527911bd4fb0249e20f31a65d31755208257637b30c88ae9a3ff2ec5805b72db",
+              "version": 2
+            },
+            "transactions": [
+              {
+                "gas": 0,
+                "inputs": [],
+                "lockTime": 0,
+                "mass": 0,
+                "outputs": [
+                  {
+                    "scriptPublicKey": "000076c4407574d18f9ed50917b938c80839919f8f17e92cbf65dbcb309c3ef768f66b815468364aa98cb445fe78dbe3d12a01b14454764a566f5b4baa5f1373084ea07be888a6",
+                    "value": 779860,
+                    "verboseData": {
+                      "scriptPublicKeyAddress": "misakatest:qf6hf5v0nm2sj9ae8ryqswv3n78306fvhajahjesnsl0w68kdwq4g6pkf25cedz9leudhc739gqmz3z5we99vm6mfw497ymnpp82q7lggq7cte2n",
+                      "scriptPublicKeyType": "PubKeyHashMlDsa87"
+                    }
+                  }
+                ],
+                "payload": "acd4000000000000000000000000000000004576c4407574d18f9ed50917b938c80839919f8f17e92cbf65dbcb309c3ef768f66b815468364aa98cb445fe78dbe3d12a01b14454764a566f5b4baa5f1373084ea07be888a6",
+                "subnetworkId": "0100000000000000000000000000000000000000",
+                "verboseData": {
+                  "blockHash": "fd97fe4add58265a1e50b52430b09e20606aecbe24a76fead4fb991020ad8a6c8a9acb8d853c36eda7c28d5ac4f32f67b688cedd130d64c3bab08286008a6301",
+                  "blockTime": 1792994471242,
+                  "computeMass": 0,
+                  "hash": "b8c21e794342539882273fa7ae3880f5ba49260f1e66db889aef7ce11675b6baad4b48ff2fa3b177496390214262493b1c16a796bc1e770453b9d25c8d576b04",
+                  "transactionId": "7c0244f611f52bbf1cb4fbea14e78d564c064f28cfdc5394cbf0af9f6550749e3d798a5e30eb9f152310bfb1fba9334209cb5ca7fe5d391d5bc65b5259521137"
+                },
+                "version": 0
+              }
+            ],
+            "verboseData": {
+              "blockKind": "LEGACY_HEARTBEAT",
+              "blueScore": 54444,
+              "childrenHashes": [],
+              "difficulty": 1.0000001192093038,
+              "exec": null,
+              "hash": "fd97fe4add58265a1e50b52430b09e20606aecbe24a76fead4fb991020ad8a6c8a9acb8d853c36eda7c28d5ac4f32f67b688cedd130d64c3bab08286008a6301",
+              "isChainBlock": true,
+              "isHeaderOnly": false,
+              "laneClass": "BLUE",
+              "mergeSetBluesHashes": [
+                "a5a6379c402b1efbdc0dcd40efde5e595a286a4d1a3cca0362e960ccbfef51ef0ea7a95279cd0355d65b5fe689be6a0b7c0a9e6eaa7343427d93fb0038b8c05d"
+              ],
+              "mergeSetRedsHashes": [],
+              "palwMergeView": {
+                "genuineRedBlocks": [],
+                "roundBlocks": []
+              },
+              "selectedParentHash": "a5a6379c402b1efbdc0dcd40efde5e595a286a4d1a3cca0362e960ccbfef51ef0ea7a95279cd0355d65b5fe689be6a0b7c0a9e6eaa7343427d93fb0038b8c05d",
+              "transactionIds": [
+                "7c0244f611f52bbf1cb4fbea14e78d564c064f28cfdc5394cbf0af9f6550749e3d798a5e30eb9f152310bfb1fba9334209cb5ca7fe5d391d5bc65b5259521137"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "error": null
+}

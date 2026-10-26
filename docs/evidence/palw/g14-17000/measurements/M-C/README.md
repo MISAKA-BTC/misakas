@@ -16,3 +16,21 @@ The raw JSON SHA-256 is `dbc1e9aa2c0baff470c9529f00d55572ede0ef5004a0767a4e2298b
 | Forged close cone, last-stage mismatch | 383,708 ns | 3,165,917 ns | 15,553,792 ns | 219,125–223,542 ns | 10,753 B | 984 | 36,077,568 / 35,979,264 B |
 
 The process medians were 389,875 / 383,708 / 373,709 ns; the p95 values were 3,165,917 / 2,137,917 / 1,191,792 ns. The median process RSS difference is 98,304 B, only a descriptive difference between independent processes, not an isolated verifier working set. The harness measured wall elapsed time on small fixtures and did not measure a real model or maximum profile. The high-load p95/max are scheduling-sensitive; no cost, capacity, deadline or fee policy may adopt them. The quiet attempt above ended without a run.
+
+## Continuation batch — five conditions, 2026-10-26
+
+**UNDER_LOAD_FIXTURE_ONLY; NOT_MET for arming.** The same pinned release binary ran under one shared build slot from 15:10:24 to 15:13:16 JST. Five conditions each have three N=0 processes and three N=1000 processes (30 processes; 15,000 timed calls including warm-ups). Every expected outcome passed. Observed pre/post 1-minute load was **7.870–12.180**, always above 5. This is Mac13,1 fixture timing, not minimum hardware or the newly integrated CERT implementation.
+
+[Raw per-process data and batch](raw/continuation-2026-10-26/batch.json), [summary](raw/continuation-2026-10-26/summary.json), [SHA-256 manifest](raw/continuation-2026-10-26/manifest.json). The batch command used `--allow-under-load --n 1000 --case mldsa87_verify --case root_claim_admit --case d2_sweep:16 --case d2_sweep:256 --case d2_sweep:4096`; each child records its full command and environment. Runner change: `79f64c05c`.
+
+| Operation / scale | Median of process medians (µs) | Largest process p95 (µs) | Largest item (µs) | Body bytes | Median process RSS / N=0 RSS (bytes) |
+|---|---:|---:|---:|---:|---:|
+| mldsa87_verify | 126.250 | 134.333 | 218.292 | 4,627 | 13,729,792 / 13,631,488 |
+| root_claim_admit | 1437.791 | 1523.291 | 2916.458 | 16,571 | 16,433,152 / 16,285,696 |
+| d2_sweep / 16 | 0.750 | 0.792 | 0.958 | 0 | 12,566,528 / 12,500,992 |
+| d2_sweep / 256 | 9.333 | 9.500 | 64.459 | 0 | 12,713,984 / 12,943,360 |
+| d2_sweep / 4096 | 216.416 | 237.667 | 417.958 | 0 | 19,283,968 / 15,695,872 |
+
+The signature rows cycle 64 fixtures, root admission cycles 96, and each D2 scale repeats a sweep of one unchanged registry. N=1000 includes one separately reported warm-up per process, leaving 999 items for its distribution. The D2 body-byte value 0 means this internal sweep has no incoming exemplar body; it does not mean zero computation, writes or retention cost. Signature bytes alone exclude public key and carrier envelope. These are wall elapsed times, not isolated CPU time. Process CPU/RSS includes setup; the negative RSS difference at scale 256 demonstrates why independent-process subtraction is not an isolated working-set measurement.
+
+The three D2 scales provide actual observations of growth, but scheduling load, cache reuse and fixture-only state prevent treating their ratios as an arming weight or a node saturation result. The five requested new native operation classes and the paired shadow run remain unmeasured.

@@ -1,0 +1,19 @@
+MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0
+        0.05 real         0.04 user         0.00 sys
+            13631488  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1029  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                   7  involuntary context switches
+           780683912  instructions retired
+           159361430  cycles elapsed
+             8044904  peak memory footprint

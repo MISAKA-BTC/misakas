@@ -5,3 +5,9 @@
 The SPINE checkpoint `ebb8b911f` identifies the slice as card 1's testnet-12 genesis class and the single-prompt decode job from `canonical::claimed`. This selects the fixture family, but it does not pin a real artifact or maximum legal profile. Required run: fix those inputs, then perform the complete cold material fetch, deterministic check, every localization round, disclosure/court, carrier submission and observed inclusion, and reorg replay on the supported minimum-specification node. Record each stage's warm-up and at least 20 repetitions, traffic conditions, byte totals, load, and a nonzero retention price from the actual storage economics. Convert each duration to DAA with the observed 184 s/DAA only as an explicitly labeled estimate; the accepted bound must cover observed tails and congestion. The five `B_*` terms and `c_retain` remain blank until those measurements exist. Do not fill any term with zero or carry forward the old candidate 5,520 DAA as a measurement.
 
 The arming gate in `consensus/core/src/palw_g14_gates_v1.rs` additionally requires X3 fold evidence, node E2E, and a shipped-binary fence crossing with restart/reorg. This document supplies none of those gate digests.
+
+## Scope and inclusion review (continuation)
+
+At inspected source `2119c943b`, `PALW_T12_KERNEL_SLICE_FENCES_V1` explicitly includes `PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY` (`full_activation_v1.rs:309`). Therefore the VAL report's statement that X3 can be postponed does **not** describe the current slice list. M-X3 remains required for that list. Neither the older 5,520-DAA scenario nor the later provisional Δ=2,016 is a measurement.
+
+The [inclusion calculation review](../approval-material.md) also rejects treating the 4-DAA fluid-byte estimate as a demonstrated default-liability bound. Measure actual carrier serialization, priority/fragmentation, backlog and reorg before adopting the premise.
