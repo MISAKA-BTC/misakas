@@ -1,0 +1,958 @@
+{
+  "build": {
+    "source_commit": "9c93b6a130b724b0b8d9ea31ab8525c2af8ac1dc",
+    "source_trees": "d1874a261a6e42cc9d5098c8ab568dea711610a525b7f07fde5a4f18f4443711",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--release",
+      "-p",
+      "kaspa-consensus",
+      "--lib",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "shared_slot": true,
+    "stage": "BUILT",
+    "features": "default",
+    "minimum_hardware": false,
+    "load_before": [
+      7.11962890625,
+      9.11181640625,
+      9.37353515625
+    ],
+    "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+    "builder_sha256": "4a1057462264d25160dd5a04b9014fc2b54f1392dcaa3d91fcf7ac886d747018",
+    "exit_code": 0,
+    "wall_seconds": 603.891570041,
+    "load_after": [
+      10.7099609375,
+      10.2607421875,
+      10.037109375
+    ],
+    "binary": {
+      "path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+      "sha256": "bd7f7a365a1dadab35b9cffa91ddbb6e59fea5f5554302d673872d4da000e652"
+    },
+    "source_unchanged": true
+  },
+  "runner_sha256": "65413f810ad89cf024da34dd2d951f1449e0a8a06853a0adf6b81a6c58235cf9",
+  "status": "UNDER_LOAD_FIXTURE_ONLY",
+  "minimum_hardware": false,
+  "arming_evidence": false,
+  "samples": [
+    {
+      "label": "p6-c1-n0-00",
+      "utc_start": "2026-10-26T08:17:31.895855+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CAP_POSITIONS": "6",
+        "G14_CAP_CLAIMS": "1",
+        "G14_CAP_N": "0"
+      },
+      "exit_code": 0,
+      "monitor_wall_seconds": 1.8169154170000001,
+      "load_before": [
+        10.1298828125,
+        11.8671875,
+        11.13134765625
+      ],
+      "load_after": [
+        10.1298828125,
+        11.8671875,
+        11.13134765625
+      ],
+      "under_load": true,
+      "stdout_sha256": "158ae5f7dec3c8b8fc8f000660f450680099d92536182730af1718b161d4572d",
+      "stderr_sha256": "aac72f0c0f7a104ca53a2941757684bc5d7fffb44788dd22e482b907b5d4850d",
+      "measurement": {
+        "arming_evidence": false,
+        "calculated_adjudications": 4,
+        "claim_states_at_measurement": [
+          "ProbabilisticPass { passed_daa: 5, window_end_daa: 55 }"
+        ],
+        "claims": 1,
+        "continuous_adversary_inclusion_guaranteed": false,
+        "fixture_only": true,
+        "gate_c_measured": false,
+        "n": 0,
+        "outsider": null,
+        "per_claim_worst_work": 1224336,
+        "positions": 6,
+        "production_cap_measured": false,
+        "real_model_measured": false,
+        "reserved_prosecution_runs": 2,
+        "rounds": [],
+        "schema": 1,
+        "setup_wall_ns": 53329958,
+        "test_adjudication_cap": 4,
+        "test_policy": true,
+        "work_cap": 1073741824
+      },
+      "rss_bytes": 54263808.0,
+      "real_seconds": 1.75,
+      "user_seconds": 0.04,
+      "sys_seconds": 0.05
+    },
+    {
+      "label": "p6-c1-n1-00",
+      "utc_start": "2026-10-26T08:17:33.714073+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CAP_POSITIONS": "6",
+        "G14_CAP_CLAIMS": "1",
+        "G14_CAP_N": "1"
+      },
+      "exit_code": 0,
+      "monitor_wall_seconds": 0.15018900000000013,
+      "load_before": [
+        10.1298828125,
+        11.8671875,
+        11.13134765625
+      ],
+      "load_after": [
+        10.1298828125,
+        11.8671875,
+        11.13134765625
+      ],
+      "under_load": true,
+      "stdout_sha256": "185fe6f93511dcb89bc8fd78d6493c0690da84fdce5c4f96b645290d6087be04",
+      "stderr_sha256": "175fc16ce7b97580c30873d30a350007661c90a0525f873e1e5f0e1d5de431d1",
+      "measurement": {
+        "arming_evidence": false,
+        "calculated_adjudications": 4,
+        "claim_states_at_measurement": [
+          "ProbabilisticPass { passed_daa: 5, window_end_daa: 55 }"
+        ],
+        "claims": 1,
+        "continuous_adversary_inclusion_guaranteed": false,
+        "fixture_only": true,
+        "gate_c_measured": false,
+        "n": 1,
+        "outsider": {
+          "convicted": true,
+          "filing": {
+            "budget_blue": 24,
+            "charged_adjudications": 1,
+            "charged_work": 1224336,
+            "daa_after": 11,
+            "daa_before": 10,
+            "object_bytes": 6244,
+            "objects": 1,
+            "transaction_borsh_bytes": 13758,
+            "transactions": 1,
+            "wall_ns": 4617833
+          },
+          "local_check_wall_ns": 1618375,
+          "seal": {
+            "budget_blue": 20,
+            "charged_adjudications": 1,
+            "charged_work": 1224336,
+            "daa_after": 10,
+            "daa_before": 9,
+            "object_bytes": 4898,
+            "objects": 1,
+            "transaction_borsh_bytes": 12412,
+            "transactions": 1,
+            "wall_ns": 4191916
+          }
+        },
+        "per_claim_worst_work": 1224336,
+        "positions": 6,
+        "production_cap_measured": false,
+        "real_model_measured": false,
+        "reserved_prosecution_runs": 2,
+        "rounds": [
+          {
+            "adjudicated": 1,
+            "dismissal_fees": [
+              10000000
+            ],
+            "filing": {
+              "budget_blue": 16,
+              "charged_adjudications": 1,
+              "charged_work": 1224336,
+              "daa_after": 7,
+              "daa_before": 6,
+              "object_bytes": 4871,
+              "objects": 1,
+              "transaction_borsh_bytes": 12385,
+              "transactions": 1,
+              "wall_ns": 4384834
+            },
+            "over_budget": 0,
+            "round": 0,
+            "seal": {
+              "budget_blue": 10,
+              "charged_adjudications": 1,
+              "charged_work": 2233216,
+              "daa_after": 6,
+              "daa_before": 5,
+              "object_bytes": 4898,
+              "objects": 1,
+              "transaction_borsh_bytes": 12412,
+              "transactions": 1,
+              "wall_ns": 4605917
+            }
+          },
+          {
+            "adjudicated": 1,
+            "dismissal_fees": [
+              10000000
+            ],
+            "filing": {
+              "budget_blue": 20,
+              "charged_adjudications": 1,
+              "charged_work": 1224336,
+              "daa_after": 9,
+              "daa_before": 8,
+              "object_bytes": 4871,
+              "objects": 1,
+              "transaction_borsh_bytes": 12385,
+              "transactions": 1,
+              "wall_ns": 4270750
+            },
+            "over_budget": 0,
+            "round": 1,
+            "seal": {
+              "budget_blue": 16,
+              "charged_adjudications": 1,
+              "charged_work": 1224336,
+              "daa_after": 8,
+              "daa_before": 7,
+              "object_bytes": 4898,
+              "objects": 1,
+              "transaction_borsh_bytes": 12412,
+              "transactions": 1,
+              "wall_ns": 5407000
+            }
+          }
+        ],
+        "schema": 1,
+        "setup_wall_ns": 37211375,
+        "test_adjudication_cap": 4,
+        "test_policy": true,
+        "work_cap": 1073741824
+      },
+      "rss_bytes": 56721408.0,
+      "real_seconds": 0.09,
+      "user_seconds": 0.07,
+      "sys_seconds": 0.03
+    },
+    {
+      "label": "p6-c6-n0-00",
+      "utc_start": "2026-10-26T08:17:33.865285+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CAP_POSITIONS": "6",
+        "G14_CAP_CLAIMS": "6",
+        "G14_CAP_N": "0"
+      },
+      "exit_code": 0,
+      "monitor_wall_seconds": 0.26459341699999994,
+      "load_before": [
+        10.1298828125,
+        11.8671875,
+        11.13134765625
+      ],
+      "load_after": [
+        10.1298828125,
+        11.8671875,
+        11.13134765625
+      ],
+      "under_load": true,
+      "stdout_sha256": "3e6c5bec17a33574ce24afdcbf366345fa88e4eed398a629382b4625fcef2883",
+      "stderr_sha256": "dc242121708c2c8e5729a0e92604a617f2bd6f20dcdf32c694deca9563bd6303",
+      "measurement": {
+        "arming_evidence": false,
+        "calculated_adjudications": 4,
+        "claim_states_at_measurement": [
+          "ProbabilisticPass { passed_daa: 5, window_end_daa: 55 }",
+          "ProbabilisticPass { passed_daa: 10, window_end_daa: 60 }",
+          "ProbabilisticPass { passed_daa: 15, window_end_daa: 65 }",
+          "ProbabilisticPass { passed_daa: 20, window_end_daa: 70 }",
+          "ProbabilisticPass { passed_daa: 25, window_end_daa: 75 }",
+          "ProbabilisticPass { passed_daa: 30, window_end_daa: 80 }"
+        ],
+        "claims": 6,
+        "continuous_adversary_inclusion_guaranteed": false,
+        "fixture_only": true,
+        "gate_c_measured": false,
+        "n": 0,
+        "outsider": null,
+        "per_claim_worst_work": 1224336,
+        "positions": 6,
+        "production_cap_measured": false,
+        "real_model_measured": false,
+        "reserved_prosecution_runs": 2,
+        "rounds": [],
+        "schema": 1,
+        "setup_wall_ns": 183874500,
+        "test_adjudication_cap": 4,
+        "test_policy": true,
+        "work_cap": 1073741824
+      },
+      "rss_bytes": 63897600.0,
+      "real_seconds": 0.2,
+      "user_seconds": 0.18,
+      "sys_seconds": 0.07
+    },
+    {
+      "label": "p6-c6-n1-00",
+      "utc_start": "2026-10-26T08:17:34.130905+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CAP_POSITIONS": "6",
+        "G14_CAP_CLAIMS": "6",
+        "G14_CAP_N": "1"
+      },
+      "exit_code": 0,
+      "monitor_wall_seconds": 0.3187870420000003,
+      "load_before": [
+        10.1298828125,
+        11.8671875,
+        11.13134765625
+      ],
+      "load_after": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "under_load": true,
+      "stdout_sha256": "957226fa07667cc490e9583d4fdffb6981cf58c32f562caeadb61418e73925b9",
+      "stderr_sha256": "61f65dec6461dcbc5f0469faaf28a232bcb0b4e0f1d74f93ae360ccdf13564e4",
+      "measurement": {
+        "arming_evidence": false,
+        "calculated_adjudications": 4,
+        "claim_states_at_measurement": [
+          "ProbabilisticPass { passed_daa: 5, window_end_daa: 55 }",
+          "ProbabilisticPass { passed_daa: 10, window_end_daa: 60 }",
+          "ProbabilisticPass { passed_daa: 15, window_end_daa: 65 }",
+          "ProbabilisticPass { passed_daa: 20, window_end_daa: 70 }",
+          "ProbabilisticPass { passed_daa: 25, window_end_daa: 75 }",
+          "ProbabilisticPass { passed_daa: 30, window_end_daa: 80 }"
+        ],
+        "claims": 6,
+        "continuous_adversary_inclusion_guaranteed": false,
+        "fixture_only": true,
+        "gate_c_measured": false,
+        "n": 1,
+        "outsider": {
+          "convicted": true,
+          "filing": {
+            "budget_blue": 74,
+            "charged_adjudications": 1,
+            "charged_work": 1224336,
+            "daa_after": 36,
+            "daa_before": 35,
+            "object_bytes": 6244,
+            "objects": 1,
+            "transaction_borsh_bytes": 13758,
+            "transactions": 1,
+            "wall_ns": 7056125
+          },
+          "local_check_wall_ns": 1541125,
+          "seal": {
+            "budget_blue": 70,
+            "charged_adjudications": 4,
+            "charged_work": 4897344,
+            "daa_after": 35,
+            "daa_before": 34,
+            "object_bytes": 4898,
+            "objects": 1,
+            "transaction_borsh_bytes": 12412,
+            "transactions": 1,
+            "wall_ns": 6762917
+          }
+        },
+        "per_claim_worst_work": 1224336,
+        "positions": 6,
+        "production_cap_measured": false,
+        "real_model_measured": false,
+        "reserved_prosecution_runs": 2,
+        "rounds": [
+          {
+            "adjudicated": 4,
+            "dismissal_fees": [
+              10000000,
+              10000000,
+              10000000,
+              10000000,
+              0,
+              0
+            ],
+            "filing": {
+              "budget_blue": 66,
+              "charged_adjudications": 4,
+              "charged_work": 4897344,
+              "daa_after": 32,
+              "daa_before": 31,
+              "object_bytes": 29226,
+              "objects": 6,
+              "transaction_borsh_bytes": 74310,
+              "transactions": 6,
+              "wall_ns": 11663916
+            },
+            "over_budget": 2,
+            "round": 0,
+            "seal": {
+              "budget_blue": 60,
+              "charged_adjudications": 1,
+              "charged_work": 2233216,
+              "daa_after": 31,
+              "daa_before": 30,
+              "object_bytes": 29388,
+              "objects": 6,
+              "transaction_borsh_bytes": 74472,
+              "transactions": 6,
+              "wall_ns": 11526292
+            }
+          },
+          {
+            "adjudicated": 4,
+            "dismissal_fees": [
+              10000000,
+              10000000,
+              10000000,
+              10000000,
+              0,
+              0
+            ],
+            "filing": {
+              "budget_blue": 70,
+              "charged_adjudications": 4,
+              "charged_work": 4897344,
+              "daa_after": 34,
+              "daa_before": 33,
+              "object_bytes": 29226,
+              "objects": 6,
+              "transaction_borsh_bytes": 74310,
+              "transactions": 6,
+              "wall_ns": 10272583
+            },
+            "over_budget": 2,
+            "round": 1,
+            "seal": {
+              "budget_blue": 66,
+              "charged_adjudications": 4,
+              "charged_work": 4897344,
+              "daa_after": 33,
+              "daa_before": 32,
+              "object_bytes": 29388,
+              "objects": 6,
+              "transaction_borsh_bytes": 74472,
+              "transactions": 6,
+              "wall_ns": 10549917
+            }
+          }
+        ],
+        "schema": 1,
+        "setup_wall_ns": 180230959,
+        "test_adjudication_cap": 4,
+        "test_policy": true,
+        "work_cap": 1073741824
+      },
+      "rss_bytes": 67239936.0,
+      "real_seconds": 0.27,
+      "user_seconds": 0.26,
+      "sys_seconds": 0.1
+    },
+    {
+      "label": "p64-c1-n0-00",
+      "utc_start": "2026-10-26T08:17:34.450666+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CAP_POSITIONS": "64",
+        "G14_CAP_CLAIMS": "1",
+        "G14_CAP_N": "0"
+      },
+      "exit_code": 0,
+      "monitor_wall_seconds": 0.14872333400000004,
+      "load_before": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "load_after": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "under_load": true,
+      "stdout_sha256": "7093f7f69185b0ce83e375f3dc085eaf6657eda841d1a36fe4f8341866b8215e",
+      "stderr_sha256": "86c28380320144fb6ac8701e4d8e8a12c34936914480370e410c4f4f4b7d85eb",
+      "measurement": {
+        "arming_evidence": false,
+        "calculated_adjudications": 4,
+        "claim_states_at_measurement": [
+          "ProbabilisticPass { passed_daa: 11, window_end_daa: 61 }"
+        ],
+        "claims": 1,
+        "continuous_adversary_inclusion_guaranteed": false,
+        "fixture_only": true,
+        "gate_c_measured": false,
+        "n": 0,
+        "outsider": null,
+        "per_claim_worst_work": 1224336,
+        "positions": 64,
+        "production_cap_measured": false,
+        "real_model_measured": false,
+        "reserved_prosecution_runs": 2,
+        "rounds": [],
+        "schema": 1,
+        "setup_wall_ns": 108225333,
+        "test_adjudication_cap": 4,
+        "test_policy": true,
+        "work_cap": 1073741824
+      },
+      "rss_bytes": 59588608.0,
+      "real_seconds": 0.12,
+      "user_seconds": 0.11,
+      "sys_seconds": 0.03
+    },
+    {
+      "label": "p64-c1-n1-00",
+      "utc_start": "2026-10-26T08:17:34.600447+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CAP_POSITIONS": "64",
+        "G14_CAP_CLAIMS": "1",
+        "G14_CAP_N": "1"
+      },
+      "exit_code": 0,
+      "monitor_wall_seconds": 0.20399658399999998,
+      "load_before": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "load_after": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "under_load": true,
+      "stdout_sha256": "67c299eeb50122f91de398fc84dc4ab90063253c5803fc96ee45b27d1cfdb089",
+      "stderr_sha256": "f5e3bbfa310a25447e94ed93f7b88ed5cb6036dacee2a5f650e43afe66ba47ad",
+      "measurement": {
+        "arming_evidence": false,
+        "calculated_adjudications": 4,
+        "claim_states_at_measurement": [
+          "ProbabilisticPass { passed_daa: 11, window_end_daa: 61 }"
+        ],
+        "claims": 1,
+        "continuous_adversary_inclusion_guaranteed": false,
+        "fixture_only": true,
+        "gate_c_measured": false,
+        "n": 1,
+        "outsider": {
+          "convicted": true,
+          "filing": {
+            "budget_blue": 35,
+            "charged_adjudications": 1,
+            "charged_work": 1224336,
+            "daa_after": 17,
+            "daa_before": 16,
+            "object_bytes": 6244,
+            "objects": 1,
+            "transaction_borsh_bytes": 13758,
+            "transactions": 1,
+            "wall_ns": 5802375
+          },
+          "local_check_wall_ns": 6819625,
+          "seal": {
+            "budget_blue": 31,
+            "charged_adjudications": 1,
+            "charged_work": 1224336,
+            "daa_after": 16,
+            "daa_before": 15,
+            "object_bytes": 4898,
+            "objects": 1,
+            "transaction_borsh_bytes": 12412,
+            "transactions": 1,
+            "wall_ns": 5695125
+          }
+        },
+        "per_claim_worst_work": 1224336,
+        "positions": 64,
+        "production_cap_measured": false,
+        "real_model_measured": false,
+        "reserved_prosecution_runs": 2,
+        "rounds": [
+          {
+            "adjudicated": 1,
+            "dismissal_fees": [
+              10000000
+            ],
+            "filing": {
+              "budget_blue": 27,
+              "charged_adjudications": 1,
+              "charged_work": 1224336,
+              "daa_after": 13,
+              "daa_before": 12,
+              "object_bytes": 4871,
+              "objects": 1,
+              "transaction_borsh_bytes": 12385,
+              "transactions": 1,
+              "wall_ns": 5457625
+            },
+            "over_budget": 0,
+            "round": 0,
+            "seal": {
+              "budget_blue": 21,
+              "charged_adjudications": 1,
+              "charged_work": 2233216,
+              "daa_after": 12,
+              "daa_before": 11,
+              "object_bytes": 4898,
+              "objects": 1,
+              "transaction_borsh_bytes": 12412,
+              "transactions": 1,
+              "wall_ns": 5234583
+            }
+          },
+          {
+            "adjudicated": 1,
+            "dismissal_fees": [
+              10000000
+            ],
+            "filing": {
+              "budget_blue": 31,
+              "charged_adjudications": 1,
+              "charged_work": 1224336,
+              "daa_after": 15,
+              "daa_before": 14,
+              "object_bytes": 4871,
+              "objects": 1,
+              "transaction_borsh_bytes": 12385,
+              "transactions": 1,
+              "wall_ns": 5516125
+            },
+            "over_budget": 0,
+            "round": 1,
+            "seal": {
+              "budget_blue": 27,
+              "charged_adjudications": 1,
+              "charged_work": 1224336,
+              "daa_after": 14,
+              "daa_before": 13,
+              "object_bytes": 4898,
+              "objects": 1,
+              "transaction_borsh_bytes": 12412,
+              "transactions": 1,
+              "wall_ns": 5452666
+            }
+          }
+        ],
+        "schema": 1,
+        "setup_wall_ns": 110015125,
+        "test_adjudication_cap": 4,
+        "test_policy": true,
+        "work_cap": 1073741824
+      },
+      "rss_bytes": 64307200.0,
+      "real_seconds": 0.17,
+      "user_seconds": 0.15,
+      "sys_seconds": 0.05
+    },
+    {
+      "label": "p64-c6-n0-00",
+      "utc_start": "2026-10-26T08:17:34.805758+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CAP_POSITIONS": "64",
+        "G14_CAP_CLAIMS": "6",
+        "G14_CAP_N": "0"
+      },
+      "exit_code": 0,
+      "monitor_wall_seconds": 0.9036030840000002,
+      "load_before": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "load_after": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "under_load": true,
+      "stdout_sha256": "1f201c66749614f96fbfd1928193fc0d0f099e517be90fb526b15c8d196f71ad",
+      "stderr_sha256": "0566bda181b9b92f9146ed6f4c9349dc54ad0cbe1eacb6b897b5e638f3d98233",
+      "measurement": {
+        "arming_evidence": false,
+        "calculated_adjudications": 4,
+        "claim_states_at_measurement": [
+          "Final { final_daa: 61 }",
+          "ProbabilisticPass { passed_daa: 21, window_end_daa: 71 }",
+          "ProbabilisticPass { passed_daa: 32, window_end_daa: 82 }",
+          "ProbabilisticPass { passed_daa: 42, window_end_daa: 92 }",
+          "ProbabilisticPass { passed_daa: 53, window_end_daa: 103 }",
+          "ProbabilisticPass { passed_daa: 63, window_end_daa: 113 }"
+        ],
+        "claims": 6,
+        "continuous_adversary_inclusion_guaranteed": false,
+        "fixture_only": true,
+        "gate_c_measured": false,
+        "n": 0,
+        "outsider": null,
+        "per_claim_worst_work": 1224336,
+        "positions": 64,
+        "production_cap_measured": false,
+        "real_model_measured": false,
+        "reserved_prosecution_runs": 2,
+        "rounds": [],
+        "schema": 1,
+        "setup_wall_ns": 839343500,
+        "test_adjudication_cap": 4,
+        "test_policy": true,
+        "work_cap": 1073741824
+      },
+      "rss_bytes": 110182400.0,
+      "real_seconds": 0.86,
+      "user_seconds": 0.82,
+      "sys_seconds": 0.18
+    },
+    {
+      "label": "p64-c6-n1-00",
+      "utc_start": "2026-10-26T08:17:35.710546+00:00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-capacity-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_CAP_POSITIONS": "64",
+        "G14_CAP_CLAIMS": "6",
+        "G14_CAP_N": "1"
+      },
+      "exit_code": 0,
+      "monitor_wall_seconds": 1.0264909169999998,
+      "load_before": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "load_after": [
+        9.958984375,
+        11.802734375,
+        11.11279296875
+      ],
+      "under_load": true,
+      "stdout_sha256": "10f9b722054e6eac2ba48c5190032759f11fb4a6ac89baeab7c0869c0c9aafc7",
+      "stderr_sha256": "fb7301539a7e3235b005743d04888a183e2aae0487f43ea84e8969b2dab7e194",
+      "measurement": {
+        "arming_evidence": false,
+        "calculated_adjudications": 4,
+        "claim_states_at_measurement": [
+          "Final { final_daa: 61 }",
+          "ProbabilisticPass { passed_daa: 21, window_end_daa: 71 }",
+          "ProbabilisticPass { passed_daa: 32, window_end_daa: 82 }",
+          "ProbabilisticPass { passed_daa: 42, window_end_daa: 92 }",
+          "ProbabilisticPass { passed_daa: 53, window_end_daa: 103 }",
+          "ProbabilisticPass { passed_daa: 63, window_end_daa: 113 }"
+        ],
+        "claims": 6,
+        "continuous_adversary_inclusion_guaranteed": false,
+        "fixture_only": true,
+        "gate_c_measured": false,
+        "n": 1,
+        "outsider": {
+          "convicted": true,
+          "filing": {
+            "budget_blue": 140,
+            "charged_adjudications": 1,
+            "charged_work": 1224336,
+            "daa_after": 69,
+            "daa_before": 68,
+            "object_bytes": 6244,
+            "objects": 1,
+            "transaction_borsh_bytes": 13758,
+            "transactions": 1,
+            "wall_ns": 12338042
+          },
+          "local_check_wall_ns": 7862166,
+          "seal": {
+            "budget_blue": 136,
+            "charged_adjudications": 4,
+            "charged_work": 4897344,
+            "daa_after": 68,
+            "daa_before": 67,
+            "object_bytes": 4898,
+            "objects": 1,
+            "transaction_borsh_bytes": 12412,
+            "transactions": 1,
+            "wall_ns": 12280042
+          }
+        },
+        "per_claim_worst_work": 1224336,
+        "positions": 64,
+        "production_cap_measured": false,
+        "real_model_measured": false,
+        "reserved_prosecution_runs": 2,
+        "rounds": [
+          {
+            "adjudicated": 4,
+            "dismissal_fees": [
+              10000000,
+              10000000,
+              10000000,
+              10000000,
+              0,
+              0
+            ],
+            "filing": {
+              "budget_blue": 132,
+              "charged_adjudications": 4,
+              "charged_work": 4897344,
+              "daa_after": 65,
+              "daa_before": 64,
+              "object_bytes": 29226,
+              "objects": 6,
+              "transaction_borsh_bytes": 74310,
+              "transactions": 6,
+              "wall_ns": 19072209
+            },
+            "over_budget": 2,
+            "round": 0,
+            "seal": {
+              "budget_blue": 126,
+              "charged_adjudications": 1,
+              "charged_work": 2233216,
+              "daa_after": 64,
+              "daa_before": 63,
+              "object_bytes": 29388,
+              "objects": 6,
+              "transaction_borsh_bytes": 74472,
+              "transactions": 6,
+              "wall_ns": 19074083
+            }
+          },
+          {
+            "adjudicated": 4,
+            "dismissal_fees": [
+              10000000,
+              10000000,
+              10000000,
+              10000000,
+              0,
+              0
+            ],
+            "filing": {
+              "budget_blue": 136,
+              "charged_adjudications": 4,
+              "charged_work": 4897344,
+              "daa_after": 67,
+              "daa_before": 66,
+              "object_bytes": 29226,
+              "objects": 6,
+              "transaction_borsh_bytes": 74310,
+              "transactions": 6,
+              "wall_ns": 21895750
+            },
+            "over_budget": 2,
+            "round": 1,
+            "seal": {
+              "budget_blue": 132,
+              "charged_adjudications": 4,
+              "charged_work": 4897344,
+              "daa_after": 66,
+              "daa_before": 65,
+              "object_bytes": 29388,
+              "objects": 6,
+              "transaction_borsh_bytes": 74472,
+              "transactions": 6,
+              "wall_ns": 18681084
+            }
+          }
+        ],
+        "schema": 1,
+        "setup_wall_ns": 815910125,
+        "test_adjudication_cap": 4,
+        "test_policy": true,
+        "work_cap": 1073741824
+      },
+      "rss_bytes": 113246208.0,
+      "real_seconds": 0.98,
+      "user_seconds": 0.94,
+      "sys_seconds": 0.19
+    }
+  ]
+}

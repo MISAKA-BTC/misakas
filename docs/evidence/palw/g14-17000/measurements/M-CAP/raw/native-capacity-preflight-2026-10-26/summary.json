@@ -1,0 +1,330 @@
+{
+  "status": "UNDER_LOAD_FIXTURE_ONLY",
+  "source_commit": "9c93b6a130b724b0b8d9ea31ab8525c2af8ac1dc",
+  "binary_sha256": "bd7f7a365a1dadab35b9cffa91ddbb6e59fea5f5554302d673872d4da000e652",
+  "processes": 8,
+  "arming_evidence": false,
+  "minimum_hardware": false,
+  "production_cap_measured": false,
+  "load_1m_min": 9.958984375,
+  "load_1m_max": 10.1298828125,
+  "quantile_scope": "Descriptive process samples; no population latency bound. N=0 includes setup; not subtracted from N=1.",
+  "groups": [
+    {
+      "positions": 6,
+      "claims": 1,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 1,
+        "median": 1.75,
+        "p95_nearest_rank": 1.75,
+        "max": 1.75
+      },
+      "peak_rss_bytes": {
+        "samples": 1,
+        "median": 54263808.0,
+        "p95_nearest_rank": 54263808.0,
+        "max": 54263808.0
+      },
+      "setup_wall_ms": {
+        "samples": 1,
+        "median": 53.329958,
+        "p95_nearest_rank": 53.329958,
+        "max": 53.329958
+      }
+    },
+    {
+      "positions": 6,
+      "claims": 1,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 1,
+        "median": 0.09,
+        "p95_nearest_rank": 0.09,
+        "max": 0.09
+      },
+      "peak_rss_bytes": {
+        "samples": 1,
+        "median": 56721408.0,
+        "p95_nearest_rank": 56721408.0,
+        "max": 56721408.0
+      },
+      "setup_wall_ms": {
+        "samples": 1,
+        "median": 37.211375,
+        "p95_nearest_rank": 37.211375,
+        "max": 37.211375
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 1,
+        "median": 4.384834,
+        "p95_nearest_rank": 4.384834,
+        "max": 4.384834
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 1,
+        "median": 4.27075,
+        "p95_nearest_rank": 4.27075,
+        "max": 4.27075
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 1,
+        "median": 1.618375,
+        "p95_nearest_rank": 1.618375,
+        "max": 1.618375
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 1,
+        "median": 4.617833,
+        "p95_nearest_rank": 4.617833,
+        "max": 4.617833
+      },
+      "adjudicated_per_round": [
+        1
+      ],
+      "over_budget_per_round": [
+        0
+      ],
+      "filing_transaction_borsh_bytes": [
+        12385
+      ]
+    },
+    {
+      "positions": 6,
+      "claims": 6,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 1,
+        "median": 0.2,
+        "p95_nearest_rank": 0.2,
+        "max": 0.2
+      },
+      "peak_rss_bytes": {
+        "samples": 1,
+        "median": 63897600.0,
+        "p95_nearest_rank": 63897600.0,
+        "max": 63897600.0
+      },
+      "setup_wall_ms": {
+        "samples": 1,
+        "median": 183.8745,
+        "p95_nearest_rank": 183.8745,
+        "max": 183.8745
+      }
+    },
+    {
+      "positions": 6,
+      "claims": 6,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 1,
+        "median": 0.27,
+        "p95_nearest_rank": 0.27,
+        "max": 0.27
+      },
+      "peak_rss_bytes": {
+        "samples": 1,
+        "median": 67239936.0,
+        "p95_nearest_rank": 67239936.0,
+        "max": 67239936.0
+      },
+      "setup_wall_ms": {
+        "samples": 1,
+        "median": 180.230959,
+        "p95_nearest_rank": 180.230959,
+        "max": 180.230959
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 1,
+        "median": 11.663916,
+        "p95_nearest_rank": 11.663916,
+        "max": 11.663916
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 1,
+        "median": 10.272583,
+        "p95_nearest_rank": 10.272583,
+        "max": 10.272583
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 1,
+        "median": 1.541125,
+        "p95_nearest_rank": 1.541125,
+        "max": 1.541125
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 1,
+        "median": 7.056125,
+        "p95_nearest_rank": 7.056125,
+        "max": 7.056125
+      },
+      "adjudicated_per_round": [
+        4
+      ],
+      "over_budget_per_round": [
+        2
+      ],
+      "filing_transaction_borsh_bytes": [
+        74310
+      ]
+    },
+    {
+      "positions": 64,
+      "claims": 1,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 1,
+        "median": 0.12,
+        "p95_nearest_rank": 0.12,
+        "max": 0.12
+      },
+      "peak_rss_bytes": {
+        "samples": 1,
+        "median": 59588608.0,
+        "p95_nearest_rank": 59588608.0,
+        "max": 59588608.0
+      },
+      "setup_wall_ms": {
+        "samples": 1,
+        "median": 108.225333,
+        "p95_nearest_rank": 108.225333,
+        "max": 108.225333
+      }
+    },
+    {
+      "positions": 64,
+      "claims": 1,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 1,
+        "median": 0.17,
+        "p95_nearest_rank": 0.17,
+        "max": 0.17
+      },
+      "peak_rss_bytes": {
+        "samples": 1,
+        "median": 64307200.0,
+        "p95_nearest_rank": 64307200.0,
+        "max": 64307200.0
+      },
+      "setup_wall_ms": {
+        "samples": 1,
+        "median": 110.015125,
+        "p95_nearest_rank": 110.015125,
+        "max": 110.015125
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 1,
+        "median": 5.457625,
+        "p95_nearest_rank": 5.457625,
+        "max": 5.457625
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 1,
+        "median": 5.516125,
+        "p95_nearest_rank": 5.516125,
+        "max": 5.516125
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 1,
+        "median": 6.819625,
+        "p95_nearest_rank": 6.819625,
+        "max": 6.819625
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 1,
+        "median": 5.802375,
+        "p95_nearest_rank": 5.802375,
+        "max": 5.802375
+      },
+      "adjudicated_per_round": [
+        1
+      ],
+      "over_budget_per_round": [
+        0
+      ],
+      "filing_transaction_borsh_bytes": [
+        12385
+      ]
+    },
+    {
+      "positions": 64,
+      "claims": 6,
+      "n": 0,
+      "process_real_seconds": {
+        "samples": 1,
+        "median": 0.86,
+        "p95_nearest_rank": 0.86,
+        "max": 0.86
+      },
+      "peak_rss_bytes": {
+        "samples": 1,
+        "median": 110182400.0,
+        "p95_nearest_rank": 110182400.0,
+        "max": 110182400.0
+      },
+      "setup_wall_ms": {
+        "samples": 1,
+        "median": 839.3435,
+        "p95_nearest_rank": 839.3435,
+        "max": 839.3435
+      }
+    },
+    {
+      "positions": 64,
+      "claims": 6,
+      "n": 1,
+      "process_real_seconds": {
+        "samples": 1,
+        "median": 0.98,
+        "p95_nearest_rank": 0.98,
+        "max": 0.98
+      },
+      "peak_rss_bytes": {
+        "samples": 1,
+        "median": 113246208.0,
+        "p95_nearest_rank": 113246208.0,
+        "max": 113246208.0
+      },
+      "setup_wall_ms": {
+        "samples": 1,
+        "median": 815.910125,
+        "p95_nearest_rank": 815.910125,
+        "max": 815.910125
+      },
+      "round_0_filing_wall_ms": {
+        "samples": 1,
+        "median": 19.072209,
+        "p95_nearest_rank": 19.072209,
+        "max": 19.072209
+      },
+      "round_1_filing_wall_ms": {
+        "samples": 1,
+        "median": 21.89575,
+        "p95_nearest_rank": 21.89575,
+        "max": 21.89575
+      },
+      "outsider_local_check_wall_ms": {
+        "samples": 1,
+        "median": 7.862166,
+        "p95_nearest_rank": 7.862166,
+        "max": 7.862166
+      },
+      "outsider_filing_wall_ms": {
+        "samples": 1,
+        "median": 12.338042,
+        "p95_nearest_rank": 12.338042,
+        "max": 12.338042
+      },
+      "adjudicated_per_round": [
+        4
+      ],
+      "over_budget_per_round": [
+        2
+      ],
+      "filing_transaction_borsh_bytes": [
+        74310
+      ]
+    }
+  ]
+}
