@@ -58,3 +58,20 @@ Load **11.376–12.466**: **UNDER_LOAD_FIXTURE_ONLY**. The table reports millise
 Each signed attestation is 4,969 B in the harness's Borsh PALW-object representation. The 75/90 cases each carry seven such attestations (34,783 B); **they do not carry 75 or 90 independent verifier responses**. Repeated positions share their bond's attestation. The lower median draw time at 90 is not evidence that a larger draw is cheaper: scheduling/load and local-chain work are included. N=0 process statistics are retained separately; their subtraction is not an exact isolated working set.
 
 This closes a concrete measurement gap for the native certification path, but not post-commit kernel challenge generation, source independence, randomness withholding, honest verifier recomputation, or real propagation. The policy uses short fixture windows and eight harness bonds; the 54 claim-draw cap is test configuration here, **not approval or a production pin**. M-C as a complete quiet/minimum-node requirement remains NOT_MET.
+
+
+### Coverage against the newly approved constructor
+
+The later integration source `648544c46` adds `approved_v1`, while this measured binary predates it. At a supplied `day_daa=720`, its full policy differs materially from the measurement's 75/41 fixture:
+
+| Field | Measured 75/41 fixture | `approved_v1(720)` |
+|---|---:|---:|
+| m / k | 75 / 41 | 75 / 41 |
+| Attestation window | 600 DAA | 1,440 DAA |
+| Prosecution window after Final | 40 DAA | 5,040 DAA |
+| Draw-by deadline | 4,000 DAA | 2,160 DAA |
+| Verifier maturity | 0 DAA | 5,040 DAA |
+| Draw attempts / epoch | 54 | 4,096 in current claim-counter semantics |
+| Epoch | 1,000,000 DAA | 720 DAA |
+
+The draw-by deadline is for obtaining a draw; it does not require completion before the longer prosecution window. A matched m/k alone therefore does not make this a production-policy duration or settlement drill. Native kernel liability/retention, bond locks, attestation availability and the full certification lifetime need a composed run. The existing test's 40-DAA prosecution window cannot substantiate the full policy's 5,040-DAA window.
