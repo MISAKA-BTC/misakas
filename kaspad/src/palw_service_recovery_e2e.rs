@@ -37,6 +37,31 @@ async fn fresh_verifier_reacquires_one_pruned_parallel_input_lane_from_the_autom
     fresh_public_service_with_recovery(PublicCase::UnretainedLargeConstraintJob, Some(RecoveryMode::PrunedRound)).await;
 }
 
+// ---- lane FPCP (2026-10-26): restart / reorg on a convicted constraint job and a convicted public prefix job ----------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "lane FPCP 2026-10-26: FAILS at d8aded6de — the recovery harness re-submits the tiled fixture's funding (constraint: RejectDoubleSpendInMempool / RejectDisallowedOrphan at palw_service_tiled_e2e.rs:591) and the native public prefix job is carried but not admitted (palw_service_public_e2e.rs:1267, also without recovery); see family-fpcp-report.md"]
+async fn fpcp_constraint_forbidden_conviction_survives_a_restart() {
+    fresh_public_service_with_recovery(PublicCase::TiledConstraintForbidden, Some(RecoveryMode::Restart)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "lane FPCP 2026-10-26: FAILS at d8aded6de — the recovery harness re-submits the tiled fixture's funding (constraint: RejectDoubleSpendInMempool / RejectDisallowedOrphan at palw_service_tiled_e2e.rs:591) and the native public prefix job is carried but not admitted (palw_service_public_e2e.rs:1267, also without recovery); see family-fpcp-report.md"]
+async fn fpcp_constraint_forbidden_conviction_survives_a_reorg() {
+    fresh_public_service_with_recovery(PublicCase::TiledConstraintForbidden, Some(RecoveryMode::Reorg)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "lane FPCP 2026-10-26: FAILS at d8aded6de — the recovery harness re-submits the tiled fixture's funding (constraint: RejectDoubleSpendInMempool / RejectDisallowedOrphan at palw_service_tiled_e2e.rs:591) and the native public prefix job is carried but not admitted (palw_service_public_e2e.rs:1267, also without recovery); see family-fpcp-report.md"]
+async fn fpcp_public_prefix_initial_conviction_survives_a_restart() {
+    fresh_public_service_with_recovery(PublicCase::TiledPublicPrefixInitial, Some(RecoveryMode::Restart)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "lane FPCP 2026-10-26: FAILS at d8aded6de — the recovery harness re-submits the tiled fixture's funding (constraint: RejectDoubleSpendInMempool / RejectDisallowedOrphan at palw_service_tiled_e2e.rs:591) and the native public prefix job is carried but not admitted (palw_service_public_e2e.rs:1267, also without recovery); see family-fpcp-report.md"]
+async fn fpcp_public_prefix_inherited_conviction_survives_a_reorg() {
+    fresh_public_service_with_recovery(PublicCase::TiledPublicPrefixInherited, Some(RecoveryMode::Reorg)).await;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecoveryMode {
     Restart,
