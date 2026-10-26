@@ -26,4 +26,20 @@ Both resource preflights exited 0. These are one process each on Mac13,1 (32 GiB
 
 [Raw N=0](raw/dolphin-preflight-n0-2026-10-26/raw.json) and [raw N=32](raw/dolphin-preflight-n32-2026-10-26/raw.json) retain commands, source/binary identity, CPU/RSS, load, setup/result JSON and stdout/stderr digests. Process real time above comes from `/usr/bin/time -l`; raw `wall_seconds` is the monitor's elapsed time, which includes up to five seconds of polling delay. Do not subtract that monitor value as compute time. Artifact and token hashes were checked before and after execution. Final N=32 logits SHA-256: `7b0ca035d1554cb91dff0507460586ebfe183129cc4026b078a9c16eb05c21f8`.
 
-The 8,192-position run is now executing, followed by 32,768 positions if successful and within the resource limits. Neither long-context result is claimed at this checkpoint. Each 16-position chunk also computes its terminal logits, so the aggregate includes more output-head work than a single terminal-head invocation. N=32 must not be linearly extrapolated to 32k. Hashing the artifact warms filesystem cache; this is not a cold-transfer measurement. Logical trace bytes omit wire framing, openings and retention and are not serialized DA bytes/DAA. Court, cold retrieval, transfer, retention pricing, minimum-node results and 9B remain unmeasured.
+The 8,192-position run completed successfully; the 32,768-position run is now executing. Its completion is not claimed. Each 16-position chunk also computes its terminal logits, so the aggregate includes more output-head work than a single terminal-head invocation. N=32 must not be linearly extrapolated to 32k. Hashing the artifact warms filesystem cache; this is not a cold-transfer measurement. Logical trace bytes omit wire framing, openings and retention and are not serialized DA bytes/DAA. Court, cold retrieval, transfer, retention pricing, minimum-node results and 9B remain unmeasured.
+
+
+## Completed 8k real-artifact run
+
+The pinned binary above executed **8,192 positions in 512 chunks**, exit 0, with the same artifact/token hashes before and after. [Raw logs](raw/dolphin-long-n8192-2026-10-26/raw.json), [derived summary](raw/dolphin-long-n8192-2026-10-26/summary.json), [manifest](raw/dolphin-long-n8192-2026-10-26/manifest.json). The summary verifies log hashes, contiguous chunk ranges and exact sums against the harness result.
+
+- Forward wall: **1,030.074612 s (17 min 10 s)**.
+- Whole process real / user / sys: **1,044.36 / 2,751.09 / 29.36 s**. CPU time includes setup, hashing, trace handling and output; forward wall excludes hashing the final logits and printing each chunk.
+- Maximum RSS: **2,772,631,552 B (2.582 GiB)**; maximum KV cache allocation: **469,762,048 B**.
+- Observed 1-minute load: **5.112–13.085**. Status **UNDER_LOAD_RUNTIME_ONLY**; one full run, not a repeated-run p95 bound.
+- Logical transient trace total: **71,587,069,952 B**. Traces are discarded after each chunk. This is neither retained disk usage nor serialized DA material; do not price it as DA bytes/DAA.
+- Last logits SHA-256: `c5ba00975c75f02352cee724ec51cc1ece927bd8b01d1ec0093efede005bfc81`.
+
+The first 1,024 positions took 53.018 s and the final 1,024 took 206.337 s. Both growing context and changing host load contribute; a constant per-token extrapolation to 32k is unsupported. Detailed 1,024-position windows preserve the observed growth, with within-run chunk quantiles labeled as descriptive. The 32k run uses the same binary/input and fresh process; results remain pending.
+
+This is a real 1.5B artifact measurement, **not 9B-8k**, not K2 native claim validation, and not the full M-COST requirement. No claim monetary price or X3 deadline is derived from this CPU/RSS observation alone. Missing cold transfer, retained encoded material, court work and minimum-node observations stay unmeasured.
