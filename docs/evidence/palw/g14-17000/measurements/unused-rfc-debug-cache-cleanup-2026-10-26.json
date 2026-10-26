@@ -1,0 +1,21 @@
+{
+  "observed_utc": "2026-10-26T12:14:54.206297+00:00",
+  "action": "delete unused generated Cargo debug cache only",
+  "path": "/Users/wata/.codex/worktrees/rfc06-12-continuation/MISAKA-testnet/target/debug",
+  "tracked_files": false,
+  "open_files": false,
+  "lsof_exit_code": 1,
+  "allocated_kib_before": 2702284,
+  "entries_before": [
+    ".cargo-lock",
+    ".fingerprint",
+    "build",
+    "deps",
+    "examples",
+    "incremental"
+  ],
+  "free_bytes_before": 24282046464,
+  "source_and_evidence_removed": false,
+  "deleted": true,
+  "free_bytes_after": 26977579008
+}

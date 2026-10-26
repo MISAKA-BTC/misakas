@@ -120,3 +120,11 @@ and the full follow-up scope under a shared slot: cap64 control/preflights and
 conditional repeated batches, actual legacy/kernel honest work, and independent
 carrier saturation. The source is frozen again; Rust compilation/runtime are
 pending. The separate M-C quiet batch remains queued on its already pinned binary.
+
+
+To relieve the shared disk gate, 2,702,284 KiB of unused generated Cargo debug
+cache from this chat's earlier RFC worktree was removed after checking that it
+contained no tracked files and `lsof` found no open files. [Cleanup record](unused-rfc-debug-cache-cleanup-2026-10-26.json).
+Source, uncommitted work, evidence, current release caches and pinned measurement
+binaries were preserved. Available disk remains dynamic while other builds run;
+this cleanup does not establish that the waiting measurement jobs have started.
