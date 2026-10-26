@@ -10,3 +10,19 @@ The endpoint reported network `testnet-12`, virtual DAA **15,850**, block count 
 The second [raw public read](public-wrpc-continuation-2026-10-26.json) completed with exit 0 and reported testnet-12 DAA **15,904**, sink `fd97fe4add58265a…`, and one transaction in that sink block. The pruning point still matches the recorded t12 genesis. Machine, Node binary hash, commands, load and all responses are in the raw JSON.
 
 Between observations at 03:34:38.240 and 06:03:33.105 UTC, the endpoint advanced by 54 DAA in 8,934.865 seconds: **165.4605 seconds per net DAA advance**. [Derivation and input digests](continuation-delta-2026-10-26.json). This is a two-endpoint average, not individual block intervals, a median/p95, an inclusion-delay bound or a reorg/finality measurement. At the second observation, 1,096 DAA remained to 17,000. No wall-clock activation deadline is inferred from this average.
+
+
+## Evening observation — 10:42:45 UTC (19:42 JST)
+
+The third [raw public read](public-wrpc-evening-2026-10-26.json) completed with
+exit 0. It reported **DAA 16,003**, sink `7e725411dd3d1990…`, two transactions in
+that block, and the same t12 genesis pruning point. This confirms that this
+endpoint reports a chain beyond 16,000; it does not identify the binary or
+configuration on all public hosts.
+
+Since the 06:03:33 UTC observation, net DAA advanced 99 in 16,752.758 seconds:
+**169.2198 seconds per net DAA advance**, leaving **997 DAA to 17,000**.
+[Derivation with input hashes](evening-delta-2026-10-26.json). This is a two-point
+average, not individual block timing, an inclusion guarantee, or a guaranteed
+activation date. No public node was modified and no participating local node was
+started. P0 measurements and arming evidence remain separate from this observation.

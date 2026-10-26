@@ -70,3 +70,9 @@ saturation rather than inferring it from the offered count. Neither prepared
 harness establishes a passing measurement, continuous-refill service, honest
 per-seat verification cost or Gate C. All five P0 arming requirements remain
 NOT_MET.
+
+
+Public deadline context at 19:42 JST: [read-only wRPC](M-OPS/README.md#evening-observation--104245-utc-1942-jst)
+reports DAA 16,003, leaving 997 DAA to 17,000. The recent two-point average is
+169.2198 seconds per net DAA advance; it is not an inclusion or wall-clock
+activation guarantee. This observation does not complete any P0 requirement.
