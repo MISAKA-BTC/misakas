@@ -13,8 +13,17 @@
 
 The index contains the `base0-a16` section. It is not a K2 program, and the canonical G14 harness currently registers `wide128_v1(7)`, a small K2 fixture. An A16 runtime result must not be relabeled as that kernel slice's native claim/court result. The artifact's recorded model-conversion diagnostics are not new model review or claim certification.
 
-## Measurement in progress
+## Runtime preflight and long-context measurement
 
-Test-only harness: `misaka/palw/base0/tests/g14_real_model_measure.rs` (source `94d08757d`). It validates the exact artifact hash, compiles the graph-v7 A16 profile against the actual artifact, and executes the existing token sequence in bounded 16-position chunks. Each chunk emits elapsed wall time, cache resident bytes, logical trace i32 bytes and a logits digest. Runtime uses 3 Rayon threads. N=0 measures setup separately. The runner records process CPU/RSS and load, and stops only its own process group if RSS exceeds 8 GiB or the 12-hour limit.
+Test-only harness: `misaka/palw/base0/tests/g14_real_model_measure.rs`, built through the `misaka-palw-opv-meas` test target at source `3872a488c64e03abfcdac11624460dab89d11138`. The [build record](dolphin-build-record.json) pins binary SHA-256 `d709c5cbfebdfd3da7f64509f8d4856980fc68801853f298f4f01afb8c841ba1` and confirms unchanged non-documentation source during compilation. It validates the exact artifact hash, compiles the graph-v7 A16 profile against the actual artifact, and executes the existing token sequence in bounded 16-position chunks. Each chunk emits elapsed wall time, cache resident bytes, logical trace i32 bytes and a logits digest. Runtime uses 3 Rayon threads. N=0 measures setup separately. The runner records process CPU/RSS and load, and stops only its own process group if RSS exceeds 8 GiB or the 12-hour limit.
 
-First run a short segment, then 8k and 32k when resource observations permit. At this checkpoint the binary is still building and **no new model execution result exists**. Hashing the artifact warms filesystem cache; this is not a cold-transfer measurement. Logical trace bytes omit wire framing, openings and retention and are not serialized DA bytes/DAA. Court, cold retrieval, transfer, retention pricing, minimum-node results and 9B remain unmeasured.
+Both resource preflights exited 0. These are one process each on Mac13,1 (32 GiB, 10 CPUs), under load, with three Rayon threads; there is no repetition distribution or p95.
+
+| Positions | Setup wall (s) | Forward wall (s) | Process real / user / sys (s) | Peak RSS (B) | Cache allocation (B) | Logical transient trace (B) | Load before → after |
+|---|---:|---:|---|---:|---:|---:|---|
+| 0 | 7.344532 | 0 | 12.99 / 12.26 / 0.39 | 1,887,535,104 | 0 | 0 | 5.943 → 5.500 |
+| 32 | 7.252610 | 1.316720 | 13.91 / 15.80 / 0.43 | 2,085,158,912 | 1,835,008 | 279,636,992 | 5.500 → 5.173 |
+
+[Raw N=0](raw/dolphin-preflight-n0-2026-10-26/raw.json) and [raw N=32](raw/dolphin-preflight-n32-2026-10-26/raw.json) retain commands, source/binary identity, CPU/RSS, load, setup/result JSON and stdout/stderr digests. Process real time above comes from `/usr/bin/time -l`; raw `wall_seconds` is the monitor's elapsed time, which includes up to five seconds of polling delay. Do not subtract that monitor value as compute time. Artifact and token hashes were checked before and after execution. Final N=32 logits SHA-256: `7b0ca035d1554cb91dff0507460586ebfe183129cc4026b078a9c16eb05c21f8`.
+
+The 8,192-position run is now executing, followed by 32,768 positions if successful and within the resource limits. Neither long-context result is claimed at this checkpoint. Each 16-position chunk also computes its terminal logits, so the aggregate includes more output-head work than a single terminal-head invocation. N=32 must not be linearly extrapolated to 32k. Hashing the artifact warms filesystem cache; this is not a cold-transfer measurement. Logical trace bytes omit wire framing, openings and retention and are not serialized DA bytes/DAA. Court, cold retrieval, transfer, retention pricing, minimum-node results and 9B remain unmeasured.

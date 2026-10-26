@@ -1,0 +1,10 @@
+
+running 1 test
+test g14_dolphin_long_context_cost ... G14_MODEL_SETUP {"arming_evidence":false,"artifact":"/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/legacy/dolphin3.0-qwen25-1.5b-a16-32k-precise.palwart","artifact_bytes":1811942348,"artifact_sha256":"8d88abf0cf46d86bed52466328690dbfebf6b49efb2b278a9648f947c4843da6","cache_profile":"A16KvI32","chunk_positions":16,"cold_fetch_measured":false,"declared_max_context":32768,"kernel_slice_claim_measured":false,"nine_b_measured":false,"positions_requested":32,"runtime":"A16 graph-v7 planned","setup_wall_ns":7252609583,"shape_profile_id":"c5ee885c982c3c4db81277174099b2dc955ae2e2e08f3231bb0c406d10035c04054a2b18cf232b0b53d8c42d27a64fc334a6ff7760bc6f63abbe5eb220c7411f","token_file":"/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/calib/eval-a16-long-tokens.json","tokens_sha256":"41069932f1940b3d7a59b54647bff7fe81fc03de9582b999fe57c2e0bd119d2d"}
+G14_MODEL_CHUNK {"cache_resident_bytes":917504,"end":16,"first":0,"logical_trace_i32_bytes":139818496,"logits_sha256":"3302316120fd4b0b87c9aa331ea89d629a0855e4e61cf6e9ce01a1a6c8a39f7f","wall_ns":664187750}
+G14_MODEL_CHUNK {"cache_resident_bytes":1835008,"end":32,"first":16,"logical_trace_i32_bytes":139818496,"logits_sha256":"7b0ca035d1554cb91dff0507460586ebfe183129cc4026b078a9c16eb05c21f8","wall_ns":652532584}
+G14_MODEL_RESULT {"arming_evidence":false,"cache_resident_bytes":1835008,"court_measured":false,"da_encoded_bytes":null,"last_logits_sha256":"7b0ca035d1554cb91dff0507460586ebfe183129cc4026b078a9c16eb05c21f8","logical_trace_i32_bytes_total":279636992,"positions_executed":32,"total_forward_wall_ns":1316720334,"trace_retained":false,"transfer_measured":false}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.91s
+
