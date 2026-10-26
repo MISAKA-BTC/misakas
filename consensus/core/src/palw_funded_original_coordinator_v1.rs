@@ -115,6 +115,63 @@ impl PalwFundedOriginalScheduleV1 {
             admission: None,
         }
     }
+    /// **Production constructor (lane VAL, 2026-10-26)**: refuses unset profile ids, a zero or unbounded fee/capital, a budget
+    /// outside `1..=2^40` and an unknown role bit. Not read by any preset; the integrator wires the pinned value
+    /// (`palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_v1(
+        profiles: [Hash64; 4],
+        fee_sompi: u64,
+        capital_sompi: u64,
+        numerical: crate::palw_court_numerical_geometry_v3::NumericalGeometryBudgetV3,
+        input: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
+        source: crate::palw_court_source_material_graph_v3::SourceGraphBudgetV3,
+        adopted_roles: u8,
+        admission: crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1,
+    ) -> Result<Self, &'static str> {
+        const MAX: u64 = 1 << 40;
+        const MAX_SOMPI: u64 = 1_000_000 * 100_000_000;
+        let in_range = |v: u64| v > 0 && v <= MAX;
+        if profiles.iter().any(|p| *p == Hash64::from_bytes([0; 64])) {
+            return Err("funded original schedule: profile ids must be set");
+        }
+        if fee_sompi == 0 || capital_sompi == 0 || fee_sompi > MAX_SOMPI || capital_sompi > MAX_SOMPI {
+            return Err("funded original schedule: fee and capital must be in 1..=1,000,000 MSK");
+        }
+        let n = numerical;
+        let i = input;
+        if ![n.max_original_leaves, n.max_roots, n.max_paths, n.max_edges, n.max_path_bytes].into_iter().all(in_range)
+            || ![i.max_original_leaves, i.max_total_edges, i.max_total_coordinates, i.max_root_memberships].into_iter().all(in_range)
+            || ![source.max_queries, source.max_roles, source.max_vertices, source.max_edges].into_iter().all(in_range)
+        {
+            return Err("funded original schedule: every budget must be in 1..=2^40");
+        }
+        let known = PALW_FUNDED_ROLE_WHOLE_BRANCH_V1
+            | PALW_FUNDED_ROLE_SERVICE_OPERATOR_V1
+            | PALW_FUNDED_ROLE_FEE_CAPITAL_BODIES_V1
+            | PALW_FUNDED_ROLE_SEMANTIC_PROVIDER_V1;
+        if adopted_roles & !known != 0 {
+            return Err("funded original schedule: unknown role bit");
+        }
+        Ok(Self {
+            fee_profile_id: profiles[0],
+            capital_profile_id: profiles[1],
+            retention_profile_id: profiles[2],
+            settlement_policy_id: profiles[3],
+            fee_sompi,
+            capital_sompi,
+            numerical,
+            input,
+            source: SourceBudgetV1 {
+                max_queries: source.max_queries,
+                max_roles: source.max_roles,
+                max_vertices: source.max_vertices,
+                max_edges: source.max_edges,
+            },
+            adopted_roles,
+            admission: Some(admission),
+        })
+    }
     /// **TEST ONLY.** Adds the all-branch admission values (lane r5). Without them the coordinator refuses `AdmissionSchedule`.
     #[cfg(test)]
     pub fn with_admission_v1(mut self, admission: crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1) -> Self {

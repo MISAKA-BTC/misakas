@@ -27,12 +27,13 @@ Branch `claude/g14-values`（base `55510b56a`）。状態はすべて **目安�
 
 値・式・見直し条件は [パラメーター台帳](../../../../governance/parameter-register.md) の「2026-10-26 lane VAL」節。要点:
 
-- **V1**: packet 34,000 B（最大 court object 33,821 B）、2 packet/DAA（block の 54.4%、残り 57,000 B は観測中央値 56,134 B 以上）、12 packet/signer、span 833 DAA。Panel=1 で持続 0.083 original/DAA（名目 60/日）。DoS: 予約は fee と capital を伴う（V2）。
+- **V1**: packet 34,000 B（最大 court object 33,821 B）、**1 packet/DAA**（2026-10-26 統括判断の条件を満たすため 2 から変更。block の 27.2%）、12 packet/signer、span 833 DAA。各区間に 1 original あたり 2 packet、12 区間は a+9,997 で終わり、区間 0〜3 が notice a+3,120 を覆う。持続 1/24 original/DAA（名目 30/日）。超過は受付で拒否され、期限超過にはならない。DoS: 予約は fee と capital を伴う（V2）。
 - **V2**: fee 0.816 MSK = 予約 packet 24 個の運搬の 2 倍。capital 0.816 MSK。
 - **V3**: work 800‰ / relay 100‰ / burn 100‰。自分で払った claim は F の 10% を失い、補助金が無いので自作自演は無益。
 - **V4**: 1.1 M sompi / session（opening の運搬 828,550 以上）。内部者も払う（共謀者が非予約枠を無料で埋めない）。
 - **V5**: 50 sompi/B（P3 `c_retain` の前提と一致）、draft TTL 720 DAA。
-- **V11**: ρ_court 6,250 sompi/DAA/unit（session-DAA が court 予約運搬の持分を払う）、session weight 13・op_work [5,13,1,11]（P1 M-RHO）。全 slot を 10,000 DAA 占有すると 341 MSK。正直な起訴の費用 0.42 MSK は最小 slash（D2 3 MSK）の報告者 49% = 1.47 MSK で回収できる。ρ を bond 相当（≥ 238,096）にする案は正直な起訴が約 10 MSK になり回収不能なので採らない。外部者の保証は予約 slot と期限順 queue による。
+- **F02 inclusion_delay_daa**: 4 DAA（目安、実測で置換）。B_carrier の考え方: 1 packet 34,000 B を観測最悪の空き 13,051 B/DAA で運ぶと 3 DAA、1 packet/DAA の予約で同じ区間の 2 個目が 1 DAA 待つので 4。184 s/DAA で約 12 分（最大 240 s で 16 分）、turn 42 DAA と span 833 より十分小さい。`CourtServiceInclusionPremiseV1` は 9803e043d にあり本 base には無いので、数値の const だけを置いた。
+- **V11**: ρ_court 3,125 sompi/DAA/unit（session-DAA が court 予約運搬 34,000 B の持分を払う。旧 6,250）、session weight 13・op_work [5,13,1,11]（P1 M-RHO）。全 slot を 10,000 DAA 占有すると 171 MSK。正直な起訴の費用 0.28 MSK は最小 slash（D2 3 MSK）の報告者 49% = 1.47 MSK で回収できる。ρ を bond 相当（≥ 238,096）にする案は正直な起訴が約 10 MSK になり回収不能なので採らない。外部者の保証は予約 slot と期限順 queue による。
 
 ## 3. 独立検証
 
@@ -42,8 +43,8 @@ Branch `claude/g14-values`（base `55510b56a`）。状態はすべて **目安�
 
 ## 4. 発見（統括の判断が要る）
 
-- **cert m/k**: 1 日の draw 上限 4,096 を毎日使い切ると、75/41 の誤認証の年間期待は 0.06（2026-10-22 pin の 7.87e-4 は少ない draw 数が前提）。上限まで使う前提なら m=89, k=50（年 5.6e-4、正直 0.9905）が最小。本 lane では変更していない。
-- V1 の 2 packet/DAA は block の半分強を court に予約する。混雑が増えるなら 1 packet/DAA（持続 30/日）に下げる。
+- **cert m/k（訂正）**: 最初の報告の「上限まで使うと 75/41 は 0.06/年」は誤り（4,096 は position の数で、claim は ⌊4,096/75⌋ = 54/日）。正しくは 7.9e-4/年 < 1e-3 で、75/41 は既に条件を満たす。この誤りを根拠にした 89/50 への変更は実施せず、統括の再判断を待つ。89/50 にすると 1 claim あたりの再実行が 75 → 89 回に増え、上限下の認証数は 54 → 46 件/日に減る。
+- production constructor 3 つを追加し、目安を `palw_g14_values_v1` から組めるようにした（preset と `palw_escrow_fee_schedule_v1` は未配線）。
 
 ## 5. 統合時に `None` 前提で壊れる試験
 
@@ -58,4 +59,4 @@ Branch `claude/g14-values`（base `55510b56a`）。状態はすべて **目安�
 
 下の commit 時点の targeted test 結果を記す（§3 の Rust 試験）。
 
-`cargo test -p kaspa-consensus-core --lib palw_g14_values_v1`: **7 passed / 0 failed**（2026-10-26）。試験名 `val_v11_..._prices_a_full_jam_above_a_bond` は ρ 改定前の名前のまま（中身は「session-DAA が運搬持分を払う・全窓占有 ≥ 300 MSK・正直な起訴が 1.47 MSK で回収できる」を確かめる）。計算 script は全項目 PASS。full suite・clippy は回していない。
+`cargo test -p kaspa-consensus-core --lib palw_g14_values_v1`: 初回 7 passed、改定後（1 packet・constructor・inclusion delay）**9 passed / 0 failed**（2026-10-26）。試験名 `val_v11_..._prices_a_full_jam_above_a_bond` は ρ 改定前の名前のまま（中身は「session-DAA が運搬持分を払う・全窓占有 ≥ 300 MSK・正直な起訴が 1.47 MSK で回収できる」を確かめる）。計算 script は全項目 PASS。full suite・clippy は回していない。

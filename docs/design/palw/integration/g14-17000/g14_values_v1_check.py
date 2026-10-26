@@ -18,28 +18,31 @@ def tail(n, p, t):
 
 
 # --- certification m/k under f = 0.25 (user 2026-10-22); m/k pinned 2026-10-22 by P4
-m, k, f, resp, draws_per_year = 75, 41, 0.25, 0.90, 4096 * 365
+# The 4,096/day cap counts drawn POSITIONS: a full cap certifies floor(4,096 / m) claims a day.
+m, k, f, resp = 75, 41, 0.25, 0.90
+certs_per_year = lambda m: (4096 // m) * 365
 p_false = tail(m, f, k)
 p_honest = tail(m, (1 - f) * resp, k)
-check("cert false-certification per draw", p_false < 1e-7, f"P={p_false:.3e}/draw, {p_false*draws_per_year:.3e}/year")
+check("cert 75/41 false certifications/year at full cap", p_false * certs_per_year(m) < 1e-3,
+      f"P={p_false:.3e}/claim x {certs_per_year(m)}/year = {p_false*certs_per_year(m):.3e}")
 check("cert honest certifies", p_honest >= 0.99, f"P={p_honest:.4f}")
 
 # --- detection 90-99 % (D2 draw cap 64)
 for lie in (0.0354, 0.05, 0.10):
     d = 1 - (1 - lie) ** 64
     check(f"D2 detection lie={lie:.2%}", d >= 0.90, f"{d:.4f}")
-# finding: at the full 4,096/day draw cap the yearly expectation exceeds 1e-3; the smallest m/k that keeps it below with
-# honest certification >= 0.99 (response 90 %) is m=89, k=50.
+# The 2026-10-26 lane VAL note that 75/41 fails at full cap multiplied by 4,096 claims/day (positions counted as claims): retracted.
 p89 = tail(89, f, 50)
-check("cert alt m=89 k=50 at full cap", p89 * draws_per_year < 1e-3 and tail(89, (1 - f) * resp, 50) >= 0.99,
-      f"{p89*draws_per_year:.3e}/year, honest {tail(89, (1-f)*resp, 50):.4f}")
+print(f"      (reference) 89/50: {p89*certs_per_year(89):.3e}/year at full cap, honest {tail(89, (1-f)*resp, 50):.4f}")
 print(f"      min lie fraction detected at 90 %: {1 - 0.1 ** (1/64):.4%}, at 99 %: {1 - 0.01 ** (1/64):.4%}")
 
 # --- V1 service profile
-pkt, span, per, signers, budget_pk, block, median_tx = 34_000, 833, 12, 2, 2, 125_000, 56_134
+pkt, span, per, signers, budget_pk, block, median_tx = 34_000, 833, 12, 2, 1, 125_000, 56_134
 check("V1 intervals end before a+10,000", 1 + per * span <= 10_000, f"{1 + per*span}")
 check("V1 packet holds largest object", pkt >= 33_821, f"{pkt}")
 check("V1 leaves median tx room", block - budget_pk * pkt >= median_tx, f"{block - budget_pk*pkt}")
+check("V1 1 packet/DAA serves one original per interval", span * budget_pk >= signers, f"{span*budget_pk} slots >= {signers}")
+check("V1 notice window covered by intervals 0-3", 1 + 4 * span >= 3_120, f"{1 + 4*span}")
 lam = budget_pk / (signers * per)
 print(f"      sustained Panel=1 originals: {lam:.4f}/DAA = {lam*720:.1f}/nominal day")
 
@@ -55,10 +58,10 @@ check("V3 shares sum 1000", w + r + c + b == 1000, "")
 check("V3 self-dealing loses", b > 0, f"self-paid claim loses {b/10}% of F (no subsidy)")
 
 # --- V11 rho, session weight
-rho, weight, cap, window, bond = 6_250, 13, 42, 10_000, 13_000 * SOMPI
+rho, weight, cap, window, bond = 3_125, 13, 42, 10_000, 13_000 * SOMPI
 jam = rho * cap * window * weight
-check("V11 session-DAA pays carriage share", rho * weight * cap >= 68_000 * 50, f"{rho*weight*cap} >= {68_000*50}")
-check("V11 full-window jam >= 300 MSK", jam >= 300 * SOMPI,
+check("V11 session-DAA pays carriage share", rho * weight * cap >= pkt * budget_pk * 50, f"{rho*weight*cap} >= {pkt*budget_pk*50}")
+check("V11 full-window jam >= 150 MSK", jam >= 150 * SOMPI,
       f"{jam/SOMPI:.0f} MSK (bond-level jam would need rho {ceil(bond/(cap*window*weight))})")
 honest_occ = rho * 336 * weight
 

@@ -134,7 +134,7 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 | # | キー | 目安 | 単位 | 根拠（式と入力） | 見直し条件・必要な実測 |
 | --- | --- | --- | --- | --- | --- |
 | V1 | `court_service.packet_cost` | bytes 34,000 / work 13 / io 1 / controls 1 | packet | 最大 object 33,821 B を 1 packet に収める | 実モデルの最大 court object（M-C 実モデル） |
-| V1 | `court_service.budget` | 2 packet/DAA（68,000 B・work 26・io 2・controls 2） | /DAA | 残り 57,000 B ≥ 観測中央値 tx 56,134 B。持続受付 2/(2×12) = 0.083 original/DAA | 混雑時の tx bytes 観測、受付需要 |
+| V1 | `court_service.budget` | **1 packet/DAA**（34,000 B・work 13・io 1・controls 1）。旧目安 2 packet（2026-10-26 統括判断で変更） | /DAA | 1 original の 24 packet は 833 DAA の各区間に 2 個。12 区間は a+9,997 で終わり、区間 0〜3 が notice a+3,120 を覆う。超過は受付で全拒否され、期限超過にはならない。持続 1/24 original/DAA（名目 30/日）、block の 27.2% | 受付需要が 30/日を超えたら 2 に戻す |
 | V1 | `court_service.packets_per_signer` | 12 | packet | localization 11 turn（upper 6）＋close 1 | 実モデルの turn 数（step leaf 数で増える） |
 | V1 | `court_service.service_span_daa` | 833 | DAA | ⌊(10,000−4)/12⌋、`1+12×833 = 9,997 ≤ 10,000` | packets_per_signer の変更時 |
 | V2 | `funded.fee_sompi` | 81,600,000（0.816 MSK） | sompi | 2 × 24 packet × 34,000 B × 50 | V1 の変更時 |
@@ -146,7 +146,10 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 | V4 | `court_ingress.fee_sompi_per_session` | 1,100,000 | sompi | opening 16,571 B × 50 = 828,550 を切上げ。内部者（producer・seat）も払う。R = ⌊cap/2⌋ = 21 を維持 | ρ_court の変更時 |
 | V5 | `material_intake.sompi_per_byte` / payer | 50 / submitter | sompi/B | 運搬単価。P3 `c_retain` = ⌈2,250,000×50/3,120⌉ = 36,058 と一致 | 保持費の実価格（M-DA） |
 | V5 | `material_intake.draft_ttl_daa` | 720 | DAA | 名目 1 日 | intake の実測完了時間 |
-| V11 | `court_capacity.rho_sompi` | 6,250 | sompi/DAA/unit | ⌈68,000×50/42/13⌉ = 6,228 を切上げ。全 slot を 10,000 DAA 占有 = 341 MSK。正直な起訴（ingress＋8 move×42 DAA 占有＋運搬）0.42 MSK ≤ 最小 slash 3 MSK の 49% = 1.47 MSK | 最低要件ハードウェアの court op 実測（arming 要件 2） |
+| F02 | `court_service_inclusion.inclusion_delay_daa` | 4 | DAA | B_carrier: ⌈34,000 / 最悪空き 13,051⌉ = 3 DAA ＋ 1 packet/DAA 予約で同区間の 2 packet 目が 1 DAA 待つ = 4（既存 `PALW_COURT_CLOSE_INCLUSION_MARGIN` と同じ）。184 s/DAA で約 12 分 | 混雑下の court packet 取り込み遅延の実測。**目安で pin、実測で置換**。型は 9803e043d、本 lane の base には無いので数値のみ |
+| V11 | `court_capacity.rho_sompi` | 3,125（旧目安 6,250） | sompi/DAA/unit | ⌈34,000×50/42/13⌉ = 3,114 を切上げ。全 slot を 10,000 DAA 占有 = 171 MSK。正直な起訴（ingress＋8 move×42 DAA 占有＋運搬）0.28 MSK ≤ 最小 slash 3 MSK の 49% = 1.47 MSK | 最低要件ハードウェアの court op 実測（arming 要件 2） |
 | V11 | `court_capacity.session_weight` / op_work | 13 / [5, 13, 1, 11] | unit | P1 M-RHO（中央値ベース、単位 126.5 µs） | 同上。**目安で pin、実測で置換** |
 
-**外さない条件:** これらを measured record・arming record の evidence にしない。外部者の保証は予約 slot（ADR-0192）と期限順 queue に依る。ρ を producer bond 相当（≥ 238,096）にすると正直な起訴が約 10 MSK になり費用回収できないので採らない。V10（X3）・V11・P1-5 は目安で pin、実測で置換。cert m/k 75/41 は 1 日の draw 上限 4,096 を毎日使い切ると誤認証の年間期待が 0.06 になる（2026-10-22 pin の 7.87e-4 とは前提の draw 数が違う）。上限まで使う前提なら m=89, k=50（年 5.6e-4、正直認証 0.9905）が最小。決定変更は統括・ユーザー判断。
+**外さない条件:** これらを measured record・arming record の evidence にしない。外部者の保証は予約 slot（ADR-0192）と期限順 queue に依る。ρ を producer bond 相当（≥ 238,096）にすると正直な起訴が約 10 MSK になり費用回収できないので採らない。V10（X3）・V11・P1-5 は目安で pin、実測で置換。cert m/k は 75/41 のまま。4,096/日の上限は抽選 position の数で、上限まで使っても認証は ⌊4,096/75⌋ = 54 件/日、誤認証の年間期待は 7.9e-4 < 1e-3（2026-10-22 pin のとおり）。lane VAL の最初の報告で「上限まで使うと 0.06/年」と書いたのは、position の数を claim の数として掛けた誤りで、撤回する。この誤りを根拠にした 89/50 への変更は実施していない（統括の再判断待ち）。
+
+**production constructor（2026-10-26）:** `PalwFundedOriginalScheduleV1::new_v1`、`FundedAdmissionScheduleV1::new_v1`、`PalwEscrowFeeScheduleV1::new_v1` を追加した（範囲外は拒否）。目安は `palw_g14_values_v1` の `palw_g14_funded_original_schedule_estimate_v1`・`palw_g14_funded_admission_estimate_v1`・`palw_g14_escrow_schedule_estimate_v1` で組む。preset と `palw_escrow_fee_schedule_v1` は未配線のまま。
