@@ -209,8 +209,13 @@ async fn registered(cfg: (Config, PalwConsensusParamsV2, Premine, Premine)) -> N
 #[tokio::test]
 async fn g14_f03k2_panel_one_class_failing_the_censorship_relation_is_refused() {
     kaspa_core::log::try_init_logger("warn");
-    let missing = registered(panel_one_config(Some(0), None)).await;
-    assert!(missing.ledger().classes.is_empty(), "no gain bound adopted: refused, never read as zero");
+    // The production bound is the user-approved 500 MSK (2026-10-26); the typed-missing refusal itself is pinned by the pure
+    // relation's tests in `palw_kernel_route_panel_one_censorship_v1`.
+    assert_eq!(
+        kaspa_consensus_core::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1,
+        Some(kaspa_consensus_core::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1),
+        "the approved production bound"
+    );
     let cheap = registered(panel_one_config(Some(0), Some(u64::MAX / 4))).await;
     assert!(cheap.ledger().classes.is_empty(), "censorship cheaper than the gain: refused");
     let dear = registered(panel_one_config(Some(0), Some(TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI))).await;

@@ -12,9 +12,9 @@
 //!   spend one block's court (a `FileProof` may spend the whole budget, the proof reserve included), as in OPV.
 //! * The fee is what the ledger actually charges a dismissed filing of the class's worst work (`LedgerPolicyV1::dismissal_fee_v1`).
 //! * Exposure counts one block per DAA, as in OPV.
-//! * The external gain bound (what a lie can be worth outside the chain's own reward) has no adopted value:
-//!   [`crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1`] is `None`. While it is `None`, every Panel
-//!   class past the fence is REFUSED as typed-missing. It is never treated as zero.
+//! * The external gain bound (what a lie can be worth outside the chain's own reward) is
+//!   [`crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1`], user-approved at 500 MSK on 2026-10-26.
+//!   Were it `None`, every Panel class past the fence would be REFUSED as typed-missing; it is never treated as zero.
 //!
 //! Below the fence nothing here runs (byte-identical). This is an economic relation over hashes-and-fees only. It is no proof of
 //! computation (PRINCIPLES §8) and no per-model review (§9): it bounds a class's court geometry, the same rule for every tier.

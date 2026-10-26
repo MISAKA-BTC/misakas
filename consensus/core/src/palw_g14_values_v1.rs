@@ -31,11 +31,12 @@ use crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCover
 /// Status string (estimates, not wired, not measured).
 pub const PALW_G14_VALUES_STATUS_V1: &str = "provisional estimates 2026-10-26 (lane VAL); not wired into any preset; not measured";
 
-/// **Lane F03k2: the external gain bound of a Panel=1 kernel-route claim — TYPED-MISSING.** What a lie can be worth outside
-/// the chain's own reward (`crate::palw_kernel_route_panel_one_censorship_v1`). No estimate has been derived. While this is `None`,
-/// every Panel class registration past `palw_kernel_route_panel_one_v1` is refused. Review condition: an economic audit of
-/// off-chain value per claim.
-pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1: Option<u64> = None;
+/// **Lane F03k2: the external gain bound of a Panel=1 kernel-route claim — USER-APPROVED 2026-10-26 (500 MSK, from an estimate).**
+/// What a lie can be worth outside the chain's own reward (`crate::palw_kernel_route_panel_one_censorship_v1`). User approval
+/// 2026-10-26 (verbatim): 「500 MSK で承認」. Basis: [`PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1`]. Review
+/// condition: an economic audit of off-chain value per claim, or a change of the ledger's dismissal fee / adjudication cap /
+/// liability window.
+pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1: Option<u64> = Some(PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1);
 
 /// sompi per MSK.
 pub const SOMPI_PER_MSK_V1: u64 = 100_000_000;
@@ -96,8 +97,7 @@ pub const PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1: u64 = 4;
 /// ledger as shipped: `dismissed_proof_fee` 0.1 MSK × `max_adjudications_per_block` 64 = 6.4 MSK per block, over the ledger's
 /// `liability_daa` 200 → 1,280 MSK, 2.56 × the bound. A consumer who stakes more than this on one Panel=1 claim is outside the
 /// guarantee. Revise: any change of the ledger's fee / adjudication cap / liability window, or evidence of larger misdirection value.
-/// Integration (2026-10-26): kept as a separate estimate. The production bound above stays `None` (typed-missing) until the user
-/// approves this value; then the production constant takes `Some(..._ESTIMATE_V1)`.
+/// Integration (2026-10-26): the user approved this value the same day; the production bound above takes it.
 pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1: u64 = 500 * SOMPI_PER_MSK_V1;
 
 // ---------------------------------------------------------------- V2 funded original / admission
