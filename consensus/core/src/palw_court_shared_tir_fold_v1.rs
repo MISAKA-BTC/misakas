@@ -74,11 +74,29 @@ fn request_inner(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,claim:Hash
             return Err(refused("shared notice precedes or substitutes its original's acceptance"));
         }
     }
-    let row=shared::SharedTirQueryV1 {version:1,claim,scope_id:c.scope_id,ordinal:intent.ordinal,request_id:intent.request_id,
+    // G14 lane F03b2 (ADR-0192 A/A addendum, PROVISIONAL): charge ⌈max bytes / 34,000⌉ packets of this coordinate against the
+    // capacity reserved at acceptance and record its deterministic service slot. All shared deadlines are the original's hard
+    // DAA, so earliest-deadline-first is arrival order (in-block: object order); the slot starts after the claim's last slot.
+    // Size never refuses; only a slot that cannot end before hard (no reserved capacity left) is refused, with no state change.
+    let packets=shared::shared_coordinate_packets_v1(&source,&set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
+    let cursor=shared_service_cursor_v1(&b.state,claim);
+    let start=ctx.daa_score.max(cursor.map_or(c.original_accepted_daa,|end|end.saturating_add(1)));
+    let per=crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1;
+    let end=start.checked_add(packets.div_ceil(per)-1).ok_or_else(||refused("shared service slot overflow"))?;
+    if end>=c.hard_daa {return Err(refused("shared request has no reserved service capacity before the original's hard DAA"));}
+    let row=shared::SharedTirQueryV1 {version:shared::SHARED_QUERY_SERVICE_VERSION_V2,claim,scope_id:c.scope_id,ordinal:intent.ordinal,request_id:intent.request_id,
         opened_block:ctx.block,opened_daa:ctx.daa_score,opened_by:intent.signer,intent_digest:intent.signing_message(network).map_err(refused)?,
-        material_until_daa:c.material_until_daa,body:None};
+        material_until_daa:c.material_until_daa,body:None,service:Some(shared::SharedServiceSlotV1 {packets,start_daa:start,end_daa:end})};
     b.write_staged_row_v1(key,Some(Row::CourtSharedQuery(Box::new(row))))?;
     Ok(SharedRequestEffectV1::Opened)
+}
+/// F03b2: the last recorded service DAA among the claim's shared requests (per-claim index, no global scan).
+pub(super) fn shared_service_cursor_v1(state:&PalwChainStateV2,claim:Hash64)->Option<u64> {
+    state.staged_court_service_by_claim.get(&claim)?.iter()
+        .filter(|(kind,_,_)|*kind==crate::palw_staged_court_state_v1::COURT_INDEX_SHARED_NOTICE_V1)
+        .filter_map(|(_,_,key)|match state.staged_court_row_v1(key) {
+            Some(Row::CourtSharedQuery(q))=>q.service.map(|s|s.end_daa),_=>None})
+        .max()
 }
 /// Data identity only, never a signed response/default/credit effect.
 pub(super) fn share_body(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,claim:Hash64,

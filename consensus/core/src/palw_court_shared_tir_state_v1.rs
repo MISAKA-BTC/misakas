@@ -21,11 +21,57 @@ pub struct SharedTirContextV1 {
 pub struct SharedTirBodyV1 {
     pub block:BlockHash,pub accepted_daa:u64,pub digest:Hash64,pub bytes:Vec<u8>,
 }
-#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+#[derive(Clone,Debug,PartialEq,Eq)]
 pub struct SharedTirQueryV1 {
     pub version:u16,pub claim:Hash64,pub scope_id:Hash64,pub ordinal:u64,pub request_id:Hash64,
     pub opened_block:BlockHash,pub opened_daa:u64,pub opened_by:PalwBondKeyV2,pub intent_digest:Hash64,
     pub material_until_daa:u64,pub body:Option<SharedTirBodyV1>,
+    /// F03b2: version 2 rows record their deterministic service slot; version 1 rows carry `None`.
+    pub service:Option<SharedServiceSlotV1>,
+}
+/// **F03b2 (PROVISIONAL estimate): the reserved service slot of one shared request.** `packets = ⌈max response bytes / 34,000⌉`
+/// of its coordinate; served in `[start_daa, end_daa]` with `PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1` packets per DAA.
+#[derive(Clone,Copy,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+pub struct SharedServiceSlotV1 {pub packets:u64,pub start_daa:u64,pub end_daa:u64}
+pub const SHARED_QUERY_SERVICE_VERSION_V2:u16=2;
+// Version 1 rows keep their exact bytes; version 2 appends the bare slot (no Option tag).
+impl BorshSerialize for SharedTirQueryV1 {
+    fn serialize<W:std::io::Write>(&self,w:&mut W)->std::io::Result<()> {
+        (self.version,self.claim,self.scope_id,self.ordinal,self.request_id,self.opened_block,self.opened_daa,self.opened_by,
+            self.intent_digest,self.material_until_daa).serialize(w)?;
+        self.body.serialize(w)?;
+        match (self.version,&self.service) {
+            (1,None)=>Ok(()),
+            (SHARED_QUERY_SERVICE_VERSION_V2,Some(s))=>s.serialize(w),
+            _=>Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"shared query version/service")),
+        }
+    }
+}
+impl BorshDeserialize for SharedTirQueryV1 {
+    fn deserialize_reader<R:std::io::Read>(r:&mut R)->std::io::Result<Self> {
+        let version=u16::deserialize_reader(r)?;
+        if version!=1 && version!=SHARED_QUERY_SERVICE_VERSION_V2 {return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"shared query version"));}
+        let claim=Hash64::deserialize_reader(r)?;let scope_id=Hash64::deserialize_reader(r)?;let ordinal=u64::deserialize_reader(r)?;
+        let request_id=Hash64::deserialize_reader(r)?;let opened_block=BlockHash::deserialize_reader(r)?;let opened_daa=u64::deserialize_reader(r)?;
+        let opened_by=PalwBondKeyV2::deserialize_reader(r)?;let intent_digest=Hash64::deserialize_reader(r)?;
+        let material_until_daa=u64::deserialize_reader(r)?;let body=Option::<SharedTirBodyV1>::deserialize_reader(r)?;
+        let service=if version==SHARED_QUERY_SERVICE_VERSION_V2 {Some(SharedServiceSlotV1::deserialize_reader(r)?)} else {None};
+        Ok(Self {version,claim,scope_id,ordinal,request_id,opened_block,opened_daa,opened_by,intent_digest,material_until_daa,body,service})
+    }
+}
+/// Packets of one coordinate: `⌈maximum_response_bytes / PALW_G14_PACKET_BYTES_V1⌉`, at least 1. Size never refuses; it is charged.
+pub fn shared_coordinate_packets_v1(source:&crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+    query:&crate::palw_tir_public_source_v1::PalwTirPublicRequestV1)->Result<u64,String> {
+    let bytes=source.unit_bound_v1(query)?.maximum_response_bytes;
+    Ok(bytes.div_ceil(crate::palw_g14_values_v1::PALW_G14_PACKET_BYTES_V1).max(1))
+}
+/// `Q` in packets: the sum over the whole closed universe (every branch's every coordinate at its maximum size).
+pub fn shared_universe_packets_v1(source:&crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,set:&TirSharedRequestSetV1)->Result<u64,String> {
+    let mut total=0u64;
+    for i in 0..set.len() {
+        total=total.checked_add(shared_coordinate_packets_v1(source,&set.request_at(i)?)?).ok_or("shared universe packets overflow")?;
+    }
+    Ok(total)
 }
 #[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
 pub struct SharedTirIdsV1 {
@@ -125,6 +171,12 @@ pub fn derive_shared_tir_context_v1(state:&PalwChainStateV2,claim:Hash64)->Resul
     c.check(&Key::CourtSharedContext(claim))?;
     Ok(c)
 }
+/// F03b2: `Q` in packets for a (derived or installed) context — every coordinate of every branch at its maximum size.
+pub fn shared_frontier_universe_packets_v1(state:&PalwChainStateV2,c:&SharedTirContextV1)->Result<u64,String> {
+    let source=c.source(state)?;
+    let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,c.claim).ok_or("shared frontier: original frame absent")?;
+    shared_universe_packets_v1(&source,&TirSharedRequestSetV1::new(frame,&source,c.profile_id)?)
+}
 pub(crate) fn context(state:&PalwChainStateV2,claim:Hash64)->Result<&SharedTirContextV1,String> {
     match state.staged_court_row_v1(&Key::CourtSharedContext(claim)) {
         Some(Row::CourtSharedContext(c))=>Ok(c),_=>Err("no installed native shared context".into()),
@@ -132,7 +184,12 @@ pub(crate) fn context(state:&PalwChainStateV2,claim:Hash64)->Result<&SharedTirCo
 }
 impl SharedTirQueryV1 {
     pub fn check(&self,key:&Key)->Result<(),String> {
-        if self.version!=1 || *key!=Key::CourtSharedQuery(self.request_id)
+        let service_ok=match (self.version,&self.service) {
+            (1,None)=>true,
+            (SHARED_QUERY_SERVICE_VERSION_V2,Some(s))=>s.packets>0 && s.start_daa>=self.opened_daa && s.end_daa>=s.start_daa,
+            _=>false,
+        };
+        if !service_ok || *key!=Key::CourtSharedQuery(self.request_id)
             || self.body.as_ref().is_some_and(|b|b.bytes.is_empty() || b.accepted_daa<self.opened_daa
                 || b.digest!=shared_body_digest_v1(&b.bytes)) {
             return Err("invalid shared query shape/key/body".into());
@@ -140,8 +197,8 @@ impl SharedTirQueryV1 {
         Ok(())
     }
     pub(crate) fn same_opening(&self,old:&Self)->bool {
-        (self.version,self.claim,self.scope_id,self.ordinal,self.request_id,self.opened_block,self.opened_daa,self.opened_by,self.intent_digest,self.material_until_daa)
-        ==(old.version,old.claim,old.scope_id,old.ordinal,old.request_id,old.opened_block,old.opened_daa,old.opened_by,old.intent_digest,old.material_until_daa)
+        (self.version,self.claim,self.scope_id,self.ordinal,self.request_id,self.opened_block,self.opened_daa,self.opened_by,self.intent_digest,self.material_until_daa,self.service)
+        ==(old.version,old.claim,old.scope_id,old.ordinal,old.request_id,old.opened_block,old.opened_daa,old.opened_by,old.intent_digest,old.material_until_daa,old.service)
     }
     pub fn check_context(&self,state:&PalwChainStateV2)->Result<(),String> {
         self.check(&Key::CourtSharedQuery(self.request_id))?;
@@ -152,6 +209,11 @@ impl SharedTirQueryV1 {
             || self.opened_daa<c.original_accepted_daa || self.opened_daa>=c.hard_daa
             || self.request_id!=set.request_id(self.ordinal)? {
             return Err("shared query substitutes original coordinate/clock".into());
+        }
+        if let Some(s)=&self.service {
+            if s.end_daa>=c.hard_daa || s.packets!=shared_coordinate_packets_v1(&source,&set.request_at(self.ordinal)?)? {
+                return Err("shared query service slot exceeds hard or misstates its packets".into());
+            }
         }
         if let Some(body)=&self.body {
             if body.accepted_daa>=c.hard_daa {return Err("shared data exceeds original hard clock".into());}

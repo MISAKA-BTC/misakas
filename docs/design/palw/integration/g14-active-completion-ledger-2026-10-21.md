@@ -96,3 +96,15 @@ Next primary integration work is the original coordinator: derive canonical comp
 ## Claude handover — 2026-10-22
 
 [Handover and full remaining scope](claude-handover-g14-2026-10-22.md). Material-family WIP retry2 builds core and passes 97 unique parent tests plus two isolated quota executions, but fails two Constraint selected-material finding comparisons (seed_id differs). Runner exit1; native build/test not reached. Source/initial/interrupted logs are preserved. Unapplied preclaim/role catalog/test-index candidates are included for review and resumption. No complete T-item, funded admission, activation or new pre integration is claimed.
+
+## F03b2 shared-frontier capacity (2026-10-26, provisional; the user may change it)
+
+| Value | Estimate | Basis | Review condition |
+|---|---|---|---|
+| Packet | 34,000 B (V1 `PALW_G14_PACKET_BYTES_V1`) | lane VAL | M-C measurement |
+| Charge per coordinate | `⌈max response bytes / 34,000⌉` packets, size never refuses | coordinator 2026-10-26 | M-C |
+| Work per class | V11 op_work `[5,13,1,11]` (recorded; not enforced alone) | M-RHO median | per-op M-C work measurement |
+| Capacity | `Q = Σ packets ≤ c·W`, c = 1 packet/DAA, W = 10,000; else original admission refused | ADR-0192 addendum | M-C, V-values revision |
+| Order | earliest deadline, then coordinate id; slot recorded in v2 query row | ADR-0192 addendum | user decision |
+
+Status: implemented on `claude/g14-f03b2`, native fold tests only. Not armed, no real-node T05.

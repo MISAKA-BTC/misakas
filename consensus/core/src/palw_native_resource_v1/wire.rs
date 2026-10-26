@@ -542,6 +542,31 @@ impl NativeWireScanV1 for crate::palw_funded_original_coordinator_v1::PalwFunded
         Err(wire_bad("funded-original schedule is test-only and has no wire form"))
     }
 }
+/// F03b2 shared query row: version 1 is the old row byte for byte; version 2 appends the bare service slot (3 × u64).
+impl NativeWireScanV1 for crate::palw_court_shared_tir_state_v1::SharedTirQueryV1 {
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        let version = reader.short()?;
+        if version != 1 && version != crate::palw_court_shared_tir_state_v1::SHARED_QUERY_SERVICE_VERSION_V2 {
+            return Err(wire_bad("shared query row version"));
+        }
+        let mut sum = NativeWireShapeV1::default();
+        sum = sum.merge(crate::Hash64::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(crate::Hash64::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(u64::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(crate::Hash64::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(crate::BlockHash::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(u64::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(crate::palw_state_v2::PalwBondKeyV2::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(crate::Hash64::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(u64::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(Option::<crate::palw_court_shared_tir_state_v1::SharedTirBodyV1>::scan_native_wire_v1(reader)?)?;
+        if version == crate::palw_court_shared_tir_state_v1::SHARED_QUERY_SERVICE_VERSION_V2 {
+            sum = sum.merge(crate::palw_court_shared_tir_state_v1::SharedServiceSlotV1::scan_native_wire_v1(reader)?)?;
+        }
+        Ok(sum)
+    }
+}
 /// RFC-0024 A shared bottom row (lane r6-p2-shared): version 1 is the whole-tile row byte for byte; version 2 appends exactly one
 /// position byte. Not an `Option` tag — the handwritten codec writes the bare byte only for version 2.
 impl NativeWireScanV1 for crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1 {
