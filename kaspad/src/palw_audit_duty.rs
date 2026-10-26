@@ -74,6 +74,14 @@ pub(super) enum PalwAuditVerdictV1 {
 /// DAA after which a candidate this node could not judge is tried again (one audit turn).
 pub(super) const PALW_AUDIT_RETRY_DAA_V1: u64 = kaspa_consensus_core::palw_audit_door_v1::PALW_AUDIT_TURN_DAA_V1;
 
+/// DAA a candidate may wait for a free seat replay slot before the audit duty runs it anyway (two turns).
+pub(super) const PALW_AUDIT_STARVED_DAA_V1: u64 = 2 * kaspa_consensus_core::palw_audit_door_v1::PALW_AUDIT_TURN_DAA_V1;
+
+/// Whether `candidate` has waited past [`PALW_AUDIT_STARVED_DAA_V1`] since its licence.
+pub(super) fn palw_audit_starved_v1(candidate: &PalwAuditCandidateV1, now_daa: u64) -> bool {
+    now_daa.saturating_sub(candidate.licensed_daa) >= PALW_AUDIT_STARVED_DAA_V1
+}
+
 impl PalwAuditDutyV1 {
     pub(super) fn new() -> Self {
         Self {
@@ -193,8 +201,14 @@ impl PalwPanelService {
             }
         }
         // The next replay on turn.
+        // **Starvation guard (t12 BASE-0 stall, 2026-10-26):** the seat replay slots were the only gate, and on a seat host
+        // they stay full for days (seat2: "every replay slot is taken" since 10-25 04:55), so that pool member never audited
+        // again; with `k_aud` 2 over a pool of 2 its absence holds every credited claim it shares from `Final`. A candidate
+        // waiting past [`PALW_AUDIT_STARVED_DAA_V1`] takes the audit duty's own slot regardless; the host ledger's
+        // reservation below still bounds the memory.
+        let starved = duty.next_replay(&bond_key, current_daa).is_some_and(|c| palw_audit_starved_v1(c, current_daa));
         if duty.replaying.is_none()
-            && seat_replay_room
+            && (seat_replay_room || starved)
             && let Some(candidate) = duty.next_replay(&bond_key, current_daa).cloned()
         {
             self.audit_duty_start_replay_v1(session, duty, &candidate, current_daa, network_domain, bond_key);
@@ -377,5 +391,13 @@ mod tests {
             duty.verdicts.insert(id, verdict);
             assert!(duty.next_replay(&bond(1), 9_999).is_none(), "{verdict:?} is final");
         }
+    }
+
+    /// A candidate older than two turns is starved: it runs even while every seat replay slot is taken.
+    #[test]
+    fn a_candidate_past_two_turns_is_starved() {
+        let c = candidate(1, 1_000, vec![bond(1)], 1);
+        assert!(!palw_audit_starved_v1(&c, 1_000 + PALW_AUDIT_STARVED_DAA_V1 - 1));
+        assert!(palw_audit_starved_v1(&c, 1_000 + PALW_AUDIT_STARVED_DAA_V1));
     }
 }
