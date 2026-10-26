@@ -2165,7 +2165,10 @@ async fn x8_g14_a_withheld_slice_is_demanded_by_an_outsider_and_defaults_its_suf
     let after_ledger = cw.net.ledger();
     let session_jobs: Vec<Digest> = std::iter::once(&s.prefix).chain(s.slices.iter()).map(|k| k.job.id()).collect();
     let others = other_paid_escrows(&before_default_ledger, &after_ledger, cw.net.kid(ROOT_CARD), &session_jobs);
-    assert_eq!(cw.net.slashed(ROOT_CARD), root_bond_slashed, "the root bond is not charged for another bond's default");
+    // A job escrow debit is a real `slash_bond` (GAP-5, user-pays escrow: burned at release, the Final reward paid out of it), so the
+    // bond's cumulative `slashed` counter includes the root card's own posted escrows paid in this span — a payment it owed, not a
+    // penalty. Anything beyond exactly those escrows would be a charge for another bond's default.
+    assert_eq!(cw.net.slashed(ROOT_CARD), root_bond_slashed + others, "the root bond is not charged for another bond's default");
     assert_eq!(cw.net.collateral(ROOT_CARD) + others, root_bond_collateral, "only its own posted escrows left the root bond");
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
