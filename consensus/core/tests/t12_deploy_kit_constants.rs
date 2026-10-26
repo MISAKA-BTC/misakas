@@ -235,7 +235,7 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     );
 }
 
-/// **The kit's copy of the full-activation list's height is the core's** (lane g14p/r7-fence-16000): `None` today — target 16,000, set
+/// **The kit's copy of the full-activation list's height is the core's** (lane g14p/r7-fence-16000): `None` today — target 17,000, set
 /// only after every arming record is pinned and the user approves — so the kit's copy is EMPTY, the preset arms no G14-only entry of the
 /// list, and 16,000 is on no schedule. When the height is set, both move together and this reads it again.
 #[test]
@@ -251,5 +251,5 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
         assert_eq!(armed, PALW_T12_FULL_ACTIVATION_DAA, "{}: dormant on the preset", fence.name);
     }
-    assert!(!p.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1), "16,000 is on no schedule yet");
+    assert!(!p.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1), "17,000 is on no schedule yet");
 }

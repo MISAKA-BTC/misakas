@@ -233,7 +233,7 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 ];
 
 /// **The full-activation list's height — `None`.** Target: DAA 16,000 (a height no other list uses: not 750, 1,000, 1,300, 1,700,
-/// 2,000, 3,600, 5,300, 5,395, 5,490, 5,585 — the fork id names heights, not fences). It is set to `Some(16_000)` ONLY after every
+/// 2,000, 3,600, 5,300, 5,395, 5,490, 5,585 — the fork id names heights, not fences). It is set to `Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1)` (17,000, user goal 2026-10-26) ONLY after every
 /// arming record each entry's validation asks for is pinned in the binary (G14 arm-readiness records, TIR frame-cost records, RFC-0608
 /// measured records, approved X3 / court-capacity / monetary-material / model-tier policies) AND the user approves; the same change
 /// updates `contrib/t12-deploy-kit/fleet.env.example` (pinned by `t12_deploy_kit_constants`) and re-pins the ids. One constant the preset,
@@ -245,7 +245,7 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = None;
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.
-pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 16_000;
+pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 17_000;
 
 /// **The full-activation flag day, armed** — the list at [`PALW_T12_FULL_ACTIVATION_DAA`] on the ASSEMBLED ruleset, after the int-13
 /// flag day; a no-op while the height is `None` (it leaves the list exactly as the earlier lists set it — in particular it does not clear

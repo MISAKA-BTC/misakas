@@ -53,7 +53,9 @@ REPO = Path(__file__).resolve().parents[2]
 KIND = 'misaka-g14-t12-16000-fence-drill/v1'
 # kaspad::private_integration::g14_drill_factory::PRIVATE_G14_DRILL_FLAG_DAYS_V1's last entry: H must lie above it.
 PRIVATE_G14_LAST_FLAG_DAY = 28
-TESTNET12_FULL_ACTIVATION_DAA = 16_000
+# The public testnet-12 target (user goal 2026-10-26: DAA 17,000). Pinned to the core's
+# PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1; override with --public-target, never read by a node.
+TESTNET12_FULL_ACTIVATION_DAA = 17_000
 # kaspad's flag that moves consensus-core's PALW_T12_FULL_ACTIVATION_FENCES_V1 to H on a salted drill chain.
 FULL_ACTIVATION_FLAG = '--palw-drill-full-activation-at'
 CROSSINGS = ('full-activation-flag', 'factory')
@@ -81,12 +83,15 @@ def validate_salt(salt):
     return salt.lower()
 
 
-def build_plan(at, partition_lead=6, partition_tail=6, restart_after=10, pre_claims=2, post_claims=2):
-    """The DAA schedule of the crossing. Every height is derived from H; nothing is pinned to 16,000 (that is the public target)."""
+def build_plan(at, partition_lead=6, partition_tail=6, restart_after=10, pre_claims=2, post_claims=2,
+               public_target=TESTNET12_FULL_ACTIVATION_DAA):
+    """The DAA schedule of the crossing. Every height is derived from H; nothing is pinned to the public target."""
+    if public_target <= PRIVATE_G14_LAST_FLAG_DAY:
+        raise PlanError('--public-target %d is not a public height' % public_target)
     if at <= PRIVATE_G14_LAST_FLAG_DAY:
         raise PlanError('H=%d must be above the drill factory\'s last flag day %d' % (at, PRIVATE_G14_LAST_FLAG_DAY))
-    if at == TESTNET12_FULL_ACTIVATION_DAA:
-        raise PlanError('H must be a LOW drill height, not the public 16,000')
+    if at == public_target:
+        raise PlanError('H must be a LOW drill height, not the public %d' % public_target)
     if partition_lead < 2 or partition_tail < 2:
         raise PlanError('the partition must start at least 2 below H and end at least 2 past it')
     if at - partition_lead <= PRIVATE_G14_LAST_FLAG_DAY:
@@ -97,7 +102,7 @@ def build_plan(at, partition_lead=6, partition_tail=6, restart_after=10, pre_cla
         raise PlanError('at least one claim on each side of the fence')
     return {
         'at': at,
-        'publicTarget': TESTNET12_FULL_ACTIVATION_DAA,
+        'publicTarget': public_target,
         'preClaims': pre_claims,
         'postClaims': post_claims,
         'partitionStartDaa': at - partition_lead,
@@ -264,7 +269,8 @@ def run(args):  # pragma: no cover - drives real processes
     import g14_collusion_drill as G
     import shutil
 
-    plan = build_plan(args.at, args.partition_lead, args.partition_tail, args.restart_after, args.pre_claims, args.post_claims)
+    plan = build_plan(args.at, args.partition_lead, args.partition_tail, args.restart_after, args.pre_claims, args.post_claims,
+                      args.public_target)
     ns = argparse.Namespace(
         mode='cross', family='positive', at=args.at, set='full', seats=args.seats, salt=args.salt, work=args.work, out=args.out + '.raw',
         private_node=args.private_node, kaspad=args.kaspad, cli=args.cli, port_base=args.port_base, tamper_leaf=None,
@@ -391,6 +397,8 @@ def run(args):  # pragma: no cover - drives real processes
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--at', type=int, default=60, help='the moved full-activation height H (low; > %d)' % PRIVATE_G14_LAST_FLAG_DAY)
+    ap.add_argument('--public-target', type=int, default=TESTNET12_FULL_ACTIVATION_DAA,
+                    help='the public testnet-12 full-activation height the drill stands in for (default %(default)s)')
     ap.add_argument('--salt', required=True, help='64 hex, this drill only (openssl rand -hex 32)')
     ap.add_argument('--work', required=True, help='fresh scratch directory (never ~/.misaka)')
     ap.add_argument('--out', required=True)
@@ -413,7 +421,8 @@ def main():
     args = ap.parse_args()
     try:
         args.salt = validate_salt(args.salt)
-        plan = build_plan(args.at, args.partition_lead, args.partition_tail, args.restart_after, args.pre_claims, args.post_claims)
+        plan = build_plan(args.at, args.partition_lead, args.partition_tail, args.restart_after, args.pre_claims, args.post_claims,
+                      args.public_target)
     except PlanError as e:
         ap.error(str(e))
     if args.plan_only:

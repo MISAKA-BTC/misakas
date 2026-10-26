@@ -1,9 +1,9 @@
 //! **testnet-12's full-activation list** (lane g14p/r7-fence-16000, 2026-10-22): `PALW_T12_FULL_ACTIVATION_FENCES_V1` at
-//! `PALW_T12_FULL_ACTIVATION_DAA` — `None`, target 16,000.
+//! `PALW_T12_FULL_ACTIVATION_DAA` — `None`, target 17,000.
 //!
 //! * **dormant** — with the height `None` every shipped id is the int-12 release's, byte for byte (the int-13 twin, extended);
 //! * **ordered** — every "needs X at or below it" of validation names an EARLIER entry (or a rule outside the list, named below);
-//! * **16,000 is free** — no other list, no shipped schedule uses it (the fork id names heights, not fences);
+//! * **17,000 is free** — no other list, no shipped schedule uses it (the fork id names heights, not fences);
 //! * **records** — armed without its arming records the list is refused by validation, and the drill flag refuses untouched.
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_t12_full_activation_16000`
@@ -172,7 +172,7 @@ fn with_the_height_none_every_shipped_id_is_the_int12_release() {
 #[test]
 fn sixteen_thousand_is_used_by_no_other_list_or_schedule() {
     let target = PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1;
-    assert_eq!(target, 16_000);
+    assert_eq!(target, 17_000);
     assert!(!OTHER_HEIGHTS.contains(&target));
     for other in [
         PALW_T12_INT11_FLAG_DAY_DAA,
@@ -205,7 +205,7 @@ fn armed_at_a_test_height_it_moves_the_params_and_schedule_ids_only_and_comes_ba
     let (b, a) = (ids(&shipped), ids(&armed));
     assert_ne!(a.0, b.0, "the params id moves");
     assert_eq!(a.1, b.1, "a future height: the identity is unchanged");
-    assert_ne!(a.2, b.2, "the schedule names 16,000");
+    assert_ne!(a.2, b.2, "the schedule names 17,000");
     assert!(armed.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
     palw_t12_arm_full_activation_at_v1(&mut armed, None);
     assert_eq!(ids(&armed), ids(&shipped), "dormant in reverse order is the shipped ruleset again");
@@ -215,7 +215,7 @@ fn armed_at_a_test_height_it_moves_the_params_and_schedule_ids_only_and_comes_ba
 /// arm-readiness records (`palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1`, empty), the TIR frame-cost records
 /// (`palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1`), the RFC-0608 measured records (memory/routing court v2, monetary
 /// material), and the approved policies (X3, court capacity, model tiers, monetary material) — none is pinned, so public testnet-12
-/// at 16,000 does not validate.
+/// at 17,000 does not validate.
 #[test]
 fn armed_on_public_testnet_12_without_records_it_is_refused() {
     let mut armed = palw_t12_shipped_params();
