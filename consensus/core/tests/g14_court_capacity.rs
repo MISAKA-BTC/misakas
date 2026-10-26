@@ -117,9 +117,29 @@ fn arm_split(mut p: Params, filer_at: u64, court_at: u64, measured: Option<PalwC
         records.push(record_with(PalwG14GatedFenceV1::CourtCapacityV1, p.genesis.hash, court_at, Some(&m)));
     }
     p.sync_palw_g14_gates_v1();
-    p.validate_palw_v2_with_arming_records_v1(&records).unwrap_or_else(|e| panic!("validates with its records: {e:?}"));
+    validates_with_records_but_f02_f03(&p, &records).unwrap_or_else(|e| panic!("validates with its records: {e:?}"));
     assert!(p.validate_palw_v2().is_err(), "nothing is pinned in this binary");
     (p, records)
+}
+
+/// **Record gate vs RFC-0026 F02/F03.** The slice lanes have not adopted F02 (`PALW_COURT_SERVICE_PROFILE_V1`) or F03's paid ingress in
+/// this binary, so a real-height arming of the legacy fences is refused by `validate_palw_court_policy_completeness_v1` AFTER its record
+/// admits (lane LEGACY, 2026-10-26: the cause of the 7 / 12 failures lane ACT reported). This returns `Ok` when the whole validation
+/// passes, or when its ONLY refusal is that typed F02/F03 gate AND every armed gated fence's record then admits on its own; any other
+/// refusal is returned. Nothing is skipped silently: the F02/F03 refusal is asserted by name in `lg14_*` / `court_capacity_*`.
+fn validates_with_records_but_f02_f03(p: &Params, records: &[PalwG14ArmingRecordV1]) -> Result<(), String> {
+    let Err(e) = p.validate_palw_v2_with_arming_records_v1(records) else { return Ok(()) };
+    let s = format!("{e:?}");
+    if !(s.contains("OneOutsiderCapacityIncomplete") || s.contains("ServiceOpportunityIncomplete")) {
+        return Err(s);
+    }
+    for fence in PalwG14GatedFenceV1::ALL {
+        if let Some(at) = fence.armed(p) {
+            palw_g14_arming_record_admits_v1(fence, p.genesis.hash, at.daa_score(), records)
+                .map_err(|r| format!("{} ({fence:?}): {r:?}", fence.name()))?;
+        }
+    }
+    Ok(())
 }
 
 fn refused_with(e: &PalwStateV2Error, want: &str) -> bool {
@@ -413,6 +433,9 @@ fn court_capacity_arming_needs_a_measured_record() {
     assert_eq!(PalwG14GatedFenceV1::CourtCapacityV1.requirements(), PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1);
     // Measured (TEST) policy with LG14-A and both records: validates.
     let (armed, records) = arm(t12.clone(), RELEASE, Some(test_measurement()));
+    // Lane LEGACY 2026-10-26: the whole validation now stops first at LG14-A's typed RFC-0026 F02/F03 refusal (slice lanes), so each
+    // court-capacity refusal below is read from the fence's own validator (which still runs its record gate).
+    // `arm` already asserted that the record gate admits and the only whole-validation refusal is F02/F03.
     // The measurement record binds the policy: a policy it does not derive is refused; a record whose measured-values evidence is
     // not the measurement's digest is refused; no measurement record at all is refused.
     let mut drifted = armed.clone();
@@ -420,17 +443,17 @@ fn court_capacity_arming_needs_a_measured_record() {
     fence.policy.rho_sompi += 1;
     drifted.palw_court_capacity_v1 = Some(fence);
     drifted.sync_palw_court_capacity_v1();
-    let why = drifted.validate_palw_v2_with_arming_records_v1(&records).expect_err("a policy its measurement does not derive");
+    let why = drifted.validate_palw_court_capacity_in_v1(&records).expect_err("a policy its measurement does not derive");
     assert!(format!("{why:?}").contains("not the one its measurement record derives"), "{why:?}");
     let mut wrong_digest = records.clone();
     for r in wrong_digest.iter_mut().filter(|r| r.fence == PalwG14GatedFenceV1::CourtCapacityV1) {
         *r = record(PalwG14GatedFenceV1::CourtCapacityV1, t12.genesis.hash, RELEASE);
     }
-    let why = armed.validate_palw_v2_with_arming_records_v1(&wrong_digest).expect_err("evidence is not the measurement's digest");
+    let why = armed.validate_palw_court_capacity_in_v1(&wrong_digest).expect_err("evidence is not the measurement's digest");
     assert!(format!("{why:?}").contains("measurement record's digest"), "{why:?}");
     let mut unmeasured = armed.clone();
     unmeasured.palw_court_capacity_v1 = Some(PalwCourtCapacityFenceV1 { measurement: None, ..armed.palw_court_capacity_v1.unwrap() });
-    let why = unmeasured.validate_palw_v2_with_arming_records_v1(&records).expect_err("no measurement record");
+    let why = unmeasured.validate_palw_court_capacity_in_v1(&records).expect_err("no measurement record");
     assert!(format!("{why:?}").contains("needs its measurement record"), "{why:?}");
     // The derivation: the cheapest class is the unit; an unmeasured class or an allotment that cannot take the heaviest class once is
     // refused.
@@ -442,14 +465,14 @@ fn court_capacity_arming_needs_a_measured_record() {
     // Without the court-capacity record: refused by name.
     let without: Vec<PalwG14ArmingRecordV1> =
         records.iter().copied().filter(|r| r.fence != PalwG14GatedFenceV1::CourtCapacityV1).collect();
-    let why = armed.validate_palw_v2_with_arming_records_v1(&without).expect_err("no record");
+    let why = armed.validate_palw_court_capacity_in_v1(&without).expect_err("no record");
     assert!(format!("{why:?}").contains("palw_court_capacity_v1"), "{why:?}");
     // The placeholder policy: refused even with its record.
     let mut placeholder_armed = armed.clone();
     placeholder_armed.palw_court_capacity_v1 = Some(PalwCourtCapacityFenceV1::placeholder_at(ForkActivation::new(RELEASE)));
     placeholder_armed.sync_palw_court_capacity_v1();
     placeholder_armed.sync_palw_g14_gates_v1();
-    let why = placeholder_armed.validate_palw_v2_with_arming_records_v1(&records).expect_err("placeholder");
+    let why = placeholder_armed.validate_palw_court_capacity_in_v1(&records).expect_err("placeholder");
     assert!(format!("{why:?}").contains("placeholder policy"), "{why:?}");
     // Without LG14-A at or below it: refused by name.
     let mut no_filer = t12.clone();
@@ -861,7 +884,7 @@ fn fused_leaf_route_counts_only_with_court_capacity() {
     armed.sync_palw_g14_gates_v1();
     records.push(record(PalwG14GatedFenceV1::LegacyHeldDaV2, t12.genesis.hash, RELEASE));
     records.push(record(PalwG14GatedFenceV1::G14RouteRequiredV1, t12.genesis.hash, RELEASE));
-    armed.validate_palw_v2_with_arming_records_v1(&records).expect("the whole route validates with its records");
+    validates_with_records_but_f02_f03(&armed, &records).expect("the whole route validates with its records");
     let mirror = bundle(&armed).state.g14_route_required_v1().expect("option (b)");
     assert_eq!(mirror.court_capacity_from, Some(RELEASE));
     assert!(mirror.route_armed(PalwG14RouteFamilyV1::LegacyFusedLeaf, RELEASE, false));
