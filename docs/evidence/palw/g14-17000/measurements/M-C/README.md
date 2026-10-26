@@ -33,4 +33,11 @@ The process medians were 389,875 / 383,708 / 373,709 ns; the p95 values were 3,1
 
 The signature rows cycle 64 fixtures, root admission cycles 96, and each D2 scale repeats a sweep of one unchanged registry. N=1000 includes one separately reported warm-up per process, leaving 999 items for its distribution. The D2 body-byte value 0 means this internal sweep has no incoming exemplar body; it does not mean zero computation, writes or retention cost. Signature bytes alone exclude public key and carrier envelope. These are wall elapsed times, not isolated CPU time. Process CPU/RSS includes setup; the negative RSS difference at scale 256 demonstrates why independent-process subtraction is not an isolated working-set measurement.
 
-The three D2 scales provide actual observations of growth, but scheduling load, cache reuse and fixture-only state prevent treating their ratios as an arming weight or a node saturation result. The five requested new native operation classes and the paired shadow run remain unmeasured.
+The three D2 scales provide actual observations of growth, but scheduling load, cache reuse and fixture-only state prevent treating their ratios as an arming weight or a node saturation result. The old core binary does not cover the five requested native classes. The later native-path observations below cover part of that gap, with different timing boundaries and only three repetitions.
+
+
+## Later native-path observations
+
+The [kernel Panel=3/1 batch](../M-SHADOW/README.md#common-schedule-native-batch-completed) now measures receipt construction/acceptance, outsider local checking, and public-fault seal/ingress through the native processor at source `f665796d1`. It retains N=0 setup processes and all per-phase timings, but has only three repetitions per case/seat, load 9.409–9.880 and a small fixture. These composite native phases are not interchangeable with the old core harness's isolated verifier operations. No complete quiet M-C table is claimed.
+
+A further test-only harness at source `209ea76ee` measures Panel=1 plus Gate C with 5/3, 75/41 and 90/50 draw/approval thresholds, N=0 uncertified-Final baselines, and native later-anchor/draw, attestation and settlement phases. Its policies are unapproved fixture configurations. The eight harness bonds cannot establish independent responding operators; synthetic signed attestations do not measure honest verifier model recomputation. The binary is building; the runner is scheduled for 20 fresh N=0 and N=1 processes at each scale. No result is claimed until it executes.
