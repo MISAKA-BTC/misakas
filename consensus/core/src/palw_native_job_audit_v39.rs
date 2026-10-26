@@ -14,6 +14,8 @@ pub struct CheckedNativeJobAuditV39 {
     pub(crate) state: Hash64,
     pub(crate) auxiliary: Hash64,
     pub(crate) daa: u64,
+    /// The block whose header anchors this state (the state is that block's selected parent's post-state).
+    pub(crate) anchor_child: Hash64,
     pub(crate) master: Digest,
     pub(crate) stage: Option<u16>,
 }
@@ -50,6 +52,10 @@ impl CheckedNativeJobAuditV39 {
     }
     pub fn daa(&self) -> u64 {
         self.daa
+    }
+    /// The anchoring block: this audit reads the state of its selected parent.
+    pub fn anchor_child(&self) -> Hash64 {
+        self.anchor_child
     }
     pub fn master(&self) -> Digest {
         self.master

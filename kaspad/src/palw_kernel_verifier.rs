@@ -73,6 +73,30 @@ pub(super) const PALW_KERNEL_VERIFIER_WALK_MAX_BLOCKS_V1: usize = 40_000;
 /// The magic of a kernel model file (`--palw-kernel-model`): the 8 bytes, then the Borsh of `Vec<(param, layer, TensorWireV1)>`.
 pub(crate) const PALW_KERNEL_MODEL_MAGIC_V1: &[u8; 8] = b"PALWKM01";
 
+/// **Lane ROLES: the kernel models a node holds with no flag** — `explicit` (`--palw-kernel-model`) followed by every `*.palwkm`
+/// file in `dir` (`<appdir>/<network>/palw-kernel-models/`), sorted, duplicates dropped. A missing directory adds nothing; an
+/// unreadable one is said once (WARN) and adds nothing. Nothing is read here: the verifier opens the files only once its fence is in
+/// force, and uses one only for a class whose REGISTERED commitments it opens to, so below the fence behaviour is unchanged.
+pub(crate) fn palw_kernel_models_with_default_dir_v1(mut explicit: Vec<std::path::PathBuf>, dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            let mut found: Vec<std::path::PathBuf> = entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "palwkm"))
+                .collect();
+            found.sort();
+            for p in found {
+                if !explicit.contains(&p) {
+                    explicit.push(p);
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("[{PALW_PANEL}] kernel verifier: cannot list the default model directory {}: {e}", dir.display()),
+    }
+    explicit
+}
+
 /// Write `params` as a kernel model file (the operator's tool and the tests' fixture writer).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn palw_kernel_model_write_v1(path: &std::path::Path, params: &MapParams) -> std::io::Result<()> {

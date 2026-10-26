@@ -61,6 +61,10 @@ pub const PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/provider
 const PALW_PROVIDER_COURT_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/provider-court/object-message/v1";
 
 /// The object tags (RFC-0009's reservation 150–153).
+/// **Namespace note (AUDIT-2 m3):** 150/151 are reused in separate namespaces — `PalwConsensusObjectV2` object tags 150/151 (the
+/// provider lease / challenge, `PALW_PROVIDER_LEASE_TAG_V1` / `PALW_PROVIDER_CHALLENGE_TAG_V1`), the kernel-route aux table id
+/// `PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1` = 150, and `PalwDeltaEntryV2::SeatRootReadiness` = 150. No collision (different key
+/// spaces); THIS one is the object tag pair (150 lease, 151 challenge).
 pub const PALW_PROVIDER_LEASE_TAG_V1: u8 = 150;
 pub const PALW_PROVIDER_CHALLENGE_TAG_V1: u8 = 151;
 pub const PALW_PROVIDER_ANSWER_TAG_V1: u8 = 152;

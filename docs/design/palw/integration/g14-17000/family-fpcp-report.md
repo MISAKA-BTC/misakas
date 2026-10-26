@@ -99,3 +99,24 @@ branch `claude/g14-fam-fpcp`（基点 `d8aded6de`）。push・配備・activatio
 ### (3) staged Constraint court を通る全員共謀 node E2E
 
 時間切れのため未着手。
+
+## 追補 3 2026-10-27（コード読みでの原因特定、build なしの bisect）
+
+`claude/g14-panel1-17000` の最新を merge 済み。
+
+### native public prefix の「carried but not admitted」— 原因（読みで特定）
+
+- **規則側ではなく harness 側の問題。** `palw_staged_court_fold_v1.rs` の `prepare_required_bundle_v1`（10-15 の `01ae08063`／`0ea08838c` で導入）は、staged court の下の required-family claim（prefix・constraint・tokenizer）について、transaction-local な original public binding（`public_original_bindings`）と producer が署名した history pledge が無ければ `stage_refused` で拒否する。本番 producer（`palw_panel.rs` ~8180–8390）は `build_fp_commitment_tx_original_public_v1` で両方を載せるが、試験の `carry_fp_commitment` は素の `build_fp_commitment_tx_under_params_v1` を使っていた。rehearsal の `None` は FP payload（`PalwFpCommitmentTxPayloadV3`）を lifecycle payload として decode しようとして失敗しているだけ。
+- 修正（試験側）: `carry_fp_commitment_with_original` を追加。native prefix の場合は binding header を backend から得て、chain の staged preclaim quote から pledge を作り、bond 0 で署名して original-public builder で運ぶ。
+- 実行（1 invocation、`native_public_prefix fpcp_public_prefix`）: 0/4。不受理より前の段で止まるようになり、`public_execution_binding_header_v1(&outcome.material)` が `"original capture binding: Unexpected length of input"` を返す（`:1529`）。tiled fixture の `outcome.material` は、本番 producer が header を作るときの material（未 encode の run material）と形が違う。**残り（waiver 候補）**: fixture から本番と同じ形の material を渡すこと。
+
+### constraint の restart/reorg が DA default で終わる — harness の問題
+
+- `palw_service_public_e2e.rs:2133` が `case.answers_input() && !automatic_recovery` の場合だけ input を答える。recovery 下では answer を automatic producer service に任せているが、tiled constraint では producer service がその tiled job の capture を持たないので答えず、claim は DA default になる（`:2461`）。取得不能 = default は規則どおり。規則の問題ではない。**waiver 候補**: tiled recovery では、harness が producer として input を答えるか、producer service に tiled capture を渡す。
+
+### waiver 項目（17,000 で武装、drill なし）
+
+1. native public prefix（staged PublicPrefix court）の全員共謀 node E2E — 上の fixture material の不一致で未 PASS。
+2. constraint・prefix の restart/reorg node E2E — 未 PASS（harness）。
+3. staged Constraint court を通る全員共謀 node E2E — 未着手。既存の constraint 有罪は LG14-A 経路で PASS。
+4. V5 実測・出荷 binary drill（ユーザー判断により skip）。

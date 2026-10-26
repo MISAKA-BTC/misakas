@@ -616,3 +616,18 @@ host に進むのは、前の host の `upgrade` が最後まで通り、`check`
 
 **戻し**: 問題の出た host から（複数なら 5.104 → .113 → ibm の順）、fleet.env の REV は **upgrade の REV のまま** で
 `./install-<host>.sh upgrade-rollback`。`rollback` は使わない（§6）。
+
+**DAA 17,000 fence（G14 slice・6 family・PanelDa の武装、drill なし）での追加条件（AUDIT-4 m5、2026-10-27）**:
+- **3 host とも、17,000 の少なくとも 1 更新窓前に `upgrade` を終える**（上の順 2〜4 を最後まで、`check-fleet.sh` で全 node が新 fp・synced）。
+  17,000 の直前に host を残して跨がない。
+- **遅れている node は止める**: 17,000 の時点で旧 binary のまま、または fp が他と違う / tip が合わない node は、跨ぐ前に
+  `systemctl stop` する（旧規則で fence を跨ぐと分裂する。止めた node は新 binary にしてから空 datadir で resync）。
+- **未解決のリスク: 跨いだ後の rollback は未試験**。fence を跨ぐ drill を省いたので、17,000 を越えてから `upgrade-rollback` で旧 binary に
+  戻すと旧規則で新 block を拒否し得る。跨いだ後は戻しではなく修正版の前進配備を前提にする（drill をしていないことは記録上もそのまま残す）。
+
+### §15 追記 — lane ROLES: G14 の役割を duty として常時 on(2026-10-27)
+
+- 新 binary では GDN step filer と有料 court ingress は既定 on(fence 前は従来どおり休眠)。停止は緊急用 `--palw-disable-gdn-step-filer` / `--palw-disable-court-paid-ingress` のみ。kit は何も渡さない。
+- kernel-route 検証者・Panel=1 seat は登録 kernel model(PALWKM01)が要る。binary は `<appdir>/misaka-testnet-12/palw-kernel-models/*.palwkm` を flag なしで読む(fence 成立後に初めて開く)。
+- 配備手順: (1) 登録 class の PALWKM01 を各 host の各 node の上記 directory に置く(ARGS 変更なし、UPGRADE_ARGS_CHANGE_OK 不要)。または (2) fleet.env の `KERNEL_MODEL=<path>[,<path>]` に書く — ARGS が変わるので `UPGRADE_ARGS_CHANGE_OK=1 ./… upgrade`。
+- 確認: 起動 log に `kernel verifier: holds the model …` が fence 17,000 以降に出ること。出なければ model 未配置で検証 duty が空回り。

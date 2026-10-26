@@ -171,6 +171,14 @@ build_args() { # fills ARGS from the parsed node
             ARGS+=(--palw-verify-class-manifest)
         fi
     fi
+    # Lane ROLES (G14 slice, fence 17,000): the kernel-route verifier and Panel=1 seat are duties that need the registered
+    # kernel model (PALWKM01). The binary also loads every *.palwkm in <appdir>/misaka-testnet-12/palw-kernel-models/ with no
+    # flag; KERNEL_MODEL (fleet.env, comma-separated paths; empty = none) names extra files. Adding it changes ARGS, so the
+    # upgrade needs UPGRADE_ARGS_CHANGE_OK=1 (PLAN.md §15 追記 lane ROLES).
+    if [ -n "${KERNEL_MODEL:-}" ]; then
+        local km; IFS=',' read -ra _kms <<<"$KERNEL_MODEL"
+        for km in "${_kms[@]}"; do [ -n "$km" ] && ARGS+=("--palw-kernel-model=$km"); done
+    fi
     case "$N_PRODUCE" in
         none) ;;
         floor) ARGS+=(--palw-produce) ;;
@@ -638,6 +646,14 @@ check_nodes() {
         journalctl -u "$N_UNIT" --since "-15min" --no-pager -o cat 2>/dev/null \
             | grep -E 'WrongGenesis|WrongConsensusParams|panicked|ERROR|class manifest|does not know|refusing \(exit 78\)|PALW DRILL|memory ledger cannot cover|panel idle|execution lane idle|deprecated and does nothing|round lane is not produced|panel service disabled|NOT as planned|receipts only' \
             | sed -E 's/^[0-9-]+ [0-9:.+]+ //' | cut -c1-200 | sort | uniq -c | sort -rn | head -6 || true
+        if [ -n "${CHECK_G14:-}" ]; then
+            # AUDIT-4 M4 (DAA 17,000 G14 slice): read-only counters over the existing RPC, then two log counts from the last
+            # 15 min. The log patterns are best-effort (no dedicated log line exists); 0 does not prove absence.
+            python3 "$KIT_DIR/t12check.py" --port "$N_JSON" --g14 || true
+            say "  G14 log b$N_ID (15 min): TFP1/provider fetch failures $(journalctl -u "$N_UNIT" --since "-15min" --no-pager -o cat 2>/dev/null \
+                | grep -ciE '(tfp1|provider|frame).*(fetch|unavailable|timed out|fail)' || true); BASE-0 audit-duty stalls $(journalctl -u "$N_UNIT" \
+                --since "-15min" --no-pager -o cat 2>/dev/null | grep -ciE 'audit duty.*(full|stall|skip|defer|not start|no key)|replay slot.*full' || true)"
+        fi
     done
     return $rc
 }

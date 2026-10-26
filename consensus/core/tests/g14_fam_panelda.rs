@@ -53,6 +53,7 @@ fn mirror() -> PalwG14RouteMirrorV1 {
         legacy_filer_from: Some(0),
         staged_court_from: Some(0),
         tir_conviction_from: Some(0),
+        tokenizer_match_from: Some(0),
         panel_da_disclosure_from: Some(FENCE),
         ..Default::default()
     }
@@ -141,7 +142,7 @@ fn no_disclosure_is_default_not_conviction() {
 }
 
 #[test]
-fn arming_mechanism_dormant_and_refused_until_wired() {
+fn arming_mechanism_dormant_ordered_and_accepted_when_wired() {
     assert_eq!(
         palw_g14_route_family_fences_v1(F::FpPanelDaDisclosure),
         &["palw_panel_da", "palw_court_clock_v2", "palw_panel_da_disclosure_v1", "palw_g14_route_required_v1"]
@@ -153,5 +154,10 @@ fn arming_mechanism_dormant_and_refused_until_wired() {
     p.validate_palw_panel_da_disclosure_v1().expect("never() is dormant");
     p.palw_panel_da_disclosure_v1 = Some(ForkActivation::new(17_000));
     let why = format!("{:?}", p.validate_palw_panel_da_disclosure_v1());
-    assert!(why.contains("at or below") || why.contains("E2E"), "{why}");
+    assert!(why.contains("at or below"), "ordering kept: {why}");
+    // With its ordering prerequisites and the mirror in place, the wiring is complete and arming is accepted.
+    p.palw_panel_da = Some(ForkActivation::new(17_000));
+    p.palw_court_clock_v2 = Some(ForkActivation::new(17_000));
+    p.sync_palw_g14_gates_v1();
+    p.validate_palw_panel_da_disclosure_v1().expect("the wiring is complete");
 }

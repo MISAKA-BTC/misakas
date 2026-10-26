@@ -27,6 +27,9 @@ use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::PalwModeV2Error;
 
 /// The kernel route aux table of the markers (allocated to this lane: aux 140).
+/// **Namespace note (AUDIT-2 m3):** the number 140 is reused in three separate namespaces — `PalwConsensusObjectV2` object tag
+/// 140 (`CapitalAssignment`, `PALW_CAPITAL_ASSIGNMENT_TAG_V1`), the aux table id `PALW_SETTLEMENT_ONCE_TABLE_V1`, and the
+/// `PalwVoidReasonV2::PanelDaDisclosureDefault` Borsh number. They never collide (different enums / key spaces); THIS one is the aux table id.
 pub const PALW_SETTLEMENT_ONCE_TABLE_V1: u8 = 140;
 /// The marker row's version.
 pub const PALW_SETTLEMENT_ONCE_ROW_VERSION_V1: u8 = 1;

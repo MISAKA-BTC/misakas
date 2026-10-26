@@ -24,7 +24,7 @@ fn junk() -> ProsecutionV1 {
 }
 
 /// Every Sybil seals, then (one block later) files junk against `claim` — all filings in ONE block of `net`.
-async fn crowd(net: &mut Net, sybils: &[usize], claim: Digest) {
+pub(super) async fn crowd(net: &mut Net, sybils: &[usize], claim: Digest) {
     let seals: Vec<(usize, Obj)> = sybils
         .iter()
         .map(|c| {

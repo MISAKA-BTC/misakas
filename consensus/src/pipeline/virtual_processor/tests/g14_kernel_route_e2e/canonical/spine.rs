@@ -16,8 +16,20 @@ enum Stage {
     /// The pinned production premise in effect on the node build (F02, user-approved 4-DAA estimate 2026-10-26).
     Pinned(&'static str),
     Missing { stage: &'static str, lane: &'static str, needs: &'static str },
+    /// A native run (lane LEGACY 2026-10-27): the stage's own driver on the real processor.
+    Native(&'static str, NativeCase),
     /// lane CERT: a stage driven by `canonical::cert` (Gate C armed with a TEST-ONLY certification policy).
     Cert(&'static str, CertCase),
+}
+
+#[derive(Clone, Copy)]
+enum NativeCase {
+    AdmissionAndSupply,
+    SupplyNeverMissing,
+    T05BeforeFinal,
+    T05AfterFinal,
+    PremiseTypedMissingBound,
+    PremiseOpportunityDefaults,
 }
 
 #[derive(Clone, Copy)]
@@ -27,17 +39,11 @@ enum CertCase {
 }
 
 const STAGES: &[Stage] = &[
-    Stage::Missing {
-        stage: "S1 original admission: funds + resources reserved atomically from the original",
-        lane: "F02 (P0-1)",
-        needs: "a native kernel-route admission reserving every derived duty's capital and fees in the admitting tx \
-                (palw_funded_original_coordinator_v1 wired into the kernel route's admission fold)",
-    },
-    Stage::Missing {
-        stage: "S2 duty derivation from the original + actual supply in an accepting block",
-        lane: "F02 (P0-1)",
-        needs: "kernel-route duties/packets derived from the original via palw_court_service_v1, accepting-block supply recorded",
-    },
+    Stage::Native(
+        "S1+S2 original admission reserves court capital + service book atomically in the accepting block; duties derived from the \
+         original; every accepting block records its supply (TEST-ONLY admission schedule; production None)",
+        NativeCase::AdmissionAndSupply,
+    ),
     Stage::Run(
         "S3a honest: wrong challenge dismissed, Final on its own clock, paid once (IBD node)",
         Mode::Panel,
@@ -61,33 +67,34 @@ const STAGES: &[Stage] = &[
         Outcome::ConvictedBeforeFinal,
     ),
     Stage::Run("S3b lie after Final: outsider convicts, liability stands (IBD node)", Mode::Panel, Start::Ibd, Outcome::ConvictedAfterFinal),
-    Stage::Missing {
-        stage: "S3b' conviction through the PUBLIC PAID ingress with every court owner occupied/refilled by colluders (T05)",
-        lane: "F03k (claude/g14-f03k)",
-        needs: "F03b (1298841fa) is on the TIR public route only, in two separate core-fold fixtures (frame fixture (7,1) for \
-                capture/refill; history fixture for root->bottom->Voided{CourtHeldVerdict}), with a 3-seat Panel; the kernel route \
-                has no shared frontier and no paid-ingress file_proof. Needs one fixture/world serving both legs at Panel=1 and \
-                a kernel-route (or slice-switch to TIR public) entry",
-    },
+    Stage::Native(
+        "S3b' T05 on the native kernel route, Panel=1: Sybils occupy and refill the court with paid junk filings twice; a fresh outsider \
+         convicts before Final (f03k::t05)",
+        NativeCase::T05BeforeFinal,
+    ),
+    Stage::Native("S3b' T05 after Final on the native kernel route, Panel=1 (f03k::t05)", NativeCase::T05AfterFinal),
     Stage::Run(
         "S3c silence: withheld material -> demand -> deadline default (kernel ledger; F02 premise NOT consulted) (IBD node)",
         Mode::Panel,
         Start::Ibd,
         Outcome::DefaultOnWithheldMaterial,
     ),
-    Stage::Missing {
-        stage: "S3c' no supply => no slash: an undelivered duty holds evidence/bond without a default",
-        lane: "F02 (P0-1)",
-        needs: "a supply-absent branch in the kernel route's default fold (the default is deadline-only today)",
-    },
+    Stage::Native(
+        "S3c' satisfied by construction: kernel-route objects are not court-accounted, so a kernel duty's supply is never missing; \
+         proven with every block of the service span filled with ordinary paid court filings (the fold's MissingSupply hold stays \
+         as a safety net)",
+        NativeCase::SupplyNeverMissing,
+    ),
     Stage::Hold("S3c'' F02 premise None (TEST-ONLY typed-missing override): the silent producer's demand ends as a no-slash hold"),
     Stage::Pinned("S3c'' F02 pinned premise (production, 4 DAA): the silent producer's supplied demand is attributed and decided"),
-    Stage::Missing {
-        stage: "S3c''' default under the premise on the native processor: only with an opportunity (u + delay <= deadline, in the duty window)",
-        lane: "F02 (P0-1) S1/S2",
-        needs: "the rule is in the fold (kernel_court_default_held_v2; fold test s3c_triple_prime_*); a native run needs the kernel \
-                claim bound to reserved units at admission (S1/S2): an unbound claim under an adopted premise still defaults by deadline",
-    },
+    Stage::Native(
+        "S3c''' native, bound claim, premise typed-missing (TEST-ONLY override): the silent producer is held, no default",
+        NativeCase::PremiseTypedMissingBound,
+    ),
+    Stage::Native(
+        "S3c''' native, bound claim, pinned premise: a supplied unit fits the deadline -> the silent producer defaults",
+        NativeCase::PremiseOpportunityDefaults,
+    ),
     Stage::Reorg("S4 honest: Final and its payment decided once across a reorg of the deciding block", Outcome::WrongChallengeDismissed),
     Stage::Reorg("S4 silence: the default decided once across a reorg of the deadline block", Outcome::DefaultOnWithheldMaterial),
 ];
@@ -327,6 +334,23 @@ async fn g14_spine_panel1_kernel_route_stage_table() {
                 let r = std::panic::AssertUnwindSafe(silent_under_pinned_premise_is_decided()).catch_unwind().await;
                 rows.push((*name, if r.is_ok() { "PASS".to_string() } else { "FAIL".to_string() }));
             }
+            Stage::Native(name, case) => {
+                let r = match case {
+                    NativeCase::AdmissionAndSupply => std::panic::AssertUnwindSafe(s1_s2_admission_and_supply()).catch_unwind().await,
+                    NativeCase::SupplyNeverMissing => {
+                        std::panic::AssertUnwindSafe(s3c_prime_supply_never_missing_on_the_kernel_route()).catch_unwind().await
+                    }
+                    NativeCase::T05BeforeFinal => std::panic::AssertUnwindSafe(super::f03k::t05(false, true)).catch_unwind().await,
+                    NativeCase::T05AfterFinal => std::panic::AssertUnwindSafe(super::f03k::t05(true, true)).catch_unwind().await,
+                    NativeCase::PremiseTypedMissingBound => {
+                        std::panic::AssertUnwindSafe(s3c_triple_prime_native(true)).catch_unwind().await
+                    }
+                    NativeCase::PremiseOpportunityDefaults => {
+                        std::panic::AssertUnwindSafe(s3c_triple_prime_native(false)).catch_unwind().await
+                    }
+                };
+                rows.push((*name, if r.is_ok() { "PASS".to_string() } else { "FAIL".to_string() }));
+            }
             Stage::Missing { stage, lane, needs } => rows.push((*stage, format!("UNIMPLEMENTED [{lane}] {needs}"))),
         }
     }
@@ -335,4 +359,203 @@ async fn g14_spine_panel1_kernel_route_stage_table() {
     }
     let open = rows.iter().filter(|(_, s)| s != "PASS").count();
     assert_eq!(open, 0, "the Panel=1 kernel slice is not closed: {open} stage(s) open");
+}
+
+// ---- lane LEGACY 2026-10-27: S1 / S2 / S3c''' on the native processor with a TEST-ONLY kernel court admission schedule ---------
+
+/// The Panel=1 world with the F02b kernel court admission schedule in force from genesis — **TEST ONLY**
+/// (`KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1`, lane VAL's estimates; production stays `None`).
+async fn admitted_world() -> World {
+    let (config, mut bundle, premine, floats) =
+        super::f03k::panel_one_config(Some(0), Some(super::f03k::TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI));
+    let mut params = config.params.clone();
+    bundle.state = bundle.state.clone().with_test_only_kernel_court_admission_v1(Some(
+        kaspa_consensus_core::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1(),
+    ));
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode {
+        *b = bundle.clone();
+    }
+    World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await
+}
+
+/// **S1 + S2 (native):** the original's admission reserves the court capital and the service book in the claim's own accepting
+/// block (one journalled block: the capital row, the binding and the claim commit together); every duty packet is derived from the
+/// original under the schedule's profile; each accepting block afterwards records its actual supply, so every packet is assessed
+/// `OpportunityProvided` once its interval has passed.
+async fn s1_s2_admission_and_supply() {
+    use kaspa_consensus_core::palw_court_service_v1::ServiceAssessment;
+    kaspa_core::log::try_init_logger("warn");
+    let _production = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::production_guard_v1();
+    let mode = Mode::Panel;
+    let mut w = admitted_world().await;
+    let free_before = w.net.collateral(0);
+    let (claim, seats) = claimed(&mut w, mode, 0, false).await;
+    assert_eq!(seats.len(), 1, "Panel=1");
+    let state = w.net.chain.tip_state().1;
+    let id = Hash64::from_bytes(claim.id);
+    let service = state.court_service_state_v1().expect("S1: the admission installed the court service book");
+    let binding = service.claims.get(&id).expect("S1: the claim is bound at admission");
+    let rows: Vec<_> = state.kernel_court_capital_rows_v1().into_iter().filter(|r| r.claim == id).collect();
+    assert_eq!(rows.len(), 1, "S1: one capital lock for the claim");
+    assert_eq!(rows[0].payer, w.net.bond(0), "S1: the producer pays the court capital");
+    assert!(rows[0].amount > 0 && rows[0].amount as u64 <= free_before, "S1: a real reservation within free collateral");
+    assert_eq!(rows[0].hard_deadline_daa, binding.hard_deadline_daa, "S1: capital and book share the hard deadline");
+    let committed = w.net.ledger().claims[&claim.id].committed_daa;
+    assert_eq!(binding.original_accepted_daa, committed, "S1: reserved in the claim's own accepting block");
+    // S2: duties derived from the original (profile packets), each assigned a reserved unit inside its interval.
+    assert!(!binding.packet_ids.is_empty(), "S2: duty packets derived from the original");
+    let mut last = 0u64;
+    for p in &binding.packet_ids {
+        let packet = service.book.packet(p).expect("S2: the packet is reserved in the book");
+        let unit = service.book.assigned_daa(p).expect("S2: the packet has a reserved unit");
+        assert!(packet.release_daa <= unit && unit < packet.service_before, "S2: the unit lies in the packet's interval");
+        assert!(unit > committed, "S2: units follow the original's acceptance");
+        last = last.max(packet.service_before);
+    }
+    w.net.beat_to(last + 1).await;
+    let state = w.net.chain.tip_state().1;
+    let service = state.court_service_state_v1().expect("the book");
+    if let Some(binding) = service.claims.get(&id) {
+        for p in &binding.packet_ids {
+            let unit = service.book.assigned_daa(p).unwrap();
+            assert!(service.book.supply_at(unit).is_some(), "S2: the accepting block at {unit} recorded its supply");
+            assert_eq!(service.book.assess(p), ServiceAssessment::OpportunityProvided, "S2: supplied");
+        }
+    }
+}
+
+#[tokio::test]
+async fn g14_spine_s1_s2_admission_reserves_and_blocks_supply() {
+    s1_s2_admission_and_supply().await;
+}
+
+/// **S3c''' (native):** on a claim BOUND at admission, the kernel ledger's default consults the premise rule. Typed-missing
+/// (TEST-ONLY override): the silent producer is held, not defaulted. Pinned premise with supplied units before the deadline: the
+/// held set excludes the claim (an opportunity existed) and the silent producer defaults.
+async fn s3c_triple_prime_native(typed_missing: bool) {
+    use crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise as premise;
+    kaspa_core::log::try_init_logger("warn");
+    let _g = if typed_missing { premise::set_typed_missing_v1("TEST_ONLY_TYPED_MISSING_PREMISE") } else { premise::production_guard_v1() };
+    let mode = Mode::Panel;
+    let mut w = admitted_world().await;
+    let funding = newcomer_funding(&w.net);
+    let (claim, _seats) = claimed(&mut w, mode, 0, true).await;
+    let id = Hash64::from_bytes(claim.id);
+    assert!(w.net.chain.tip_state().1.court_service_state_v1().is_some_and(|s| s.claims.contains_key(&id)), "bound at admission");
+    let mut node = start_node(&mut w.net, Start::Ibd).await;
+    let bond = register_newcomer(&mut node, funding).await;
+    sync(&node, &mut w.net).await;
+    know_newcomer(&mut w.net, bond);
+    Rules::file_demand(&mut node, NEWCOMER, claim.id, claim.at.0).await;
+    sync(&node, &mut w.net).await;
+    let read = Rpc::of(&w.net.chain).claim(&claim.id);
+    assert_eq!(read.demands.len(), 1, "the demand is open");
+    let deadline = read.demands[0].deadline_daa;
+    let held = w.net.chain.tip_state().1.kernel_court_default_held_v2(premise::effective_v1().as_ref(), &w.net.ledger());
+    assert_eq!(held.contains_key(&claim.id), typed_missing, "the premise rule on the native state");
+    w.net.beat_to(deadline + 2).await;
+    let st = w.net.claim_state(&claim.id);
+    if typed_missing {
+        assert!(!matches!(st, ClaimStateV1::Unavailable { .. } | ClaimStateV1::Final { .. }), "typed-missing: held: {st:?}");
+    } else {
+        assert!(matches!(st, ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "opportunity + silence: default: {st:?}");
+    }
+}
+
+#[tokio::test]
+async fn g14_spine_s3c_triple_prime_native_typed_missing_holds_a_bound_claim() {
+    s3c_triple_prime_native(true).await;
+}
+
+#[tokio::test]
+async fn g14_spine_s3c_triple_prime_native_opportunity_then_silence_defaults() {
+    s3c_triple_prime_native(false).await;
+}
+
+
+/// **S3c' — satisfied by construction on the kernel route** (coordinator decision 2026-10-27: no change of kernel-route semantics
+/// before 19,000). A kernel duty's reserved unit is withheld only when a block's unreserved court operations spend reserved service
+/// capacity (`observe_court_service_block_v1`), and kernel-route objects are not court-accounted (`palw_court_accounted_op_v1`), so
+/// on the kernel route supply is never missing. Proven natively: every block across the duty's service span carries a full round of
+/// ordinary paid court filings (every non-coalition card seals and files against the claim), and at every block no packet is ever
+/// `MissingSupply`; once each interval passes every packet is `OpportunityProvided`. So no default can be attributed while supply is
+/// missing. The fold's MissingSupply hold (`kernel_court_default_held_v1`) stays as the safety net.
+async fn s3c_prime_supply_never_missing_on_the_kernel_route() {
+    use kaspa_consensus_core::palw_court_service_v1::ServiceAssessment;
+    kaspa_core::log::try_init_logger("warn");
+    let _production = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::production_guard_v1();
+    let mut w = admitted_world().await;
+    let (claim, seats) = claimed(&mut w, Mode::Panel, 0, false).await;
+    let id = Hash64::from_bytes(claim.id);
+    let filers = w.outsiders(&claim, &seats, 2); // 4 exceeded the block storage-mass limit (500,000)
+    let (packets, last) = {
+        let state = w.net.chain.tip_state().1;
+        let service = state.court_service_state_v1().expect("bound at admission");
+        let binding = service.claims.get(&id).expect("bound").clone();
+        let last = binding.packet_ids.iter().map(|p| service.book.packet(p).unwrap().service_before).max().unwrap();
+        (binding.packet_ids, last)
+    };
+    let paid_before: u64 = filers.iter().map(|c| w.net.collateral(*c)).sum();
+    let mut rounds = 0u32;
+    while w.net.daa() <= last {
+        super::f03k::crowd(&mut w.net, &filers, claim.id).await;
+        rounds += 1;
+        let state = w.net.chain.tip_state().1;
+        if let Some(service) = state.court_service_state_v1().filter(|s| s.claims.contains_key(&id)) {
+            for p in &packets {
+                assert_ne!(service.book.assess(p), ServiceAssessment::MissingSupply, "round {rounds}: kernel supply is never missing");
+            }
+        }
+    }
+    assert!(rounds >= 2, "the court was filled across the service span");
+    let paid_after: u64 = filers.iter().map(|c| w.net.collateral(*c)).sum();
+    assert!(paid_after < paid_before, "the filings were ordinary paid court operations ({paid_before} -> {paid_after})");
+    let state = w.net.chain.tip_state().1;
+    if let Some(service) = state.court_service_state_v1().filter(|s| s.claims.contains_key(&id)) {
+        for p in &packets {
+            assert_eq!(service.book.assess(p), ServiceAssessment::OpportunityProvided, "every packet supplied");
+        }
+    }
+    assert!(!w.net.ledger().claims[&claim.id].convicted, "filings of junk convict nothing");
+}
+
+#[tokio::test]
+async fn g14_spine_s3c_prime_kernel_supply_is_never_missing_under_a_full_court() {
+    s3c_prime_supply_never_missing_on_the_kernel_route().await;
+}
+
+/// **T-adversarial (B), user-approved 2026-10-27: the colluders refuse to disclose.** Panel=1, the producer and its seat collude on a
+/// lie and withhold the demanded material from an outsider. The demand reaches its deadline with a supplied opportunity under the
+/// pinned premise: a DA default (never a computation verdict), and the producer forfeits its claim reservation, which is at least the
+/// user-approved 500 MSK external gain bound (`PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1`): refusing gains the colluders
+/// nothing. Scope: the kernel ledger demands trace material; a court demand of WEIGHT openings is not a kernel-route demand today.
+async fn adversarial_b_refusal_to_disclose_is_a_da_default_costing_more_than_the_gain() {
+    kaspa_core::log::try_init_logger("warn");
+    let _production = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::production_guard_v1();
+    let mut w = admitted_world().await;
+    let funding = newcomer_funding(&w.net);
+    let reservation = w.policy().claim_collateral;
+    let gain = kaspa_consensus_core::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.expect("approved 500 MSK");
+    let (claim, _seats) = claimed(&mut w, Mode::Panel, 0, true).await;
+    let before = w.net.collateral(0);
+    let mut node = start_node(&mut w.net, Start::Ibd).await;
+    let bond = register_newcomer(&mut node, funding).await;
+    sync(&node, &mut w.net).await;
+    know_newcomer(&mut w.net, bond);
+    Rules::file_demand(&mut node, NEWCOMER, claim.id, claim.at.0).await;
+    sync(&node, &mut w.net).await;
+    let read = Rpc::of(&w.net.chain).claim(&claim.id);
+    assert_eq!(read.demands.len(), 1, "the demand is open");
+    w.net.beat_to(read.demands[0].deadline_daa + 2).await;
+    let st = w.net.claim_state(&claim.id);
+    assert!(matches!(st, ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "refusal: a DA default: {st:?}");
+    assert!(!w.net.ledger().claims[&claim.id].convicted, "a DA default, not a computation conviction");
+    let forfeited = before.saturating_sub(w.net.collateral(0));
+    assert!(forfeited >= reservation.min(before), "the reservation is forfeited ({forfeited} of {reservation})");
+    assert!(forfeited >= gain, "forfeited {forfeited} >= the 500 MSK external gain bound {gain}");
+}
+
+#[tokio::test]
+async fn g14_adversarial_b_colluders_refusing_disclosure_default_and_forfeit_at_least_the_gain() {
+    adversarial_b_refusal_to_disclose_is_a_da_default_costing_more_than_the_gain().await;
 }

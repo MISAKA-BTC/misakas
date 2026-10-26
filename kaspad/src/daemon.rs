@@ -2184,7 +2184,12 @@ Do you confirm? (y/n)";
                             })
                             .unwrap_or_default(),
                         // Lane G14-K: the kernel-route verifier's registered models (empty: it does nothing).
-                        kernel_models: args.palw_kernel_model.iter().map(std::path::PathBuf::from).collect(),
+                        // Lane ROLES: the verifier is a duty — the files the flag names plus every *.palwkm the node holds in its
+                        // default directory. Only loaded once the kernel route's fence is in force (palw_kernel_verifier).
+                        kernel_models: crate::palw_panel::palw_kernel_verifier::palw_kernel_models_with_default_dir_v1(
+                            args.palw_kernel_model.iter().map(std::path::PathBuf::from).collect(),
+                            &app_dir.join(network.to_prefixed()).join("palw-kernel-models"),
+                        ),
                         // Lane KNODE: the slice roles (injections were refused at start-up without a drill salt).
                         kernel_roles: crate::palw_panel::palw_kernel_roles::PalwKernelRolesConfigV1 {
                             producer: args.palw_kernel_producer,

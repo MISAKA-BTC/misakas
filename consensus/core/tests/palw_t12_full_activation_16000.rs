@@ -371,3 +371,100 @@ fn the_kernel_slice_puts_the_kernel_route_on_x3s_clock() {
         eprintln!("slice validation (records): {why}");
     }
 }
+
+/// **Lane FPSEL (coordinator 2026-10-27): family ③ `FpSelection` as a 19,000 CANDIDATE — in this test only; the real lists are
+/// untouched.** The candidate is the kernel slice plus the TIR frame route and every fence it stands on (`palw_legacy_public_filer_v1`,
+/// `palw_staged_public_court_v1`, `palw_staged_tir_route_v1`, `palw_tir_public_conviction_v1`), in the full list's order, with the frame
+/// cost set to lane FPSEL's ESTIMATE. The shipped validation refuses it only for missing records (never a missing prerequisite); with
+/// TEST-ONLY records for exactly its (fence, genesis, height) — G14, kernel-route and frame-cost — the whole validation passes, and the
+/// route mirror arms `FpSelection` (framed) and `FpTokenizer` from 19,000 while an unframed FP claim stays route-absent.
+#[test]
+#[ignore = "lane FPSEL 2026-10-27: with every record supplied, validation still refuses palw_settlement_once_v1 (open blocker RFC08-2, unsourced terms) - a slice fence, not this family's; run once, not re-run (coordinator: no slow tests)"]
+fn fpsel_candidate_at_19000_validates_except_for_its_records() {
+    use kaspa_consensus_core::config::params::{PALW_T12_KERNEL_SLICE_FENCES_V1, PalwPostLaunchFenceV1, palw_t12_release_v7_params};
+    use kaspa_consensus_core::palw_g14_gates_v1::{
+        PALW_G14_ARMING_RECORD_VERSION_V1, PalwG14ArmingRecordV1, PalwG14GatedFenceV1, PalwG14RouteFamilyV1 as F,
+    };
+    use kaspa_consensus_core::palw_kernel_route_arming_v1::{
+        PALW_KERNEL_ROUTE_ARMING_RECORD_VERSION_V1, PalwKernelRouteArmingRecordV1, PalwKernelRouteGatedFenceV1,
+    };
+    use kaspa_consensus_core::palw_tir_frame_cost_v1::{PALW_TIR_FRAME_COST_RECORD_VERSION_V1, PalwTirFrameCostRecordV1};
+    const AT: u64 = 19_000;
+    const FRAME_ROUTE: [&str; 4] =
+        ["palw_legacy_public_filer_v1", "palw_staged_public_court_v1", "palw_staged_tir_route_v1", "palw_tir_public_conviction_v1"];
+    let slice: Vec<&str> = PALW_T12_KERNEL_SLICE_FENCES_V1.iter().map(|f| f.name).collect();
+    let candidate: Vec<PalwPostLaunchFenceV1> = PALW_T12_FULL_ACTIVATION_FENCES_V1
+        .iter()
+        .filter(|f| slice.contains(&f.name) || FRAME_ROUTE.contains(&f.name))
+        .copied()
+        .collect();
+    assert_eq!(candidate.len(), slice.len() + FRAME_ROUTE.len(), "the frame route is not already on the slice");
+    let mut p = palw_t12_release_v7_params();
+    palw_t12_arm_after_int13_at_v1(&mut p, &candidate, Some(AT));
+    p.palw_tir_frame_cost_v1 = Some(kaspa_consensus_core::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1);
+    // Shipped validation: refused, and only for want of records.
+    let why = format!("{:?}", p.validate_palw_v2().expect_err("no record is pinned: the candidate must be refused"));
+    assert!(!why.contains("at or below"), "a prerequisite is missing from the candidate: {why}");
+    assert!(why.contains("record"), "refused for something other than a missing record: {why}");
+    // TEST-ONLY records (labelled digests, never pinned) for exactly this ruleset.
+    let digest = |label: String| {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&kaspa_hashes::blake2b_512_keyed(b"fpsel-candidate-test-only", label.as_bytes()).as_bytes()[..32]);
+        out
+    };
+    let genesis = p.genesis.hash;
+    let g14: Vec<PalwG14ArmingRecordV1> = PalwG14GatedFenceV1::ALL
+        .into_iter()
+        .filter_map(|fence| {
+            let at = fence.armed(&p)?.daa_score();
+            let evidence: Vec<[u8; 32]> =
+                (0..fence.requirements().len()).map(|i| digest(format!("g14 {} {at} {i}", fence.name()))).collect();
+            Some(PalwG14ArmingRecordV1 {
+                version: PALW_G14_ARMING_RECORD_VERSION_V1,
+                fence,
+                genesis,
+                activation_daa: at,
+                source_commit: [0x5F; 20],
+                evidence: Box::leak(evidence.into_boxed_slice()),
+                review: digest(format!("g14 review {}", fence.name())),
+            })
+        })
+        .collect();
+    let kernel: Vec<PalwKernelRouteArmingRecordV1> = PalwKernelRouteGatedFenceV1::ALL
+        .into_iter()
+        .filter_map(|fence| {
+            let at = fence.armed(&p)?.daa_score();
+            let evidence: Vec<[u8; 32]> =
+                (0..fence.requirements().len()).map(|i| digest(format!("kernel {} {at} {i}", fence.name()))).collect();
+            Some(PalwKernelRouteArmingRecordV1 {
+                version: PALW_KERNEL_ROUTE_ARMING_RECORD_VERSION_V1,
+                fence,
+                genesis,
+                activation_daa: at,
+                source_commit: [0x5E; 20],
+                evidence: Box::leak(evidence.into_boxed_slice()),
+                review: digest(format!("kernel review {}", fence.name())),
+            })
+        })
+        .collect();
+    let conviction = fence_at(&p, "palw_tir_public_conviction_v1").expect("armed on the candidate");
+    let cost = [PalwTirFrameCostRecordV1 {
+        version: PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
+        genesis,
+        activation_daa: conviction,
+        source_commit: [0x5D; 20],
+        measurement: digest("frame cost measurement (TEST-ONLY: the estimate, not a measurement)".into()),
+        review: digest("frame cost review".into()),
+        cost: p.palw_tir_frame_cost_v1.unwrap(),
+    }];
+    assert!(g14.iter().any(|r| r.fence == PalwG14GatedFenceV1::TirPublicConvictionV1));
+    p.validate_palw_v2_with_all_records_v1(&g14, &cost, &kernel)
+        .unwrap_or_else(|why| panic!("with its records the candidate must validate: {why:?}"));
+    let m = p.palw_g14_route_required_v1_mirror().expect("the route-required fence is on the candidate");
+    for family in [F::FpSelection, F::FpTokenizer, F::KernelRoutePanelOne] {
+        assert!(m.route_armed(family, AT, true), "{family:?} armed at {AT}");
+        assert!(!m.route_armed(family, AT - 1, true), "{family:?} not below {AT}");
+    }
+    assert!(!m.route_armed(F::FpSelection, AT, false), "an unframed FP claim stays route-absent");
+    eprintln!("fpsel candidate: {} G14 + {} kernel-route + 1 frame-cost TEST-ONLY record(s); shipped refusal: {why}", g14.len(), kernel.len());
+}

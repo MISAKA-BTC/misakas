@@ -2055,6 +2055,10 @@ pub struct PalwStateParamsV2 {
     /// so the fold falls back to `palw_g14_values_v1` (typed-missing today).
     #[borsh(skip)]
     kernel_panel_one_test_only_external_gain_bound_v1: Option<u64>,
+    /// **G14 stages S1/S2: a TEST-ONLY kernel-route court admission schedule.** Fixtures only; `None` everywhere else, so the
+    /// processor folds with `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1` (typed-missing in production).
+    #[borsh(skip)]
+    kernel_court_admission_test_only_v1: Option<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1>,
     /// **G14 U06/U07 (lane g14p/court-clock): `Params::palw_court_clock_v2`'s height**, mirrored by `Params::sync_palw_g14_gates_v1`
     /// (`crate::palw_court_clock_v2`). `None` on every shipped preset.
     #[borsh(skip)]
@@ -4861,7 +4865,7 @@ pub enum PalwVoidReasonV2 {
     WorkSliceDefaulted = 132,
     /// **ADR-0206 (lane g14-fam-panelda): a PanelDa claim's prompt was not publicly disclosed by `a + 1,040`.** A default, never a
     /// conviction: the claim earns nothing, its disclosure deposit is burned, its computation bond is not slashed and no strike is
-    /// written (an unavailable prompt is not a computation error). Explicit Borsh number **140**; written only past
+    /// written (an unavailable prompt is not a computation error). Explicit Borsh number **140** (void-reason namespace; 140 is also an object tag and an aux table id elsewhere — AUDIT-2 m3); written only past
     /// `Params::palw_panel_da_disclosure_v1`.
     PanelDaDisclosureDefault = 140,
 }

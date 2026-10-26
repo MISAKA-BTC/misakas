@@ -32,7 +32,16 @@ pub(super) const TEST_ONLY_KERNEL_CERT_POLICY_V1: PalwSecurityCertificationPolic
 
 /// The canonical Panel network with Gate C (`palw_independently_work_certified_v1`) armed at 0 and the TEST-ONLY policy mirrored.
 pub(super) fn cert_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
-    let (config, bundle, premine, floats) = canonical_config(false);
+    cert_config_over(canonical_config(false))
+}
+
+/// [`cert_config`] over the Panel=1 world (`f03k::panel_one_config`): the coalition is the producer and ONE seat.
+pub(super) fn cert_panel_one_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    cert_config_over(super::f03k::panel_one_config(Some(0), Some(super::f03k::TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI)))
+}
+
+fn cert_config_over(base: (Config, PalwConsensusParamsV2, Premine, Premine)) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (config, bundle, premine, floats) = base;
     let mut params = config.params.clone();
     params.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
     let mut tmp = params.clone();
@@ -65,10 +74,16 @@ pub(super) fn hold(net: &Net, claim: &Digest) -> Option<PalwKernelCertifiedRewar
 /// The honest slice up to the kernel `Final`: returns the world and the claim. Asserts the NEGATIVE half of S3a': `Final` without
 /// SecurityCertified pays the producer nothing, the reward sits in the hold, the certification is committed and undecided.
 async fn honest_final_uncertified() -> (World, Digest) {
-    kaspa_core::log::try_init_logger("warn");
-    let mut w = World::on(Net::over_cfg(cert_config(), TestConsensus::new)).await;
-    let (claim, seats) = claimed(&mut w, Mode::Panel, 0, false).await;
+    let (w, claim, seats) = honest_final_uncertified_seated(cert_config()).await;
     assert_eq!(seats.len(), 3, "the colluding Panel covered it");
+    (w, claim)
+}
+
+/// [`honest_final_uncertified`] with the cards of the Panel that covered it (the colluders, beside producer card 0).
+async fn honest_final_uncertified_seated(cfg: (Config, PalwConsensusParamsV2, Premine, Premine)) -> (World, Digest, Vec<usize>) {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::on(Net::over_cfg(cfg, TestConsensus::new)).await;
+    let (claim, seats) = claimed(&mut w, Mode::Panel, 0, false).await;
     let floor = final_floor(&w, Mode::Panel, &claim.id);
     let policy = w.policy();
     let owed_poster = w.net.owed(1);
@@ -81,7 +96,7 @@ async fn honest_final_uncertified() -> (World, Digest) {
     let row = cert_row(&w.net, &claim.id).expect("the certification is committed at Final");
     assert!(row.outcome.is_none() && row.anchor.is_none(), "undecided and not drawn at the commit: {:?}", row.outcome);
     assert_eq!(row.producer_bond, w.net.kid(0));
-    (w, claim.id)
+    (w, claim.id, seats)
 }
 
 /// Seed anchors from attempt blocks until the certification is drawn (a seed that did not exist at the commit).
@@ -258,4 +273,50 @@ pub(super) async fn s3a_prime_shortfall() {
         w.net.beat_to(next).await;
         assert!(w.net.owed(0) <= p0 && w.net.owed(1) <= p1, "no second settlement of the held reward");
     }
+}
+
+
+/// **T-adversarial (C), user-approved 2026-10-27: Gate C when ONLY the colluders hold the model.** The producer and every Panel seat
+/// hold the weights; nobody else can acquire them (every peer outside the coalition refuses). Each drawn colluder attests
+/// `Reproduced`; each drawn outsider, unable to acquire the registered model, attests `Unavailable`. Under the honest-fraction
+/// premise the colluders' drawn positions stay below `k`: `NotCertified`, the Final pays the producer nothing, and the held reward
+/// (less the V3 burn share) returns to the poster exactly once.
+pub(super) async fn adversarial_c_gate_c_with_colluders_only_holding_the_model() {
+    // Panel=1: the coalition is the producer and its one seat (2 of the 8 bonded cards = the f = 0.25 premise).
+    let (mut w, claim, seats) = honest_final_uncertified_seated(cert_panel_one_config()).await;
+    assert_eq!(seats.len(), 1, "Panel=1");
+    let policy = w.policy();
+    let colluders: Vec<usize> = std::iter::once(0usize).chain(seats.iter().copied()).collect();
+    let row = until_drawn(&mut w.net, &claim).await;
+    let cards = drawn_cards(&w.net, &row);
+    let k = TEST_ONLY_KERNEL_CERT_POLICY_V1.k as u32;
+    let mut colluder_positions = 0u32;
+    for (card, positions) in &cards {
+        if colluders.contains(card) {
+            attest(&mut w.net, &claim, *card, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Reproduced).await;
+            colluder_positions += positions;
+        } else {
+            // Outside the coalition no peer serves the registered weights.
+            assert!(acquire(&[ModelPeer::Refuses], &[0u8; 64]).is_none(), "an outsider cannot acquire the colluders' model");
+            attest(&mut w.net, &claim, *card, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Unavailable).await;
+        }
+    }
+    assert!(colluder_positions < k, "honest-fraction premise: the coalition's drawn positions ({colluder_positions}) stay below k = {k}");
+    let (producer_before, poster_before) = until_decided(
+        &mut w.net,
+        &claim,
+        TEST_ONLY_KERNEL_CERT_POLICY_V1.attest_window_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50,
+    )
+    .await;
+    let decided = cert_row(&w.net, &claim).unwrap();
+    assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::NotCertified), "{:?}", decided.outcome);
+    assert_eq!(w.net.owed(0), producer_before, "Final reward 0: an uncertified Final never pays the producer");
+    let (burn, refund) = palw_kernel_uncertified_split_v1(Rules::final_reward(&policy));
+    assert_eq!(w.net.owed(1), poster_before + refund, "refunded to the poster (less the burn share {burn})");
+    assert!(hold(&w.net, &claim).is_none(), "settled once");
+}
+
+#[tokio::test]
+async fn g14_adversarial_c_gate_c_with_only_colluders_holding_the_model_is_not_certified() {
+    adversarial_c_gate_c_with_colluders_only_holding_the_model().await;
 }

@@ -67,3 +67,36 @@ Route: `route_armed(FpSelection) = framed && palw_tir_public_conviction_v1 in fo
 - an HTTP-to-directory sync step for `palw-evidence serve`.
 
 The existing `misaka-palw-fp-devnet-e2e.sh` covers only the A16 legacy class. The closest existing test is the in-process harness `palw_service_tir_frame_e2e.rs` (T-N1), whose honest run takes up to 2 hours, and the rail path is not wired into it.
+
+## Follow-up 3 (2026-10-27): the rail path in T-N1, the 19,000 candidate, and waivers
+
+Merged the tip of `claude/g14-panel1-17000` (conflicts in `palw_g14_values_v1.rs` and the parameter register; both sides kept).
+
+**Added (code):**
+- `publish_fp_claim_material_v1` (`misaka_palw_remote::evidence::fs`): the one FPC1 provider publish, now shared by the rail's `--evidence-out` and the harness.
+- In T-N1, `Tn1ProducerV1::Rail { node_less, provider_up }` and `rail_tfp1_claim_v1`: an FP selection job → node quote → shared pledges → TFP1 carrier → original published to a local-directory provider. Seats, the outsider and the producer node read the provider through `evidence_provider_dirs`.
+- New tests, four in all:
+  - rail with node, honest → Final;
+  - node-less rail, honest → Final;
+  - provider down → DA default: not `CourtFraud`, no seat charged, no spend;
+  - node-less rail, forged, every seat colluding → one outsider convicts.
+- `Params::validate_palw_v2_with_all_records_v1` (G14 + frame-cost + kernel-route records), and the test `fpsel_candidate_at_19000_validates_except_for_its_records`. The candidate is the slice plus the frame route (filer, staged court, staged TIR route, TIR conviction), with TEST-ONLY records. The real lists are untouched.
+
+**Ran once (results):**
+- `fpsel_candidate_at_19000…` **FAILED**: with every record supplied, validation still refuses `palw_settlement_once_v1` (open blocker RFC08-2, unsourced terms). That fence belongs to the slice, not to FpSelection, so FPSEL cannot resolve it. The test is now `#[ignore]` with this reason.
+- `tir_frame_node_tn1_rail_honest_framed_claim_is_final` **FAILED** at acceptance:
+  - the node's mempool accepted the TFP1 carrier;
+  - the claim was not accepted with its frame (`palw_tir_public_frame_v1` = None after the carrying block).
+  - Cause not found. A diagnostic print was added, not re-run.
+  - Likely suspects: the quote DAA / plan vs the block's DAA, or the `heartbeat` block path vs the node template.
+
+**Waivers (not run, per coordinator):**
+- the node-less honest, provider-down and forged rail T-N1 cases;
+- (3) restart/reorg for the rail path: not implemented;
+- the rerun of the honest case after the diagnostic.
+
+**Left before FpSelection can be armed:**
+1. Fix the rail acceptance failure above.
+2. The slice's settlement-once blocker.
+3. A pinned frame-cost record and G14 records (empty; no measurement).
+4. The FpTokenizer family's route; it is covered by the same staged fences, which the candidate test armed.

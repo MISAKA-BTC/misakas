@@ -15,7 +15,7 @@ branch `claude/g14-fam-panelda`(基点 d8aded6de)。画像(FP V5)は実装しな
 4. **保留**: `palw_claim_final_floor_v1` に `deadline+1`。`finalize_claim` 冒頭で未開示なら `PanelDaDisclosureDefault`(Borsh 140)で void。
 5. **経路接続**: 開示が claim の prompt row(TIR frame の material horizon まで)を書き、外部者の replay 入力になる。CLOCK(`palw_court_clock_v2`)を fence の前提に(validation)、期限は notice 窓の内側。
 6. **価格**(central、要確認): derived-work 下で PanelDa は ids 不在で拒否されていた(ADR-0145 §6)。governed PanelDa は prompt 全体を既払い扱い(prefill 0、ADR-0082 D10 と同じ読み)で価格付け — 過少払いのみで二重払いはない。answer accounting 武装時は従来どおり拒否。
-7. validation は前提・窓に加え**武装を拒否したまま**(実ノード E2E 未実施のため)。
+7. validation(2026-10-27 改): 順序(`palw_panel_da`・`palw_court_clock_v2` が同じか下)と外部者の窓の検査はそのまま。武装の拒否は配線が欠けた場合だけ(tag 233 の kind と fence、delta 236、void reason 140、deposit、bundle mirror)。**DAA 17,000 で slice・6 family と一緒に武装(ユーザー決定 2026-10-27)**。
 
 ## 試験
 - production fold(T-N1 harness、fence は TEST-ONLY で DAA 0): 正直+開示 → Final・支払い・担保不変 / 嘘+全 owner 共謀 → 開示後に外部 bond 1 つが有罪・producer と Valid seat を slash / 未開示 → `PanelDaDisclosureDefault`、producer は deposit 分だけ減、offence なし、seat 不変、支払いなし / fence 境界(fence 未満は従来の拒否、row なしの開示は拒否、PublicDa は row なし)— 4/4 pass、既存 T-N1・tir_fp_lane も pass。
@@ -23,8 +23,8 @@ branch `claude/g14-fam-panelda`(基点 d8aded6de)。画像(FP V5)は実装しな
 - 本 lane 以外の既存失敗(基点で未照合): a2u の tag 245/255 行と pin drift、`routing_v2` 4 件、`liveness_lifecycle`、`public_filer_targeting`、`t12_a2u_new_kinds_uniform`(tag 201–204 の fence 未 arm で停止、本 kind まで到達せず)、`palw_court_shared_tir_state_v1` と `p2p-flows` のコンパイルエラー、worker の build script。
 
 ## 残件
-- **実ノード E2E(mempool → template → processor)**: FP の node harness が無く未実施。これが validation の拒否解除条件。
+- **実ノード E2E(mempool → template → processor)は waiver(ユーザー決定 2026-10-27: drill 省略、未実施項目は waiver)**。証拠は fold 試験まで。
 - tag 233 の割当確認、`full_activation_v1.rs` への登録と record(統括)。
 
-## ユーザー判断
-governed PanelDa の価格(prefill を 0 として払う)を承認するか。
+## 衝突確認(2026-10-27、統合 branch cd54005fb を grep)
+tag 233・delta 236・void reason 140・tail 0xE8 は本 lane 以外で未使用(object tag 140 は別 enum)。価格(prefill 0)はユーザー承認済み 2026-10-27。

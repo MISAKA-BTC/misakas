@@ -1602,6 +1602,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0206",
+      "path": "docs/adr/0206-panel-da-mandatory-disclosure-g14-route.md",
+      "title": "ADR-0206: PanelDa の G14 経路 — 期限付きの必須公開",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",

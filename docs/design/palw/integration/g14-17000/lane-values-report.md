@@ -60,3 +60,7 @@ Branch `claude/g14-values`（base `55510b56a`）。状態はすべて **目安�
 下の commit 時点の targeted test 結果を記す（§3 の Rust 試験）。
 
 `cargo test -p kaspa-consensus-core --lib palw_g14_values_v1`: 初回 7 passed、改定後（1 packet・constructor・inclusion delay）**9 passed / 0 failed**（2026-10-26）。試験名 `val_v11_..._prices_a_full_jam_above_a_bond` は ρ 改定前の名前のまま（中身は「session-DAA が運搬持分を払う・全窓占有 ≥ 300 MSK・正直な起訴が 1.47 MSK で回収できる」を確かめる）。計算 script は全項目 PASS。full suite・clippy は回していない。
+
+## Addendum (lane ARM-LEGACY, 2026-10-27): V11 against a measurement
+
+The legacy one-move court verdict was measured on an M1 Max under load (about 11), dev opt-level 2: median 133.9 µs, p95 141.7 µs, 62 samples. At cap 42 that is about 6 ms per block. The measurement does not contradict the V11 estimate, so it stays as is (cap 42, weight 13, ρ_court 3,125). The opening, dissection and close classes are not measured, and neither is the minimum-spec node; this remains an estimate and is no record. Evidence and the conditions for revisiting it: `docs/evidence/palw/g14-17000/measurements/M-CAP/arm-legacy-2026-10-27/README.md`.
