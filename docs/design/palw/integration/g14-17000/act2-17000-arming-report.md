@@ -134,3 +134,47 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
   - `protocol/flows` の orphans 試験を `BlockTransactionsV3` に合わせた。
   - `misaka-palw-worker` は llama.cpp(`MISAKA_LLAMA_SRC`)が必要なので、check から外した。
 - 全体 check: 上記 2 件を除けば error は無かった。修正後に該当 crate だけを check して exit 0。
+
+## 8. 第 2 段(2026-10-27 後半)
+
+### settlement_once(RFC08-2) — 推奨は (ii) 一覧から外す(実施済み)
+
+- (i) 閉じる場合: 各 leg に認証された期限を持たせる。対象は native mining receipt、native funded/text/job/mining admission(signed hard deadline)、paid V2 外の kernel claim(producer 署名の lifetime)、material provider fee、beacon source-fee、verifier fee。wire(新しい object 欄)、fold、mempool/template、SDK にまたがる。変更先は `palw_settlement_liability_v1/_fold_v1`、`palw_native_mining_fold_v39`、`palw_monetary_material_fold_v1`、kernel route、beacon fee など。複数日の作業になり、freeze に間に合わない。
+- (ii) 外した場合: 一覧の他の entry で settlement_once を「以下」に要求するものは無い(要求するのは paid_claim_trap と native_liability_horizon で、どちらも一覧外)。
+  - Panel=1 の Final 決済は、各支払点の既存の once-guard が守る。escrow 行の削除、phase、paid flag で、t12 が今動かしている方式と同じ。
+  - 失うものは、consumer をまたぐ二重決済の構造的な排除(aux 140 marker)と、結合 liability 述語。
+  - 既知の残存リスク: 同じ obligation に別々の consumer が支払う経路(kernel GAP-5 escrow の tick・object arm・paid-claim projection・EXEC fee)は、escrow 行の共有で防いでいる。cross-consumer の試験は未実行。
+  - 外れるのは slice の要件「settlement once」だけ。family の要件で外れるものは無い。
+
+### typed waiver(実装済み)
+
+- `consensus/core/src/palw_arming_waiver_v1.rs`: 種類は `NotRun` / `UserDecision`。`decided_by` は "user …" でなければならない。(fence, network, height, slot) に束縛される。
+- G14 / kernel-route / RFC-0018 の record 形式検査に組み込んだ。waiver を別の slot に移すと拒否される。
+- `pin_arming_record.py` に `--waive` / `--decision` / `--waive-review` を追加した。genesis の 128 hex 対応も直した(Hash64 は 64 byte、旧版は 32 byte しか受け付けなかった)。
+- 試験(`palw_t12_g14_17000_arming.rs`、4 passed):
+  - pin した全 slot が waiver であること(Python と Rust の digest の一致も兼ねる)。
+  - waiver で record は通るが、順序(held DA → filer)、値(court capacity の placeholder)、open blocker(RFC08-2)の拒否は残ること。
+
+### record の pin(実施済み)
+
+- `scripts/release/gen_t12_17000_records.py` で `palw_t12_17000_records_v1.rs` を生成し、binary の G14 / kernel-route / RFC-0018 / frame-cost record にした。対象は testnet-12 の 17,000 だけ。
+- **全 slot が waiver。** pin 形式(`passed:true` JSON)の run 出力が一つも無いため。ARM-LEGACY の 7/7 E2E などは「報告済み、出力ファイルは無い、未実行として扱う」と明記した。
+- frame cost: lane VAL の目安値。measurement と review は waiver。
+- Gate C U-1(17,000)と U-5(75/41)は `UserDecision`。U-6 と U-2/U-3 は個別の裁定が無いので `NotRun`。
+
+### 再実測(merge `6aaa2e0ed` の前の tree)
+
+- 21 本(int-13 の 4 本は保持)を 1 本ずつ足すと、10 本が拒否された。
+- そのうち filer と tir_public_conviction の F03 拒否は、1 本ずつ足す方式の副作用(outsider lane が後ろにあるため)。同じ高さに全部置けば解消する。
+- 一覧全体を武装したときの最初の拒否は次のとおり:
+  `palw_independently_work_certified_v1 needs palw_model_tier_v1 at or below it`
+
+### (c) 残り
+
+1. **Gate C には `palw_model_tier_v1` が要る。** これは一覧に無い。
+   - t12 には tier fence が install されていない。entry の既定は空の catalog(genesis 8 モデルが無い)と設計値の κ で、自前の record(c・κ の承認、catalog tip)も無い。
+   - 必要なもの: genesis 8 モデルの catalog の値、κ のユーザー承認、tier record。これが無いと Gate C も、Gate C を要する KernelRoutePanelOne も武装できない。
+2. **court_capacity**: t12 に policy が install されていない(placeholder は拒否される)。
+   - `PalwCourtMeasurementV1::policy()` は全 class の測定(時間・bytes・working set)を要求する。さらに `session_weight` を 0 に固定する。そのため、one-move class だけの M-CAP 実測からは V11 目安(weight 13)を導けない。
+   - 安全検査なので waiver では解けない。LegacyFusedLeaf はここで止まる。
+3. 一覧全体に対する validation の、model tier より後ろの拒否は、まだ列挙していない(validation は最初の拒否しか返さないため)。
