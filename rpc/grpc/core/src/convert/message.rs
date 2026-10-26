@@ -6577,3 +6577,29 @@ try_from!(item: &protowire::GetPalwAcceptanceReadsResponseMessage, RpcResult<kas
             .collect::<RpcResult<Vec<_>>>()?,
     }
 });
+
+from!(item: &kaspa_rpc_core::GetPalwTirOriginalQuoteRequest, protowire::GetPalwTirOriginalQuoteRequestMessage, {
+    Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwTirOriginalQuoteRequestMessage, kaspa_rpc_core::GetPalwTirOriginalQuoteRequest, {
+    Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwTirOriginalQuoteResponse>, protowire::GetPalwTirOriginalQuoteResponseMessage, {
+    Self {
+        available: item.available,
+        quoted: item.quoted,
+        refusal: item.refusal.clone(),
+        quote_daa: item.quote_daa,
+        plan_hex: item.plan_hex.clone(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwTirOriginalQuoteResponseMessage, RpcResult<kaspa_rpc_core::GetPalwTirOriginalQuoteResponse>, {
+    Self {
+        available: item.available,
+        quoted: item.quoted,
+        refusal: item.refusal.clone(),
+        quote_daa: item.quote_daa,
+        plan_hex: item.plan_hex.clone(),
+    }
+});

@@ -331,6 +331,7 @@ impl RpcApi for GrpcClient {
     route!(get_palw_paid_claim_call, GetPalwPaidClaim);
     route!(get_palw_acceptance_reads_call, GetPalwAcceptanceReads);
     route!(get_palw_rfc_0016_report_call, GetPalwRfc0016Report);
+    route!(get_palw_tir_original_quote_call, GetPalwTirOriginalQuote);
     route!(get_palw_claim_detail_call, GetPalwClaimDetail);
     route!(get_palw_court_state_call, GetPalwCourtState);
     route!(get_palw_fence_schedule_call, GetPalwFenceSchedule);

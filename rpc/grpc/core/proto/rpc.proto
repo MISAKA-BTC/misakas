@@ -3711,3 +3711,18 @@ message GetPalwAcceptanceReadsResponseMessage {
   repeated RpcPalwOutpointEntry outpoints = 5;
   RPCError error = 1000;
 }
+
+// G14 lane FPSEL, op 248: the ORIGINAL TIR frame quote (TFP1). Read-only.
+message GetPalwTirOriginalQuoteRequestMessage {
+  string commitmentHex = 1;
+  string bindingHex = 2;
+}
+
+message GetPalwTirOriginalQuoteResponseMessage {
+  bool available = 1;
+  bool quoted = 2;
+  string refusal = 3;
+  uint64 quoteDaa = 4;
+  string planHex = 5;
+  RPCError error = 1000;
+}

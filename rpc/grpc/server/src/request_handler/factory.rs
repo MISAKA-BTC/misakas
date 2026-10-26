@@ -141,6 +141,7 @@ impl Factory {
                 GetPalwPaidClaim,
                 GetPalwAcceptanceReads,
                 GetPalwRfc0016Report,
+                GetPalwTirOriginalQuote,
                 GetPalwClaimDetail,
                 GetPalwCourtState,
                 GetPalwFenceSchedule,
