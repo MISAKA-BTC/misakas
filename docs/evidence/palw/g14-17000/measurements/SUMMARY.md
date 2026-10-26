@@ -112,3 +112,11 @@ the new saturation test). That import and the test helper's omitted heartbeat
 have been corrected after the build terminated. Original build/failure logs are
 preserved. A new pinned build must validate both changes before any follow-up
 measurement can be counted.
+
+
+The repair is committed at `ac8922983`, with formatting at `92b8bbb01`.
+A [fresh FIFO retry](native-heartbeat-retry-2026-10-26.json) now queues one build
+and the full follow-up scope under a shared slot: cap64 control/preflights and
+conditional repeated batches, actual legacy/kernel honest work, and independent
+carrier saturation. The source is frozen again; Rust compilation/runtime are
+pending. The separate M-C quiet batch remains queued on its already pinned binary.
