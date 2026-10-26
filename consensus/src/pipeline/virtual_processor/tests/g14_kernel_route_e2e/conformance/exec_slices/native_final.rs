@@ -194,7 +194,8 @@ async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_acce
                 activation: ForkActivation::new(1),
                 policy: PalwPaidConsumerLifecyclePolicyV1 {
                     version: 1,
-                    service_span_daa: 1_000,
+                    // Covers the class minimum path (bind + receipt + challenge, clock v2); the consumer rule refuses a shorter span.
+                    service_span_daa: 12_000,
                     dispute_tail_daa: 3_000,
                     material_tail_daa: 2_000,
                 },
