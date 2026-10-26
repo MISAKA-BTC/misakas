@@ -83,10 +83,10 @@ const STAGES: &[Stage] = &[
     Stage::Hold("S3c'' F02 premise None (TEST-ONLY typed-missing override): the silent producer's demand ends as a no-slash hold"),
     Stage::Pinned("S3c'' F02 pinned premise (production, 4 DAA): the silent producer's supplied demand is attributed and decided"),
     Stage::Missing {
-        stage: "S3c''' default under an explicitly test-only inclusion premise on the native processor",
-        lane: "F02 (P0-1) / central",
-        needs: "the TEST_ONLY_ premise setter and typed-missing override exist (palw_accept test_only_inclusion_premise); the \
-                kernel ledger's default must consult the premise (base: it defaults deadline-only, even with no premise)",
+        stage: "S3c''' default under the premise on the native processor: only with an opportunity (u + delay <= deadline, in the duty window)",
+        lane: "F02 (P0-1) S1/S2",
+        needs: "the rule is in the fold (kernel_court_default_held_v2; fold test s3c_triple_prime_*); a native run needs the kernel \
+                claim bound to reserved units at admission (S1/S2): an unbound claim under an adopted premise still defaults by deadline",
     },
     Stage::Reorg("S4 honest: Final and its payment decided once across a reorg of the deciding block", Outcome::WrongChallengeDismissed),
     Stage::Reorg("S4 silence: the default decided once across a reorg of the deadline block", Outcome::DefaultOnWithheldMaterial),
@@ -154,6 +154,8 @@ fn spine_of(chain: &T12Chain) -> Vec<kaspa_hashes::Hash64> {
 async fn decided_across_a_reorg(outcome: Outcome) {
     use super::super::recovery::dag_ibd_node;
     kaspa_core::log::try_init_logger("warn");
+    // The inclusion-premise override is process-wide: run on the production premise, serialized against the TEST-ONLY override.
+    let _production = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::production_guard_v1();
     let mode = Mode::Panel;
     let mut w = world(mode).await;
     let funding = newcomer_funding(&w.net);
@@ -257,6 +259,7 @@ async fn g14_spine_s3c_without_inclusion_premise_is_a_no_slash_hold() {
 /// decided: the claim ends `Unavailable` with the producer defaulted and the default penalty taken — never held forever.
 async fn silent_under_pinned_premise_is_decided() {
     kaspa_core::log::try_init_logger("warn");
+    let _production = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::production_guard_v1();
     let pinned = kaspa_consensus_core::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1;
     assert!(pinned.is_some_and(|p| p.inclusion_delay_daa == 4), "the approved 4-DAA premise is pinned");
     assert_eq!(crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::effective_v1(), pinned);

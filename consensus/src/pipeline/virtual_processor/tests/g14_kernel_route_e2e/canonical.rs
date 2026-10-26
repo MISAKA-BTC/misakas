@@ -626,6 +626,8 @@ async fn claimed(w: &mut World, mode: Mode, producer: usize, lie: bool) -> (Clai
 /// **One canonical G14 case** (module doc): `mode` × how the participant's node starts × the outcome the participant reaches.
 async fn canonical(mode: Mode, start: Start, outcome: Outcome) {
     kaspa_core::log::try_init_logger("warn");
+    // The inclusion-premise override is process-wide: run on the production premise, serialized against the TEST-ONLY override.
+    let _production = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::production_guard_v1();
     let mut w = world(mode).await;
     let funding = newcomer_funding(&w.net);
     let before = w.net.collateral(0) - Rules::admission_cost(&w, mode);

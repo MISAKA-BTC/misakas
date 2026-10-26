@@ -3523,6 +3523,14 @@ pub(crate) mod test_only_inclusion_premise {
         *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Some(premise));
         TestOnlyPremiseGuardV1 { _serial: serial }
     }
+    /// TEST ONLY: hold the override's serial lock WITHOUT an override, so a test reads the production premise while no other test
+    /// holds a premise override (the override is process-wide).
+    #[cfg(test)]
+    pub(crate) fn production_guard_v1() -> TestOnlyPremiseGuardV1 {
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        TestOnlyPremiseGuardV1 { _serial: serial }
+    }
     /// TEST ONLY: fold with NO inclusion premise (the typed-missing case production no longer has since the 2026-10-26 pin).
     /// `name` must start with `TEST_ONLY_`.
     #[cfg(test)]

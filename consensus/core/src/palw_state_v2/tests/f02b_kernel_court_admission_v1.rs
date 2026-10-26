@@ -227,3 +227,52 @@ fn f02b_held_set_supply_check_and_capital_release() {
     assert!(b.state.kernel_court_capital_rows_v1().is_empty(), "= hard: released");
     assert!(b.committed_at(&producer(), COMMIT_DAA) < committed, "the collateral is returned");
 }
+
+/// **G14 S3c''' (lane LEGACY, 2026-10-27): no producer default without an opportunity under the premise.** On the fully supplied
+/// book of the test above, an open demand whose response deadline leaves no reserved, supplied unit `u` with
+/// `u + inclusion_delay_daa <= deadline` inside its packet's interval is HELD (no slash); a demand due late enough that such a unit
+/// exists is NOT held (the silent producer defaults); with the premise typed-missing the demanded claim is held.
+#[test]
+fn s3c_triple_prime_default_needs_an_opportunity_under_the_premise() {
+    use crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1 as Premise;
+    use crate::palw_court_service_v1::ServiceCost;
+    use misaka_palw_kernel::ledger::{DemandRowV1, KernelLedgerV1};
+    const TEST_ONLY_PREMISE: Premise = Premise { version: 1, inclusion_delay_daa: 4 };
+    let state = parent(1_000_000_000_000);
+    let (p, e) = (slice_params(), test_only_estimate_extras());
+    let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+    assert!(admit(&mut b));
+    let hard = COMMIT_DAA + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+    let mut full = b.state.court_service_state_v1().unwrap().clone();
+    for daa in COMMIT_DAA + 1..=hard {
+        full.book.observe_block(daa, [1; 64], ServiceCost::default()).unwrap();
+    }
+    let first_unit = *full.book.assignments.values().min().unwrap();
+    let mut supplied = b.state.clone();
+    supplied.staged_courts.insert(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
+        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(full).into()));
+    let base: KernelLedgerV1 =
+        (*supplied.kernel_route.as_ref().unwrap().ledger_native_projection_checked_v9().expect("projection")).clone();
+    let with_demand = |deadline: u64| {
+        let mut l = base.clone();
+        l.demands.insert((CLAIM, 0, 0), DemandRowV1 { demanders: vec![([7; 64], 1)], filed_daa: COMMIT_DAA, deadline_daa: deadline, last: None });
+        l
+    };
+    // Typed-missing premise: held.
+    assert!(supplied.kernel_court_default_held_v2(None, &with_demand(hard)).contains_key(&CLAIM), "typed-missing: held");
+    // No opportunity: the earliest reserved unit plus the inclusion delay is past the deadline.
+    let early = first_unit + TEST_ONLY_PREMISE.inclusion_delay_daa - 1;
+    assert_eq!(
+        supplied.kernel_court_default_held_v2(Some(&TEST_ONLY_PREMISE), &with_demand(early)).get(&CLAIM),
+        Some(&hard),
+        "no opportunity under the premise: held to the hard deadline, no slash"
+    );
+    // Opportunity: the earliest unit fits the delay before the deadline -> not held (a silent producer defaults).
+    let fits = first_unit + TEST_ONLY_PREMISE.inclusion_delay_daa;
+    assert!(
+        !supplied.kernel_court_default_held_v2(Some(&TEST_ONLY_PREMISE), &with_demand(fits)).contains_key(&CLAIM),
+        "an opportunity existed: ordinary default"
+    );
+    // No open demand: nothing beyond the v1 set (all supplied: empty).
+    assert!(supplied.kernel_court_default_held_v2(Some(&TEST_ONLY_PREMISE), &base).is_empty());
+}
