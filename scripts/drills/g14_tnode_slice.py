@@ -147,6 +147,27 @@ def requirement_results(led, ident, command):
     return out
 
 
+RSS_LIMIT_KB = 12 * 1024 * 1024
+
+
+def rss_watchdog(work, stop, log):
+    """Kill every node process whose command line names `work` once any of them exceeds 12 GB RSS (lane rule)."""
+    import os
+    import signal
+    while not stop.wait(5):
+        ps = subprocess.run(['ps', '-axo', 'pid=,rss=,command='], capture_output=True, text=True).stdout
+        mine = [l.split(None, 2) for l in ps.splitlines() if work in l and 'ps -axo' not in l]
+        peak = max([int(m[1]) for m in mine] or [0])
+        log['peakRssKb'] = max(log.get('peakRssKb', 0), peak)
+        if peak > RSS_LIMIT_KB:
+            log['killed'] = 'RSS %d kB > 12 GB' % peak
+            for m in mine:
+                try:
+                    os.kill(int(m[0]), signal.SIGKILL)
+                except OSError:
+                    pass
+
+
 def profile_refusal_check(private_node, salt, at, seats):
     """The factory's kernel-slice ruleset prints (it validates only through the drill record path; the factory itself asserts the
     shipped validation refuses it). PASS when it prints and names the kernel-route records; FAIL/BLOCKED otherwise."""
@@ -199,7 +220,15 @@ def main():
                                 partition_tail=6, restart_after=10, extra_node_flag=[], crossing='kernel-slice',
                                 private_node=a.private_node, kaspad=a.kaspad, cli=a.cli, port_base=a.port_base,
                                 stall_s=a.stall_s, step_timeout=a.step_timeout)
-        fence_result = FD.run(ns)
+        import threading
+        stop, rss = threading.Event(), {}
+        th = threading.Thread(target=rss_watchdog, args=(str(Path(a.work).resolve()), stop, rss), daemon=True)
+        th.start()
+        try:
+            fence_result = FD.run(ns)
+        finally:
+            stop.set()
+        ident['rssWatch'] = rss
         blocked = fence_result.get('blocked')
     elif a.profile_only:
         blocked = 'profile-only run: no node was started'
