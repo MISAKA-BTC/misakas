@@ -255,7 +255,8 @@ def validate_campaign(plan, drill):
         requirements = set()
         for fact in scenario['requirements']:
             exact_keys(fact, ('id', 'kind', 'role', 'claimId', 'expected'), 'native fact requirement')
-            require(isinstance(fact['id'], str) and IDENTIFIER.fullmatch(fact['id']) is not None and fact['id'] not in fact_ids,
+            require(isinstance(fact['id'], str) and IDENTIFIER.fullmatch(fact['id']) is not None and fact['id'] not in fact_ids
+                and fact['id'] != 'base-drill-mechanics',
                 'native fact ids must be globally unique')
             fact_ids.add(fact['id'])
             require(fact['kind'] in NATIVE_KINDS and fact['role'] in scenario['roles'] and fact['claimId'] in scenario['claims'],

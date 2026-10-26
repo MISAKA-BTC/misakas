@@ -2,6 +2,7 @@
 from copy import deepcopy
 import ast
 import hashlib
+import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -10,6 +11,11 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import rfc_integration_campaign as campaign
+
+entry_path = Path(campaign.__file__).with_name('misaka-rfc-integration-campaign.py')
+entry_spec = importlib.util.spec_from_file_location('misaka_rfc_integration_campaign_entry', entry_path)
+entry = importlib.util.module_from_spec(entry_spec)
+entry_spec.loader.exec_module(entry)
 
 
 def h(number):
@@ -46,6 +52,45 @@ def plan_and_drill():
 
 
 class FrozenPlanCounterexamples(unittest.TestCase):
+    def test_saved_campaign_markers_cannot_be_replaced_before_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            freeze = b'{"campaignId":"frozen"}\n'
+            once = b'{"campaignId":"frozen","actualExecutionStarted":true}\n'
+            (root / 'campaign-freeze.json').write_bytes(freeze)
+            (root / 'campaign-once.json').write_bytes(once)
+            entry.validate_saved_campaign_markers(root, freeze, once)
+            (root / 'campaign-once.json').write_bytes(b'{"campaignId":"other"}\n')
+            with self.assertRaises(campaign.CampaignError):
+                entry.validate_saved_campaign_markers(root, freeze, once)
+            (root / 'campaign-once.json').write_bytes(once)
+            (root / 'campaign-freeze.json').write_bytes(b'{"campaignId":"other"}\n')
+            with self.assertRaises(campaign.CampaignError):
+                entry.validate_saved_campaign_markers(root, freeze, once)
+
+    def test_duplicate_or_reassigned_fact_cannot_promote_a_gate(self):
+        plan, _ = plan_and_drill()
+        normal, attack = plan['scenarios']
+        complete = [dict(id=scenario['id'], kind=scenario['kind'], stage=scenario['stage'], claims=scenario['claims'],
+                         facts=[dict(item, status='PASS') for item in scenario['requirements']]) for scenario in (normal, attack)]
+        gates = entry.gates_report(SimpleNamespace(plan=plan), complete, True, True)
+        self.assertTrue(all(row['status'] == 'PASS' for row in gates.values()))
+        fact = dict(normal['requirements'][0], status='FAIL')
+        rows = [dict(id=normal['id'], kind=normal['kind'], stage=normal['stage'], claims=normal['claims'],
+                     facts=[fact, dict(fact, status='PASS')]),
+                dict(id=attack['id'], kind=attack['kind'], stage=attack['stage'], claims=attack['claims'], facts=[])]
+        gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
+        self.assertTrue(all(row['status'] == 'FAIL' for row in gates.values()))
+        self.assertTrue(any('duplicate observed fact id' in error for error in next(iter(gates.values()))['integrityErrors']))
+        rows[0]['facts'] = [dict(fact, status='PASS', role='B')]
+        gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
+        self.assertTrue(all(row['status'] == 'FAIL' for row in gates.values()))
+        self.assertTrue(any('identity differs' in error for error in next(iter(gates.values()))['integrityErrors']))
+        rows[0]['facts'] = [dict(fact, status='PASS'), {'id': []}]
+        gates = entry.gates_report(SimpleNamespace(plan=plan), rows, True, True)
+        self.assertTrue(all(row['status'] == 'FAIL' for row in gates.values()))
+        self.assertTrue(any('no textual identity' in error for error in next(iter(gates.values()))['integrityErrors']))
+
     def test_actual_local_python_import_closure_is_frozen(self):
         root = Path(campaign.__file__).parent
         pinned = set(campaign.SOURCE_LEAVES)
