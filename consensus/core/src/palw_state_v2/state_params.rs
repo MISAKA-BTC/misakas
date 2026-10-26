@@ -779,6 +779,12 @@ impl PalwStateParamsV2 {
         self.kernel_route_panel_one_from_daa
     }
 
+    /// **Does the Panel=1 seat policy govern a claim committed at `daa_score`?** (lane SEED: such a claim's seats wait for a
+    /// post-commit seed anchor.) `false` on every shipped preset.
+    pub fn kernel_route_panel_one_governs_v1(&self, daa_score: u64) -> bool {
+        self.kernel_route_panel_one_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
     /// **The kernel route's assigned seats and per-segment quorum for a draw at `daa_score`**: `(1, 1)` (Panel=1) past
     /// `palw_kernel_route_panel_one_v1`, otherwise the interim `(3, 3)`. Every seat draw and committee reads this.
     pub fn kernel_route_seats_and_quorum_v1(&self, daa_score: u64) -> (usize, u8) {

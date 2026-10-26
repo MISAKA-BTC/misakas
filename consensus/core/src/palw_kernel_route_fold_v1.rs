@@ -1522,6 +1522,20 @@ fn draw_seats(
     // Lane g14p/kernel-route U02: the seat policy (interim 3-of-3, or Panel=1 past `palw_kernel_route_panel_one_v1`) at the draw.
     let (seat_count, seat_quorum) = builder.params.kernel_route_seats_and_quorum_v1(draw_daa);
     let seed = palw_kernel_interim_seed_v1(claim);
+    let challenge = palw_kernel_interim_challenge_v1(claim);
+    draw_seats_seeded(builder, producer, deadline_daa, seat_count, seat_quorum, seed, challenge)
+}
+
+/// The seat draw under a given lottery seed and challenge pair (the interim one at the commit, or lane SEED's post-commit Panel=1 one).
+fn draw_seats_seeded(
+    builder: &TransitionBuilder<'_>,
+    producer: &PalwBondKeyV2,
+    deadline_daa: u64,
+    seat_count: usize,
+    seat_quorum: u8,
+    seed: Hash64,
+    (challenge_anchor, sample_seed): (misaka_palw_kernel::hash::Digest, misaka_palw_kernel::hash::Digest),
+) -> KernelAssignmentV1 {
     let producer_operator = builder.state.bonds.get(producer).map(|b| b.operator_id);
     let floor = builder.params.min_collateral_sompi();
     // One entry per operator: its best (smallest) key over its eligible bonds.
@@ -1548,7 +1562,6 @@ fn draw_seats(
         .map(|(_, bond)| KernelSeatV1 { bond, kernel_bond: palw_kernel_bond_id_v1(&bond), scope: ScopeV1::WholeClaim })
         .collect();
     let quorum = seat_quorum.min(seats.len() as u8);
-    let (challenge_anchor, sample_seed) = palw_kernel_interim_challenge_v1(claim);
     KernelAssignmentV1 {
         assignment_root: palw_kernel_assignment_root_v1(&seats, quorum),
         seats,
@@ -1557,6 +1570,54 @@ fn draw_seats(
         deadline_daa,
         quorum,
     }
+}
+
+/// **lane SEED (G14 independent review MAJOR-1 / MINOR-1): the deferred Panel=1 seat draw.** A Panel-licensed program claim committed
+/// at or past `palw_kernel_route_panel_one_v1` has no assignment at its commit. At the first block whose state holds a round seed
+/// anchor (ADR-0130 / ADR-0170, the kind RFC-0018 Gate C draws from) recorded strictly after the commit, its one seat, its challenge
+/// anchor and its sample seed are drawn from `H(claim ‖ anchor)` — once: the claim must still be `Checking` with no assignment and no
+/// counted receipt. A claim no anchor reaches by its check deadline has no seat, so no receipt can cover it: it times out (never
+/// `Final`). Below the fence (every claim committed earlier) nothing here runs, and the interim draw at the commit is unchanged.
+fn draw_panel_one_seats_v1(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1) -> Result<(), PalwStateV2Error> {
+    let Some(from) = builder.params.kernel_route_panel_one_from_daa() else { return Ok(()) };
+    let Some(lane) = builder.extras.round_lane else { return Ok(()) };
+    let Some(anchor) = builder.state.round_seed_anchor else { return Ok(()) };
+    let mut due: Vec<(misaka_palw_kernel::hash::Digest, PalwBondKeyV2, u64, u64)> = Vec::new();
+    {
+        let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+        for (claim, row) in ledger.claims.iter() {
+            let misaka_palw_kernel::lifecycle::ClaimStateV1::Checking { anchor_daa: committed_daa, deadline_daa } = row.life.state else {
+                continue;
+            };
+            if committed_daa < from
+                || !matches!(row.body, ClaimBodyV1::Program { .. })
+                || ledger.mode_of_claim(claim) != Some(misaka_palw_kernel::mode::VerificationModeV1::PanelLicensed)
+                || route.assignment_of(claim).is_some()
+                || !route.receipts_of(claim).is_empty()
+                || route.paid_claim_for_base_v2(claim).ok().flatten().is_some()
+                || !palw_kernel_panel_one_anchor_after_commit_v1(committed_daa, lane.schedule_span_daa, Some(&anchor))
+            {
+                continue;
+            }
+            let producer = route.bond_key_of(&row.producer).ok_or_else(|| refused("a Panel=1 claim's producer has no V2 bond"))?;
+            due.push((*claim, producer, committed_daa, deadline_daa));
+        }
+    }
+    for (claim, producer, committed_daa, deadline_daa) in due {
+        let (seat_count, seat_quorum) = builder.params.kernel_route_seats_and_quorum_v1(committed_daa);
+        let seed = palw_kernel_panel_one_seed_v1(&claim, &anchor);
+        let challenge = palw_kernel_panel_one_challenge_v1(&claim, &anchor);
+        let assignment = draw_seats_seeded(builder, &producer, deadline_daa, seat_count, seat_quorum, seed, challenge);
+        for seat in &assignment.seats {
+            builder.note_kernel_bond(&seat.bond)?;
+        }
+        builder.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1,
+            key_bytes(&claim),
+            Some(borsh::to_vec(&assignment).expect("an assignment serializes")),
+        )?;
+    }
+    Ok(())
 }
 
 /// **Tag 110: one kernel route object.** See the module doc.
@@ -2385,6 +2446,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             // RFC-0015: an OptimisticPublicVerification claim has no Panel — no seats, no assignment, no receipts.
             let panel_licensed = ledger.mode_of_claim(claim) == Some(misaka_palw_kernel::mode::VerificationModeV1::PanelLicensed);
             if panel_licensed && matches!(ledger.claims.get(claim).map(|c| &c.body), Some(ClaimBodyV1::Program { .. })) {
+                // lane SEED (G14 review MAJOR-1): past `palw_kernel_route_panel_one_v1` nothing is drawn at the commit — the seats,
+                // challenge anchor and sample seed wait for a round seed anchor later than this block (`draw_panel_one_seats_v1`).
+                if builder.params.kernel_route_panel_one_governs_v1(ctx.daa_score) {
+                    continue;
+                }
                 let assignment = draw_seats(builder, claim, signer, deadline, ctx.daa_score);
                 for seat in &assignment.seats {
                     builder.note_kernel_bond(&seat.bond)?;
@@ -2631,6 +2697,8 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
                 .map_err(PalwStateV2Error::NativeResource)?;
         }
     }
+    // lane SEED: the Panel=1 seat draws of claims committed past the fence, once a post-commit seed anchor exists. A no-op below it.
+    draw_panel_one_seats_v1(builder, &ledger)?;
     let pending_source_fees: Vec<_> =
         ledger.beacon_source_fee_promises.iter().filter(|(_, promise)| promise.outcome.is_none()).map(|(key, _)| *key).collect();
     let events = ledger.tick_reserved_v1().map_err(PalwStateV2Error::NativeResource)?;

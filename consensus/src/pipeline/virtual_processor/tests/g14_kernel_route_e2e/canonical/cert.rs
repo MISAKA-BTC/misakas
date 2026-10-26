@@ -16,7 +16,7 @@ use kaspa_consensus_core::palw_security_certification_v1::*;
 
 /// **TEST ONLY — not an approved policy.** m = 5 positions, k = 3 (a strict majority), no veto, one anchor span of delay, short
 /// windows, every Active genesis bond in the pool at once.
-const TEST_ONLY_KERNEL_CERT_POLICY_V1: PalwSecurityCertificationPolicyV1 = PalwSecurityCertificationPolicyV1 {
+pub(super) const TEST_ONLY_KERNEL_CERT_POLICY_V1: PalwSecurityCertificationPolicyV1 = PalwSecurityCertificationPolicyV1 {
     m: 5,
     k: 3,
     veto: 0,
@@ -31,7 +31,7 @@ const TEST_ONLY_KERNEL_CERT_POLICY_V1: PalwSecurityCertificationPolicyV1 = PalwS
 };
 
 /// The canonical Panel network with Gate C (`palw_independently_work_certified_v1`) armed at 0 and the TEST-ONLY policy mirrored.
-fn cert_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+pub(super) fn cert_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = canonical_config(false);
     let mut params = config.params.clone();
     params.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
@@ -52,12 +52,12 @@ fn cert_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     (Config::new(params), bundle, premine, floats)
 }
 
-fn cert_row(net: &Net, claim: &Digest) -> Option<PalwClaimCertificationRowV1> {
+pub(super) fn cert_row(net: &Net, claim: &Digest) -> Option<PalwClaimCertificationRowV1> {
     let key = certification_kernel_claim_key_v1(&palw_kernel_claim_certification_id_v1(claim));
     net.api()?.aux.get(&(PALW_SECURITY_CERTIFICATION_TABLE_V1, key)).map(|raw| borsh::from_slice(raw).unwrap())
 }
 
-fn hold(net: &Net, claim: &Digest) -> Option<PalwKernelCertifiedRewardHoldV1> {
+pub(super) fn hold(net: &Net, claim: &Digest) -> Option<PalwKernelCertifiedRewardHoldV1> {
     let key = certification_kernel_hold_key_v1(&palw_kernel_claim_certification_id_v1(claim));
     net.api()?.aux.get(&(PALW_SECURITY_CERTIFICATION_TABLE_V1, key)).map(|raw| borsh::from_slice(raw).unwrap())
 }
@@ -85,7 +85,7 @@ async fn honest_final_uncertified() -> (World, Digest) {
 }
 
 /// Seed anchors from attempt blocks until the certification is drawn (a seed that did not exist at the commit).
-async fn until_drawn(net: &mut Net, claim: &Digest) -> PalwClaimCertificationRowV1 {
+pub(super) async fn until_drawn(net: &mut Net, claim: &Digest) -> PalwClaimCertificationRowV1 {
     let ttpb = net.ttpb();
     for round in 0..64u64 {
         if cert_row(net, claim).is_some_and(|r| r.anchor.is_some()) {
@@ -105,7 +105,7 @@ async fn until_drawn(net: &mut Net, claim: &Digest) -> PalwClaimCertificationRow
 /// One block at a time until the certification decides (at most `limit` DAA); returns what the producer's and the poster's
 /// payees were owed in the coinbase queue just before the deciding block (the queue drains into later coinbases, so the
 /// settlement is read at the deciding block itself).
-async fn until_decided(net: &mut Net, claim: &Digest, limit: u64) -> (u64, u64) {
+pub(super) async fn until_decided(net: &mut Net, claim: &Digest, limit: u64) -> (u64, u64) {
     let end = net.daa() + limit;
     loop {
         assert!(net.daa() <= end, "the certification did not decide by DAA {end}");
