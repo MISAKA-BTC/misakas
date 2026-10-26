@@ -43,11 +43,18 @@ fn receipt(a: &PalwPaidClaimAuthorityV2, lock: &PalwPaidClaimLockV2, seat: &Palw
         message_root: [0; 64],
     }
 }
+// Declared logical capacity of the isolated child. The earlier 512 MiB fixture
+// failed in the FIRST native reads (logical capacity refusal before the hook,
+// see authority-quota-fixture-runtime.json): that is a fixture error, not RED.
+// A wide logical ceiling lets every base read pass; the hook then makes an
+// independent owner occupy the real remaining quota, so only the second read
+// can observe Resource. Logical accounting only: no physical allocation.
+const CHILD_LOGICAL_LIMIT: u64 = 1 << 40;
 fn occupy_remaining() -> Option<NativeDemandLeaseV1> {
     // Search by real admission, dropping every probe. No payload allocation is
     // simulated; the final lease is a real logical owner until the call ends.
     let mut low = 0;
-    let mut high = 512u64 << 20;
+    let mut high = CHILD_LOGICAL_LIMIT;
     while low < high {
         let mid = low + (high - low + 1) / 2;
         match reserve_native_requests_v1(mid) {
@@ -94,7 +101,7 @@ fn paid_check_authority_native_resource_after_first_reads_keeps_receipt_atomic()
     let object = PaidClaimObjectV2::Receipt { receipt: receipt(&a, &lock, &seat) };
     let root = b.state.state_root();
     let journal_len = b.entries.len();
-    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 512 << 20, database_bytes: 512 << 20 }));
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: CHILD_LOGICAL_LIMIT, database_bytes: CHILD_LOGICAL_LIMIT }));
     let reached = Rc::new(Cell::new(false));
     let blocker = Rc::new(RefCell::new(None));
     let (seen, held) = (reached.clone(), blocker.clone());
@@ -175,7 +182,7 @@ fn paid_check_authority_fs_second_read_resource_is_not_a_source_approval() {
         PaidClaimObjectV2::StageMessage { enrollment: a.enrollment.id(), round: 0, prior_transcript: [0; 64], message_root: [22; 64] };
     let root = b.state.state_root();
     let journal_len = b.entries.len();
-    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 512 << 20, database_bytes: 512 << 20 }));
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: CHILD_LOGICAL_LIMIT, database_bytes: CHILD_LOGICAL_LIMIT }));
     let reached = Rc::new(Cell::new(false));
     let blocker = Rc::new(RefCell::new(None));
     let (seen, held) = (reached.clone(), blocker.clone());

@@ -372,72 +372,15 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         (a.enrollment.base_claim == *claim && a.context.id() == index.target).then_some(a)
     }
 
+    /// String compatibility edge for SDK / RPC display only. Consensus folds call
+    /// [`Self::paid_claim_check_authority_checked_v2`] and keep Resource typed;
+    /// this wrapper is the same authority algorithm, flattened only for display.
     pub fn paid_claim_check_authority_v2(
         &self,
         context: &Digest,
         now: u64,
     ) -> Result<misaka_palw_kernel::claim_paid_v2::PaidClaimCheckAuthorityV2, String> {
-        if let Ok(a6) = self.paid_claim_authority_checked_v6(context) {
-            if let Some(binding) = self.paid_bootstrap_binding_v6(&a6.enrollment.id()).map_err(|why| why.to_string())? {
-                a6.validate(&*self.ledger_checked_v1().map_err(|why| why.to_string())?)?;
-                if binding.original_context != *context || binding.enrollment != a6.enrollment.id() {
-                    return Err("paid claim context/target mismatch".into());
-                }
-                return self.paid_bootstrap_check_authority_v6(&a6, now).map_err(|why| why.to_string());
-            }
-        }
-        // A seeded lock needs no funded source target (an unfunded target is what the bootstrap draw locks): read the authority
-        // row and validate it against the ledger without the target check.
-        let raw: Option<PalwPaidClaimAuthorityV2> = self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap());
-        let seeded = raw.as_ref().and_then(|a| {
-            self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
-        });
-        let a = match (&raw, &seeded) {
-            (Some(a), Some(lock))
-                if lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2()
-                    || lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2() =>
-            {
-                a.validate(&*self.ledger()?)?;
-                if a.context.id() != *context {
-                    return Err("paid claim context mismatch".into());
-                }
-                a.clone()
-            }
-            _ => self.paid_claim_authority_v2(context)?,
-        };
-        // A bootstrap lock (user decision 2026-10-17, dormant): the lock row names the bootstrap anchor and holds the draw's seed;
-        // the authority is re-derived from that authenticated row, never from a beacon that cannot exist yet.
-        if let Some(lock) = self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
-            && (lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2()
-                || lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2())
-        {
-            let base = self.ledger()?.claim_challenge_subject(&a.enrollment.base_claim).ok_or("base statement missing")?;
-            return PaidClaimCheckAuthorityV2::verify_bootstrap_v2(
-                &a.class,
-                &a.enrollment,
-                &base,
-                &a.context,
-                now,
-                paid_checker_snapshot_root_v2(&a.checker_candidates),
-                lock.seed,
-            );
-        }
-        let (contract, sources, promises) = self.paid_beacon_material_v5(context)?.ok_or("paid claim source funding missing")?;
-        let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, now)
-            .map_err(|e| e.to_string())?;
-        let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) = collected else {
-            return Err("paid claim source has not locked".into());
-        };
-        let base = self.ledger()?.claim_challenge_subject(&a.enrollment.base_claim).ok_or("base statement missing")?;
-        PaidClaimCheckAuthorityV2::verify(
-            &a.class,
-            &a.enrollment,
-            &base,
-            &a.context,
-            &beacon,
-            now,
-            paid_checker_snapshot_root_v2(&a.checker_candidates),
-        )
+        self.paid_claim_check_authority_checked_v2(context, now).map_err(|why| why.to_string())
     }
 }
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
@@ -997,8 +940,8 @@ pub(crate) use bootstrap_read_v6::with_checker_v6 as with_bootstrap_checker_v6;
 #[path = "palw_paid_claim_base_checked_v1.rs"]
 mod paid_base_checked_v1;
 
-// The native checked sibling is registered for the coordinated RED staging;
-// the two fold callers still use the legacy String API until RED is observed.
+// Typed native paid-check read: the Receipt and FS folds call it directly; the
+// String `paid_claim_check_authority_v2` above is only the SDK compat edge.
 #[path = "palw_paid_check_authority_checked_v2.rs"]
 mod paid_check_authority_checked_v2;
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! Typed native paid-check read. String compatibility belongs at the SDK edge;
 //! a local admission failure must never select a legacy authority fallback.
-//! RED staging: this sibling is compiled but the native callers still use the
-//! existing String API until the coordinated baseline failure is observed.
+//! Native callers: ordinary Receipt and FS initial-source revalidation in
+//! `palw_claim_challenge_fold_v2`, via `kernel_ledger_projection_state_error_v1`.
 use crate::palw_claim_challenge_v2::*;
 use crate::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
@@ -45,13 +45,17 @@ impl PalwKernelRouteStateV1 {
             )
             .map_err(invalid);
         }
-        // Preserve the existing normal source algorithm/provenance. Its nested
-        // String-returning legacy readers remain an explicit separate boundary;
-        // do not pretend to recover a lost Resource by parsing its display text.
-        let (contract, sources, promises) =
-            self.paid_beacon_material_v5(context).map_err(invalid)?.ok_or_else(|| invalid("paid claim source funding missing"))?;
-        let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, now)
+        // Same normal V5 source algorithm/provenance, read through the typed
+        // owner: target/fee/cost/authority/index/round rows, finals, sources and
+        // promises keep Resource distinct from Decode. The material (and its
+        // source/promise tickets) stays owned until the collector's last use.
+        let material = self
+            .rfc07_normal_paid_material_owned_v5(context)?
+            .ok_or_else(|| invalid("paid claim source funding missing"))?;
+        let (contract, sources, promises) = &*material;
+        let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, contract, sources, promises, now)
             .map_err(|why| invalid(why.to_string()))?;
+        drop(material);
         let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) = collected else {
             return Err(invalid("paid claim source has not locked"));
         };
