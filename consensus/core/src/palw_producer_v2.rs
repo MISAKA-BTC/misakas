@@ -267,6 +267,13 @@ pub struct PalwProducerFactsV2 {
     /// [`PALW_NOT_READY_EXPOSURE_FULL_V2`] mines exactly then, so a fleet at its ceilings still binds.
     /// Filled by the caller that holds the fences (`false` from [`palw_producer_facts_v4`]).
     pub binder_due: bool,
+    /// **ADR-0165 §00.9, the short wait: no REAL attempt is coming.** `true` where [`Self::binder_due`] is and every model class
+    /// with a lifecycle row (the base class excluded) refuses a new attempt at the fold's class gate at the candidate's DAA — a
+    /// panel room exhausted, a class not admitting, no class at all. An operator's REAL attempt is what anchors a due claim on its
+    /// own; while every REAL class refuses one, none will be mined, and the floor producer's anchor duty need not wait the release's
+    /// thirty slots for it ([`crate::palw_real_share_v1::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1`]). A node policy input: it
+    /// moves no consensus rule. Filled by the caller that holds the fences (`false` from [`palw_producer_facts_v4`]).
+    pub real_attempts_refused: bool,
     /// **Lane PA, C-F2: the pwu the chain demands of each rider, by batch size** — entry `n − 1` is the pwu of a rider when the lead's batch
     /// holds `n` riders (`1 ..= PALW_RIDERS_MAX_V1`), derived exactly as the fold admits it: at the rider's SHARE of the lead's subsidy
     /// (`palw_rider_floor_subsidy_v1`), through [`crate::palw_admission_v2::palw_attempt_canonical_pwu_v1`]. The lead's own `pwu` is the
@@ -657,6 +664,8 @@ pub fn palw_producer_facts_v4(
         bond_class_share: None,
         // Lane bind-deadlock: the caller that holds `Params::palw_anchor_at_ceiling` fills it.
         binder_due: false,
+        // ADR-0165 §00.9's short wait: filled with `binder_due`.
+        real_attempts_refused: false,
         rider_pwu: Vec::new(),
         is_base_class: class_id == state_params.base_class_id(),
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))

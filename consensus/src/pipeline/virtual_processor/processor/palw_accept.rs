@@ -203,6 +203,17 @@ impl VirtualStateProcessor {
                 )
                 .is_empty()
             });
+        // **ADR-0165 §00.9's short wait: is any REAL attempt coming?** Only the floor producer's anchor duty reads it, and only with a
+        // claim due: every model class with a lifecycle row (the base class excluded) asked the fold's own class gate at the candidate's
+        // DAA, as `class_admission_refusal` above asks it for this producer's class. All refusing — or none rowed — means no operator's
+        // REAL attempt will anchor the due claims, so the duty need not wait for one (`palw_floor_anchor_duty_after_slots_v1`).
+        facts.real_attempts_refused = facts.binder_due && facts.is_base_class && {
+            let base = state_params.base_class_id();
+            state.model_lifecycles_iter().map(|(id, _)| id).filter(|id| **id != base).all(|id| {
+                kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, id, candidate_daa)
+                    .is_err()
+            })
+        };
         // **ADR-0160 F-R (J-6): and, on the floor, the seats' capital and the bond's share of it**,
         // which the fold asks before the ceiling and skips the block's own attempt on — priced over a
         // template of the claim this block would carry (its weight term and its escrow, the facts'
