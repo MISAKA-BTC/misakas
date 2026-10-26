@@ -2547,6 +2547,11 @@ fn main() {
             "--claim-budget-permille" => {
                 claim_budget_permille = value("--claim-budget-permille").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
+            // The old name, kept so a launcher written before the rename still starts.
+            "--public-job-budget-permille" => {
+                eprintln!("warning: --public-job-budget-permille is deprecated; use --claim-budget-permille (same meaning)");
+                claim_budget_permille = value("--public-job-budget-permille").parse().unwrap_or_else(|e| die(format!("{e}")))
+            }
             "--claim-exposure-sompi" => {
                 claim_exposure_sompi = value("--claim-exposure-sompi").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
@@ -2571,8 +2576,15 @@ fn main() {
             }
             "--no-answer-fast-path" => answer_fast_path = false,
             "--no-cancel-on-disconnect" => cancel_on_disconnect = false,
+            // Repeat it, or comma-separate: every provider named gets a copy. `testnet12` names the public testnet-12 providers
+            // (`misaka_endpoints::testnet12_evidence_providers_v1`, one or more).
             "--evidence-provider" => {
-                evidence_specs.push_str(&value("--evidence-provider"));
+                let spec = value("--evidence-provider");
+                if spec.trim() == "testnet12" {
+                    evidence_specs.push_str(&misaka_endpoints::testnet12_evidence_provider_list_v1());
+                } else {
+                    evidence_specs.push_str(&spec);
+                }
                 evidence_specs.push('\n');
             }
             "--evidence-min-copies" => {
@@ -2596,7 +2608,7 @@ fn main() {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--claim-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--no-cancel-on-disconnect] [--finality-depth n] [--evidence-provider <dir|http://…> ... [--evidence-min-copies n]] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--claim-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--no-cancel-on-disconnect] [--finality-depth n] [--evidence-provider <dir|http://…|testnet12>[,…] ... [--evidence-min-copies n]] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
             )),
         }
     }

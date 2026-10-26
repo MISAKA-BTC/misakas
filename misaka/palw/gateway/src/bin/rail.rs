@@ -1632,8 +1632,11 @@ fn print_gateway_identity(
         (found, params)
     });
     let Some((outpoint, facts)) = found else {
-        die("no bond registered to this key was found on this chain — register one (kaspad --palw-register-bond \
-             --palw-producer-key <this seed>), or name it with --bond <txid:index> (the `registered bond` line in the node log)"
+        die("no bond registered to this key was found on this chain — register one: with a node, kaspad --palw-register-bond \
+             --palw-producer-key <this seed>; without a node, misaka bond register-export (--rpc/--quote-rpc: two public wRPC, e.g. \
+             wss://wallet.misakascan.com/t12/wrpc/borsh and wss://llm.misakascan.com/t12/wrpc/borsh) → misaka bond register-sign → \
+             misaka bond register-submit --relay <node>,<node> (docs/testnet12-node-free.md). Or name it with --bond <txid:index> \
+             (the `registered bond` line in the node log, or the bond register-submit reports)"
             .into())
     };
     let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(

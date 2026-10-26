@@ -271,7 +271,7 @@ pub(crate) async fn connect_to(network: &str, rpc: Option<&str>, timeout: Durati
     let net = NetworkId::from_str(network).map_err(|e| (network.to_string(), format!("not a network id: {e}")))?;
     let registry = misaka_endpoints::EndpointRegistry::load(network);
     let hostport = misaka_endpoints::resolve(&net, EndpointKind::NodeWrpcBorsh, rpc, registry.as_ref());
-    let url = format!("ws://{hostport}");
+    let url = misaka_endpoints::wrpc_url(&hostport);
     let open = || open_client(&url, timeout);
     let mut client = open().await?;
     let server = client.get_server_info().await.map_err(|e| (url.clone(), format!("getServerInfo: {e}")))?;

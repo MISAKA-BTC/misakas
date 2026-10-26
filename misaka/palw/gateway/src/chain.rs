@@ -608,7 +608,7 @@ impl RpcChainSource {
 /// `host:port` becomes the borsh wRPC URL the CLI's `--rpc` means; anything already carrying a
 /// scheme is left alone.
 pub fn normalize_endpoint(endpoint: &str) -> String {
-    if endpoint.contains("://") { endpoint.to_string() } else { format!("ws://{endpoint}") }
+    misaka_endpoints::wrpc_url(endpoint)
 }
 
 /// The `u128` decimal strings the producer-facts surface uses (ADR-0046: derive, never declare).

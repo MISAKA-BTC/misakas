@@ -130,7 +130,7 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
     // F7 (t10): the node's currently-connected peer IPs, for the seeder-mesh
     // divergence check below (None ⇒ could not be queried).
     let mut connected_peer_ips: Option<Vec<String>> = None;
-    match try_connect(&format!("ws://{borsh_hostport}"), timeout).await {
+    match try_connect(&misaka_endpoints::wrpc_url(&borsh_hostport), timeout).await {
         Ok(client) => match client.get_server_info().await {
             Ok(info) => {
                 rows.push(Row { label: format!("wRPC Borsh {borsh_hostport}"), value: "listening".into(), health: Health::Ok });
@@ -424,7 +424,7 @@ pub async fn liveness(ctx: &Ctx, state_path: &std::path::Path, stall_secs: u64) 
     // WEDGED is decided on the RPC alone: a node whose runtime is blocked accepts the TCP
     // connection (the kernel does) and never answers.
     let dag = match tokio::time::timeout(timeout, async {
-        let client = try_connect(&format!("ws://{hostport}"), timeout).await?;
+        let client = try_connect(&misaka_endpoints::wrpc_url(&hostport), timeout).await?;
         client.get_block_dag_info().await.map_err(|e| e.to_string())
     })
     .await
