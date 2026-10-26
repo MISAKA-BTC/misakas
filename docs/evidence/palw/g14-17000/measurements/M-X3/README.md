@@ -47,3 +47,21 @@ Two boundaries need executable validation before claiming closure:
 - **Hard limit:** the new helper bounds its floor, while Final/default assignment computes `max(existing horizon, paid lifetime or legacy horizon, floor)`. That expression alone does not impose an upper bound of `a+10,000`. Demonstrate the upstream bounds on valid paid/source/EXEC inputs and the retained material, including boundary/overflow cases, rather than inferring a whole-horizon bound from the floor helper.
 
 The candidate's two native tests compare an old-horizon filing with/without X3; they do not cover these boundaries. Its test configuration also uses gain 1 MSK and cap 4, while the measurement follow-up keeps approved gain 500 MSK and cap 64. The recommendation remains to preserve the nonzero estimates as **provisional**, retain X3 pending completion of its actual kernel contract, and keep measurement/arming entries unfilled. No fence-list removal, activation, production policy adoption or test success is asserted here.
+
+### CLOCK follow-up at `ee96b7b9f`
+
+The [follow-up source snapshot](clock-candidate-followup-2026-10-26.json) records
+the candidate's later addition of the bond-budget prerequisite and a slice-policy
+test. Its check that the X3 terms are nonzero does not establish that those terms
+were measured. The lane reports 9/9 core tests, but also records both native clock
+tests failing before seat assignment; a later commit updates that fixture for the
+post-commit draw. No successful native rerun was collected by this measurement
+branch. These candidate commits remain separate from the queued measurement build.
+
+This delta does not modify the kernel clock or proof-admission implementation,
+so the initial-notice and whole-horizon boundary questions above remain open.
+The lane also explicitly leaves actor/turn duty clocks, per-claim inclusion delay,
+the actual slice plus Gate C harness, and the reward-liability-horizon fence
+unfinished. Retaining X3 with provisional numbers remains the recommendation;
+neither the policy setter nor its unit assertions supply missing end-to-end
+deadline or cost evidence.
