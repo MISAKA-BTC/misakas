@@ -654,12 +654,13 @@ pub struct Args {
     /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): verify the shards of live sharded claims this bond does
     /// not seat from public material, and accuse (as a non-seat bond) or demand their runs on chain. Off by default; files no receipt.
     pub palw_tir_shard_watch: bool,
-    /// **G14 ③ / ⑦: the GDN step filer** (`--palw-gdn-step-filer`): file `GdnStepAccusedV2` against a recurrence step this node's own
-    /// recompute convicts. Off by default; dormant below `palw_memory_routing_court_v2`.
+    /// **G14 ③ / ⑦: the GDN step filer**: file `GdnStepAccusedV2` against a recurrence step this node's own recompute convicts.
+    /// ALWAYS-ON DUTY (lane ROLES, 09-25 rule): on unless `--palw-disable-gdn-step-filer` (emergency stop); dormant below
+    /// `palw_memory_routing_court_v2`. `--palw-gdn-step-filer` is accepted and does nothing.
     pub palw_gdn_step_filer: bool,
     /// **G14 item 3 (lane r5-f03-ingress): the paid public court ingress** (`--palw-court-paid-ingress`): the held/outsider filer files
-    /// an accusation whose admission burns the court ingress fee. Off by default: without it the filer settles such a case instead of
-    /// paying. Dormant either way while the ingress fee schedule is not adopted (typed-missing) or below `palw_court_outsider_lane_v1`.
+    /// an accusation whose admission burns the court ingress fee. ALWAYS-ON DUTY (lane ROLES): on unless
+    /// `--palw-disable-court-paid-ingress` (emergency stop; the filer then settles such a case instead of paying). Dormant either way while the ingress fee schedule is not adopted (typed-missing) or below `palw_court_outsider_lane_v1`.
     pub palw_court_paid_ingress: bool,
     /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
     /// the chain's registered root before it is used.
@@ -1085,8 +1086,8 @@ impl Default for Args {
             palw_drill_tamper_boundary: None,
             palw_tir_shard_demand_runs: false,
             palw_tir_shard_watch: false,
-            palw_gdn_step_filer: false,
-            palw_court_paid_ingress: false,
+            palw_gdn_step_filer: true,
+            palw_court_paid_ingress: true,
             palw_tir_shard_mirror: None,
             palw_tir_shard_fetch: false,
             palw_tir_shard_run_leaves: None,
@@ -2987,8 +2988,15 @@ pub fn cli() -> Command {
                     "G14 / RFC-0006: the GDN step filer — re-execute the served recurrence steps of disputable Qwen3.6 hybrid claims from \
                      public material and file GdnStepAccusedV2 (tag 243) when the court's own verdict convicts the step; reserves the claim \
                      first near its Final deadline where the legacy public filer is in force, re-submits what a reorg dropped, and hands a \
-                     conviction to the false-Valid filer. Dormant below palw_memory_routing_court_v2. Off by default.",
+                     conviction to the false-Valid filer. ALWAYS-ON DUTY — deprecated, does nothing: the filer runs on every \
+                     bonded node; dormant below palw_memory_routing_court_v2. Emergency stop: --palw-disable-gdn-step-filer.",
                 ),
+        )
+        .arg(
+            Arg::new("palw-disable-gdn-step-filer")
+                .long("palw-disable-gdn-step-filer")
+                .action(clap::ArgAction::SetTrue)
+                .help("EMERGENCY STOP: turn off the always-on GDN step filer duty (lane ROLES). Not for normal operation."),
         )
         .arg(
             Arg::new("palw-court-paid-ingress")
@@ -2997,8 +3005,16 @@ pub fn cli() -> Command {
                 .help(
                     "G14 item 3: let the held/outsider court filer pay the once-only court ingress fee (the paid public path whose \
                      per-claim outside reservation a coalition cannot occupy). Without it a case whose admission would burn the fee \
-                     settles unpaid. Dormant while the fee schedule is unadopted or below palw_court_outsider_lane_v1. Off by default.",
+                     settles unpaid. ALWAYS-ON DUTY — deprecated, does nothing: paid ingress is on for every bonded filer; dormant \
+                     while the fee schedule is unadopted or below palw_court_outsider_lane_v1. Emergency stop: \
+                     --palw-disable-court-paid-ingress.",
                 ),
+        )
+        .arg(
+            Arg::new("palw-disable-court-paid-ingress")
+                .long("palw-disable-court-paid-ingress")
+                .action(clap::ArgAction::SetTrue)
+                .help("EMERGENCY STOP: turn off the always-on paid court ingress duty (lane ROLES). Not for normal operation."),
         )
         .arg(
             Arg::new("palw-tir-shard-watch")
@@ -3321,9 +3337,11 @@ pub fn cli() -> Command {
                 .action(clap::ArgAction::Append)
                 .value_parser(clap::value_parser!(String))
                 .help(
-                    "PALW (G14-K): a registered kernel model file (PALWKM01, repeatable) the kernel-route public verifier \
-                     re-executes claims with. Used only for a class whose registered parameter commitments it opens to; \
-                     needs --palw-fee-outpoint and a bond. Inert unless the kernel route's fence is in force.",
+                    "PALW (G14-K): an extra registered kernel model file (PALWKM01, repeatable) the kernel-route public \
+                     verifier re-executes claims with. The verifier and the Panel=1 seat are ALWAYS-ON duties (lane ROLES): \
+                     every *.palwkm file in <appdir>/<network>/palw-kernel-models/ is also loaded with no flag. Used only for a \
+                     class whose registered parameter commitments it opens to; needs --palw-fee-outpoint and a bond. Inert \
+                     unless the kernel route's fence is in force.",
                 ),
         )
         .arg(
@@ -4287,8 +4305,9 @@ impl Args {
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
             palw_tir_shard_watch: m.get_one::<bool>("palw-tir-shard-watch").copied().unwrap_or(false),
-            palw_gdn_step_filer: m.get_one::<bool>("palw-gdn-step-filer").copied().unwrap_or(false),
-            palw_court_paid_ingress: m.get_one::<bool>("palw-court-paid-ingress").copied().unwrap_or(false),
+            // Lane ROLES: duties, on by construction; only the emergency-stop flags turn them off.
+            palw_gdn_step_filer: !m.get_flag("palw-disable-gdn-step-filer"),
+            palw_court_paid_ingress: !m.get_flag("palw-disable-court-paid-ingress"),
             palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
             palw_tir_shard_fetch: m.get_one::<bool>("palw-tir-shard-fetch").copied().unwrap_or(false),
             palw_tir_shard_run_leaves: m.get_one::<u32>("palw-tir-shard-run-leaves").copied(),
