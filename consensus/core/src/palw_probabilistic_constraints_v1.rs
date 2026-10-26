@@ -27,13 +27,22 @@ impl Params {
     /// **The fence's record gate** (lane g14p/kernel-route, U01): the kernel-route acceptance rule is built (the fold); arming is
     /// refused until an arm-readiness record is pinned (`crate::palw_kernel_route_arming_v1`; the pinned list is empty).
     pub fn validate_palw_probabilistic_constraints_v1(&self) -> Result<(), PalwModeV2Error> {
+        self.validate_palw_probabilistic_constraints_in_v1(crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1)
+    }
+
+    /// The gate against `records` in place of the pinned list (the drill record path; the node's shipped path passes the pinned list).
+    pub fn validate_palw_probabilistic_constraints_in_v1(
+        &self,
+        records: &[crate::palw_kernel_route_arming_v1::PalwKernelRouteArmingRecordV1],
+    ) -> Result<(), PalwModeV2Error> {
         if self.has_isolated_native_calibration_v34() {
             return self.validate_isolated_native_calibration_v34().map_err(|_| {
                 PalwModeV2Error::Invalid("native calibration34 owning isolated genesis or complete original policies are invalid")
             });
         }
-        self.validate_palw_kernel_route_fence_record_v1(
+        self.validate_palw_kernel_route_fence_record_in_v1(
             crate::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1::ProbabilisticConstraintsV1,
+            records,
         )
     }
 }

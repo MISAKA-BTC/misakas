@@ -28,6 +28,7 @@ use kaspa_consensus_core::{
         params::{ForkActivation, Params},
     },
     palw_g14_gates_v1::{PALW_G14_ARMING_RECORD_VERSION_V1, PalwG14ArmingRecordV1, PalwG14GatedFenceV1},
+    palw_kernel_route_arming_v1::{PALW_KERNEL_ROUTE_ARMING_RECORD_VERSION_V1, PalwKernelRouteArmingRecordV1, PalwKernelRouteGatedFenceV1},
     palw_mode_v2::PalwConsensusMode,
     palw_panel_v2::PalwPanelParamsV2,
     palw_state_v2::PalwConsensusObjectV2,
@@ -84,12 +85,18 @@ pub enum PrivateG14DrillSetV1 {
     /// Option (b) alone (`palw_g14_route_required_v1`, no route armed): every legacy-route family is refused past the height, so the
     /// heartbeat lane must carry block production (release plan B.2's "注意").
     RouteRequiredOnly,
+    /// **The kernel slice** (coordinator plan 2026-10-26, lane TNODE): `PALW_T12_KERNEL_SLICE_FENCES_V1` at the height — the int-13
+    /// entries, the kernel route with Panel=1, its claim deadline, settlement once, Gate C and route-required — validated with drill
+    /// records for both the G14 and the kernel-route gated fences. Every other refusal (values, prerequisites) is the shipped one.
+    KernelSlice,
 }
 
 /// The drill ruleset and the drill records it validates with.
 pub struct PrivateG14DrillV1 {
     pub params: Params,
     pub records: Vec<PalwG14ArmingRecordV1>,
+    /// The kernel-route drill records (empty unless the set arms a kernel-route gated fence).
+    pub kernel_records: Vec<PalwKernelRouteArmingRecordV1>,
     pub mode: PrivateG14DrillModeV1,
     pub set: PrivateG14DrillSetV1,
     pub seats: u16,
@@ -129,6 +136,45 @@ pub fn private_g14_drill_record_v1(fence: PalwG14GatedFenceV1, genesis: kaspa_co
         evidence: Box::leak(evidence.into_boxed_slice()),
         review: digest32(&subject("review: none — a drill record authorizes a drill chain only", 0)),
     }
+}
+
+/// **One kernel-route drill record**: the same labelled construction as [`private_g14_drill_record_v1`], under the kernel-route
+/// fence's name and requirement count. Never pinned in `PALW_KERNEL_ROUTE_ARMING_RECORDS_V1`.
+pub fn private_kernel_route_drill_record_v1(
+    fence: PalwKernelRouteGatedFenceV1,
+    genesis: kaspa_consensus_core::Hash64,
+    at_daa: u64,
+) -> PalwKernelRouteArmingRecordV1 {
+    let subject = |what: &str, i: usize| {
+        let mut label = Vec::new();
+        label.extend_from_slice(b"kernel-route:");
+        label.extend_from_slice(what.as_bytes());
+        label.extend_from_slice(fence.name().as_bytes());
+        label.extend_from_slice(genesis.as_bytes().as_slice());
+        label.extend_from_slice(&at_daa.to_le_bytes());
+        label.extend_from_slice(&(i as u64).to_le_bytes());
+        label
+    };
+    let evidence: Vec<[u8; 32]> = (0..fence.requirements().len()).map(|i| digest32(&subject("evidence", i))).collect();
+    let mut source_commit = [0u8; 20];
+    source_commit.copy_from_slice(&digest32(&subject("source", 0))[..20]);
+    PalwKernelRouteArmingRecordV1 {
+        version: PALW_KERNEL_ROUTE_ARMING_RECORD_VERSION_V1,
+        fence,
+        genesis,
+        activation_daa: at_daa,
+        source_commit,
+        evidence: Box::leak(evidence.into_boxed_slice()),
+        review: digest32(&subject("review: none — a drill record authorizes a drill chain only", 0)),
+    }
+}
+
+/// The kernel-route drill records for every kernel-route gated fence `params` arms.
+pub fn private_kernel_route_drill_records_v1(params: &Params) -> Vec<PalwKernelRouteArmingRecordV1> {
+    PalwKernelRouteGatedFenceV1::ALL
+        .into_iter()
+        .filter_map(|fence| fence.armed(params).map(|at| private_kernel_route_drill_record_v1(fence, params.genesis.hash, at.daa_score())))
+        .collect()
 }
 
 /// The drill records for every gated fence `params` arms (one per fence, at its own height, on its own genesis).
@@ -214,20 +260,25 @@ pub fn private_g14_drill_v1(
         PrivateG14DrillSetV1::RouteRequiredOnly => {
             params.palw_g14_route_required_v1 = at;
         }
+        PrivateG14DrillSetV1::KernelSlice => {
+            use kaspa_consensus_core::config::params::{PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_arm_fence_list_at_v1};
+            palw_t12_arm_fence_list_at_v1(&mut params, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(mode.at_daa()));
+        }
     }
     params.sync_palw_g14_gates_v1();
     if params.has_isolated_g14_genesis_v1() {
         return Err("the drill exercises the record path: its genesis must not be an isolated G14 test genesis".into());
     }
     let records = private_g14_drill_records_v1(&params);
+    let kernel_records = private_kernel_route_drill_records_v1(&params);
     params.validate_palw_v1().map_err(|e| format!("the drill ruleset fails validate_palw_v1: {e}"))?;
     params
-        .validate_palw_v2_with_arming_records_v1(&records)
+        .validate_palw_v2_with_g14_and_kernel_route_records_v1(&records, &kernel_records)
         .map_err(|e| format!("the drill ruleset fails the whole V2 validation with its drill records: {e:?}"))?;
     if params.validate_palw_v2().is_ok() {
         return Err("the shipped validation must still refuse the drill ruleset (no record is pinned in the binary)".into());
     }
-    Ok(PrivateG14DrillV1 { params, records, mode, set, seats, quorum })
+    Ok(PrivateG14DrillV1 { params, records, kernel_records, mode, set, seats, quorum })
 }
 
 #[cfg(test)]
@@ -286,5 +337,25 @@ mod tests {
         assert_eq!(&capable[..4], &[false, true, true, true]);
         assert!(capable[4..].iter().all(|c| !c), "cards past the Panel judge nothing");
         assert_eq!((bundle.panel.seat_count(), bundle.panel.quorum()), (3, 3));
+    }
+
+    /// Lane TNODE: the kernel slice either validates through the drill record path, or is refused for a reason that is NOT a missing
+    /// drill record (the record path reaches the kernel-route gate). The outcome is printed for the evidence, never hidden.
+    #[test]
+    fn kernel_slice_drill_reaches_the_kernel_route_record_path() {
+        match private_g14_drill_v1(&salt(), PrivateG14DrillModeV1::Cross { at_daa: 60 }, PrivateG14DrillSetV1::KernelSlice, 3) {
+            Ok(drill) => {
+                println!(
+                    "[tnode] kernel slice validates: g14 records {:?} kernel records {:?}",
+                    drill.records.iter().map(|r| r.fence.name()).collect::<Vec<_>>(),
+                    drill.kernel_records.iter().map(|r| r.fence.name()).collect::<Vec<_>>()
+                );
+                assert!(drill.kernel_records.iter().any(|r| r.fence == PalwKernelRouteGatedFenceV1::ProbabilisticConstraintsV1));
+            }
+            Err(e) => {
+                println!("[tnode] kernel slice refused: {e}");
+                assert!(!e.contains("PALW_KERNEL_ROUTE_ARMING_RECORDS_V1 is empty"), "the drill record path must reach the gate: {e}");
+            }
+        }
     }
 }
