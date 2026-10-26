@@ -1,0 +1,7 @@
+# M-C — court operation measurement status
+
+**NOT_MET for arming.** The test-only release harness `consensus/core/tests/palw_tir_court_verify_cpu.rs` is queued for a source-pinned build at commit `84d7186471454c050c85fd3170b1ba9dea0d9987` through the shared `buildslot.sh`. The machine is Mac13,1 with 32 GiB RAM and 10 CPUs, **not** the minimum supported node. The observed 1-minute load before the build was 12–21, above the instruction's 5 threshold. No unloaded sample has been collected in this branch yet. The 2026-10-22 table in `docs/evidence/palw/studio-values-2026-10-22/measurements.md` was measured at load 51–61 and is comparison history, not a fresh value or policy input.
+
+The runner [run_court_op.py](../run_court_op.py) records the exact executable SHA-256, source/test hashes, command, environment, pre/post load, `/usr/bin/time -l` CPU and peak RSS, raw stdout/stderr and the harness's warm-up-separated median/p95/max over at least 20 operations. `MEASURE_N=0` is captured in separate processes as setup context. Its `--allow-under-load` mode is exploratory and marks the result `UNDER_LOAD`; arming evidence requires a quiet run and a repeat on the slowest supported node.
+
+This preexisting harness still lacks the requested Panel=1 approval, post-commit challenge, constraint receipt, public fault proof, and outsider-ingress operation classes. Those must be added in test code and measured before a complete M-C table or `PALW_RFC0016_MEASURED_RECORDS_V1` / `PALW_RFC0608_MEASURED_RECORDS_V1` candidate can be claimed.
