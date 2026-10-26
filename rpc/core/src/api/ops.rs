@@ -340,6 +340,9 @@ pub enum RpcApiOps {
     /// RFC-0016: the per-model report (targets apart from outcomes; node-local observations labelled) and the pre-lottery quote.
     /// Read-only. Op 255 (245–254 are reserved by other lanes).
     GetPalwRfc0016Report = 255,
+    /// G14 lane FPSEL: the ORIGINAL TIR frame quote (TFP1) a producer that is not this node signs its pledges over. Read-only.
+    /// Op 248 (proto 1332/1333): the u8 op space ends at 255, 250-255 are the bond budget and RFC-0016; 248 is in the X8R 240-249 range and unused on every branch (checked 2026-10-26); number approved by the G14 coordinator 2026-10-26.
+    GetPalwTirOriginalQuote = 248,
     /// Tooling lane (ops 225–228, the unused tail of C2's 220–229 range): one claim's whole standing — operator row, accusation
     /// pending, receipt pause, court clocks, dispute record, DA and court sessions — as one versioned JSON document. Read-only, no rule
     /// reads it. Appended in a free slot: a node built before it drops the WebSocket on it (clients feature-detect).

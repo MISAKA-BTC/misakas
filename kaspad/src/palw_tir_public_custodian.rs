@@ -624,6 +624,10 @@ impl PalwPanelService {
                         } else {
                             Arc::from(self.resolve_backend(session, class, header.artifact_root)?)
                         };
+                        // A node-less producer's original lives with an RFC-0009 provider (lane FPSEL): fetch it first if not retained.
+                        if let Err(why) = self.fetch_tir_original_from_evidence_providers_v1(job.network_domain, key.0).await {
+                            info!("[{PALW_PANEL}] claim {}: {why}; the frame original stays the claimant's DA duty", key.0);
+                        }
                         let paths = self.fp_retained_payload_paths(&key.0);
                         let cache = self.config.retention_dir.join("tir-public-prepared");
                         let reader = tokio::task::spawn_blocking(move || {

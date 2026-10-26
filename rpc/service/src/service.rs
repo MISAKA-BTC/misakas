@@ -4048,6 +4048,50 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_tir_original_quote_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwTirOriginalQuoteRequest,
+    ) -> RpcResult<GetPalwTirOriginalQuoteResponse> {
+        // Bounded before any decode, as op 244: the original FP payload cap and the 2 KiB header envelope.
+        let decode = |label: &str, hex: &str, maximum: usize| -> RpcResult<Vec<u8>> {
+            if hex.len() % 2 != 0 || hex.len() / 2 > maximum {
+                return Err(RpcError::General(format!("{label} hex is malformed or exceeds its bound")));
+            }
+            let mut bytes = vec![0u8; hex.len() / 2];
+            faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("{label} hex: {e}")))?;
+            Ok(bytes)
+        };
+        let commitment_bytes =
+            decode("commitment", &request.commitment_hex, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES)?;
+        let binding_bytes = decode("binding", &request.binding_hex, 2048)?;
+        let commitment: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3 =
+            borsh::from_slice(&commitment_bytes).map_err(|e| RpcError::General(format!("commitment does not decode: {e}")))?;
+        let binding: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
+            borsh::from_slice(&binding_bytes).map_err(|e| RpcError::General(format!("binding header does not decode: {e}")))?;
+        let kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = binding else {
+            // A legacy header has no TIR frame: the caller keeps its other route.
+            return Ok(GetPalwTirOriginalQuoteResponse::default());
+        };
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwTirOriginalQuoteResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session.spawn_blocking(move |c| c.palw_tir_public_original_quote_v1(commitment, header)).await;
+        Ok(match answer {
+            Ok(Some((quote_daa, plan))) => GetPalwTirOriginalQuoteResponse {
+                available: true,
+                quoted: true,
+                refusal: String::new(),
+                quote_daa,
+                plan_hex: faster_hex::hex_string(&borsh::to_vec(&plan).map_err(|e| RpcError::General(e.to_string()))?),
+            },
+            // Below the fence (the node's quote is `None` there) or an original the frame route does not admit.
+            Ok(None) => GetPalwTirOriginalQuoteResponse::default(),
+            Err(refusal) => GetPalwTirOriginalQuoteResponse { available: true, refusal, ..Default::default() },
+        })
+    }
+
     async fn get_palw_reward_vesting_call(
         &self,
         _connection: Option<&DynRpcConnection>,

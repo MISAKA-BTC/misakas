@@ -8260,49 +8260,21 @@ impl PalwPanelService {
             {
                 match session.palw_tir_public_original_quote_v1(commitment.clone(), header.clone())? {
                     Some((quoted_daa, plan)) => {
-                        let mut pledge = kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1::for_plan_v1(
-                            &commitment,
-                            &plan,
-                            quoted_daa.max(current_daa),
-                        )?;
-                        pledge.signature = self
-                            .sign(
-                                pledge.id_v1().as_byte_slice(),
-                                kaspa_consensus_core::palw_tir_public_custody_v1::PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1,
-                            )
-                            .ok_or("producer cannot sign the original TIR source pledge")?;
-                        pledge.check_v1()?;
-                        // G14 R4: a registered semantic stage rides the frame too — the producer signs the history pledge over
-                        // the frame's semantic component, on the frame pledge's own acceptance door and material horizon.
-                        let history = match (&plan.semantic, plan.semantic_resource_plan_id) {
-                            (Some(_), Some(resource_plan_id)) => {
-                                use kaspa_consensus_core::palw_history_custody_v1::{
-                                    PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1,
-                                };
-                                let mut history = PalwHistoryCustodyPledgeV1 {
-                                    version: 1,
-                                    claim: claim_id,
-                                    producer: PalwBondKeyV2(bond),
-                                    execution_root: commitment.execution_root,
-                                    job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&commitment),
-                                    cu_ruleset_id: header.job_context.cu_ruleset_id,
-                                    resource_plan_id,
-                                    maximum_records: plan.maximum_semantic_history_records,
-                                    maximum_custodians: plan.acquisition.maximum_custodians,
-                                    accept_until_daa: pledge.accept_until_daa,
-                                    material_until_daa: pledge.material_until_daa,
-                                    signature: Vec::new(),
-                                };
-                                history.signature = self
-                                    .sign(history.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1)
-                                    .ok_or("producer cannot sign the frame's semantic history pledge")?;
-                                history.check_v1()?;
-                                Some(history)
-                            }
-                            (None, _) => None,
-                            (Some(_), None) => return Err("the frame quote's semantic component has no resource identity".into()),
+                        // The one TFP1 pledge assembly the free-prompt rail uses too (`palw_tir_public_original_pledges_v1`).
+                        let sign = |message: &[u8], context: &[u8]| {
+                            self.sign(message, context).ok_or_else(|| "producer cannot sign the original TIR pledges".to_string())
                         };
-                        Some((header.clone(), pledge, history, plan.terms.plan.rent_sompi))
+                        let pledges = kaspa_pq_validator_core::palw_tir_public_original_pledges_v1(
+                            &sign,
+                            &commitment,
+                            PalwBondKeyV2(bond),
+                            header,
+                            &plan,
+                            quoted_daa,
+                            current_daa,
+                        )?;
+                        debug_assert_eq!(pledges.pledge.claim, claim_id);
+                        Some((header.clone(), pledges.pledge, pledges.history, pledges.rent_sompi))
                     }
                     None => None,
                 }
@@ -14583,6 +14555,49 @@ impl PalwPanelService {
             Ok(Err(why)) => info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})"),
             Err(join) => warn!("[{PALW_PANEL}] claim {claim}: the evidence-provider fetch did not finish ({join})"),
         }
+    }
+
+    /// **G14 lane FPSEL (coordinator decision 2026-10-26): a TIR frame original from the RFC-0009 stage B evidence providers.** A
+    /// node-less producer's rail publishes the claim's FPC1 capture to a provider (`--evidence-out` + `palw-evidence publish`); a
+    /// custodian that retains no original of the claim (`fp_retained_payload_paths`) fetches it here, root-checked against the CHAIN's
+    /// roots and every chunk against the manifest, and keeps it under `retention/foreign/<claim>.material`, where the frame custodian's
+    /// reader (`retained_original_v1`) finds it and still checks it against the frame. `Ok(false)`: no provider dir, or a copy is
+    /// already retained. A provider's silence is the claimant's DA no-response (a DA default), never a computation fault: nothing here
+    /// files or accuses anything, and no responsibility moves to the provider (no provider court).
+    pub(crate) async fn fetch_tir_original_from_evidence_providers_v1(&self, network_domain: Hash64, claim: Hash64) -> Result<bool, String> {
+        if self.config.evidence_provider_dirs.is_empty() || self.fp_retained_payload_paths(&claim).iter().any(|p| p.is_file()) {
+            return Ok(false);
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let (state, _, _) = session.palw_derived_artifacts_v1(claim).ok_or("the claim's committed roots are not readable")?;
+        let roots = misaka_palw_remote::evidence::ClaimRoots {
+            network_domain,
+            trace_root: state.trace_root,
+            output_root: state.output_root,
+            execution_root: state.execution_root,
+            trace_chunk_count: state.trace_chunk_count,
+            retention_deadline: state.trace_retention_daa,
+        };
+        let dirs = self.config.evidence_provider_dirs.clone();
+        let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
+        tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let (bytes, report) = misaka_palw_remote::evidence::fs::fetch_claim_material(
+                &dirs,
+                &claim.to_string(),
+                &roots,
+                &misaka_palw_remote::evidence::ManifestLimits::default(),
+                claim,
+            )
+            .map_err(|why| format!("no evidence provider served the frame original ({why:?})"))?;
+            let parent = target.parent().ok_or("retention path has no parent")?;
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            let partial = target.with_extension("material.partial");
+            std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &target)).map_err(|e| e.to_string())?;
+            info!("[{PALW_PANEL}] claim {claim}: TIR frame original ({} B) from evidence provider(s) {:?}", bytes.len(), report.served_by);
+            Ok(true)
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
 
     /// **The signed whole-capture pull** (ADR-0077 SA-2's last sentence). The attempt lane keeps

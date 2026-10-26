@@ -489,6 +489,58 @@ pub fn build_fp_commitment_tx_with_tir_public_original_v1(
     )
 }
 
+/// **The signed pledges of an ORIGINAL TIR frame (`TFP1`)**, from the node's quote (`palw_tir_public_original_quote_v1`).
+pub struct PalwTirPublicOriginalPledgesV1 {
+    pub pledge: kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
+    pub history: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    /// The plan's native rent: the carrier declares exactly this and pays it on top of relay.
+    pub rent_sompi: u64,
+}
+
+/// **G14 R1/R2/R4: the ONE assembly of an original TIR frame's pledges** — used by the node producer (`build_canonical_claim`) and
+/// by the free-prompt rail (gateway → rail, full node or node-less) alike. The source pledge is signed over the quoted plan at
+/// `max(quoted_daa, current_daa)`; a registered semantic stage adds the history pledge over the plan's semantic component, on the
+/// source pledge's own acceptance door and material horizon. `sign(message, context)` is the producer's ML-DSA-87 bond key.
+pub fn palw_tir_public_original_pledges_v1(
+    sign: &dyn Fn(&[u8], &[u8]) -> Result<Vec<u8>, String>,
+    commitment: &PalwFreePromptCommitmentV3,
+    producer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    plan: &kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
+    quoted_daa: u64,
+    current_daa: u64,
+) -> Result<PalwTirPublicOriginalPledgesV1, String> {
+    use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
+    use kaspa_consensus_core::palw_tir_public_custody_v1::{PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1, PalwTirPublicCustodyPledgeV1};
+    let mut pledge = PalwTirPublicCustodyPledgeV1::for_plan_v1(commitment, plan, quoted_daa.max(current_daa))?;
+    pledge.signature = sign(pledge.id_v1().as_byte_slice(), PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1)?;
+    pledge.check_v1()?;
+    let history = match (&plan.semantic, plan.semantic_resource_plan_id) {
+        (Some(_), Some(resource_plan_id)) => {
+            let mut history = PalwHistoryCustodyPledgeV1 {
+                version: 1,
+                claim: kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment),
+                producer,
+                execution_root: commitment.execution_root,
+                job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
+                cu_ruleset_id: header.job_context.cu_ruleset_id,
+                resource_plan_id,
+                maximum_records: plan.maximum_semantic_history_records,
+                maximum_custodians: plan.acquisition.maximum_custodians,
+                accept_until_daa: pledge.accept_until_daa,
+                material_until_daa: pledge.material_until_daa,
+                signature: Vec::new(),
+            };
+            history.signature = sign(history.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1)?;
+            history.check_v1()?;
+            Some(history)
+        }
+        (None, _) => None,
+        (Some(_), None) => return Err("the frame quote's semantic component has no resource identity".into()),
+    };
+    Ok(PalwTirPublicOriginalPledgesV1 { pledge, history, rent_sompi: plan.terms.plan.rent_sompi })
+}
+
 /// An external producer's original public envelope (version 2): the same original FP claim and
 /// pledge, plus the standing custody delegation both the producer and its node custodian signed.
 /// The delegation must name this producer and cover the pledged material horizon; admission
