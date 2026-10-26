@@ -78,3 +78,20 @@ SPINE が呼ぶもの: kernel route・Panel=1 の post-Final 経路 `observe_nat
 - CODE: book の release 判定に kernel claim はまだ入っていない。
 - TEST: processor 経由の E2E（SPINE の canonical）は SPINE 側。
 - 値: `follow_up_branches_per_turn` に VAL の値がない。
+
+
+## F02b 改訂（統括決定 2026-10-26）
+- capital の置き場所: `slashable_locks` への流用をやめた。kernel route の aux table 150 に専用 row `KernelCourtCapitalRowV1`（version 1）を置く。
+  - 書くのは `palw_kernel_route_panel_one_v1` が有効になってからだけ。
+  - `palw_bond_committed_v1` に `kernel_court_capital_reserved_v1` として計上する。
+  - conviction・default の経路はこの table を読まない。
+  - release されるのは、claim が live book を離れた時（解決済み book の release）か、hard（a+10,000）に達した時。row を消すと collateral が戻り、何も課金しない。
+- hold の終わり: hold 中の default は horizon（hard）に達した時点で slash なしに release する。pre-Final の claim は `Unavailable{producer_defaulted:false}` になり、reservation は返され、demand bond も返金される。
+- S3c': premise があっても、予約 packet のどれかが `MissingSupply` なら hold する。
+- 解決済み book の release: kernel binding も `court_service_release_eligible_v1` を満たすことを試験で確認した。
+- `follow_up_branches_per_turn` は VAL の値待ち。試験は `TEST_ONLY_` の値のまま。
+- 試験:
+  - core: 39 passed / 1 failed（base 既存の r5）。
+  - kernel: 2 passed。
+  - processor setter: 1 passed。
+- 残件: S3c' は supply の欠落を claim 全体で見ている。kernel 経路には duty clock がないので、actor ごと・turn ごとの帰属と inclusion_delay の適用はまだない。processor 経由の E2E は SPINE が担当。
