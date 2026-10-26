@@ -38,8 +38,11 @@ fn cert_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let mut tmp = params.clone();
     tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     tmp.sync_palw_rfc0018_v1();
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(mut bundle) = tmp.palw_consensus_mode else { unreachable!() };
-    let mirror = PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*bundle.state.rfc0018_v1().expect("Gate C mirrored") };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(mut bundle) = tmp.palw_consensus_mode else {
+        unreachable!()
+    };
+    let mirror =
+        PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*bundle.state.rfc0018_v1().expect("Gate C mirrored") };
     assert!(mirror.gate_c_at(0), "Gate C governs from DAA 0 in this harness");
     TEST_ONLY_KERNEL_CERT_POLICY_V1.validate().expect("the test policy is well-formed");
     bundle.state = bundle.state.clone().with_rfc0018_v1(Some(mirror));
@@ -239,8 +242,12 @@ pub(super) async fn s3a_prime_shortfall() {
     let short = cert_row(&w.net, &claim).unwrap();
     assert_eq!(short.positive_positions(), positive);
     assert!(short.positive_positions() < k, "short of k = {k}: {}", short.positive_positions());
-    let (producer_before, poster_before) =
-        until_decided(&mut w.net, &claim, TEST_ONLY_KERNEL_CERT_POLICY_V1.attest_window_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50).await;
+    let (producer_before, poster_before) = until_decided(
+        &mut w.net,
+        &claim,
+        TEST_ONLY_KERNEL_CERT_POLICY_V1.attest_window_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50,
+    )
+    .await;
     let decided = cert_row(&w.net, &claim).unwrap();
     assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::NotCertified), "{:?}", decided.outcome);
     assert!(matches!(w.net.claim_state(&claim), ClaimStateV1::Final { .. }), "still a kernel Final");
@@ -248,4 +255,110 @@ pub(super) async fn s3a_prime_shortfall() {
     assert_eq!(w.net.owed(0), producer_before, "an uncertified Final never pays the producer");
     assert_eq!(w.net.owed(1), poster_before + Rules::final_reward(&policy), "the held reward returns to the poster, whole");
     assert!(hold(&w.net, &claim).is_none(), "settled once");
+}
+
+/// Explicit measurement of the native Gate C path with a single liable Panel
+/// seat. TEST-ONLY policies and eight harness bonds; repeated draw positions are
+/// not independent operators. Attestations are synthetic approvals, not measured
+/// verifier re-execution. N=0 stops at the same uncertified Final used by N=1.
+#[tokio::test]
+#[ignore = "explicit pinned Gate C fixture measurement under buildslot"]
+async fn g14_cert_panel_one_measure() {
+    use misaka_palw_kernel::model_eligibility_v1::*;
+    use serde_json::json;
+    use std::time::Instant;
+    kaspa_core::log::try_init_logger("warn");
+    let n: u32 = std::env::var("G14_CERT_N").unwrap().parse().unwrap();
+    let m: u16 = std::env::var("G14_CERT_M").unwrap().parse().unwrap();
+    assert!(n <= 1);
+    let k = match m {
+        5 => 3,
+        75 => 41,
+        90 => 50,
+        _ => panic!("measurement scales: 5, 75, 90"),
+    };
+    let policy = PalwSecurityCertificationPolicyV1 { m, k, draws_per_epoch: 54, ..TEST_ONLY_KERNEL_CERT_POLICY_V1 };
+    policy.validate().unwrap();
+    let (config, mut bundle, premine, floats) = cert_config();
+    let mut params = config.params.clone();
+    params.palw_kernel_route_panel_one_v1 = Some(ForkActivation::new(0));
+    let mirror = PalwRfc0018MirrorV1 { certification: policy, ..*bundle.state.rfc0018_v1().unwrap() };
+    bundle.state = bundle.state.clone().with_rfc0018_v1(Some(mirror)).with_kernel_route_panel_one_from_daa(Some(0));
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode {
+        b.state = b.state.clone().with_rfc0018_v1(Some(mirror)).with_kernel_route_panel_one_from_daa(Some(0));
+    }
+    assert!(params.validate_palw_v2().is_err(), "no production activation approval");
+    let setup = Instant::now();
+    let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
+    let job = w.job().await;
+    let claim = w.claim(0, &job, false).await;
+    assert_eq!(w.seats(&claim.id).len(), 1);
+    w.cover(&claim.id).await;
+    w.net.beat_to(final_floor(&w, Mode::Panel, &claim.id)).await;
+    assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
+    assert_eq!(w.net.owed(0), 0);
+    assert!(hold(&w.net, &claim.id).is_some());
+    assert!(cert_row(&w.net, &claim.id).unwrap().anchor.is_none());
+    let setup_ns = setup.elapsed().as_nanos();
+    let mut phases = Vec::new();
+    let mut unique_bonds = 0;
+    let mut certified = false;
+    if n == 1 {
+        let start = Instant::now();
+        let from = w.net.daa();
+        for round in 0..64u64 {
+            if cert_row(&w.net, &claim.id).is_some_and(|r| r.anchor.is_some()) {
+                break;
+            }
+            let ttpb = w.net.ttpb();
+            w.net.chain.attempt(5 + (round % 3) as usize, ttpb, Vec::new(), &|_| true).await;
+            let to = w.net.daa() + 8;
+            w.net.beat_to(to).await;
+        }
+        let row = cert_row(&w.net, &claim.id).unwrap();
+        assert!(row.anchor.is_some());
+        assert_eq!(row.draws.len(), m as usize);
+        assert!(!row.draws.contains(&w.net.kid(0)));
+        phases.push(json!({"phase":"later_anchor_and_draw", "wall_ns":start.elapsed().as_nanos(),
+            "daa_before":from,"daa_after":w.net.daa(),"object_bytes":null}));
+        let cards = drawn_cards(&w.net, &row);
+        unique_bonds = cards.len();
+        for (card, positions) in cards {
+            let start = Instant::now();
+            let from = w.net.daa();
+            let attestation = EligibilityAttestationV1 {
+                version: ELIGIBILITY_ATTESTATION_VERSION_V1,
+                network: w.net.domain.as_bytes(),
+                exam: palw_kernel_claim_certification_id_v1(&claim.id),
+                verifier: w.net.kid(card),
+                verdict: EligibilityVerdictV1::Reproduced,
+                transcript: [0xC0 | card as u8; 64],
+                claim_mismatches: vec![],
+            };
+            let object = w.net.route(card, &K::AttestEligibilityExamV1 { attestation });
+            let bytes = borsh::to_vec(&object).unwrap().len();
+            w.net.send(vec![(card, object)]).await;
+            phases.push(json!({"phase":"drawn_attestation_sign_and_accept", "wall_ns":start.elapsed().as_nanos(),
+                "daa_before":from,"daa_after":w.net.daa(),"object_bytes":bytes,"positions":positions}));
+        }
+        assert_eq!(cert_row(&w.net, &claim.id).unwrap().positive_positions(), m as u32);
+        let start = Instant::now();
+        let from = w.net.daa();
+        let (before, _) = until_decided(&mut w.net, &claim.id, policy.prosecution_window_daa + 50).await;
+        assert_eq!(cert_row(&w.net, &claim.id).unwrap().outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::Certified));
+        assert!(palw_kernel_claim_security_certified_v1(&w.net.chain.tip_state().1, &claim.id));
+        assert_eq!(w.net.owed(0), before + Rules::final_reward(&w.policy()));
+        assert!(hold(&w.net, &claim.id).is_none());
+        certified = true;
+        phases.push(json!({"phase":"certification_decision_and_reward", "wall_ns":start.elapsed().as_nanos(),
+            "daa_before":from,"daa_after":w.net.daa(),"object_bytes":null}));
+    }
+    println!(
+        "G14_CERT_MEASURE {}",
+        json!({"schema":1,"n":n,"m":m,"k":k,"panel_seats":1,
+        "test_policy":true,"fixture_only":true,"arming_evidence":false,"honest_verifier_compute_measured":false,
+        "independent_operators_measured":false,"withholding_measured":false,
+        "claim":claim.id.iter().map(|b|format!("{b:02x}")).collect::<String>(),
+        "setup_wall_ns":setup_ns,"unique_drawn_bonds":unique_bonds,"certified":certified,"phases":phases})
+    );
 }
