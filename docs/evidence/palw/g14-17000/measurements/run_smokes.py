@@ -5,7 +5,7 @@ from pathlib import Path
 root=Path('/Users/wata/.codex/artifacts/g14-17000-measure')
 commands=[
  [sys.executable,str(root/'run_native_measure.py'),'--build-record',str(root/'native-verified-build-record.json'),
-  '--out',str(root/'native-smoke-2026-10-26'),'--case','honest','--runs','1','--allow-under-load'],
+  '--out',str(root/'native-smoke-retry-2026-10-26'),'--case','honest','--runs','1','--allow-under-load'],
 ]
 for n in [0,32]:
  commands.append([sys.executable,str(root/'run_model_measure.py'),'--build-record',str(root/'dolphin-build-record.json'),

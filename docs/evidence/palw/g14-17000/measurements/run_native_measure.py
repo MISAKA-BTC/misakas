@@ -57,7 +57,7 @@ def main():
                     after = os.getloadavg()
                     raw = (a.out / (label+'.stdout.log')).read_text()
                     err = (a.out / (label+'.stderr.log')).read_text()
-                    lines = [line[len('G14_MEASURE '):] for line in raw.splitlines() if line.startswith('G14_MEASURE ')]
+                    lines = re.findall(r'^(?:test \S+ \.\.\. )?G14_MEASURE (\{.*\})$', raw, re.MULTILINE)
                     row = {'label': label, 'command': cmd, 'env': {k: env[k] for k in ['TMPDIR', 'G14_MEASURE_CASE', 'G14_MEASURE_N', 'G14_MEASURE_SEATS']},
                            'exit_code': rc, 'wall_seconds': time.monotonic()-start, 'load_before': before, 'load_after': after,
                            'under_load': max(before[0], after[0]) > 5,

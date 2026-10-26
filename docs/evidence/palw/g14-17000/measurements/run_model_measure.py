@@ -56,7 +56,7 @@ def main():
     r['under_load']=any(x['load'][0]>5 for x in r['telemetry']) or max(r['load_before'][0],r['load_after'][0])>5
     lines=(a.out/'stdout.log').read_text().splitlines()
     for key, prefix in [('setup','G14_MODEL_SETUP '),('result','G14_MODEL_RESULT ')]:
-        hits=[json.loads(line[len(prefix):]) for line in lines if line.startswith(prefix)]
+        hits=[json.loads(raw) for raw in re.findall(r'^(?:test \S+ \.\.\. )?'+re.escape(prefix)+r'(\{.*\})$', '\n'.join(lines), re.MULTILINE)]
         r[key]=hits[0] if len(hits)==1 else None
     chunks=[json.loads(line[len('G14_MODEL_CHUNK '):]) for line in lines if line.startswith('G14_MODEL_CHUNK ')]
     r['completed_positions']=chunks[-1]['end'] if chunks else 0
