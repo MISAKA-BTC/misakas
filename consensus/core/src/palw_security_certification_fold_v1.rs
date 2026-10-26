@@ -141,6 +141,109 @@ pub(super) fn commit_native_mining_v39(
     Ok(())
 }
 
+/// **lane CERT (2026-10-26): a kernel-route claim's `Final` reward is held for SecurityCertified.** Called from the kernel fold's
+/// settlement at the producer's escrow `FinalReward` (never a verifier check fee, never the EXEC fee route). Below Gate C (`gate_c_at`
+/// the block): `Ok(false)` and the released rule pays at `Final`. Past it: the claim's `'K'` certification row is committed (claim,
+/// producer, pool cut at this DAA, exactly as a chain claim's at its `Final`) and the reward, already debited from the poster's
+/// escrow, is held in its `'H'` row; `Ok(true)` and nothing is paid now. A second hold of the same claim is refused (the once-only
+/// marker before this already stops it; this refusal is the hold's own invariant, not a fallback).
+pub(super) fn hold_kernel_final_reward_v1(
+    builder: &mut TransitionBuilder<'_>,
+    now: u64,
+    kernel_claim: &[u8; 64],
+    producer: &[u8; 64],
+    poster: &[u8; 64],
+    amount: u64,
+) -> Result<bool, PalwStateV2Error> {
+    let Some(mirror) = builder.params.rfc0018_v1().copied() else { return Ok(false) };
+    if !mirror.gate_c_at(now) {
+        return Ok(false);
+    }
+    let id = palw_kernel_claim_certification_id_v1(kernel_claim);
+    let key = certification_kernel_claim_key_v1(&id);
+    let hold_key = certification_kernel_hold_key_v1(&id);
+    if row_of::<PalwClaimCertificationRowV1>(&builder.state, &key).is_some()
+        || row_of::<PalwKernelCertifiedRewardHoldV1>(&builder.state, &hold_key).is_some()
+    {
+        return Err(refuse("a kernel claim's Final reward is held for certification once"));
+    }
+    let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("kernel certification: no kernel route"))?;
+    let producer_key = route.bond_key_of(producer).ok_or_else(|| refuse("kernel certification: the producer has no native bond"))?;
+    let poster_key = route.bond_key_of(poster).ok_or_else(|| refuse("kernel certification: the poster has no native bond"))?;
+    let class_id = route
+        .ledger_checked_v1()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?
+        .claims
+        .get(kernel_claim)
+        .map(|row| row.class_binding_id)
+        .ok_or_else(|| refuse("kernel certification: the Final claim is not in the ledger"))?;
+    let producer_bond = builder.state.bonds.get(&producer_key).ok_or(PalwStateV2Error::MissingBond(producer_key))?;
+    let poster_payload = builder.state.bonds.get(&poster_key).ok_or(PalwStateV2Error::MissingBond(poster_key))?.payout_payload;
+    let row = PalwClaimCertificationRowV1 {
+        claim: *kernel_claim,
+        class_id,
+        producer_bond: *producer,
+        producer_principal: producer_bond.operator_id.as_bytes(),
+        // A kernel claim is user-paid work (no issuance leg); its held reward is the escrow's, kept in the 'H' row.
+        attempt: false,
+        final_daa: now,
+        committed_daa: now,
+        committed_span: builder.state.round_seed_anchor.as_ref().map(|anchor| anchor.span).unwrap_or(0),
+        anchor: None,
+        draws: Vec::new(),
+        drawn_daa: 0,
+        deadline_daa: 0,
+        attestations: Vec::new(),
+        held_reward: 0,
+        payout_payload: producer_bond.payout_payload.as_bytes(),
+        outcome: None,
+    };
+    let hold = PalwKernelCertifiedRewardHoldV1 {
+        version: PALW_KERNEL_CERTIFIED_REWARD_HOLD_VERSION_V1,
+        claim: *kernel_claim,
+        producer_bond: *producer,
+        producer_payload: producer_bond.payout_payload.as_bytes(),
+        poster_bond: *poster,
+        poster_payload: poster_payload.as_bytes(),
+        amount,
+        held_daa: now,
+    };
+    let class_key = certification_class_key_v1(&row.class_id);
+    write_row(builder, key, Some(&row))?;
+    write_row(builder, hold_key, Some(&hold))?;
+    let mut counters = row_of::<PalwCertificationClassRowV1>(&builder.state, &class_key).unwrap_or_default();
+    counters.committed = counters.committed.saturating_add(1);
+    write_row(builder, class_key, Some(&counters))?;
+    Ok(true)
+}
+
+/// **lane CERT: the held kernel Final reward settles once, at the certification's decision.** Certifying: paid to the producer exactly
+/// as the released `Final` paid it (the bond-budget recipient, the RFC-0016 telemetry, the kernel payout). Any other outcome
+/// (`NotCertified`, `Expired`, `NoPopulation`, `Withdrawn`; a conviction after `Final` withdraws): returned whole to the poster; the
+/// producer is never paid uncertified. A producer whose bond left the route before certification is not paid either (returned).
+fn settle_kernel_reward_hold_v1(
+    builder: &mut TransitionBuilder<'_>,
+    now: u64,
+    kernel_claim: &[u8; 64],
+    certified: bool,
+) -> Result<(), PalwStateV2Error> {
+    let hold_key = certification_kernel_hold_key_v1(&palw_kernel_claim_certification_id_v1(kernel_claim));
+    let Some(hold) = row_of::<PalwKernelCertifiedRewardHoldV1>(&builder.state, &hold_key) else {
+        return Err(refuse("a decided kernel certification has no held reward"));
+    };
+    write_row::<PalwKernelCertifiedRewardHoldV1>(builder, hold_key, None)?;
+    let producer_key = builder.state.kernel_route.as_ref().and_then(|route| route.bond_key_of(&hold.producer_bond));
+    match (certified, producer_key) {
+        (true, Some(bond)) => {
+            let payload = Hash64::from_bytes(hold.producer_payload);
+            builder.consume_kernel_final_reward_v1(kernel_claim, bond, payload, now, hold.amount)?;
+            super::palw_rfc0016_fold_v1::rfc0016_note_escrow_payout_v1(builder, now, kernel_claim, hold.amount)?;
+            builder.add_kernel_payout(payload, hold.amount)
+        }
+        _ => builder.add_kernel_payout(Hash64::from_bytes(hold.poster_payload), hold.amount),
+    }
+}
+
 /// The native fold's collection of a decided mining claim retires its `'V'` row (its receipt no longer reads it).
 pub(super) fn retire_native_mining_v39(builder: &mut TransitionBuilder<'_>, mining_claim: &Hash64) -> Result<(), PalwStateV2Error> {
     let key = certification_native_key_v39(&palw_native_certification_id_v39(mining_claim));
@@ -183,8 +286,10 @@ pub(super) fn try_attest_claim_certification_v1(
         return None;
     }
     // A chain claim's row, else an owning39 mining claim's (`'V'`): one attestation object, one rule.
-    let key = Some(certification_claim_key_v1(&attestation.exam))
-        .filter(|k| row_of::<PalwClaimCertificationRowV1>(&builder.state, k).is_some())
+    // lane CERT: or a kernel-route ledger claim's (`'K'`).
+    let key = [certification_claim_key_v1(&attestation.exam), certification_kernel_claim_key_v1(&attestation.exam)]
+        .into_iter()
+        .find(|k| row_of::<PalwClaimCertificationRowV1>(&builder.state, k).is_some())
         .unwrap_or_else(|| certification_native_key_v39(&attestation.exam));
     let mut row: PalwClaimCertificationRowV1 = row_of(&builder.state, &key)?;
     Some((|| {
@@ -631,12 +736,19 @@ pub(super) fn sweep_security_certification_v1(
         network = PalwCertificationNetworkRowV1 { epoch, draws: 0 };
     }
     let network_before = network.clone();
+    // lane CERT: the kernel ledger, loaded once if an undecided kernel-route row needs its facts.
+    let mut kernel_ledger: Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1> = None;
     for (key, bytes) in rows {
         let native = key.first().copied() == Some(CERTIFICATION_NATIVE_MINING_PREFIX_V39);
-        if !(key.first().copied() == Some(CERTIFICATION_CLAIM_PREFIX_V1) || native) || key.len() != 65 {
+        let kernel = key.first().copied() == Some(CERTIFICATION_KERNEL_CLAIM_PREFIX_V1);
+        if !(key.first().copied() == Some(CERTIFICATION_CLAIM_PREFIX_V1) || native || kernel) || key.len() != 65 {
             continue;
         }
         let mut row: PalwClaimCertificationRowV1 = borsh::from_slice(&bytes).map_err(|e| refuse(e.to_string()))?;
+        if kernel {
+            sweep_kernel_claim_certification_v1(builder, now, &policy, anchor.as_ref(), &mut network, key, row, &mut kernel_ledger)?;
+            continue;
+        }
         let claim_id = Hash64::from_bytes(row.claim);
         let claim = if native { None } else { builder.state.claims.get(&claim_id).cloned() };
         // An owning39 mining claim stands while its native claim row and its complete Master escrow Final stand.
@@ -770,6 +882,82 @@ pub(super) fn sweep_security_certification_v1(
     }
     if network != network_before {
         write_row(builder, certification_network_key_v1(), Some(&network))?;
+    }
+    Ok(())
+}
+
+/// **lane CERT: one kernel-route claim's certification in the sweep**: the same anchor rule, epoch capacity, global-pool draw and
+/// verdict as a chain claim's (`palw_certification_verdict_v1`). Its facts come from the kernel ledger: `still_final` while the ledger
+/// claim is `Final` and unconvicted (a conviction after `Final` withdraws it), `accusation_pending` while any demand on it is open.
+/// At the decision the held Final reward settles once (`settle_kernel_reward_hold_v1`). A decided row stays (the claim's public
+/// certification status); nothing credits consensus weight here: a kernel claim carries none (`B = F = 0`).
+#[allow(clippy::too_many_arguments)]
+fn sweep_kernel_claim_certification_v1(
+    builder: &mut TransitionBuilder<'_>,
+    now: u64,
+    policy: &PalwSecurityCertificationPolicyV1,
+    anchor: Option<&crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
+    network: &mut PalwCertificationNetworkRowV1,
+    key: Vec<u8>,
+    mut row: PalwClaimCertificationRowV1,
+    kernel_ledger: &mut Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>,
+) -> Result<(), PalwStateV2Error> {
+    if row.outcome.is_some() {
+        return Ok(());
+    }
+    let mut changed = false;
+    if row.anchor.is_none()
+        && !palw_certification_public_check_v1(&row.class_id)
+        && network.draws < policy.draws_per_epoch
+        && let Some(a) = anchor
+        && a.span >= row.committed_span.saturating_add(policy.anchor_delay_spans.max(1))
+    {
+        let id = palw_kernel_claim_certification_id_v1(&row.claim);
+        let execution_key = a.execution_key.as_bytes();
+        let seed = palw_certification_seed_v1(&id, a.span, &execution_key);
+        row.anchor = Some((a.span, execution_key));
+        row.drawn_daa = now;
+        row.deadline_daa = now.saturating_add(policy.attest_window_daa);
+        network.draws = network.draws.saturating_add(1);
+        match palw_certification_draw_v1(&seed, &id, &pool_v1(&builder.state, policy, &row), policy.m) {
+            Some(draws) => row.draws = draws,
+            None => row.outcome = Some((PalwCertificationOutcomeV1::NoPopulation, now)),
+        }
+        changed = true;
+    }
+    if row.outcome.is_none() {
+        if kernel_ledger.is_none() {
+            let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("kernel certification: no kernel route"))?;
+            *kernel_ledger = Some(
+                route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?,
+            );
+        }
+        let ledger = kernel_ledger.as_ref().expect("loaded above");
+        let claim_row = ledger.claims.get(&row.claim);
+        let facts = PalwCertificationClaimFactsV1 {
+            still_final: claim_row
+                .is_some_and(|c| !c.convicted && matches!(c.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })),
+            accusation_pending: ledger.demands.keys().any(|(claim, _, _)| *claim == row.claim),
+        };
+        if let Some(outcome) = palw_certification_verdict_v1(policy, &row, facts, now) {
+            row.outcome = Some((outcome, now));
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    write_row(builder, key, Some(&row))?;
+    if let Some((outcome, _)) = row.outcome {
+        let class_key = certification_class_key_v1(&row.class_id);
+        let mut counters = row_of::<PalwCertificationClassRowV1>(&builder.state, &class_key).unwrap_or_default();
+        if outcome.certifies() {
+            counters.certified = counters.certified.saturating_add(1);
+        } else {
+            counters.failed = counters.failed.saturating_add(1);
+        }
+        write_row(builder, class_key, Some(&counters))?;
+        settle_kernel_reward_hold_v1(builder, now, &row.claim, outcome.certifies())?;
     }
     Ok(())
 }

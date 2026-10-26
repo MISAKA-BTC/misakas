@@ -12,6 +12,14 @@ use futures_util::FutureExt;
 enum Stage {
     Run(&'static str, Mode, Start, Outcome),
     Missing { stage: &'static str, lane: &'static str, needs: &'static str },
+    /// lane CERT: a stage driven by `canonical::cert` (Gate C armed with a TEST-ONLY certification policy).
+    Cert(&'static str, CertCase),
+}
+
+#[derive(Clone, Copy)]
+enum CertCase {
+    CertifiedReorgIbd,
+    Shortfall,
 }
 
 const STAGES: &[Stage] = &[
@@ -32,12 +40,16 @@ const STAGES: &[Stage] = &[
         Start::Ibd,
         Outcome::WrongChallengeDismissed,
     ),
-    Stage::Missing {
-        stage: "S3a' honest: per-claim lottery approval (SecurityCertified) gates Final/settlement on the kernel route",
-        lane: "SPINE -> central (no lane owns it)",
-        needs: "misaka_palw_kernel::ledger reaches ClaimStateV1::Final from the Panel pass + window only; no \
-                palw_claim_security_certified_v1 / Gate C draw exists for kernel-route claims",
-    },
+    Stage::Cert(
+        "S3a' per-claim lottery approval: Final alone pays nothing; k drawn approvals + prosecution window -> paid once; a reorg \
+         past the approvals takes the payment back; IBD agrees (TEST-ONLY cert policy)",
+        CertCase::CertifiedReorgIbd,
+    ),
+    Stage::Cert(
+        "S3a' approval shortfall / Unavailable verifiers: NotCertified, producer never paid, reward returned to the poster \
+         (TEST-ONLY cert policy)",
+        CertCase::Shortfall,
+    ),
     Stage::Run(
         "S3b lie, all seats colluding: outsider convicts before Final, producer slashed (pruned-import node)",
         Mode::Panel,
@@ -76,6 +88,15 @@ async fn g14_spine_panel1_kernel_route_stage_table() {
         match s {
             Stage::Run(name, mode, start, outcome) => {
                 let r = std::panic::AssertUnwindSafe(canonical(*mode, *start, *outcome)).catch_unwind().await;
+                rows.push((*name, if r.is_ok() { "PASS".to_string() } else { "FAIL".to_string() }));
+            }
+            Stage::Cert(name, case) => {
+                let r = match case {
+                    CertCase::CertifiedReorgIbd => {
+                        std::panic::AssertUnwindSafe(super::cert::s3a_prime_certified_reorg_ibd()).catch_unwind().await
+                    }
+                    CertCase::Shortfall => std::panic::AssertUnwindSafe(super::cert::s3a_prime_shortfall()).catch_unwind().await,
+                };
                 rows.push((*name, if r.is_ok() { "PASS".to_string() } else { "FAIL".to_string() }));
             }
             Stage::Missing { stage, lane, needs } => rows.push((*stage, format!("UNIMPLEMENTED [{lane}] {needs}"))),
