@@ -856,6 +856,23 @@ pub fn palw_g14_route_family_fences_v1(family: PalwG14RouteFamilyV1) -> &'static
     }
 }
 
+/// **The `FpSelection` family's arm-readiness checklist** (lane FPSEL, 2026-10-26). A record is still per FENCE
+/// ([`palw_g14_route_family_fences_v1`]: `palw_tir_public_conviction_v1`'s V1–V7 record, `palw_g14_route_required_v1`'s T-N8/T-N10
+/// record) plus the frame's own cost record (`PALW_TIR_FRAME_COST_RECORDS_V1`); this list names what those records must show for
+/// THIS family, so the integrator can check the family before pinning. It changes no record format and authorizes nothing.
+pub const PALW_G14_FP_SELECTION_FAMILY_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "frame cost: a PALW_TIR_FRAME_COST_RECORDS_V1 entry for this network and height (slowest supported node, release build, \
+     genesis-size classes, network inputs observed); palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1 is only the estimate",
+    "T-N10 fold: an unframed FP selection job is refused past palw_g14_route_required_v1 and a framed one is admitted once \
+     palw_tir_public_conviction_v1 is in force at its acceptance (g14_close_gates)",
+    "T-N2 fold: greedy, seeded Decision 11 sampling and V4 pipeline selection faults are convicted from public material by an \
+     outsider through the frame's selection door, and each honest twin is not (palw_tir_public_fold_v1)",
+    "node E2E: the producer (palw_panel) attaches TFP1 to every admitted TIR original past the fence, D-18 (no TFP1) is refused at \
+     acceptance, and a full-collusion selection lie is convicted and slashed by a bond outside the Panel",
+    "V7 node E2E: restart, reorg and pruned IBD mid-pursuit reproduce the frame, its owner queue and the verdict",
+    "drill: the shipped binary crosses both fences; FP claims admitted before them settle under the old rules",
+];
+
 /// The refusal code for a claim whose family has no armed G14 route (no reward, weight or credit; `ClassNotRewardable`'s `code`).
 pub const PALW_G14_ROUTE_ABSENT_CODE_V1: &str = "G14_ROUTE_ABSENT";
 /// The refusal code for a G-05 job version (selection, constraint, prefix, tokenizer) admitted before its route is armed.

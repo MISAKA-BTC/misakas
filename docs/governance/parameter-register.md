@@ -176,3 +176,15 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 - **本番 Gate C policy — m/k = 75/41 ユーザー承認 2026-10-26、目安から**: `PalwSecurityCertificationPolicyV1::approved_v1(day_daa)`（他の項は RFC-0018 の設計値）。f = 0.25 で誤認証 3.99e-8/claim、4,096 position 上限で 54 件/日・年 7.9e-4、正直認証 0.9926（応答 90%）。e2e の TEST_ONLY policy はこれに置き換えられる。
 - **V1〜V5、V11、inclusion_delay_daa — ユーザー承認済みの目安 2026-10-26、実測で置換**: 値は「2026-10-26 lane VAL」節（V1 は 1 packet/DAA、V11 ρ_court 3,125、inclusion_delay_daa 4 DAA を含む改定後の値）。measured record・arming record には入れない。
 - 範囲: どれも本番 preset には入れていない（slice の武装は統括の統合時）。panel v3 の fence は未武装なので、approved 一覧が consensus に効くのは panel v3 か slice が武装されてから。
+
+## 2026-10-26 lane FPSEL — TIR public frame の費用 `PALW_G14_TIR_FRAME_COST_ESTIMATE_V1`（**目安**、未実測の箇所あり、record・preset には入れない）
+
+| 項目 | 値 | 根拠 | 見直し条件 |
+|---|---|---|---|
+| clock `action_parser_steps` / `_per_custodian` / `frame_passes_per_check` / `control_bytes` | 15,625,804 / 18,575 / 2 / 14,320 | 2026-10-16 candidate（`docs/design/palw/evidence/tir-frame-measure-2026-10-16/`）。M1 Max の release build、小さな corpus class での実測 | 最遅の対応 node で release build、genesis 規模の class で `frame_measure.rs` と fold harness を再実測 |
+| `parallel_bytes_per_daa` | 125,000 | t12 の block の上限（他の traffic なし）。network 入力で、観測していない | V5/V6 drill で混雑時の frame の取り分を観測 |
+| `inclusion_margin_daa` / `reorg_replay_moves` / `acquisition_daa` / `collection_daa` | 4 / 1 / 1 / 8 | candidate のとおり | V7 restart・reorg drill の観測、clock v2 の dispute 延長条件との整合を確認 |
+| `reorg_retention_daa` | **360**（candidate は 256） | t12 の finality 深さ（V9 で `network_v1` を 360 にしたのと同じ理由） | finality 深さの変更 |
+| `maximum_door_daa` | 3,120 | 責任期間 `window_challenge_at` 120 + `window_court` 3,000（16,000 fence で読んだ値） | 武装する fence での horizon を validation で再確認 |
+
+`PALW_TIR_FRAME_COST_RECORDS_V1` は空のままにする。この目安だけでは `palw_tir_public_conviction_v1` を武装できない（`NoRecord`）。

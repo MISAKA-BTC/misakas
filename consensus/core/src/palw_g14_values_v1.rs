@@ -254,6 +254,47 @@ pub fn palw_g14_escrow_schedule_estimate_v1(
     PalwEscrowFeeScheduleV1::new_v1(contract_id, dues, PALW_G14_ESCROW_MAX_DUES_PER_SPEND_V1)
 }
 
+/// **Lane FPSEL: the TIR public frame's cost model (`palw_tir_frame_cost_v1`) — PROVISIONAL ESTIMATE (目安), NOT A PINNED RECORD.**
+///
+/// The `FpSelection` route family's only G14 route is the TIR public frame, which cannot be armed without a frame cost. The values
+/// are the 2026-10-16 candidate (`docs/design/palw/evidence/tir-frame-measure-2026-10-16/candidate-t12-cost.json`): the clock's cost
+/// units were measured on an M1 Max (release build) over the tiny corpus classes, so they are not slowest-node values, and the
+/// network inputs (inclusion margin, parallel bytes, restarts) were not observed on testnet-12. One value differs from the
+/// candidate: `reorg_retention_daa` is 360 (testnet-12's finality depth; the V9 ruling moved `network_v1` from 256 to 360 for the
+/// same reason: a reorg must never un-record a move). `maximum_door_daa` 3,120 is the liability horizon (`window_challenge_at` 120
+/// + `window_court` 3,000) the candidate read at the old 16,000 fence; validation at arming re-checks it at the real fence.
+///
+/// Review conditions: replace the clock with the slowest supported node's release measurement on genesis-size classes
+/// (`frame_measure.rs` + the fold harness); replace the network inputs with what the V5/V6/V7 drills observe on testnet-12;
+/// re-check `maximum_door_daa` against the horizon at the arming fence. It is in no preset and in no
+/// [`crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1`] entry, so arming still refuses with `NoRecord`.
+pub const PALW_G14_TIR_FRAME_COST_ESTIMATE_V1: crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1 =
+    crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1 {
+        config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1 {
+            prices: crate::palw_rendering_resources_v1::PalwRenderingResourcePricesV1 {
+                inclusion_margin_daa: 4,
+                rent_per_stream_byte: 1,
+                rent_per_parser_step: 1,
+                rent_per_row_byte: 1,
+                deposit_per_move: 1,
+                reorg_replay_moves: 1,
+            },
+            acquisition_daa: 1,
+            collection_daa: 8,
+            reorg_retention_daa: 360,
+            maximum_owned_rows_per_reserver: 1,
+        },
+        clock: crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1 {
+            version: crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_VERSION_V1,
+            action_parser_steps: 15_625_804,
+            action_parser_steps_per_custodian: 18_575,
+            frame_passes_per_check: 2,
+            control_bytes: 14_320,
+            parallel_bytes_per_daa: 125_000,
+            maximum_door_daa: 3_120,
+        },
+    };
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,6 +465,40 @@ mod tests {
         let d = PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1;
         assert!(d >= PALW_G14_PACKET_BYTES_V1.div_ceil(13_051) + PALW_G14_PANEL1_LIABLE_SIGNERS_V1 - 1);
         assert!(d < PALW_G14_T12_TURN_DEADLINE_DAA_V1 && d < PALW_G14_SERVICE_SPAN_DAA_V1);
+    }
+
+    #[test]
+    fn fpsel_tir_frame_cost_estimate_is_well_formed_and_not_a_record() {
+        use crate::palw_tir_frame_cost_v1::{
+            PALW_TIR_FRAME_COST_RECORDS_V1, PalwTirFrameCostRefusalV1, palw_tir_frame_cost_record_admits_v1,
+        };
+        let cost = PALW_G14_TIR_FRAME_COST_ESTIMATE_V1;
+        cost.check_v1().expect("the estimate passes the frame cost model's own check");
+        assert_ne!(cost, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1(), "not the test-only config");
+        let network = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+        assert!(cost.config.reorg_retention_daa >= network.reorg_retention_daa, "covers testnet-12's finality depth (V9)");
+        assert!(cost.clock.maximum_door_daa <= 120 + 3_000, "inside the liability horizon the candidate read");
+        assert_eq!(cost.clock.inclusion_daa_v1(1, 0).expect("no overflow"), 1, "one control fits one DAA's inclusion capacity");
+        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.is_empty());
+        assert_eq!(
+            palw_tir_frame_cost_record_admits_v1(h(9), 17_000, Some(&cost), PALW_TIR_FRAME_COST_RECORDS_V1),
+            Err(PalwTirFrameCostRefusalV1::NoRecord),
+            "the estimate never authorizes palw_tir_public_conviction_v1 by itself"
+        );
+    }
+
+    #[test]
+    fn fpsel_family_requirements_name_only_gated_fences() {
+        use crate::palw_g14_gates_v1::{
+            PALW_G14_FP_SELECTION_FAMILY_ARMING_REQUIREMENTS_V1, PalwG14GatedFenceV1, PalwG14RouteFamilyV1,
+            palw_g14_route_family_fences_v1,
+        };
+        let fences = palw_g14_route_family_fences_v1(PalwG14RouteFamilyV1::FpSelection);
+        assert_eq!(fences, ["palw_tir_public_conviction_v1", "palw_g14_route_required_v1"]);
+        for name in fences {
+            assert!(PalwG14GatedFenceV1::ALL.iter().any(|f| f.name() == *name), "{name} has its own record list");
+        }
+        assert!(!PALW_G14_FP_SELECTION_FAMILY_ARMING_REQUIREMENTS_V1.is_empty());
     }
 
     #[test]
