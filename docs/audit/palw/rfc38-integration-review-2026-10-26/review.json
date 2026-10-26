@@ -1,0 +1,344 @@
+{
+  "source": "dd4582bc877ad9f2eed43e591e42b6f1fbbdc05d",
+  "remote_branch": "refs/heads/studio/rfc38-integration",
+  "ls_remote_verified": "dd4582bc877ad9f2eed43e591e42b6f1fbbdc05d",
+  "integration_worktree": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-public-prosecution-integration-9bee39",
+  "changed_sources": [
+    {
+      "path": "consensus/core/src/palw_claim_local_checkpoint_fold_v1.rs",
+      "sha256": "19fd22e1e370ca78e9b51a91fc22477db0f522408a502133b2b715e5d61314bc"
+    },
+    {
+      "path": "consensus/core/src/palw_claim_local_checkpoint_resources_v1.rs",
+      "sha256": "1b7a9af0d7fb8d51c6278a2a55a318b82629c496cd60d0d6185a527794c0dc90"
+    },
+    {
+      "path": "consensus/core/src/palw_court_original_aggregate_native_tests.rs",
+      "sha256": "df48c620e59f2c04864f56b6a02fa3e42db0f1bda7c70407a1a1815a29d2e526"
+    },
+    {
+      "path": "consensus/core/src/palw_court_shared_original_aggregate_v1.rs",
+      "sha256": "6b5f6fbb3198f48c0aeb7cfbbd7fe616bfe0d5cfc4e7ef6669c5b840cbbb3b1c"
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+      "sha256": "df6fb1f4f14091695ceddfcdb3dd9f2b01e5b0c4335811187df001e0c236640a"
+    },
+    {
+      "path": "consensus/core/src/palw_rfc0016_v1/report.rs",
+      "sha256": "4f2347f00cc42c372dd8c88a0ddf885e089782cad4dca05b5f70851b4f363439"
+    },
+    {
+      "path": "consensus/core/src/palw_row_stream_v1.rs",
+      "sha256": "c5198c26480e7f8f43053e6855fd5a2301c2d15c73e3b2cad40c14b0ce1a500f"
+    },
+    {
+      "path": "consensus/core/src/palw_row_stream_v1/coverage.rs",
+      "sha256": "aec0df8fe739d3f1ce49ae89e70da21a0759508945cf38b77bce82769f6b28f5"
+    },
+    {
+      "path": "consensus/core/src/palw_row_stream_v1/resume.rs",
+      "sha256": "2eab6ff8ecc2072a4cd4fc9e9c604a1fa1b48d9cb7450abd361ddb97b8d73b21"
+    },
+    {
+      "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+      "sha256": "686b1bc4456f1609a3076c877ff8cbd14dcdfd8a4d5d7593595fb6cb0ab77270"
+    },
+    {
+      "path": "consensus/core/src/palw_security_certification_sweep_workspace_v2.rs",
+      "sha256": "3861af4b23f0107c85d195895e770a3df3562c7b6537b2e920e8e0dcdb6c6095"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/funded_escrow.rs",
+      "sha256": "d6b78cccd0f0eeaabd0cf5b86f8edce5e720b91047461f141e85798f43e7db19"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/tests.rs",
+      "sha256": "9c83d5b00af703a3cc2ccbf6b9669055030e5fd254ddae6f6070475ba69af238"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/tests/claim_local_rewards_v1.rs",
+      "sha256": "a04c22205b27a1344a09fb084c50dcc4d6b33a81352eb761246157b0f220b684"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/tests/rfc0016_capacity_attestation_v1.rs",
+      "sha256": "636695e1c7c6b5a316bd429ddfddcf3eae81d6603ae795c9ff817cf7f9eb6aab"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/tests/security_certification_sweep_workspace_v2.rs",
+      "sha256": "5a5be58c826d0e6b580f3bbd0951c3ad55d78c34a79f26b5f120947c26227888"
+    },
+    {
+      "path": "consensus/core/tests/ibd_row_stream_resume.rs",
+      "sha256": "1074c3cd926d49078493381444a399ef177bdd5ead315a7a83ca6ff476c0b9b0"
+    },
+    {
+      "path": "consensus/core/tests/palw_deferred_feature_fold_matrix.rs",
+      "sha256": "b4af8beceba7189846dc99d0d6f15881b4d68ff8592b2901f8df514d80dd33dc"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/material_typed_ingress_v4.rs",
+      "sha256": "03196734701bfb248a92b72ad8bcc913ba54539fcde18ba3959c4100f12b9256"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/signed_provider_challenge_v4.rs",
+      "sha256": "1c4d7c0df9ad26c820be5788175b1afcd32e4ae63d2097a7574a6741363cf836"
+    },
+    {
+      "path": "consensus/tests/fixtures/signed_provider_config_v4.rs",
+      "sha256": "2c5c2e6d8551732afcc807cd8b962047d8031819ae123b6c0953f182468cbce7"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/README.md",
+      "sha256": "78cc90f4a05d6d2d42c7136439a7215bba88ad6b10a8e4812d745e6154ed696f"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-a-report-2026-10-25.md",
+      "sha256": "e1b1eff53c4acb2aff89b464b930cdae2d9df847dcbe64ad2c4d549c7f74e499"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-b-report-2026-10-25.md",
+      "sha256": "c056acfbe5be27f9481790075ec98688ed737de6e15fac2df675d0176f326363"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-c-handoff-2026-10-25.md",
+      "sha256": "dcbabdb08a38effb9888b5c41bc2f62de1264033b12111d98cfd5c3f61de2a2e"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-c-report-2026-10-25.md",
+      "sha256": "652dad4f906fea154ae384f2ed3a66d8699fdaad777fcf8dfa944697620b2f4d"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-d-report-2026-10-25.md",
+      "sha256": "47d877141f4fa27744ac779744343185890c300d16e84d6a492c4e40b05432e8"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-e-report-2026-10-25.md",
+      "sha256": "a9678ada331e16b769bfd53e898c885f453d0c251f4b204c2e8b4dcaa83fb126"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-f-report-2026-10-25.md",
+      "sha256": "4d385d01f047eb83248982b40f5a2c9d04e7fe7e5bebae03cffbfae6275a4a5e"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-g-report-2026-10-25.md",
+      "sha256": "d7a643f39c1f13b141c25a6c23b916840a4e448aa2fd5168d8db00cc91d93b1d"
+    },
+    {
+      "path": "docs/design/palw/integration/rfc38-lanes/lane-g3-report-2026-10-25.md",
+      "sha256": "9065d624835ac431018d64dfaa36b6a7522d436279d4bfe8382ad8ee98e93961"
+    },
+    {
+      "path": "docs/evidence/rfc/0007-signed-provider-native-funded-challenge-2026-10-25.json",
+      "sha256": "91850725f25644fa9dbe79fdeee42e99a8443dfa426954ce1d6c2fd19cf3244d"
+    },
+    {
+      "path": "docs/evidence/rfc/0007-signed-provider-native-funded-challenge-2026-10-25.md",
+      "sha256": "28cc37676af4815ab030d61ac5c4cfe1a5557a3bd3c79c718f0a29fa1474c548"
+    },
+    {
+      "path": "docs/evidence/rfc/0012-public-history-segment2-closed-2026-10-25.json",
+      "sha256": "19834568d4894c298499454945bc0c189c29ecd57953d4f170be97ee4084e8d3"
+    },
+    {
+      "path": "docs/evidence/rfc/0012-public-history-segment2-closed-2026-10-25.md",
+      "sha256": "da76475e3f01c01c65ea3a8d5fa5f894ccb727fa6c22734f386ba39fd3153076"
+    },
+    {
+      "path": "kaspad/src/eth_rpc.rs",
+      "sha256": "74a0eb4602533168a687216be4e5c74d506b51643eb324308ef21c66c9ff7659"
+    },
+    {
+      "path": "kaspad/src/palw_panel/answer_accounting.rs",
+      "sha256": "38cb4490a82177a822d2a10e5b7e969121731848328d3495b209b7bd3f28646b"
+    },
+    {
+      "path": "kaspad/src/private_integration/kernel_paid_checker_v4.rs",
+      "sha256": "46d03b187a078c56913729b4b51a24e0a6e4480f0b16239d4f472ca6e5d34152"
+    },
+    {
+      "path": "kaspad/src/private_integration/kernel_paid_checker_v4/signed_socket_native.rs",
+      "sha256": "19d52f4277f7d93741a2036a2700666c74498b7a151c6d214ec51582cd12aa2b"
+    },
+    {
+      "path": "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4.rs",
+      "sha256": "bd8b6483dcc978cb806fdcf9e2fc3bdcf302d7f9c3f2a817ceb482c4fb396779"
+    },
+    {
+      "path": "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4_failure.rs",
+      "sha256": "07179e9c07f19e1a1ea7c99b9506af8c4cffbd4a2e860a7385de371127b74fff"
+    },
+    {
+      "path": "misaka/palw/sdk/src/claim_paid_v2/provider_reader_v4_located_tests.rs",
+      "sha256": "2563040b5cd938b55e58c6b650afd4289b97fe7921056f5bf3b151df29f0d2bb"
+    },
+    {
+      "path": "scripts/drills/misaka-rfc-integration-campaign.py",
+      "sha256": "0da2a6b792243f6a52578cf720658bbe6dcdadc5cf673286823c2921434bf5a0"
+    },
+    {
+      "path": "scripts/drills/rfc_gate_inputs.py",
+      "sha256": "68a4a959430c03e3eb5bcdbfb7f934bfd998477b11aa7f07bb60e386bdf08dab"
+    },
+    {
+      "path": "scripts/drills/rfc_integration_campaign.py",
+      "sha256": "569fce85ae58db16f7aed77ad2491ff16eac6ae0d562b081d20bb068417768f5"
+    },
+    {
+      "path": "scripts/drills/tests/test_rfc_gate_inputs.py",
+      "sha256": "ddfd556c4e4d01a7da5b681d0fddc4cc5348dd9ae83cc7a3f739cdc4da0ff223"
+    }
+  ],
+  "original_logs_preserved": [
+    {
+      "name": "run2.sh",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/run2.sh",
+      "bytes": 1237,
+      "sha256": "50bb6162f2f443ee93cdb2ec38f6e71bf119d0c48f2d2e9e00e52a750c939e83"
+    },
+    {
+      "name": "1-core-lib.log",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/1-core-lib.log",
+      "bytes": 621433,
+      "sha256": "01411906bfa155e4378fb2dc0189631defdf0566e1de7b097a07f8ace85d422c"
+    },
+    {
+      "name": "3b-node-lib.log",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/3b-node-lib.log",
+      "bytes": 709063,
+      "sha256": "5e0e24acfd8479db7d2e1dcae05d1f8688cf176bfe208cc2b74875e64cd6690d"
+    },
+    {
+      "name": "summary2.txt",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/summary2.txt",
+      "bytes": 476,
+      "sha256": "c668bfacc0e74d49e5d91efc4dff99e809458c871c15bd873872015226fde831"
+    },
+    {
+      "name": "5-py.log",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/5-py.log",
+      "bytes": 113,
+      "sha256": "b287d0d1d60d3c3d4629e9139a735eefeb89b6d695d48d00e70404daa6a8692a"
+    },
+    {
+      "name": "3-node-lib.log",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/3-node-lib.log",
+      "bytes": 733913,
+      "sha256": "b129c84abec53bed7bd07b71ee1cbf0d82a02e9855d2d79f5a2940ff55caae73"
+    },
+    {
+      "name": "run.sh",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/run.sh",
+      "bytes": 1346,
+      "sha256": "3f69d79a3c1604e157423a3bf80f6b5719faa824790a2093e3e97aa3e87cbecf"
+    },
+    {
+      "name": "2-core-it.log",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/2-core-it.log",
+      "bytes": 670014,
+      "sha256": "7bacbb210f0e75e3d4e079decdfe942a527dd1518ea3110dacdaed03ba0ea05a"
+    },
+    {
+      "name": "summary.txt",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/summary.txt",
+      "bytes": 909,
+      "sha256": "acd9288f87440cebc63b0e0feec0281bf10921cda8a3f4c883f2cf92b68139c5"
+    },
+    {
+      "name": "6-docs.log",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/6-docs.log",
+      "bytes": 438,
+      "sha256": "680811134375332dd3204c4ad570c071ce952546ea00c47f2849c934784d6bd2"
+    },
+    {
+      "name": "4-parents.log",
+      "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/original-xlane/4-parents.log",
+      "bytes": 706493,
+      "sha256": "151343beabefd852ab35c3c96f3492c1027ff34e22e3dcdc18dea0fd021a2e07"
+    }
+  ],
+  "checks": {
+    "python_gate_input_tests": {
+      "passed": 4,
+      "failed": 0
+    },
+    "docs": {
+      "pass": true,
+      "known_missing": 43,
+      "new_missing": 0
+    },
+    "diff_check": "PASS"
+  },
+  "aggregate_failure_loss_reproduction": [
+    {
+      "id": "case",
+      "status": "PASS",
+      "facts": []
+    }
+  ],
+  "parents": {
+    "status": "PASS",
+    "distinct_parent_tests": 2,
+    "children_not_additional": true,
+    "source_still_matches": true,
+    "build_seconds": 297.65,
+    "pins": [
+      {
+        "target": "misaka_palw_sdk",
+        "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/misaka_palw_sdk-aaeab28e72c8ff38",
+        "sha256": "36ef5cc57e025b20e9e54400bedad94b7204fa5df550def01ff1fd20cae37c53"
+      },
+      {
+        "target": "kaspad_lib",
+        "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/kaspad_lib-5cef1a3e0ed1d407",
+        "sha256": "0772ed82999952fd8249d188f42a6e7edd86360ee4c13d0cb00cec544d29db2f"
+      },
+      {
+        "target": "kaspa_consensus",
+        "path": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/kaspa_consensus-ad41684dc122cc36",
+        "sha256": "aa54c031fab83bf76a44b16c8c2f4cb28ea66fe2f38b6a52508b73da61b8a540"
+      }
+    ],
+    "group": {
+      "command": [
+        "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/kaspa_consensus-ad41684dc122cc36",
+        "rfc07_signed_socket_",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "test_names": [
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_refusal_is_availability_obligation_not_conviction: test",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge: test"
+      ],
+      "checker": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/kaspad_lib-5cef1a3e0ed1d407",
+      "exit": 0,
+      "seconds": 12.73,
+      "log": "\nrunning 2 tests\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_refusal_is_availability_obligation_not_conviction ... \nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child ... TYPED_INGRESS_V4 without_commitment_scope=COURT_SCOPE_INCOMPLETE: a K2-TIR-v1/v2 class serves every model-dependent value in the clear and has no commitment-only form; its model relations (elementwise 0, smallest linear K Some(16)) allow 15 clear position(s) over the model's lifetime — only a K2-TIR-v4/v5 class (withheld or hiding values) is reward-bearing past the court scope\n\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_reader_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 0.48s\n\nTYPED_INGRESS_V4 request_commit_daa=26 sink_daa=26 virtual_daa=26 checkpoint=51cac91f6a2e446a0dad7010b0d579cf441cfed9c964422f1c73bbb356da3bff14f17895877868d679f54d6b5ceddd8c16ee8824dd65d997549fecab103c7fa3 quote_daa=27 native_quote=Ok(())\nTYPED_INGRESS_V4 ledger_daa=26 seal=Some(SealRowV1 { seal: [133, 196, 200, 195, 5, 138, 216, 180, 191, 55, 141, 41, 111, 90, 38, 30, 145, 138, 239, 32, 61, 202, 248, 139, 21, 83, 100, 84, 32, 110, 11, 11, 20, 27, 54, 151, 60, 60, 32, 211, 27, 226, 191, 180, 6, 67, 21, 76, 179, 245, 100, 25, 30, 160, 125, 52, 169, 177, 224, 136, 152, 137, 193, 66], daa: 6, deposit: 100000000 }) producer=Some(BondRowV1 { collateral: 93906319001040, reserved: 100000000, exit_requested: None }) native_consent=Ok(true) native_admission=Ok(true)\nTYPED_INGRESS_V4 observed_ledger_replay=Ok(5)\nTYPED_INGRESS_V4 carrying_block=310433c5b22d533bcb7f61a18dd38e3c0c18960c72eedcd659d0e4140577c6a3de64e36e6bea61c1cc4d4176bc89d5192809950bad189c3d49095daf5845194f carrying_header_daa=26 folded_block=577b7fe3af7cc56d626aab1b03292d6fffff2e309f21ca1affa7362e204caa5ad0b8c899b39d8b1e048a5b5acc2bbc8937e9d9d828f1338226214ba928853aa5 folded_header_daa=27 actual_sink=577b7fe3af7cc56d626aab1b03292d6fffff2e309f21ca1affa7362e204caa5ad0b8c899b39d8b1e048a5b5acc2bbc8937e9d9d828f1338226214ba928853aa5 actual_virtual_daa=27\n\nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child ... \nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::provider_child ... SIGNED_UNIT_NATIVE_V4 sdk_acquisition=ProviderAcquisitionReportV4 { target: Program, unit_requests: 1, fetched_bytes: 0, workspace_bytes_charged: 0 }\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1032 filtered out; finished in 2.21s\n\nSIGNED_UNIT_NATIVE_V4 mode=refuse-availability checker_pid=20920 provider_pid=20921 unit=(0, 2) production_wal=ready\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1032 filtered out; finished in 2.62s\n\nSIGNED_UNIT_NATIVE_V4 claim=2fb9b697e19e49cb7d8402af796c3e38218297b90c75740b82a5a36ac6c7b70fe7948e0756410ef2991656ae3ea4ed4d3c0c1bbb4d947ebe7e13b3b65da0c8c6 enrollment=27da1f711a9e59a9425ac745273c3205870b9ddc7b1343a59aa4268778029e68c260fde7f6842623d1592d1709be24121778adf379737f9111a27d57228b3ee3 provider=PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 2 }) consent=fdea5d1172a339e945dce12164c90f14bcec0435cae989423036534b1360b8280f1024287483aa6e4bd53b8a077c5e04cd11af63af90ce71c165e429b6fb55ce checker=PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 7 }) tx=d008c2c7fcdc6478fe6048d8376a8ab484f0065e840667867ace8e28e3da8e3ecbed68d6b8e89752966932150a88e8b8d935655b61a3b8826c3f44da3d8f6d6b accepted_checkpoint=302e93a0f00a5728d04f7ffd624d6d6f2c2e93d4e07e235cc4841578404103fa5a1d5169217294f760e25508063ab3e9c53fba87afd92b52a04b72b4bfbf6ec4\nSIGNED_UNIT_NATIVE_V4 cold_checkpoint=302e93a0f00a5728d04f7ffd624d6d6f2c2e93d4e07e235cc4841578404103fa5a1d5169217294f760e25508063ab3e9c53fba87afd92b52a04b72b4bfbf6ec4 exact_fee=289712 obligation_sequence=1\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 8.33s\n\nok\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::signed_provider::rfc07_signed_socket_unit_failure_paid_checker_native_funded_challenge ... \nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_writer_child ... TYPED_INGRESS_V4 without_commitment_scope=COURT_SCOPE_INCOMPLETE: a K2-TIR-v1/v2 class serves every model-dependent value in the clear and has no commitment-only form; its model relations (elementwise 0, smallest linear K Some(16)) allow 15 clear position(s) over the model's lifetime — only a K2-TIR-v4/v5 class (withheld or hiding values) is reward-bearing past the court scope\n\nrunning 1 test\ntest pipeline::virtual_processor::tests::g14_kernel_route_e2e::material_typed_ingress_v4::typed_reader_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 0.44s\n\nTYPED_INGRESS_V4 request_commit_daa=26 sink_daa=26 virtual_daa=26 checkpoint=0ad4fbfa8b86614fcbc2b35ed2e0d138abf1c9f404721acc3df73cc47af8fc9456666d9cc7af669fea0a6887891aa8b56b03e37c2fc4d906fe9355fb89a112aa quote_daa=27 native_quote=Ok(())\nTYPED_INGRESS_V4 ledger_daa=26 seal=Some(SealRowV1 { seal: [133, 196, 200, 195, 5, 138, 216, 180, 191, 55, 141, 41, 111, 90, 38, 30, 145, 138, 239, 32, 61, 202, 248, 139, 21, 83, 100, 84, 32, 110, 11, 11, 20, 27, 54, 151, 60, 60, 32, 211, 27, 226, 191, 180, 6, 67, 21, 76, 179, 245, 100, 25, 30, 160, 125, 52, 169, 177, 224, 136, 152, 137, 193, 66], daa: 6, deposit: 100000000 }) producer=Some(BondRowV1 { collateral: 93906319001040, reserved: 100000000, exit_requested: None }) native_consent=Ok(true) native_admission=Ok(true)\nTYPED_INGRESS_V4 observed_ledger_replay=Ok(5)\nTYPED_INGRESS_V4 carrying_block=f3e601cdf784cf5a66f64486b0a0bd2bc7ea72545dd1d87f0f2edcd6693813059eb13a29f8f757faacadffb4dfcc517bbf6edb9bf9d2e4ee80d44c19cd72269b carrying_header_daa=26 folded_block=b8531cdb05b20472b861c724763be73aa985e2bd4b35255b740bc225900511919442d72cf385f23aa75b884bd69d6297bf7652251d377375ad79f4f7d4b338bf folded_header_daa=27 actual_sink=b8531cdb05b20472b861c724763be73aa985e2bd4b35255b740bc225900511919442d72cf385f23aa75b884bd69d6297bf7652251d377375ad79f4f7d4b338bf actual_virtual_daa=27\n\nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::checker_child ... \nrunning 1 test\ntest private_integration::kernel_paid_checker_v4::signed_socket_native::provider_child ... SIGNED_UNIT_NATIVE_V4 sdk_acquisition=ProviderAcquisitionReportV4 { target: Program, unit_requests: 1, fetched_bytes: 1, workspace_bytes_charged: 0 }\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1032 filtered out; finished in 2.18s\n\nSIGNED_UNIT_NATIVE_V4 mode=malformed-invalid-material checker_pid=20926 provider_pid=20927 unit=(0, 2) production_wal=ready\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1032 filtered out; finished in 2.56s\n\nSIGNED_UNIT_NATIVE_V4 claim=2fb9b697e19e49cb7d8402af796c3e38218297b90c75740b82a5a36ac6c7b70fe7948e0756410ef2991656ae3ea4ed4d3c0c1bbb4d947ebe7e13b3b65da0c8c6 enrollment=e8cac9215e4582f17059c897e2806d8e4a711d7fd6eace72cad60004313653713c3b2bb5a76834920069bcd6f0f0b93baa29228b625af37f4a3f1a40b1f6f94b provider=PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 2 }) consent=564c39de6526a20ebc70c14681b9e9b66b5a3beae437434381225cbcebae0e4e749938d4ff6749e2aa37ff7081918862f0c09de2a70d455291bf0a1ba8a5a302 checker=PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 5 }) tx=8bdd615826cab5d1004450386f432589bb438f1a3479d758364547fff080e57ed42517005d44ab7defd3082ad56ba243638486cc53e3ce72425f75d35ad62677 accepted_checkpoint=5cee2aaa1d8585b619dc9edbb625697117970af12c8a2531ca27796f3034f3e8121c5481f7d577e2e87b8d3b5b9016fbffb088efcf64b5b68fafcc34d3f4585b\nSIGNED_UNIT_NATIVE_V4 cold_checkpoint=5cee2aaa1d8585b619dc9edbb625697117970af12c8a2531ca27796f3034f3e8121c5481f7d577e2e87b8d3b5b9016fbffb088efcf64b5b68fafcc34d3f4585b exact_fee=289712 obligation_sequence=1\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 4.26s\n\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1264 filtered out; finished in 12.68s\n\n"
+    },
+    "full_source_manifest_record": "/Users/wata/.codex/artifacts/rfc06-12-20261025/review-rfc38/record.json",
+    "full_record_sha256": "0ea1db42b01fd297820efe3abbb0efe51a295feb357d5e2f2c452ef5760d182c"
+  },
+  "review_findings": [
+    {
+      "priority": 2,
+      "path": "scripts/drills/rfc_gate_inputs.py",
+      "line": 83,
+      "issue": "Malformed middle records skipped; duplicate ID last-wins can hide prior FAIL."
+    },
+    {
+      "priority": 2,
+      "path": "scripts/drills/misaka-rfc-integration-campaign.py",
+      "line": 70,
+      "issue": "aggregate-root does not bind saved campaign freeze to current plan/candidate."
+    },
+    {
+      "priority": 2,
+      "path": "consensus/core/src/palw_row_stream_v1/resume.rs",
+      "line": 159,
+      "issue": "PermissionDenied/TimedOut local IO categorized ResumeSpill rather than local refusal."
+    }
+  ],
+  "not_adoption": "Recommendations only. Existing design freeze and explicit approval records remain authoritative.",
+  "recommendation": "Accept as first-round partial implementation after the three P2 corrections; not full RFC completion or campaign acceptance."
+}
