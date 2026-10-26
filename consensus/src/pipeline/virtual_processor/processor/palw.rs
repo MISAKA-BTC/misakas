@@ -650,6 +650,7 @@ impl VirtualStateProcessor {
     ///
     /// Node-local throughout: the tip is this node's root-verified store row and the path is its
     /// own reachability, so nothing here is supplied by the peer proposing the reorg.
+    #[allow(dead_code)] // no caller at present; kept for the tip / reorg readers
     pub(crate) fn palw_candidate_state_v2(
         &self,
         candidate: BlockHash,
@@ -770,6 +771,7 @@ impl VirtualStateProcessor {
     /// answer, because the hint is a download heuristic that says so in its own name and a
     /// fork-choice decision reading it is P0-5. The fallback fires only where the sink is not a
     /// block at all.
+    #[allow(dead_code)] // no caller at present; kept for the tip / reorg readers
     pub(crate) fn palw_weighing_point_v2(&self, sink: BlockHash) -> Option<BlockHash> {
         self.palw_weighing_point_v2_checked(sink).ok().flatten()
     }

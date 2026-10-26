@@ -189,6 +189,24 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 arm_objective_offence_at_or_below(params, at);
             }
             PalwLifecycleKindFenceV1::LegacyHeldDaV2 => params.palw_legacy_held_da_v2 = Some(at),
+            // Release recovery rides on the monetary-material fence (armed in this same sweep); the probe policy is a fixture.
+            PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => {
+                params.palw_material_release_recovery_v2 = Some(
+                    kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(
+                        at,
+                    ),
+                )
+            }
+            // In force only under the shard court too (`palw_memory_routing_court_v2_fence`); arm it alongside if it is not.
+            PalwLifecycleKindFenceV1::MemoryRoutingCourtV2 => {
+                params.palw_memory_routing_court_v2 = Some(at);
+                if params.palw_shard_court.is_none_or(|f| f.daa_score() > at.daa_score()) {
+                    params.palw_shard_court = Some(at);
+                }
+            }
+            // Left unarmed on purpose: `validate_palw_selected_source_bootstrap_v1` refuses ANY activation until its native
+            // coverage and acceptance exist, so node C carries it exactly as node A does (unjudged below a fence it lacks).
+            PalwLifecycleKindFenceV1::SelectedSourceBootstrapV1 => {}
             // Lane HFX: the `Head` variants inside tag 68 and a generative job; the fence mirrors onto the V2 bundle.
             PalwLifecycleKindFenceV1::TaskHeadsV1 => {
                 params.palw_task_heads_v1 = Some(kaspa_consensus_core::palw_task_heads_v1::PalwTaskHeadsFenceV1::testnet12_v1(at));

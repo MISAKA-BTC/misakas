@@ -376,6 +376,61 @@ pub fn palw_native_same_draw_v3(
     Ok(())
 }
 
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PalwNativeReadyRequestV3 {
+    fn scan_native_wire_v1<R: std::io::Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        r.step()?;
+        u16::scan_native_wire_v1(r)?
+            .merge(BlockHash::scan_native_wire_v1(r)?)?
+            .merge(Header::scan_native_wire_v1(r)?)?
+            .merge(PalwAttemptMaterialEnvelopeV3::scan_native_wire_v1(r)?)?
+            .merge(Vec::<u8>::scan_native_wire_v1(r)?)?
+            .merge(Vec::<u32>::scan_native_wire_v1(r)?)
+    }
+}
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PalwNativeReadyResponseV3 {
+    fn scan_native_wire_v1<R: std::io::Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        r.step()?;
+        match r.byte()? {
+            0 => u16::scan_native_wire_v1(r)?.merge(Vec::<(PalwBondKeyV2, Vec<u8>)>::scan_native_wire_v1(r)?),
+            1 => u16::scan_native_wire_v1(r)?.merge(String::scan_native_wire_v1(r)?),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "native Ready response tag unknown")),
+        }
+    }
+}
+
+/// Canonical map construction without an intermediate unreserved BTree map.
+/// The source signature owner remains alive while its exact map frame is
+/// encoded, preflighted, and decoded into the returned independent owner.
+pub fn palw_native_signature_map_owned_v3(
+    signatures: &[(PalwBondKeyV2, Vec<u8>)],
+) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<BTreeMap<PalwBondKeyV2, Vec<u8>>>, String> {
+    use kaspa_consensus_core::palw_native_resource_v1::{
+        preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1,
+    };
+    if signatures.len() > kaspa_consensus_core::palw_attempt_material_v3::PALW_MATERIAL_MAX_PROVIDERS_V3
+        || signatures.windows(2).any(|r| r[0].0 >= r[1].0)
+    {
+        return Err("signature map roster is oversized, repeated or reordered".into());
+    }
+    let len = signatures
+        .iter()
+        .try_fold(4u64, |n, (b, s)| n.checked_add(borsh::object_length(&(b, s)).ok()? as u64))
+        .ok_or("signature map frame overflow")?;
+    let _raw =
+        reserve_native_requests_v1(len.checked_mul(2).ok_or("signature map raw ownership overflow")?).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::with_capacity(usize::try_from(len).map_err(|_| "signature frame exceeds address space")?);
+    bytes.extend((signatures.len() as u32).to_le_bytes());
+    for row in signatures {
+        borsh::to_writer(&mut bytes, row).map_err(|e| e.to_string())?;
+    }
+    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
+    retain_native_value_decode_v1(&bytes, || borsh::from_slice::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes)).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,61 +578,4 @@ mod tests {
         signatures.remove(&bond(5));
         assert!(palw_native_check_signatures_v3(&ready, &roster, &signatures).is_err(), "a missing provider");
     }
-}
-
-impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PalwNativeReadyRequestV3 {
-    fn scan_native_wire_v1<R: std::io::Read>(
-        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
-    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
-        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
-        r.step()?;
-        u16::scan_native_wire_v1(r)?
-            .merge(BlockHash::scan_native_wire_v1(r)?)?
-            .merge(Header::scan_native_wire_v1(r)?)?
-            .merge(PalwAttemptMaterialEnvelopeV3::scan_native_wire_v1(r)?)?
-            .merge(Vec::<u8>::scan_native_wire_v1(r)?)?
-            .merge(Vec::<u32>::scan_native_wire_v1(r)?)
-    }
-}
-impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PalwNativeReadyResponseV3 {
-    fn scan_native_wire_v1<R: std::io::Read>(
-        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
-    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
-        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
-        r.step()?;
-        match r.byte()? {
-            0 => u16::scan_native_wire_v1(r)?.merge(Vec::<(PalwBondKeyV2, Vec<u8>)>::scan_native_wire_v1(r)?),
-            1 => u16::scan_native_wire_v1(r)?.merge(String::scan_native_wire_v1(r)?),
-            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "native Ready response tag unknown")),
-        }
-    }
-}
-
-/// Canonical map construction without an intermediate unreserved BTree map.
-/// The source signature owner remains alive while its exact map frame is
-/// encoded, preflighted, and decoded into the returned independent owner.
-pub fn palw_native_signature_map_owned_v3(
-    signatures: &[(PalwBondKeyV2, Vec<u8>)],
-) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<BTreeMap<PalwBondKeyV2, Vec<u8>>>, String> {
-    use kaspa_consensus_core::palw_native_resource_v1::{
-        preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1,
-    };
-    if signatures.len() > kaspa_consensus_core::palw_attempt_material_v3::PALW_MATERIAL_MAX_PROVIDERS_V3
-        || signatures.windows(2).any(|r| r[0].0 >= r[1].0)
-    {
-        return Err("signature map roster is oversized, repeated or reordered".into());
-    }
-    let len = signatures
-        .iter()
-        .try_fold(4u64, |n, (b, s)| n.checked_add(borsh::object_length(&(b, s)).ok()? as u64))
-        .ok_or("signature map frame overflow")?;
-    let _raw =
-        reserve_native_requests_v1(len.checked_mul(2).ok_or("signature map raw ownership overflow")?).map_err(|e| e.to_string())?;
-    let mut bytes = Vec::with_capacity(usize::try_from(len).map_err(|_| "signature frame exceeds address space")?);
-    bytes.extend((signatures.len() as u32).to_le_bytes());
-    for row in signatures {
-        borsh::to_writer(&mut bytes, row).map_err(|e| e.to_string())?;
-    }
-    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
-    retain_native_value_decode_v1(&bytes, || borsh::from_slice::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes)).map_err(|e| e.to_string())
 }

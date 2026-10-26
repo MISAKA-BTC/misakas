@@ -140,7 +140,7 @@ async fn execution11_native_commit_binds_original_job_input_and_reserves_produce
     net.beat_to(book.claim().unwrap().retention_until + 1).await;
     action(&mut net, 0, EXECUTION_ACTION_CLOSE_V11, borsh::to_vec(&id).unwrap()).await;
     assert_eq!(net.api().unwrap().execution_job_header_v11(&id).unwrap().terminal, ExecutionTerminalV11::Challengeable);
-    assert!(net.api().unwrap().aux.get(&(EXECUTION_CREDIT_TABLE_V11, borsh::to_vec(&id).unwrap())).is_none());
+    assert!(!net.api().unwrap().aux.contains_key(&(EXECUTION_CREDIT_TABLE_V11, borsh::to_vec(&id).unwrap())));
     let replay = net.replay().await;
     net.assert_same(&replay, "native exact committed job and closed incomplete Final");
 }

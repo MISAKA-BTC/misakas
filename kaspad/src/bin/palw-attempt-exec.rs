@@ -57,10 +57,10 @@ fn main() {
         .unwrap_or(floor_root);
     let outcome = kaspad_lib::palw_attempt_exec::execute_producer_anchor_v1(&params, class_id, root, &artifacts, anchor)
         .unwrap_or_else(|e| die(e));
-    if let Some(parent) = material_out.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).unwrap_or_else(|e| die(format!("cannot create {}: {e}", parent.display())));
-        }
+    if let Some(parent) = material_out.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| die(format!("cannot create {}: {e}", parent.display())));
     }
     std::fs::write(&material_out, &outcome.material).unwrap_or_else(|e| die(format!("cannot write {}: {e}", material_out.display())));
     println!(

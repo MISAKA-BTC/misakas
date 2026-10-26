@@ -440,7 +440,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PaidCla
     fn scan_native_wire_v1<R: io::Read>(
         r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
     ) -> io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
-        use kaspa_consensus_core::palw_native_resource_v1::{NativeWireScanV1, NativeWireShapeV1};
+        use kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1;
         use std::collections::BTreeMap;
         r.step()?;
         let mut shape = NativeWireShapeV1::default();
@@ -463,7 +463,6 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for super::
     fn scan_native_wire_v1<R: io::Read>(
         r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
     ) -> io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
-        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
         r.step()?;
         <(u16, Digest)>::scan_native_wire_v1(r)?
             .merge(SaltedCommitV1::scan_native_wire_v1(r)?)?

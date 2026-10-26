@@ -4039,11 +4039,9 @@ impl VirtualStateProcessor {
                     )?;
                     let artifact = match &movement.action {
                         stage::PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt } => {
-                            let contract = match state.staged_owned_row_v1(movement.claim, movement.reserver) {
-                                _ => state
-                                    .staged_claim_contract_v1(&movement.claim)
-                                    .ok_or("history grant has no accepted material contract")?,
-                            };
+                            let contract = state
+                                .staged_claim_contract_v1(&movement.claim)
+                                .ok_or("history grant has no accepted material contract")?;
                             let signer = state.bond(&grant.seat).ok_or("history grant signer is not registered")?;
                             grant.validate_signature_v1(receipt, &signer.pubkey, Self::verify_mldsa87_with_context_bool)?;
                             Some(

@@ -221,6 +221,7 @@ pub fn write_complete_pipeline_v28(
 /// sources and contexts, never an existing partial artifact. Tensor production
 /// remains the frontend's bounded stream; the declaration writer independently
 /// rehashes every original source PC/R before forming a native class artifact.
+#[allow(clippy::type_complexity)]
 pub fn produce_fresh_complete_pipeline_v28(
     output: &Path,
     original_source_directory: &Path,

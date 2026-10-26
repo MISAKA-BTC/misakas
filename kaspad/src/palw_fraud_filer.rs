@@ -1856,7 +1856,7 @@ pub(super) fn palw_fraud_filer_bootstrap_step_v2(
     let mut round: Vec<PalwLegacyHeldUnitV2> = (0..chunks).map(|chunk| PalwLegacyHeldUnitV2::PromptIds { chunk }).collect();
     if height > 0
         && !case.constraint_preflight_pending_v1()
-        && !(case.public_fp_job_v1().is_some_and(|job| job.is_prefix_state()) && !case.prefix_complete)
+        && (!case.public_fp_job_v1().is_some_and(|job| job.is_prefix_state()) || case.prefix_complete)
     {
         round.extend(palw_legacy_kary_round_units_v1(
             kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyTreeV2::Step,
@@ -5747,8 +5747,8 @@ impl PalwPanelService {
             .max_close_bytes()
             .min(kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
         let file_by = Some(progress.terms.collect_until_daa.saturating_sub(2));
-        if progress.bundle.is_some() {
-            let file_by = Some(progress.bundle.as_ref().expect("present").plan.terms.collect_until_daa.saturating_sub(2));
+        if let Some(bundle) = &progress.bundle {
+            let file_by = Some(bundle.plan.terms.collect_until_daa.saturating_sub(2));
             return self
                 .fraud_filer_bundle_stage_v1(
                     session,

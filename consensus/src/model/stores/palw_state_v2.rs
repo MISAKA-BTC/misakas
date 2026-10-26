@@ -56,7 +56,6 @@ use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, CachedDbItem};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::HasherBase;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
@@ -837,6 +836,7 @@ impl DbPalwStateV2Store {
 
     /// The decode-and-recheck half both tip readers share, so the cached path and the uncached one
     /// cannot come to hold two different ideas of what a tip row means.
+    #[allow(dead_code)] // no caller at present; kept for the tip / reorg readers
     fn materialize_tip(&self, record: &PalwStateTipRecordV2, params: &PalwStateParamsV2) -> StoreResult<NativeChainStateV1> {
         self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
         // ADR-0152 T80: a snapshot of another state version is refused by name, before a decode that
@@ -847,6 +847,7 @@ impl DbPalwStateV2Store {
         self.materialize_native_record_v1(record, params, "tip snapshot")
     }
 
+    #[allow(dead_code)] // no caller at present; kept for the tip / reorg readers
     fn materialize_native_record_v1(
         &self,
         record: &PalwStateTipRecordV2,
