@@ -69,21 +69,64 @@ def cap_gates(gates):
     return result
 
 
+class LedgerRefused(ValueError):
+    pass
+
+
+def verify_aggregate_root(root, freeze):
+    """Refuse to re-aggregate a ledger that the current freeze did not produce.
+
+    The root must hold the campaign-freeze.json and campaign-once.json written
+    before its first child, the once marker must pin those exact freeze bytes,
+    and campaign id, canonical plan and candidate SHA256 must equal the current
+    freeze. Otherwise another run's rows would be reported under this plan and
+    candidate."""
+    import hashlib
+    root = Path(root)
+    freeze_path, once_path = root / 'campaign-freeze.json', root / 'campaign-once.json'
+    if not freeze_path.is_file() or not once_path.is_file():
+        raise LedgerRefused('aggregate root lacks its campaign-freeze.json/campaign-once.json markers')
+    freeze_bytes = freeze_path.read_bytes()
+    try:
+        stored, once = json.loads(freeze_bytes), json.loads(once_path.read_text())
+    except ValueError:
+        raise LedgerRefused('aggregate root markers are not JSON')
+    if not isinstance(stored, dict) or not isinstance(once, dict):
+        raise LedgerRefused('aggregate root markers are not objects')
+    if once.get('freezeSha256') != hashlib.sha256(freeze_bytes).hexdigest():
+        raise LedgerRefused('once marker does not pin the stored freeze bytes')
+    current = (freeze['campaignId'], freeze['canonicalPlanSha256'], freeze['candidate']['sha256'])
+    recorded = (stored.get('campaignId'), stored.get('canonicalPlanSha256'), (stored.get('candidate') or {}).get('sha256'))
+    if recorded != current or (once.get('campaignId'), once.get('candidateSha256')) != (current[0], current[2]):
+        raise LedgerRefused('aggregate root was frozen for another campaign, plan or candidate')
+    return stored
+
+
 def aggregate_ledger(lines, planned_ids):
     """Rebuild scenario rows from an append-only ledger (resume = re-aggregate, never re-run).
 
-    Later rows for an id replace earlier ones; planned ids never recorded stay UNKNOWN."""
+    One campaign attempts each scenario at most once, so a repeated id is
+    refused rather than letting a later row replace an earlier FAIL. Only the
+    final non-empty line may be torn (a killed run); a malformed row anywhere
+    else, or an id outside the plan, refuses the ledger. Planned ids never
+    recorded stay UNKNOWN."""
+    planned = list(planned_ids)
+    body = [(n, line.strip()) for n, line in enumerate(lines, 1) if line.strip()]
     rows = {}
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
+    for index, (number, line) in enumerate(body):
         try:
             row = json.loads(line)
         except ValueError:
-            continue  # a torn final line from a killed run is not a result
-        if isinstance(row, dict) and isinstance(row.get('id'), str):
-            rows[row['id']] = row
-    for ident in planned_ids:
+            if index == len(body) - 1:
+                continue  # a torn final line from a killed run is not a result
+            raise LedgerRefused('ledger line %d is malformed before the tail' % number)
+        if not isinstance(row, dict) or not isinstance(row.get('id'), str):
+            raise LedgerRefused('ledger line %d is not a scenario row' % number)
+        if row['id'] not in planned:
+            raise LedgerRefused('ledger line %d names scenario %s outside the plan' % (number, row['id']))
+        if row['id'] in rows:
+            raise LedgerRefused('ledger repeats scenario %s (line %d)' % (row['id'], number))
+        rows[row['id']] = row
+    for ident in planned:
         rows.setdefault(ident, dict(id=ident, status='UNKNOWN', reason='no ledger row; stage never reached', facts=[]))
     return list(rows.values())

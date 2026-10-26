@@ -41,6 +41,42 @@ class GateInputCap(unittest.TestCase):
         rows = {r['id']: r for r in inputs.aggregate_ledger(lines, ['a', 'b', 'c', 'd'])}
         self.assertEqual([rows[k]['status'] for k in 'abcd'], ['FAIL', 'PASS', 'UNKNOWN', 'UNKNOWN'])
 
+    def test_later_pass_cannot_erase_an_earlier_fail(self):
+        fail, ok = json.dumps(dict(id='a', status='FAIL')), json.dumps(dict(id='a', status='PASS'))
+        for lines in ([fail, '{"id": "x', ok], [fail, ok]):
+            with self.assertRaises(inputs.LedgerRefused):
+                inputs.aggregate_ledger(lines, ['a'])
+
+    def test_only_the_tail_may_be_torn_and_ids_stay_inside_the_plan(self):
+        with self.assertRaises(inputs.LedgerRefused):
+            inputs.aggregate_ledger(['{"id": "a', json.dumps(dict(id='b', status='PASS'))], ['a', 'b'])
+        with self.assertRaises(inputs.LedgerRefused):
+            inputs.aggregate_ledger([json.dumps(dict(id='z', status='PASS'))], ['a'])
+        with self.assertRaises(inputs.LedgerRefused):
+            inputs.aggregate_ledger(['[1, 2]', ''], ['a'])
+
+    def test_aggregate_root_must_be_frozen_for_the_current_campaign(self):
+        import hashlib
+        freeze = dict(campaignId='c1', canonicalPlanSha256='11' * 32, candidate=dict(sha256='22' * 32))
+        def root_with(stored, once_patch=None):
+            t = Path(tempfile.mkdtemp())
+            raw = json.dumps(stored).encode()
+            (t / 'campaign-freeze.json').write_bytes(raw)
+            once = dict(campaignId=stored['campaignId'], freezeSha256=hashlib.sha256(raw).hexdigest(),
+                candidateSha256=stored['candidate']['sha256'])
+            once.update(once_patch or {})
+            (t / 'campaign-once.json').write_text(json.dumps(once))
+            return t
+        self.assertEqual(inputs.verify_aggregate_root(root_with(freeze), freeze)['campaignId'], 'c1')
+        for other in (dict(freeze, campaignId='c2'), dict(freeze, canonicalPlanSha256='33' * 32),
+                      dict(freeze, candidate=dict(sha256='44' * 32))):
+            with self.assertRaises(inputs.LedgerRefused):
+                inputs.verify_aggregate_root(root_with(other), freeze)
+        with self.assertRaises(inputs.LedgerRefused):
+            inputs.verify_aggregate_root(root_with(freeze, dict(freezeSha256='00' * 32)), freeze)
+        with self.assertRaises(inputs.LedgerRefused):
+            inputs.verify_aggregate_root(Path(tempfile.mkdtemp()), freeze)
+
 
 if __name__ == '__main__':
     unittest.main()

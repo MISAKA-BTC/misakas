@@ -68,6 +68,7 @@ def main():
     limits = base.read_process_limits(frozen.limits_pin.path)
     freeze = frozen.manifest()
     if args.aggregate_root:
+        rfc_gate_inputs.verify_aggregate_root(args.aggregate_root, freeze)
         ledger = Path(args.aggregate_root) / 'scenario-ledger.jsonl'
         lines = ledger.read_text().splitlines() if ledger.is_file() else []
         scenarios = rfc_gate_inputs.aggregate_ledger(lines, [row['id'] for row in frozen.plan['scenarios']])
