@@ -362,6 +362,47 @@ pub const PALW_T12_FP_CONSTRAINT_PREFIX_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
 ];
 
+/// **The DAA 17,000 testnet-12 arming list (lane ACT2, user decision 2026-10-27: arm the Panel=1 kernel slice and all six G14 route
+/// families — LegacyPanelAttempt, LegacyFusedLeaf, FpSelection, FpConstraint, FpPrefix, FpTokenizer — together; the drill is waived by
+/// the user, never recorded as run).** The union of [`PALW_T12_KERNEL_SLICE_FENCES_V1`], every name
+/// [`crate::palw_g14_gates_v1::palw_g14_route_family_fences_v1`] returns for those families, and the fences their validation requires
+/// at or below them, in [`PALW_T12_FULL_ACTIVATION_FENCES_V1`]'s order (prerequisites first) so one height satisfies every "at or below".
+/// `palw_fp_tokenizer_match` and `palw_panel_da_disclosure_v1` (not on the full list) sit right before route-required (PanelDa added
+/// to scope by the user 2026-10-27). RFC07 `palw_claim_challenge_v2` is NOT here. The preset does NOT read this list: arming it is [`PALW_T12_G14_17000_DAA_V1`] through [`palw_t12_arm_after_int13_at_v1`]
+/// after review, and every entry's own validation (records, measured values) still applies.
+pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    crate::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY,
+    crate::palw_gen_range_twin_v1::PALW_DRILL_GEN_RANGE_TWIN_ENTRY,
+    PALW_T12_MODEL_COURT_WINDOW_ENTRY,
+    crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
+    PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,
+    PALW_T12_FULL_KERNEL_ROUTE_PANEL_ONE_ENTRY,
+    PALW_T12_FULL_PROVIDER_COURT_ENTRY,
+    PALW_T12_FULL_LEGACY_PUBLIC_FILER_ENTRY,
+    PALW_T12_FULL_LEGACY_HELD_DA_V2_ENTRY,
+    PALW_T12_FULL_STAGED_PUBLIC_COURT_ENTRY,
+    PALW_T12_FULL_STAGED_TIR_ROUTE_ENTRY,
+    PALW_T12_FULL_TIR_CONTAINER_IDENTITY_ENTRY,
+    PALW_T12_FULL_TIR_PUBLIC_CONVICTION_ENTRY,
+    PALW_T12_FULL_COURT_OUTSIDER_LANE_ENTRY,
+    PALW_T12_FULL_COURT_CLOCK_V2_ENTRY,
+    PALW_T12_FULL_COURT_CAPACITY_ENTRY,
+    PALW_T12_FULL_BOND_BUDGET_ENTRY,
+    PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
+    PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
+    PALW_T12_FULL_GATE_C_ENTRY,
+    crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_ENTRY,
+    // PanelDa (user 2026-10-27, added to scope): `palw_panel_da` is already in force on testnet-12 (RC DA court fence); the
+    // disclosure needs it and `palw_court_clock_v2` at or below.
+    PALW_T12_G14_PANEL_DA_DISCLOSURE_ENTRY,
+    PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
+];
+
+palw_full_activation_bare_entry_v1!(PALW_T12_G14_PANEL_DA_DISCLOSURE_ENTRY, palw_panel_da_disclosure_v1);
+
+/// The height [`PALW_T12_G14_17000_FENCES_V1`] is meant for — read by tests and the arming report only, NEVER by the preset.
+pub const PALW_T12_G14_17000_DAA_V1: u64 = 17_000;
+
 /// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.
 pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {
     match at {

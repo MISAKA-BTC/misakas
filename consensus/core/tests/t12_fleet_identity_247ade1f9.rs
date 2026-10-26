@@ -77,3 +77,42 @@ fn slice_at_17000_keeps_the_handshake_identity() {
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
     assert_eq!(p.consensus_identity_id(), id, "the slice at 17,000 moves the handshake identity: {moved:?}");
 }
+
+/// **Lane ACT2: the DAA-17,000 G14 list (slice + six route families), armed, leaves everything below 17,000 as the fleet runs it** —
+/// handshake identity, fork id at every probed DAA below 17,000, the schedule below 17,000 and every fence armed below 17,000.
+#[test]
+fn g14_17000_list_keeps_everything_below_17000() {
+    use kaspa_consensus_core::config::params::{
+        PALW_T12_G14_17000_DAA_V1, PALW_T12_G14_17000_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1,
+    };
+    let base = palw_t12_shipped_params();
+    let mut p = base.clone();
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, Some(PALW_T12_G14_17000_DAA_V1));
+    let below = |q: &Params| {
+        let mut f: Vec<String> = q
+            .palw_fences_v1()
+            .iter()
+            .filter_map(|(n, f)| f.map(|f| (*n, f.daa_score())))
+            .filter(|(_, h)| *h < 17_000)
+            .map(|(n, h)| format!("{n}@{h}"))
+            .collect();
+        f.sort();
+        f
+    };
+    let sched = |q: &Params| q.fence_schedule_v1().into_iter().filter(|h| *h < 17_000).collect::<Vec<u64>>();
+    assert_eq!(p.consensus_identity_id(), base.consensus_identity_id(), "handshake identity moved");
+    for daa in FORK_ID_DAAS {
+        // `next` announces the upcoming fence (17,000 vs none) by design (ADR-0072 SA-2): a peer may differ there. `fired` may not.
+        assert_eq!(fork_id_v1(&p, daa).fired, fork_id_v1(&base, daa).fired, "fired fork id at {daa} moved");
+    }
+    assert_eq!(sched(&p), sched(&base), "schedule below 17,000 moved");
+    assert_eq!(below(&p), below(&base), "a fence below 17,000 moved");
+    assert!(p.fence_schedule_v1().contains(&17_000), "the list is not at 17,000");
+    println!(
+        "FLEETDIAG g14-17000 armed: schedule_id armed={} shipped={}; fork_id@17000 armed={:?} shipped={:?}",
+        p.consensus_schedule_id(),
+        base.consensus_schedule_id(),
+        fork_id_v1(&p, 17_000),
+        fork_id_v1(&base, 17_000)
+    );
+}
