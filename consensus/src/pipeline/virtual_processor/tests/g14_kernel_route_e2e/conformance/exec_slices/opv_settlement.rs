@@ -65,7 +65,15 @@ async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
             ),
             "an unapproved dependency never verifies its slice"
         );
-        assert!(cw.net.chain.tip_state().1.exec_v2_holds_final_v1(&root_claim), "unapproved work cannot release root Final");
+        // A defaulted dependency voids the root (as the withheld-slice test asserts), and a Voided root no longer "holds" Final —
+        // it can never reach one. Either form means the unapproved work released no root Final.
+        let tip = cw.net.chain.tip_state().1;
+        assert!(
+            tip.exec_v2_holds_final_v1(&root_claim)
+                || matches!(tip.exec_v2_root_v1(&root_claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }),
+            "unapproved work cannot release root Final: {:?}",
+            tip.exec_v2_root_v1(&root_claim).unwrap().phase
+        );
         let z = replay_with_lane(&cw.net, &s.lane).await;
         cw.net.assert_same(&z, "replay");
         return;

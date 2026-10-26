@@ -1771,7 +1771,13 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
         assert_eq!(repeated_ledger.exec_reward_holds[&k.claim.id], ledger.exec_reward_holds[&k.claim.id]);
     }
     assert_eq!(cw.net.api().unwrap().finals_read_v1().unwrap(), finals, "neither replay nor closing ticks publish a second Final");
-    assert_eq!(cw.net.collateral(REGISTRANT), poster_collateral, "duplicate reveals spend no escrow");
+    // The registrant's other paid jobs (outside this session) settled in the same span; `others` is recomputed from the rows exactly
+    // as the kernel-Final assert above (d0464d2ea), and nothing more may leave.
+    assert_eq!(
+        cw.net.collateral(REGISTRANT) + other_paid_escrows(&poster_ledger, &repeated_ledger, cw.net.kid(REGISTRANT), &session_jobs),
+        poster_collateral,
+        "duplicate reveals spend no escrow"
+    );
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
 }
