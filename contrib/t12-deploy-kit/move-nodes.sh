@@ -27,11 +27,20 @@ move_target_spec() { # <id> <host>
     esac
 }
 
+# **The 2026-10-26 seat reduction: retirements, with no target** (docs/design/palw/t12-panel-room-bind-loop-1026.md §5). Three
+# seats on 5.104's 8 vCPUs replayed an 8k claim in a median 730 s (p90 ~10,000 s; load 8-11, 4.6 GiB swapped) against 250 s on .113.
+# b5 stops for good on 5.104 — `MOVE_TO=retired CONFIRM_MOVE_SEAT=yes ./move-host.sh retire 5` there — and runs nowhere else: .113 is
+# at 94 % disk with the explorer on it, ibm runs three nodes. The 8k class keeps 8 ready seats against 7 required (retire_checks
+# refuses below that). Its bond stays registered; its readiness lapses and the panel draw stops naming it. Undo: `unretire 5`.
+#   <bond id>|<host>
+RETIRES=( "5|5104" )
+
 # The spec the SOURCE (5.104) runs it as now — copied from install-5104.sh's NODES (move-host.sh checks the unit's
 # ExecStart names b<id>.sh before it stops anything, so a drift is refused rather than followed).
 PUB_5104="169.58.232.113:26311,169.58.39.220:26311,169.58.39.220:26321"
 move_source_spec() { # <id> <host>
     case "$1@$2" in
+        5@5104) echo "5|misaka-t12-seat5|dropin|127.0.0.1:26341|26343|26344|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26331,$PUB_5104" ;;
         7@5104) echo "7|misaka-t12-seat7|new|127.0.0.1:26351|26353|26354|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26321,127.0.0.1:26331,127.0.0.1:26341,$PUB_5104" ;;
         3@5104) echo "3|misaka-t12-seat3|dropin|127.0.0.1:26321|26323|26324|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26331,127.0.0.1:26341,127.0.0.1:26351,$PUB_5104" ;;
         *) return 1 ;;
