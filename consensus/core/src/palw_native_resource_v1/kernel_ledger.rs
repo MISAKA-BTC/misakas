@@ -42,6 +42,7 @@ impl NativeHeapV1 for misaka_palw_kernel::ledger::KernelLedgerV1 {
   sum=sum.add::<Self>(self.seg_progress.native_heap_v1(path),path);
   sum=sum.add::<Self>(self.typed.native_heap_v1(path),path);
   sum=sum.add::<Self>(self.provider_liable.native_heap_v1(path),path);
+  sum=sum.add::<Self>(self.court_default_held.native_heap_v1(path),path);
   sum=sum.add::<Self>(self.commitment_scope_from_daa.native_heap_v1(path),path);
   sum=sum.add::<Self>(self.verifier_pay_policy.native_heap_v1(path),path);
   sum=sum.add::<Self>(self.verifier_pay.native_heap_v1(path),path);

@@ -133,6 +133,14 @@ impl ReservedKernelLedgerV1 {
         Ok(())
     }
 
+    /// **G14 lane F02b:** the court-bound claims whose producer default is held (no adopted inclusion premise), admitted first.
+    pub fn install_court_default_held_v1(&mut self, held: std::collections::BTreeSet<[u8; 64]>) -> Result<(), NativeCoverageV1> {
+        let quote = held.native_heap_v1("kernel ledger consumer court default hold");
+        self.grow_v1(quote.bytes().ok_or(quote)?)?;
+        self.ledger.court_default_held = held;
+        Ok(())
+    }
+
     /// The consumer Final-reward caps (a typed map built by the fold from its own rows), admitted before it is installed.
     pub fn install_final_reward_caps_v1(&mut self, caps: std::collections::BTreeMap<[u8; 64], u64>) -> Result<(), NativeCoverageV1> {
         let quote = caps.native_heap_v1("kernel ledger consumer Final-reward caps");

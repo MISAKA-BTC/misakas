@@ -20572,6 +20572,10 @@ pub struct PalwTransitionExtrasV1 {
     /// [`crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1`] (typed-missing: `None`); `None` makes every
     /// F02 default undecided (no slash). `None` by `Default`.
     pub court_service_inclusion_premise_v1: Option<crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1>,
+    /// **Lane F02b: the kernel-route court admission schedule** (atomic packets + capital at original acceptance). The processor
+    /// copies [`crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1`] (typed-missing `None`). `None` by
+    /// `Default`: no kernel-route admission reserves anything.
+    pub kernel_court_admission_v1: Option<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1>,
     /// `palw_tir_container_identity_v1` at this block (RFC-0002 02-A): a TIR class's `PALWART3` container binding folds, and a
     /// TIR original of an unbound class is refused. False below it (every shipped preset).
     pub tir_container_identity_active: bool,
