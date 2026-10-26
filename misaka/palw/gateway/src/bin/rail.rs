@@ -645,7 +645,51 @@ fn main() {
     // **G14: the original public envelope.** A claim whose class requires a staged public family is
     // refused at admission without the producer's pledge over the node's native quote (op 244), and an
     // external producer, which runs no node, must name the node custodian that answers its DA demands.
-    let public = public_binding_path.as_ref().and_then(|path| {
+    // **G14 R1/R2 (lane FPSEL): past `palw_tir_public_conviction_v1` a TIR original rides its ORIGINAL frame (`TFP1`)**, exactly as
+    // the node producer's canonical claim does: the node's quote (op 248) on its accepted snapshot, the pledges signed by the ONE
+    // shared assembly (`palw_tir_public_original_pledges_v1`), and the plan's rent declared and paid on top of relay. No quote (below
+    // the fence, a legacy header, an original the frame does not admit) keeps the routes below; consensus refuses a frameless TIR
+    // original past the fence (G-03), so nothing here can make one rewardable.
+    let tir_frame = public_binding_path.as_ref().and_then(|path| {
+        let header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
+            read_borsh_hex_v1(path, 2048).unwrap_or_else(|e| die(format!("--public-binding {}: {e}", path.display())));
+        let kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(tir) = &header else { return None };
+        let Some(endpoint) = rpc_endpoint.as_deref() else {
+            eprintln!(
+                "[misaka-palw-fp-rail] WARNING: a TIR original without --rpc cannot be quoted for its TFP1 frame; past \
+                 palw_tir_public_conviction_v1 the chain refuses it (G-03)"
+            );
+            return None;
+        };
+        let quote = chain_tir_original_quote_v1(&rpc_runtime(), endpoint, &commitment, &header)
+            .unwrap_or_else(|e| die(format!("the node's TIR original quote is unavailable: {e}")));
+        if !quote.refusal.is_empty() {
+            die(format!("the chain would refuse this TIR original frame: {}", quote.refusal));
+        }
+        if !quote.quoted {
+            return None;
+        }
+        let plan = read_hex_borsh_v1::<kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>(
+            &quote.plan_hex,
+            1 << 20,
+        )
+        .unwrap_or_else(|e| die(format!("the node's TIR original plan does not decode: {e}")));
+        let current_daa = chain_price.as_ref().map_or(quote.quote_daa, |p| p.daa_score);
+        let sign = |message: &[u8], context: &[u8]| signer.sign_message(message, context);
+        let pledges = kaspa_pq_validator_core::palw_tir_public_original_pledges_v1(
+            &sign,
+            &commitment,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(commitment.job.executor_bond),
+            tir,
+            &plan,
+            quote.quote_daa,
+            current_daa,
+        )
+        .unwrap_or_else(|e| die(format!("cannot sign the TIR original pledges: {e}")));
+        eprintln!("[misaka-palw-fp-rail] TFP1: original frame quoted at DAA {} (rent {} sompi)", quote.quote_daa, pledges.rent_sompi);
+        Some((tir.clone(), header, pledges))
+    });
+    let public = public_binding_path.as_ref().filter(|_| tir_frame.is_none()).and_then(|path| {
         let header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
             read_borsh_hex_v1(path, 2048).unwrap_or_else(|e| die(format!("--public-binding {}: {e}", path.display())));
         let endpoint =
@@ -697,12 +741,35 @@ fn main() {
         Some((pledge, header, delegation, daa))
     });
     let accounting_context = match chain_price.as_ref().filter(|quote| quote.accounting_active) {
-        Some(_) => Some(public.as_ref().unwrap_or_else(|| die(
-            "native accounting requires this rail's quoted public binding context; plain worker results carry no context".into()
-        )).1.job_context_v1()),
+        Some(_) => Some(match (&tir_frame, &public) {
+            (Some((_, header, _)), _) => header.job_context_v1(),
+            (None, Some(public)) => public.1.job_context_v1(),
+            (None, None) => die(
+                "native accounting requires this rail's quoted public binding context; plain worker results carry no context".into(),
+            ),
+        }),
         None => None,
     };
     let build_plain = |fee: u64| {
+        if let Some((tir, _, pledges)) = &tir_frame {
+            // The rent rides on top of relay: consensus burns exactly the declaration from this carrier's fee.
+            return kaspa_pq_validator_core::build_fp_commitment_tx_with_tir_public_original_v1(
+                signer,
+                commitment.job.network_domain,
+                prompt_ids_form,
+                commitment.clone(),
+                result.prompt_token_ids.clone(),
+                price,
+                tir,
+                &pledges.pledge,
+                pledges.history.as_ref(),
+                pledges.rent_sompi,
+                funding_outpoint,
+                &funding_entry,
+                fee.saturating_add(pledges.rent_sompi),
+            )
+            .unwrap_or_else(|e| die(format!("cannot build the TIR original (TFP1) commitment transaction: {e}")));
+        }
         if let Some((pledge, header, delegation, daa)) = &public {
             return kaspa_pq_validator_core::build_fp_commitment_tx_with_quoted_delegated_public_v1(
                 signer,
@@ -1616,7 +1683,10 @@ fn chain_class_leaves(endpoint: &str, class_id: Hash64) -> u64 {
 /// A bounded hex file of borsh bytes (whitespace trimmed), decoded strictly.
 fn read_borsh_hex_v1<T: borsh::BorshDeserialize>(path: &Path, maximum_bytes: usize) -> Result<T, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let hex = text.trim();
+    read_hex_borsh_v1(text.trim(), maximum_bytes)
+}
+
+fn read_hex_borsh_v1<T: borsh::BorshDeserialize>(hex: &str, maximum_bytes: usize) -> Result<T, String> {
     if hex.len() % 2 != 0 || hex.len() / 2 > maximum_bytes {
         return Err("hex is malformed or exceeds its bound".into());
     }
@@ -1640,6 +1710,25 @@ fn chain_preclaim_quote_v1(
         binding_hex: faster_hex::hex_string(&borsh::to_vec(header).map_err(|e| e.to_string())?),
     };
     let quote = runtime.block_on(client.get_palw_staged_preclaim_quote(request)).map_err(|e| e.to_string());
+    let _ = runtime.block_on(client.disconnect());
+    quote
+}
+
+/// G14 op 248 (lane FPSEL): the ORIGINAL TIR frame quote from the node the rail names. Advisory like op 244: the accepting block
+/// recomputes the plan, so a stale answer only makes admission refuse.
+fn chain_tir_original_quote_v1(
+    runtime: &tokio::runtime::Runtime,
+    endpoint: &str,
+    commitment: &PalwFreePromptCommitmentV3,
+    header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+) -> Result<kaspa_rpc_core::GetPalwTirOriginalQuoteResponse, String> {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    let client = try_rpc_connect(runtime, endpoint)?;
+    let request = kaspa_rpc_core::GetPalwTirOriginalQuoteRequest {
+        commitment_hex: faster_hex::hex_string(&borsh::to_vec(commitment).map_err(|e| e.to_string())?),
+        binding_hex: faster_hex::hex_string(&borsh::to_vec(header).map_err(|e| e.to_string())?),
+    };
+    let quote = runtime.block_on(client.get_palw_tir_original_quote(request)).map_err(|e| e.to_string());
     let _ = runtime.block_on(client.disconnect());
     quote
 }
@@ -2406,6 +2495,12 @@ mod watch {
             .args(&config.pass_through);
         if let Some(capture) = &job.capture {
             command.arg("--capture").arg(capture);
+            // G14 lane FPSEL: the fp-worker's retained TIR header (`tir-public-binding.hex`) makes the one-shot rail quote and attach
+            // the original's TFP1 frame (op 248), as the node producer does.
+            let tir_binding = capture.with_file_name("tir-public-binding.hex");
+            if tir_binding.is_file() && !config.pass_through.iter().any(|a| a == "--public-binding") {
+                command.arg("--public-binding").arg(tir_binding);
+            }
         }
         let output = command.output().map_err(|e| format!("cannot run the one-shot rail: {e}"))?;
         let stdout = String::from_utf8_lossy(&output.stdout);

@@ -1338,8 +1338,22 @@ fn retain_v1<B: PalwExecutionBackendV1>(
     });
     let doc = serde_json::to_vec_pretty(&manifest_doc).map_err(|e| format!("cannot render the retention manifest: {e}"))?;
     std::fs::write(retain_dir.join("manifest.json"), doc).map_err(|e| format!("cannot write the retention manifest: {e}"))?;
+    // **G14 lane FPSEL: the TIR original's public binding header, for its TFP1 frame.** The rail quotes the frame on the node with it
+    // (op 248) exactly as the node producer does with its own backend's header. Only a TIR header is written (a legacy header keeps
+    // its staged route, whose external-producer form needs a custody delegation the watcher does not have); a backend with no
+    // exporter writes nothing, and consensus refuses a frameless TIR original past `palw_tir_public_conviction_v1` (G-03).
+    if let Ok(header @ kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(_)) =
+        rt.backend.public_execution_binding_header_v1(&run.outcome.material)
+    {
+        let bytes = borsh::to_vec(&header).map_err(|e| format!("cannot serialize the TIR public binding header: {e}"))?;
+        let path = retain_dir.join(PALW_FP_TIR_PUBLIC_BINDING_FILE_V1);
+        std::fs::write(&path, faster_hex::hex_string(&bytes)).map_err(|e| format!("cannot retain {}: {e}", path.display()))?;
+    }
     Ok(())
 }
+
+/// The retained TIR public binding header (borsh hex) beside `material.bin`: the rail's `--public-binding` for a TFP1 frame.
+pub const PALW_FP_TIR_PUBLIC_BINDING_FILE_V1: &str = "tir-public-binding.hex";
 
 // ---------------------------------------------------------------------------------------------
 // The three modes.

@@ -34,3 +34,19 @@ Route: `route_armed(FpSelection) = framed && palw_tir_public_conviction_v1 in fo
 
 ## Test results
 `buildslot.sh env CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test --offline -p kaspa-consensus-core --lib -- fpsel_ val_`: both new tests passed, and all 13 tests in `palw_g14_values_v1::tests` passed. The run selected 94 tests in total: 93 passed and 1 failed. The filter `val_` also matched `palw_step_refute::routing_v2::tests::routed_retrieval_authenticates_committed_bytes_without_a_merits_verdict`. That test fails (`ProfileNotCanonical("weight name and dtypes must be both present or both absent")`) and this change does not touch it. I did not check whether it also fails on the base commit, and I have not fixed it.
+
+## Follow-up 2026-10-26: TFP1 on the free-prompt rail
+
+**Done (source compiles; not run on a network):**
+- One shared pledge assembly, `kaspa_pq_validator_core::palw_tir_public_original_pledges_v1`. The node producer (`build_canonical_claim`) now calls it in place of its inline code, and the rail calls the same function. This replaced that inline code and changed none of its steps.
+- A read-only RPC `GetPalwTirOriginalQuote`, **op 248**, proto 1332/1333. It wraps the existing `palw_tir_public_original_quote_v1` and makes no consensus change. Why 248: the op type is u8, ops 250–255 are already claimed (the bond budget and RFC-0016), and 248 sits in X8R's 240–249 range. No branch uses it, but the coordinator must confirm the number.
+- fp-worker: `retain_v1` writes `tir-public-binding.hex` (a TIR header only) next to `material.bin`.
+- rail: the watcher passes that file as `--public-binding`. Before choosing the history-custody route, the one-shot rail quotes op 248, signs the pledges with the bond key (sidecar or seed), and builds with `build_fp_commitment_tx_with_tir_public_original_v1` (fee = relay + rent). If the TIR header has no `--rpc`, the rail prints a warning. Past the fence, consensus then refuses the claim (G-03).
+- Node-less: `palw-remote-miner` only mines V2 Attempts and never builds FP commitments. The node-less FP path is the rail with `--rpc` pointed at a public wRPC node, so it gets the same TFP1 attachment.
+- Tests: `fpsel_op248_messages_round_trip_and_refuse_unknown_versions` passed. `cargo check` passed for kaspad, gateway, base0, validator-core, grpc client/server (lib+bins) and kaspa-testing-integration `--tests`; the build includes the new rpc_tests arm.
+
+**Not done:**
+1. The node E2E (gateway → rail → fp-worker → framed claim → Final, and an unframed claim refused). Running it surfaced a further gap. The frame's original custodian (`palw_tir_public_custodian::retained_original_v1`) serves only an FPC1/TIR capture found in **the producer node's own** retention dir. A rail co-located with its node can stage into that dir (`--retention-dir`). A node-less rail has no node to serve the original, so its frame would end in a DA default. This needs a design decision: a provider delegation for the frame original, along the lines of RFC-0009's DA transfer.
+2. Choice of op number (above).
+
+**(3) Checked:** `routing_v2::...routed_retrieval...` also fails at base d8aded6de with the same `ProfileNotCanonical` error. The failure predates this lane.
