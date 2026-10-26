@@ -552,7 +552,22 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     let refused = fold_sp(&r.p, &fp_armed, &r.s, &ctx(3, FENCE, 3, 0), &[commit.clone()], PalwBlockWorkV3::None, Hash64::default())
         .expect_err("a route-less FP commitment past the fence");
     assert_eq!(refusal_code(&refused), Some(PALW_G14_ROUTE_ABSENT_CODE_V1), "{refused:?}");
-    let s3 = fold_sp(&r.p, &fp_armed, &r.s, &ctx(3, FENCE - 1, 3, 0), &[commit], PalwBlockWorkV3::None, Hash64::default())
+    // Lane FPTOK, through the fold (objects.rs): every route armed, the floor class registered no raw tokenizer material, so the
+    // claim gate names FpTokenizer among the missing routes (G14_ROUTE_ABSENT). With every route armed except the tokenizer binding
+    // the same family is named; the class's material is read from its class semantics, which a floor class does not have.
+    let every = PalwG14RouteMirrorV1 {
+        legacy_filer_from: Some(0),
+        staged_court_from: Some(0),
+        tir_conviction_from: Some(0),
+        tokenizer_match_from: Some(0),
+        ..none
+    };
+    assert!(r.s.class_semantics_v1(&r.floor).is_none(), "the floor class registers no tokenizer material");
+    let no_material = fold_sp(&r.p, &route_sp(&r.p, FENCE, every), &r.s, &ctx(3, FENCE, 3, 0), &[commit.clone()], PalwBlockWorkV3::None, Hash64::default())
+        .expect_err("no tokenizer material: refused through the fold");
+    assert_eq!(refusal_code(&no_material), Some(PALW_G14_ROUTE_ABSENT_CODE_V1), "{no_material:?}");
+    assert!(format!("{no_material:?}").contains("FpTokenizer"), "{no_material:?}");
+    let s3 =fold_sp(&r.p, &fp_armed, &r.s, &ctx(3, FENCE - 1, 3, 0), &[commit], PalwBlockWorkV3::None, Hash64::default())
         .expect("admitted before the fence");
     assert!(s3.claim(&h(0xB1)).is_some());
     // Below every fence (testnet-12 as shipped): byte-identical — the mirror is `None`, the gate answers nothing.
