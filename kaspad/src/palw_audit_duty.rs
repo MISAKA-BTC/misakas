@@ -49,14 +49,30 @@ pub(super) fn palw_audit_queued_v1(round: u32, responder: bool, object: &PalwCon
 pub(super) struct PalwAuditDutyV1 {
     candidates: Vec<PalwAuditCandidateV1>,
     read_at: Option<u64>,
-    /// Claims this node judged: `true` reproduced (receipt owed until the chain shows it), `false` not.
-    verdicts: BTreeMap<Hash64, bool>,
+    /// Claims this node judged (receipt owed until the chain shows it for a reproduced one).
+    verdicts: BTreeMap<Hash64, PalwAuditVerdictV1>,
     /// claim → (the reproduced root, the DAA its batch was last queued; `None` not yet queued).
     owed: BTreeMap<Hash64, (Hash64, Option<u64>)>,
     pub(super) replays: PalwSeatReplaysV1,
     pub(super) replaying: Option<(Hash64, PalwSeatReplayKeyV1)>,
     routing_owner: Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,
 }
+
+/// **This node's verdict on one candidate** (t12 BASE-0 stall of 2026-10-26). A replay that came to no
+/// verdict, or a job this host could not replay at that moment (header, class, routing context), is NOT
+/// a judgement: it is retried after [`PALW_AUDIT_RETRY_DAA_V1`]. Before this a single transient failure
+/// was remembered as final for as long as the claim stayed a candidate — and with eight operator bonds,
+/// a producer and five seats the pool is two, so two such failures left a credited claim unaudited (no
+/// `Final` deadline) forever.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PalwAuditVerdictV1 {
+    Reproduced,
+    Refuted,
+    Unjudged { retry_at: u64 },
+}
+
+/// DAA after which a candidate this node could not judge is tried again (one audit turn).
+pub(super) const PALW_AUDIT_RETRY_DAA_V1: u64 = kaspa_consensus_core::palw_audit_door_v1::PALW_AUDIT_TURN_DAA_V1;
 
 impl PalwAuditDutyV1 {
     pub(super) fn new() -> Self {
@@ -83,7 +99,14 @@ impl PalwAuditDutyV1 {
 
     /// The next claim to replay: on turn for `me`, not yet judged here.
     fn next_replay(&self, me: &PalwBondKeyV2, now_daa: u64) -> Option<&PalwAuditCandidateV1> {
-        self.candidates.iter().find(|c| !self.verdicts.contains_key(&c.claim_id) && palw_audit_on_turn_v1(c, me, now_daa))
+        self.candidates.iter().find(|c| {
+            let open = match self.verdicts.get(&c.claim_id) {
+                None => true,
+                Some(PalwAuditVerdictV1::Unjudged { retry_at }) => now_daa >= *retry_at,
+                Some(_) => false,
+            };
+            open && palw_audit_on_turn_v1(c, me, now_daa)
+        })
     }
 
     /// The entries due in a batch now: owed, never queued or queued more than the resend delay ago, in
@@ -143,7 +166,7 @@ impl PalwPanelService {
                                 info!(
                                     "[{PALW_PANEL}] claim {claim}: this operator's audit reproduces the credited claim — receipt owed (ADR-0160 F-Q)"
                                 );
-                                duty.verdicts.insert(claim, true);
+                                duty.verdicts.insert(claim, PalwAuditVerdictV1::Reproduced);
                                 duty.owed.insert(claim, (candidate.job.execution_root, None));
                             }
                             Some(super::palw_operator_da::PalwOperatorDaVerdictV1::Refuted) => {
@@ -154,15 +177,15 @@ impl PalwPanelService {
                                     result.as_ref().ok(),
                                     candidate.job.execution_root
                                 );
-                                duty.verdicts.insert(claim, false);
+                                duty.verdicts.insert(claim, PalwAuditVerdictV1::Refuted);
                             }
                             other => {
                                 warn!(
                                     "[{PALW_PANEL}] claim {claim}: this operator's audit came to no verdict ({other:?}, {:?}); the next pool \
-                                     member's turn covers it (ADR-0160 F-Q)",
+                                     member's turn covers it, and this node retries after {PALW_AUDIT_RETRY_DAA_V1} DAA (ADR-0160 F-Q)",
                                     result.as_ref().err()
                                 );
-                                duty.verdicts.insert(claim, false);
+                                duty.verdicts.insert(claim, PalwAuditVerdictV1::Unjudged { retry_at: current_daa.saturating_add(PALW_AUDIT_RETRY_DAA_V1) });
                             }
                         }
                     }
@@ -219,9 +242,10 @@ impl PalwPanelService {
         let job = &candidate.job;
         let unjudged = |duty: &mut PalwAuditDutyV1, why: &str| {
             warn!(
-                "[{PALW_PANEL}] claim {claim}: this operator is in the credited claim's audit pool and cannot replay it — {why} (ADR-0160 F-Q)"
+                "[{PALW_PANEL}] claim {claim}: this operator is in the credited claim's audit pool and cannot replay it now — {why}; retried \
+                 after {PALW_AUDIT_RETRY_DAA_V1} DAA (ADR-0160 F-Q)"
             );
-            duty.verdicts.insert(claim, false);
+            duty.verdicts.insert(claim, PalwAuditVerdictV1::Unjudged { retry_at: current_daa.saturating_add(PALW_AUDIT_RETRY_DAA_V1) });
         };
         let Some(artifact_root) = job.artifact_root.filter(|_| super::palw_operator_da::palw_operator_da_replayable_v1(job)) else {
             return unjudged(duty, "the lane does not replay this claim");
@@ -337,5 +361,21 @@ mod tests {
         duty.refresh(vec![candidate(2, 1_000, vec![bond(1)], 1)], 1_005);
         assert_eq!(duty.owed.len(), 1, "claim 1 left the candidates (audited): nothing owed for it");
         assert!(duty.next_replay(&bond(1), 1_005).is_some_and(|c| c.claim_id == Hash64::from_u64_word(2)));
+    }
+
+    /// t12 BASE-0 stall (2026-10-26): a candidate this node could not judge is retried after one turn, while a
+    /// reproduced or refuted one is never replayed again.
+    #[test]
+    fn an_unjudged_candidate_is_retried_and_a_judged_one_is_not() {
+        let mut duty = PalwAuditDutyV1::new();
+        duty.refresh(vec![candidate(1, 1_000, vec![bond(1)], 1)], 1_000);
+        let id = Hash64::from_u64_word(1);
+        duty.verdicts.insert(id, PalwAuditVerdictV1::Unjudged { retry_at: 1_000 + PALW_AUDIT_RETRY_DAA_V1 });
+        assert!(duty.next_replay(&bond(1), 1_001).is_none(), "not within the retry delay");
+        assert!(duty.next_replay(&bond(1), 1_000 + PALW_AUDIT_RETRY_DAA_V1).is_some_and(|c| c.claim_id == id), "retried after it");
+        for verdict in [PalwAuditVerdictV1::Reproduced, PalwAuditVerdictV1::Refuted] {
+            duty.verdicts.insert(id, verdict);
+            assert!(duty.next_replay(&bond(1), 9_999).is_none(), "{verdict:?} is final");
+        }
     }
 }
