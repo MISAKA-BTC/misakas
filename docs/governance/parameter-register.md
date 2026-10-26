@@ -153,3 +153,10 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 **外さない条件:** これらを measured record・arming record の evidence にしない。外部者の保証は予約 slot（ADR-0192）と期限順 queue に依る。ρ を producer bond 相当（≥ 238,096）にすると正直な起訴が約 10 MSK になり費用回収できないので採らない。V10（X3）・V11・P1-5 は目安で pin、実測で置換。cert m/k は 75/41 のまま。4,096/日の上限は抽選 position の数で、上限まで使っても認証は ⌊4,096/75⌋ = 54 件/日、誤認証の年間期待は 7.9e-4 < 1e-3（2026-10-22 pin のとおり）。lane VAL の最初の報告で「上限まで使うと 0.06/年」と書いたのは、position の数を claim の数として掛けた誤りで、撤回する。この誤りを根拠にした 89/50 への変更は実施していない（統括の再判断待ち）。
 
 **production constructor（2026-10-26）:** `PalwFundedOriginalScheduleV1::new_v1`、`FundedAdmissionScheduleV1::new_v1`、`PalwEscrowFeeScheduleV1::new_v1` を追加した（範囲外は拒否）。目安は `palw_g14_values_v1` の `palw_g14_funded_original_schedule_estimate_v1`・`palw_g14_funded_admission_estimate_v1`・`palw_g14_escrow_schedule_estimate_v1` で組む。preset と `palw_escrow_fee_schedule_v1` は未配線のまま。
+
+## 2026-10-26 lane VAL — `palw_bond_budget_v1` の承認 policy を目安で pin（未実測、preset は未変更）
+
+- 承認: **ユーザー委任 2026-10-22**（値の決定と目安の使用）。統括の指示（slice の settlement once の前提）で、2026-10-22 V12-b の policy（`palw_values_p4_v1::palw_bond_budget_policy_provisional_v1`）の digest を `palw_bond_budget_approved_policy_digests_v1` に入れた。**目安であり実測ではない。**
+- 根拠: capital unit 13,000 KAS（t12 最小 producer bond）、1 unit・1 日あたり claim・reward block・Round rights 各 72（名目 10 slot に 1、184 s/DAA で 1 日の block の約 15%）、1 日の reward は unit の 0.25（回収可能 slash 0.51 未満）、export cap 250‰、liability hold 10,000 DAA（court clock v2 の上限）。
+- 見直し条件: ADR-0176 Stage 1（参照 miner の正直な速度、実測 S/K）、X3 の実測 Δ。値を変えれば digest が変わり、承認一覧の更新が要る。
+- 範囲: preset には入れていない（fence 高さは統括の統合時）。`palw_model_bond_allocation_v1` は slice（`PALW_T12_KERNEL_SLICE_FENCES_V1`）に model tier が無いので、承認一覧は空のまま。

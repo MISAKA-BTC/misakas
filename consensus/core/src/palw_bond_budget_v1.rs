@@ -552,9 +552,16 @@ impl PalwBondBudgetPolicyV1 {
     }
 }
 
-/// **The approved budget policies' digests — EMPTY** (lane ACT 2026-10-26). A policy enters only with the user's approval of the value
-/// lane's numbers; until then every armed budget is refused with a typed missing-value reason.
-pub const PALW_BOND_BUDGET_APPROVED_POLICY_DIGESTS_V1: &[Hash64] = &[];
+/// **The approved budget policies' digests** (lane VAL 2026-10-26). One entry: the 2026-10-22 V12-b policy
+/// ([`crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1`]), pinned as a **DELEGATED ESTIMATE (目安), NOT A
+/// MEASUREMENT** under the user's 2026-10-22 delegation of value decisions and permission to use estimates. Basis: capital unit
+/// 13,000 KAS (the t12 minimum producer bond), 72 claims / reward blocks / Round rights per unit per day (1 per 10 nominal slots, about
+/// 15 % of a day's blocks at 184 s/DAA), reward 0.25 of the unit per day (below the 0.51 collectable slash), export cap 250 ‰,
+/// liability hold 10,000 DAA (the court-clock v2 horizon). Revise on ADR-0176 Stage 1 (the reference miner's honest rate, measured
+/// S/K) and X3's measured Δ. Not read by any preset: arming still needs the fence height and its own prerequisites.
+pub fn palw_bond_budget_approved_policy_digests_v1() -> Vec<Hash64> {
+    vec![crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1().digest()]
+}
 
 /// **The approved model-allocation policies — EMPTY** (lane ACT 2026-10-26), for the same reason.
 pub fn palw_model_bond_allocation_approved_policies_v1() -> Vec<PalwModelAllocationPolicyV1> {
@@ -887,13 +894,13 @@ impl Params {
             ));
         }
         // Lane ACT (2026-10-26): the remaining refusal is the VALUE alone — a policy is armable only when its digest is pinned in
-        // `PALW_BOND_BUDGET_APPROVED_POLICY_DIGESTS_V1` (empty: typed-missing until the value lane's policy is approved). The reward and
+        // `palw_bond_budget_approved_policy_digests_v1` (lane VAL: the 10-22 V12-b estimate). The reward and
         // weight fences it bounds carry their own record gates, so they are not re-refused here.
-        if PALW_BOND_BUDGET_APPROVED_POLICY_DIGESTS_V1.contains(&fence.policy.digest()) {
+        if palw_bond_budget_approved_policy_digests_v1().contains(&fence.policy.digest()) {
             return Ok(());
         }
         Err(PalwModeV2Error::Invalid(
-            "palw_bond_budget_v1 cannot be armed: no approved policy is pinned (PALW_BOND_BUDGET_APPROVED_POLICY_DIGESTS_V1 is empty; ADR-0176's window W, the rho -> Q/B/R/F mapping and the cap values come from the value lane)",
+            "palw_bond_budget_v1 cannot be armed: no approved policy is pinned (not in palw_bond_budget_approved_policy_digests_v1; ADR-0176's window W, the rho -> Q/B/R/F mapping and the cap values come from the value lane)",
         ))
     }
 

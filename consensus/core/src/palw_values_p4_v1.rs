@@ -341,7 +341,18 @@ mod tests {
         assert!(daily.reward_sompi < PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1 / 1_000 * 510, "below the 0.51 collectable");
         let mut armed = t12.clone();
         armed.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(16_000), policy: b.clone() });
-        assert!(armed.validate_palw_bond_budget_v1().is_err(), "still refused (non-value blockers)");
+        // Lane VAL 2026-10-26: the estimate is pinned in the approved list, so a refusal (if any) is never the missing value.
+        assert!(crate::palw_bond_budget_v1::palw_bond_budget_approved_policy_digests_v1().contains(&b.digest()));
+        if let Err(e) = armed.validate_palw_bond_budget_v1() {
+            assert!(!format!("{e:?}").contains("no approved policy"), "{e:?}");
+        }
+        // Any other policy is still refused for the missing approval.
+        let mut other = b.clone();
+        other.claims_per_unit += 1;
+        other.max_open_claims_per_bond += 1;
+        if other.validate().is_ok() {
+            assert!(!crate::palw_bond_budget_v1::palw_bond_budget_approved_policy_digests_v1().contains(&other.digest()));
+        }
         let mut bad = b.clone();
         bad.export_cap_permille = 511;
         assert!(bad.validate().is_err());
