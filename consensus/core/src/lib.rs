@@ -548,6 +548,8 @@ pub mod palw_opv_bootstrap_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
 /// ADR-0077 SA-5, which says what arming it does NOT buy.
 pub mod palw_panel_da_v1;
+/// Lane g14-fam-panelda (ADR-0206 proposed, DORMANT): PanelDa mandatory disclosure — the G14 route for private text prompts.
+pub mod palw_panel_da_disclosure_v1;
 /// ADR-0124 — the panel is paid out of the claim's own reward, a seat holds exposure while it
 /// judges, and a claim is paid for the compute it certifies: the three pure rules, and nothing
 /// that reads a fence.

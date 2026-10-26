@@ -367,6 +367,7 @@ impl Params {
         // RFC-0036 (Proposed): the authenticated state map / row access fence is refused if armed — nothing is wired.
         self.validate_palw_state_row_map_v1()?;
         self.validate_palw_court_clock_v2()?;
+        self.validate_palw_panel_da_disclosure_v1()?;
         // **The court-capacity fence** (`crate::palw_court_capacity_v1`, audit G-07): LG14-A at or below it, a sound policy, and on a
         // real network a pinned record and a measured (non-placeholder) policy.
         self.validate_palw_court_capacity_in_v1(records)?;

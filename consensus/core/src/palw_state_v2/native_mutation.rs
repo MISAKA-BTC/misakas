@@ -115,6 +115,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         deletion!(claim_semantics);
         deletion!(fp_public_jobs);
+        deletion!(panel_da_disclosures);
         deletion!(exec_v2_origins);
         deletion!(claim_roots);
         deletion!(shard_licensing);

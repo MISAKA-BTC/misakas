@@ -266,6 +266,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwLifecycleKindFenceV1::CourtModelScopeV1 => params.palw_court_model_scope_v1 = Some(at),
             // RFC-0024 (tags 201-204): the bounded door.
             PalwLifecycleKindFenceV1::TirBoundedDoorV1 => params.palw_tir_bounded_door_v1 = Some(at),
+            // ADR-0206 (tag 233): validation still refuses arming (no node E2E yet); the arm keeps the harness exhaustive.
+            PalwLifecycleKindFenceV1::PanelDaDisclosureV1 => params.palw_panel_da_disclosure_v1 = Some(at),
             // Selected-source bootstrap (aux 148). Public validation still refuses activation; this arm only
             // makes the kind fence exhaustive for the harness, which already expects that refusal.
             PalwLifecycleKindFenceV1::SelectedSourceBootstrapV1 => {
@@ -492,6 +494,12 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                     params.palw_model_lines = Some(at);
                 }
                 params.palw_model_immutable_v1 = Some(at);
+            }
+            // ADR-0206 (tag 233): a bare height, mirrored onto the V2 bundle; keyed on a claim's acceptance, so far above the chain
+            // it judges nothing here.
+            "palw_panel_da_disclosure_v1" => {
+                params.palw_panel_da_disclosure_v1 = Some(at);
+                params.sync_palw_g14_gates_v1();
             }
             other => panic!("a landed A-2 row's fence {other} is not armed by this harness: arm it here ({row:?})"),
         }

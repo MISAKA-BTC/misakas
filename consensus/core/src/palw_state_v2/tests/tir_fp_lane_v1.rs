@@ -50,6 +50,17 @@ fn lane_with(
     forge: Option<(usize, usize)>,
     cost: Option<crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
 ) -> Lane {
+    lane_with_mode(certify, forge, cost, crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA)
+}
+
+/// [`lane_with`] under a privacy mode (lane g14-fam-panelda: `PALW_FP_PRIVACY_PANEL_DA` keeps the ids off the commitment).
+fn lane_with_mode(
+    certify: bool,
+    forge: Option<(usize, usize)>,
+    cost: Option<crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
+    privacy_mode: u8,
+) -> Lane {
+    let panel_da = privacy_mode == crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA;
     use crate::palw_e2e_adjudicability::{PalwE2eCoveringV1, PalwE2eFamilyV1, palw_e2e_family_id_v1};
     use crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1;
     let (p, base, _, _) = derived_work_chain();
@@ -154,6 +165,7 @@ fn lane_with(
     job.prompt_tokens = tiny.prompt.len() as u32;
     job.decode_token_limit = tiny.generated.len() as u32;
     job.max_context_tokens = 64;
+    job.privacy_mode = privacy_mode;
     let class_facts = PalwFpClassFactsV3 {
         model_profile_id: Hash64::default(),
         runtime_manifest_hash: Hash64::default(),
@@ -196,7 +208,7 @@ fn lane_with(
     let mut payload = PalwFpCommitmentTxPayloadV3 {
         version: PALW_FP_V3_VERSION,
         commitment: original.clone(),
-        prompt_token_ids: x.prompt.clone(),
+        prompt_token_ids: if panel_da { Vec::new() } else { x.prompt.clone() },
         signature: Vec::new(),
     };
     payload.signature = sign(payload.claim_id(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT);
@@ -209,7 +221,7 @@ fn lane_with(
         work_leaves: original.work_leaves,
         prompt_token_ids_hash: original.job.prompt_token_ids_hash,
         prompt_tokens: original.job.prompt_tokens,
-        prompt_token_ids: x.prompt.clone(),
+        prompt_token_ids: if panel_da { Vec::new() } else { x.prompt.clone() },
         decode_tokens_executed: original.decode_tokens_executed,
         trace_root: original.trace_root,
         output_root: original.output_root,
@@ -280,6 +292,7 @@ fn tir_fp_lane_prices_and_accepts_a_framed_ir_claim_with_every_fence_at_genesis(
             daa_score: AT_DAA,
             receipt_rights: None,
             tir_free_prompt_active: true,
+        panel_da_deferred_prompt: false,
         },
         &l.claim,
         &l.class_id,
@@ -611,10 +624,20 @@ fn tn1_sign(
 /// pass — the batched debit of audit §10 — and its Ready), then a Panel of one seat bound and the claim licensed. Returns the lane,
 /// the state, the frame and the next free DAA.
 fn tn1_licensed(forge: Option<(usize, usize)>) -> (Lane, PalwChainStateV2, crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1, u64) {
+    tn1_licensed_mode(forge, crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA, None)
+}
+
+/// [`tn1_licensed`] under a privacy mode, with `palw_panel_da_disclosure_v1`'s mirror at `disclosure_from` (TEST-ONLY heights).
+fn tn1_licensed_mode(
+    forge: Option<(usize, usize)>,
+    privacy_mode: u8,
+    disclosure_from: Option<u64>,
+) -> (Lane, PalwChainStateV2, crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1, u64) {
     use crate::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
     use crate::palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1 as Owned, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1};
     let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
-    let mut l = lane_with(false, forge, Some(cost));
+    let mut l = lane_with_mode(false, forge, Some(cost), privacy_mode);
+    l.p = l.p.clone().with_panel_da_disclosure_from_daa(disclosure_from);
     // An accuser's room is a share of its collateral (the fixture params carry none): half, as the conviction fold tests use.
     // R-core+ in force from genesis, as on testnet-12 (`palw_t12_arm_every_rule_from_genesis`): the conviction tiers, the
     // `CourtConviction` record and the exit-lock lattice a collectible debit needs.
@@ -846,13 +869,28 @@ fn t_n1_an_honest_ir_fp_claim_reaches_final_and_payment_inside_the_liability_hor
 /// never reaches `Final`, and its receipt quantum never spends (no weight, no reward).
 #[test]
 fn t_n1_a_forged_ir_fp_claim_is_convicted_by_one_outside_owner_and_never_paid() {
+    tn1_forged_flow(crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA);
+}
+
+/// The forged half's flow. Under PanelDa (lane g14-fam-panelda) the ids are first disclosed in public — by the producer, inside its
+/// deadline, as the duty requires — and the outsider takes them from the chain's public row, not from the producer or the Panel.
+fn tn1_forged_flow(privacy_mode: u8) {
     use crate::palw_tir_public_carriage_v1::{
         PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T, PalwTirPublicControlV1 as Control,
         PalwTirPublicConvictionEvidenceV1 as Evidence,
     };
     use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, PalwTirPublicOwnedActionV1 as Owned};
     const FORGED: usize = 7;
-    let (l, mut s, frame, mut daa) = tn1_licensed(Some((FORGED, 1)));
+    let panel_da = privacy_mode == crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA;
+    let (l, mut s, frame, mut daa) = tn1_licensed_mode(Some((FORGED, 1)), privacy_mode, panel_da.then_some(0));
+    if panel_da {
+        let disclose = PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: l.claim, prompt_token_ids: l.execution.prompt.clone() };
+        s = apply_derived(&s, &l.p, &tn1_ctx(daa), &[disclose], &l.extras).expect("the producer discloses inside its deadline").0;
+        daa += 1;
+        let row = s.panel_da_disclosure_v1(&l.claim).expect("the public row");
+        assert_eq!(row.prompt_token_ids, l.execution.prompt, "the outsider's prompt is the chain's public row");
+        assert_eq!(row.locked_deposit_v1(), 0, "the deposit is returned at disclosure");
+    }
     let plan = frame.plan_v1().clone();
     let terms = plan.terms;
     let domain = l.extras.tir_public_network_domain_v1.unwrap();
@@ -1087,4 +1125,98 @@ fn audit_fixcd_c04_a_tir_class_semantic_statement_names_its_registered_tokenizer
     let (declared, _) =
         apply_derived(&l.state, &l.p, &at(), &[declare(declaration(record.tokenizer_id))], &on).expect("the registered tokenizer folds");
     assert_eq!(declared.class_semantics_v1(&l.class_id).map(|s| s.tokenizer_id), Some(record.tokenizer_id));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Lane g14-fam-panelda (ADR-0206): a PanelDa IR free-prompt claim under the mandatory disclosure, through the production fold. The
+// fence's mirror is TEST-ONLY armed at DAA 0 (`tn1_licensed_mode(.., Some(0))`); every other fence is T-N1's.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const PANEL_DA: u8 = crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA;
+
+/// **Honest: the producer discloses in time → `Final` past the deadline, paid, deposit returned, nothing charged.**
+#[test]
+fn panelda_honest_disclosed_claim_reaches_final_and_payment() {
+    let (l, s, _, daa) = tn1_licensed_mode(None, PANEL_DA, Some(0));
+    let row = s.panel_da_disclosure_v1(&l.claim).expect("the governed claim's row").clone();
+    assert_eq!(row.deadline_daa, AT_DAA + crate::palw_g14_values_v1::PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1);
+    assert!(row.prompt_token_ids.is_empty() && row.disclosed_daa.is_none(), "private until disclosed");
+    let producer = bond_key(PRODUCER);
+    assert_eq!(s.panel_da_deposit_locked_v1(&producer), row.deposit_sompi as u128, "the deposit is locked at admission");
+    let collateral = s.bonds.get(&producer).unwrap().collateral;
+    let disclose = PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: l.claim, prompt_token_ids: l.execution.prompt.clone() };
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[disclose.clone()], &l.extras).expect("a binding disclosure folds");
+    assert_eq!(s.panel_da_deposit_locked_v1(&producer), 0, "returned at disclosure");
+    assert!(apply_derived(&s, &l.p, &tn1_ctx(daa + 1), &[disclose], &l.extras).is_err(), "once only");
+    let claim = s.claim(&l.claim).unwrap().clone();
+    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else { panic!("licensed") };
+    let floor = palw_claim_final_floor_v1(&s, &l.p, &l.claim, &claim, licensed_daa).unwrap();
+    assert!(floor > row.deadline_daa, "no Final (no reward) before the disclosure deadline");
+    let (before, _) = apply_derived(&s, &l.p, &tn1_ctx(floor - 1), &[], &l.extras).unwrap();
+    assert!(!matches!(before.claim(&l.claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+    let (after, _) = apply_derived(&before, &l.p, &tn1_ctx(floor + 1), &[], &l.extras).unwrap();
+    assert!(matches!(after.claim(&l.claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "Final at its floor");
+    let weight = after.safe_weight();
+    let (paid, _) = tn1_spend(&l, &after, floor + 2).expect("the Final claim's quantum spends");
+    assert!(paid.safe_weight() > weight, "paid");
+    assert_eq!(paid.bonds.get(&producer).unwrap().collateral, collateral, "the honest producer is not charged");
+}
+
+/// **A lie with every owner colluding (no dispute): the disclosure puts the ids in public state, and ONE outside bond convicts and
+/// slashes** (the T-N1 forged flow, its outsider reading the prompt from the chain's row).
+#[test]
+fn panelda_forged_claim_all_colluding_is_convicted_by_one_outsider_after_disclosure() {
+    tn1_forged_flow(PANEL_DA);
+}
+
+/// **No disclosure: void `PanelDaDisclosureDefault` at the floor, the deposit burned, and nothing else** — no conviction, no
+/// offence, no seat slashed, the producer's collateral down by exactly the deposit, never paid.
+#[test]
+fn panelda_undisclosed_claim_defaults_without_conviction() {
+    let (l, s, _, _) = tn1_licensed_mode(None, PANEL_DA, Some(0));
+    let producer = bond_key(PRODUCER);
+    let row = s.panel_da_disclosure_v1(&l.claim).unwrap().clone();
+    let claim = s.claim(&l.claim).unwrap().clone();
+    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else { panic!("licensed") };
+    let floor = palw_claim_final_floor_v1(&s, &l.p, &l.claim, &claim, licensed_daa).unwrap();
+    let late = PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: l.claim, prompt_token_ids: l.execution.prompt.clone() };
+    assert!(apply_derived(&s, &l.p, &tn1_ctx(row.deadline_daa + 1), &[late], &l.extras).is_err(), "a late disclosure is refused");
+    let before = s.bonds.get(&producer).unwrap().clone();
+    let seats: Vec<u64> = (0..5).map(|n| s.bonds.get(&bond_key(SEAT + n)).unwrap().collateral).collect();
+    let (after, _) = apply_derived(&s, &l.p, &tn1_ctx(floor + 1), &[], &l.extras).unwrap();
+    assert!(
+        matches!(
+            after.claim(&l.claim).map(|c| c.phase.clone()),
+            Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PanelDaDisclosureDefault, .. })
+        ),
+        "{:?}",
+        after.claim(&l.claim).map(|c| c.phase.clone())
+    );
+    let bond = after.bonds.get(&producer).unwrap();
+    assert_eq!(bond.collateral, before.collateral - row.deposit_sompi, "exactly the deposit is burned");
+    assert_eq!(bond.slashed, before.slashed + row.deposit_sompi, "recorded as a burn, not more");
+    assert_eq!(after.consumed_offences.len(), s.consumed_offences.len(), "no offence: a default is not a conviction");
+    for n in 0..5u64 {
+        assert_eq!(after.bonds.get(&bond_key(SEAT + n)).unwrap().collateral, seats[n as usize], "no seat is charged");
+    }
+    assert!(after.panel_da_disclosure_v1(&l.claim).is_none(), "the row leaves with the default");
+    assert!(tn1_spend(&l, &after, floor + 2).is_err(), "never paid");
+}
+
+/// **The fence boundary**: a PanelDa claim accepted below `palw_panel_da_disclosure_v1` is refused past the derived-work fence
+/// exactly as before (no ids, no accounting); a disclosure with no row is refused; and PublicDa writes no row past the fence.
+#[test]
+fn panelda_fence_boundary_is_byte_identical_below() {
+    let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    let mut l = lane_with_mode(false, None, Some(cost), PANEL_DA);
+    l.p = l.p.clone().with_panel_da_disclosure_from_daa(Some(AT_DAA + 1));
+    let err = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).expect_err("below the fence");
+    assert!(matches!(err, PalwStateV2Error::FreePromptPromptNotAccountable { .. }), "{err:?}");
+    let disclose = PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: l.claim, prompt_token_ids: l.execution.prompt.clone() };
+    let armed = l.p.clone().with_panel_da_disclosure_from_daa(Some(0));
+    assert!(apply_derived(&l.state, &armed, &at(), &[disclose], &l.extras).is_err(), "no row: refused");
+    let public = lane_with_mode(false, None, Some(cost), crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA);
+    let p = public.p.clone().with_panel_da_disclosure_from_daa(Some(0));
+    let (s, _) = apply_derived(&public.state, &p, &at(), std::slice::from_ref(&public.object), &public.extras).expect("PublicDa folds");
+    assert!(s.panel_da_disclosure_v1(&public.claim).is_none(), "PublicDa writes no row");
 }

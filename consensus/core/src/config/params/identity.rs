@@ -651,6 +651,9 @@ impl Params {
         if self.palw_court_clock_v2 == Some(ForkActivation::never()) {
             self.palw_court_clock_v2 = None;
         }
+        if self.palw_panel_da_disclosure_v1 == Some(ForkActivation::never()) {
+            self.palw_panel_da_disclosure_v1 = None;
+        }
         if self.palw_paid_claim_trap_v1 == Some(ForkActivation::never()) {
             self.palw_paid_claim_trap_v1 = None;
         }
@@ -1159,6 +1162,7 @@ impl Params {
             palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1,
             palw_court_clock_v2,
+            palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -1618,6 +1622,7 @@ impl Params {
             ("palw_state_row_map_v1", *palw_state_row_map_v1),
             ("palw_kernel_route_panel_one_v1", *palw_kernel_route_panel_one_v1),
             ("palw_court_clock_v2", *palw_court_clock_v2),
+            ("palw_panel_da_disclosure_v1", *palw_panel_da_disclosure_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -2042,6 +2047,10 @@ impl Params {
         }
         if let Some(at) = self.palw_court_clock_v2.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_court_clock_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_panel_da_disclosure_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_panel_da_disclosure_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(at) = self.palw_staged_float_constraint_v1 {
@@ -2930,6 +2939,7 @@ impl Params {
             palw_state_row_map_v1: _,
             palw_kernel_route_panel_one_v1,
             palw_court_clock_v2,
+            palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -3954,6 +3964,9 @@ impl Params {
         if let Some(at) = palw_court_clock_v2.as_mut() {
             fork(at, visit);
         }
+        if let Some(at) = palw_panel_da_disclosure_v1.as_mut() {
+            fork(at, visit);
+        }
         if let Some(at) = palw_paid_claim_trap_v1.as_mut() {
             fork(at, visit);
         }
@@ -4525,6 +4538,7 @@ impl Params {
             palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1,
             palw_court_clock_v2,
+            palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -5282,6 +5296,10 @@ impl Params {
         }
         if let Some(at) = palw_court_clock_v2.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_court_clock_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = palw_panel_da_disclosure_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_panel_da_disclosure_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_staged_float_constraint_v1.filter(|f| *f != ForkActivation::never()) {

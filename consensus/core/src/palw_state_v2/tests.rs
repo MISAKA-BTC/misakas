@@ -14346,6 +14346,7 @@ mod fp_compute_pricing {
                     daa_score: 103,
                     receipt_rights: None,
                     tir_free_prompt_active: false,
+                panel_da_deferred_prompt: false,
                 };
                 let quoted = palw_fp_commitment_price_v1(
                     &s3,
@@ -14382,6 +14383,7 @@ mod fp_compute_pricing {
                     daa_score: 103,
                     receipt_rights: None,
                     tir_free_prompt_active: false,
+                panel_da_deferred_prompt: false,
                 },
                 &h64(0xEF),
                 &plain,
@@ -14452,6 +14454,7 @@ mod fp_compute_pricing {
                 daa_score: 103,
                 receipt_rights: Some(rights_inputs),
                 tir_free_prompt_active: false,
+            panel_da_deferred_prompt: false,
             },
             &h64(0xE0),
             &plain,
@@ -17318,6 +17321,7 @@ fn every_delta_entry_kind_round_trips_through_borsh() {
                 // G14 item 6: its round trip is the d2_readiness suite's.
                 PalwDeltaEntryV2::D2Readiness { .. } => "d2_readiness",
                 PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
+                PalwDeltaEntryV2::PanelDaDisclosure { .. } => "panel_da_disclosure",
                 PalwDeltaEntryV2::ClassSemantics { .. } => "class_semantics",
                 PalwDeltaEntryV2::ClaimSemantics { .. } => "claim_semantics",
                 PalwDeltaEntryV2::LegacyAnswer { .. } => "legacy_answer",
@@ -17769,6 +17773,7 @@ fn delta_entry_discriminants_are_the_ones_on_disk() {
             },
         ),
         (201, PalwDeltaEntryV2::PublicFpJob { key, old: None, new: None }),
+        (236, PalwDeltaEntryV2::PanelDaDisclosure { key, old: None, new: None }),
         (
             202,
             PalwDeltaEntryV2::LegacyAnswer {
@@ -18442,6 +18447,7 @@ fn the_state_root_preimage_is_exactly_the_adr_0043_list() {
         // G14 item 6: one Some-only block (`d2_readiness/v1`), empty here.
         d2_readiness: _,
         fp_public_jobs: _,
+        panel_da_disclosures: _,
         class_semantics: _,
         claim_semantics: _,
         legacy_answers: _,

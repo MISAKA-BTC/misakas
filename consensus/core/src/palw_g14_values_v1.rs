@@ -514,3 +514,27 @@ mod tests {
         assert!(crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_none());
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Lane g14-fam-panelda (2026-10-26): PanelDa mandatory disclosure — PROVISIONAL ESTIMATES (目安), not measured, not armed.
+// Register: `docs/governance/parameter-register.md` "2026-10-26 lane PANELDA"; design: ADR-0206 (proposed).
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// **Disclosure deadline offset** (estimate): a PanelDa claim accepted at `a` must have its prompt ids publicly disclosed at or before
+/// `a + 1,040` (one third of the 3,120-DAA notice window). Basis: leaves the outsider `3,120 − 1,040 = 2,080` DAA of notice window on
+/// the disclosed material — about 50× the 42-DAA court turn deadline — while the service-time privacy lasts about the Panel's own
+/// receipt window. Review: when the notice window, the turn deadline or the measured outsider replay time changes.
+pub const PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1: u64 = 1_040;
+/// **The outsider's minimum notice window after the deadline** (estimate): arming is refused unless
+/// `PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1 + this <= NOTICE_WINDOW_DAA`. Basis: ≥ 2 × (inclusion delay 4 + replay of the largest t12
+/// class + 42-DAA turn) rounded up generously; 2,000 DAA ≈ 5.5 h at t12's rate. Review: with the outsider replay measurement.
+pub const PALW_G14_PANEL_DA_OUTSIDER_MIN_WINDOW_DAA_V1: u64 = 2_000;
+/// **Largest prompt a PanelDa disclosure may carry, in token ids** (estimate; the disclosure is the ids as u32 LE, 4 B each). Basis:
+/// t12's largest served context class is 8K; 32,768 keeps a margin. Review: when a class with a longer context is served.
+pub const PALW_G14_PANEL_DA_MAX_DISCLOSED_IDS_V1: u64 = 32_768;
+/// **Disclosure deposit per PanelDa claim, sompi** (estimate): twice the carriage of the largest disclosure at the t12 fee rate
+/// (`2 × 32,768 × 4 B × 50 sompi/B = 13,107,200`). Locked at commit, returned on a timely disclosure, forfeited (burned) on a default.
+/// It is a default deposit, not a conviction slash: an undisclosed prompt is unavailability, never a computation error.
+/// Review: with the fee rate or the max disclosed ids.
+pub const PALW_G14_PANEL_DA_DISCLOSURE_DEPOSIT_SOMPI_V1: u64 =
+    2 * PALW_G14_PANEL_DA_MAX_DISCLOSED_IDS_V1 * 4 * PALW_G14_CARRIAGE_SOMPI_PER_BYTE_V1;

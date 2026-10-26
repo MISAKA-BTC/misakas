@@ -1162,6 +1162,8 @@ mod tests {
             "palw_state_row_map_v1" => params.palw_state_row_map_v1 = Some(at),
             "palw_kernel_route_panel_one_v1" => params.palw_kernel_route_panel_one_v1 = Some(at),
             "palw_court_clock_v2" => params.palw_court_clock_v2 = Some(at),
+            // lane g14-fam-panelda: a bare height; its prerequisites are `validate_palw_v2`'s.
+            "palw_panel_da_disclosure_v1" => params.palw_panel_da_disclosure_v1 = Some(at),
             "palw_class_registration_origin_v1" => {
                 params.palw_class_registration_origin_v1 = Some(at);
                 params.sync_palw_class_registration_origin_v1();

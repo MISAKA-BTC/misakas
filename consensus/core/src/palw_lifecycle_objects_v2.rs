@@ -619,6 +619,16 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             if signature.is_empty() { return Err("a readiness answer must carry its seat's signature"); }
             Ok(())
         }
+        // ADR-0206 (tag 233): a PanelDa disclosure needs no signature (the claim's hash fixes the ids); its size is bounded here,
+        // its binding and window by the fold.
+        PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { prompt_token_ids, .. } => {
+            if prompt_token_ids.is_empty()
+                || prompt_token_ids.len() as u64 > crate::palw_g14_values_v1::PALW_G14_PANEL_DA_MAX_DISCLOSED_IDS_V1
+            {
+                return Err("a PanelDa disclosure carries between 1 and the maximum disclosed ids");
+            }
+            Ok(())
+        }
         // RFC-0032 A material intake (tag 255): signed, and a Part inside the one-part bound. Authentication against the original,
         // the per-target bound and the per-submitter budget are the fold's (`material_intake`).
         PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
@@ -1297,11 +1307,13 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_selected_source_bootstrap_v1` — RFC-0007 claim-level selected source approval (tag 246).
     /// Local activation-table slot (not wire). Pin already uses 15 and 16.
     SelectedSourceBootstrapV1 = 21,
+    /// `Params::palw_panel_da_disclosure_v1` — ADR-0206's PanelDa disclosure (tag 233). Local activation-table slot (not wire).
+    PanelDaDisclosureV1 = 22,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1324,6 +1336,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::CourtModelScopeV1,
         Self::TirBoundedDoorV1,
         Self::SelectedSourceBootstrapV1,
+        Self::PanelDaDisclosureV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1351,6 +1364,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::TirDesignatedAnswersV1 => "palw_tir_designated_answers_v1",
             Self::CourtModelScopeV1 => "palw_court_model_scope_v1",
             Self::TirBoundedDoorV1 => "palw_tir_bounded_door_v1",
+            Self::PanelDaDisclosureV1 => "palw_panel_da_disclosure_v1",
         }
     }
 }
@@ -1588,6 +1602,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::SeatReadinessDemandedV1 { .. } | O::SeatReadinessAnsweredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
         // RFC-0032 A material intake (tag 255): the shared TIR court's own fence (G-10), no new fence.
         O::MaterialIntakeV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1),
+        // ADR-0206 (lane g14-fam-panelda): the PanelDa disclosure (tag 233), dormant behind its own fence.
+        O::PanelDaPromptDisclosedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::PanelDaDisclosureV1),
         // RFC-0024 §4/§5 (lane r5-p2-terminal): the position terminal and the lookahead moves (tags 201-204).
         O::TirPositionDissectedV2 { .. }
         | O::TirPositionClosedV2 { .. }
@@ -1751,6 +1767,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (231, "SeatReadinessDemandedV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (232, "SeatReadinessAnsweredV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (255, "MaterialIntakeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
+    (233, "PanelDaPromptDisclosedV1", PalwLifecycleKindFenceV1::PanelDaDisclosureV1),
     (201, "TirPositionDissectedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
     (202, "TirPositionClosedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
     (203, "TirLookaheadDisclosedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
@@ -1868,6 +1885,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => self.palw_tir_designated_answers_v1_fence(),
                     PalwLifecycleKindFenceV1::CourtModelScopeV1 => self.palw_court_model_scope_v1,
                     PalwLifecycleKindFenceV1::TirBoundedDoorV1 => self.palw_tir_bounded_door_v1_fence(),
+                    PalwLifecycleKindFenceV1::PanelDaDisclosureV1 => self.palw_panel_da_disclosure_v1_fence(),
                 },
             )
         })
@@ -2505,6 +2523,8 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10). 140 `BondCapitalAssignedV1` (landed, owned by the allocation fence, which
     // needs `palw_bond_budget_v1` at or below it); 141–149 unallocated within the lane: no row until a kind lands there.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 140, hi: 140 }, "palw_model_bond_allocation_v1", "BUDGET capital assignment", true),
+    // Lane g14-fam-panelda (ADR-0206): the PanelDa disclosure (tag 233).
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 233, hi: 233 }, "palw_panel_da_disclosure_v1", "G14 PanelDa mandatory disclosure", true),
     // DA16: lease, challenge, answer, transfer. A change to their wire form (DA16's re-scope: the `Artifact` lease subject removed
     // under this fence) re-pins `PALW_A2_NEW_KIND_WIRE_V1` in the same commit and keeps this row's fence, or adds a row for another.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", true),
@@ -3200,6 +3220,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // same D2 fence. No existing court object fits (the provider court's 151/152 need a lease and a kernel subject; LG14-B's 157/158
     // are claim-bound). PROPOSED by the lane: the central merge confirms the allocation.
     (231, 232, "D2 readiness disclosure court (ADR-0200 C1)", &["palw_court_model_scope_v1"]),
+    // 233: lane g14-fam-panelda (2026-10-26, ADR-0206) — the PanelDa mandatory disclosure. PROPOSED by the lane (next free after
+    // 232): the central merge confirms the allocation.
+    (233, 233, "G14 PanelDa mandatory disclosure (ADR-0206)", &["palw_panel_da_disclosure_v1"]),
     // 201-204: lowest unused tags above 200 (lane r5-p2-terminal, 2026-10-22) — RFC-0024 §4/§5's versioned court moves.
     (201, 204, "RFC-0024 position terminal and lookahead", &["palw_tir_bounded_door_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
@@ -5552,6 +5575,8 @@ pub(crate) mod tests {
             // build by `scripts/drills/a2u_new_kind_wire_pins.py` (2026-10-22); the Rust test stays the authority.
             (178, 0x1d759cbe80301463),
             (131, 0xf970df6a8bdc323c),
+            // Lane g14-fam-panelda (ADR-0206): the PanelDa disclosure (233), under `palw_panel_da_disclosure_v1`.
+            (233, 0x9efb3eb370a1ed2e),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

@@ -364,6 +364,7 @@ pub fn palw_void_reason_name_v1(reason: &PalwVoidReasonV2) -> &'static str {
         PalwVoidReasonV2::WorkRootExpired => "work_root_expired",
         PalwVoidReasonV2::WorkSliceProvenFalse => "work_slice_proven_false",
         PalwVoidReasonV2::WorkSliceDefaulted => "work_slice_defaulted",
+        PalwVoidReasonV2::PanelDaDisclosureDefault => "panel_da_disclosure_default",
     }
 }
 

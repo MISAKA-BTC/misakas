@@ -7400,6 +7400,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::SeatReadinessDemandedV1 { .. } => "SeatReadinessDemandedV1",
         O::SeatReadinessAnsweredV1 { .. } => "SeatReadinessAnsweredV1",
         O::MaterialIntakeV1 { .. } => "MaterialIntakeV1",
+        O::PanelDaPromptDisclosedV1 { .. } => "PanelDaPromptDisclosedV1",
         O::TirPositionDissectedV2 { .. } => "TirPositionDissectedV2",
         O::TirPositionClosedV2 { .. } => "TirPositionClosedV2",
         O::TirLookaheadDisclosedV2 { .. } => "TirLookaheadDisclosedV2",

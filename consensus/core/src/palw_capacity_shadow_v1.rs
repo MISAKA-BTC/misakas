@@ -613,6 +613,7 @@ pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapaci
         // default convicts nobody.
         PalwVoidReasonV2::WorkSliceProvenFalse => PalwCapacityVoidAttributionV1::Censored,
         PalwVoidReasonV2::WorkSliceDefaulted => PalwCapacityVoidAttributionV1::Undetected,
+        PalwVoidReasonV2::PanelDaDisclosureDefault => PalwCapacityVoidAttributionV1::Undetected,
     }
 }
 

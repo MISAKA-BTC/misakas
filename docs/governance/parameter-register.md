@@ -194,3 +194,14 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 - **kernel route の時計**: X3 の高さ以降に commit された kernel claim の `liability_until` の下限を `committed + 3,120 + court_deadline (20) + proof_grace (10)` とする（`misaka_palw_kernel::claim_clock`、consumer 注入、root 外）。ADR-0198 の notice a+3,120（inclusive）と hard a+10,000 の内側。報酬保留・signer lock・reservation はこの horizon に従う。
 - **M-1 飽和費用の不等式（X3 以降の Panel=1 class 登録条件）**: `runs × dismissal_fee × max(check+challenge+liability, 3,150) > claim_collateral + claim_reward + 外部利得上限`。interim policy で `64 × 0.1 MSK × 3,150 = 20,160 MSK > 1,000 + 5 + 500 = 1,505 MSK`（13.4 倍）。外部利得上限 500 MSK はユーザー承認（2026-10-26）。前提: DAA あたり 1 block（最悪側）、fee の市場は未 pin（第 1 部 MAJOR-2）。告発者・claim ごとの却下 4 件の上限（`palw_provider_court_v1` の court scope）を slice に追加。
 - 見直し: M-X3 実測、DAA あたり block 数の実測、mempool の fee 優先順位。
+
+## 2026-10-26 lane PANELDA — PanelDa 必須公開の目安（未実測・未配線、fence `palw_panel_da_disclosure_v1` は未武装）
+
+ADR-0206(proposed)。値は `consensus/core/src/palw_g14_values_v1.rs` 末尾。すべて目安。
+
+| 値 | 目安 | 根拠 | 見直し条件 |
+|---|---|---|---|
+| `PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1` | 1,040 DAA | notice 窓 3,120 の 1/3。外部者に 2,080 DAA が残る | notice 窓・turn 期限・外部者 replay 実測 |
+| `PALW_G14_PANEL_DA_OUTSIDER_MIN_WINDOW_DAA_V1` | 2,000 DAA | 包含遅延 4+最大 class replay+turn 42 の 2 倍を大きく上回る | 外部者 replay 実測 |
+| `PALW_G14_PANEL_DA_MAX_DISCLOSED_IDS_V1` | 32,768 | t12 最大 8K class に余裕 | 長 context class の提供 |
+| `PALW_G14_PANEL_DA_DISCLOSURE_DEPOSIT_SOMPI_V1` | 13,107,200 sompi | 2 × 32,768 × 4 B × 50 sompi/B | 料率・最大 ids |
