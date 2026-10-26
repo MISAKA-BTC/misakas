@@ -47,6 +47,7 @@ async fn g14_kernel_capacity_measure() {
     let setup = Instant::now();
     let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
     let mut claims = Vec::new();
+    let mut first_seats = Vec::new();
     for _ in 0..count {
         w.jobs += 1;
         let job = KernelJobV1 {
@@ -59,9 +60,13 @@ async fn g14_kernel_capacity_measure() {
         let object = w.net.route(1, &K::PostJob { job: job.clone() });
         w.net.send(vec![(1, object)]).await;
         assert!(w.net.ledger().jobs.contains_key(&job.id()));
-        let claim = w.claim_with(0, &job, true, Delivery::Chunked(16_000)).await;
+        let claim = w.claim_with(0, &job, true, Delivery::Chunked(4_096)).await;
         assert!(w.net.ledger().claims.contains_key(&claim.id));
-        assert_eq!(w.seats(&claim.id).len(), 1);
+        let assigned = w.seats(&claim.id);
+        assert_eq!(assigned.len(), 1);
+        if claims.is_empty() {
+            first_seats = assigned;
+        }
         w.cover(&claim.id).await;
         claims.push(claim);
     }
@@ -71,8 +76,8 @@ async fn g14_kernel_capacity_measure() {
     let per_work = w.net.ledger().bounds_of(&w.class).unwrap().max_court_work;
     assert!(per_work > 0);
     let capacity = (policy.max_court_work_per_block / per_work).min(policy.max_adjudications_per_block as u64) as usize;
-    let seats = w.seats(&claims[0].id);
-    let outsider = w.outsiders(&claims[0], &seats, 1)[0];
+    let outsider = w.outsiders(&claims[0], &first_seats, 1)[0];
+    let initial_states: Vec<_> = claims.iter().map(|c| format!("{:?}", w.net.claim_state(&c.id))).collect();
     let sybils: Vec<usize> = (1..8).filter(|c| *c != outsider).take(count).collect();
     assert_eq!(sybils.len(), count);
     let junk = ProsecutionV1::Kernel(vec![0xEE; 32]);
@@ -128,7 +133,7 @@ async fn g14_kernel_capacity_measure() {
     println!(
         "G14_CAP_MEASURE {}",
         json!({"schema":1,"n":n,"claims":count,"positions":positions,
-        "setup_wall_ns":setup_ns,"test_adjudication_cap":policy.max_adjudications_per_block,
+        "setup_wall_ns":setup_ns,"claim_states_at_measurement":initial_states,"test_adjudication_cap":policy.max_adjudications_per_block,
         "reserved_prosecution_runs":policy.prosecution_reserved_runs(),"work_cap":policy.max_court_work_per_block,
         "per_claim_worst_work":per_work,"calculated_adjudications":capacity,"rounds":rounds,"outsider":conviction,
         "arming_evidence":false,"fixture_only":true,"test_policy":true,"production_cap_measured":false,
