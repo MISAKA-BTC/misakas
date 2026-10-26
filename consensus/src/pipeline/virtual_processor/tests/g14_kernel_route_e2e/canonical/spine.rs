@@ -13,6 +13,8 @@ enum Stage {
     Run(&'static str, Mode, Start, Outcome),
     Reorg(&'static str, Outcome),
     Hold(&'static str),
+    /// The pinned production premise in effect on the node build (F02, user-approved 4-DAA estimate 2026-10-26).
+    Pinned(&'static str),
     Missing { stage: &'static str, lane: &'static str, needs: &'static str },
     /// lane CERT: a stage driven by `canonical::cert` (Gate C armed with a TEST-ONLY certification policy).
     Cert(&'static str, CertCase),
@@ -78,12 +80,13 @@ const STAGES: &[Stage] = &[
         lane: "F02 (P0-1)",
         needs: "a supply-absent branch in the kernel route's default fold (the default is deadline-only today)",
     },
-    Stage::Hold("S3c'' F02 premise None (production, typed-missing): the silent producer's demand ends as a no-slash hold"),
+    Stage::Hold("S3c'' F02 premise None (TEST-ONLY typed-missing override): the silent producer's demand ends as a no-slash hold"),
+    Stage::Pinned("S3c'' F02 pinned premise (production, 4 DAA): the silent producer's supplied demand is attributed and decided"),
     Stage::Missing {
         stage: "S3c''' default under an explicitly test-only inclusion premise on the native processor",
         lane: "F02 (P0-1) / central",
-        needs: "palw_accept.rs copies the const PALW_COURT_SERVICE_INCLUSION_PREMISE_V1 (None) with no test override; a \
-                #[cfg(test)] setter taking a TEST_ONLY_ premise, and the kernel ledger's default consulting the premise",
+        needs: "the TEST_ONLY_ premise setter and typed-missing override exist (palw_accept test_only_inclusion_premise); the \
+                kernel ledger's default must consult the premise (base: it defaults deadline-only, even with no premise)",
     },
     Stage::Reorg("S4 honest: Final and its payment decided once across a reorg of the deciding block", Outcome::WrongChallengeDismissed),
     Stage::Reorg("S4 silence: the default decided once across a reorg of the deadline block", Outcome::DefaultOnWithheldMaterial),
@@ -213,12 +216,15 @@ async fn decided_across_a_reorg(outcome: Outcome) {
     z.assert_same(&d.chain, "a node syncing Z's DAG after the reorg");
 }
 
-/// **S3c'': with no adopted inclusion premise** (production: `PALW_COURT_SERVICE_INCLUSION_PREMISE_V1 = None`), F02 attributes no
-/// default. The silent producer's demanded position passes its deadline, and the claim must then be held: not Final, not
+/// **S3c'': with no adopted inclusion premise** — since the 2026-10-26 pin a node build always has one, so this case is reached only
+/// through the TEST-ONLY typed-missing override (`set_typed_missing_v1`). F02 attributes no default. The silent producer's demanded position passes its deadline, and the claim must then be held: not Final, not
 /// convicted, not Unavailable. No penalty is taken, and both the producer's reservation and the demander's bond stay held.
 async fn silent_without_premise_holds() {
     kaspa_core::log::try_init_logger("warn");
-    assert!(kaspa_consensus_core::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.is_none(), "production premise");
+    let _missing = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::set_typed_missing_v1(
+        "TEST_ONLY_TYPED_MISSING_PREMISE",
+    );
+    assert_eq!(crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::effective_v1(), None);
     let mode = Mode::Panel;
     let mut w = world(mode).await;
     let funding = newcomer_funding(&w.net);
@@ -245,6 +251,37 @@ async fn silent_without_premise_holds() {
 #[tokio::test]
 async fn g14_spine_s3c_without_inclusion_premise_is_a_no_slash_hold() {
     silent_without_premise_holds().await;
+}
+
+/// **S3c'' (node build): the pinned premise is in effect** (no override). The same silent producer, demanded by an outsider, is
+/// decided: the claim ends `Unavailable` with the producer defaulted and the default penalty taken — never held forever.
+async fn silent_under_pinned_premise_is_decided() {
+    kaspa_core::log::try_init_logger("warn");
+    let pinned = kaspa_consensus_core::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1;
+    assert!(pinned.is_some_and(|p| p.inclusion_delay_daa == 4), "the approved 4-DAA premise is pinned");
+    assert_eq!(crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::effective_v1(), pinned);
+    let mode = Mode::Panel;
+    let mut w = world(mode).await;
+    let funding = newcomer_funding(&w.net);
+    let before = w.net.collateral(0) - Rules::admission_cost(&w, mode);
+    let (claim, _seats) = claimed(&mut w, mode, 0, true).await;
+    let mut node = start_node(&mut w.net, Start::Ibd).await;
+    let bond = register_newcomer(&mut node, funding).await;
+    sync(&node, &mut w.net).await;
+    know_newcomer(&mut w.net, bond);
+    Rules::file_demand(&mut node, NEWCOMER, claim.id, claim.at.0).await;
+    sync(&node, &mut w.net).await;
+    let read = Rpc::of(&w.net.chain).claim(&claim.id);
+    assert_eq!(read.demands.len(), 1, "the demand is open");
+    w.net.beat_to(read.demands[0].deadline_daa + 2).await;
+    let st = w.net.claim_state(&claim.id);
+    assert!(matches!(st, ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "pinned premise: decided default: {st:?}");
+    assert!(w.net.collateral(0) < before, "the default penalty is taken");
+}
+
+#[tokio::test]
+async fn g14_spine_s3c_pinned_premise_decides_the_silent_default() {
+    silent_under_pinned_premise_is_decided().await;
 }
 
 #[tokio::test]
@@ -281,6 +318,10 @@ async fn g14_spine_panel1_kernel_route_stage_table() {
             }
             Stage::Hold(name) => {
                 let r = std::panic::AssertUnwindSafe(silent_without_premise_holds()).catch_unwind().await;
+                rows.push((*name, if r.is_ok() { "PASS".to_string() } else { "FAIL".to_string() }));
+            }
+            Stage::Pinned(name) => {
+                let r = std::panic::AssertUnwindSafe(silent_under_pinned_premise_is_decided()).catch_unwind().await;
                 rows.push((*name, if r.is_ok() { "PASS".to_string() } else { "FAIL".to_string() }));
             }
             Stage::Missing { stage, lane, needs } => rows.push((*stage, format!("UNIMPLEMENTED [{lane}] {needs}"))),
