@@ -100,3 +100,18 @@ Merged the tip of `claude/g14-panel1-17000` (conflicts in `palw_g14_values_v1.rs
 2. The slice's settlement-once blocker.
 3. A pinned frame-cost record and G14 records (empty; no measurement).
 4. The FpTokenizer family's route; it is covered by the same staged fences, which the candidate test armed.
+
+## Follow-up 4 (2026-10-27): cause of "rail TFP1 claim not admitted" — found and fixed
+
+**Cause.** After the merge, the panel1 branch pins `PALW_COURT_SERVICE_PROFILE_V1`. With it pinned, every TIR original runs `install_court_service_binding_v1` when it is accepted. That binding reserves court-service packets out to `a + DISPUTE_WINDOW_DAA` (10,000), and `require_tir_service_custody_window_v1` then refuses any frame whose signed custody `material_until = collect + reorg_retention_daa` ends sooner, with "service material horizon exceeds signed TIR custody".
+
+Evidence: one rerun with `kaspa_consensus=info` printed block `7e16480f…`, "a PALW lifecycle object was dropped … service material horizon exceeds signed TIR custody". In the same run the carrier was in a valid block, the quote matched the plan, and `accept_until` 1727 was later than the block's DAA 1712.
+
+This is not rail-specific. Every TIR original is affected, including the producer's canonical claims. Under the estimated frame cost, where `material ≈ a + 3,480`, **no FpSelection claim could earn after 17,000.**
+
+**Fix.** This is a value conflict, not a rule bug: the rule (custody must cover the service binding) is correct.
+- `PALW_G14_TIR_FRAME_COST_ESTIMATE_V1.reorg_retention_daa` changed from 360 to `DISPUTE_WINDOW_DAA` (10,000). A guard assertion was added to the values test.
+- The T-N1 fixture's TEST-ONLY cost was raised to the same floor.
+- The register row was updated.
+
+**Not verified (waiver).** Neither the values test nor T-N1 has been rebuilt or rerun since the fix. Side effects that still need measuring: a longer custody period means seat bonds stay locked until `material` (`bond_exit_after_daa`), and the frame rent rises.

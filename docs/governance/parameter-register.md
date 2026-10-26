@@ -184,7 +184,7 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 | clock `action_parser_steps` / `_per_custodian` / `frame_passes_per_check` / `control_bytes` | 15,625,804 / 18,575 / 2 / 14,320 | 2026-10-16 candidate（`docs/design/palw/evidence/tir-frame-measure-2026-10-16/`）。M1 Max の release build、小さな corpus class での実測 | 最遅の対応 node で release build、genesis 規模の class で `frame_measure.rs` と fold harness を再実測 |
 | `parallel_bytes_per_daa` | 125,000 | t12 の block の上限（他の traffic なし）。network 入力で、観測していない | V5/V6 drill で混雑時の frame の取り分を観測 |
 | `inclusion_margin_daa` / `reorg_replay_moves` / `acquisition_daa` / `collection_daa` | 4 / 1 / 1 / 8 | candidate のとおり | V7 restart・reorg drill の観測、clock v2 の dispute 延長条件との整合を確認 |
-| `reorg_retention_daa` | **360**（candidate は 256） | t12 の finality 深さ（V9 で `network_v1` を 360 にしたのと同じ理由） | finality 深さの変更 |
+| `reorg_retention_daa` | **10,000**（candidate は 256、10-26 案は 360） | 10-27 修正: TIR original は受理時に F02 court service binding を張り、その packet は a+10,000（DISPUTE_WINDOW_DAA）まで続く。frame の署名済み custody（collect + これ）が覆わないと全 original が拒否される。t12 の finality 深さ 360 も覆う | F02 profile の窓の変更、custody 延長による seat bond 拘束・rent の実測 |
 | `maximum_door_daa` | 3,120 | 責任期間 `window_challenge_at` 120 + `window_court` 3,000（16,000 fence で読んだ値） | 武装する fence での horizon を validation で再確認 |
 
 `PALW_TIR_FRAME_COST_RECORDS_V1` は空のままにする。この目安だけでは `palw_tir_public_conviction_v1` を武装できない（`NoRecord`）。

@@ -439,6 +439,29 @@ stage_artifact() {
     fi
 }
 
+# lane ROLES: the Panel=1 slice's registered kernel model (PALWKM01) into every node's default directory, sha-verified. The binary
+# loads every *.palwkm there with no flag (palw_kernel_verifier) and opens it only once the kernel route's fence is in force.
+# Empty KERNEL_MODEL_SHA256 = not staged (the kernel verification duty then has no model and idles).
+stage_kernel_model() {
+    [ -n "${KERNEL_MODEL_SHA256:-}" ] || { say "  no KERNEL_MODEL_SHA256 in fleet.env - kernel model not staged"; return 0; }
+    if [ ! -f "$KERNEL_MODEL_FILE" ]; then
+        [ -f "$KERNEL_MODEL_FILE.incoming" ] || die "no $KERNEL_MODEL_FILE and no .incoming - run distribute-from-mac.sh kernel-model"
+        verify_sha "$KERNEL_MODEL_FILE.incoming" "$KERNEL_MODEL_SHA256"
+        mv "$KERNEL_MODEL_FILE.incoming" "$KERNEL_MODEL_FILE"
+    fi
+    verify_sha "$KERNEL_MODEL_FILE" "$KERNEL_MODEL_SHA256"
+    local spec dir dst
+    for spec in "${NODES[@]}"; do
+        parse_node "$spec"
+        dir="$N_APPDIR/misaka-testnet-12/palw-kernel-models"; dst="$dir/$(basename "$KERNEL_MODEL_FILE")"
+        mkdir -p "$dir"
+        if [ -f "$dst" ] && [ "$(sha_of "$dst")" = "$KERNEL_MODEL_SHA256" ]; then continue; fi
+        install -m 0644 "$KERNEL_MODEL_FILE" "$dst.tmp.$TS" && mv -f "$dst.tmp.$TS" "$dst"
+        verify_sha "$dst" "$KERNEL_MODEL_SHA256"
+    done
+    say "  kernel model placed in every node's palw-kernel-models/"
+}
+
 stage_nodes() {
     local spec
     for spec in "${NODES[@]}"; do
@@ -1191,7 +1214,7 @@ main_dispatch() {
     case "$cmd" in
         preflight) REL="$REL_ROOT/${REV}"; preflight_common "$RESERVE_MIB"; host_preflight ;;
         stage)     require_release; host_preflight
-                   stage_binaries "${BINARIES[@]}"; stage_artifact; stage_nodes
+                   stage_binaries "${BINARIES[@]}"; stage_artifact; stage_kernel_model; stage_nodes
                    say "stage done — nothing running was touched" ;;
         switch)    require_release; host_guard_switch; switch_host "$START_GAP" ;;
         check)     require_release; check_nodes; seeder_status ;;

@@ -19,6 +19,12 @@
 #                                       install-*.sh stage checks it again on the host.
 #   ./distribute-from-mac.sh artifact   5.104's 8k artifact + sidecar → Mac → ibm, .113 as *.incoming
 #                                       (the existing *.palwart.part files there are left alone)
+#   ./distribute-from-mac.sh kernel-model <file>
+#                                       lane ROLES: the Panel=1 slice's PALWKM01 (wide128_v1(7), generated on the Mac by
+#                                       `cargo run -p misaka-palw-kernel --example gen-wide128-palwkm -- <dir>`) -> 5.104,
+#                                       .113, ibm as $KERNEL_MODEL_FILE.incoming (sha256 = KERNEL_MODEL_SHA256 checked here);
+#                                       install-*.sh stage verifies again and copies it into each node's
+#                                       <appdir>/misaka-testnet-12/palw-kernel-models/ (PLAN.md section 15 addendum)
 set -euo pipefail
 KIT=$(cd "$(dirname "$0")" && pwd)
 . "$KIT/fleet.env"
@@ -121,5 +127,15 @@ artifact)
         push "$h" "$a.palwmanifest" "$ART_8K.palwmanifest.incoming"
         say "8k artifact → $h (as .incoming; stage promotes it)"
     done ;;
-*) sed -n '2,21p' "$0"; exit 2 ;;
+kernel-model)
+    km=${2:-}; [ -f "$km" ] || die "usage: $0 kernel-model <wide128-v1-7.palwkm>"
+    [ -n "${KERNEL_MODEL_FILE:-}" ] && [ -n "${KERNEL_MODEL_SHA256:-}" ] || die "set KERNEL_MODEL_FILE and KERNEL_MODEL_SHA256 in fleet.env"
+    [ "$(lsha "$km")" = "$KERNEL_MODEL_SHA256" ] || die "kernel model sha256 on the Mac differs from KERNEL_MODEL_SHA256"
+    for h in 5104 113 ibm; do
+        on "$h" "mkdir -p $(dirname "$KERNEL_MODEL_FILE")"
+        push "$h" "$km" "$KERNEL_MODEL_FILE.incoming"
+        on "$h" "sha256sum $KERNEL_MODEL_FILE.incoming"
+        say "kernel model -> $h (as .incoming; stage verifies and places it per node)"
+    done ;;
+*) sed -n '2,27p' "$0"; exit 2 ;;
 esac

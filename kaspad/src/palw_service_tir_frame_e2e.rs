@@ -34,6 +34,10 @@ pub(super) fn tir_frame_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>
     // TEST-ONLY 2-DAA acquisition leaves it one DAA. 4 DAA keeps the frame's collect door (which the licence waits out) inside the
     // receipt window (bind + 600).
     cost.config.acquisition_daa = 4;
+    // Lane FPSEL fix 2026-10-27: past the F02 profile pin every TIR original installs a court service binding whose packets run to
+    // `a + DISPUTE_WINDOW_DAA`, and the frame's signed custody (`collect + retention`) must cover it; the TEST-ONLY retention 8 made
+    // every original (canonical or rail) be dropped as "service material horizon exceeds signed TIR custody".
+    cost.config.reorg_retention_daa = cost.config.reorg_retention_daa.max(kaspa_consensus_core::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
     p.palw_tir_frame_cost_v1 = Some(cost);
     // **HARNESS ONLY: a work target at this tiny class's scale.** `W₀ = escrow · 10⁹ / rate`: at testnet-12's 9 MSK a G it is
     // ~3.6·10^11 CCU and the ~7·10^4-CCU IR class draws (and its quanta win) at ~2·10^-7 — so its probes could only be ground, never
@@ -1800,8 +1804,23 @@ async fn rail_tfp1_claim_v1(
         .ok()
         .map(|envelope| format!("{envelope:?}").chars().take(400).collect::<String>());
     eprintln!("[service-tir-frame] rail: carrier {} envelope {rehearsal:?}", tx.id());
-    chain.heartbeat(vec![tx.clone()]).await;
+    let block = chain.heartbeat(vec![tx.clone()]).await;
+    let carried = block.transactions.iter().any(|t| t.id() == tx.id());
     chain.heartbeat(vec![]).await;
+    let admitted = chain.tc.palw_legacy_dispute_v1(claim).is_some();
+    let plain = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
+        .ok()
+        .and_then(|e| e.original_fp_v1().ok())
+        .map(|o| o.commitment == commitment);
+    let requote = chain.tc.palw_tir_public_original_quote_v1(commitment.clone(), tir.clone()).map(|q| q.map(|(d, p)| (d, p.resource_plan_id)));
+    eprintln!(
+        "[service-tir-frame] rail diag: quoted at {quote_daa} (plan {}), accept_until {}, block daa {}, carried {carried}, claim admitted {admitted}, \
+         envelope original == commitment {plain:?}, requote {requote:?}, block status {:?}",
+        plan.resource_plan_id,
+        pledges.pledge.accept_until_daa,
+        block.header.daa_score,
+        chain.tc.get_block_status(block.header.hash)
+    );
     let output = tx.outputs.last().unwrap();
     *funding = (
         TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),

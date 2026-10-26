@@ -94,6 +94,10 @@ pub struct PalwKernelRolesConfigV1 {
     pub producer: bool,
     /// One job to post: (prompt, max_new_tokens).
     pub post_job: Option<(Vec<u32>, u32)>,
+    /// Lane ROLES: one encoded `KernelRouteObjectV1::RegisterClass` to submit, signed by this node's bond and carried with its fee
+    /// outpoint, until the class is on the route (`--palw-kernel-register-class=<file>`); `register_class_dry_run` only logs it.
+    pub register_class: Option<Vec<u8>>,
+    pub register_class_dry_run: bool,
     pub export_dir: Option<PathBuf>,
     pub relay_dir: Option<PathBuf>,
     /// TEST ONLY: validated at start-up to need a drill salt.
@@ -127,6 +131,7 @@ pub fn palw_kernel_post_job_parse_v1(s: &str) -> Result<(Vec<u32>, u32), String>
 pub(super) struct PalwKernelRolesBookV1 {
     queued: HashMap<Hash64, u64>,
     posted: bool,
+    registered: bool,
     injected: HashSet<(Digest, u8)>,
     last_daa: Option<u64>,
 }
@@ -450,6 +455,35 @@ impl PalwPanelService {
                 None => crate::palw_backends::note_throttled_v1("kernel-poster-no-class", || {
                     format!("[{PALW_PANEL}] kernel poster: no registered class opens to a held --palw-kernel-model; nothing posted")
                 }),
+            }
+        }
+
+        // -- registrant (lane ROLES) --
+        if let (Some(bytes), false) = (&cfg.register_class, book.registered) {
+            match K::decode(bytes) {
+                Ok(object @ K::RegisterClass { .. }) => {
+                    let K::RegisterClass { descriptor, program_bytes, plan, param_commitments } = &object else { unreachable!() };
+                    let class = misaka_palw_kernel::ledger::single_class_binding_v1(*descriptor, program_bytes, plan, param_commitments)
+                        .class_binding_id();
+                    if ledger.classes.contains_key(&class) {
+                        info!("[{PALW_PANEL}] kernel registrant: class {} is on the route", Hash64::from_bytes(class));
+                        book.registered = true;
+                    } else if cfg.register_class_dry_run {
+                        crate::palw_backends::note_throttled_v1("kernel-register-class-dry-run", || {
+                            format!(
+                                "[{PALW_PANEL}] kernel registrant DRY RUN: would submit RegisterClass for class {} (param root {}) signed by bond {}, \
+                                 carried with --palw-fee-outpoint; nothing submitted",
+                                Hash64::from_bytes(class),
+                                Hash64::from_bytes(param_commitments.root()),
+                                bond_key.0
+                            )
+                        });
+                    } else if let Some(o) = sign(&object) {
+                        out.push((class, PALW_KERNEL_PRODUCER_ROUND_V1, o, "RegisterClass"));
+                    }
+                }
+                Ok(_) => warn!("[{PALW_PANEL}] kernel registrant: the file is not a RegisterClass object; nothing submitted"),
+                Err(why) => warn!("[{PALW_PANEL}] kernel registrant: the file does not decode: {why:?}; nothing submitted"),
             }
         }
 

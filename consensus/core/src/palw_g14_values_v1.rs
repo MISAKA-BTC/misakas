@@ -281,7 +281,12 @@ pub const PALW_G14_TIR_FRAME_COST_ESTIMATE_V1: crate::palw_tir_frame_cost_v1::Pa
             },
             acquisition_daa: 1,
             collection_daa: 8,
-            reorg_retention_daa: 360,
+            // Lane FPSEL fix 2026-10-27: the frame's signed custody (`material_until = collect + this`) must cover the F02 court
+            // service binding every TIR original now installs at acceptance (its packets run to `a + DISPUTE_WINDOW_DAA`;
+            // `require_tir_service_custody_window_v1`). At 360 every TIR original was refused ("service material horizon exceeds
+            // signed TIR custody") once `PALW_COURT_SERVICE_PROFILE_V1` was pinned. 10,000 (the dispute window) also covers t12's
+            // finality depth 360 (V9).
+            reorg_retention_daa: crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA,
             maximum_owned_rows_per_reserver: 1,
         },
         clock: crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1 {
@@ -477,6 +482,11 @@ mod tests {
         assert_ne!(cost, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1(), "not the test-only config");
         let network = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
         assert!(cost.config.reorg_retention_daa >= network.reorg_retention_daa, "covers testnet-12's finality depth (V9)");
+        // The frame's custody horizon (collect + retention, collect >= acceptance) covers the F02 service binding's window.
+        assert!(
+            cost.config.reorg_retention_daa >= crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA,
+            "a TIR original's signed custody must outlast its court service packets (a + DISPUTE_WINDOW_DAA)"
+        );
         assert!(cost.clock.maximum_door_daa <= 120 + 3_000, "inside the liability horizon the candidate read");
         assert_eq!(cost.clock.inclusion_daa_v1(1, 0).expect("no overflow"), 1, "one control fits one DAA's inclusion capacity");
         assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 17_000 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));

@@ -2197,6 +2197,10 @@ Do you confirm? (y/n)";
                                 crate::palw_panel::palw_kernel_roles::palw_kernel_post_job_parse_v1(s)
                                     .unwrap_or_else(|e| panic!("--palw-kernel-post-job={s}: {e}"))
                             }),
+                            register_class: args.palw_kernel_register_class.as_ref().map(|p| {
+                                std::fs::read(p).unwrap_or_else(|e| panic!("--palw-kernel-register-class={p}: {e}"))
+                            }),
+                            register_class_dry_run: args.palw_kernel_register_class_dry_run,
                             export_dir: args.palw_kernel_export_dir.as_ref().map(std::path::PathBuf::from),
                             relay_dir: args.palw_kernel_relay_dir.as_ref().map(std::path::PathBuf::from),
                             inject: args
