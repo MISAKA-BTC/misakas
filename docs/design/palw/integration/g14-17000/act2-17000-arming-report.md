@@ -37,7 +37,7 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
 | 18 | palw_claim_hard_deadline_v1 | slice(X3) |
 | 19 | palw_settlement_once_v1 | slice |
 | 20 | palw_independently_work_certified_v1 | slice(Gate C) |
-| 21 | palw_fp_tokenizer_match | FpTokenizer |
+| — | ~~palw_fp_tokenizer_match~~ | FpTokenizer。**t12 は DAA 5,300 から既に有効**。17,000 で再武装すると 17,000 未満の fence が動くので、一覧から外した(identity 試験で検出) |
 | 22 | palw_panel_da_disclosure_v1 | PanelDa(`palw_panel_da` は t12 で既に有効) |
 | 23 | palw_g14_route_required_v1 | 全 family |
 
@@ -48,7 +48,7 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
 
 ## 3. validation(`validate_palw_v2`、出荷 records)の拒否
 
-方法: 一覧の順に 1 本ずつ足し、拒否された fence は外したまま次へ進む。実測は PanelDa を加える前の 21 本で取った。int-13 の 4 本を除く 17 本のうち、14 本が拒否された。PanelDa の 2 本は、下記のとおりコードを読んで分類した。`validate_palw_v2` は最初の拒否しか返さない。前提で止まった fence は、前提が通った後に自分の record gate でも止まる(コードで確認済み)。
+方法: 一覧の順に 1 本ずつ足し、拒否された fence は外したまま次へ進む。最終版の 22 本(int-13 の 4 本は保持)で再実測した。**18 本のうち 16 本が拒否、2 本(tir_container_identity、bond_budget)が OK**。`validate_palw_v2` は最初の拒否しか返さない。前提で止まった fence は、前提が通った後に自分の record gate でも止まる(コードで確認済み)。
 
 | fence | 拒否(実測の最初の理由) | 解除に要るもの | 分類 |
 |---|---|---|---|
@@ -68,7 +68,7 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
 | claim_hard_deadline_v1 | X3 record なし(4 要件、2 番目が B_* 測定) | record | (b)。測定項目は目安 pin 済み、waiver を明記 |
 | settlement_once_v1 | 前提(5, 18)。その後 **`PALW_RFC0608_OPEN_BLOCKERS_V1` の RFC08-2** | blocker の解消 | **(c)** §6-2 |
 | independently_work_certified_v1 | 前提(5) | 5 | 前提 |
-| fp_tokenizer_match | OK | — | — |
+| fp_tokenizer_match | (一覧外。5,300 で有効) | — | — |
 | panel_da_disclosure_v1 | 無条件拒否(実ノード E2E 未) | lane PANELDA が 245f36f54 の配線を要件とし、E2E を waiver にする変更 | (b)(その変更が前提) |
 | g14_route_required_v1 | G14 record なし(T-N8/T-N10/E2E/drill) | record | (b) |
 
@@ -102,7 +102,9 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
 
 ## 5. identity
 
-- `t12-fleet-identity.sh 24d756077`: 結果は末尾 §7 に記す。
+- `t12-fleet-identity.sh 24d756077`(cherry-pick と merge の後、tokenizer 除去の前): **IDENTICAL to 24d756077**(params、identity、schedule id、fork id、17,000 未満の fence)。
+- 最終 tree での `g14_17000_list_keeps_everything_below_17000` は pass。`fleet_ids_match_247ade1f9` も pass(4 passed)。
+- 武装後の schedule id は `a2759b1c…`(出荷時は `9ef2b1a7…`)。17,000 の高さが加わるので変わるのは想定どおり。17,000 未満の schedule は同一。
 - 分岐専用の試験 `g14_17000_list_keeps_everything_below_17000` を置いた。一覧を 17,000 で武装しても、次のものは出荷 params と同一であることを確かめる。
   - handshake identity
   - 15,500 以前を含む各 DAA の fired fork id
@@ -123,3 +125,12 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
 3. **`PALW_TIR_FRAME_COST_RECORDS_V1` が空。** tir_public_conviction には測定値の record が要る(目安は `PALW_G14_TIR_FRAME_COST_ESTIMATE_V1`)。測定値は waiver にできない。対応は、測定するか、目安を値として pin する規則をユーザーが承認するかのどちらか。
 4. **court_capacity の policy は、測定 record から導出したものと一致することを検査される。** ARM-LEGACY の V11 測定が来ないと武装できない。
 5. 失敗のまま残っている試験がある: kaspad fpcp_ の 6 件、close_legacy と court_capacity の pin 各 1 件。V1 の evidence にするには、先に直す必要がある。
+
+## 7. その他
+
+- integration tip `1b9f9a45f`(FPTOK)を merge した。衝突はなかった。
+- compile の修正:
+  - `misaka-palw-remote` に `misaka-endpoints` の依存を追加した(2b16ba257 の palw-evidence が使う)。
+  - `protocol/flows` の orphans 試験を `BlockTransactionsV3` に合わせた。
+  - `misaka-palw-worker` は llama.cpp(`MISAKA_LLAMA_SRC`)が必要なので、check から外した。
+- 全体 check: 上記 2 件を除けば error は無かった。修正後に該当 crate だけを check して exit 0。
