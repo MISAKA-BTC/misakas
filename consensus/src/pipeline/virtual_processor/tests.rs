@@ -13850,7 +13850,9 @@ async fn a_missing_delta_under_the_tip_is_recovered_from_the_pruning_snapshot() 
     let mut diff = kaspa_consensus_core::utxo::utxo_diff::UtxoDiff::default();
     let mut bond_view = vp.initial_active_bond_view();
     // Two failures are staged at once and each has its own answer, so the assertions separate them.
-    let reached = vp.calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, sink);
+    let reached = vp
+        .calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, sink)
+        .expect("the walk rebuilds its base and returns the block it reached");
 
     // 1. The BASE. Reverting the tip needs the delta that is gone, so the tip is not a usable base;
     //    the pruning snapshot is, and the walk got past `from` on the strength of it. Without that
@@ -13878,7 +13880,9 @@ async fn a_missing_delta_under_the_tip_is_recovered_from_the_pruning_snapshot() 
     //    the same snapshot) returns exactly that block.
     let mut diff = kaspa_consensus_core::utxo::utxo_diff::UtxoDiff::default();
     let mut bond_view = vp.initial_active_bond_view();
-    let reached = vp.calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, below);
+    let reached = vp
+        .calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, below)
+        .expect("the walk reaches the block below the gap");
     assert_eq!(reached, below, "the rebuilt base must carry the walk all the way to {below}");
     let _ = state_params;
 }
