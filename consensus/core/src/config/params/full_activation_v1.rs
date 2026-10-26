@@ -343,6 +343,25 @@ pub const PALW_T12_KERNEL_SLICE_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
 ];
 
+/// **The FP constraint / prefix family list (lane FPCP, 2026-10-26)** — the subset of [`PALW_T12_FULL_ACTIVATION_FENCES_V1`] under which a
+/// constraint (FP Job V6) or prefix-state (11 / 12) job can be admitted and earn again under option (b): `FpConstraint` / `FpPrefix`
+/// (staged public court + LG14-A), and — because one FP claim spans several families — `FpTokenizer` (the same fences) and
+/// `FpSelection` (the TIR public frame: `palw_tir_public_conviction_v1`, whose resolved fence needs the staged TIR route and the staged
+/// court). Same order as the full list. `palw_legacy_held_da_v2` is NOT here: no FP family's route reads it. Nothing here arms anything;
+/// every entry's own validation (records, measured values) still applies when a height is set.
+pub const PALW_T12_FP_CONSTRAINT_PREFIX_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    crate::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY,
+    crate::palw_gen_range_twin_v1::PALW_DRILL_GEN_RANGE_TWIN_ENTRY,
+    PALW_T12_MODEL_COURT_WINDOW_ENTRY,
+    crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
+    PALW_T12_FULL_LEGACY_PUBLIC_FILER_ENTRY,
+    PALW_T12_FULL_STAGED_PUBLIC_COURT_ENTRY,
+    PALW_T12_FULL_STAGED_TIR_ROUTE_ENTRY,
+    PALW_T12_FULL_TIR_CONTAINER_IDENTITY_ENTRY,
+    PALW_T12_FULL_TIR_PUBLIC_CONVICTION_ENTRY,
+    PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
+];
+
 /// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.
 pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {
     match at {
