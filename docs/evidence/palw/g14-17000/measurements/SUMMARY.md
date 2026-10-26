@@ -55,3 +55,16 @@ and preflight are queued, with no compile or runtime success claimed. The existi
 full-cap source remains unchanged. [Comparison scope](M-SHADOW/README.md#actual-legacykernel-comparison-preflight-prepared)
 records the remaining attack and verification-cost requirements. All five P0
 arming requirements remain NOT_MET.
+
+
+## Independent-carrier capacity implementation checkpoint
+
+Commit `dfd2ccf6a` on `codex/g14-court-saturation` prepares an additional native
+capacity experiment. The existing sender serializes same-card change-chain
+transactions, so merely raising its count would not create same-block pressure.
+The new test normally mines independent funding UTXOs, then offers 12 or 72 junk
+proofs through the unchanged mempool/template and records each carrying/folding
+block. An outsider's valid proof is also co-offered with a fresh junk batch. The
+runner distinguishes actually observed cap saturation from transport-limited
+batches. It does not assert continuous-refill service or outsider priority.
+Build and preflight execution are queued; no passing observation is claimed.
