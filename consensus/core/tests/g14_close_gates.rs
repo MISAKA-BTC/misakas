@@ -563,7 +563,9 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     t12.palw_g14_route_required_v1 = Some(ForkActivation::new(RELEASE));
     t12.sync_palw_g14_gates_v1();
     let mirror = sp_of(&t12).g14_route_required_v1().expect("mirrored");
-    assert_eq!(mirror, PalwG14RouteMirrorV1 { from_daa: RELEASE, ..none }, "testnet-12 arms no G14 route");
+    // Lane FPTOK: testnet-12's own tokenizer binding (if it has one) is mirrored, but it alone is no route.
+    let tokenizer_match_from = t12.palw_fp_tokenizer_match_fence().map(|f| f.daa_score());
+    assert_eq!(mirror, PalwG14RouteMirrorV1 { from_daa: RELEASE, tokenizer_match_from, ..none }, "testnet-12 arms no G14 route");
     assert!(palw_g14_route_attempt_refusal_v1(&sp_of(&t12), RELEASE).is_some());
     assert!(palw_g14_route_attempt_refusal_v1(&sp_of(&t12), RELEASE - 1).is_none());
 }
@@ -577,7 +579,7 @@ fn legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_arme
     let at = FENCE;
     let none = PalwG14RouteMirrorV1::default();
     let check = |routes: PalwG14RouteMirrorV1, c: &PalwFreePromptCommitmentV3, framed: bool| {
-        palw_g14_route_fp_refusal_v1(&route_sp(&p, at, routes), at, Some(c), framed).map(|(code, _)| code)
+        palw_g14_route_fp_refusal_v1(&route_sp(&p, at, routes), at, Some(c), framed, true).map(|(code, _)| code)
     };
     // No route armed: every legacy FP job version is refused; constraint and prefix by the G-05 code.
     assert_eq!(check(none, &constraint_v6(), false), Some(PALW_G14_JOB_UNJUDGEABLE_CODE_V1));
@@ -594,7 +596,12 @@ fn legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_arme
     let no_filer = PalwG14RouteMirrorV1 { staged_court_from: Some(at), tir_conviction_from: Some(at), ..none };
     assert_eq!(check(no_filer, &constraint_v6(), true), Some(PALW_G14_JOB_UNJUDGEABLE_CODE_V1));
     // Every route armed: a FRAMED job is admitted; the same job unframed is refused (the frame is the selection route).
-    let all = PalwG14RouteMirrorV1 { tir_conviction_from: Some(at), ..staged };
+    // Lane FPTOK: without the tokenizer binding the tokenizer family has no route, so every FP job stays refused.
+    let unbound = PalwG14RouteMirrorV1 { tir_conviction_from: Some(at), ..staged };
+    for c in [public_v4(), constraint_v6(), prefix_v11()] {
+        assert!(check(unbound, &c, true).is_some(), "version {}: framed, tokenizer unbound", c.job.version);
+    }
+    let all = PalwG14RouteMirrorV1 { tokenizer_match_from: Some(at), ..unbound };
     for c in [public_v4(), constraint_v6(), prefix_v11()] {
         assert_eq!(check(all, &c, true), None, "version {}: framed, every route armed", c.job.version);
         assert!(check(all, &c, false).is_some(), "version {}: unframed", c.job.version);
@@ -604,8 +611,22 @@ fn legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_arme
     let late = PalwG14RouteMirrorV1 { tir_conviction_from: Some(at + 1), ..staged };
     assert!(check(late, &public_v4(), true).is_some());
     // Below the fence: nothing refused. No commitment shown: refused (fail closed).
-    assert_eq!(palw_g14_route_fp_refusal_v1(&route_sp(&p, at + 1, none), at, Some(&constraint_v6()), false), None);
-    assert!(palw_g14_route_fp_refusal_v1(&route_sp(&p, at, none), at, None, true).is_some());
+    assert_eq!(palw_g14_route_fp_refusal_v1(&route_sp(&p, at + 1, none), at, Some(&constraint_v6()), false, true), None);
+    assert!(palw_g14_route_fp_refusal_v1(&route_sp(&p, at, none), at, None, true, true).is_some());
+    // Lane FPTOK: a class without registered raw tokenizer material has no tokenizer route. Every route armed: a registered class is
+    // admitted, an unregistered one refused with G14_ROUTE_ABSENT.
+    let tok = |routes: PalwG14RouteMirrorV1, from: u64, c: &PalwFreePromptCommitmentV3, has: bool| {
+        palw_g14_route_fp_refusal_v1(&route_sp(&p, from, routes), at, Some(c), true, has).map(|(code, _)| code)
+    };
+    for c in [public_v4(), constraint_v6(), prefix_v11()] {
+        assert_eq!(tok(all, at, &c, true), None, "version {}: registered tokenizer material", c.job.version);
+        assert_eq!(tok(all, at, &c, false), Some(PALW_G14_ROUTE_ABSENT_CODE_V1), "version {}: none registered", c.job.version);
+        // Below the fence, and while the tokenizer route is unarmed, the flag changes nothing.
+        assert_eq!(tok(all, at + 1, &c, false), None, "version {}: below the fence", c.job.version);
+        assert_eq!(tok(all, at + 1, &c, false), tok(all, at + 1, &c, true));
+        assert_eq!(tok(unbound, at, &c, false), tok(unbound, at, &c, true), "version {}: tokenizer route unarmed", c.job.version);
+        assert_eq!(tok(none, at, &c, false), tok(none, at, &c, true), "version {}: no route armed", c.job.version);
+    }
     // The fold refuses the constraint commitment at the claim gate with the G-05 code, before any constraint-specific check.
     let r = rig(p);
     let commit = fp_commit(&r.s, r.floor, r.bond, r.pk.clone(), h(0xC6), Some(constraint_v6()));
@@ -868,20 +889,26 @@ fn g14_genesis_from_block_zero_only_families_with_an_armed_route_earn() {
     // Non-public material never pays; an unframed public job never pays.
     for c in [v5_image(), panel_da(), public_v4(), constraint_v6(), prefix_v11()] {
         for daa in [0, 1, 1_000] {
-            assert!(palw_g14_route_fp_refusal_v1(&sp, daa, Some(&c), false).is_some(), "version {} unframed at {daa}", c.job.version);
+            assert!(palw_g14_route_fp_refusal_v1(&sp, daa, Some(&c), false, true).is_some(), "version {} unframed at {daa}", c.job.version);
         }
         assert!(
-            palw_g14_route_fp_refusal_v1(&sp, 0, Some(&c), true).is_some() || mirror.tir_conviction_from == Some(0),
+            palw_g14_route_fp_refusal_v1(&sp, 0, Some(&c), true, true).is_some() || mirror.tir_conviction_from == Some(0),
             "framed at 0 only if the TIR route resolved at 0"
         );
     }
     for c in [v5_image(), panel_da()] {
-        assert!(palw_g14_route_fp_refusal_v1(&sp, u64::MAX / 2, Some(&c), true).is_some(), "non-public never, framed or not");
+        assert!(palw_g14_route_fp_refusal_v1(&sp, u64::MAX / 2, Some(&c), true, true).is_some(), "non-public never, framed or not");
     }
     // Only families with an armed route earn: a framed public FP job once every route it needs is in force.
     let tir = mirror.tir_conviction_from.expect("the TIR route resolves on g14-genesis");
+    // Lane FPTOK: the tokenizer family also needs the job ↔ class tokenizer binding in force.
+    let tok = mirror.tokenizer_match_from.expect("the tokenizer binding resolves on g14-genesis");
+    if tok > tir {
+        assert!(palw_g14_route_fp_refusal_v1(&sp, tok - 1, Some(&public_v4()), true, true).is_some(), "framed, tokenizer still unbound");
+    }
+    let tir = tir.max(tok);
     for c in [public_v4(), constraint_v6(), prefix_v11()] {
-        assert_eq!(palw_g14_route_fp_refusal_v1(&sp, tir, Some(&c), true), None, "version {} framed at {tir}", c.job.version);
+        assert_eq!(palw_g14_route_fp_refusal_v1(&sp, tir, Some(&c), true, true), None, "version {} framed at {tir}", c.job.version);
     }
     // The liability horizon governs every claim from block 0.
     assert!(sp.reward_liability_horizon_governs_v1(0));

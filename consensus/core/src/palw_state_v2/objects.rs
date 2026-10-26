@@ -3671,6 +3671,12 @@ fn apply_object_inner(
                 ctx.daa_score,
                 public_job.as_deref(),
                 builder.extras.tir_public_originals.contains_key(claim_id),
+                // Lane FPTOK: the class registered the raw tokenizer material its tokenizer court recomputes against.
+                builder
+                    .state
+                    .class_semantics
+                    .get(class_id)
+                    .is_some_and(|s| s.raw_tokenizer_bytes.is_some() && s.tokenizer_key_events.is_some()),
             ) {
                 return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
             }

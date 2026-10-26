@@ -702,6 +702,7 @@ impl Params {
             court_capacity_from: self.palw_court_capacity_v1_fence().map(|f| f.activation.daa_score()),
             kernel_panel_one_from: height(self.palw_kernel_route_panel_one_v1_fence()),
             gate_c_from: height(self.palw_independently_work_certified_v1),
+            tokenizer_match_from: self.palw_fp_tokenizer_match_fence().map(|f| f.daa_score()),
         })
     }
 
@@ -771,6 +772,10 @@ pub struct PalwG14RouteMirrorV1 {
     pub kernel_panel_one_from: Option<u64>,
     /// Gate C, `palw_independently_work_certified_v1` (per-claim drawn approval; `KernelRoutePanelOne`).
     pub gate_c_from: Option<u64>,
+    /// `palw_fp_tokenizer_match`, resolved (ConsensusV2): the job's `tokenizer_id` is the class's listed tokenizer (lane FPTOK,
+    /// 2026-10-26). Without it the job may name a tokenizer the court's registered raw material does not describe, and an
+    /// outsider's detokenize recomputation would not be a judgment of the claim the producer made.
+    pub tokenizer_match_from: Option<u64>,
 }
 
 fn in_force(height: Option<u64>, daa: u64) -> bool {
@@ -795,8 +800,13 @@ impl PalwG14RouteMirrorV1 {
                 self.route_armed(PalwG14RouteFamilyV1::LegacyPanelAttempt, d, framed) && in_force(self.court_capacity_from, d)
             }
             PalwG14RouteFamilyV1::FpSelection => framed && in_force(self.tir_conviction_from, d),
-            PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix | PalwG14RouteFamilyV1::FpTokenizer => {
+            PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix => {
                 in_force(self.staged_court_from, d) && in_force(self.legacy_filer_from, d)
+            }
+            // Lane FPTOK (2026-10-26): the raw-tokenizer court judges ids <-> text with the class's registered tokenizer, so the job
+            // must be bound to that tokenizer (`palw_fp_tokenizer_match`) before an outsider's recomputation convicts the claim.
+            PalwG14RouteFamilyV1::FpTokenizer => {
+                in_force(self.staged_court_from, d) && in_force(self.legacy_filer_from, d) && in_force(self.tokenizer_match_from, d)
             }
             PalwG14RouteFamilyV1::NonPublicEvidence => false,
             PalwG14RouteFamilyV1::KernelRoutePanelOne => in_force(self.kernel_panel_one_from, d) && in_force(self.gate_c_from, d),
@@ -813,7 +823,7 @@ impl PalwG14RouteMirrorV1 {
 /// | `FpSelection` | every FP job decoded under a selection rule (V3, V4, constraint, prefix) | the TIR public frame: `palw_tir_public_conviction_v1` AND the commitment carries its TFP1 frame |
 /// | `FpConstraint` | FP Job V6 (constraint) | the staged Constraint family: `palw_staged_public_court_v1` + LG14-A |
 /// | `FpPrefix` | prefix state / inherit (11 / 12) | the staged PublicPrefix family: `palw_staged_public_court_v1` + LG14-A |
-/// | `FpTokenizer` | every FP job (its ids ↔ text through its tokenizer) | the staged raw-tokenizer family: `palw_staged_public_court_v1` + LG14-A |
+/// | `FpTokenizer` | every FP job (its ids ↔ text through its tokenizer) | the staged raw-tokenizer family: `palw_staged_public_court_v1` + LG14-A + `palw_fp_tokenizer_match` |
 /// | `NonPublicEvidence` | FP Job V5 (images / source ids), PanelDa | none can exist (the material never reaches the chain) |
 ///
 /// The legacy FP lane's selection proofs are refused on FP claims and contradiction 14–18 sit under LG14-A (R5, R6), so even LG14-A +
@@ -849,9 +859,17 @@ pub fn palw_g14_route_family_fences_v1(family: PalwG14RouteFamilyV1) -> &'static
             &["palw_legacy_public_filer_v1", "palw_legacy_held_da_v2", "palw_court_capacity_v1", "palw_g14_route_required_v1"]
         }
         PalwG14RouteFamilyV1::FpSelection => &["palw_tir_public_conviction_v1", "palw_g14_route_required_v1"],
-        PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix | PalwG14RouteFamilyV1::FpTokenizer => {
+        PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix => {
             &["palw_staged_public_court_v1", "palw_legacy_public_filer_v1", "palw_g14_route_required_v1"]
         }
+        // Listed in intended activation order: the binding at or below the staged court. Not a params refusal, because Constraint /
+        // Prefix use the staged court without it; `route_armed` counts the family from the latest of the three.
+        PalwG14RouteFamilyV1::FpTokenizer => &[
+            "palw_fp_tokenizer_match",
+            "palw_legacy_public_filer_v1",
+            "palw_staged_public_court_v1",
+            "palw_g14_route_required_v1",
+        ],
         PalwG14RouteFamilyV1::NonPublicEvidence => &[],
     }
 }
@@ -918,11 +936,17 @@ pub fn palw_g14_route_attempt_refusal_v1(params: &PalwStateParamsV2, accepted_da
 /// job needs has its route armed; else `Some((code, why))`. A G-05 job version (constraint, prefix) is refused with
 /// [`PALW_G14_JOB_UNJUDGEABLE_CODE_V1`]; a job whose only gap is the lane-wide selection / tokenizer route, or whose evidence is
 /// non-public, with [`PALW_G14_ROUTE_ABSENT_CODE_V1`]. `commitment = None` (nothing shows the job) is refused (fail closed).
+///
+/// `class_has_tokenizer_material` (lane FPTOK, 2026-10-26): the claim's class registered the raw tokenizer material the staged
+/// raw-tokenizer court recomputes against (`raw_tokenizer_bytes` and `tokenizer_key_events` on its class semantics). Without it no
+/// outsider can judge the job's ids <-> text, so `FpTokenizer` counts as unarmed for this claim. It is read only where the
+/// tokenizer route is otherwise armed: below the fence, or while that route is unarmed, the answer does not depend on it.
 pub fn palw_g14_route_fp_refusal_v1(
     params: &PalwStateParamsV2,
     accepted_daa: u64,
     commitment: Option<&PalwFreePromptCommitmentV3>,
     framed: bool,
+    class_has_tokenizer_material: bool,
 ) -> Option<(&'static str, String)> {
     let mirror = params.g14_route_required_v1()?;
     if !mirror.governs(accepted_daa) {
@@ -933,7 +957,7 @@ pub fn palw_g14_route_fp_refusal_v1(
     };
     let families = palw_g14_fp_route_families_v1(&commitment.job);
     let missing: Vec<PalwG14RouteFamilyV1> =
-        families.iter().copied().filter(|f| !mirror.route_armed(*f, accepted_daa, framed)).collect();
+        families.iter().copied().filter(|f| !mirror.route_armed(*f, accepted_daa, framed) || (*f == PalwG14RouteFamilyV1::FpTokenizer && !class_has_tokenizer_material)).collect();
     if missing.is_empty() {
         return None;
     }

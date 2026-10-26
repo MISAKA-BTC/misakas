@@ -243,6 +243,8 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     p.palw_staged_public_court_v1 = at;
     p.palw_staged_tir_route_v1 = at;
     p.palw_tir_public_conviction_v1 = at;
+    // Lane FPTOK: the tokenizer family's route also needs the job bound to its class's listed tokenizer.
+    p.palw_fp_tokenizer_match = at;
     // Audit §10: the frame needs a measured cost model a record names (here the TEST-ONLY config and a test record).
     let mut cost = kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
     let PalwConsensusMode::ConsensusV2(t12_bundle) = &t12.palw_consensus_mode else { unreachable!() };
