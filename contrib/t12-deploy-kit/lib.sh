@@ -137,6 +137,20 @@ build_args() { # fills ARGS from the parsed node
     # fleet.env, or the install-<host>.sh; empty = off, the release's default): each grant of the node's memory
     # ledger then also needs the host's free memory less EVERY node's reservations (t12-replay-memory-1001.md §5).
     if [ -n "${HOST_LEDGER_DIR:-}" ]; then ARGS+=("--palw-host-ledger-dir=$HOST_LEDGER_DIR"); fi
+    # RFC-0009 stage B (10-26): evidence providers a panel seat's material pull is also answered from (EVIDENCE_PROVIDER_DIR —
+    # fleet.env; empty = off, ARGS unchanged): comma-separated, each a directory, dir:<path>, or an http:// / https:// URL.
+    if [ -n "${EVIDENCE_PROVIDER_DIR:-}" ]; then
+        local _ep
+        IFS=',' read -r -a _eps <<<"$EVIDENCE_PROVIDER_DIR"
+        for _ep in "${_eps[@]}"; do
+            case "$_ep" in
+                http://?*|https://?*|dir:/?*|/?*) ;;
+                *) die "EVIDENCE_PROVIDER_DIR entry '$_ep' is not an absolute directory, dir:<path>, or http(s):// URL" ;;
+            esac
+            case "$_ep" in *[[:space:]]*) die "EVIDENCE_PROVIDER_DIR entry '$_ep' contains whitespace" ;; esac
+        done
+        ARGS+=("--palw-evidence-provider-dir=$EVIDENCE_PROVIDER_DIR")
+    fi
     # int-10.2 A2: the widest prefill run a replay starts at, where a host caps it (PREFILL_RUN_MAX in its install-<host>.sh;
     # empty = the binary's 64). 32 costs 4-11 % of an 8k replay's time (measured) and halves its trace scratch: on a
     # host whose ledger is the limit, more replays at once (t12-replay-memory-1001.md §4-§5).

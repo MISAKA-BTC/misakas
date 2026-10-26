@@ -569,6 +569,8 @@ genesis の node-only release**（`rcore/n5-emergency` @ `8a0810992` — hf 4 �
 退避して genesis から起動）なので使えない — 既存の appdir があると `switch` は `CONFIRM_REGENESIS=yes` 無しでは止まる。appdir を移すと
 bond の round 署名記録（`palw-panel/state/palw-round-last-signed`）も一緒に移り、同じ round に 2 度署名し得る（§14）。
 
+`EVIDENCE_PROVIDER_DIR`（fleet.env、`--palw-evidence-provider-dir`）を足す・変えるのは ARGS の変更なので、`upgrade` には `UPGRADE_ARGS_CHANGE_OK=1` が要る。
+
 **`upgrade` がすること**（host ごと、node ごとに順番に。1 つでも gate に落ちたらそこで止まり、後の node は旧 release のまま動き続ける）:
 1. **事前確認（全 node、何も止めない）**: 新 REV の launch script の `--check`。今の unit / drop-in が kit のもの（header）で、その ExecStart が
    `$REL_ROOT/<rev>/launch/b<N>.sh` で実在する。新旧 launch script の `ARGS=(…)` block が同一（node-only hotfix で変わるのは `BIN` と
