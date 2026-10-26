@@ -153,5 +153,5 @@ fn arming_mechanism_dormant_and_refused_until_wired() {
     p.validate_palw_panel_da_disclosure_v1().expect("never() is dormant");
     p.palw_panel_da_disclosure_v1 = Some(ForkActivation::new(17_000));
     let why = format!("{:?}", p.validate_palw_panel_da_disclosure_v1());
-    assert!(why.contains("at or below") || why.contains("not wired"), "{why}");
+    assert!(why.contains("at or below") || why.contains("E2E"), "{why}");
 }

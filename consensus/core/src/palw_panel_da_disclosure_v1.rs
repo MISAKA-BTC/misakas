@@ -15,8 +15,8 @@
 //! 5. a claim undisclosed at the deadline **defaults**: void, no reward, the disclosure deposit forfeited — and nothing more. An
 //!    unavailable prompt is never a computation conviction and never slashes the computation bond.
 //!
-//! This module holds the pure rules. The disclosure carrier (transaction object), its fold row and the deposit lock are NOT wired
-//! yet; `Params::validate_palw_panel_da_disclosure_v1` therefore refuses arming on any network (see the lane report).
+//! This module holds the pure rules; the fold is `palw_panel_da_disclosure_fold_v1` (tag 233, delta 236, tail 0xE8). Arming stays
+//! refused by `Params::validate_palw_panel_da_disclosure_v1` until a real-node E2E has run (see the lane report).
 //! Image prompts (FP Job V5) get no route here: they stay `NonPublicEvidence`.
 
 use crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
@@ -78,6 +78,9 @@ pub enum PalwPanelDaDisclosureRefusalV1 {
     IdsDoNotBind,
     BeforeAcceptance,
     AfterDeadline { deadline: u64 },
+    AlreadyDisclosed,
+    /// No governed PanelDa claim has this id (never admitted under the fence, or already retired).
+    NoSuchRow,
 }
 
 /// **Admit one disclosure** of `ids` for `job` (in the class's prompt-ids `form`) (claim accepted at `accepted_daa`), landing at `at`. Anyone may file it: the hash
@@ -139,6 +142,70 @@ pub const PALW_PANEL_DA_DEFAULT_OUTCOME_V1: PalwPanelDaDefaultOutcomeV1 = PalwPa
     computation_conviction: false,
     computation_bond_slash_sompi: 0,
 };
+
+/// **The object tag of a PanelDa disclosure** (`PalwConsensusObjectV2::PanelDaPromptDisclosedV1`). Below
+/// `palw_panel_da_disclosure_v1` it rides unjudged (A-2: the kind→fence table owns it).
+pub const PALW_PANEL_DA_DISCLOSURE_TAG_V1: u8 = 233;
+/// Delta 236: the one journaled writer of `panel_da_disclosures`.
+pub const PALW_PANEL_DA_DISCLOSURE_DELTA_V1: u8 = 236;
+/// The carriage tail of `panel_da_disclosures`, written only when the table is non-empty.
+pub const PALW_CARRIAGE_PANEL_DA_DISCLOSURES_TAIL_V1: u8 = 0xE8;
+/// The row's layout version.
+pub const PALW_PANEL_DA_DISCLOSURE_ROW_VERSION_V1: u8 = 1;
+
+/// **One governed PanelDa claim's disclosure row** (`panel_da_disclosures`, keyed by claim; ADR-0206). Written at the claim's
+/// admission past `palw_panel_da_disclosure_v1` (the deposit is then locked against `bond`), updated once by the disclosure
+/// (`disclosed_daa`, the public ids — the deposit is returned), and removed at the claim's retirement or at its default (the deposit
+/// burned). Rooted (`panel_da_disclosures/v1`), journaled (delta 236), carried (tail `0xE8`), each only when non-empty.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwPanelDaDisclosureRowV1 {
+    pub version: u8,
+    pub bond: crate::palw_state_v2::PalwBondKeyV2,
+    pub accepted_daa: u64,
+    pub deadline_daa: u64,
+    pub deposit_sompi: u64,
+    pub prompt_token_ids_hash: crate::Hash64,
+    pub prompt_tokens: u32,
+    pub disclosed_daa: Option<u64>,
+    /// The disclosed ids — PUBLIC once written (this is the disclosure). Empty while pending.
+    pub prompt_token_ids: Vec<u32>,
+}
+
+impl PalwPanelDaDisclosureRowV1 {
+    /// The deposit still locked against the bond (0 once disclosed).
+    pub fn locked_deposit_v1(&self) -> u64 {
+        if self.disclosed_daa.is_some() { 0 } else { self.deposit_sompi }
+    }
+
+    pub fn status_v1(&self, now: u64) -> PalwPanelDaDisclosureStatusV1 {
+        palw_panel_da_disclosure_status_v1(self.accepted_daa, self.disclosed_daa, now)
+    }
+
+    /// **Admit a disclosure of `ids` at `at` against this row.** Count and hash must bind (under either prompt-ids form: the two
+    /// forms hash under different domains, so a match under either names exactly the committed ids); in the window; once.
+    pub fn admit_v1(&self, ids: &[u32], at: u64) -> Result<(), PalwPanelDaDisclosureRefusalV1> {
+        use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1 as Form, prompt_token_ids_match_v1};
+        if self.disclosed_daa.is_some() {
+            return Err(PalwPanelDaDisclosureRefusalV1::AlreadyDisclosed);
+        }
+        if ids.len() as u64 > PALW_G14_PANEL_DA_MAX_DISCLOSED_IDS_V1 {
+            return Err(PalwPanelDaDisclosureRefusalV1::TooManyIds { got: ids.len(), max: PALW_G14_PANEL_DA_MAX_DISCLOSED_IDS_V1 });
+        }
+        if at < self.accepted_daa {
+            return Err(PalwPanelDaDisclosureRefusalV1::BeforeAcceptance);
+        }
+        if at > self.deadline_daa {
+            return Err(PalwPanelDaDisclosureRefusalV1::AfterDeadline { deadline: self.deadline_daa });
+        }
+        if ids.len() != self.prompt_tokens as usize
+            || !(prompt_token_ids_match_v1(Form::Flat, ids, &self.prompt_token_ids_hash)
+                || prompt_token_ids_match_v1(Form::MerkleV1, ids, &self.prompt_token_ids_hash))
+        {
+            return Err(PalwPanelDaDisclosureRefusalV1::IdsDoNotBind);
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

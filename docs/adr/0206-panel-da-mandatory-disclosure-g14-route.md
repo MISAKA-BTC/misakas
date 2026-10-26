@@ -1,6 +1,6 @@
 # ADR-0206: PanelDa の G14 経路 — 期限付きの必須公開
 
-- Status: **proposed**(武装はユーザー判断。fence `palw_panel_da_disclosure_v1` は全 preset で `None`、validation は配線完了まで武装を拒否)
+- Status: **accepted**(2026-10-26 ユーザー決定: 期限付き必須公開と「期限まで非公開」への縮小を採用。値は目安のまま。fence は全 preset で `None`)
 - Date: 2026-10-26
 - Lane: g14-fam-panelda(branch `claude/g14-fam-panelda`)
 - 関連: ADR-0077 D16 / SA-5、ADR-0119 D7、ADR-0192(claim 共通 frontier)、ADR-0198(notice a+3,120 / hard a+10,000)、2026-10-17 決定(court 保持 ≥ 4W+開示窓)、PRINCIPLES §8・§9
@@ -60,3 +60,9 @@ A を選ぶ理由: 外部者が必要とするのは「hash に束縛された i
 | OUTSIDER_MIN | 2,000 DAA | 包含遅延+最大 class replay+turn の 2 倍超 | 外部者 replay 実測 |
 | MAX_DISCLOSED_IDS | 32,768 | t12 最大 8K class に余裕 | 長 context class |
 | DEPOSIT | 13,107,200 sompi | 最大開示の運搬費の 2 倍 | 料率・最大 ids |
+
+## 実装記録(2026-10-27、lane g14-fam-panelda)
+
+- carrier tag 233(割当は統括の確認要)、row delta 236 / tail 0xE8 / root `panel_da_disclosures/v1`、void reason 140。
+- 価格: derived-work 下で governed PanelDa は prompt 全体を既払い扱い(prefill 0)。過少払いのみで二重払いはない。answer accounting 武装時は従来どおり拒否。**ユーザー確認待ち**。
+- validation は実ノード E2E が済むまで武装を拒否する。
