@@ -424,6 +424,19 @@ async fn rfc02_native39_node_e2e_job_credit_delivery_witness_derives_on_the_node
     assert_eq!(delivery.amount(), d.credit.amount);
     assert!(net.chain.ctx.consensus.get_virtual_utxo_entry(delivery.outpoint()).is_some(), "the delivered credit is an unspent output");
     eprintln!("[n39] 3. delivery: block {}, outpoint {}, {} sompi", d.pay_block, delivery.outpoint(), delivery.amount());
+    // NEGATIVE: a stale witness — the state anchored one chain block earlier (two back from the paying block's post-state) — is
+    // refused even though it holds the same immutable credit: the witness must be exactly the paying block's selected-parent state.
+    let earlier = net.chain.vp().ghostdag_store.get_selected_parent(d.pay_block).unwrap();
+    let stale = point(&net, earlier);
+    if let Some(stale_audit) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stale.audit(&net, d.c.job))).ok() {
+        for i in &d.candidates {
+            assert!(
+                derive_native_redemption_v39(&d.final_audit, &stale_audit, &stale.payout_rows(), &d.post.payout_rows(), &cb, *i)
+                    .is_err(),
+                "a stale witness two blocks back is refused"
+            );
+        }
+    }
     let _ = std::fs::remove_dir_all(&d.c.dir);
 }
 
@@ -434,7 +447,7 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     let began = std::time::Instant::now();
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
-    let mut net = Net::over_cfg(mining_config(), |cfg| TestConsensus::with_db(db.clone(), cfg, sender));
+    let mut net = Net::over_cfg(mining_config_v3_budget(), |cfg| TestConsensus::with_db(db.clone(), cfg, sender));
     net._keep.push(Box::new(receiver));
     let params = net.config.params.clone();
     let (producer, outsider) = (0usize, 1usize);
