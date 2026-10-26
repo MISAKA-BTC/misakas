@@ -339,6 +339,17 @@ async fn owning39_master_component_job_reaches_final_and_the_master_is_final() {
 /// `owning_config_with(CHALLENGE)` plus the owning39 mining fence (TEST capacities and premise roots, never measured) and RFC-0018
 /// Gate C (its design certification policy, unchanged), mirrored onto the bundle the chain is built from.
 fn mining_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    mining_config_with(100, false)
+}
+
+/// **TEST ONLY**: [`mining_config`] whose budget is a V3 policy with bond formula v2, so a native39 receipt's liability is priced by
+/// the formula (not the bare pwu exposure) and its export cap can pay a block. The policy is the lane-VAL pinned V3 estimate; only the
+/// harness bonds are sized to it (collateral moved from the main premine, nothing minted). Production values and the gate are unchanged.
+pub(super) fn mining_config_v3_budget() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    mining_config_with(100, true)
+}
+
+fn mining_config_with(collateral_multiplier: u64, v3_budget: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (cfg, mut bundle, mut premine, floats) = owning_config_with(Some(CHALLENGE));
     let mut params = cfg.params.clone();
     // HARNESS ONLY: fund the design m=47 draws and the anchor producer with real
@@ -349,7 +360,7 @@ fn mining_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
         if let Obj::BondRegistered { bond, collateral, .. } = object {
             let entry = premine.iter_mut().find(|(outpoint, _)| *outpoint == bond.0).expect("the bond has funded collateral");
             assert_eq!(entry.1.amount, *collateral);
-            let enlarged = collateral.checked_mul(100).expect("test collateral fits");
+            let enlarged = collateral.checked_mul(collateral_multiplier).expect("test collateral fits");
             added = added.checked_add(enlarged - *collateral).unwrap();
             *collateral = enlarged;
             entry.1.amount = enlarged;
@@ -410,10 +421,22 @@ fn mining_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     params.palw_model_eligibility_v1 = Some(ForkActivation::new(0));
     params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
     params.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
+    if v3_budget {
+        let fence = params.palw_bond_budget_v1.as_mut().expect("the owning39 world arms the budget");
+        // TEST-ONLY policy: the pinned V3 estimate with D2 rights slicing by rho (formula v2 refuses a budget without it). The
+        // production estimate itself is untouched.
+        let mut policy = kaspa_consensus_core::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
+        policy.slice_rights_by_rho = true;
+        fence.policy = policy;
+        params.palw_bond_formula_v2 =
+            Some(kaspa_consensus_core::palw_bond_formula_v2::PalwBondFormulaFenceV2::at(ForkActivation::new(0)));
+        params.sync_palw_bond_budget_v1();
+    }
     params.sync_palw_rfc0018_v1();
     let mut tmp = params.clone();
     tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     tmp.sync_palw_rfc0018_v1();
+    tmp.sync_palw_bond_budget_v1();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = tmp.palw_consensus_mode else { unreachable!() };
     assert!(bundle.state.rfc0018_v1().is_some_and(|m| m.gate_c_at(0)), "Gate C is mirrored");
     (Config::new(params), bundle, premine, floats)

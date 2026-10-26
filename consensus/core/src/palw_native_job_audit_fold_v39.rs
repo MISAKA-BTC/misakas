@@ -343,6 +343,7 @@ impl PalwChainStateV2 {
             state: rows.state_root(),
             auxiliary: rows.root(),
             daa,
+            anchor_child: anchor.child(),
             master,
             stage,
         })

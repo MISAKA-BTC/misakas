@@ -353,7 +353,9 @@ pub fn derive_native_redemption_v39(
         || before.state_root() == after.state_root()
         || credit.amount == 0
         || credit.established > coinbase.daa()
-        || before_audit.daa() >= coinbase.daa()
+        // The witness is EXACTLY the paying block's selected-parent state: the state its own header anchors. (Was `daa <
+        // coinbase.daa`, which both admits a stale witness from further back and refuses a real parent of equal DAA score.)
+        || before_audit.anchor_child() != coinbase.block()
     {
         return Err("native39 delivery witness is not the bracketing state of the same immutable credit".into());
     }
