@@ -933,7 +933,6 @@ native_struct!(crate::palw_court_service_state_v2::CourtServiceStateV2; version,
 native_struct!(crate::palw_court_duty_clock_v1::CourtDutyClockV1; version, profile_id, duty_id, claim, allocation_id, source_id, acquisition, answerer, demand_id, turn, predecessor_block, predecessor_daa, first_eligible_daa, response_deadline_daa, original_hard_daa, material_until_daa);
 native_struct!(crate::palw_court_shared_tir_state_v1::SharedTirContextV1; version, claim, allocation_id, source_id, rules_id, profile_id, scope_id, queries, original_accepted_daa, hard_daa, material_until_daa);
 native_struct!(crate::palw_court_shared_tir_state_v1::SharedTirQueryV1; version, claim, scope_id, ordinal, request_id, opened_block, opened_daa, opened_by, intent_digest, material_until_daa, body, service);
-native_struct!(crate::palw_court_shared_tir_state_v1::SharedServiceSlotV1; packets, start_daa, end_daa);
 native_struct!(crate::palw_court_shared_tir_state_v1::SharedTirIdsV1; version, claim, scope_id, rows_root, ids, block, accepted_daa, material_until_daa);
 native_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1; version, claim, scope_id, target, signer, slot_id, stream_id, total_bytes, body_hash, begun_block, begun_daa, begin_intent, last_block, last_daa, accepted_bytes, head, finished, material_until_daa);
 native_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1; version, claim, slot_id, stream_id, offset, previous, bytes, block, daa, intent, material_until_daa);
@@ -1165,6 +1164,7 @@ native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlan
 native_struct!(crate::palw_court_service_v1::ServiceReservations; budget, remaining, assignments, packets, supply, last_observed_daa);
 native_struct!(crate::palw_court_service_state_v2::ServiceClaimBinding; claim, allocation_id, source_id, original_accepted_daa, hard_deadline_daa, packet_ids);
 native_struct!(crate::palw_court_shared_tir_state_v1::SharedTirBodyV1; block, accepted_daa, digest, bytes);
+native_struct!(crate::palw_court_shared_tir_state_v1::SharedServiceSlotV1; packets, start_daa, end_daa);
 native_enum!(crate::palw_court_shared_tir_stream_v1::SharedStreamTargetV1; Unit { ordinal, request_id }, FullIds);
 native_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedStreamFinishedV1; block, daa);
 native_enum!(crate::palw_court_end_archive_v1::CourtEndEvidenceV1; Uncaptured, Native { point, object }, TirConviction { point, claim, filer, evidence }, DeadlineSweep { point });

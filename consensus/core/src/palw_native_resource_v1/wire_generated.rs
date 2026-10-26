@@ -160,11 +160,10 @@ wire_struct!(crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1; u16, crat
 wire_struct!(crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, u64, u8, crate::palw_state_v2::PalwBondKeyV2, Box<crate::palw_tir_dissect_v1::PalwTirRootClaimV1>, Vec<u8>);
 wire_struct!(crate::palw_court_shared_tir_round_v1::SharedTirRoundRowV1; u16, crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1, crate::palw_court_close_receipt_v1::NativeCourtRulesV1, Vec<u8>, u64);
 wire_struct!(crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1; u16, crate::Hash64, u64, crate::Hash64, Vec<u8>, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, Box<crate::palw_tir_dissect_v1::PalwTirDissectRoundV1>, Vec<u8>);
+wire_struct!(crate::palw_court_shared_tir_state_v1::SharedServiceSlotV1; u64, u64, u64);
 wire_struct!(crate::palw_court_shared_tir_state_v1::SharedTirBodyV1; crate::BlockHash, u64, crate::Hash64, Vec<u8>);
 wire_struct!(crate::palw_court_shared_tir_state_v1::SharedTirContextV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, u64, u64);
 wire_struct!(crate::palw_court_shared_tir_state_v1::SharedTirIdsV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, Vec<u32>, crate::BlockHash, u64, u64);
-// F03b2: SharedTirQueryV1 has a handwritten version-gated codec; its scanner is in wire.rs.
-wire_struct!(crate::palw_court_shared_tir_state_v1::SharedServiceSlotV1; u64, u64, u64);
 wire_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedStreamFinishedV1; crate::BlockHash, u64);
 wire_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, u64, crate::Hash64, Vec<u8>, crate::BlockHash, u64, crate::Hash64, u64);
 wire_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1; u16, crate::Hash64, crate::Hash64, crate::palw_court_shared_tir_stream_v1::SharedStreamTargetV1, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64, u64, crate::Hash64, crate::BlockHash, u64, crate::Hash64, crate::BlockHash, u64, u64, crate::Hash64, Option<crate::palw_court_shared_tir_stream_state_v1::SharedStreamFinishedV1>, u64);

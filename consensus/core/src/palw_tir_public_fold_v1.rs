@@ -4064,10 +4064,17 @@ mod conviction_e2e_tests {
     /// `bind_clock_service`.
     #[test]
     fn f03b_t05_shared_frontier_survives_full_owner_capture_sybil_refill_and_latest_answer() {
+        exercise_f03b_t05(palw_tir_public_frame_fixture_v1(Some((7,1)),4),false);
+    }
+    /// F03b2: the wide fixture, where at least one coordinate's maximum response needs ≥ 2 packets; Q is charged by packet count.
+    #[test]
+    fn f03b2_t05_wide_fixture_charges_multi_packet_coordinates() {
+        exercise_f03b_t05(crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_wide_v1(Some((7,1)),4),true);
+    }
+    fn exercise_f03b_t05(fx:PalwTirPublicFrameFixtureV1,require_multi:bool) {
         use crate::palw_court_shared_tir_state_v1::{self as shared,RootedSharedDataV1};
         use crate::palw_court_shared_tir_frontier_v1::{SignedSharedRequestV1,SharedRequestEffectV1,SHARED_REQUEST_CONTEXT_V1};
         use super::super::palw_court_shared_tir_fold_v1 as fold;
-        let fx=palw_tir_public_frame_fixture_v1(Some((7,1)),4);
         let frame=&fx.frame;let claim=frame.plan_v1().original_claim;
         let owners=squatters(Frame::MAXIMUM_OWNERS_V1);
         let refill:Vec<PalwBondKeyV2>=(0..4).map(|i|bond(480+i)).collect();
@@ -4107,6 +4114,10 @@ mod conviction_e2e_tests {
             crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,derived.hard_daa-derived.original_accepted_daa));
         let widest=(0..set.len()).max_by_key(|&i|(packets[i as usize],std::cmp::Reverse(i))).unwrap();
         eprintln!("f03b2: universe={} coordinates, {} packets; widest ordinal {} = {} packets",set.len(),universe,widest,packets[widest as usize]);
+        if require_multi {
+            assert!(packets[widest as usize]>=2,"the wide fixture has a multi-packet coordinate");
+            assert!(universe>set.len(),"Q is charged by packet count, not by coordinate count");
+        }
         // Negative: no reserved capacity left. A request whose slot cannot end before hard is refused with no state change.
         {
             let snapshot=b.state.clone();
