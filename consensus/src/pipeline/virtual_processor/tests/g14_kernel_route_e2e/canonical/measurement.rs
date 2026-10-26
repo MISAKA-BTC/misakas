@@ -96,6 +96,13 @@ async fn g14_native_panel_measure() {
             send(&mut rows, &mut w.net, "claim_reveal_and_assignment", vec![(0, o)]).await;
             assert!(w.net.ledger().claims.contains_key(&claim.id));
             admitted_daa = Some(w.net.daa());
+            if seats == 1 {
+                assert!(w.net.api().unwrap().assignment_of(&claim.id).is_none(), "no pre-commit seat");
+                let before = w.net.daa();
+                let start = Instant::now();
+                seed::until_seated(&mut w.net, &claim.id, before).await;
+                phase(&mut rows, "post_commit_panel_anchor_and_assignment", start, before, &w.net, 0);
+            }
             let assigned = w.seats(&claim.id);
             actual_seats = Some(assigned.len());
             assert_eq!(assigned.len(), seats, "measure the requested seat policy, not the test's name");
@@ -103,7 +110,7 @@ async fn g14_native_panel_measure() {
             let assignment = api.assignment_of(&claim.id).unwrap();
             challenge = json!({"anchor": format!("{:?}", assignment.challenge_anchor),
                 "seed": format!("{:?}", assignment.sample_seed),
-                "kind": "interim_claim_derived_not_post_commit_beacon"});
+                "kind": if seats == 1 { "post_commit_round_seed_anchor" } else { "interim_claim_derived" }});
             let before = w.net.daa();
             let start = Instant::now();
             let receipts = colluding_receipts(&mut w.net, claim.id, before);
@@ -162,9 +169,9 @@ async fn g14_native_panel_measure() {
     }
     println!(
         "G14_MEASURE {}",
-        json!({"schema": 2, "fixture_only": true, "arming_evidence": false,
-        "scope": "native_kernel_interim_panel3_vs_panel1", "legacy_model_route_compared": false,
-        "gate_c_certification_measured": false, "post_commit_beacon_measured": false,
+        json!({"schema": 3, "fixture_only": true, "arming_evidence": false,
+        "scope": "native_kernel_interim_panel3_vs_deferred_panel1", "legacy_model_route_compared": false,
+        "gate_c_certification_measured": false, "post_commit_beacon_measured": false, "post_commit_panel_anchor_measured": seats == 1 && n == 1 && case != "withheld_reveal",
         "randomness_withholding_measured": false, "class": digest(&w.class), "job": digest(&job.id()),
         "claim": digest(&claim.id), "case": case, "n": n, "requested_seats": seats, "actual_seats": actual_seats,
         "verdict": verdict, "final_daa": final_daa, "admitted_daa": admitted_daa, "covered_daa": covered_daa,

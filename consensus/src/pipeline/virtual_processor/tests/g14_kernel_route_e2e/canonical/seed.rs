@@ -35,7 +35,7 @@ fn seed_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
 
 /// Attempt blocks (which record round seed anchors) until the claim's Panel=1 assignment exists. Returns the anchor the draw block's
 /// state held and the DAA it appeared at.
-async fn until_seated(net: &mut Net, claim: &Digest, commit_daa: u64) -> (kaspa_consensus_core::palw_execution_lane_v1::PalwExecSeedAnchorV1, u64) {
+pub(super) async fn until_seated(net: &mut Net, claim: &Digest, commit_daa: u64) -> (kaspa_consensus_core::palw_execution_lane_v1::PalwExecSeedAnchorV1, u64) {
     let ttpb = net.ttpb();
     for round in 0..32u64 {
         let before = net.chain.tip_state().1.round_seed_anchor().copied();

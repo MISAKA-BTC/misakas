@@ -62,6 +62,9 @@ async fn g14_kernel_capacity_measure() {
         assert!(w.net.ledger().jobs.contains_key(&job.id()));
         let claim = w.claim_with(0, &job, true, Delivery::Chunked(4_096)).await;
         assert!(w.net.ledger().claims.contains_key(&claim.id));
+        let committed = w.net.daa();
+        assert!(w.net.api().unwrap().assignment_of(&claim.id).is_none());
+        seed::until_seated(&mut w.net, &claim.id, committed).await;
         let assigned = w.seats(&claim.id);
         assert_eq!(assigned.len(), 1);
         if claims.is_empty() {

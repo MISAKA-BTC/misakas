@@ -302,6 +302,9 @@ async fn g14_cert_panel_one_measure() {
     let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
     let job = w.job().await;
     let claim = w.claim(0, &job, false).await;
+    let committed = w.net.daa();
+    assert!(w.net.api().unwrap().assignment_of(&claim.id).is_none());
+    seed::until_seated(&mut w.net, &claim.id, committed).await;
     assert_eq!(w.seats(&claim.id).len(), 1);
     w.cover(&claim.id).await;
     w.net.beat_to(final_floor(&w, Mode::Panel, &claim.id)).await;
