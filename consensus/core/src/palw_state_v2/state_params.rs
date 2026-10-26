@@ -195,6 +195,7 @@ impl PalwStateParamsV2 {
             court_outsider_lane_from_daa: None,
             kernel_route_panel_one_from_daa: None,
             kernel_panel_one_test_only_external_gain_bound_v1: None,
+            kernel_court_admission_test_only_v1: None,
             court_clock_v2_from_daa: None,
             panel_da_disclosure_from_daa: None,
             cell_coverage_closure_from_daa: None,
@@ -789,6 +790,21 @@ impl PalwStateParamsV2 {
     pub fn with_test_only_kernel_panel_one_external_gain_bound_v1(mut self, bound: Option<u64>) -> Self {
         self.kernel_panel_one_test_only_external_gain_bound_v1 = bound;
         self
+    }
+
+    /// **TEST ONLY (G14 stages S1/S2)**: a fixture's kernel-route court admission schedule. No preset calls this.
+    pub fn with_test_only_kernel_court_admission_v1(
+        mut self,
+        schedule: Option<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1>,
+    ) -> Self {
+        self.kernel_court_admission_test_only_v1 = schedule;
+        self
+    }
+
+    /// The kernel-route court admission schedule the processor folds with: a fixture's test-only schedule, else the production
+    /// `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1` (typed-missing `None`).
+    pub fn kernel_court_admission_schedule_v1(&self) -> Option<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1> {
+        self.kernel_court_admission_test_only_v1.or(crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1)
     }
 
     /// The external gain bound the Panel=1 class relation uses: a fixture's test-only value, else `palw_g14_values_v1`'s (`None`).

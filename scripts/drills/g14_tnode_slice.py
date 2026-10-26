@@ -71,6 +71,18 @@ T_ITEMS = [
     ('T15', 'old/new fence boundary, old claims keep old rules, shipping identity unchanged, activation refusal remains',
      'P, Q, F; shipped binaries hashed before/after', ['fence:F0', 'fence:F1', 'fence:F5', 'fence:F6', 'profile:shipped-refuses'],
      'real processes cross H on the shipped release build'),
+    # User-approved adversarial items (2026-10-27). In-process (native processor): canonical/spine.rs, canonical/cert.rs.
+    ('T16', '(A) outsider holds no weights; only producer + every seat hold the model and substitute weights for a self-consistent '
+     'wrong trace; the outsider convicts from localization, court-demanded weight openings and the registered root',
+     'P liar + seat (colluders, model holders), O outsider WITHOUT the model', None,
+     'NOT-IMPLEMENTED: the kernel ledger has no court demand for WEIGHT openings (MaterialKeyV1::Param is not a ledger demand); '
+     'needs a fenced kernel-route param-opening demand + response + DA default before a native or real-node test exists'),
+    ('T17', '(B) colluders refuse to disclose -> DA default; forfeited reservation >= the 500 MSK external gain bound',
+     'P silent producer (colluder), Q poster + outsider demander', None,
+     'in-process: spine.rs g14_adversarial_b_* (trace material; weight-opening refusal waits on T16); real node: P silent, Q demands'),
+    ('T18', '(C) Gate C when only the colluders hold the model -> NotCertified, Final reward 0, refund to the poster',
+     'P producer + seats (model holders), drawn verifiers WITHOUT the model attest Unavailable', None,
+     'in-process: cert.rs g14_adversarial_c_*; real node needs a drawn verifier started without --palw-kernel-model'),
 ]
 
 # Lane KNODE: the kaspad flags each kernel-route role takes (palw_panel::palw_kernel_roles; every role also needs the node's bond:
@@ -109,6 +121,10 @@ KNODE_T_PLAN = {
     'T10': {'P': ['liar'], 'Q': ['poster']},
     'T11': {'P': ['producer'], 'Q': ['poster']},
     'T13': {'P': ['producer'], 'Q': ['poster']},
+    # User-approved adversarial items (2026-10-27).
+    'T16': {'P': ['liar', 'seat'], 'Q': ['poster', 'outsider-filer']},
+    'T17': {'P': ['silent', 'seat'], 'Q': ['poster', 'outsider-filer']},
+    'T18': {'P': ['producer', 'seat'], 'Q': ['poster', 'gate-c-verifier']},
 }
 
 
@@ -127,7 +143,7 @@ def knode_role_flags(t, model, work):
 
 # Arming requirements this lane can speak to: (family, fence, index, T rows it rests on, waiver text or None).
 REQUIREMENTS = [
-    ('kernel-route', 'palw_probabilistic_constraints_v1', 1, ['T01', 'T03', 'T05', 'T14'], None),
+    ('kernel-route', 'palw_probabilistic_constraints_v1', 1, ['T01', 'T03', 'T05', 'T14', 'T16', 'T17', 'T18'], None),
     ('kernel-route', 'palw_probabilistic_constraints_v1', 4, [], 'user decision 2026-10-26: RFC-0011 §15.7 shadow comparison treated as '
      'complete TEMPORARILY; not measured; to be replaced by a measurement'),
     ('kernel-route', 'palw_probabilistic_constraints_v1', 7, ['T14', 'T15'], None),
