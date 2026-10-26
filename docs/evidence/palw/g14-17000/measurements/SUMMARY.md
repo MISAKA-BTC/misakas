@@ -105,3 +105,10 @@ heartbeat fix is prepared outside the currently compiling source. Gate C and
 maximum-trace capacity stopped at class registration before their measured work.
 [Evidence and diagnosis](M-SHADOW/README.md#detailed-post-commit-diagnostics--2105-jst).
 The consolidated native build has acquired its slot at source `a2e212207`.
+
+
+The consolidated `a2e212207` build failed with one E0425 (`BTreeSet` missing in
+the new saturation test). That import and the test helper's omitted heartbeat
+have been corrected after the build terminated. Original build/failure logs are
+preserved. A new pinned build must validate both changes before any follow-up
+measurement can be counted.

@@ -111,3 +111,11 @@ The independent Gate C and exact-maximum-trace capacity preflights both failed
 at class registration, before their measured work. They supply no capacity or
 certification timing. The cap64 follow-up retains the approved 500 MSK gain;
 its actual behavior and the heartbeat change still require execution.
+
+
+The first consolidated build (`a2e212207`) then stopped with Rust E0425: the
+capacity test lacked a `BTreeSet` import. The [build logs](../M-CAP/raw/native-fullcap-build-failure-2026-10-26/native-fullcap-build-record.json)
+are preserved. After this terminal failure, the measurement source was updated
+to import that type and mine one ordinary heartbeat before each seed attempt.
+No product code, clock predicate, attempt bound, gain or admission rule changes.
+The revised executable still needs compilation and preflight validation.

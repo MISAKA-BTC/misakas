@@ -4,7 +4,7 @@
 use super::*;
 use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1;
 use serde_json::{Value, json};
-use std::time::Instant;
+use std::{collections::BTreeSet, time::Instant};
 
 fn block_budget(net: &Net) -> (u64, u32, u64) {
     net.chain.tip_state().1.kernel_route().unwrap().aux_row(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]).unwrap()

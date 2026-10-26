@@ -61,6 +61,10 @@ pub(super) async fn until_seated(
     let ttpb = net.ttpb();
     let mut diagnostic = Vec::new();
     for round in 0..32u64 {
+        // Only heartbeat blocks advance testnet-12 DAA after palw_anchor_clock.
+        // Attempts alone stay in the commit's span regardless of their timestamps.
+        // Keep the same attempt budget and strict post-commit draw predicate.
+        net.chain.heartbeat(ttpb, Vec::new()).await;
         let before = net.chain.tip_state().1.round_seed_anchor().copied();
         let (_, attempt) = net.chain.attempt(5 + (round % 3) as usize, ttpb, Vec::new(), &|_| true).await;
         let state = net.chain.tip_state().1;
