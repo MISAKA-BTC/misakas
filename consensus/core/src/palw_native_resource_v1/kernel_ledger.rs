@@ -49,6 +49,7 @@ impl NativeHeapV1 for misaka_palw_kernel::ledger::KernelLedgerV1 {
   sum=sum.add::<Self>(self.court_scope_policy.native_heap_v1(path),path);
   sum=sum.add::<Self>(self.court_scope.native_heap_v1(path),path);
   sum=sum.add::<Self>(self.sealed_bounty_policy.native_heap_v1(path),path);
+  sum=sum.add::<Self>(self.claim_clock_from_daa.native_heap_v1(path),path);
   sum
  }
 }

@@ -21,7 +21,7 @@ use kaspa_consensus_core::config::params::{
 };
 
 /// The list's names, in the order its prerequisites need. Adding an entry is one line here, one line in the list, and the notes.
-const LIST: [&str; 37] = [
+const LIST: [&str; 38] = [
     "palw_audit_1004_v1",
     "palw_gen_range_twin_v1",
     "palw_model_court_window",
@@ -47,6 +47,7 @@ const LIST: [&str; 37] = [
     "palw_public_evidence_reward_v1",
     // Compute-claim audit CX-01/CX-02 (ADR-0205 draft): its prerequisites are genesis fences of testnet-12.
     "palw_fp_answer_accounting_v1",
+    "palw_bond_budget_v1",
     "palw_claim_hard_deadline_v1",
     "palw_settlement_once_v1",
     "palw_native_liability_horizon_v1",
@@ -79,6 +80,7 @@ const PREREQUISITES: &[(&str, &str)] = &[
     ("palw_court_capacity_v1", "palw_legacy_public_filer_v1"),
     ("palw_court_model_scope_v1", "palw_legacy_held_da_v2"),
     ("palw_settlement_once_v1", "palw_claim_hard_deadline_v1"),
+    ("palw_settlement_once_v1", "palw_bond_budget_v1"),
     ("palw_settlement_once_v1", "palw_probabilistic_constraints_v1"),
     ("palw_native_liability_horizon_v1", "palw_settlement_once_v1"),
     ("palw_independently_work_certified_v1", "palw_probabilistic_constraints_v1"),
@@ -95,7 +97,7 @@ const PREREQUISITES: &[(&str, &str)] = &[
 
 /// Prerequisites validation names that are NOT on the list and NOT in force on testnet-12 — the notes' "missing" section. Armed without
 /// them the list is refused by name until a reviewed change adds them (they are policy-carrying fences the user has not approved).
-const MISSING_PREREQUISITES: &[&str] = &["palw_bond_budget_v1", "palw_model_bond_allocation_v1", "palw_material_income_v3"];
+const MISSING_PREREQUISITES: &[&str] = &["palw_model_bond_allocation_v1", "palw_material_income_v3"];
 
 /// Every other list's height on testnet-12 (shipped, or once scheduled and kept as a pinned history).
 const OTHER_HEIGHTS: [u64; 11] = [750, 1_000, 1_300, 1_700, 2_000, 3_600, 5_300, 5_395, 5_490, 5_585, 9_000];
@@ -296,7 +298,7 @@ fn the_kernel_slice_is_an_ordered_subset_and_clears_back() {
     let mut p = base.clone();
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
     assert_ne!(ids(&p), ids(&base));
-    // 17,000 moves only the slice's six non-int-13 entries; the int-13 four stay at the fleet's 15,500.
+    // 17,000 moves only the slice's eight non-int-13 entries (lane CLOCK added the provider court and the bond budget); the int-13 four stay at 15,500.
     let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     let mut at_17000 = 0;
     for f in PALW_T12_KERNEL_SLICE_FENCES_V1 {
@@ -307,7 +309,7 @@ fn the_kernel_slice_is_an_ordered_subset_and_clears_back() {
             at_17000 += 1;
         }
     }
-    assert_eq!(at_17000, 6);
+    assert_eq!(at_17000, 8);
     for ((name, was), (_, now)) in base.palw_fences_v1().iter().zip(p.palw_fences_v1().iter()) {
         if !PALW_T12_KERNEL_SLICE_FENCES_V1.iter().any(|f| f.name == *name) || int13.contains(name) {
             assert_eq!(was, now, "{name} did not move");
@@ -336,4 +338,36 @@ fn the_kernel_slice_covers_the_kernel_route_family() {
     assert!(m.route_armed(F::KernelRoutePanelOne, 17_000, false));
     assert!(!m.route_armed(F::LegacyPanelAttempt, 17_000, false), "other families stay route-absent");
     assert!(!m.route_armed(F::FpSelection, 17_000, true));
+}
+
+/// **lane CLOCK (review part 2, B-1 / M-1 / M-5)**: armed through the slice list itself, X3 carries the decided policy (the user's
+/// 2026-10-22 目安, never the a+300 probe), the provider court is on the slice at the same height, and the kernel route's interim
+/// policy fits the notice / hard clock; the Panel=1 saturation relation holds with the approved 500 MSK external gain bound.
+#[test]
+fn the_kernel_slice_puts_the_kernel_route_on_x3s_clock() {
+    use kaspa_consensus_core::config::params::{PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_release_v7_params};
+    use kaspa_consensus_core::palw_kernel_route_panel_one_censorship_v1::{
+        panel_one_censorship_check_clocked_v1, panel_one_censorship_cost_clocked_v1,
+    };
+    let mut p = palw_t12_release_v7_params();
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
+    assert_eq!(fence_at(&p, "palw_provider_court_v1"), Some(17_000));
+    assert_eq!(fence_at(&p, "palw_claim_hard_deadline_v1"), Some(17_000));
+    let x3 = p.palw_claim_hard_deadline_v1.expect("X3 installed");
+    assert!(kaspa_consensus_core::palw_ruling_fences_v1::palw_x3_unmeasured_terms_v1(&x3.policy).is_empty(), "decided, not probe");
+    assert_eq!(x3.policy.retention_cost_per_daa_sompi, 36_058);
+    let k = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Default::default(), Default::default());
+    assert_eq!(misaka_palw_kernel::claim_clock::claim_clock_floor_v1(&k, 17_000), Ok(17_000 + 3_120 + 20 + 10));
+    let gain = kaspa_consensus_core::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1;
+    assert_eq!(gain, Some(500 * 100_000_000));
+    assert_eq!(panel_one_censorship_cost_clocked_v1(&k, 1), 64 * 10_000_000 * 3_150);
+    assert!(panel_one_censorship_check_clocked_v1(&k, 1, gain, true).is_ok());
+    assert_eq!(fence_at(&p, "palw_bond_budget_v1"), Some(17_000));
+    p.validate_palw_bond_budget_v1().expect("the approved budget policy validates");
+    // Whole-ruleset validation may still refuse for missing arming records (public genesis), never for a missing prerequisite.
+    if let Err(why) = p.validate_palw_v2() {
+        let why = format!("{why:?}");
+        assert!(!why.contains("at or below it"), "a prerequisite is missing from the slice: {why}");
+        eprintln!("slice validation (records): {why}");
+    }
 }

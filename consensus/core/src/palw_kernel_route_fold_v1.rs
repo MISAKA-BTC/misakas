@@ -446,6 +446,9 @@ fn load_ledger_with_projection_v9(
             provider_liable,
         )
         .map_err(PalwStateV2Error::NativeResource)?;
+    // G14 lane CLOCK: X3 governs the kernel route's claims too — injected at every load (not in the header or root); a claim committed
+    // at or after X3 keeps its liability horizon at least `committed + 3,120 + court + grace` (`misaka_palw_kernel::claim_clock`).
+    ledger.set_claim_clock_from_daa_v1(builder.params.claim_hard_deadline_v1().map(|m| m.from_daa));
     // Each load reconstructs authenticated open targets. No object supplies this inventory.
     if let Some(fence) = extras.beacon_source.filter(|f| f.activation.is_active(ctx.daa_score)) {
         let inputs =
@@ -2286,10 +2289,13 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             let panel_one = builder.params.kernel_route_panel_one_from_daa().is_some_and(|from| ctx.daa_score >= from);
             if panel_one && !ledger.opv.classes.contains(class) {
                 let worst = bounds.map_or(u64::MAX, |b| b.max_court_work);
-                if crate::palw_kernel_route_panel_one_censorship_v1::panel_one_censorship_check_v1(
+                // G14 lane CLOCK (M-1): past X3 the exposure is the notice window and the gain includes the reservation.
+                let clocked = ledger.claim_clock_from_daa_v1().is_some_and(|from| ctx.daa_score >= from);
+                if crate::palw_kernel_route_panel_one_censorship_v1::panel_one_censorship_check_clocked_v1(
                     &ledger.policy,
                     worst,
                     builder.params.kernel_panel_one_external_gain_bound_v1(),
+                    clocked,
                 )
                 .is_err()
                 {

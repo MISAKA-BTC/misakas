@@ -603,6 +603,9 @@ async fn claimed(w: &mut World, mode: Mode, producer: usize, lie: bool) -> (Clai
     let claim = w.claim(producer, &job, lie).await;
     let seats = match mode {
         Mode::Panel => {
+            // lane SEED: under Panel=1 the seat is drawn at the first block holding a seed anchor recorded after the commit, not at
+            // the commit. Attempt blocks (which record round seed anchors) until the draw happens; the rule itself is unchanged.
+            w.until_seated_v1(&claim.id).await;
             let seats = w.seats(&claim.id);
             // lane F03k2: the seat count is the route's policy at the draw (interim 3-of-3, or 1 in a Panel=1 world).
             let (expected, _) = w.net.bundle.state.kernel_route_seats_and_quorum_v1(w.net.daa());
@@ -1355,6 +1358,8 @@ async fn g14_canonical_opv_a_borrowed_trace_of_another_prompt_is_refused_at_incl
 
 /// lane SPINE (2026-10-26): the Panel=1 kernel-route vertical slice, stage by stage.
 mod cert;
+/// lane CLOCK (2026-10-26): the kernel route claim on X3's notice / hard clock.
+mod clock;
 mod f03k;
 /// lane SEED (2026-10-26): the Panel=1 seat draw and sample seed from a post-commit seed anchor (G14 review MAJOR-1).
 mod seed;
