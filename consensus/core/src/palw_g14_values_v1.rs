@@ -31,6 +31,12 @@ use crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCover
 /// Status string (estimates, not wired, not measured).
 pub const PALW_G14_VALUES_STATUS_V1: &str = "provisional estimates 2026-10-26 (lane VAL); not wired into any preset; not measured";
 
+/// **Lane F03k2: the external gain bound of a Panel=1 kernel-route claim — TYPED-MISSING.** What a lie can be worth outside
+/// the chain's own reward (`crate::palw_kernel_route_panel_one_censorship_v1`). No estimate has been derived. While this is `None`,
+/// every Panel class registration past `palw_kernel_route_panel_one_v1` is refused. Review condition: an economic audit of
+/// off-chain value per claim.
+pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1: Option<u64> = None;
+
 /// sompi per MSK.
 pub const SOMPI_PER_MSK_V1: u64 = 100_000_000;
 /// Carriage price used throughout, sompi / byte: the t12 fee rate 49.96 rounded up (P3 V7b).

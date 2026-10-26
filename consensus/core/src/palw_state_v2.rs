@@ -2049,6 +2049,10 @@ pub struct PalwStateParamsV2 {
     /// by `Params::sync_palw_g14_gates_v1`. `None` on every shipped preset (the interim 3-of-3).
     #[borsh(skip)]
     kernel_route_panel_one_from_daa: Option<u64>,
+    /// **Lane F03k2: a TEST-ONLY external gain bound** for the Panel=1 class censorship relation. Fixtures only; `None` everywhere else,
+    /// so the fold falls back to `palw_g14_values_v1` (typed-missing today).
+    #[borsh(skip)]
+    kernel_panel_one_test_only_external_gain_bound_v1: Option<u64>,
     /// **G14 U06/U07 (lane g14p/court-clock): `Params::palw_court_clock_v2`'s height**, mirrored by `Params::sync_palw_g14_gates_v1`
     /// (`crate::palw_court_clock_v2`). `None` on every shipped preset.
     #[borsh(skip)]

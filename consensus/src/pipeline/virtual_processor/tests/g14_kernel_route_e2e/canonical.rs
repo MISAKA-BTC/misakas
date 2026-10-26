@@ -604,7 +604,9 @@ async fn claimed(w: &mut World, mode: Mode, producer: usize, lie: bool) -> (Clai
     let seats = match mode {
         Mode::Panel => {
             let seats = w.seats(&claim.id);
-            assert_eq!(seats.len(), 3, "three distinct-operator seats");
+            // lane F03k2: the seat count is the route's policy at the draw (interim 3-of-3, or 1 in a Panel=1 world).
+            let (expected, _) = w.net.bundle.state.kernel_route_seats_and_quorum_v1(w.net.daa());
+            assert_eq!(seats.len(), expected, "the policy's distinct-operator seats");
             assert!(!seats.contains(&producer), "never the producer");
             w.cover(&claim.id).await; // every assigned seat signs a passing receipt
             seats

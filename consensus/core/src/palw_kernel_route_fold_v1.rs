@@ -2067,6 +2067,22 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
+            // Lane F03k2 (inside the dormant `palw_kernel_route_panel_one_v1`): a Panel-licensed class registers only if saturating
+            // the court for its claims' whole exposure costs more than a claim's maximum gain; a missing gain bound refuses it.
+            let panel_one = builder.params.kernel_route_panel_one_from_daa().is_some_and(|from| ctx.daa_score >= from);
+            if panel_one && !ledger.opv.classes.contains(class) {
+                let worst = bounds.map_or(u64::MAX, |b| b.max_court_work);
+                if crate::palw_kernel_route_panel_one_censorship_v1::panel_one_censorship_check_v1(
+                    &ledger.policy,
+                    worst,
+                    builder.params.kernel_panel_one_external_gain_bound_v1(),
+                )
+                .is_err()
+                {
+                    persist_budget(builder, ctx, &ledger)?;
+                    return Ok(());
+                }
+            }
         }
     }
     // A paid opt-in reserves its fixed signed fee for the actual source bond

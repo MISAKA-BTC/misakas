@@ -44,3 +44,26 @@ Replace S3b' `Missing` with a `Stage` that runs `f03k::t05(false, true)` (S3b' b
 The F03b reading of S3b' ("a shared frontier is needed on the kernel route") is withdrawn for the kernel route, for the reason in §2.
 
 Panel=1 still needs a 1-seat world fixture (G14C/SPINE).
+
+## 5. Second round (F03k2, branch `claude/g14-f03k2`, base 22b657aa9)
+1. **Panel=1 world.**
+   - `canonical/f03k.rs::panel_one_config`/`panel_one_world` arm `palw_kernel_route_panel_one_v1` from genesis and mirror it onto the bundle (as `sync_palw_g14_gates_v1` does).
+   - `claimed` now asserts the seat count the route's policy gives (`kernel_route_seats_and_quorum_v1`), no longer a fixed 3.
+   - T05 runs in this world with 1 colluding seat: before Final, after Final, and negative.
+   - `t05(after_final, outsider)` is `pub(super)` and runs in the Panel=1 world, for SPINE's S3b'.
+2. **Censorship-cost relation for Panel classes**, inside the dormant `palw_kernel_route_panel_one_v1` (no new fence).
+   - Module `consensus/core/src/palw_kernel_route_panel_one_censorship_v1.rs`. The relation is `min(max_adjudications, ⌈block work / worst⌉) × dismissal_fee_v1(worst) × (check + challenge + liability windows) > claim_reward + external gain bound`.
+   - Applied in the kernel fold after `ClassRegistered`. A failing class keeps only the spent budget, the same pattern as the carrier-fit refusal.
+   - The external gain bound is `palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1 = None`, which is typed-missing. Past the fence every Panel class is refused until a value is adopted. Court ingress and V3 do not price a kernel `FileProof`, so the fee is the ledger's actual dismissal fee.
+   - Fixtures set the bound through the borsh-skipped `with_test_only_kernel_panel_one_external_gain_bound_v1`. The fixture value is `TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI` = 1 BILI.
+   - Tests:
+     - refused when the bound is missing;
+     - refused when censorship is cheaper than the gain;
+     - registered when it is dearer;
+     - below the fence, the same root whatever the input. Arming the fence at all changes the hashed params and so the root; that is a property of the existing fence.
+3. **Same-block race: NOT shown, a decision item.**
+   - `BlockBudgetV1::charged_v1` is first-come within the block.
+   - In the test net, one worst-case `FileProof` can spend the whole block's court work.
+   - Sybil junk ordered before the outsider's filing in a block that a colluder produces therefore starves it in that block. The refused filing costs nothing, and it gets through in any block the colluders do not fill, for example its own node's.
+   - The per-filer cap (4 per claim) does not stop fresh Sybil bonds.
+   - Options for 統括: (a) accept this, since the relation in item 2 prices whole-exposure saturation; or (b) order `FileProof`s within a block deterministically (for example, the oldest seal first). (b) needs a fence.

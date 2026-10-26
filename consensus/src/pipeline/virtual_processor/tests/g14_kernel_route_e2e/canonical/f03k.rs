@@ -65,13 +65,14 @@ async fn crowd_twice(w: &mut World, sybils: &[usize], claim: Digest) {
 }
 
 /// **T05, kernel route**: lie covered by every seat, Sybils crowd the court twice, then `outsider` decides the case.
-async fn t05(after_final: bool, outsider: bool) {
+pub(super) async fn t05_in(panel_one: bool, after_final: bool, outsider: bool) {
     kaspa_core::log::try_init_logger("warn");
     let mode = Mode::Panel;
-    let mut w = world(mode).await;
+    let mut w = if panel_one { panel_one_world().await } else { world(mode).await };
     let funding = newcomer_funding(&w.net);
     let before = w.net.collateral(0);
     let (claim, seats) = claimed(&mut w, mode, 0, true).await;
+    assert_eq!(seats.len(), if panel_one { 1 } else { 3 }, "the world's seat policy");
     let sybils = w.outsiders(&claim, &seats, 2);
     let floor = final_floor(&w, mode, &claim.id);
     let slashed = reservation(&w, mode);
@@ -130,17 +131,107 @@ async fn t05(after_final: bool, outsider: bool) {
     agree(&w.net, &node, "the outsider's node");
 }
 
+/// **SPINE's entry (S3b')**: T05 in the Panel=1 world.
+pub(super) async fn t05(after_final: bool, outsider: bool) {
+    t05_in(true, after_final, outsider).await;
+}
+
+/// **TEST ONLY (lane F03k2)**: the external gain bound the Panel=1 world's class relation uses. It is not a network value;
+/// production reads `palw_g14_values_v1` (typed-missing).
+pub(super) const TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI: u64 = 100_000_000;
+
+/// The canonical Panel network with `palw_kernel_route_panel_one_v1` armed at `from` (mirrored onto the bundle, as
+/// `Params::sync_palw_g14_gates_v1` does) and the fixture's external gain bound `gain`.
+pub(super) fn panel_one_config(from: Option<u64>, gain: Option<u64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (config, mut bundle, premine, floats) = canonical_config(false);
+    let mut params = config.params.clone();
+    params.palw_kernel_route_panel_one_v1 = from.map(ForkActivation::new);
+    bundle.state =
+        bundle.state.clone().with_kernel_route_panel_one_from_daa(from).with_test_only_kernel_panel_one_external_gain_bound_v1(gain);
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode {
+        *b = bundle.clone();
+    }
+    (Config::new(params), bundle, premine, floats)
+}
+
+/// **The Panel=1 world**: the fence armed from genesis; card 1 registers the class under the relation.
+pub(super) async fn panel_one_world() -> World {
+    World::on(Net::over_cfg(panel_one_config(Some(0), Some(TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI)), TestConsensus::new)).await
+}
+
 #[tokio::test]
 async fn g14_f03k_t05_outsider_convicts_before_final_through_a_crowded_court() {
-    t05(false, true).await;
+    t05_in(false, false, true).await;
 }
 
 #[tokio::test]
 async fn g14_f03k_t05_outsider_convicts_after_final_through_a_crowded_court() {
-    t05(true, true).await;
+    t05_in(false, true, true).await;
 }
 
 #[tokio::test]
 async fn g14_f03k_t05_without_the_outsider_nothing_convicts() {
+    t05_in(false, false, false).await;
+}
+
+#[tokio::test]
+async fn g14_f03k2_panel_one_t05_before_final() {
+    t05(false, true).await;
+}
+
+#[tokio::test]
+async fn g14_f03k2_panel_one_t05_after_final() {
+    t05(true, true).await;
+}
+
+#[tokio::test]
+async fn g14_f03k2_panel_one_t05_negative() {
     t05(false, false).await;
+}
+
+/// Card 1 sends the fixture's class registration on a fresh net of `cfg` (without `World::on`'s assertion that it registered).
+async fn registered(cfg: (Config, PalwConsensusParamsV2, Premine, Premine)) -> Net {
+    let mut net = Net::over_cfg(cfg, TestConsensus::new);
+    let (fx, d) = (fixture(), k2_tir_v2_descriptor());
+    let register = K::RegisterClass {
+        descriptor: d.digest(),
+        program_bytes: fx.program.encode(),
+        plan: fx.plan.clone(),
+        param_commitments: fx.pc.clone(),
+    };
+    let o = net.route(1, &register);
+    net.send(vec![(1, o)]).await;
+    net
+}
+
+/// **The F03k2 relation on the native processor**: past the fence a Panel class is refused when the gain bound is missing
+/// (typed-missing) or when saturating the court is cheaper than the gain, and it registers when saturation costs more.
+#[tokio::test]
+async fn g14_f03k2_panel_one_class_failing_the_censorship_relation_is_refused() {
+    kaspa_core::log::try_init_logger("warn");
+    let missing = registered(panel_one_config(Some(0), None)).await;
+    assert!(missing.ledger().classes.is_empty(), "no gain bound adopted: refused, never read as zero");
+    let cheap = registered(panel_one_config(Some(0), Some(u64::MAX / 4))).await;
+    assert!(cheap.ledger().classes.is_empty(), "censorship cheaper than the gain: refused");
+    let dear = registered(panel_one_config(Some(0), Some(TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI))).await;
+    assert_eq!(dear.ledger().classes.len(), 1, "censorship dearer than the gain: registered");
+}
+
+/// **Below the fence, byte-identical**: with the fence armed far in the future, the registration folds to the same PALW root
+/// whether the relation's input is missing, passing or failing (nothing of the relation runs below the fence); and as on the
+/// unarmed network, the class registers. (Arming the fence at all changes the network's hashed params, hence its domain and
+/// root; that is the existing fence's, not this relation's, so the unarmed root is not compared.)
+#[tokio::test]
+async fn g14_f03k2_below_the_fence_registration_is_byte_identical() {
+    kaspa_core::log::try_init_logger("warn");
+    let unarmed = registered(panel_one_config(None, None)).await;
+    assert_eq!(unarmed.ledger().classes.len(), 1, "unarmed: the class registers");
+    let later = |gain| registered(panel_one_config(Some(1_000_000), gain));
+    let (missing, failing, passing) =
+        (later(None).await, later(Some(u64::MAX / 4)).await, later(Some(TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI)).await);
+    assert_eq!(missing.ledger().classes.len(), 1, "below the fence the class registers as before");
+    // Separate nets differ in block timestamps, so compare the kernel route's whole state (rows and aux), not the chain root.
+    let route = missing.api();
+    assert_eq!(failing.api(), route, "a failing relation changes nothing below the fence");
+    assert_eq!(passing.api(), route, "nor a passing one");
 }

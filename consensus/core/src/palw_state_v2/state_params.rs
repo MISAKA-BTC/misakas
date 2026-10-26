@@ -194,6 +194,7 @@ impl PalwStateParamsV2 {
             reward_liability_horizon_from_daa: None,
             court_outsider_lane_from_daa: None,
             kernel_route_panel_one_from_daa: None,
+            kernel_panel_one_test_only_external_gain_bound_v1: None,
             court_clock_v2_from_daa: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
@@ -759,6 +760,18 @@ impl PalwStateParamsV2 {
     pub fn with_kernel_route_panel_one_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.kernel_route_panel_one_from_daa = from_daa;
         self
+    }
+
+    /// **TEST ONLY (lane F03k2)**: a fixture's external gain bound for the Panel=1 class censorship relation. No preset calls this.
+    pub fn with_test_only_kernel_panel_one_external_gain_bound_v1(mut self, bound: Option<u64>) -> Self {
+        self.kernel_panel_one_test_only_external_gain_bound_v1 = bound;
+        self
+    }
+
+    /// The external gain bound the Panel=1 class relation uses: a fixture's test-only value, else `palw_g14_values_v1`'s (`None`).
+    pub fn kernel_panel_one_external_gain_bound_v1(&self) -> Option<u64> {
+        self.kernel_panel_one_test_only_external_gain_bound_v1
+            .or(crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1)
     }
 
     /// `Params::palw_kernel_route_panel_one_v1`'s height, if armed (the mirror).

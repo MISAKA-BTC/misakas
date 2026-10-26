@@ -1066,6 +1066,7 @@ pub mod palw_rfc0608_measured_v1;
 /// arms nothing.
 pub mod palw_values_p4_v1;
 pub mod palw_g14_values_v1;
+pub mod palw_kernel_route_panel_one_censorship_v1;
 /// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
 /// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
 pub mod palw_cell_coverage_v1;
