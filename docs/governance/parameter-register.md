@@ -146,6 +146,8 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 | V4 | `court_ingress.fee_sompi_per_session` | 1,100,000 | sompi | opening 16,571 B × 50 = 828,550 を切上げ。内部者（producer・seat）も払う。R = ⌊cap/2⌋ = 21 を維持 | ρ_court の変更時 |
 | V5 | `material_intake.sompi_per_byte` / payer | 50 / submitter | sompi/B | 運搬単価。P3 `c_retain` = ⌈2,250,000×50/3,120⌉ = 36,058 と一致 | 保持費の実価格（M-DA） |
 | V5 | `material_intake.draft_ttl_daa` | 720 | DAA | 名目 1 日 | intake の実測完了時間 |
+| F03k | `kernel_panel_one_external_gain_bound` | 500 MSK（5e10 sompi） | sompi | 嘘の claim が通った場合の利得: claim_reward 5 MSK（escrow から）＋ V2 fee 0.816 MSK ＋ 結果の利用者への協調した誤誘導の余地 約 494 MSK。比較する検閲費用は出荷中の t12 ledger: `dismissed_proof_fee` 0.1 MSK × `max_adjudications_per_block` 64 = 6.4 MSK/block、`liability_daa` 200 で 1,280 MSK（bound の 2.56 倍）。1 件の Panel=1 claim に 500 MSK を超える価値を賭ける利用者は保証の外 | ledger の料金・上限・責任期間の変更、誤誘導の価値がこれを超える証拠。**目安（2026-10-22 委任）。ユーザーへの明示承認依頼を推奨** |
+| F02 | `follow_up_branches_per_turn` | 2 | 分岐/turn | 二分 dissection の follow-up はどちらの半分にも進めるので両方を予約。Q = 2 署名者 × 12 turn × 2 = 48 ≤ c·W = 1 × 9,999。833 DAA 区間あたり 4 slot。持続 1/48 original/DAA（名目 15/日） | 実モデル class の dissection の分岐数。**ユーザー承認済みの目安（2026-10-26）、実測で置換** |
 | F02 | `court_service_inclusion.inclusion_delay_daa` | 4 | DAA | B_carrier: ⌈34,000 / 最悪空き 13,051⌉ = 3 DAA ＋ 1 packet/DAA 予約で同区間の 2 packet 目が 1 DAA 待つ = 4（既存 `PALW_COURT_CLOSE_INCLUSION_MARGIN` と同じ）。184 s/DAA で約 12 分 | 混雑下の court packet 取り込み遅延の実測。**目安で pin、実測で置換**。型は 9803e043d、本 lane の base には無いので数値のみ |
 | V11 | `court_capacity.rho_sompi` | 3,125（旧目安 6,250） | sompi/DAA/unit | ⌈34,000×50/42/13⌉ = 3,114 を切上げ。全 slot を 10,000 DAA 占有 = 171 MSK。正直な起訴（ingress＋8 move×42 DAA 占有＋運搬）0.28 MSK ≤ 最小 slash 3 MSK の 49% = 1.47 MSK | 最低要件ハードウェアの court op 実測（arming 要件 2） |
 | V11 | `court_capacity.session_weight` / op_work | 13 / [5, 13, 1, 11] | unit | P1 M-RHO（中央値ベース、単位 126.5 µs） | 同上。**目安で pin、実測で置換** |
@@ -166,3 +168,11 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 | 項目 | 名前 | 値 | 単位 | 根拠 | 見直し条件 |
 |---|---|---|---|---|---|
 | CERT | `palw_kernel_uncertified_split_v1`（NotCertified・Expired・NoPopulation・Withdrawn・Final 後 conviction） | producer 0 / burn = V3 burn 100‰（切捨て）/ 残りを poster へ返却。burn + refund = 報酬 | ‰ of 保留報酬 | 全額返却だと自己支払い claim が認証抽選を無料で引ける。全額 burn だと正直な claim がまれに落ちたとき（約 0.7%）支払者の負担が重すぎる | m/k の確定（VAL・ユーザー承認）、正直 claim の実測失敗率、V3 burn の変更 |
+
+## 2026-10-26 ユーザー承認（beacon policy・Gate C m/k・値の目安）
+
+- ユーザー承認 2026-10-26（原文）:「本番の beacon policy（k/D）と m/k 75/41 を承認していただくこと。値の目安（V1〜V5、V11、包含遅延など）をそのまま使うことも了承　これは承認する」。
+- **本番 Panel beacon policy — ユーザー承認 2026-10-26、目安から**: `palw_panel_beacon_v1::palw_panel_beacon_policy_approved_v1`、`approved_panel_beacon_policies_v1` に 1 件。k = 3（f = 0.25 で全 source 敵対の確率 1.6%）、D = 200 DAA（t12 の静穏時 finality 深さ 7〜10 h = 140〜200 DAA の上端）、anchor delay 2・window 40（econ B12 の interim shape）、retry 2（最後の寄与者の選択肢 ≤ 3）、repetition 1、security_bits 128。形は paid opt-in source（v5、route が有効なら seal-reveal v6）で、source は承認済み paid claim（2026-10-17 決定）。最初の承認済み paid Final までは固定 bootstrap seed（EXEC credit なし）。外部の bias review（RFC-0007 §VI.8 item 2、RFC-0010 P0-10）は未実施。見直し: その review、または finality 深さの実測。
+- **本番 Gate C policy — m/k = 75/41 ユーザー承認 2026-10-26、目安から**: `PalwSecurityCertificationPolicyV1::approved_v1(day_daa)`（他の項は RFC-0018 の設計値）。f = 0.25 で誤認証 3.99e-8/claim、4,096 position 上限で 54 件/日・年 7.9e-4、正直認証 0.9926（応答 90%）。e2e の TEST_ONLY policy はこれに置き換えられる。
+- **V1〜V5、V11、inclusion_delay_daa — ユーザー承認済みの目安 2026-10-26、実測で置換**: 値は「2026-10-26 lane VAL」節（V1 は 1 packet/DAA、V11 ρ_court 3,125、inclusion_delay_daa 4 DAA を含む改定後の値）。measured record・arming record には入れない。
+- 範囲: どれも本番 preset には入れていない（slice の武装は統括の統合時）。panel v3 の fence は未武装なので、approved 一覧が consensus に効くのは panel v3 か slice が武装されてから。

@@ -61,6 +61,13 @@ pub const PALW_G14_SERVICE_SPAN_DAA_V1: u64 = 833;
 /// throughput is `1 / 24` original per DAA (30 per nominal day). Was 2 packets (68,000 B) in the first estimate.
 pub const PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1: u64 = 1;
 
+/// **F02 `follow_up_branches_per_turn` (USER-APPROVED ESTIMATE class, 2026-10-26; replace by measurement)** — 2: a binary
+/// dissection's follow-up turn can go to either half, so each turn reserves both branches. Capacity check (`Q ≤ c·W`): one Panel=1
+/// original reserves `Q = 2 signers × 12 turns × 2 = 48` packets against `c·W = 1 packet/DAA × 9,999 DAA`; per 833-DAA interval it
+/// needs `2 × 2 = 4` of 833 slots. Sustained throughput halves to `1 / 48` original per DAA (15 per nominal day). Revise: the
+/// court's real branching factor per turn (dissection arity of the real-model classes).
+pub const PALW_G14_FOLLOW_UP_BRANCHES_PER_TURN_ESTIMATE_V1: u64 = 2;
+
 /// **V1 (estimate).**
 pub const PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1: CourtServiceProfileV1 = CourtServiceProfileV1 {
     version: 1,
@@ -82,6 +89,15 @@ pub const PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1: CourtServiceProfileV1 = Co
 /// original holds in one interval queue at most 1 extra DAA → 4 DAA, equal to `PALW_COURT_CLOSE_INCLUSION_MARGIN` (4 DAA/chunk).
 /// At the measured 184 s/DAA median (240 s observed max) that is ≈ 12–16 minutes. Must stay ≪ span 833 and the 42-DAA turn.
 pub const PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1: u64 = 4;
+
+/// **F03k external gain bound for Panel=1 kernel-route classes (ESTIMATE, 2026-10-26)**: 500 MSK. If a lying claim stands, it
+/// gains at most the claim reward paid from escrow (`claim_reward` 5 MSK) plus the funded fee (V2, 0.816 MSK), plus an allowance of
+/// ≈ 494 MSK for coordinated misdirection of whoever consumes the result. The censorship cost it is checked against, from the t12
+/// ledger as shipped: `dismissed_proof_fee` 0.1 MSK × `max_adjudications_per_block` 64 = 6.4 MSK per block, over the ledger's
+/// `liability_daa` 200 → 1,280 MSK, 2.56 × the bound. A consumer who stakes more than this on one Panel=1 claim is outside the
+/// guarantee. Revise: any change of the ledger's fee / adjudication cap / liability window, or evidence of larger misdirection value.
+/// F03k's branch (d801d4eb3) declares this name as `None`; this value replaces it at integration.
+pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1: Option<u64> = Some(500 * SOMPI_PER_MSK_V1);
 
 // ---------------------------------------------------------------- V2 funded original / admission
 
@@ -383,6 +399,23 @@ mod tests {
         let zero = PalwEscrowDueV1 { kind: K::WorkPayment, payee: Some(h(2)), amount_sompi: 0 };
         assert!(PalwEscrowFeeScheduleV1::new_v1(h(1), vec![zero], 8).is_err());
         assert!(palw_g14_escrow_schedule_estimate_v1(h(1), 0, h(2), h(3)).is_err());
+    }
+
+    #[test]
+    fn val_external_gain_bound_is_below_the_ledger_censorship_cost() {
+        let gain = PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.expect("estimate");
+        let censorship = (SOMPI_PER_MSK_V1 / 10) * 64 * 200;
+        assert!(censorship > gain && censorship * 100 >= gain * 250, "censorship {censorship} gain {gain}");
+        assert!(gain >= 5 * SOMPI_PER_MSK_V1 + PALW_G14_FUNDED_FEE_SOMPI_V1, "covers reward + escrow fee");
+    }
+
+    #[test]
+    fn val_follow_up_branches_fit_the_hard_window() {
+        let b = PALW_G14_FOLLOW_UP_BRANCHES_PER_TURN_ESTIMATE_V1;
+        let q = PALW_G14_PANEL1_LIABLE_SIGNERS_V1 * PALW_G14_PACKETS_PER_SIGNER_V1 * b;
+        assert_eq!(q, 48);
+        assert!(q <= PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1 * 9_999, "Q <= c*W");
+        assert!(PALW_G14_PANEL1_LIABLE_SIGNERS_V1 * b <= PALW_G14_SERVICE_SPAN_DAA_V1 * PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1);
     }
 
     #[test]

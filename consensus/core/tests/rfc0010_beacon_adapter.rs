@@ -172,7 +172,8 @@ fn an_independent_source_inside_the_window_locks_and_verifies() {
 
 #[test]
 fn the_shipped_registry_approves_no_scheme_so_every_proof_is_refused() {
-    assert!(approved_panel_beacon_policies_v1().is_empty(), "EXTERNAL_GATE_PENDING: no Panel beacon scheme is approved");
+    // 2026-10-26: the one user-approved policy; the fixture policy is not it.
+    assert_eq!(approved_panel_beacon_policies_v1(), vec![kaspa_consensus_core::palw_panel_beacon_v1::palw_panel_beacon_policy_approved_v1()]);
     let p = policy(1);
     let history = History::new(vec![event(1, RELEASE + 1, RELEASE + 2)]);
     let proof = honest(&p, &history);

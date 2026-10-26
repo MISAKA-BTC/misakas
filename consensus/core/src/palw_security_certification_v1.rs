@@ -156,6 +156,19 @@ impl PalwSecurityCertificationPolicyV1 {
         }
     }
 
+    /// **The production Gate C policy — m / k = 75 / 41 USER-APPROVED 2026-10-26** (user: 「m/k 75/41 を承認」; decided 2026-10-22
+    /// as an estimate under f = 0.25: false certification 3.99e-8 per claim, ≤ 54 certifications a day under the 4,096-position cap,
+    /// 7.9e-4 a year; honest certification 0.9926 at 90 % response). The other fields are the RFC-0018 design values at `day_daa`.
+    /// Replaces the e2e harness's TEST-ONLY policy. Not read by any preset.
+    pub const fn approved_v1(day_daa: u64) -> Self {
+        Self::design_unapproved_v1(day_daa)
+    }
+
+    /// Whether `self` is the approved policy at `day_daa`.
+    pub fn is_approved_v1(&self, day_daa: u64) -> bool {
+        *self == Self::approved_v1(day_daa)
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.k == 0 || self.k > self.m || self.m == 0 {
             return Err("certification needs 1 ≤ k ≤ m");
@@ -668,6 +681,17 @@ pub fn palw_certification_grief_f64(f: f64, m: u32, k: u32, veto: u32) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn val_approved_gate_c_policy_is_75_of_41_and_validates() {
+        let p = PalwSecurityCertificationPolicyV1::approved_v1(720);
+        assert_eq!((p.m, p.k, p.veto), (75, 41, 0));
+        p.validate().expect("strict majority");
+        assert!(p.is_approved_v1(720));
+        let mut other = p;
+        other.k = 40;
+        assert!(!other.is_approved_v1(720));
+    }
+
     use super::*;
 
     #[test]
