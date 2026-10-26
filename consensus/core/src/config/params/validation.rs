@@ -91,6 +91,7 @@ impl Params {
             false,
             crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1,
             crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
+            crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1,
         )
     }
 
@@ -104,7 +105,18 @@ impl Params {
         &self,
         records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
     ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false, records, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1)
+        self.validate_palw_v2_inner(false, records, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1, crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1)
+    }
+
+    /// **[`Self::validate_palw_v2_with_arming_records_v1`] with kernel-route records too** (lane TNODE, 2026-10-26): `kernel_records`
+    /// in place of the binary's pinned (empty) `PALW_KERNEL_ROUTE_ARMING_RECORDS_V1`, for a salted drill chain that arms the kernel
+    /// slice. Every refusal is [`Self::validate_palw_v2`]'s; only WHICH records exist differs. The node never calls it on a shipped path.
+    pub fn validate_palw_v2_with_g14_and_kernel_route_records_v1(
+        &self,
+        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
+        kernel_records: &[crate::palw_kernel_route_arming_v1::PalwKernelRouteArmingRecordV1],
+    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        self.validate_palw_v2_inner(false, records, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1, kernel_records)
     }
 
     /// [`Self::validate_palw_v2_with_arming_records_v1`] with `cost_records` in place of the binary's pinned TIR frame cost records
@@ -115,7 +127,7 @@ impl Params {
         records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
         cost_records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
     ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false, records, cost_records)
+        self.validate_palw_v2_inner(false, records, cost_records, crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1)
     }
 
     /// Feature-gated private factory exception for release heights only. All
@@ -138,6 +150,7 @@ impl Params {
             true,
             crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1,
             crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
+            crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1,
         )
     }
 
@@ -146,6 +159,7 @@ impl Params {
         private_rule_e: bool,
         records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
         cost_records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
+        kernel_records: &[crate::palw_kernel_route_arming_v1::PalwKernelRouteArmingRecordV1],
     ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         // The overlay's bond collateral has one gate left: the acceptance-time skip, in force from
         // `bond_spend_gate_mergeset_activation_daa_score`. The own-body gate that covered the blocks
@@ -225,7 +239,7 @@ impl Params {
         // **The task-head profile** (`crate::palw_task_heads_v1`): dormant, refused when armed.
         self.validate_palw_task_heads_v1()?;
         // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
-        self.validate_palw_probabilistic_constraints_v1()?;
+        self.validate_palw_probabilistic_constraints_in_v1(kernel_records)?;
         self.validate_palw_funded_execution_v11()?;
         self.validate_palw_stage_execution_v14()?;
         self.validate_palw_native_final_v27()?;
@@ -247,10 +261,16 @@ impl Params {
         self.validate_palw_beacon_source_fee_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
         self.validate_palw_panel_free_v1()?;
-        self.validate_palw_signed_registration_v1()?;
+        self.validate_palw_kernel_route_fence_record_in_v1(
+            crate::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1::SignedRegistrationV1,
+            kernel_records,
+        )?;
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
-        self.validate_palw_provider_court_v1()?;
+        self.validate_palw_kernel_route_fence_record_in_v1(
+            crate::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1::ProviderCourtV1,
+            kernel_records,
+        )?;
         // **Lane g14p/kernel-route U02** (`crate::palw_kernel_route_arming_v1`): the Panel=1 seat policy's ordering and mirror.
         self.validate_palw_kernel_route_panel_one_v1()?;
         self.validate_palw_legacy_held_da_v2_in(records)?;

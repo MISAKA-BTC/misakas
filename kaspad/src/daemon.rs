@@ -2185,6 +2185,24 @@ Do you confirm? (y/n)";
                             .unwrap_or_default(),
                         // Lane G14-K: the kernel-route verifier's registered models (empty: it does nothing).
                         kernel_models: args.palw_kernel_model.iter().map(std::path::PathBuf::from).collect(),
+                        // Lane KNODE: the slice roles (injections were refused at start-up without a drill salt).
+                        kernel_roles: crate::palw_panel::palw_kernel_roles::PalwKernelRolesConfigV1 {
+                            producer: args.palw_kernel_producer,
+                            post_job: args.palw_kernel_post_job.as_deref().map(|s| {
+                                crate::palw_panel::palw_kernel_roles::palw_kernel_post_job_parse_v1(s)
+                                    .unwrap_or_else(|e| panic!("--palw-kernel-post-job={s}: {e}"))
+                            }),
+                            export_dir: args.palw_kernel_export_dir.as_ref().map(std::path::PathBuf::from),
+                            relay_dir: args.palw_kernel_relay_dir.as_ref().map(std::path::PathBuf::from),
+                            inject: args
+                                .palw_drill_kernel_inject
+                                .iter()
+                                .map(|s| s.parse().unwrap_or_else(|e| panic!("--palw-drill-kernel-inject={s}: {e}")))
+                                .collect(),
+                            flood: args.palw_drill_kernel_flood,
+                            // Typed-missing in production (`None`): the producer's admission preflight is a no-op, as the fold's is.
+                            admission_schedule: kaspa_consensus_core::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1,
+                        },
                         drill_answer_only: {
                             let drill = palw_private_drill;
                             if (args.palw_drill_answer_only || args.palw_drill_refuse_leaf_evidence) && !drill {

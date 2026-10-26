@@ -164,6 +164,11 @@ impl PalwKernelVerifierBookV1 {
         self.models.iter().find(|m| m.roots.contains(registered_root)).map(|m| m.params.clone())
     }
 
+    /// Lane KNODE: the held model a registered root opens to, for the slice roles (`palw_kernel_roles`) that share this book's models.
+    pub(super) fn model_for_root_v1(&self, registered_root: &Digest) -> Option<std::sync::Arc<MapParams>> {
+        self.model_for(registered_root)
+    }
+
     /// Forget everything about the route (the fence left, the bond unfunded).
     fn clear(&mut self) {
         self.cases.clear();
