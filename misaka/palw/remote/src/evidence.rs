@@ -175,6 +175,33 @@ pub mod fs {
         std::fs::rename(&tmp, &path)
     }
 
+    /// **A free-prompt claim's material, placed with a provider directory** — the ONE manifest assembly the rail's `--evidence-out`
+    /// and the in-process harness (lane FPSEL T-N1 rail case) share: `material` (`palw_fp_capture_encode_v1`, FPC1 — what a seat
+    /// replays and a TIR frame custodian opens) in 1 MiB chunks, named by a manifest whose roots are the commitment's own, shape-checked
+    /// before anything is written. Returns the manifest and its chunk count.
+    pub fn publish_fp_claim_material_v1(
+        root: &Path,
+        commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        material: &[u8],
+    ) -> Result<(EvidenceManifestV1, usize), String> {
+        let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment);
+        let chunks = chunk_material(material, 1 << 20);
+        let manifest = EvidenceManifestV1::build(
+            commitment.job.network_domain,
+            &commitment.job.executor_bond,
+            &commitment.job.job_nonce,
+            commitment.trace_root,
+            commitment.output_root,
+            commitment.execution_root,
+            commitment.trace_chunk_count,
+            commitment.trace_retention_daa,
+            &chunks,
+        );
+        manifest.validate_shape(&ManifestLimits::default()).map_err(|e| format!("the evidence manifest is not admissible: {e}"))?;
+        publish(root, &claim.to_string(), &manifest, &chunks).map_err(|e| format!("cannot write the evidence to {}: {e}", root.display()))?;
+        Ok((manifest, chunks.len()))
+    }
+
     /// One directory as a [`ChunkProvider`].
     pub struct FsProvider {
         pub id: String,

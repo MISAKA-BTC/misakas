@@ -902,23 +902,9 @@ fn main() {
         let prompt_ids = misaka_palw_fp_submit::staged_prompt_ids(&payload, Some(&result.prompt_token_ids)).unwrap_or_else(|e| die(e.to_string()));
         let material = misaka_palw_fp_submit::encode_claim_material(&payload, prompt_ids, capture_bytes.as_deref())
             .unwrap_or_else(|e| die(e.to_string()));
-        let chunks = misaka_palw_remote::evidence::fs::chunk_material(&material, 1 << 20);
-        let manifest = misaka_palw_remote::evidence::EvidenceManifestV1::build(
-            commitment.job.network_domain,
-            &commitment.job.executor_bond,
-            &commitment.job.job_nonce,
-            commitment.trace_root,
-            commitment.output_root,
-            commitment.execution_root,
-            commitment.trace_chunk_count,
-            commitment.trace_retention_daa,
-            &chunks,
-        );
-        manifest
-            .validate_shape(&misaka_palw_remote::evidence::ManifestLimits::default())
-            .unwrap_or_else(|e| die(format!("the evidence manifest is not admissible: {e}")));
-        misaka_palw_remote::evidence::fs::publish(dir, &claim_id.to_string(), &manifest, &chunks)
-            .unwrap_or_else(|e| die(format!("cannot write the evidence to {}: {e}", dir.display())));
+        let (manifest, chunk_count) = misaka_palw_remote::evidence::fs::publish_fp_claim_material_v1(dir, &commitment, &material)
+            .unwrap_or_else(|e| die(e));
+        let chunks = vec![(); chunk_count];
         serde_json::json!({
             "dir": dir.display().to_string(),
             "claim_id": hex(claim_id),
