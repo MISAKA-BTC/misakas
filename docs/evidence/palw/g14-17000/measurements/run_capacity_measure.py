@@ -29,7 +29,7 @@ def main():
     p.add_argument('--runs', type=int, default=3)
     p.add_argument('--allow-under-load', action='store_true')
     p.add_argument('--claims', type=int, action='append', choices=[1, 2, 4, 6])
-    p.add_argument('--positions', type=int, action='append', choices=[6, 64])
+    p.add_argument('--positions', type=int, action='append', choices=[6, 64, 65])
     a = p.parse_args()
     assert a.runs >= 1
     build = json.loads(a.build_record.read_text())

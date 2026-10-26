@@ -35,7 +35,7 @@ async fn g14_kernel_capacity_measure() {
     let n: usize = std::env::var("G14_CAP_N").unwrap().parse().unwrap();
     let count: usize = std::env::var("G14_CAP_CLAIMS").unwrap().parse().unwrap();
     let positions: u32 = std::env::var("G14_CAP_POSITIONS").unwrap().parse().unwrap();
-    assert!(n <= 1 && [1, 2, 4, 6].contains(&count) && [6, 64].contains(&positions));
+    assert!(n <= 1 && [1, 2, 4, 6].contains(&count) && [6, 64, 65].contains(&positions));
     let (config, mut bundle, premine, floats) = canonical_config(false);
     let mut params = config.params.clone();
     params.palw_kernel_route_panel_one_v1 = Some(ForkActivation::new(0));
@@ -46,8 +46,11 @@ async fn g14_kernel_capacity_measure() {
     assert!(params.validate_palw_v2().is_err());
     let setup = Instant::now();
     let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
+    let artifact_tensor_wire_bytes: usize = w.fx.params.tensors.values().map(|tensor| borsh::to_vec(&TensorWireV1::of(tensor)).unwrap().len()).sum();
+    let program_bytes = w.fx.program.encode().len();
     let mut claims = Vec::new();
     let mut first_seats = Vec::new();
+    let mut material_profiles = Vec::new();
     for _ in 0..count {
         w.jobs += 1;
         let job = KernelJobV1 {
@@ -60,7 +63,38 @@ async fn g14_kernel_capacity_measure() {
         let object = w.net.route(1, &K::PostJob { job: job.clone() });
         w.net.send(vec![(1, object)]).await;
         assert!(w.net.ledger().jobs.contains_key(&job.id()));
-        let claim = w.claim_with(0, &job, true, Delivery::Chunked(4_096)).await;
+        // 65 total tokens means the exact legal maximum of 64 trace positions.
+        // Retain the previous 6/64-token cases unchanged for comparison.
+        let claim = if positions == 65 {
+            let ledger = w.net.ledger();
+            let generated = greedy(&w.fx, &ledger, &w.class, &job.prompt, job.max_new_tokens as usize);
+            let at = matmul_at(&w.fx.program, MAX_POSITIONS - 1);
+            let kid = w.net.kid(0);
+            let produced = produce(&w.fx, &ledger, &w.class, &job, kid, generated, |trace| {
+                bump(&mut trace.values[at.0 as usize][at.1 as usize][at.2 as usize], 1);
+            });
+            assert_eq!(produced.trace.values.len(), MAX_POSITIONS as usize);
+            let id = produced.claim.id();
+            let (seal, reveal) = seal_and_reveal(&ledger, kid, &produced.object);
+            let object = w.net.route(0, &seal);
+            w.net.send(vec![(0, object)]).await;
+            let object = w.net.route(0, &reveal);
+            let chunks = kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&object, 4_096)
+                .expect("chunk encoding")
+                .expect("maximum trace uses chunks");
+            w.net.send(chunks.into_iter().map(|c| (0, c)).collect()).await;
+            Claim { id, producer: 0, trace: produced.trace, at }
+        } else {
+            w.claim_with(0, &job, true, Delivery::Chunked(4_096)).await
+        };
+        let publication_start = Instant::now();
+        let material = claim.published(&w.fx, &[]);
+        let publication_wall_ns = publication_start.elapsed().as_nanos();
+        material_profiles.push(json!({"job_token_total":positions,"trace_positions":claim.trace.values.len(),
+            "fault_position":claim.at.0,"published_tensor_count":material.0.len(),
+            "published_tensor_wire_bytes":material.0.values().map(Vec::len).sum::<usize>(),
+            "publication_wall_ns":publication_wall_ns,"includes_artifact_parameters":false,
+            "includes_transport_framing":false,"disk_or_network_fetch_measured":false}));
         assert!(w.net.ledger().claims.contains_key(&claim.id));
         let committed = w.net.daa();
         assert!(w.net.api().unwrap().assignment_of(&claim.id).is_none());
@@ -93,11 +127,7 @@ async fn g14_kernel_capacity_measure() {
                 .zip(&claims)
                 .map(|(card, claim)| {
                     let accuser = w.net.kid(*card);
-                    (
-                        *card,
-                        w.net
-                            .route(*card, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &junk) }),
-                    )
+                    (*card, w.net.route(*card, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &junk) }))
                 })
                 .collect();
             let seal_cost = measured_send(&mut w.net, seals).await;
@@ -125,8 +155,7 @@ async fn g14_kernel_capacity_measure() {
         let check_ns = start.elapsed().as_nanos();
         let OutsiderFindingV1::Prosecute(proof) = finding else { panic!("public material exposes the lie") };
         let accuser = w.net.kid(outsider);
-        let object =
-            w.net.route(outsider, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &proof) });
+        let object = w.net.route(outsider, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &proof) });
         let seal = measured_send(&mut w.net, vec![(outsider, object)]).await;
         let object = w.net.route(outsider, &K::FileProof { accuser, claim: claim.id, proof });
         let filing = measured_send(&mut w.net, vec![(outsider, object)]).await;
@@ -135,8 +164,8 @@ async fn g14_kernel_capacity_measure() {
     }
     println!(
         "G14_CAP_MEASURE {}",
-        json!({"schema":1,"n":n,"claims":count,"positions":positions,
-        "setup_wall_ns":setup_ns,"claim_states_at_measurement":initial_states,"test_adjudication_cap":policy.max_adjudications_per_block,
+        json!({"schema":2,"n":n,"claims":count,"positions":positions,
+        "setup_wall_ns":setup_ns,"material_profiles":material_profiles,"artifact_tensor_wire_bytes":artifact_tensor_wire_bytes,"program_bytes":program_bytes,"claim_states_at_measurement":initial_states,"test_adjudication_cap":policy.max_adjudications_per_block,
         "reserved_prosecution_runs":policy.prosecution_reserved_runs(),"work_cap":policy.max_court_work_per_block,
         "per_claim_worst_work":per_work,"calculated_adjudications":capacity,"rounds":rounds,"outsider":conviction,
         "arming_evidence":false,"fixture_only":true,"test_policy":true,"production_cap_measured":false,

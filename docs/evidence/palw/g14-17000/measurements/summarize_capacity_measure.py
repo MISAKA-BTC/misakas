@@ -37,15 +37,27 @@ def summarize(folder):
         records = re.findall(r'^(?:test \S+ \.\.\. )?G14_CAP_MEASURE (\{.*\})$', stdout.read_text(), re.M)
         assert len(records) == 1 and json.loads(records[0]) == row['measurement']
         m = row['measurement']
-        assert row['exit_code'] == 0 and m['schema'] == 1
+        assert row['exit_code'] == 0 and m['schema'] in (1, 2)
         for key in ('arming_evidence', 'production_cap_measured', 'continuous_adversary_inclusion_guaranteed', 'gate_c_measured', 'real_model_measured'):
             assert m[key] is False
         assert m['fixture_only'] and m['test_policy']
         count, positions, n = m['claims'], m['positions'], m['n']
-        assert count in (1, 2, 4, 6) and positions in (6, 64) and n in (0, 1)
+        assert count in (1, 2, 4, 6) and positions in (6, 64, 65) and n in (0, 1)
         assert all(int(row['env'][key]) == value for key, value in [('G14_CAP_CLAIMS', count), ('G14_CAP_POSITIONS', positions), ('G14_CAP_N', n)])
         assert m['test_adjudication_cap'] == 4 and m['reserved_prosecution_runs'] == 2
         assert len(m['claim_states_at_measurement']) == count
+        if m['schema'] == 2:
+            assert len(m['material_profiles']) == count
+            for profile in m['material_profiles']:
+                assert profile['job_token_total'] == positions
+                assert profile['trace_positions'] == positions - 1
+                assert profile['fault_position'] == (63 if positions == 65 else 1)
+                assert profile['published_tensor_count'] > 0 and profile['published_tensor_wire_bytes'] > 0
+                assert profile['disk_or_network_fetch_measured'] is False
+                assert profile['includes_artifact_parameters'] is False
+                assert profile['includes_transport_framing'] is False
+        else:
+            assert positions != 65
         cap = min(4, m['work_cap'] // m['per_claim_worst_work'])
         assert m['calculated_adjudications'] == cap
         pair = re.sub(r'-n[01]-', '-', label)
@@ -82,6 +94,12 @@ def summarize(folder):
                  'process_real_seconds': stats([r['real_seconds'] for r in rows]),
                  'peak_rss_bytes': stats([r['rss_bytes'] for r in rows]),
                  'setup_wall_ms': stats([r['measurement']['setup_wall_ns'] / 1e6 for r in rows])}
+        if all(r['measurement']['schema'] == 2 for r in rows):
+            profiles = [profile for r in rows for profile in r['measurement']['material_profiles']]
+            entry['trace_positions'] = sorted({p['trace_positions'] for p in profiles})
+            entry['fault_positions'] = sorted({p['fault_position'] for p in profiles})
+            entry['published_tensor_count_per_claim'] = sorted({p['published_tensor_count'] for p in profiles})
+            entry['published_tensor_wire_bytes_per_claim'] = sorted({p['published_tensor_wire_bytes'] for p in profiles})
         if n:
             for index in range(2):
                 entry[f'round_{index}_filing_wall_ms'] = stats([r['measurement']['rounds'][index]['filing']['wall_ns'] / 1e6 for r in rows])

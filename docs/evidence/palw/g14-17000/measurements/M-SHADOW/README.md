@@ -55,3 +55,11 @@ Absolute Final times **differ**. Panel=3 admission/coverage occurs before/at the
 | Fake-state proof seal + ingress | 9.644833 | 10.551959 | 1,410 / 1,410 inner prosecution |
 
 These native phase timers include signing where named, carrier/mempool/template/fold work where invoked, and local simulated blocks; they are not isolated verifier CPU. The full summary preserves every phase, N=0 process RSS/CPU and maxima. The comparison excludes Gate C and real artifact execution. It does not establish network propagation, legacy-route equivalence, minimum-hardware capacity, or production policy safety.
+
+## Post-commit-anchor preflight failed — 2026-10-26
+
+The release build at `8e96ab0538e0be5de90b8096accf66edca61feb1` completed with unchanged source and binary SHA-256 `2f16ff06103eeed9cd78da888143093a000489a46d4e4807986dccdab479b9a7`. [Four-process preflight](raw/postcommit-preflight-failure-2026-10-26/raw.json), [build record](raw/postcommit-preflight-failure-2026-10-26/build-record.json), [manifest](raw/postcommit-preflight-failure-2026-10-26/manifest.json).
+
+Panel=3 N=0/N=1 and Panel=1 N=0 exited 0. Panel=1 N=1 exited 101: `canonical/seed.rs::until_seated` exhausted 32 attempt blocks and panicked `no post-commit anchor seated the claim`. It emitted no completed measurement row. The collector correctly stopped with **FAILED**; no equality or timing result is claimed for the new pair. The dependent full comparison/Gate C/capacity sequence did not run. These failure logs remain intact even if a later run succeeds.
+
+Diagnosis is in progress: run the integration source's own two `lane_seed_` tests on this fixed binary, and record per-attempt anchor, span, admitted-attempt presence and kernel claim state in the next test build. The test's 32-attempt limit and acceptance predicates are unchanged. Neither cause nor a product regression is established by the preflight alone.
