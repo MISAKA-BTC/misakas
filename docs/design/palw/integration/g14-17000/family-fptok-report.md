@@ -80,3 +80,14 @@ Every failure has the same cause. Validation of the armed ruleset is refused wit
 **(2)** The :237 failure is not caused by this diff. The FpTokenizer fence list is now ordered binding → LG14-A → staged court. No params validator ties the binding below the staged court, because Constraint and Prefix legitimately use the staged court without the binding. `route_armed` counts the family only from the latest of the three fences. Placing the binding at or below the court is therefore a fence-list (release) choice. Changing this order is a reorder of a string array only, and was not rebuilt.
 
 **(3) Not implemented.** `palw_g14_route_fp_refusal_v1` receives no class row: its arguments are params, DAA, commitment and framed. Only its caller `palw_state_v2/objects.rs:~3669` holds `builder.state` and can read the class's listing (`tir_class_v1` / `PalwGenClassRecordV1::tokenizer_id`, and the class row's `raw_tokenizer_bytes`). Proposed connection: add a `class_has_tokenizer_material: bool` argument (`raw_tokenizer_bytes.is_some()` on the class's registered semantics) and drop `FpTokenizer` from `route_armed` when it is false, which returns `G14_ROUTE_ABSENT`. Tests to add: a listed class is admitted and an unlisted class is refused, both with every route armed. This changes the shared fold caller, so it is left to the owner of `objects.rs` (SPINE / F02).
+
+## 7. Proposal (3) implemented (coordinator request, 2026-10-26)
+
+- `palw_g14_route_fp_refusal_v1(.., class_has_tokenizer_material: bool)`. When the flag is false, `FpTokenizer` counts as missing, and only when it would otherwise be armed. The function returns `None` below the fence before it reads the flag. When the tokenizer route is unarmed, the family is missing whether the flag is true or false.
+- Caller `palw_state_v2/objects.rs` (FP claim gate): the flag is set when `class_semantics[class]` has both `raw_tokenizer_bytes` and `tokenizer_key_events`.
+- Tests in `legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_armed`, each run for V4, V6 and V11:
+  - With every route armed, a registered class is admitted and an unregistered class is refused with `G14_ROUTE_ABSENT`.
+  - Below the fence the answer is `None` and identical for both flag values.
+  - With the tokenizer route unarmed, or with no route armed, the answer is identical for both flag values.
+- Run: `cargo test -p kaspa-consensus-core --test g14_close_gates` gave **12 passed / 0 failed**.
+- Not tested: a fold or node test of an unregistered class's FP claim through `objects.rs` (only the function itself is tested).

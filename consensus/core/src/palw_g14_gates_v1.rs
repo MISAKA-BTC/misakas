@@ -936,11 +936,17 @@ pub fn palw_g14_route_attempt_refusal_v1(params: &PalwStateParamsV2, accepted_da
 /// job needs has its route armed; else `Some((code, why))`. A G-05 job version (constraint, prefix) is refused with
 /// [`PALW_G14_JOB_UNJUDGEABLE_CODE_V1`]; a job whose only gap is the lane-wide selection / tokenizer route, or whose evidence is
 /// non-public, with [`PALW_G14_ROUTE_ABSENT_CODE_V1`]. `commitment = None` (nothing shows the job) is refused (fail closed).
+///
+/// `class_has_tokenizer_material` (lane FPTOK, 2026-10-26): the claim's class registered the raw tokenizer material the staged
+/// raw-tokenizer court recomputes against (`raw_tokenizer_bytes` and `tokenizer_key_events` on its class semantics). Without it no
+/// outsider can judge the job's ids <-> text, so `FpTokenizer` counts as unarmed for this claim. It is read only where the
+/// tokenizer route is otherwise armed: below the fence, or while that route is unarmed, the answer does not depend on it.
 pub fn palw_g14_route_fp_refusal_v1(
     params: &PalwStateParamsV2,
     accepted_daa: u64,
     commitment: Option<&PalwFreePromptCommitmentV3>,
     framed: bool,
+    class_has_tokenizer_material: bool,
 ) -> Option<(&'static str, String)> {
     let mirror = params.g14_route_required_v1()?;
     if !mirror.governs(accepted_daa) {
@@ -951,7 +957,7 @@ pub fn palw_g14_route_fp_refusal_v1(
     };
     let families = palw_g14_fp_route_families_v1(&commitment.job);
     let missing: Vec<PalwG14RouteFamilyV1> =
-        families.iter().copied().filter(|f| !mirror.route_armed(*f, accepted_daa, framed)).collect();
+        families.iter().copied().filter(|f| !mirror.route_armed(*f, accepted_daa, framed) || (*f == PalwG14RouteFamilyV1::FpTokenizer && !class_has_tokenizer_material)).collect();
     if missing.is_empty() {
         return None;
     }
