@@ -1,0 +1,7 @@
+{
+  "status": "BLOCKED",
+  "evidence": {
+    "exit": 1
+  },
+  "note": "private RFC12 node: the drill ruleset fails the whole V2 validation with its drill records: Invalid(\"palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it\")\n"
+}
