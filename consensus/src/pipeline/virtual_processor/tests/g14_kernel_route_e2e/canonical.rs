@@ -928,8 +928,7 @@ async fn g14_canonical_opv_a_peer_refusing_the_model_changes_no_verdict_reward_w
     non_interference(Mode::Opv).await;
 }
 
-// ==== Milestone 3 (GAP-10): the other K2 lie types, on the canonical harness ====================================================
-//
+// ==== Milestone 3 (GAP-10): the other K2 lie types, on the canonical harness =============================================//
 // Each lie is placed in what the producer commits for the parent's single-program class (`wide128_v1(7)`: an embedding gather, a
 // wide MatMul, a rounding division and clamps, the logits), every seat covers it (Panel) or nobody does (OPV), and the participant
 // of milestone 2 — a bond registered after the claim, on its own node started after it — finds it from the RPC reads and convicts it
@@ -1357,3 +1356,4 @@ mod capacity_measurement;
 
 // Real legacy Panel and kernel-route shared-input measurement (explicit ignored run).
 mod legacy_shadow;
+mod saturation_measurement;
