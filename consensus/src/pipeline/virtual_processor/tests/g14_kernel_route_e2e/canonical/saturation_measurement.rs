@@ -149,7 +149,8 @@ async fn g14_kernel_saturation_measure() {
         w.net.send(vec![(0, object)]).await;
         let object = w.net.route(0, &reveal);
         let chunks = kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&object, 4096).unwrap();
-        send_independent(&mut w.net, chunks.unwrap_or_else(|| vec![object]).into_iter().map(|o| (0, o)).collect(), "claim-reveal").await;
+        send_independent(&mut w.net, chunks.unwrap_or_else(|| vec![object]).into_iter().map(|o| (0, o)).collect(), "claim-reveal")
+            .await;
         let committed = w.net.daa();
         seed::until_seated(&mut w.net, &claim.id, committed).await;
         w.cover(&claim.id).await;
@@ -200,13 +201,15 @@ async fn g14_kernel_saturation_measure() {
         let check_ns = start.elapsed().as_nanos();
         let OutsiderFindingV1::Prosecute(proof) = finding else { panic!("public material must expose the planted lie") };
         let accuser = w.net.kid(outsider);
-        let object = w.net.route(outsider, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &proof) });
+        let object =
+            w.net.route(outsider, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &proof) });
         let mut seals = vec![(outsider, object)];
         let junk = ProsecutionV1::Kernel(vec![0xEE, 2]);
         for target in &claims {
             for card in &sybils {
                 let a = w.net.kid(*card);
-                let object = w.net.route(*card, &K::SealProof { accuser: a, claim: target.id, seal: proof_seal_v1(&target.id, &a, &junk) });
+                let object =
+                    w.net.route(*card, &K::SealProof { accuser: a, claim: target.id, seal: proof_seal_v1(&target.id, &a, &junk) });
                 seals.push((*card, object));
             }
         }

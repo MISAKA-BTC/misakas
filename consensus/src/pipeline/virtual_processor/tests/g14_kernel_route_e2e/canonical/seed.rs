@@ -36,7 +36,10 @@ fn seed_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
 /// Measurement-only early clock: public t12's anchor-retention fence is already
 /// active at DAA 17,000, but the tiny harness starts before its shipped DAA 5,300.
 /// Both parameter mirrors must carry the same explicit test activation.
-pub(super) fn measurement_anchor_window(params: &mut kaspa_consensus_core::config::params::Params, bundle: &mut PalwConsensusParamsV2) -> bool {
+pub(super) fn measurement_anchor_window(
+    params: &mut kaspa_consensus_core::config::params::Params,
+    bundle: &mut PalwConsensusParamsV2,
+) -> bool {
     let enabled = std::env::var("G14_MEASURE_EARLY_ANCHOR_WINDOW").as_deref() == Ok("1");
     assert_eq!(bundle.state.kernel_panel_one_external_gain_bound_v1(), Some(500 * kaspa_consensus_core::constants::SOMPI_PER_KASPA));
     if enabled {
