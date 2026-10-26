@@ -46,3 +46,12 @@ fence 未満の挙動:2 種の filer は tick 冒頭の fence 判定で idle に
 - このため、card 1 から `RegisterClass`(tag 1、Panel=1)を投げても live t12 では拒否される。進め方の選択肢:(i) fence 付きの consensus 変更で wide128 の param_root を attest する(指紋が変わる)、(ii) model artifact statement → conformance class の経路を使う(Panel=1 ではなくなる)。ユーザーの判断待ち。
 - 補助ツールも欠けている:署名済み `KernelRouteV1` を任意に投稿する kaspad flag はない(あるのは poster の PostJob だけ)。最小の実装案は `--palw-kernel-register-class=<bin>` で、PostJob と同じ `kernel_roles_signed_v1` で bond 署名し、court outbox に載せる。BLOCKER の方針が決まるまで実装していない。
 - 登録手順(BLOCKER 解消後):card 1(b1)の bond と fee outpoint を使い、上記 bin を投稿する → `palw_kernel_route_v1` RPC で class `6a85c5…` が出ることを確認 → 各 node の log に `kernel verifier: holds the model … commitment root 44c62870…` が出ることを確認。live への投稿は行っていない。
+
+## R4 解消 — 17,000 fence で slice root を公開済みとして指定(2026-10-27、ユーザー決定)
+
+- **ACT2 への連絡:** 定数は `kaspa_consensus_core::palw_kernel_route_v1::PALW_T12_KERNEL_SLICE_ATTESTED_ROOT_V1`(64 B、`44c62870…960e`)。fence は既存の `palw_kernel_route_panel_one_v1`(`PALW_T12_FULL_KERNEL_ROUTE_PANEL_ONE_ENTRY`。`PALW_T12_KERNEL_SLICE_FENCES_V1` に含まれる)。新しい Params 欄や fence は足していないので、ACT2 が 17,000 でこの fence を武装すれば同時に有効になる。
+- consensus(`palw_kernel_route_fold_v1.rs`、attested set の組み立て):`kernel_route_panel_one_from_daa` 以上の block でだけ、この 1 行を attested set に加える。fence 未満では attested set は従来と同一。model を審査・判定する仕組みは作っていない(固定 1 行)。合成 fixture なので、公開性は seed から自明。
+- 階層:kernel route の fold と ledger には c_m や tier の参照がない(grep で 0 件)。kernel claim は B=F=0 で poster 払いなので、係数 0.3 は配分に効く経路がない。登録 model として扱う上での 0.3 は §9 のとおりで、kernel route 側は c_m と結びついていない。
+- 投稿ツール(kaspad):`--palw-kernel-register-class=<wide128-v1-7.register-class.bin>` は、その node の `--palw-producer-bond` で署名し、`--palw-fee-outpoint` で運ぶ。class が route に載るまで再投稿し、載ったら止まる。`--palw-kernel-register-class-dry-run` は class id・root・bond を log に出すだけで、何も投稿しない。kernel route の fence 前は不活性。
+- 手順(live へは自分で投稿していない):(1) 17,000 を過ぎたら card 1 の node(b1)で、まず `--palw-kernel-register-class=… --palw-kernel-register-class-dry-run` を付けて起動し、log の class id が `6a85c5…ec55`、root が `44c62870…` であることを確認する。(2) dry-run を外して再起動(ARGS が変わるので `UPGRADE_ARGS_CHANGE_OK=1`)。(3) `palw_kernel_route_v1` で class が載ったことを確認し、各 node の log に `kernel verifier: holds the model … 44c62870…` が出ることを確認する。(4) 載ったら flag を外す。
+- 試験:`g14_kernel_route_e2e::roles_slice_attest::roles_slice_root_is_attested_only_past_the_panel_one_fence` は PASS(fence 未満は拒否、fence 以後は登録、別 root の wide128_v1(8) は拒否)。test hook は process 全体で共有されるため、この試験は `--exact` で単独実行すること。`cargo check -p kaspad` も PASS。kaspad flag の parse 試験はしていない(WAIVER-R1 に追加)。

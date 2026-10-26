@@ -455,6 +455,13 @@ fn load_ledger_with_projection_v9(
     if let Some(route) = builder.state.kernel_route.as_ref() {
         attested.extend(route.onboarding_attested_roots_v1(ctx.daa_score));
     }
+    // Lane ROLES: past the Panel=1 slice fence, the slice class's synthetic root (one fixed row; nothing below the fence).
+    if builder.params.kernel_route_panel_one_from_daa().is_some_and(|from| ctx.daa_score >= from) {
+        let root = Hash64::from_bytes(crate::palw_kernel_route_v1::PALW_T12_KERNEL_SLICE_ATTESTED_ROOT_V1);
+        if !attested.contains(&root) {
+            attested.push(root);
+        }
+    }
     let mut ledger = builder
         .state
         .kernel_route
