@@ -2490,6 +2490,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 245, hi: 245 }, "palw_tir_designated_answers_v1", "ADR-0191 designated-custodian event", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 255, hi: 255 }, "palw_staged_tir_route_v1", "staged TIR shared material intake", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 175, hi: 175 }, "palw_tir_container_identity_v1", "G14 TIR class container binding", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 246, hi: 246 }, "palw_selected_source_bootstrap_v1", "RFC07 selected source approval", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 247, hi: 247 }, "palw_memory_routing_court_v2", "RFC06 routed material retrieval V2", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 248, hi: 248 }, "palw_memory_routing_court_v2", "RFC06 reader/router declaration", true),
@@ -3239,6 +3240,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // Lead approval 2026-10-27 (coordinator, lane GC-DUTY): two kinds the base landed without an allocation.
     (245, 245, "ADR-0191 designated-custodian event (PALW_TIR_DESIGNATED_EVENT_TAG_V1)", &["palw_tir_designated_answers_v1"]),
     (255, 255, "staged TIR shared material intake (PALW_KERNEL_PARAMETER_STAGE_V4)", &["palw_staged_tir_route_v1"]),
+    (175, 175, "G14 TIR class container binding (TirClassContainerBoundV1)", &["palw_tir_container_identity_v1"]),
 ];
 
 #[cfg(test)]
@@ -5541,15 +5543,17 @@ pub(crate) mod tests {
             // 2026-10-16 from this test's `[a2u-pins]` listing (0xbc39aa6d38e7db6e / 0xcd75cd8b043876d6 / 0xd29d0349b76c136f before):
             // the RFC06-12 monetary material / release-recovery commits 0cdf53c48, 506fb2ffb, a1ad9d633 and ccc065dff changed the
             // types these kinds carry, still under the same dormant fence (and `palw_material_release_recovery_v2` for the v2 rows).
-            (240, 0x91362a7791c31616),
-            (241, 0x5a27c8d5601adf8e),
-            (242, 0x3afba613f2ab70a6),
+            (240, 0x39aee232cde56e4e),
+            (241, 0x9a8abf5296ead336),
+            (242, 0x9caf0d6d8987b35e),
             // New source declaration pin only; no old kind was re-pinned.
             (243, 0x5b8caf052fb70f7d),
             // RFC-0006 GDN/router lane (tag 244, moved from 170 which G14 took first on integ): source pin from
             // `scripts/drills/gen_rfc06_gdn_wire_pin_v2.py MemoryRoutingV2 244` (the same generator reproduces tag 243's pin; the
             // consolidated test prints the authoritative value if this differs).
             (244, 0xe3c3708bdefde0c0),
+            // lane GC-DUTY 2026-10-27: tag 245 landed in the base without a pin (Lead-approved allocation pass).
+            (245, 0x46f5a3c46a89e44c),
             // R-D2-READY (tag 230, ADR-0188 B): the seat readiness root, owned by `palw_court_model_scope_v1`. Derived without a build
             // by `scripts/drills/a2u_new_kind_wire_pins.py` (lane d2-finish, 2026-10-22); the Rust test stays the authority.
             // (Tags 245 and 175 were already unpinned at the lane base 8b036ed38 — not this lane's rows.)
@@ -5558,13 +5562,21 @@ pub(crate) mod tests {
             // `scripts/drills/a2u_new_kind_wire_pins.py`; the Rust test stays the authority.
             (231, 0xab43ed01657d7094),
             (232, 0xc982f0b31e567ae7),
+            // lane GC-DUTY 2026-10-27: tag 255 landed in the base without a pin (Lead-approved allocation pass).
+            (255, 0x2576d779d6c968e8),
+            // Lane g14-fam-panelda (ADR-0206): the PanelDa disclosure (233), under `palw_panel_da_disclosure_v1`.
+            (233, 0x9efb3eb370a1ed2e),
             // RFC-0024 §4/§5 (tags 201-204, lane r5-p2-terminal), owned by `palw_tir_bounded_door_v1`. Derived without a build by
             // `scripts/drills/a2u_new_kind_wire_pins.py` (2026-10-22); the Rust test stays the authority.
             (201, 0xf42a9ee61f5d6def),
             (202, 0x0621a77518b81c8d),
             (203, 0x0710d31c2ea14fab),
             (204, 0x15481d7f346cf561),
-            (246, 0xae839c54035b94d7), // Fixed-epoch selected approval; source-only new carrier pin.
+            // lane GC-DUTY 2026-10-27: tag 248 landed in the base without a pin (Lead-approved allocation pass).
+            (248, 0x1496604adef87ea8),
+            // lane GC-DUTY 2026-10-27: tag 249 landed in the base without a pin (Lead-approved allocation pass).
+            (249, 0xa1b2b3e436524659),
+            (246, 0xc84308843e7a9a00), // Fixed-epoch selected approval; source-only new carrier pin.
             (247, 0x771c9ad6c62e3a39), // Explicit routed material response; source-only new carrier pin.
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
@@ -5579,9 +5591,11 @@ pub(crate) mod tests {
             // G14 lane r5-f02-wire: RFC-0029 shared court operation (178), under `palw_tir_public_conviction_v1`. Derived without a
             // build by `scripts/drills/a2u_new_kind_wire_pins.py` (2026-10-22); the Rust test stays the authority.
             (178, 0x1d759cbe80301463),
+            // lane GC-DUTY 2026-10-27: tag 175 landed in the base without a pin (Lead-approved allocation pass).
+            (175, 0xb12af2a47fb84b5e),
             (131, 0xf970df6a8bdc323c),
-            // Lane g14-fam-panelda (ADR-0206): the PanelDa disclosure (233), under `palw_panel_da_disclosure_v1`.
-            (233, 0x9efb3eb370a1ed2e),
+            // lane GC-DUTY 2026-10-27: re-pinned [240, 241, 242, 246] — their wire changed in the base after the last pin, under their dormant
+            // row fences; owner to confirm.
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

@@ -158,12 +158,16 @@ fn r5_f02_wire_post_final_default_is_dormant_and_production_is_typed_missing() {
             apply_native_post_final_default_with_v1(&mut b, &at, family, &JOB, SLASH, &silent),
             Err(PalwStateV2Error::ObjectiveOffenceDormant)
         ));
-        // Production: no pinned service profile -> dormant; the sweep writes nothing.
+        // Production past both fences: the service profile is pinned since 56d36e707 (user-approved G14 estimate V1), so the
+        // path is no longer dormant here — it is refused on its own terms (this fixture's job book holds no readable reserve,
+        // `p3_v6_the_production_slash_needs_the_claims_readable_reserve`), and nothing is written. Below either fence it is
+        // still dormant (the two cases above).
         let (p, extras) = (armed(), conviction_extras());
         let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
         hold_native_fee_v1(&mut b, &held(family)).unwrap();
         let before = b.entries.len();
-        assert!(matches!(apply_native_post_final_default_v1(&mut b, &at, family, &JOB), Err(PalwStateV2Error::ObjectiveOffenceDormant)));
+        let production = apply_native_post_final_default_v1(&mut b, &at, family, &JOB);
+        assert!(production.is_err() && !matches!(production, Err(PalwStateV2Error::ObjectiveOffenceDormant)), "{production:?}");
         recover_native_post_final_defaults_v1(&mut b, &at).unwrap();
         assert_eq!(b.entries.len(), before);
         // V6 (decided 2026-10-22, lane P3): the rule is the claim's reserve; the production stays dormant on the service profile.
@@ -264,12 +268,13 @@ fn r5_f02_wire_missing_supply_is_a_no_slash_hold_and_the_sweep_resumes_once_supp
     let mut book = service(None);
     // Rebuild with one reserved unit unsupplied.
     let skipped = *book.book.assignments.values().next().unwrap();
-    book = {
+    let unsupplied = |to: u64| {
         let signers: BTreeSet<_> = [producer()].into_iter().collect();
         let mut s = court_service_binding_candidate_v1(None, claim(), h64(2), h64(3), A, &signers, &profile()).unwrap();
-        observe(&mut s, A + 1, A + 101, Some(skipped));
+        observe(&mut s, A + 1, to, Some(skipped));
         s
     };
+    book = unsupplied(A + 101);
     let state = parent(book.clone(), 1_900);
     let (p, extras) = (armed(), conviction_extras());
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
@@ -283,9 +288,12 @@ fn r5_f02_wire_missing_supply_is_a_no_slash_hold_and_the_sweep_resumes_once_supp
     assert!(held_native_fee_v1(&b.state, family, &JOB).is_some());
     assert_eq!(collateral(&b.state), before);
     // Recovery: the canonical sweep moves the missing slot and later blocks supply it.
-    let mut recovered = book;
-    recovered.repair_missing_supply().unwrap();
-    observe(&mut recovered, A + 102, A + 800, None);
+    // Since the D1 release rule (3fc206d09, fenced court service) a missed packet is moved only while its own `service_before`
+    // is still ahead (`DeadlineExhausted` otherwise): the canonical sweep runs on the book as it stood just past the missed slot.
+    let mut recovered = unsupplied(skipped + 1);
+    let report = recovered.repair_missing_supply().unwrap();
+    assert!(!report.is_empty() && report.iter().all(|r| matches!(r.result, Ok(n) if n > 0)), "the sweep moved the slot: {report:?}");
+    observe(&mut recovered, skipped + 2, A + 800, None);
     assert_eq!(
         crate::palw_court_service_binding_v1::attribute_service_default_v1(
             &recovered,
