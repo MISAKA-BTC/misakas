@@ -916,9 +916,12 @@ pub fn empty_acceptance_result(input: &EvmBlockInput) -> EvmExecutionResult {
         input.daa_score,
         coinbase,
     );
-    // Match the full executor's ADR0139 cap, including its minimum clamp.
-    // Empty acceptance still commits gas_limit and must not erase round gas.
-    let derived = env::EvmDerivedEnv { gas_limit: input.user_gas_cap.max(MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK), ..derived };
+    // EVMFIX (2026-10-27): an empty acceptance commits the BASE gas limit from
+    // `derive_env`, NOT the ADR-0139 round cap. This is the rule testnet-12 has
+    // committed since the execution lane opened (ddf5485d8 and earlier); c5a7b200a
+    // made it commit the round cap and split a fresh IBD at the first chain block
+    // that merged a permitted round with no EVM tx. No user gas is spent here, so
+    // the committed value is the historical one, on every build and every fence.
     let parent_burn = input.parent.map(|p| evmu256_to_u128(p.evm_burn_accumulator)).unwrap_or(0);
     let parent_total = input.parent.map(|p| evmu256_to_u128(p.evm_total_native_balance)).unwrap_or(0);
     let header = EvmExecutionHeader {
@@ -1327,8 +1330,12 @@ mod tests {
                 input.typed_receipt_root_activation_daa_score = receipt_fence;
                 let (full, _) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input).unwrap();
                 let fast = empty_acceptance_result(&input);
+                // Historical rule: an empty acceptance commits the base limit whatever the cap.
+                assert_eq!(fast.header.gas_limit, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, "cap={cap}");
+                if cap > MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK {
+                    continue;
+                }
                 assert_eq!(full.header, fast.header, "genesis parent, cap={cap}, receipt fence={receipt_fence}");
-                assert_eq!(fast.header.gas_limit, cap.max(MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK));
                 active_input.user_gas_cap = cap;
                 active_input.typed_receipt_root_activation_daa_score = receipt_fence;
                 let (full, db) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &active_input).unwrap();
