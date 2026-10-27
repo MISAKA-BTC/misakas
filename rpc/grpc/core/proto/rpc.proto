@@ -3480,7 +3480,10 @@ message GetPalwCourtStateRequestMessage {
   string sessionHex = 2;
 }
 
+// Lane UX-A: empty view = the fence schedule (unchanged); otherwise a view kind of the op-227 multiplexer (see the Rust request).
 message GetPalwFenceScheduleRequestMessage {
+  string view = 1;
+  string key = 2;
 }
 
 message GetPalwBondDetailRequestMessage {

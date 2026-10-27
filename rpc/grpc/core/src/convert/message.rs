@@ -6121,11 +6121,11 @@ from!(item: &kaspa_rpc_core::GetPalwCourtStateRequest, protowire::GetPalwCourtSt
 try_from!(item: &protowire::GetPalwCourtStateRequestMessage, kaspa_rpc_core::GetPalwCourtStateRequest, {
     Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone() }
 });
-from!(_item: &kaspa_rpc_core::GetPalwFenceScheduleRequest, protowire::GetPalwFenceScheduleRequestMessage, {
-    Self {}
+from!(item: &kaspa_rpc_core::GetPalwFenceScheduleRequest, protowire::GetPalwFenceScheduleRequestMessage, {
+    Self { view: item.view.clone(), key: item.key.clone() }
 });
-try_from!(_item: &protowire::GetPalwFenceScheduleRequestMessage, kaspa_rpc_core::GetPalwFenceScheduleRequest, {
-    Self {}
+try_from!(item: &protowire::GetPalwFenceScheduleRequestMessage, kaspa_rpc_core::GetPalwFenceScheduleRequest, {
+    Self { view: item.view.clone(), key: item.key.clone() }
 });
 from!(item: &kaspa_rpc_core::GetPalwBondDetailRequest, protowire::GetPalwBondDetailRequestMessage, {
     Self { bond: item.bond.clone() }

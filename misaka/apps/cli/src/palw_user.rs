@@ -116,7 +116,7 @@ pub(crate) enum BuildCmd {
 
 // ---- reads -----------------------------------------------------------------------------------------------------------------------
 
-fn read_error(op_name: &str, op: u16, fallback: &str, e: &kaspa_rpc_core::RpcError) -> CliError {
+pub(crate) fn read_error(op_name: &str, op: u16, fallback: &str, e: &kaspa_rpc_core::RpcError) -> CliError {
     if rpc_error_is_connection_loss(e) {
         CliError::new(
             exit::COMPONENT_DOWN,
@@ -128,7 +128,7 @@ fn read_error(op_name: &str, op: u16, fallback: &str, e: &kaspa_rpc_core::RpcErr
 }
 
 /// The node answered: parse its document, refuse a version this CLI does not know.
-fn parse_view(op_name: &str, available: bool, found: bool, json: &str, what: &str) -> Result<Value, CliError> {
+pub(crate) fn parse_view(op_name: &str, available: bool, found: bool, json: &str, what: &str) -> Result<Value, CliError> {
     if !available {
         return Err(CliError::new(
             exit::GENERIC,
@@ -148,7 +148,7 @@ fn parse_view(op_name: &str, available: bool, found: bool, json: &str, what: &st
     }
 }
 
-fn emit(ctx: &Ctx, json: bool, mut doc: Value, human: impl FnOnce(&Value) -> String) {
+pub(crate) fn emit(ctx: &Ctx, json: bool, mut doc: Value, human: impl FnOnce(&Value) -> String) {
     if json || ctx.output == OutputFormat::Json {
         doc["schema"] = PALW_USER_CLI_SCHEMA.into();
         println!("{}", serde_json::to_string_pretty(&doc).expect("a JSON value serializes"));
@@ -157,7 +157,7 @@ fn emit(ctx: &Ctx, json: bool, mut doc: Value, human: impl FnOnce(&Value) -> Str
     }
 }
 
-fn text(v: &Value) -> String {
+pub(crate) fn text(v: &Value) -> String {
     match v {
         Value::Null => "-".into(),
         Value::String(s) => s.clone(),
@@ -172,7 +172,10 @@ pub(crate) async fn claim_detail(ctx: &Ctx, claim: &str, json: bool) -> CliResul
     let _ = reader.client.disconnect().await;
     let r = answer
         .map_err(|e| read_error("getPalwClaimDetail", 225, "`misaka palw claim` and `misaka bond status` read part of it", &e))?;
-    let doc = parse_view("getPalwClaimDetail", r.available, r.found, &r.view_json, "such claim")?;
+    let mut doc = parse_view("getPalwClaimDetail", r.available, r.found, &r.view_json, "such claim")?;
+    // Lane UX-A: the lifecycle view (op 227 view kind) adds SecurityCertified / held, the Gate C draw and the typed codes with their reasons.
+    // Read after op 225 on its own connection, so a node that predates the view kinds still answers the detail (`lifecycle: null`).
+    doc["lifecycle"] = crate::palw_status::lifecycle_doc(ctx, &claim.to_string()).await.unwrap_or(Value::Null);
     emit(ctx, json, doc, render_claim_detail);
     Ok(())
 }
@@ -243,6 +246,14 @@ pub(crate) fn render_claim_detail(doc: &Value) -> String {
     }
     for s in doc["courtSessions"].as_array().into_iter().flatten() {
         out += &render_session_line(s);
+    }
+    if doc["lifecycle"].is_object() {
+        for line in crate::palw_status::render_lifecycle(&doc["lifecycle"]).lines().skip(1) {
+            out += line;
+            out += "\n";
+        }
+    } else {
+        out += "  lifecycle: unavailable (the node predates op 227's view kinds)\n";
     }
     out += &format!("  judged at DAA {} (tip {})\n", text(&doc["nowDaa"]), text(&doc["tipDaa"]));
     out
@@ -348,7 +359,7 @@ pub(crate) fn render_bond_detail(doc: &Value) -> String {
 
 async fn fence_schedule(ctx: &Ctx) -> Result<(u64, Value), CliError> {
     let reader = crate::palw_derived::connect(ctx).await?;
-    let answer = reader.client.get_palw_fence_schedule(GetPalwFenceScheduleRequest {}).await;
+    let answer = reader.client.get_palw_fence_schedule(GetPalwFenceScheduleRequest::default()).await;
     let _ = reader.client.disconnect().await;
     let r = answer.map_err(|e| {
         read_error(

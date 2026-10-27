@@ -1305,8 +1305,13 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwFenceSchedule => {
                 let rpc_client = client.clone();
                 tst!(op, {
+                    // Lane UX-A: an unknown view kind is an error; a view on a node with no ConsensusV2 bundle answers unavailable.
+                    let odd = GetPalwFenceScheduleRequest { view: "nope".into(), key: String::new() };
+                    assert!(rpc_client.get_palw_fence_schedule_call(None, odd).await.is_err());
+                    let arming = GetPalwFenceScheduleRequest { view: "arming".into(), key: String::new() };
+                    assert!(!rpc_client.get_palw_fence_schedule_call(None, arming).await.unwrap().available);
                     // Tooling lane (op 227): read from the node's own ruleset, on every network.
-                    let read = rpc_client.get_palw_fence_schedule_call(None, GetPalwFenceScheduleRequest {}).await.unwrap();
+                    let read = rpc_client.get_palw_fence_schedule_call(None, GetPalwFenceScheduleRequest::default()).await.unwrap();
                     assert!(read.available && read.found);
                     let doc: serde_json::Value = serde_json::from_str(&read.view_json).unwrap();
                     assert_eq!(doc["version"], 1);
