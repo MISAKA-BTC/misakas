@@ -10304,9 +10304,11 @@ impl<'a> TransitionBuilder<'a> {
             terminal_daa.checked_add(self.params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?;
         let at = palw_exec_v2_rewards_v1::retirement(&self.state, self.params, &id, Some(ordinary), claim)?
             .expect("retirement is configured");
-        let at = if self.params.claim_local_settlement_active_at(claim.accepted_daa) {
-            crate::palw_rfc0018_v1::palw_gate_c_retirement_floor_v1(self.params, claim, at)
-        } else { at };
+        // lane GC-E2E (2026-10-27): Gate C's retirement floor applies wherever Gate C governs the claim — the same floor DL-1 and the
+        // deadline sweep derive (`terminal_deadline_at_v1`). It was applied only under claim-local settlement, so a governed Final
+        // without it was armed to retire before its certification could decide (DL-1 drift). The identity where Gate C does not
+        // govern (every shipped network), so byte-identical below the fence.
+        let at = crate::palw_rfc0018_v1::palw_gate_c_retirement_floor_v1(self.params, claim, at);
         self.arm_deadline(at, id)?;
         Ok(())
     }
