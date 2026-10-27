@@ -1866,6 +1866,12 @@ pub trait ConsensusApi: Send + Sync {
         Err("RFC-0016 report unavailable".into())
     }
 
+    /// **Lane UX-A (op 227's view kinds): a status view** (`palw_user_status_v1::palw_status_view_json_v1`) at the tip, judged at the
+    /// next block's DAA, answered as [`Self::palw_claim_detail_v1`] answers. Read-only.
+    fn palw_status_view_v1(&self, _view: crate::palw_user_status_v1::PalwStatusViewV1) -> Result<Option<(u64, Option<String>)>, String> {
+        Ok(None)
+    }
+
     /// **Tooling lane (op 225): one claim's consolidated user view** (`palw_user_views_v1::palw_claim_detail_json_v1`) at the tip,
     /// judged at the next block's DAA: `Ok(None)` off ConsensusV2 / with no PALW tip; `Ok(Some((now_daa, None)))` for a claim the state
     /// does not hold; `Ok(Some((now_daa, Some(json))))` otherwise. Read-only.
@@ -1883,6 +1889,11 @@ pub trait ConsensusApi: Send + Sync {
 
     /// **Tooling lane (op 228): one bond's consolidated user view**, as [`Self::palw_claim_detail_v1`] answers.
     fn palw_bond_detail_v1(&self, _bond: crate::palw_state_v2::PalwBondKeyV2) -> Result<Option<(u64, Option<String>)>, String> {
+        Ok(None)
+    }
+
+    /// **ADR-0206 (op 227 view `panelDaDisclosure/v1`): one PanelDa claim's disclosure duty**, as [`Self::palw_claim_detail_v1`] answers (read-only view).
+    fn palw_panel_da_disclosure_view_v1(&self, _claim: crate::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
         Ok(None)
     }
 

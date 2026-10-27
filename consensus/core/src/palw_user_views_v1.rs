@@ -72,12 +72,14 @@ fn palw_named_fence_lists_v1() -> Vec<(&'static str, Option<u64>, &'static [Palw
         ("fullActivation", PALW_T12_FULL_ACTIVATION_DAA, PALW_T12_FULL_ACTIVATION_FENCES_V1),
         ("int13", PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1),
         ("postLaunchV1", Some(PALW_T12_POST_LAUNCH_FENCE_DAA), PALW_T12_POST_LAUNCH_FENCES_V1),
-        ("postLaunchV2", None, PALW_T12_POST_LAUNCH_FENCES_V2),
-        ("postLaunchV3", None, PALW_T12_POST_LAUNCH_FENCES_V3),
-        ("postLaunchV4", None, PALW_T12_POST_LAUNCH_FENCES_V4),
+        ("postLaunchV2", PALW_T12_POST_LAUNCH_FENCE_V2_DAA, PALW_T12_POST_LAUNCH_FENCES_V2),
+        ("postLaunchV3", PALW_T12_POST_LAUNCH_FENCE_V3_DAA, PALW_T12_POST_LAUNCH_FENCES_V3),
+        ("postLaunchV4", PALW_T12_POST_LAUNCH_FENCE_V4_DAA, PALW_T12_POST_LAUNCH_FENCES_V4),
         ("int11", None, PALW_T12_INT11_FENCES_V1),
         ("tirFlagDay", PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1),
         ("modelCourtWindow", PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1),
+        // The G14 flag day (Panel=1 kernel slice, the six families, PanelDa disclosure): the list a participant asks about after DAA 16,600 (the constant keeps its 17000 name).
+        ("g14At16600", PALW_T12_G14_17000_FLAG_DAY_DAA, PALW_T12_G14_17000_FENCES_V1),
     ]
 }
 
@@ -616,8 +618,17 @@ mod tests {
         // The day one is adopted this test is updated with the reviewed change that adopts it — never silently.
         // Lane P3 (2026-10-22, user delegation of value decisions; awaiting independent verification): V7 and V8 —
         // docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md.
-        const DECIDED_P3: &[&str] =
-            &["D2 disclosure fee schedule", "D2 readiness draw cap", "TIR position witness budget", "TIR lookahead frontier bound"];
+        // Lane UX-B (2026-10-27): V4 paid ingress, V5 material intake and V1 court service profile are pinned estimates
+        // (`palw_g14_values_v1`); only the funded-original schedule stays typed-missing.
+        const DECIDED_P3: &[&str] = &[
+            "D2 disclosure fee schedule",
+            "D2 readiness draw cap",
+            "TIR position witness budget",
+            "TIR lookahead frontier bound",
+            "court paid-ingress schedule",
+            "material intake schedule",
+            "court service profile",
+        ];
         for value in palw_typed_missing_values_v1() {
             assert_eq!(
                 value.adopted,

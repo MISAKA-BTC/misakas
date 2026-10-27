@@ -128,35 +128,69 @@ def pick(d, *names, default=None):
     return default
 
 
-G14_FIELDS = (
-    # (label, method, candidate field names) — read-only monitoring for the DAA 17,000 G14 slice (AUDIT-4 M4). A method that errors
-    # or an answer without any candidate field prints "unavailable": no new RPC is added for this, and field names are best-effort.
-    ("kernel claims posted", "getPalwKernelFinals", ("claimsPosted", "committedClaims", "claims")),
-    ("kernel demands", "getPalwKernelFinals", ("demandsOpened", "openDemands", "demands")),
-    ("kernel demands answered", "getPalwKernelFinals", ("demandsAnswered", "answeredDemands")),
-    ("SecurityCertified", "getPalwKernelFinals", ("securityCertified", "certified", "certifiedFinals")),
-    ("Final", "getPalwKernelFinals", ("finals", "finalCount", "final")),
-    ("court admissions", "getPalwCourtState", ("admissions", "openedSessions", "sessions", "openSessions")),
-    ("court convictions", "getPalwCourtState", ("convictions", "convicted")),
-    ("PanelDa disclosure defaults", "getPalwCourtState", ("panelDaDisclosureDefaults", "panelDaDefaults")),
-)
+# Read-only monitoring for the G14 slice (AUDIT-4 M4, AUDIT-7). Lane UX-A (2026-10-27) replaced the guessed field names with the ones the
+# RPC actually serves:
+#   getPalwKernelFinals {limit}   -> total, finals[].claimId, finals[].standing (Standing | ConvictedAfterFinal | DaForfeitedAfterFinal)
+#   getPalwFenceSchedule {view:"arming", key:""} (op 227 view kind) -> routeFamilies[].family/armed/armedFramed, gateC.inForce/m/k
+#   getPalwFenceSchedule {view:"claim-lifecycle", key:<claimId>} -> certificationCode, securityCertified, held
+# A node built before the view kinds refuses them: those lines print "unavailable". PanelDa disclosure counters are lane
+# PANELDA's and are not read here.
+G14_LIFECYCLE_SAMPLE = 64
+
+
+def _view(r):
+    """The JSON document of a getPalwFenceSchedule view answer, or None."""
+    if not isinstance(r, dict) or "error" in r or not r.get("available") or not r.get("found"):
+        return None
+    try:
+        return json.loads(r.get("viewJson") or "")
+    except ValueError:
+        return None
 
 
 def g14_report(a):
     """--g14: read-only G14 counters, then `G14TIP fp=… tip=… daa=…` for check-fleet.sh's 3-host comparison."""
-    methods = sorted({m for _, m, _ in G14_FIELDS})
     try:
-        res = call_all(a.port, [(m, {}) for m in methods] + [("getPalwNodeStatus", {}), ("getBlockDagInfo", {})], a.timeout)
+        res = call_all(a.port, [("getPalwKernelFinals", {"limit": G14_LIFECYCLE_SAMPLE}), ("getPalwNodeStatus", {}),
+                                ("getBlockDagInfo", {})], a.timeout)
     except Exception as e:  # noqa: BLE001 — any transport failure is "did not answer"
         print(f"  G14 UNREACHABLE 127.0.0.1:{a.port}: {e}")
         print("G14TIP unreachable")
         return 2
-    for label, m, names in G14_FIELDS:
-        r = res.get(m)
-        v = None if not isinstance(r, dict) or "error" in r else pick(r, *names)
-        if isinstance(v, list):
-            v = len(v)
-        print(f"  G14 {label}: {'unavailable' if v is None else v}")
+    kf = res.get("getPalwKernelFinals")
+    finals = kf.get("finals") if isinstance(kf, dict) and "error" not in kf and kf.get("available") else None
+    if finals is None:
+        print("  G14 kernel Finals: unavailable")
+    else:
+        standing = [f.get("standing") for f in finals]
+        print(f"  G14 kernel Finals: {kf.get('total', len(finals))}")
+        print(f"  G14 kernel convicted after Final: {standing.count('ConvictedAfterFinal')} (of the {len(finals)} listed)")
+        print(f"  G14 kernel DA forfeited after Final: {standing.count('DaForfeitedAfterFinal')} (of the {len(finals)} listed)")
+    # the view kinds on their own connection: an old node's refusal must not hide the lines above.
+    calls = [("getPalwFenceSchedule", {"view": "arming", "key": ""})]
+    try:
+        arming = _view(call_all(a.port, calls, a.timeout).get("getPalwFenceSchedule"))
+    except Exception:  # noqa: BLE001
+        arming = None
+    if arming is None:
+        print("  G14 arming: unavailable (node predates op 227's view kinds)")
+    else:
+        gc = arming.get("gateC") or {}
+        print(f"  G14 Gate C in force: {gc.get('inForce')} (m/k {gc.get('m')}/{gc.get('k')})")
+        for f in arming.get("routeFamilies") or []:
+            print(f"  G14 route {f.get('family')}: armed {f.get('armed')} framed {f.get('armedFramed')}")
+    if finals and arming is not None:
+        codes = {}
+        for f in finals[:G14_LIFECYCLE_SAMPLE]:
+            try:
+                doc = _view(call_all(a.port, [("getPalwFenceSchedule", {"view": "claim-lifecycle", "key": f.get("claimId", "")})],
+                                     a.timeout).get("getPalwFenceSchedule"))
+            except Exception:  # noqa: BLE001
+                doc = None
+            code = doc.get("certificationCode") if doc else "unavailable"
+            codes[code] = codes.get(code, 0) + 1
+        print(f"  G14 SecurityCertified: {codes.get('certified', 0) + codes.get('public-check-certified', 0)} "
+              f"(of {sum(codes.values())} sampled; by code {dict(sorted(codes.items()))})")
     st, dag = res.get("getPalwNodeStatus") or {}, res.get("getBlockDagInfo") or {}
     fp = "?" if "error" in st else pick(st, "consensusParamsId", default="?")
     tips = pick(dag, "tipHashes", default=None)

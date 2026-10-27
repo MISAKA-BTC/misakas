@@ -134,7 +134,7 @@ pub(super) async fn until_decided(net: &mut Net, claim: &Digest, limit: u64) -> 
 }
 
 /// The cards whose bonds hold at least one drawn position, with their position counts.
-fn drawn_cards(net: &Net, row: &PalwClaimCertificationRowV1) -> Vec<(usize, u32)> {
+pub(super) fn drawn_cards(net: &Net, row: &PalwClaimCertificationRowV1) -> Vec<(usize, u32)> {
     (0..8usize)
         .filter_map(|card| {
             let n = row.draws.iter().filter(|d| **d == net.kid(card)).count() as u32;
@@ -143,7 +143,7 @@ fn drawn_cards(net: &Net, row: &PalwClaimCertificationRowV1) -> Vec<(usize, u32)
         .collect()
 }
 
-async fn attest(net: &mut Net, claim: &Digest, card: usize, verdict: misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1) {
+pub(super) async fn attest(net: &mut Net, claim: &Digest, card: usize, verdict: misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1) {
     use misaka_palw_kernel::model_eligibility_v1::*;
     let attestation = EligibilityAttestationV1 {
         version: ELIGIBILITY_ATTESTATION_VERSION_V1,

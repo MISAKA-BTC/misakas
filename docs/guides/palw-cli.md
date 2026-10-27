@@ -127,18 +127,19 @@ misaka palw submit-object --object r.borsh --key-file ~/.misaka/bond.key --submi
 - 合意側の context `misaka-palw/legacy-dispute/object/v1` で、chain 固有の domain に対して署名する。
 - 状態に依存する判定(deposit、上限、期限)は、その object を運ぶ block で fold が行う。
 
-### 2.2 未採択の値に依存するもの — 作らずに拒否する
+### 2.2 値に依存する builder — CLI では作らない
 
 ```sh
-misaka palw build funded-original --claim <claim>   # exit 10: funded original schedule が未採択
-misaka palw build court-ingress   --claim <claim>   # exit 10: court paid-ingress schedule が未採択
-misaka palw build material-intake --claim <claim>   # exit 10: material intake schedule が未採択
-misaka palw build d2-demand       --class <class>   # exit 10: D2 disclosure fee schedule が未採択
-misaka palw build position-close  --claim <claim>   # exit 10: TIR position witness budget が未採択
+misaka palw build funded-original --claim <claim>   # exit 10: funded original schedule が未採択(typed-missing)
+misaka palw build court-ingress   --claim <claim>   # exit 10: 値は採択済み(V4 目安)、CLI の builder は未実装 — SDK を使う
+misaka palw build material-intake --claim <claim>   # exit 10: 値は採択済み(V5 目安)、CLI の builder は未実装 — SDK を使う
+misaka palw build d2-demand       --class <class>   # exit 10: 値は採択済み、CLI の builder は未実装 — SDK を使う
+misaka palw build position-close  --claim <claim>   # exit 10: 値は採択済み、CLI の builder は未実装 — SDK を使う
 ```
 
-- 手数料表や slash 額が合意で typed-missing(未採択)である間は、chain がその object をすべて拒否する。
-- そのため CLI は値を推測せず、何が足りないか(値の名前と、合意がその値を読む関数)を表示して終了する。
+- 2026-10-27 時点で typed-missing(未採択)なのは funded original schedule だけ。chain はその object をすべて拒否する。CLI は値を推測せず、値の名前と、合意がその値を読む関数を表示して終了する。
+- 採択済み: court service profile(V1)、court paid-ingress(V4)、material intake(V5)、D2 disclosure fee、D2 readiness draw cap、TIR position witness budget、TIR lookahead frontier bound。いずれも目安の値で、根拠と見直し条件は台帳にある。
+- 採択済みの値を使う builder は、CLI に実装されるまで exit 10 で SDK を案内する(UX-B が追加中)。
 
 ## 3. 未採択の値 — `misaka palw not-adopted`
 
@@ -148,7 +149,7 @@ misaka palw not-adopted --json
 ```
 
 - 各行は、fold が読むのと同じ accessor を、この build の合意コードで評価した結果。
-- 値が採択されると、その行は自動で `adopted` に変わる。
+- 値が採択されると、その行は自動で `adopted` に変わる(2026-10-27: funded original 以外はすべて `adopted`)。
   - その変更と同時に、合意コアの試験 `no_shipped_build_adopts_a_typed_missing_value` が落ちる。
   - これにより、この手引きと survey の見直しが強制される。
 

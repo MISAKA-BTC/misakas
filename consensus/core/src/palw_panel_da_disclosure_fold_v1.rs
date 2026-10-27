@@ -30,6 +30,12 @@ impl PalwChainStateV2 {
             .fold(0u128, |sum, row| sum.saturating_add(row.locked_deposit_v1() as u128))
     }
 
+    /// Fixtures only: install a disclosure row directly (lane panelda-ux view tests).
+    #[cfg(test)]
+    pub(crate) fn panel_da_disclosures_insert_for_tests_v1(&mut self, claim: Hash64, row: PalwPanelDaDisclosureRowV1) {
+        self.panel_da_disclosures.insert(claim, row);
+    }
+
     /// A governed PanelDa claim's disclosure row (public read: the ids are public once disclosed).
     pub fn panel_da_disclosure_v1(&self, claim: &Hash64) -> Option<&PalwPanelDaDisclosureRowV1> {
         self.panel_da_disclosures.get(claim)

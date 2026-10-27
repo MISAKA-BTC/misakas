@@ -571,6 +571,20 @@ pub struct RpcCoreService {
 const RPC_CORE: &str = "rpc-core";
 
 impl RpcCoreService {
+    /// Lane UX-A (op 227's view kinds): one status view at the tip, `(available, found, now_daa, view_json)`; `available: false` off
+    /// ConsensusV2 or with no PALW tip.
+    async fn palw_status_view_read(
+        &self,
+        view: kaspa_consensus_core::palw_user_status_v1::PalwStatusViewV1,
+    ) -> RpcResult<(bool, bool, u64, String)> {
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok((false, false, 0, String::new()));
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session.spawn_blocking(move |c| c.palw_status_view_v1(view)).await.map_err(RpcError::General)?;
+        Ok(palw_user_view_answer(answer))
+    }
+
     /// The single definition of "this node is synced", behind `is_synced` on getInfo,
     /// getServerInfo and getSyncStatus.
     ///
@@ -3942,8 +3956,57 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     async fn get_palw_fence_schedule_call(
         &self,
         _connection: Option<&DynRpcConnection>,
-        _request: GetPalwFenceScheduleRequest,
+        request: GetPalwFenceScheduleRequest,
     ) -> RpcResult<GetPalwFenceScheduleResponse> {
+        // Lane panelda-ux (ADR-0206): a versioned view kind on op 227 (no new op).
+        if request.view == kaspa_rpc_core::PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1 {
+            let claim = request
+                .key
+                .trim()
+                .parse::<kaspa_consensus_core::Hash64>()
+                .map_err(|_| RpcError::General(format!("subject '{}' is not a 128-hex claim id", request.key)))?;
+            if palw_v2_bundle(&self.config.params).is_none() {
+                return Ok(GetPalwFenceScheduleResponse::default());
+            }
+            let session = self.consensus_manager.consensus().unguarded_session();
+            let answer =
+                session.spawn_blocking(move |c| c.palw_panel_da_disclosure_view_v1(claim)).await.map_err(RpcError::General)?;
+            let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
+            return Ok(GetPalwFenceScheduleResponse { available, found, now_daa, view_json });
+        }
+        use kaspa_consensus_core::palw_user_status_v1::PalwStatusViewV1 as V;
+        let key = request.key.as_str();
+        let no_key = |view: V| if key.is_empty() { Ok(view) } else { Err(RpcError::General(format!("view '{}' takes no key", request.view))) };
+        // Lane UX-A view kinds (parsed before any state is read: an unknown view or a malformed key is an error).
+        let view = match request.view.as_str() {
+            "" | "fence-schedule" => None,
+            "claim-lifecycle" => Some(V::ClaimLifecycle(palw_user_view_hash64("claim", key)?)),
+            "model-tier" if key.is_empty() => Some(V::ModelTier(None)),
+            "model-tier" => Some(V::ModelTier(Some(palw_user_view_hash64("class", key)?))),
+            "arming" => Some(no_key(V::Arming)?),
+            "bond-budget" => Some(V::BondBudget(palw_user_view_bond(key)?)),
+            "claim-budget" => Some(V::ClaimBudget(palw_user_view_hash64("claim", key)?)),
+            "model-allocation" if key.is_empty() => Some(V::ModelAllocation(None)),
+            "model-allocation" => Some(V::ModelAllocation(Some(palw_user_view_hash64("model", key)?))),
+            "capital-assignment" => Some(V::CapitalAssignment(palw_user_view_bond(key)?)),
+            // Lane J1 (user journey): the kernel-route job views.
+            "kernel-classes" => Some(no_key(V::KernelClasses)?),
+            "kernel-job" => Some(V::KernelJob(palw_user_view_hash64("job", key)?)),
+            "kernel-result" => Some(V::KernelResult(palw_user_view_hash64("job", key)?)),
+            other => {
+                return Err(RpcError::General(format!(
+                    "unknown view '{other}' (fence-schedule, claim-lifecycle, model-tier, arming, bond-budget, claim-budget, \
+                     model-allocation, capital-assignment, kernel-classes, kernel-job, kernel-result, panelDaDisclosure/v1)"
+                )));
+            }
+        };
+        if let Some(view) = view {
+            let (available, found, now_daa, view_json) = self.palw_status_view_read(view).await?;
+            return Ok(GetPalwFenceScheduleResponse { available, found, now_daa, view_json });
+        }
+        if !key.is_empty() {
+            return Err(RpcError::General("the fence schedule takes no key".into()));
+        }
         // The node's own ruleset, judged at the virtual DAA — `ForkActivation::is_active`, the predicate every fold site reads.
         let session = self.consensus_manager.consensus().unguarded_session();
         let now_daa = session.get_virtual_daa_score();
@@ -5979,6 +6042,16 @@ fn palw_user_view_answer(answer: Option<(u64, Option<String>)>) -> (bool, bool, 
         Some((now_daa, None)) => (true, false, now_daa, String::new()),
         Some((now_daa, Some(json))) => (true, true, now_daa, json),
     }
+}
+
+/// `<txid>:<index>` → a bond key (lane UX-A's view kinds; the same parse `getPalwBondDetail` does inline).
+fn palw_user_view_bond(text: &str) -> RpcResult<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+    let (txid, index) = text.split_once(':').ok_or_else(|| RpcError::General(format!("bond '{text}' is not <txid>:<index>")))?;
+    let transaction_id = txid
+        .parse::<kaspa_consensus_core::tx::TransactionId>()
+        .map_err(|_| RpcError::General(format!("bond transaction id '{txid}' is not a transaction id")))?;
+    let index: u32 = index.parse().map_err(|_| RpcError::General(format!("bond index '{index}' is not an output index")))?;
+    Ok(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint { transaction_id, index }))
 }
 
 fn palw_v2_bundle(

@@ -4119,6 +4119,15 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_rfc0016_report_v1_impl(class)
     }
 
+    fn palw_status_view_v1(
+        &self,
+        view: kaspa_consensus_core::palw_user_status_v1::PalwStatusViewV1,
+    ) -> Result<Option<(u64, Option<String>)>, String> {
+        self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, _| {
+            kaspa_consensus_core::palw_user_status_v1::palw_status_view_json_v1(state, params, view, clock).map(|doc| doc.to_string())
+        })
+    }
+
     fn palw_claim_detail_v1(&self, claim: kaspa_consensus_core::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
         self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, anchor_delay| {
             kaspa_consensus_core::palw_user_views_v1::palw_claim_detail_json_v1(state, params, &claim, clock, anchor_delay)
@@ -4141,6 +4150,13 @@ impl ConsensusApi for Consensus {
     ) -> Result<Option<(u64, Option<String>)>, String> {
         self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, _| {
             kaspa_consensus_core::palw_user_views_v1::palw_bond_detail_json_v1(state, params, &bond, clock).map(|doc| doc.to_string())
+        })
+    }
+
+    fn palw_panel_da_disclosure_view_v1(&self, claim: kaspa_consensus_core::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
+        self.virtual_processor.palw_user_view_v1_impl(|state, _params, clock, _| {
+            kaspa_consensus_core::palw_panel_da_disclosure_v1::palw_panel_da_disclosure_view_json_v1(state, &claim, clock)
+                .map(|doc| doc.to_string())
         })
     }
 
