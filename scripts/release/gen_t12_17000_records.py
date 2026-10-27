@@ -100,7 +100,12 @@ TABLE = [
      [RUN('core-g14_close_legacy'), E2E, E2E, FILER_V5, XD, RUN('consensus-lg14a_restart'), DRILL]),
     ('g14', 'LegacyHeldDaV2', 'palw_legacy_held_da_v2',
      [RUN('core-g14_close_legacy'), E2E, RUN('kaspad-lg14b_suite'), HELD_V5, XD, RUN('kaspad-lg14b_restart'), DRILL]),
-    ('g14', 'StagedPublicCourtV1', 'palw_staged_public_court_v1', V17('core-lib-staged_court')),
+    ('g14', 'StagedPublicCourtV1', 'palw_staged_public_court_v1', V17('core-lib-staged_court')[:6] + [(
+        'e2e-not-run', '',
+        'Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run. No node E2E of a lying FpConstraint claim on a TIR '
+        'class with a TFP1 frame across a restart or reorg (CI-TRIAGE / lane FPCP addendum 3): in-process the same lie without '
+        'restart/reorg is convicted (6 fresh_public_bond_service_*constraint* tests pass); the restart/reorg harness failure is its '
+        'recovery mode not answering input; in the release an A16 unframed job is refused at admission')]),
     ('g14', 'StagedTirRouteV1', 'palw_staged_tir_route_v1', V17('core-lib-tir_public_fold')),  # split run (lane T)
     ('g14', 'TirPublicConvictionV1', 'palw_tir_public_conviction_v1', V17('core-lib-tir_public_claim_state')),
     ('g14', 'CourtCapacityV1', 'palw_court_capacity_v1',

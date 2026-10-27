@@ -195,7 +195,7 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         requirement: 6,
         kind: PalwArmingWaiverKindV1::E2ENotRun,
         value: "",
-        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run. No node E2E of a lying FpConstraint claim on a TIR class with a TFP1 frame across a restart or reorg (CI-TRIAGE / lane FPCP addendum 3): in-process the same lie without restart/reorg is convicted (6 fresh_public_bond_service_*constraint* tests pass); the restart/reorg harness failure is its recovery mode not answering input; in the release an A16 unframed job is refused at admission",
         decided_by: "user 2026-10-27",
     },
     PalwArmingWaiverV1 {
