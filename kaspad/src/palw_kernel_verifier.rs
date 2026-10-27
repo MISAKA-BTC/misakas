@@ -109,15 +109,8 @@ pub(crate) fn palw_kernel_model_write_v1(path: &std::path::Path, params: &MapPar
 
 /// Read a kernel model file.
 pub(crate) fn palw_kernel_model_read_v1(path: &std::path::Path) -> Result<MapParams, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let body = bytes.strip_prefix(PALW_KERNEL_MODEL_MAGIC_V1.as_slice()).ok_or("not a kernel model file (PALWKM01)")?;
-    let rows: Vec<(u16, Option<u16>, misaka_palw_kernel::public::TensorWireV1)> =
-        borsh::from_slice(body).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut params = MapParams::default();
-    for (j, l, wire) in rows {
-        params.tensors.insert((j, l), wire.decode().map_err(|e| format!("{}: tensor ({j}, {l:?}): {e}", path.display()))?);
-    }
-    Ok(params)
+    // One reader, shared with `misaka palw build file-proof` (lane UX-B).
+    misaka_palw_remote::pursuit::kernel_model_read_v1(path)
 }
 
 /// One model this verifier holds: its tensors and the parameter-commitment roots it opens to (both forms: v1/v2 single programs

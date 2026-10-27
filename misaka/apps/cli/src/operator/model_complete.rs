@@ -51,7 +51,7 @@ impl CallerSnapshot {
 
 /// Shared bounded op-211 capture for complete-check and source-contract tooling.
 /// Caller must authenticate the resulting roots against its trusted chain view.
-pub(super) async fn kernel_snapshot(nv: &crate::wallet::NodeView) -> Result<(KernelRowsSnapshotV1, Vec<KernelRowV1>), CliError> {
+pub(crate) async fn kernel_snapshot(nv: &crate::wallet::NodeView) -> Result<(KernelRowsSnapshotV1, Vec<KernelRowV1>), CliError> {
     let limits = KernelRowsLimitsV1::default();
     let mut collector = KernelRowsCollectorV1::new(limits);
     let mut request = GetPalwKernelRowsRequest::default();

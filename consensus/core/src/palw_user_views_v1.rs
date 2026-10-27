@@ -616,8 +616,17 @@ mod tests {
         // The day one is adopted this test is updated with the reviewed change that adopts it — never silently.
         // Lane P3 (2026-10-22, user delegation of value decisions; awaiting independent verification): V7 and V8 —
         // docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md.
-        const DECIDED_P3: &[&str] =
-            &["D2 disclosure fee schedule", "D2 readiness draw cap", "TIR position witness budget", "TIR lookahead frontier bound"];
+        // Lane UX-B (2026-10-27): V4 paid ingress, V5 material intake and V1 court service profile are pinned estimates
+        // (`palw_g14_values_v1`); only the funded-original schedule stays typed-missing.
+        const DECIDED_P3: &[&str] = &[
+            "D2 disclosure fee schedule",
+            "D2 readiness draw cap",
+            "TIR position witness budget",
+            "TIR lookahead frontier bound",
+            "court paid-ingress schedule",
+            "material intake schedule",
+            "court service profile",
+        ];
         for value in palw_typed_missing_values_v1() {
             assert_eq!(
                 value.adopted,
