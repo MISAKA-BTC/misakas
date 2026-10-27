@@ -229,7 +229,7 @@ impl PalwChainStateV2 {
 
 /// The native and kernel claim hash domains remain distinct even if a caller
 /// presents equal raw bytes. Neither lane can consume or close the other's row.
-pub(super) fn kernel_budget_claim_id_v1(claim: &misaka_palw_kernel::hash::Digest) -> Hash64 {
+pub fn kernel_budget_claim_id_v1(claim: &misaka_palw_kernel::hash::Digest) -> Hash64 {
     let mut hash = keyed(b"misaka-palw/bond-budget/kernel-claim/v1");
     hash.update(claim);
     finish(hash)
@@ -1764,29 +1764,11 @@ impl TransitionBuilder<'_> {
             // RFC-0015 §8.3: an OPV kernel claim needs a budget (`unbudgeted_panel_free_v1`); a Panel-licensed one keeps its rule.
             return if kernel_class_is_optimistic { self.unbudgeted_panel_free_v1() } else { Ok(None) };
         };
-        let model = if mirror.allocation_at(ctx.daa_score).is_some() {
-            // Use the actual native class/line which authenticated the kernel
-            // binding. An ambiguous or absent binding has no allocation right.
-            let mut classes: Vec<_> = self
-                .state
-                .kernel_route
-                .as_ref()
-                .into_iter()
-                .flat_map(|route| route.kernel_bindings_v1())
-                .filter(|(_, binding)| binding.kernel_class == kernel_class)
-                .map(|(class, _)| class)
-                .collect();
-            classes.sort();
-            classes.dedup();
-            if classes.len() != 1 {
-                return Err(PalwStateV2Error::BondBudgetRefused(
-                    "a kernel allocation requires exactly one authenticated native class".into(),
-                ));
-            }
-            Some(self.bond_budget_model_of(&classes[0], self.state.class(&classes[0]).map(|row| &row.artifact_root)))
-        } else {
-            None
-        };
+        // RFC-0016 P4 / ADR-0177 (lane GC-DUTY, Lead 2026-10-28): a kernel route claim is user escrow — `plan_bond_budget_moded_v1`
+        // never applies the model allocation (S_m) to `PalwBudgetOriginV1::KernelRoute`. The native-class lookup that stood here was
+        // discarded there anyway and only refused (and so dropped) an honest Panel=1 claim whose class had no `KernelBoundV1`.
+        let _ = (kernel_class, &mirror);
+        let model = None;
         // ユーザー方針 2026-10-15: an OPV claim holds Panel=0's 7-day span; a Panel-licensed kernel claim Panel=1's day.
         let mode = if kernel_class_is_optimistic { PalwHoldModeV1::PanelZero } else { PalwHoldModeV1::PanelOne };
         // ユーザー判断 2026-10-15 item 6: the producer's liability is reserved beside the user's escrow (never replaced by it).

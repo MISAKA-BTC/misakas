@@ -235,6 +235,8 @@ pub use palw_legacy_public_filer_fold_v1::{PalwGdnStepCandidateV1, palw_gdn_step
 // 140), the per-block clock and the reservation / consumption hooks. A child module for the same reason as the others.
 #[path = "palw_bond_budget_fold_v1.rs"]
 mod palw_bond_budget_fold_v1;
+/// The kernel claim's bond-budget row id (a read for tests and RPC; lane GC-DUTY).
+pub use palw_bond_budget_fold_v1::kernel_budget_claim_id_v1;
 // RFC-0016 (dormant): V+ block rights and the elastic Final capacity in the fold — a child module for the same reason (it reads the
 // epoch counters, the readiness predicate and the panel demand terms the fold reads).
 #[path = "palw_rfc0016_fold_v1.rs"]
