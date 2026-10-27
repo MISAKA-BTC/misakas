@@ -100,7 +100,12 @@ TABLE = [
      [RUN('core-g14_close_legacy'), E2E, E2E, FILER_V5, XD, RUN('consensus-lg14a_restart'), DRILL]),
     ('g14', 'LegacyHeldDaV2', 'palw_legacy_held_da_v2',
      [RUN('core-g14_close_legacy'), E2E, RUN('kaspad-lg14b_suite'), HELD_V5, XD, RUN('kaspad-lg14b_restart'), DRILL]),
-    ('g14', 'StagedPublicCourtV1', 'palw_staged_public_court_v1', V17('core-lib-staged_court')),
+    ('g14', 'StagedPublicCourtV1', 'palw_staged_public_court_v1', V17('core-lib-staged_court')[:6] + [(
+        'e2e-not-run', '',
+        'Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run. No node E2E of a lying FpConstraint claim on a TIR '
+        'class with a TFP1 frame across a restart or reorg (CI-TRIAGE / lane FPCP addendum 3): in-process the same lie without '
+        'restart/reorg is convicted (6 fresh_public_bond_service_*constraint* tests pass); the restart/reorg harness failure is its '
+        'recovery mode not answering input; in the release an A16 unframed job is refused at admission')]),
     ('g14', 'StagedTirRouteV1', 'palw_staged_tir_route_v1', V17('core-lib-tir_public_fold')),  # split run (lane T)
     ('g14', 'TirPublicConvictionV1', 'palw_tir_public_conviction_v1', V17('core-lib-tir_public_claim_state')),
     ('g14', 'CourtCapacityV1', 'palw_court_capacity_v1',
@@ -207,8 +212,12 @@ def main():
                        '        review: %s,\n    },\n' % (mod, struct, mod, ver, mod, fty, rec['fence'], ge, AT,
                                                          P._bytes(rec['sourceCommit']), ev, P._bytes(rec['review'])))
         out.append('];\n\n')
-    out.append('/// The frame cost record for FpSelection: the lane VAL estimate (ProvisionalEstimate) and the agent review.\n')
-    out.append('pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[\n'
+    out.append('/// The frame cost record for FpSelection: the lane VAL estimate (ProvisionalEstimate) and the agent review. Emitted only\n'
+               '/// with the final evidence run\'s candidate commit as its source (a zero commit is refused, never pinned).\n')
+    if source == '0' * 40:
+        out.append('pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[];\n')
+    else:
+      out.append('pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[\n'
                '    crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {\n'
                '        version: crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,\n'
                '        genesis: %s,\n        activation_daa: %d,\n        source_commit: %s,\n        measurement: %s,\n'

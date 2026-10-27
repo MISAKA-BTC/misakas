@@ -67,6 +67,48 @@ fn list_every_refusal_at_17000() {
     println!("ACT2COUNT refused={refused} of {}", PALW_T12_G14_17000_FENCES_V1.len());
 }
 
+#[test]
+/// **DEPLOY GATE (E2E-K, 2026-10-28): the re-armed preset passes startup validation.** The shipped testnet-12 params with the G14
+/// list at 17,400 (what `PALW_T12_G14_17000_FLAG_DAY_DAA = Some(17_400)` assembles) must pass `validate_palw_v2()` — the check the
+/// preset assembly and `ConfigBuilder::build` run at node startup — with the binary's PINNED records: every gated fence of the list
+/// has its record (G14, kernel route, RFC-0018 / Gate C, model tier) and the TIR frame cost record names a real source commit.
+/// RED until the final evidence run is pinned; the flag day is not re-armed until it is green.
+fn t12_preset_rearmed_at_17400_validates_like_startup() {
+    use kaspa_consensus_core::palw_g14_gates_v1::{PALW_G14_ARMING_RECORDS_V1, PalwG14GatedFenceV1};
+    use kaspa_consensus_core::palw_kernel_route_arming_v1::{PALW_KERNEL_ROUTE_ARMING_RECORDS_V1, PalwKernelRouteGatedFenceV1};
+    use kaspa_consensus_core::palw_model_tier_v1::PALW_MODEL_TIER_ARMING_RECORDS_V1;
+    use kaspa_consensus_core::palw_rfc0018_v1::{PALW_RFC0018_ARMING_RECORDS_V1, PalwRfc0018GatedFenceV1};
+    use kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1;
+    let at = PALW_T12_G14_17000_DAA_V1;
+    let mut p = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, Some(at));
+    let names: Vec<&str> = PALW_T12_G14_17000_FENCES_V1.iter().map(|f| f.name).collect();
+    let mut missing = vec![];
+    for f in PalwG14GatedFenceV1::ALL.into_iter().filter(|f| names.contains(&f.name())) {
+        if !PALW_G14_ARMING_RECORDS_V1.iter().any(|r| r.fence == f && r.activation_daa == at) {
+            missing.push(f.name());
+        }
+    }
+    for f in PalwKernelRouteGatedFenceV1::ALL.into_iter().filter(|f| names.contains(&f.name())) {
+        if !PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().any(|r| r.fence == f && r.activation_daa == at) {
+            missing.push(f.name());
+        }
+    }
+    for f in PalwRfc0018GatedFenceV1::ALL.into_iter().filter(|f| names.contains(&f.name())) {
+        if !PALW_RFC0018_ARMING_RECORDS_V1.iter().any(|r| r.fence == f && r.activation_daa == at) {
+            missing.push(f.name());
+        }
+    }
+    if !PALW_MODEL_TIER_ARMING_RECORDS_V1.iter().any(|r| r.activation_daa == at) {
+        missing.push("palw_model_tier_v1");
+    }
+    if !PALW_TIR_FRAME_COST_RECORDS_V1.iter().any(|r| r.activation_daa == at && r.source_commit != [0; 20]) {
+        missing.push("palw_tir_frame_cost_v1");
+    }
+    assert!(missing.is_empty(), "no pinned record (or a zero source commit) for: {missing:?}");
+    assert_eq!(p.validate_palw_v2(), Ok(()), "the re-armed preset must pass startup validation");
+}
+
 /// The whole list at 17,000, peeled: validate; on a refusal, print it, set the first list fence the message names dormant, repeat.
 /// The final line says whether the WHOLE list validates (`ACT2PEEL whole=Ok`).
 #[test]
