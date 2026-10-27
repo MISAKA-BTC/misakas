@@ -271,7 +271,7 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = None;
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.
-pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 17_000;
+pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 16_600; // the value is 16,600 (user moved the flag day from 17,000, 2026-10-27); the name is kept
 
 /// **The full-activation flag day, armed** — the list at [`PALW_T12_FULL_ACTIVATION_DAA`] on the ASSEMBLED ruleset, after the int-13
 /// flag day; a no-op while the height is `None` (it leaves the list exactly as the earlier lists set it — in particular it does not clear
@@ -481,7 +481,7 @@ pub const PALW_T12_G14_COURT_CAPACITY_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = Pa
 };
 
 /// The height [`PALW_T12_G14_17000_FENCES_V1`] is meant for — read by tests and the arming report only, NEVER by the preset.
-pub const PALW_T12_G14_17000_DAA_V1: u64 = 17_000;
+pub const PALW_T12_G14_17000_DAA_V1: u64 = 16_600; // the value is 16,600 (user moved the flag day from 17,000, 2026-10-27); the name is kept
 
 /// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.
 pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {
