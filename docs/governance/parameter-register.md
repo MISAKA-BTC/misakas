@@ -112,6 +112,8 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 | `bond_budget_daily_per_unit` | 72（claim・reward block・Round rights） | ADR-0176 Stage 1 |
 | `bond_budget_export_cap_permille` | 250 | Stage 1 の S/K |
 | `bond_budget_liability_hold_daa` | 10,000 | X3 の実測 Δ |
+| `bond_budget_final_weight_per_unit` | 4.0e13（旧 1,000）**目安** | 最重 claim の Final weight × 72 × 4 が動いたとき（新 class・weight 尺度変更）、または ADR-0176 Stage 1 実測 |
+| `bond_budget_max_open_claims_per_bond` | 288（旧 72）**目安** | 実測ピーク open × 4 を超えたとき |
 | `source_seal_deposit_kas` | 28.6 | beacon と受付料が pin されたとき |
 | `source_max_concurrent_attempts` | 3 | 遅延の価値 ν |
 | `work_beacon_k` / `settlement_depth_daa` / `anchor_delay_slots` / `window_slots` / `retry_limit` | 3 / 200 / 2 / 40 / 2 | 外部の bias review。承認ではない |
@@ -248,3 +250,19 @@ ADR-0206(proposed)。値は `consensus/core/src/palw_g14_values_v1.rs` 末尾。
 
 - 現状: block あたり 64 run のうち FileProof だけが使える予約 32 run があり、block ごとに戻る。block の中では先着順で、外部者の FileProof に席は保証されない。junk の却下料は 0.1 MSK（作業量に比例）で filer 負担。全枠を責任期間 3,150 DAA 埋める費用は約 20,160 MSK で、賭け金の 12.7 倍。経済的な抑止は成立するので、構造的な修正は 17,000 では行わない（統括判断 2026-10-27）。
 - 今後の修正案: `misaka/palw/kernel/src/ledger.rs` の `charged_v1`（:710）で、`liability_until` まで N DAA 以内の claim への FileProof に予約の一部を割り当てる。または :1719〜1721 で期限の早い順に予約を使う。
+
+## 2026-10-28 lane GC-DUTY — `palw_bond_budget_v1` の F と open claim 上限を実測規模へ（目安）
+
+- 承認: 統括（Lead）2026-10-28、ユーザー委任 2026-10-22（目安で決め後から変更）。原則: ADR-0176 2026-10-15「枠不足で REAL が止まらない」。
+- 問題: `final_weight_per_unit = 1,000` は機構尺度の仮置きで、claim の Final weight（実測 1.389e11）より約 10^8 小さく、17,400 で budget を武装すると自分の attempt がすべて `UnsettledWeight` で skip され、seed anchor・Panel=1 の席・Final が起きない（harness で確認）。
+- 実測（testnet-12 DAA 16,693、読み取りのみ `getPalwCapacityShadow` / `getPalwClaims`）: 重い class の Final weight 1.389e11/claim（中央値 = p99 = 最大）、軽い class 4.33e6。1 bond の open claim ピーク 45（100,000 KAS bond、未確定 weight 合計 6.25e12）。accept→Final 中央値 236 DAA・最大 292。escrow 3,200.8 KAS/claim。
+- 値（**目安**）: F = 4 × 72 × 1.39e11 ≈ **4.0e13** / unit、`max_open_claims_per_bond` = 4 × 72 = **288**。偽造で Q/B/R/F が増えない性質は不変（上限は資本に線形、weight は chain の値）。承認 digest は provisional policy から再計算される（`palw_bond_budget_approved_policy_digests_v1`）。
+- **未解決（ユーザー判断待ち）: R。** 上限 0.25 × 担保/日（100,000 KAS bond で約 25,000 KAS/日）に対し、正直な REAL は約 88 claim/日 × 3,200 KAS ≈ 282,000 KAS/日。R を上げると「1 日分の偽造が回収可能 slash 0.51 を超えない」設計上限を破る。
+- 見直し条件: 上の各行の調整条件。
+
+### 2026-10-28 ユーザー決定 — R は変更しない
+
+- ユーザー（原文）: 「R はこのまま」。R の上限 0.25 × 担保/日（`bond_budget_export_cap_permille` 250）を維持する。
+- 抑止の上限は保たれる: 1 日分の発行由来報酬は担保の 0.25 以下で、回収可能 slash 0.51 を超えない（PESG §6）。
+- 想定される REAL の処理量（17,400 以降）: 1 bond あたり約 0.25 × 担保 ÷ 3,200.8 KAS/claim / 日。100,000 KAS bond で約 8 claim/日、13,000 KAS bond で約 1 claim/日（実測では約 88/日 → R で約 11 分の 1 に絞られる）。R を超える attempt は skip され、block は有効のまま。
+- 見直し条件: claim あたり報酬（escrow）の変更、担保の分布の変更、export cap の再検討（Stage 1 の S/K 実測）、REAL の停滞が観測されたとき。

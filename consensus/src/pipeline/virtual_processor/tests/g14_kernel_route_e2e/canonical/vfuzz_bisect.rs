@@ -101,6 +101,65 @@ async fn vfuzz_claim_commit_bisect_the_17400_list() {
     }
 }
 
+/// **lane GC-DUTY decisive test (Lead 2026-10-28)**: the FULL 17,400 list armed at DAA 0 (F and open-claim estimates in, R unchanged).
+/// (i) own attempts are admitted under the budget (counted, per bond, with the anchor each records); (iii) a refused one is a clean skip
+/// (the block stands, the chain advances); (ii) a Panel=1 claim is seated from a post-commit seed anchor, goes Final, is certified by
+/// the drawn verifiers (Gate C 'K') and paid. Prints the anchor gap and seating → Final in DAA.
+#[tokio::test]
+async fn gc_duty_full_17400_list_real_attempts_anchor_and_a_panel_one_claim_is_seated_final_certified_and_paid() {
+    use super::cert::{attest, cert_row, until_decided, until_drawn};
+    kaspa_core::log::try_init_logger("error");
+    let n = PALW_T12_G14_17000_FENCES_V1.len();
+    let mut w = World::on(Net::over_cfg(prefix_config(n, 0), TestConsensus::new)).await;
+    // (i)+(iii): attempts by cards 5..7, one per block.
+    let ttpb = w.net.ttpb();
+    let (mut admitted, mut skipped, mut anchors) = (0u32, 0u32, Vec::new());
+    for round in 0..12usize {
+        let sink_before = w.net.chain.sink();
+        let daa_before = w.net.daa();
+        let (_, c) = w.net.chain.attempt(5 + round % 3, ttpb, Vec::new(), &|_| true).await;
+        let s = w.net.chain.tip_state().1;
+        // (iii) the attempt block is accepted and becomes the sink whether or not its claim is admitted (a refused attempt is a
+        // skip, not an invalid block). The DAA score is not the right witness: a harness attempt block can share its parent's DAA.
+        assert_ne!(w.net.chain.sink(), sink_before, "the attempt block is accepted (the chain advances) whether or not its claim is admitted");
+        eprintln!("GC-DUTY 17400 attempt round {round}: sink DAA {daa_before} -> {}", w.net.daa());
+        if s.claim(&c).is_some() { admitted += 1 } else { skipped += 1 }
+        if let Some(a) = s.round_seed_anchor().copied() {
+            if anchors.last().is_none_or(|(_, b)| *b != a.block) {
+                anchors.push((w.net.daa(), a.block));
+            }
+        }
+    }
+    let gaps: Vec<u64> = anchors.windows(2).map(|p| p[1].0 - p[0].0).collect();
+    eprintln!("GC-DUTY 17400 attempts: admitted {admitted}, skipped {skipped}; anchors at {:?} (gaps {gaps:?})", anchors.iter().map(|a| a.0).collect::<Vec<_>>());
+    assert!(admitted > 0, "REAL attempts are admitted under the full list");
+    assert!(!anchors.is_empty(), "admitted attempts record seed anchors");
+    // (ii): a Panel=1 claim seated from a post-commit anchor → Final → Gate C → payout.
+    let commit_daa = w.net.daa();
+    let (claim, _seats) = claimed(&mut w, Mode::Panel, 0, false).await;
+    let seated_daa = w.net.daa();
+    let floor = final_floor(&w, Mode::Panel, &claim.id);
+    w.net.beat_to(floor).await;
+    assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&claim.id));
+    let final_daa = w.net.daa();
+    eprintln!("GC-DUTY 17400 Panel=1: committed ~DAA {commit_daa}, seated by DAA {seated_daa}, Final at DAA {final_daa} (seat → Final {} DAA)", final_daa - seated_daa);
+    let policy = w.policy();
+    let row = until_drawn(&mut w.net, &claim.id).await;
+    use misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Reproduced;
+    let drawn: Vec<usize> = (0..8usize).filter(|c| row.draws.contains(&w.net.kid(*c))).collect();
+    for card in drawn {
+        attest(&mut w.net, &claim.id, card, Reproduced).await;
+    }
+    let (producer_before, _) = until_decided(&mut w.net, &claim.id, TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50).await;
+    let decided = cert_row(&w.net, &claim.id).unwrap();
+    assert_eq!(
+        decided.outcome.map(|(o, _)| o),
+        Some(kaspa_consensus_core::palw_security_certification_v1::PalwCertificationOutcomeV1::Certified)
+    );
+    assert_eq!(w.net.owed(0), producer_before + Rules::final_reward(&policy), "the certified Final pays");
+    eprintln!("GC-DUTY 17400 Gate C certified at DAA {}; paid", w.net.daa());
+}
+
 /// **lane GC-DUTY option (C)**: every prefix of the 17,400 list (0..=n, armed at DAA 0) lets the honest Panel=1 claim commit.
 #[tokio::test]
 async fn gc_duty_every_prefix_of_the_17400_list_commits_the_honest_panel_one_claim() {
