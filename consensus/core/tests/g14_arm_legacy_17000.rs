@@ -101,7 +101,7 @@ fn armed(outsider_lane: bool) -> (Params, Vec<PalwG14ArmingRecordV1>) {
 fn arm_legacy_17000_candidates_pass_every_gate_but_the_records() {
     let shipped = palw_t12_shipped_params();
     let ids = (shipped.consensus_params_id(), shipped.consensus_identity_id(), shipped.consensus_schedule_id());
-    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_000 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
+    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 16_600 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
 
     // The candidates are exactly the two families' fences plus F03's outsider lane.
     let mut want: Vec<&str> = palw_g14_route_family_fences_v1(PalwG14RouteFamilyV1::LegacyPanelAttempt).to_vec();
