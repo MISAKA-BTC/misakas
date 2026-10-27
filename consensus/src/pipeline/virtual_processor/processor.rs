@@ -2622,6 +2622,7 @@ impl VirtualStateProcessor {
                                     header.daa_score,
                                     // ADR-0075 SA-1/SA-2: what each 0x4b carrier paid, collected
                                     // by the UTXO walk two frames up, where the fee is knowable.
+                                    &ctx.palw_v2_accepted_tx_fees,
                                     &ctx.palw_v2_rent_available_fees,
                                 )?;
                                 let history_custody_pledges = objects
