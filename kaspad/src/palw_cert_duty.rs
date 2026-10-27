@@ -42,6 +42,37 @@ pub(super) const PALW_CERT_DUTY_MARGIN_DAA_V1: u64 = 60;
 /// DAA after which a queued attestation not yet on chain is queued again.
 const PALW_CERT_DUTY_RESEND_DAA_V1: u64 = 6;
 
+/// **Which replay seam re-executes an owed row** (pure; unit-tested).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PalwCertDutyRouteV1 {
+    /// An Attempt (LegacyPanelAttempt, and LegacyFusedLeaf: an Attempt of a fused-attention class): lane B's replay of the anchor's
+    /// job; `heavy` for a class the panel room holds to `Final` (C7), which takes the heavy slot.
+    Attempt { heavy: bool },
+    /// A free-prompt claim (FpSelection / FpConstraint / FpPrefix / FpTokenizer): SEAT-R's free-prompt pass
+    /// (`fp_seat_replay_pass_v1`) over the job material this node holds (pool and retention).
+    FreePrompt { heavy: bool },
+    /// An owning39 mining claim (`'V'`): no node replay (see the module doc).
+    Native,
+    /// The claim's facts or its class's registered root are gone: nobody can re-execute it.
+    Gone,
+}
+
+pub(super) fn palw_cert_duty_route_v1(d: &PalwCertificationDutyV1) -> PalwCertDutyRouteV1 {
+    if d.native {
+        return PalwCertDutyRouteV1::Native;
+    }
+    match (d.job.as_ref(), d.seat_duty.as_ref()) {
+        (Some(job), Some(_)) if job.artifact_root.is_some() => {
+            if job.free_prompt {
+                PalwCertDutyRouteV1::FreePrompt { heavy: job.held_to_final }
+            } else {
+                PalwCertDutyRouteV1::Attempt { heavy: job.held_to_final }
+            }
+        }
+        _ => PalwCertDutyRouteV1::Gone,
+    }
+}
+
 /// This node's verdict on one owed certification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PalwCertDutyVerdictV1 {
@@ -60,6 +91,8 @@ pub(super) struct PalwCertDutyV1 {
     pub(super) replays: PalwSeatReplaysV1,
     replaying: Option<(Hash64, PalwSeatReplayKeyV1)>,
     routing_owner: Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,
+    /// The free-prompt row whose SEAT-R pass is in progress (one at a time, in the same slot).
+    fp_active: Option<Hash64>,
 }
 
 /// The verdict to attest now for `duty`, or `None` while the duty still waits for a judgement (pure; unit-tested).
@@ -98,6 +131,7 @@ impl PalwCertDutyV1 {
             replays,
             replaying: None,
             routing_owner: None,
+            fp_active: None,
         }
     }
 
@@ -110,16 +144,20 @@ impl PalwCertDutyV1 {
     }
 
     /// The next row to replay: a replayable chain claim not yet judged here (or whose retry is due), outside the last margin.
-    fn next_replay(&self, now_daa: u64) -> Option<&PalwCertificationDutyV1> {
+    fn next_replay(&self, now_daa: u64, free_prompt: bool) -> Option<&PalwCertificationDutyV1> {
         self.owed.iter().find(|d| {
             let open = match self.verdicts.get(&d.claim_id) {
                 None => true,
                 Some(PalwCertDutyVerdictV1::Unjudged { retry_at }) => now_daa >= *retry_at,
                 Some(_) => false,
             };
-            open && !d.native
-                && d.job.as_ref().is_some_and(super::palw_operator_da::palw_operator_da_replayable_v1)
-                && now_daa.saturating_add(PALW_CERT_DUTY_MARGIN_DAA_V1) < d.deadline_daa
+            let route = palw_cert_duty_route_v1(d);
+            let seam = if free_prompt {
+                matches!(route, PalwCertDutyRouteV1::FreePrompt { .. })
+            } else {
+                matches!(route, PalwCertDutyRouteV1::Attempt { .. })
+            };
+            open && seam && now_daa.saturating_add(PALW_CERT_DUTY_MARGIN_DAA_V1) < d.deadline_daa
         })
     }
 }
@@ -135,6 +173,7 @@ impl PalwPanelService {
         current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
+        fp_materials: &HashMap<Hash64, Vec<Vec<u8>>>,
         court_outbox: &mut CourtOutboxV1,
     ) {
         let mine = |round: u32, responder: bool| (round, responder) == (PALW_CERT_DUTY_ROUND_V1, false);
@@ -156,17 +195,16 @@ impl PalwPanelService {
             court_outbox.retain_pending(|(_, round, responder, _)| !mine(*round, *responder));
             return;
         }
-        // Structurally uncheckable here: attest Unavailable at once (an owning39 mining claim, a claim lane B does not replay).
+        // Structurally uncheckable here: attest Unavailable at once (an owning39 mining claim; a claim whose class left the registry).
         for d in &duty.owed {
-            if !duty.verdicts.contains_key(&d.claim_id)
-                && (d.native || !d.job.as_ref().is_some_and(super::palw_operator_da::palw_operator_da_replayable_v1))
-            {
+            let route = palw_cert_duty_route_v1(d);
+            if !duty.verdicts.contains_key(&d.claim_id) && matches!(route, PalwCertDutyRouteV1::Native | PalwCertDutyRouteV1::Gone) {
                 warn!(
                     "[{PALW_PANEL}] claim {}: drawn for its Gate C certification ({} position(s)) and this node cannot re-execute it ({}) — \
                      attesting Unavailable (GC-DUTY)",
                     d.claim_id,
                     d.positions,
-                    if d.native { "owning39 mining claim" } else { "lane B does not replay it" }
+                    if d.native { "owning39 mining claim: no node replay" } else { "its facts or class root are gone" }
                 );
                 duty.verdicts.insert(d.claim_id, PalwCertDutyVerdictV1::Unavailable);
             }
@@ -205,12 +243,52 @@ impl PalwPanelService {
                 }
             }
         }
-        // The next replay, in the duty's own slot.
+        // A free-prompt row's SEAT-R pass (polled every tick until it decides), in the same slot.
+        if duty.replaying.is_none() {
+            if duty.fp_active.is_none() {
+                duty.fp_active = duty.next_replay(current_daa, true).map(|d| d.claim_id);
+            }
+            let active = duty.fp_active.and_then(|claim| duty.owed.iter().find(|d| d.claim_id == claim).cloned());
+            match active.as_ref().map(|d| (d, palw_cert_duty_route_v1(d))) {
+                Some((d, PalwCertDutyRouteV1::FreePrompt { heavy })) if d.seat_duty.is_some() => {
+                    let claim = d.claim_id;
+                    let seat_duty = d.seat_duty.as_ref().expect("checked");
+                    let seat_r_duty = PalwSeatRDutyV1 { deadline: d.deadline_daa, role: PalwSeatRRoleV1::FullSeat, heavy };
+                    let pooled = fp_materials.get(&claim).map(|v| v.as_slice()).unwrap_or(&[]);
+                    let (step, _) =
+                        self.fp_seat_replay_pass_v1(session, seat_duty, seat_r_duty, current_daa, pooled, &mut duty.replays).await;
+                    let verdict = match step {
+                        PalwSeatReplayStepV1::Waiting => None,
+                        PalwSeatReplayStepV1::Licensed => {
+                            Some(PalwCertDutyVerdictV1::Reproduced { execution_root: seat_duty.execution_root })
+                        }
+                        PalwSeatReplayStepV1::Refuted => {
+                            error!(
+                                "[{PALW_PANEL}] claim {claim}: the free-prompt replay does NOT reproduce the claim — attesting NotReproducible (GC-DUTY)"
+                            );
+                            Some(PalwCertDutyVerdictV1::NotReproducible)
+                        }
+                        PalwSeatReplayStepV1::NoVerdict => {
+                            warn!("[{PALW_PANEL}] claim {claim}: no free-prompt job material held here yet, or no verdict; retried (GC-DUTY)");
+                            Some(PalwCertDutyVerdictV1::Unjudged { retry_at: current_daa.saturating_add(PALW_CERT_DUTY_RETRY_DAA_V1) })
+                        }
+                    };
+                    if let Some(v) = verdict {
+                        duty.verdicts.insert(claim, v);
+                        duty.fp_active = None;
+                    }
+                }
+                _ => duty.fp_active = None,
+            }
+        }
+        // The next attempt replay (LegacyPanelAttempt, LegacyFusedLeaf, held-to-Final), in the duty's own slot.
         if duty.replaying.is_none()
-            && duty.replays.has_room(false)
-            && let Some(d) = duty.next_replay(current_daa).cloned()
+            && duty.fp_active.is_none()
+            && let Some(d) = duty.next_replay(current_daa, false).cloned()
+            && let PalwCertDutyRouteV1::Attempt { heavy } = palw_cert_duty_route_v1(&d)
+            && duty.replays.has_room(heavy)
         {
-            self.cert_duty_start_replay_v1(session, duty, &d, current_daa, network_domain);
+            self.cert_duty_start_replay_v1(session, duty, &d, current_daa, network_domain, heavy);
         }
         // Attest every row with a verdict due now.
         let me = palw_kernel_bond_id_v1(&bond_key);
@@ -265,6 +343,7 @@ impl PalwPanelService {
         d: &PalwCertificationDutyV1,
         current_daa: u64,
         network_domain: Hash64,
+        heavy: bool,
     ) {
         let claim = d.claim_id;
         let unjudged = |duty: &mut PalwCertDutyV1, why: &str| {
@@ -308,7 +387,7 @@ impl PalwPanelService {
             "[{PALW_PANEL}] claim {claim}: drawn for its Gate C certification ({} position(s), deadline DAA {}) — re-executing (GC-DUTY)",
             d.positions, d.deadline_daa
         );
-        duty.replays.start(key, class_id, false, current_daa, Some(reserved), backend, move |b| b.execute_for_verdict(&ctx, &prompt));
+        duty.replays.start(key, class_id, heavy, current_daa, Some(reserved), backend, move |b| b.execute_for_verdict(&ctx, &prompt));
         duty.replaying = Some((claim, key));
         duty.routing_owner = routing_owner;
     }
@@ -328,6 +407,7 @@ mod tests {
             positions: 2,
             job: None,
             producer: None,
+            seat_duty: None,
         }
     }
 
@@ -348,6 +428,90 @@ mod tests {
         let a = palw_cert_duty_transcript_v1(&[9; 64], &[1; 64], &root);
         assert_ne!(a, [0u8; 64]);
         assert_ne!(a, palw_cert_duty_transcript_v1(&[9; 64], &[2; 64], &root));
+    }
+
+    fn job(free_prompt: bool, held_to_final: bool) -> kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
+        kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
+            accepted_block: Hash64::from_bytes([1; 64]),
+            class_id: Hash64::from_bytes([2; 64]),
+            artifact_root: Some(Hash64::from_bytes([3; 64])),
+            execution_root: Hash64::from_bytes([4; 64]),
+            trace_root: Hash64::from_bytes([5; 64]),
+            output_root: Hash64::from_bytes([6; 64]),
+            work_leaves: if free_prompt { 9 } else { 0 },
+            free_prompt,
+            held_to_final,
+        }
+    }
+
+    fn seat_duty(j: &kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1) -> kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2 {
+        let bond = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(1), 0));
+        kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2 {
+            accepted_block: j.accepted_block,
+            claim_id: Hash64::from_bytes([7; 64]),
+            class_id: j.class_id,
+            artifact_root: j.artifact_root.unwrap(),
+            seat_bond: bond,
+            executor_bond: bond,
+            execution_root: j.execution_root,
+            trace_root: j.trace_root,
+            output_root: j.output_root,
+            bound_daa: 0,
+            receipt_deadline: 1_000,
+            panel_anchor: Hash64::default(),
+            seat_index: 0,
+            panel_seat_count: 1,
+            pwu: 1,
+            quanta: 0,
+            free_prompt: j.free_prompt,
+            work_leaves: j.work_leaves,
+            job_identity: Hash64::default(),
+            tir_shard: None,
+        }
+    }
+
+    fn owed(free_prompt: bool, held_to_final: bool) -> PalwCertificationDutyV1 {
+        let j = job(free_prompt, held_to_final);
+        PalwCertificationDutyV1 { seat_duty: Some(seat_duty(&j)), job: Some(j), ..duty(1_000) }
+    }
+
+    /// Every chain-claim type has a replay seam: LegacyPanelAttempt and LegacyFusedLeaf (an Attempt of a fused class, held to `Final`)
+    /// lane B's attempt replay (heavy slot when held), every FP family the SEAT-R free-prompt pass; only 'V' and a gone class are
+    /// Unavailable.
+    #[test]
+    fn every_chain_claim_type_routes_to_a_replay_seam() {
+        use PalwCertDutyRouteV1 as R;
+        assert_eq!(palw_cert_duty_route_v1(&owed(false, false)), R::Attempt { heavy: false }, "LegacyPanelAttempt");
+        assert_eq!(palw_cert_duty_route_v1(&owed(false, true)), R::Attempt { heavy: true }, "LegacyFusedLeaf / held-to-Final");
+        assert_eq!(palw_cert_duty_route_v1(&owed(true, false)), R::FreePrompt { heavy: false }, "FP families");
+        assert_eq!(palw_cert_duty_route_v1(&owed(true, true)), R::FreePrompt { heavy: true }, "FP held to Final");
+        assert_eq!(palw_cert_duty_route_v1(&PalwCertificationDutyV1 { native: true, ..owed(false, false) }), R::Native);
+        assert_eq!(palw_cert_duty_route_v1(&PalwCertificationDutyV1 { seat_duty: None, ..owed(false, false) }), R::Gone);
+        let mut gone = owed(false, false);
+        gone.job.as_mut().unwrap().artifact_root = None;
+        assert_eq!(palw_cert_duty_route_v1(&gone), R::Gone);
+    }
+
+    /// The verdict each seam reaches on a replay: the claim's own roots reproduce (→ Reproduced), a lie's do not (→ NotReproducible).
+    /// Attempt / fused / held: lane B's `palw_operator_da_verdict_v1`; free prompt: SEAT-R's `palw_seat_replay_step_v1`, which
+    /// `fp_seat_replay_pass_v1` applies.
+    #[test]
+    fn each_seam_reproduces_the_honest_roots_and_refutes_a_lie() {
+        use super::super::palw_operator_da::{PalwOperatorDaVerdictV1 as V, palw_operator_da_verdict_v1};
+        use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
+        for held in [false, true] {
+            let j = job(false, held);
+            let honest = PalwReplayRootsV1 { execution_root: j.execution_root, trace_root: j.trace_root, work_leaves: None, output_root: Some(j.output_root) };
+            let lie = PalwReplayRootsV1 { execution_root: Hash64::from_bytes([0xEE; 64]), ..honest.clone() };
+            assert_eq!(palw_operator_da_verdict_v1(&Ok(honest), &j), Some(V::Reproduces));
+            assert_eq!(palw_operator_da_verdict_v1(&Ok(lie), &j), Some(V::Refuted));
+        }
+        let j = job(true, false);
+        let honest = PalwReplayRootsV1 { execution_root: j.execution_root, trace_root: j.trace_root, work_leaves: Some(j.work_leaves), output_root: Some(j.output_root) };
+        let step = |r: PalwReplayRootsV1| palw_seat_replay_step_v1(&Ok(r), j.execution_root, j.trace_root, j.work_leaves, j.output_root);
+        assert_eq!(step(honest.clone()), PalwSeatReplayStepV1::Licensed);
+        assert_eq!(step(PalwReplayRootsV1 { output_root: Some(Hash64::from_bytes([0xEE; 64])), ..honest.clone() }), PalwSeatReplayStepV1::Refuted);
+        assert_eq!(step(PalwReplayRootsV1 { work_leaves: Some(j.work_leaves + 1), ..honest }), PalwSeatReplayStepV1::Refuted, "a mispriced FP");
     }
 
     #[test]

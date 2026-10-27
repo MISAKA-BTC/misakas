@@ -10272,7 +10272,16 @@ impl PalwPanelService {
             //
             // Past Gate C a drawn bond re-executes the claim in its own replay slot and signs inner 75 before the deadline. Identity arms
             // it (the chain's read is empty for any undrawn bond and below the fence); no flag does.
-            self.cert_duty_tick_v1(&session, &mut cert_duty, current_daa, network_domain, bond_key, &mut court_outbox).await;
+            self.cert_duty_tick_v1(
+                &session,
+                &mut cert_duty,
+                current_daa,
+                network_domain,
+                bond_key,
+                pool_books.material.map(),
+                &mut court_outbox,
+            )
+            .await;
 
             // --- ADR-0164 F-M1: the riders this node's producer built, onto the carrier queue (`palw_rider_outbox`) ---
             crate::palw_rider_outbox::palw_rider_outbox_import_v2(|batch|court_outbox.try_push_rider_batch(batch,current_daa));

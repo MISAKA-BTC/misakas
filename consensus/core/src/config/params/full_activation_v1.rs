@@ -83,6 +83,7 @@ palw_full_activation_bare_entry_v1!(PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY, palw_reward_liability_horizon_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_UNRESOLVED_BOUND_ENTRY, palw_unresolved_bound_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_GATE_C_ENTRY, palw_independently_work_certified_v1);
+palw_full_activation_bare_entry_v1!(PALW_T12_G14_GATE_C_ATTESTOR_LIABILITY_ENTRY, palw_gate_c_attestor_liability_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_DAG_SIBLING_ATTRIBUTION_ENTRY, palw_dag_sibling_attribution_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_PANEL_ANCHOR_PERMISSIONLESS_ENTRY, palw_panel_anchor_permissionless_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_MEMORY_ROUTING_COURT_V2_ENTRY, palw_memory_routing_court_v2);
@@ -414,6 +415,8 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     // native mining receipts and other legs with no signed deadline. No entry of this list needs it at or below; each pay point keeps
     // its own once-guard (escrow row removal / phase / paid flag), as testnet-12 runs today.
     PALW_T12_FULL_GATE_C_ENTRY,
+    // lane GC-DUTY (user 2026-10-27): positive 'S'/'K' attestors' liability, at Gate C's height (validation: at or below it).
+    PALW_T12_G14_GATE_C_ATTESTOR_LIABILITY_ENTRY,
     // Slot for lane ROLES: the wide128 test-class root pinned as "public attest" (a constant ROLES adds here, before route-required).
     // `palw_fp_tokenizer_match` (FpTokenizer) is NOT here: testnet-12 already runs it from DAA 5,300; re-arming it at 17,000
     // would move a live fence below 17,000. The FpTokenizer family's other fences are above.

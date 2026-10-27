@@ -204,3 +204,62 @@ async fn gatec_e2e_chain_claim_shortfall_is_not_certified_and_slashes_nobody() {
     let replay = net.replay().await;
     net.assert_same(&replay, "Gate C chain-claim shortfall");
 }
+
+/// **lane GC-DUTY: the drawn verifiers find their own duty and the honest claim certifies with no hand-picked attestor.** Each of
+/// the 8 cards asks the node's read (`palw_certification_duties_v1`, what kaspad's `palw_cert_duty` polls every DAA) for the rows it
+/// owes and attests each; nobody else attests. The replay itself is kaspad's (crate boundary): here an owed row whose job
+/// descriptor matches the claim record's roots stands in for a reproduced replay. Every drawn position approves, the row certifies
+/// after the prosecution window, a second node agrees, and nothing is owed afterwards.
+#[tokio::test]
+async fn gatec_duty_e2e_drawn_bonds_find_their_duty_and_the_honest_claim_certifies() {
+    use misaka_palw_kernel::model_eligibility_v1::*;
+    kaspa_core::log::try_init_logger("warn");
+    let mut net = Net::over_cfg(gatec_config(), TestConsensus::new);
+    let claim = chain_claim_final(&mut net).await;
+    let row = until_drawn(&mut net, &claim).await;
+    let params = net.chain.vp().palw_state_params_v2.clone().unwrap();
+    let daa = net.daa();
+    let (_, state) = net.chain.tip_state();
+    let mut attested = 0;
+    for card in 0..8usize {
+        let bond = net.chain.bonds[card];
+        let owed = palw_certification_duties_v1(&state, &params, &bond, daa);
+        assert_eq!(owed.is_empty(), !row.draws.contains(&net.kid(card)), "card {card}: owes exactly when drawn");
+        for d in owed {
+            let c = state.claim(&d.claim_id).expect("the claim");
+            let job = d.job.as_ref().expect("a chain claim carries lane B's job");
+            assert!(!d.native && d.seat_duty.is_some() && !job.free_prompt, "an Attempt row routes to the attempt seam");
+            let reproduced = job.execution_root == c.execution_root && job.trace_root == c.trace_root;
+            let mut seen = Vec::new();
+            seen.extend_from_slice(&d.certification_id);
+            seen.extend_from_slice(&net.kid(card));
+            seen.extend_from_slice(&job.execution_root.as_bytes());
+            let attestation = EligibilityAttestationV1 {
+                version: ELIGIBILITY_ATTESTATION_VERSION_V1,
+                network: net.domain.as_bytes(),
+                exam: d.certification_id,
+                verifier: net.kid(card),
+                verdict: if reproduced { EligibilityVerdictV1::Reproduced } else { EligibilityVerdictV1::NotReproducible },
+                transcript: if reproduced {
+                    misaka_palw_kernel::hash::id(b"misaka-palw/kaspad/gate-c-duty/transcript/v1", &seen)
+                } else {
+                    [0u8; 64]
+                },
+                claim_mismatches: vec![],
+            };
+            let o = net.route(card, &K::AttestEligibilityExamV1 { attestation });
+            net.send(vec![(card, o)]).await;
+            attested += 1;
+        }
+    }
+    assert_eq!(attested, drawn_cards(&net, &row).len(), "each drawn bond attests once");
+    assert_eq!(c_row(&net, &claim).unwrap().positive_positions(), TEST_ONLY_KERNEL_CERT_POLICY_V1.m as u32);
+    let outcome = until_decided(&mut net, &claim, TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 200).await;
+    assert_eq!(outcome, PalwCertificationOutcomeV1::Certified);
+    assert!(certified(&net, &claim));
+    let daa = net.daa();
+    let (_, state) = net.chain.tip_state();
+    assert!((0..8).all(|card| palw_certification_duties_v1(&state, &params, &net.chain.bonds[card], daa).is_empty()), "nothing owed");
+    let replay = net.replay().await;
+    net.assert_same(&replay, "Gate C duty auto-attestation");
+}

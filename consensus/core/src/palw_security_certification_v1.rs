@@ -694,6 +694,10 @@ pub struct PalwCertificationDutyV1 {
     /// What a chain claim's re-execution replays (lane B's descriptor); `None` for `'V'` and for a claim whose facts are gone.
     pub job: Option<crate::palw_operator_da_v1::PalwOperatorDaJobV1>,
     pub producer: Option<crate::palw_state_v2::PalwBondKeyV2>,
+    /// The claim's facts in the seat-duty shape (`seat_bond` = the drawn bond, the panel's facts where it is still held), so the drawn
+    /// verifier re-executes a chain claim through the SEAT-R replay passes (attempt, held-to-Final, fused-leaf and every free-prompt
+    /// family). `None` for `'V'` and for a claim whose class left the registry.
+    pub seat_duty: Option<crate::palw_producer_v2::PalwSeatDutyV2>,
 }
 
 /// **lane GC-DUTY: the `'S'` / `'V'` certifications `me` was drawn for and has not attested** at `daa` — drawn (anchored), undecided,
@@ -736,6 +740,39 @@ pub fn palw_certification_duties_v1(
             }
             let claim_id = Hash64::from_bytes(row.claim);
             let facts = (!native).then(|| crate::palw_operator_da_v1::palw_operator_da_claim_facts_v1(state, &claim_id)).flatten();
+            let seat_duty = (!native)
+                .then(|| {
+                    let claim = state.claim(&claim_id)?;
+                    let artifact_root = state.class(&claim.class_id)?.artifact_root;
+                    let panel = state.panel(&claim_id);
+                    let bound_daa = panel.map(|p| p.bound_daa).unwrap_or(row.final_daa);
+                    Some(crate::palw_producer_v2::PalwSeatDutyV2 {
+                        accepted_block: claim.accepted_block,
+                        claim_id,
+                        class_id: claim.class_id,
+                        artifact_root,
+                        seat_bond: *me,
+                        executor_bond: claim.bond,
+                        execution_root: claim.execution_root,
+                        trace_root: claim.trace_root,
+                        output_root: claim.output_root,
+                        bound_daa,
+                        receipt_deadline: row.deadline_daa,
+                        panel_anchor: panel.map(|p| p.anchor).unwrap_or_default(),
+                        seat_index: 0,
+                        panel_seat_count: panel.map(|p| p.seats.len() as u16).unwrap_or(1),
+                        pwu: claim.pwu,
+                        quanta: match claim.source {
+                            PalwClaimSourceV2::FreePrompt { quanta, .. } => quanta,
+                            _ => 0,
+                        },
+                        free_prompt: matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }),
+                        work_leaves: claim.work_leaves,
+                        job_identity: claim.job_identity,
+                        tir_shard: None,
+                    })
+                })
+                .flatten();
             let mut certification_id = [0u8; 64];
             certification_id.copy_from_slice(&key[1..]);
             Some(PalwCertificationDutyV1 {
@@ -747,6 +784,7 @@ pub fn palw_certification_duties_v1(
                 positions,
                 producer: facts.as_ref().map(|f| f.producer),
                 job: facts.map(|f| f.job),
+                seat_duty,
             })
         })
         .collect();
