@@ -1376,7 +1376,7 @@ enum PalwCmd {
     /// Seat counts stay distinct — bonded / ready / selected / valid receipts.
     #[command(subcommand)]
     Panel(PalwPanelCmd),
-    /// **PanelDa disclosure duty (ADR-0206)**: `status <CLAIM>` (op 249) and `disclose` (tag 233, dry-run unless --submit).
+    /// **PanelDa disclosure duty (ADR-0206)**: `status <CLAIM>` (op 227 view) and `disclose` (tag 233, dry-run unless --submit).
     #[command(subcommand, name = "panel-da")]
     PanelDa(palw_panel_da::PanelDaCmd),
     Settlement {

@@ -109,25 +109,43 @@ impl Deserializer for GetPalwCourtStateRequest {
     }
 }
 
-/// No arguments: every top-level PALW fence of the node's ruleset.
+/// Default (`view` empty): every top-level PALW fence of the node's ruleset (request version 1, byte for byte as before).
+///
+/// **Versioned view kinds on op 227** (version 2): `view` names another read-only user view and `subject` its target. Kinds are
+/// strings, so lanes adding views cannot collide on a number: [`PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1`] (ADR-0206) is one.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GetPalwFenceScheduleRequest {}
+pub struct GetPalwFenceScheduleRequest {
+    #[serde(default)]
+    pub view: String,
+    #[serde(default)]
+    pub subject: String,
+}
+
+/// View kind `panelDaDisclosure/v1` (lane panelda-ux, ADR-0206): `subject` is a 128-hex claim id; the document is one PanelDa claim's
+/// disclosure duty (deadline, remaining DAA, disclosed, deposit locked / returned / burned, void reason).
+pub const PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1: &str = "panelDaDisclosure/v1";
 
 impl Serializer for GetPalwFenceScheduleRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        if self.view.is_empty() && self.subject.is_empty() {
+            store!(u16, &1, writer)?;
+            return Ok(());
+        }
+        store!(u16, &2, writer)?;
+        store!(String, &self.view, writer)?;
+        store!(String, &self.subject, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwFenceScheduleRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let version = load!(u16, reader)?;
-        if version != 1 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown getPalwFenceSchedule request version"));
+        match load!(u16, reader)? {
+            1 => Ok(Self::default()),
+            2 => Ok(Self { view: load!(String, reader)?, subject: load!(String, reader)? }),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown getPalwFenceSchedule request version")),
         }
-        Ok(Self {})
     }
 }
 
@@ -173,7 +191,13 @@ mod tests {
         assert!(req.session_hex.is_empty());
         let bond = round_trip(&GetPalwBondDetailRequest { bond: "00:1".into() });
         assert_eq!(bond.bond, "00:1");
-        let _ = round_trip(&GetPalwFenceScheduleRequest {});
+        let _ = round_trip(&GetPalwFenceScheduleRequest::default());
+        let mut v1 = Vec::new();
+        Serializer::serialize(&GetPalwFenceScheduleRequest::default(), &mut v1).unwrap();
+        assert_eq!(v1, 1u16.to_le_bytes().to_vec(), "the plain fence schedule request is the version-1 bytes");
+        let panel_da = GetPalwFenceScheduleRequest { view: PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1.into(), subject: "ab".repeat(64) };
+        let back = round_trip(&panel_da);
+        assert_eq!((back.view.as_str(), back.subject.len()), (PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1, 128));
         let claim = round_trip(&GetPalwClaimDetailRequest { claim_hex: "cd".repeat(64) });
         assert_eq!(claim.claim_hex.len(), 128);
         let resp = round_trip(&GetPalwClaimDetailResponse { available: true, found: true, now_daa: 7, view_json: "{}".into() });

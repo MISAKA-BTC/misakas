@@ -207,7 +207,7 @@ impl PalwPanelDaDisclosureRowV1 {
     }
 }
 
-// ---- read-only user view (lane panelda-ux, op 249): no rule reads it --------------------------------------------------------------
+// ---- read-only user view (lane panelda-ux, op 227 view `panelDaDisclosure/v1`): no rule reads it --------------------------------------------------------------
 
 /// The disclosure object a duty holder submits (tag 233). The fold decodes exactly this borsh value.
 pub fn palw_panel_da_disclosure_object_v1(claim: crate::Hash64, ids: Vec<u32>) -> crate::palw_state_v2::PalwConsensusObjectV2 {
@@ -224,7 +224,7 @@ pub fn palw_panel_da_deposit_state_v1(row: Option<&PalwPanelDaDisclosureRowV1>, 
     }
 }
 
-/// **`getPalwPanelDaDisclosure` (op 249) document, version 1**: `None` when the chain holds neither a disclosure row nor a claim.
+/// **op 227 view `panelDaDisclosure/v1` document, version 1**: `None` when the chain holds neither a disclosure row nor a claim.
 /// Never prints a prompt id (only their count once disclosed).
 pub fn palw_panel_da_disclosure_view_json_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,

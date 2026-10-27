@@ -2743,7 +2743,7 @@ mod mockery {
     test!(GetPalwCourtStateRequest);
     impl Mock for GetPalwFenceScheduleRequest {
         fn mock() -> Self {
-            GetPalwFenceScheduleRequest {}
+            GetPalwFenceScheduleRequest::default()
         }
     }
     test!(GetPalwFenceScheduleRequest);

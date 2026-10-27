@@ -10,7 +10,7 @@ PanelDa(privacy mode 2)のテキストプロンプトは**期限まで非公開*
 
 ```
 misaka palw panel-da status <CLAIM_ID>          # 期限、残り DAA、公開済みか、deposit(locked/returned/burned)、void 理由
-misaka palw panel-da status <CLAIM_ID> --json   # RPC getPalwPanelDaDisclosure(op 249)と同じ文書(version 1)
+misaka palw panel-da status <CLAIM_ID> --json   # RPC getPalwFenceSchedule の view `panelDaDisclosure/v1`(op 227)と同じ文書(version 1)
 ```
 
 ## 公開する

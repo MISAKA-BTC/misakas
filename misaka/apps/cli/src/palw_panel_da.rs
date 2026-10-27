@@ -3,7 +3,7 @@
 //! A PanelDa text claim accepted past `palw_panel_da_disclosure_v1` must have its prompt ids published by `a + 1,040` DAA or it
 //! defaults (claim void, deposit burned; never a conviction). The duty holder — the producer, or the poster who holds the ids — files:
 //!
-//! * `palw panel-da status <CLAIM>` — op 249 `getPalwPanelDaDisclosure`: deadline, remaining DAA, disclosed or not, the deposit
+//! * `palw panel-da status <CLAIM>` — op 227 view `panelDaDisclosure/v1` `panelDaDisclosure/v1`: deadline, remaining DAA, disclosed or not, the deposit
 //!   (locked / returned / burned) and the void reason. Read-only.
 //! * `palw panel-da disclose --claim <C> --ids-file <F> --key-file <K>` — builds the tag-233 object (no signature: the claim's hash
 //!   fixes the ids), checks it against the node's row (count, hash, deadline) and carries it on a lifecycle transaction funded by the
@@ -13,7 +13,7 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_panel_da_disclosure_v1::palw_panel_da_disclosure_object_v1;
-use kaspa_rpc_core::GetPalwPanelDaDisclosureRequest;
+use kaspa_rpc_core::{GetPalwFenceScheduleRequest, PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use serde_json::Value;
 
@@ -24,7 +24,7 @@ pub(crate) const PALW_PANEL_DA_CLI_SCHEMA: &str = "misaka.palw.panel-da.v1";
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum PanelDaCmd {
-    /// **A PanelDa claim's disclosure duty** (`getPalwPanelDaDisclosure`, op 249): deadline, remaining DAA, disclosed, deposit
+    /// **A PanelDa claim's disclosure duty** (`panelDaDisclosure/v1`, op 227 view `panelDaDisclosure/v1`): deadline, remaining DAA, disclosed, deposit
     /// (locked / returned / burned), void reason. Read-only.
     Status {
         /// 128-hex claim id.
@@ -122,22 +122,23 @@ pub(crate) fn render_status(doc: &Value) -> String {
 
 async fn read_view(ctx: &Ctx, claim: Hash64) -> Result<Value, CliError> {
     let reader = crate::palw_derived::connect(ctx).await?;
-    let answer = reader.client.get_palw_panel_da_disclosure(GetPalwPanelDaDisclosureRequest { claim: claim.to_string() }).await;
+    let request = GetPalwFenceScheduleRequest { view: PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1.into(), subject: claim.to_string() };
+    let answer = reader.client.get_palw_fence_schedule(request).await;
     let _ = reader.client.disconnect().await;
     let r = answer.map_err(|e| {
-        CliError::new(exit::GENERIC, format!("getPalwPanelDaDisclosure (op 249): {e} — a node built before op 249 drops the connection"))
+        CliError::new(exit::GENERIC, format!("getPalwFenceSchedule view panelDaDisclosure/v1 (op 227): {e} — a node built before this view answers an unknown-view error"))
     })?;
     if !r.available {
-        return Err(CliError::new(exit::GENERIC, "getPalwPanelDaDisclosure: the node holds no PALW ConsensusV2 state".to_string()));
+        return Err(CliError::new(exit::GENERIC, "panelDaDisclosure/v1: the node holds no PALW ConsensusV2 state".to_string()));
     }
     if !r.found {
-        return Err(CliError::new(exit::GENERIC, format!("getPalwPanelDaDisclosure: the chain holds no claim {claim}")));
+        return Err(CliError::new(exit::GENERIC, format!("panelDaDisclosure/v1: the chain holds no claim {claim}")));
     }
     let doc: Value = serde_json::from_str(&r.view_json)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwPanelDaDisclosure: bad document: {e}")))?;
+        .map_err(|e| CliError::new(exit::GENERIC, format!("panelDaDisclosure/v1: bad document: {e}")))?;
     match doc["version"].as_u64() {
         Some(1) => Ok(doc),
-        other => Err(CliError::new(exit::GENERIC, format!("getPalwPanelDaDisclosure: document version {other:?} is newer than this CLI"))),
+        other => Err(CliError::new(exit::GENERIC, format!("panelDaDisclosure/v1: document version {other:?} is newer than this CLI"))),
     }
 }
 

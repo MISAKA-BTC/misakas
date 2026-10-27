@@ -1886,7 +1886,7 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
-    /// **ADR-0206 (op 249): one PanelDa claim's disclosure duty**, as [`Self::palw_claim_detail_v1`] answers (read-only view).
+    /// **ADR-0206 (op 227 view `panelDaDisclosure/v1`): one PanelDa claim's disclosure duty**, as [`Self::palw_claim_detail_v1`] answers (read-only view).
     fn palw_panel_da_disclosure_view_v1(&self, _claim: crate::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
         Ok(None)
     }

@@ -3480,7 +3480,10 @@ message GetPalwCourtStateRequestMessage {
   string sessionHex = 2;
 }
 
+// Empty view: the fence schedule. Otherwise a versioned read-only view kind (e.g. "panelDaDisclosure/v1") over `subject`.
 message GetPalwFenceScheduleRequestMessage {
+  string view = 1;
+  string subject = 2;
 }
 
 message GetPalwBondDetailRequestMessage {

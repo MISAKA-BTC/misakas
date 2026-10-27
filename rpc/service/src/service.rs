@@ -3942,8 +3942,27 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     async fn get_palw_fence_schedule_call(
         &self,
         _connection: Option<&DynRpcConnection>,
-        _request: GetPalwFenceScheduleRequest,
+        request: GetPalwFenceScheduleRequest,
     ) -> RpcResult<GetPalwFenceScheduleResponse> {
+        // Lane panelda-ux (ADR-0206): a versioned view kind on op 227 (no new op).
+        if request.view == kaspa_rpc_core::PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1 {
+            let claim = request
+                .subject
+                .trim()
+                .parse::<kaspa_consensus_core::Hash64>()
+                .map_err(|_| RpcError::General(format!("subject '{}' is not a 128-hex claim id", request.subject)))?;
+            if palw_v2_bundle(&self.config.params).is_none() {
+                return Ok(GetPalwFenceScheduleResponse::default());
+            }
+            let session = self.consensus_manager.consensus().unguarded_session();
+            let answer =
+                session.spawn_blocking(move |c| c.palw_panel_da_disclosure_view_v1(claim)).await.map_err(RpcError::General)?;
+            let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
+            return Ok(GetPalwFenceScheduleResponse { available, found, now_daa, view_json });
+        }
+        if !request.view.is_empty() {
+            return Err(RpcError::General(format!("unknown getPalwFenceSchedule view '{}'", request.view)));
+        }
         // The node's own ruleset, judged at the virtual DAA — `ForkActivation::is_active`, the predicate every fold site reads.
         let session = self.consensus_manager.consensus().unguarded_session();
         let now_daa = session.get_virtual_daa_score();

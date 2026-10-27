@@ -348,7 +348,7 @@ pub(crate) fn render_bond_detail(doc: &Value) -> String {
 
 async fn fence_schedule(ctx: &Ctx) -> Result<(u64, Value), CliError> {
     let reader = crate::palw_derived::connect(ctx).await?;
-    let answer = reader.client.get_palw_fence_schedule(GetPalwFenceScheduleRequest {}).await;
+    let answer = reader.client.get_palw_fence_schedule(GetPalwFenceScheduleRequest::default()).await;
     let _ = reader.client.disconnect().await;
     let r = answer.map_err(|e| {
         read_error(

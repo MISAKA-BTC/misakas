@@ -1306,7 +1306,7 @@ async fn sanity_test() {
                 let rpc_client = client.clone();
                 tst!(op, {
                     // Tooling lane (op 227): read from the node's own ruleset, on every network.
-                    let read = rpc_client.get_palw_fence_schedule_call(None, GetPalwFenceScheduleRequest {}).await.unwrap();
+                    let read = rpc_client.get_palw_fence_schedule_call(None, GetPalwFenceScheduleRequest::default()).await.unwrap();
                     assert!(read.available && read.found);
                     let doc: serde_json::Value = serde_json::from_str(&read.view_json).unwrap();
                     assert_eq!(doc["version"], 1);
