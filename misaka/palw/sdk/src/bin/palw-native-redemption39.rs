@@ -38,7 +38,8 @@ fn run() -> Result<(), String> {
         return Err("redemption39 spec pin differs".into());
     }
     let spec: misaka_palw_sdk::native_redemption_v39::RedemptionSpecV39 = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-    let archive = archive_dir.map(|d| misaka_palw_sdk::native_archive_v39::NativeArchiveDirV39::open(std::path::Path::new(&d))).transpose()?;
+    let archive =
+        archive_dir.map(|d| misaka_palw_sdk::native_archive_v39::NativeArchiveDirV39::open(std::path::Path::new(&d))).transpose()?;
     let archive_ref =
         archive.as_ref().map(|a| a as &dyn kaspa_consensus_core::palw_native_execution_v39::NativeOriginalSourceArchiveV39);
     let report = misaka_palw_sdk::native_redemption_v39::audit_native_redemption_v39(&root, &spec, params, archive_ref)?;

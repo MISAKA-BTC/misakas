@@ -32,11 +32,11 @@ pub mod codes {
     pub const SERVER_ERROR: i64 = -32000;
 }
 
+#[cfg(test)]
+mod full_block_tests;
 /// §9: the RFC 6455 WebSocket transport (`eth_subscribe`). A `serve_conn` that
 /// sees an `Upgrade: websocket` request hands the socket to [`ws::serve_ws`].
 mod ws;
-#[cfg(test)]
-mod full_block_tests;
 
 /// An error surfaced through the JSON-RPC `error` member.
 #[derive(Debug, Clone)]
@@ -1052,7 +1052,9 @@ async fn resolve_block_number(provider: &Arc<dyn EthProvider>, v: Option<&Value>
         None => provider.block_number().await,
         Some(Value::String(tag)) => match tag.as_str() {
             "latest" | "pending" => provider.block_number().await,
-            "safe" | "finalized" => provider.block_by_tag(tag).await?
+            "safe" | "finalized" => provider
+                .block_by_tag(tag)
+                .await?
                 .map(|block| block.number)
                 .ok_or_else(|| EthRpcError::server(format!("{tag} EVM head unavailable"))),
             "earliest" => Ok(0),
@@ -1121,8 +1123,8 @@ async fn eth_get_logs(provider: &Arc<dyn EthProvider>, params: &Value) -> EthRes
         }
         let hash = hash.as_str().ok_or_else(|| EthRpcError::invalid_params("blockHash must be a 32-byte hash string"))?;
         let hash = parse_hash32_param(&json!([hash]), 0)?;
-        let logs = provider.get_logs_by_block_hash(hash, addresses, topics).await?
-            .ok_or_else(|| EthRpcError::server("Block not found."))?;
+        let logs =
+            provider.get_logs_by_block_hash(hash, addresses, topics).await?.ok_or_else(|| EthRpcError::server("Block not found."))?;
         if logs.iter().any(|log| log.block_hash != hash) {
             return Err(EthRpcError::server("exact block-hash logs returned a different block"));
         }

@@ -301,10 +301,20 @@ impl PalwBackendRegistry {
         // A derived class (the floor) first: it resolves with no holding, so none of theirs is
         // its bytes ([`Self::serves_without_a_holding_v1`]).
         let figure = match self.sdk.resolve(class_id, artifact_root, &[]) {
-            Ok(backend) => Some(Self::compose_need_v1(kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(at_run(backend).as_ref()), (0, 0), None, role)),
+            Ok(backend) => Some(Self::compose_need_v1(
+                kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(at_run(backend).as_ref()),
+                (0, 0),
+                None,
+                role,
+            )),
             Err(_) => self.holdings.iter().find_map(|holding| {
                 let backend = self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok()?;
-                Some(Self::compose_need_v1(kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(at_run(backend).as_ref()), holding_terms_v1(holding)?, None, role))
+                Some(Self::compose_need_v1(
+                    kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(at_run(backend).as_ref()),
+                    holding_terms_v1(holding)?,
+                    None,
+                    role,
+                ))
             }),
         };
         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
@@ -429,7 +439,12 @@ impl PalwBackendRegistry {
         if let Some(run) = run {
             backend.set_prefill_run_positions_v1(run);
         }
-        let need = Self::compose_need_v1(kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(backend.as_ref()), holding_terms_v1(holding)?, None, role);
+        let need = Self::compose_need_v1(
+            kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(backend.as_ref()),
+            holding_terms_v1(holding)?,
+            None,
+            role,
+        );
         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
             memo.insert(key, Some(need.clone()));
         }

@@ -1357,8 +1357,7 @@ impl PalwProducerService {
             last_hold = None;
             last_hold_at = None;
             self.flow_context.update_palw_runtime(|r| r.set_producer("drawing", ""));
-            let outcome =
-                self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, None, None).await;
+            let outcome = self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, None, None).await;
             let network_lost = self.network_draw_lost.load(std::sync::atomic::Ordering::Relaxed);
             self.flow_context.update_palw_runtime(|r| {
                 r.draws = draws + u64::from(outcome.is_ok());
@@ -1382,8 +1381,12 @@ impl PalwProducerService {
                         && !self.exiting()
                     {
                         let retention = self.last_lead_retention.load(std::sync::atomic::Ordering::Relaxed);
-                        let mut built = match crate::palw_rider_outbox::RiderBatchV2::new(claim,self.config.riders as usize) {
-                            Ok(batch)=>batch,Err(why)=>{warn!("[{PALW_PRODUCER}] rider batch capacity refused: {why}");continue;}
+                        let mut built = match crate::palw_rider_outbox::RiderBatchV2::new(claim, self.config.riders as usize) {
+                            Ok(batch) => batch,
+                            Err(why) => {
+                                warn!("[{PALW_PRODUCER}] rider batch capacity refused: {why}");
+                                continue;
+                            }
                         };
                         for index in 0..self.config.riders {
                             if self.exiting() {
@@ -1529,9 +1532,8 @@ impl PalwProducerService {
         );
         template.block.header.palw_commitment = envelope.encode();
         template.block.header.finalize();
-        let block: kaspa_consensus_core::block::Block = template
-            .into_immutable_v3()
-            .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
+        let block: kaspa_consensus_core::block::Block =
+            template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
         let hash = block.hash();
         palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
             .await
@@ -1615,9 +1617,8 @@ impl PalwProducerService {
             );
             template.block.header.palw_commitment = envelope.encode();
             template.block.header.finalize();
-            let block: kaspa_consensus_core::block::Block = template
-                .into_immutable_v3()
-                .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
+            let block: kaspa_consensus_core::block::Block =
+                template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
             let hash = block.hash();
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
                 .await
@@ -1870,11 +1871,20 @@ impl PalwProducerService {
         let routing_active_v2 = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
             f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(routing_candidate_v2.daa_score)
         });
-        let routing_work_v2 = if let Some((lead,index,retention))=rider.filter(|_|routing_active_v2) {
-            crate::palw_native_routing_work_v2::bind_rider_v2(session,backend.as_mut(),&job,
-                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond),lead,index,retention)
-                .map_err(|why|format!("native rider routing deferred before execution: {why}"))?
-        } else { None };
+        let routing_work_v2 = if let Some((lead, index, retention)) = rider.filter(|_| routing_active_v2) {
+            crate::palw_native_routing_work_v2::bind_rider_v2(
+                session,
+                backend.as_mut(),
+                &job,
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond),
+                lead,
+                index,
+                retention,
+            )
+            .map_err(|why| format!("native rider routing deferred before execution: {why}"))?
+        } else {
+            None
+        };
         let routing_authority_v2 = if routing_active_v2 && rider.is_none() {
             session.palw_native_routing_execution_authority_v2(
                 template.selected_parent_hash,
@@ -1891,7 +1901,7 @@ impl PalwProducerService {
         // This original owner stays live through signing, retention, submit
         // and announcement, even when custody consumes the backend in a task.
         let require_fresh_routing_v2 = || -> Result<(), String> {
-            crate::palw_native_routing_work_v2::refresh_v2(session,routing_work_v2.as_ref()).map_err(|why|why.to_string())?;
+            crate::palw_native_routing_work_v2::refresh_v2(session, routing_work_v2.as_ref()).map_err(|why| why.to_string())?;
             if let Some(original) = &routing_authority_v2 {
                 let fresh = session
                     .palw_native_routing_execution_authority_v2(
@@ -2098,7 +2108,11 @@ impl PalwProducerService {
             let material = self.retain_execution(message, &run.material)?;
             let announced = palw_attempt_announcement_v1(material, None);
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, announced)).await;
-            riders_out.as_mut().ok_or("rider destination absent")?.push(PalwAttemptEnvelopeV2 { attempt, signature },routing_work_v2.clone(),Some(&job)).map_err(|why|why.to_string())?;
+            riders_out
+                .as_mut()
+                .ok_or("rider destination absent")?
+                .push(PalwAttemptEnvelopeV2 { attempt, signature }, routing_work_v2.clone(), Some(&job))
+                .map_err(|why| why.to_string())?;
             return Ok(None);
         }
         // A dummy of the right length so the shape gate sees the real wire size at the draw. The
@@ -2264,9 +2278,8 @@ impl PalwProducerService {
             template.block.header.nonce = nonce;
             template.block.header.palw_commitment = commitment;
             template.block.header.finalize();
-            let block: kaspa_consensus_core::block::Block = template
-                .into_immutable_v3()
-                .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
+            let block: kaspa_consensus_core::block::Block =
+                template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
             let hash = block.hash();
             // **The block first, the announcement after** (ADR-0084 Decision 3). This broadcast
             // used to come before the submit, and on 5f a 748 MB material announced to five peers
@@ -2578,7 +2591,8 @@ pub(crate) fn palw_dissection_refusal_v1(
     let memory_route = params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(daa_score));
     (backend.has_fused_site()
         && !backend.supports_dissection_with_memory_routing_v2(memory_route)
-        && params.palw_kary_court_active_at(daa_score)).then(|| {
+        && params.palw_kary_court_active_at(daa_score))
+    .then(|| {
         format!(
             "this node will not produce for class {class_id}: its fused attention site cannot be dissected by this build, and a \
              claim disputed down to that leaf is convicted by the silence it could not answer (ADR-0093){}",

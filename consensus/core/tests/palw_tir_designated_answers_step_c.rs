@@ -3,8 +3,8 @@
 //! These are scenario tests of the pure rules, not end-to-end consensus runs. The end-to-end run on the fenced path (a node with the
 //! fence armed) is NOT done here and is listed as remaining in the report.
 
-use kaspa_consensus_core::palw_tir_designated_answers_v1 as d;
 use d::*;
+use kaspa_consensus_core::palw_tir_designated_answers_v1 as d;
 
 fn c(i: u8) -> PalwTirCustodianIdV1 {
     [i; 32]
@@ -113,7 +113,14 @@ fn restart_and_reorg_replay_is_identical_across_the_fence() {
 #[test]
 fn owner_tenure_split_keeps_an_awaited_owner_alive_and_the_evidence_horizon() {
     let key = PalwTirRequestKeyV1 { claim: [1; 32], root: [2; 32], coordinates: 7 };
-    let t = PalwTirOwnerTenureV1 { claim: [1; 32], awaiting: Some(key), last_progress_daa: 1_000, pursuit_step: 4, evidence_until_daa: 9_000, charges: 3 };
+    let t = PalwTirOwnerTenureV1 {
+        claim: [1; 32],
+        awaiting: Some(key),
+        last_progress_daa: 1_000,
+        pursuit_step: 4,
+        evidence_until_daa: 9_000,
+        charges: 3,
+    };
     assert!(!palw_tir_owner_idle_v1(&t, 50_000, 100), "awaiting is never idle, however long");
     let h = palw_tir_handover_tenure_v1(&t, 2_000);
     assert_eq!((h.pursuit_step, h.evidence_until_daa, h.charges), (4, 9_000, 3));

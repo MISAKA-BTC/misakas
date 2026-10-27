@@ -184,8 +184,7 @@ pub fn collect_opt_in_seal_reveal_beacon_v6(
     let start = ctx.commitment_position.saturating_add(ctx.policy.anchor_delay_slots);
     let seal_end = crate::sealed::seal_window_end_v3(ctx);
     let reveal_end = crate::sealed::reveal_window_end_v3(ctx);
-    let mixed: Vec<&crate::SealedSourceV3> =
-        facts.iter().filter(|s| s.seal_position >= start && s.seal_position < seal_end).collect();
+    let mixed: Vec<&crate::SealedSourceV3> = facts.iter().filter(|s| s.seal_position >= start && s.seal_position < seal_end).collect();
     let n = mixed.len() as u32;
     if tip < seal_end {
         return Ok(SealedBeaconStateV3::Sealing { sealed: n, need });
@@ -193,15 +192,15 @@ pub fn collect_opt_in_seal_reveal_beacon_v6(
     if n < need {
         return Ok(SealedBeaconStateV3::Unavailable { mixed: n, need });
     }
-    let in_time = |s: &crate::SealedSourceV3| s.reveal.as_ref().filter(|r| r.reveal_position < reveal_end && r.reveal_position <= tip).cloned();
+    let in_time =
+        |s: &crate::SealedSourceV3| s.reveal.as_ref().filter(|r| r.reveal_position < reveal_end && r.reveal_position <= tip).cloned();
     if tip < reveal_end {
         let revealed = mixed.iter().filter(|s| in_time(s).is_some()).count() as u32;
         return Ok(SealedBeaconStateV3::Revealing { mixed: n, revealed });
     }
-    let forfeited = sources
-        .iter()
-        .filter(|s| s.context_id == contract.context_id && s.forfeited_position.is_some_and(|at| at <= tip))
-        .count() as u32;
+    let forfeited =
+        sources.iter().filter(|s| s.context_id == contract.context_id && s.forfeited_position.is_some_and(|at| at <= tip)).count()
+            as u32;
     let withheld = mixed.iter().filter(|s| in_time(s).is_none()).count() as u32;
     if withheld > 0 || forfeited > 0 {
         return Ok(SealedBeaconStateV3::Vetoed { withheld, failed: forfeited });
@@ -230,7 +229,13 @@ pub fn collect_opt_in_seal_reveal_beacon_v6(
         .collect();
     let challenge_anchor = crate::beacon::challenge_anchor_v1(ctx, &beacon_sources);
     Ok(SealedBeaconStateV3::Locked(VerifiedWorkBeaconV1::derived(
-        WorkBeaconV1 { sources: beacon_sources, accumulators: vec![initial, output], output, challenge_anchor, lock_position: reveal_end },
+        WorkBeaconV1 {
+            sources: beacon_sources,
+            accumulators: vec![initial, output],
+            output,
+            challenge_anchor,
+            lock_position: reveal_end,
+        },
         ctx.id(),
     )))
 }

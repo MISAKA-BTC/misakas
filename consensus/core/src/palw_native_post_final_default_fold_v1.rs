@@ -19,8 +19,9 @@
 use super::*;
 use crate::palw_court_duty_clock_v1::CourtDutyClockV1;
 use crate::palw_native_liability_hold_v1::{
-    PALW_NATIVE_FAMILY_FUNDED_V11, PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_HELD_FEE_PREFIX_V1, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1,
-    PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, PalwNativeHeldFeeRowV1, palw_native_held_fee_key_v1,
+    PALW_NATIVE_FAMILY_FUNDED_V11, PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_HELD_FEE_PREFIX_V1,
+    PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, PalwNativeHeldFeeRowV1,
+    palw_native_held_fee_key_v1,
 };
 
 fn refused(why: impl ToString) -> PalwStateV2Error {
@@ -128,7 +129,13 @@ pub(super) fn decide_native_post_final_default_v1(
         }
     }
     let unpaid: BTreeSet<PalwBondKeyV2> = std::iter::once(row.producer).collect();
-    crate::palw_court_service_binding_v1::attribute_service_default_v1(service, claim, &clocks, &unpaid, b.extras.court_service_inclusion_premise_v1.as_ref())
+    crate::palw_court_service_binding_v1::attribute_service_default_v1(
+        service,
+        claim,
+        &clocks,
+        &unpaid,
+        b.extras.court_service_inclusion_premise_v1.as_ref(),
+    )
 }
 
 /// **Apply a decided post-Final default of `(family, job)`** under an explicit slash amount (fixtures; a future pinned amount).
@@ -150,7 +157,9 @@ pub(super) fn apply_native_post_final_default_with_v1(
     let row = super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(&b.state, family, job, now)
         .ok_or_else(|| refused("no held native fee inside its liability horizon"))?;
     match decide_native_post_final_default_v1(b, &row, now, answered).map_err(refused)? {
-        crate::palw_court_service_binding_v1::CourtServiceAttributionV1::NoSlashHold(why) => Ok(NativePostFinalDefaultV1::NoSlashHold(why)),
+        crate::palw_court_service_binding_v1::CourtServiceAttributionV1::NoSlashHold(why) => {
+            Ok(NativePostFinalDefaultV1::NoSlashHold(why))
+        }
         crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault => {
             // The actor's exit must still be held by the very fee being refunded (its budget reservation): no fictitious collection.
             if b.state.bond(&row.producer).is_none() {
@@ -202,7 +211,10 @@ pub(super) fn apply_native_post_final_default_v1(
 /// now decides `PartyDefault` and is defaulted here (at most [`PALW_NATIVE_POST_FINAL_DEFAULTS_PER_BLOCK_V1`] a block, key order).
 /// Undecided and no-slash rows are left untouched (they stay held; at H the release sweep pays them without a slash). A no-op
 /// unless the hold, F02 and the slash amount are all in force.
-pub(super) fn recover_native_post_final_defaults_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+pub(super) fn recover_native_post_final_defaults_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
     if !super::palw_court_service_lifecycle_fold_v1::court_service_f02_active_v1(b) {
         return Ok(());
     }

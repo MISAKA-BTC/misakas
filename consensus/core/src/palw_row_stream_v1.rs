@@ -125,7 +125,8 @@ impl PalwCollectionRootStreamV1 {
 /// Collections whose root is not the standard entry hash (see `PalwCollectionOpeningV1::root`). Their rows are
 /// buffered — inside the same byte budget — and rooted by that very function.
 fn is_non_standard(label: &[u8]) -> bool {
-    label == crate::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32 || label == crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32
+    label == crate::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32
+        || label == crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32
 }
 
 enum Rooter {

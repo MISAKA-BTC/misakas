@@ -35,27 +35,26 @@ use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, canonical_step_leaf_index};
 use kaspa_consensus_core::palw_step_leg::{PalwCheckpointLeafV2, PalwStepBindingV2, PalwStepTileLeafV1};
 use kaspa_consensus_core::palw_step_refute::memory_v2::{
-    PalwGdnCaptureV2, PalwGdnCheckpointWitnessV2, PalwGdnConvWindowRefutationV2, PalwGdnStepRefutationV2, PalwGdnTransitionRefutationV2,
-    gdn_checkpoint_witness_from_disclosures_v2, gdn_conv_window_demands_v2, gdn_conv_window_refutation_from_capture_v2,
-    gdn_conv_window_refutation_with_accused_v2, gdn_refutation_from_capture_v2, gdn_replay_start_v2, gdn_transition_demands_v2,
-    gdn_transition_refutation_from_capture_v2, gdn_transition_refutation_with_accused_v2,
+    PalwGdnCaptureV2, PalwGdnCheckpointWitnessV2, PalwGdnConvWindowRefutationV2, PalwGdnStepRefutationV2,
+    PalwGdnTransitionRefutationV2, gdn_checkpoint_witness_from_disclosures_v2, gdn_conv_window_demands_v2,
+    gdn_conv_window_refutation_from_capture_v2, gdn_conv_window_refutation_with_accused_v2, gdn_refutation_from_capture_v2,
+    gdn_replay_start_v2, gdn_transition_demands_v2, gdn_transition_refutation_from_capture_v2,
+    gdn_transition_refutation_with_accused_v2,
 };
 
 #[path = "gdn_leaf_leg_owner_v3.rs"]
 mod leaf_leg_owner;
-pub use leaf_leg_owner::{Base0GdnLeafLegV3, base0_gdn_leaf_leg_retained_v3};
 use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1;
+pub use leaf_leg_owner::{Base0GdnLeafLegV3, base0_gdn_leaf_leg_retained_v3};
 #[path = "gdn_court_error_v3.rs"]
 mod court_error;
-pub use court_error::{base0_gdn_court_error_v3, base0_gdn_terminal_fault_v3};
 use court_error::base0_gdn_court_error_with_replay_v3;
+pub use court_error::{base0_gdn_court_error_v3, base0_gdn_terminal_fault_v3};
 #[path = "gdn_witness_copy_owner_v4.rs"]
 mod witness_copy_owner;
 pub use witness_copy_owner::{Base0GdnRetainedCheckpointWitnessV4, Base0GdnWitnessBuiltV4, base0_gdn_checkpoint_witness_retained_v4};
 #[path = "gdn_predecessor_evidence_v3.rs"]
 mod predecessor_evidence;
-
-
 
 /// **What an accuser holds of one claim's execution.**
 pub struct Base0GdnMaterialV2<'a> {
@@ -161,16 +160,25 @@ fn honest_chunks_v2<K: Base0FpRecomputeKernelsV1>(
 /// Actual held predecessor route. The raw recompute helpers remain compatible;
 /// root-workspace capacity on this path must never become a String refusal.
 fn honest_chunks_root_retained_v3<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, leaf: &PalwCheckpointLeafV2, mut kernels: K,
+    material: &Base0GdnMaterialV2<'_>,
+    leaf: &PalwCheckpointLeafV2,
+    mut kernels: K,
 ) -> Result<Option<Vec<Vec<u8>>>, NativeDecodeErrorV1<String>> {
     let b = material.binding;
     let state = crate::fp_recompute::base0_fp_recompute_state_at_covered_root_retained_v3(
-        &b.shape_profile, &b.job_context, material.prompt_token_ids, material.output_token_ids,
-        leaf.covered_decode_call, &mut kernels, material.prompt_ids_form,
-    ).map_err(|why| match why {
+        &b.shape_profile,
+        &b.job_context,
+        material.prompt_token_ids,
+        material.output_token_ids,
+        leaf.covered_decode_call,
+        &mut kernels,
+        material.prompt_ids_form,
+    )
+    .map_err(|why| match why {
         NativeDecodeErrorV1::Resource(capacity) => NativeDecodeErrorV1::Resource(capacity),
-        NativeDecodeErrorV1::Decode(semantic) => NativeDecodeErrorV1::Decode(
-            format!("the accuser cannot recompute checkpoint {}: {semantic}", leaf.checkpoint_index)),
+        NativeDecodeErrorV1::Decode(semantic) => {
+            NativeDecodeErrorV1::Decode(format!("the accuser cannot recompute checkpoint {}: {semantic}", leaf.checkpoint_index))
+        }
     })?;
     Ok((state.state_chunks_root == leaf.state_chunks_root && state.chunks.len() as u32 == leaf.state_chunk_count)
         .then_some(state.chunks))
@@ -302,14 +310,17 @@ pub fn base0_gdn_first_forged_checkpoint_v2<K: Base0FpRecomputeKernelsV1>(
 
 /// Actual PerPosition prefix discovery with the leg owner live through replay.
 pub fn base0_gdn_first_forged_checkpoint_retained_v3<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, kernels: K,
+    material: &Base0GdnMaterialV2<'_>,
+    kernels: K,
 ) -> Result<Option<u32>, NativeDecodeErrorV1<String>> {
     let leg = base0_gdn_leaf_leg_retained_v3(material)?;
     first_forged_with_leg_v3(material, &leg, kernels).map_err(NativeDecodeErrorV1::Decode)
 }
 
 fn first_forged_with_leg_v3<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, mut kernels: K,
+    material: &Base0GdnMaterialV2<'_>,
+    leg: &Base0CheckpointsV1,
+    mut kernels: K,
 ) -> Result<Option<u32>, String> {
     let b = material.binding;
     let (profile, ctx) = (&b.shape_profile, &b.job_context);
@@ -375,15 +386,21 @@ pub fn base0_gdn_forged_checkpoint_demands_v2<K: Base0FpRecomputeKernelsV1>(
 
 /// Retained PerPosition counterpart; no other cadence falls back to a raw leg.
 pub fn base0_gdn_forged_checkpoint_demands_retained_v3<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, court: Base0GdnCheckpointCourtV2, index: u32, kernels: impl FnMut() -> K,
+    material: &Base0GdnMaterialV2<'_>,
+    court: Base0GdnCheckpointCourtV2,
+    index: u32,
+    kernels: impl FnMut() -> K,
 ) -> Result<Vec<PalwHeldMissingV1>, NativeDecodeErrorV1<String>> {
     let leg = base0_gdn_leaf_leg_retained_v3(material)?;
     forged_demands_with_leg_v3(material, &leg, court, index, kernels)
 }
 
 fn forged_demands_with_leg_v3<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, court: Base0GdnCheckpointCourtV2,
-    index: u32, kernels: impl FnMut() -> K,
+    material: &Base0GdnMaterialV2<'_>,
+    leg: &Base0CheckpointsV1,
+    court: Base0GdnCheckpointCourtV2,
+    index: u32,
+    kernels: impl FnMut() -> K,
 ) -> Result<Vec<PalwHeldMissingV1>, NativeDecodeErrorV1<String>> {
     confirm_first_forged_v2(material, &leg, index, kernels).map_err(NativeDecodeErrorV1::Decode)?;
     let demands = match court {
@@ -426,14 +443,20 @@ pub fn base0_gdn_transition_evidence_from_disclosures_v2<K: Base0FpRecomputeKern
     kernels: impl FnMut() -> K,
 ) -> Result<PalwGdnTransitionRefutationV2, String> {
     let leg = base0_gdn_leg_v2(material)?;
-    transition_disclosures_with_leg_v3(material, &leg, node_slot, head, index, demands, answers, kernels).map_err(|why| why.to_string())
+    transition_disclosures_with_leg_v3(material, &leg, node_slot, head, index, demands, answers, kernels)
+        .map_err(|why| why.to_string())
 }
 
 /// Retains the admitted leaf leg through transition assembly and predecessor use.
 #[allow(clippy::too_many_arguments)]
 pub fn base0_gdn_transition_evidence_from_disclosures_retained_v3<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, node_slot: u32, head: u32, index: u32,
-    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1], kernels: impl FnMut() -> K,
+    material: &Base0GdnMaterialV2<'_>,
+    node_slot: u32,
+    head: u32,
+    index: u32,
+    demands: &[PalwHeldMissingV1],
+    answers: &[PalwHeldDisclosureV1],
+    kernels: impl FnMut() -> K,
 ) -> Result<PalwGdnTransitionRefutationV2, NativeDecodeErrorV1<String>> {
     let leg = base0_gdn_leaf_leg_retained_v3(material)?;
     transition_disclosures_with_leg_v3(material, &leg, node_slot, head, index, demands, answers, kernels)
@@ -441,8 +464,14 @@ pub fn base0_gdn_transition_evidence_from_disclosures_retained_v3<K: Base0FpReco
 
 #[allow(clippy::too_many_arguments)]
 fn transition_disclosures_with_leg_v3<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, node_slot: u32, head: u32, index: u32,
-    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1], kernels: impl FnMut() -> K,
+    material: &Base0GdnMaterialV2<'_>,
+    leg: &Base0CheckpointsV1,
+    node_slot: u32,
+    head: u32,
+    index: u32,
+    demands: &[PalwHeldMissingV1],
+    answers: &[PalwHeldDisclosureV1],
+    kernels: impl FnMut() -> K,
 ) -> Result<PalwGdnTransitionRefutationV2, NativeDecodeErrorV1<String>> {
     if demands != gdn_transition_demands_v2(material.binding, node_slot, head, index).map_err(base0_gdn_court_error_v3)?.as_slice() {
         return Err(NativeDecodeErrorV1::Decode("the answered demands are not the units this transition reads".to_string()));
@@ -455,21 +484,43 @@ fn transition_disclosures_with_leg_v3<K: Base0FpRecomputeKernelsV1>(
 /// returned carrier through the node's court/output handoff.
 #[allow(clippy::too_many_arguments)]
 pub fn base0_gdn_transition_evidence_from_disclosures_retained_v4<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, node_slot: u32, head: u32, index: u32,
-    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1], kernels: impl FnMut() -> K,
+    material: &Base0GdnMaterialV2<'_>,
+    node_slot: u32,
+    head: u32,
+    index: u32,
+    demands: &[PalwHeldMissingV1],
+    answers: &[PalwHeldDisclosureV1],
+    kernels: impl FnMut() -> K,
 ) -> Result<Base0GdnWitnessBuiltV4<PalwGdnTransitionRefutationV2>, NativeDecodeErrorV1<String>> {
     let leg = base0_gdn_leaf_leg_retained_v3(material)?;
     kaspa_consensus_core::palw_step_refute::memory_v2::gdn_check_transition_demands_borrowed_v3(
-        material.binding, node_slot, head, index, demands,
-    ).map_err(base0_gdn_court_error_v3)?;
-    predecessor_evidence::transition_with_owned_predecessor_v3(material, &leg, node_slot, head, index,
-        base0_gdn_checkpoint_witness_retained_v4(demands, answers)?, kernels)
+        material.binding,
+        node_slot,
+        head,
+        index,
+        demands,
+    )
+    .map_err(base0_gdn_court_error_v3)?;
+    predecessor_evidence::transition_with_owned_predecessor_v3(
+        material,
+        &leg,
+        node_slot,
+        head,
+        index,
+        base0_gdn_checkpoint_witness_retained_v4(demands, answers)?,
+        kernels,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn transition_disclosures_with_accused_v4<K: Base0FpRecomputeKernelsV1>(
-    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, node_slot: u32, head: u32, index: u32,
-    accused: PalwGdnCheckpointWitnessV2, kernels: impl FnMut() -> K,
+    material: &Base0GdnMaterialV2<'_>,
+    leg: &Base0CheckpointsV1,
+    node_slot: u32,
+    head: u32,
+    index: u32,
+    accused: PalwGdnCheckpointWitnessV2,
+    kernels: impl FnMut() -> K,
 ) -> Result<PalwGdnTransitionRefutationV2, NativeDecodeErrorV1<String>> {
     // The predecessor is whichever checkpoint the assembler derives (the cadence's exact predecessor, as the terminal derives it);
     // it is served lazily from the accuser's OWN recompute, and a predecessor that is itself forged refuses the accusation by name.
@@ -512,16 +563,25 @@ pub fn base0_gdn_conv_window_evidence_from_disclosures_v2(
 
 /// Retains the admitted leaf leg through convolution-window evidence assembly.
 pub fn base0_gdn_conv_window_evidence_from_disclosures_retained_v3(
-    material: &Base0GdnMaterialV2<'_>, conv_slot: u32, head: u32, index: u32,
-    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1],
+    material: &Base0GdnMaterialV2<'_>,
+    conv_slot: u32,
+    head: u32,
+    index: u32,
+    demands: &[PalwHeldMissingV1],
+    answers: &[PalwHeldDisclosureV1],
 ) -> Result<PalwGdnConvWindowRefutationV2, NativeDecodeErrorV1<String>> {
     let leg = base0_gdn_leaf_leg_retained_v3(material)?;
     conv_disclosures_with_leg_v3(material, &leg, conv_slot, head, index, demands, answers)
 }
 
 fn conv_disclosures_with_leg_v3(
-    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, conv_slot: u32, head: u32, index: u32,
-    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1],
+    material: &Base0GdnMaterialV2<'_>,
+    leg: &Base0CheckpointsV1,
+    conv_slot: u32,
+    head: u32,
+    index: u32,
+    demands: &[PalwHeldMissingV1],
+    answers: &[PalwHeldDisclosureV1],
 ) -> Result<PalwGdnConvWindowRefutationV2, NativeDecodeErrorV1<String>> {
     if demands != gdn_conv_window_demands_v2(material.binding, conv_slot, head, index).map_err(base0_gdn_court_error_v3)?.as_slice() {
         return Err(NativeDecodeErrorV1::Decode("the answered demands are not the units this window reads".to_string()));
@@ -532,31 +592,55 @@ fn conv_disclosures_with_leg_v3(
 
 /// Actual held convolution path with the same independently retained witness.
 pub fn base0_gdn_conv_window_evidence_from_disclosures_retained_v4(
-    material: &Base0GdnMaterialV2<'_>, conv_slot: u32, head: u32, index: u32,
-    demands: &[PalwHeldMissingV1], answers: &[PalwHeldDisclosureV1],
+    material: &Base0GdnMaterialV2<'_>,
+    conv_slot: u32,
+    head: u32,
+    index: u32,
+    demands: &[PalwHeldMissingV1],
+    answers: &[PalwHeldDisclosureV1],
 ) -> Result<Base0GdnWitnessBuiltV4<PalwGdnConvWindowRefutationV2>, NativeDecodeErrorV1<String>> {
     let leg = base0_gdn_leaf_leg_retained_v3(material)?;
     // An independently admitted native rank cache serves this same immutable
     // material's clone source. The request visitor admits its own rank cache.
-    let rank = kaspa_consensus_core::palw_step::PalwCanonicalStepRankV3::new_v3(&material.binding.shape_profile, &material.binding.job_context)
-        .map_err(NativeDecodeErrorV1::Resource)?;
+    let rank = kaspa_consensus_core::palw_step::PalwCanonicalStepRankV3::new_v3(
+        &material.binding.shape_profile,
+        &material.binding.job_context,
+    )
+    .map_err(NativeDecodeErrorV1::Resource)?;
     kaspa_consensus_core::palw_step_refute::memory_v2::gdn_check_conv_demands_borrowed_v3(
-        material.binding, conv_slot, head, index, demands).map_err(base0_gdn_court_error_v3)?;
+        material.binding,
+        conv_slot,
+        head,
+        index,
+        demands,
+    )
+    .map_err(base0_gdn_court_error_v3)?;
     let capture = capture_v2(material, &leg);
-    let request = kaspa_consensus_core::palw_step_refute::memory_v2::gdn_conv_refutation_requests_v3(&capture, conv_slot, head, index, |at, _coordinate|
-        material.tiles.tiles.iter().find(|(i, _)| *i == at).map(|(_, leaf)| leaf))
-        .map_err(base0_gdn_court_error_v3)?;
+    let request = kaspa_consensus_core::palw_step_refute::memory_v2::gdn_conv_refutation_requests_v3(
+        &capture,
+        conv_slot,
+        head,
+        index,
+        |at, _coordinate| material.tiles.tiles.iter().find(|(i, _)| *i == at).map(|(_, leaf)| leaf),
+    )
+    .map_err(base0_gdn_court_error_v3)?;
     let admission = request.reserve_v3().map_err(base0_gdn_court_error_v3)?;
-    let tile = |coordinate: PalwStepCoordinateV1| rank.index_v3(&coordinate)
-        .and_then(|at| material.tiles.tiles.iter().find(|(i, _)| *i == at).map(|(_, leaf)| leaf.clone()));
-    let built = base0_gdn_checkpoint_witness_retained_v4(demands, answers)?.try_build_v4(|accused|
-        gdn_conv_window_refutation_with_accused_v2(&capture, conv_slot, head, index, accused, &tile).map_err(base0_gdn_court_error_v3))?;
+    let tile = |coordinate: PalwStepCoordinateV1| {
+        rank.index_v3(&coordinate).and_then(|at| material.tiles.tiles.iter().find(|(i, _)| *i == at).map(|(_, leaf)| leaf.clone()))
+    };
+    let built = base0_gdn_checkpoint_witness_retained_v4(demands, answers)?.try_build_v4(|accused| {
+        gdn_conv_window_refutation_with_accused_v2(&capture, conv_slot, head, index, accused, &tile).map_err(base0_gdn_court_error_v3)
+    })?;
     admission.validate_v3(&built).map_err(base0_gdn_court_error_v3)?;
     Ok(built.with_conv_owner_v5(admission.into_owner_v3()))
 }
 
 fn conv_disclosures_with_accused_v4(
-    material: &Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, conv_slot: u32, head: u32, index: u32,
+    material: &Base0GdnMaterialV2<'_>,
+    leg: &Base0CheckpointsV1,
+    conv_slot: u32,
+    head: u32,
+    index: u32,
     accused: PalwGdnCheckpointWitnessV2,
 ) -> Result<PalwGdnConvWindowRefutationV2, NativeDecodeErrorV1<String>> {
     let tile = tile_source_v2(material);

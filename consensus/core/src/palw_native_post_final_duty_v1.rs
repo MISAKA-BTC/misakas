@@ -50,7 +50,9 @@ pub const PALW_NATIVE_POST_FINAL_ANSWER_MAX_BYTES_V1: usize = 64 * 1024;
 /// At most this many duty records are observed / recovered by one block (key order).
 pub const PALW_NATIVE_POST_FINAL_DUTIES_PER_BLOCK_V1: usize = 64;
 
-pub use crate::palw_native_post_final_duty_row_v1::{NativePostFinalDutyV1, PalwNativePostFinalDutyRowV1, PalwNativePostFinalMaterialRowV1};
+pub use crate::palw_native_post_final_duty_row_v1::{
+    NativePostFinalDutyV1, PalwNativePostFinalDutyRowV1, PalwNativePostFinalMaterialRowV1,
+};
 
 /// audit B-02 (fix-b): aux 144 prefix of a recorded post-Final material unit (`0x04 ‖ family ‖ job ‖ commitment`, 130 bytes).
 pub const PALW_NATIVE_POST_FINAL_MATERIAL_PREFIX_V1: u8 = 0x04; // integration: 0x03 is the held-fee horizon index (fix-a)
@@ -83,7 +85,9 @@ pub(super) fn native_post_final_material_row_v1(
             PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
             &palw_native_post_final_material_key_v1(family, job, commitment),
         )
-        .filter(|r| r.version == PALW_NATIVE_POST_FINAL_DUTY_VERSION_V1 && r.family == family && r.job == *job && r.commitment == *commitment)
+        .filter(|r| {
+            r.version == PALW_NATIVE_POST_FINAL_DUTY_VERSION_V1 && r.family == family && r.job == *job && r.commitment == *commitment
+        })
 }
 
 /// **audit B-02 (fix-b): record a unit of material the held Final owes after Final.** No production caller: which units a text29 /
@@ -99,7 +103,8 @@ pub(super) fn register_post_final_material_v1(
     if !family_supported_v1(family) || max_bytes == 0 || max_bytes as usize > PALW_NATIVE_POST_FINAL_ANSWER_MAX_BYTES_V1 {
         return Err(refused("post-Final material unit outside its family or bound"));
     }
-    let row = PalwNativePostFinalMaterialRowV1 { version: PALW_NATIVE_POST_FINAL_DUTY_VERSION_V1, family, job: *job, commitment, max_bytes };
+    let row =
+        PalwNativePostFinalMaterialRowV1 { version: PALW_NATIVE_POST_FINAL_DUTY_VERSION_V1, family, job: *job, commitment, max_bytes };
     b.write_kernel_row_encoded_v1(
         PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
         &palw_native_post_final_material_key_v1(family, job, &commitment),
@@ -138,7 +143,11 @@ fn family_supported_v1(family: u8) -> bool {
 }
 
 /// The job's post-Final duty record, if any.
-pub(super) fn native_post_final_duty_row_v1(state: &PalwChainStateV2, family: u8, job: &[u8; 64]) -> Option<PalwNativePostFinalDutyRowV1> {
+pub(super) fn native_post_final_duty_row_v1(
+    state: &PalwChainStateV2,
+    family: u8,
+    job: &[u8; 64],
+) -> Option<PalwNativePostFinalDutyRowV1> {
     state
         .kernel_route
         .as_ref()?
@@ -146,7 +155,12 @@ pub(super) fn native_post_final_duty_row_v1(state: &PalwChainStateV2, family: u8
         .filter(|r| r.version == PALW_NATIVE_POST_FINAL_DUTY_VERSION_V1 && r.family == family && r.job == *job)
 }
 
-fn write_v1(b: &mut TransitionBuilder<'_>, family: u8, job: &[u8; 64], row: Option<&PalwNativePostFinalDutyRowV1>) -> Result<(), PalwStateV2Error> {
+fn write_v1(
+    b: &mut TransitionBuilder<'_>,
+    family: u8,
+    job: &[u8; 64],
+    row: Option<&PalwNativePostFinalDutyRowV1>,
+) -> Result<(), PalwStateV2Error> {
     b.write_kernel_row_encoded_v1(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, &palw_native_post_final_duty_key_v1(family, job), row)
 }
 
@@ -233,7 +247,11 @@ pub(super) fn accuse_post_final_v1(
     }
     let mut duties = Vec::new();
     for actor in responsible_actors_v1(&held) {
-        duties.push(NativePostFinalDutyV1 { clock: native_clock_v1(b, ctx, &held, accusation, actor, 0)?, supplied_daa: None, answered: None });
+        duties.push(NativePostFinalDutyV1 {
+            clock: native_clock_v1(b, ctx, &held, accusation, actor, 0)?,
+            supplied_daa: None,
+            answered: None,
+        });
     }
     let row = PalwNativePostFinalDutyRowV1 {
         version: PALW_NATIVE_POST_FINAL_DUTY_VERSION_V1,
@@ -278,7 +296,12 @@ pub(super) fn answer_post_final_v1(
     let duty = row
         .duties
         .iter_mut()
-        .find(|d| d.clock.answerer == *signer && d.answered.is_none() && now >= d.clock.first_eligible_daa && now <= d.clock.response_deadline_daa)
+        .find(|d| {
+            d.clock.answerer == *signer
+                && d.answered.is_none()
+                && now >= d.clock.first_eligible_daa
+                && now <= d.clock.response_deadline_daa
+        })
         .ok_or_else(|| refused("signer has no open post-Final duty"))?;
     duty.answered = Some((now, digest));
     let (discharged, accuser) = (latest_turn_discharged_v1(&row), row.accuser);
@@ -291,7 +314,10 @@ pub(super) fn answer_post_final_v1(
 }
 
 /// Delete the job's duty record (the held fee left: released, refunded or convicted).
-pub(super) fn clear_native_post_final_duties_v1(b: &mut TransitionBuilder<'_>, held: &PalwNativeHeldFeeRowV1) -> Result<(), PalwStateV2Error> {
+pub(super) fn clear_native_post_final_duties_v1(
+    b: &mut TransitionBuilder<'_>,
+    held: &PalwNativeHeldFeeRowV1,
+) -> Result<(), PalwStateV2Error> {
     if native_post_final_duty_row_v1(&b.state, held.family, &held.job).is_none() {
         return Ok(());
     }
@@ -311,7 +337,10 @@ pub(super) fn native_service_slot_supplied_v1(
 }
 
 /// Production per-block observation (pinned profile, typed-missing today → no-op).
-pub(super) fn observe_native_post_final_duties_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+pub(super) fn observe_native_post_final_duties_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
     if !super::palw_court_service_lifecycle_fold_v1::court_service_f02_active_v1(b) {
         return Ok(());
     }
@@ -400,8 +429,11 @@ pub(super) fn decide_native_post_final_duty_v1(
     // Only the latest turn decides (an earlier no-supply turn was recovered by a later one).
     let turn = mine.iter().map(|d| d.clock.turn).max().unwrap_or(0);
     // Lane F02: the explicit inclusion premise (typed-missing in production) — without it nothing is attributed.
-    let premise =
-        b.extras.court_service_inclusion_premise_v1.as_ref().ok_or("court service inclusion assumptions are not adopted; no party default")?;
+    let premise = b
+        .extras
+        .court_service_inclusion_premise_v1
+        .as_ref()
+        .ok_or("court service inclusion assumptions are not adopted; no party default")?;
     let mut supplied = true;
     for d in mine.iter().filter(|d| d.clock.turn == turn) {
         if d.clock.response_deadline_daa >= now {
@@ -437,7 +469,14 @@ pub(super) fn reopen_unsupplied_turn_v1(
         return Ok(false);
     }
     let Some(mut row) = native_post_final_duty_row_v1(&b.state, held.family, &held.job) else { return Ok(false) };
-    let turn = row.duties.iter().map(|d| d.clock.turn).max().unwrap_or(0).checked_add(1).ok_or_else(|| refused("post-Final turn overflow"))?;
+    let turn = row
+        .duties
+        .iter()
+        .map(|d| d.clock.turn)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| refused("post-Final turn overflow"))?;
     let mut next = Vec::new();
     for actor in responsible_actors_v1(held) {
         match native_clock_v1(b, ctx, held, row.accusation, actor, turn) {

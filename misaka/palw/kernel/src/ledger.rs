@@ -1449,7 +1449,10 @@ impl KernelLedgerV1 {
             }
             // RFC-0016 V8 (inner 76): a capacity attestation is judged only by the native consumer past `palw_capacity_attestation_v1`.
             KernelRouteObjectV1::AttestCapacityV1 { .. } => {
-                return Err(KernelRefusalV1::rule(name, "capacity attestations must be interpreted by the authenticated native consumer"));
+                return Err(KernelRefusalV1::rule(
+                    name,
+                    "capacity attestations must be interpreted by the authenticated native consumer",
+                ));
             }
             // M*-49 (`palw_verifier_pay_v1`): the signer is the drawn slot holder (`authorize`); below the consumer's fence no draw
             // exists, so the attestation is refused by its own rule.
@@ -3262,10 +3265,13 @@ impl KernelLedgerV1 {
                     // EXEC consistency invariant: a bound dependency's liability covers its root window).
                     // G14 lane CLOCK: past X3 the horizon never ends before the claim's notice window (+ a demand's path).
                     let floor = clock_floor.unwrap_or(0);
-                    row.liability_until = Some(match self.paid_claim_consumers_v2.get(&claim) {
-                        Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
-                        None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
-                    }.max(floor));
+                    row.liability_until = Some(
+                        match self.paid_claim_consumers_v2.get(&claim) {
+                            Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
+                            None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
+                        }
+                        .max(floor),
+                    );
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(taken - held);
@@ -3344,10 +3350,13 @@ impl KernelLedgerV1 {
                     let floor = self.claim_clock_floor_of_v1(&id).unwrap_or(0);
                     let row = self.claims.get_mut(&id).expect("listed");
                     // The paid lifetime's horizon, never shortening an EXEC hold's consented extension (see the default arm).
-                    row.liability_until = Some(match self.paid_claim_consumers_v2.get(&id) {
-                        Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
-                        None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
-                    }.max(floor));
+                    row.liability_until = Some(
+                        match self.paid_claim_consumers_v2.get(&id) {
+                            Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
+                            None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
+                        }
+                        .max(floor),
+                    );
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);

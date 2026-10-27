@@ -1617,9 +1617,15 @@ fn panel_sponsor_funds_native_escrow_before_entropy_and_unused_principal_refunds
     let route = v.c.s.kernel_route().unwrap();
     let source = v.source_route.as_ref().unwrap().beacon_source.unwrap();
     let tail = v.c.sp.window_challenge() + 2 * v.c.sp.window_court();
-    let target =
-        panel_source_target_v2(&source.policy, frozen.context(&request, &policy).unwrap(), &request, &panel, tail, &route.header.policy)
-            .unwrap();
+    let target = panel_source_target_v2(
+        &source.policy,
+        frozen.context(&request, &policy).unwrap(),
+        &request,
+        &panel,
+        tail,
+        &route.header.policy,
+    )
+    .unwrap();
     let terms = BeaconSourceFeeTermsV1 {
         source: target.terms,
         sponsor: kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor),
@@ -1641,13 +1647,20 @@ fn panel_sponsor_funds_native_escrow_before_entropy_and_unused_principal_refunds
         epoch: seal.beacon_epoch,
         terms: BeaconSourceFeeTermsV1 { fee_per_source: native_before + 1, ..terms },
     };
-    if let Ok((refused, delta, _)) = v.fold(&before, &x, &[carrier(sponsor, excessive.encode())], PalwBlockWorkV3::None, Hash64::default())
+    if let Ok((refused, delta, _)) =
+        v.fold(&before, &x, &[carrier(sponsor, excessive.encode())], PalwBlockWorkV3::None, Hash64::default())
     {
         let route = refused.kernel_route().unwrap();
         assert!(route.panel_source_fee_authority_v2(&terms.source.context).is_err());
         assert!(!route.ledger().unwrap().beacon_source_fees.contains_key(&terms.source.context));
         assert_eq!(refused.bond(&sponsor).unwrap().collateral, native_before);
-        assert!(!delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table: kaspa_consensus_core::palw_panel_source_fee_v2::PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2, .. })));
+        assert!(!delta.entries.iter().any(|e| matches!(
+            e,
+            PalwDeltaEntryV2::KernelRouteRow {
+                table: kaspa_consensus_core::palw_panel_source_fee_v2::PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2,
+                ..
+            }
+        )));
         assert_eq!(revert_delta_v2(&refused, &delta, &v.c.sp).unwrap(), before);
     }
     assert_eq!(v.c.s, before, "insufficient actual collateral cannot leave a half-funded authority");
@@ -1657,7 +1670,15 @@ fn panel_sponsor_funds_native_escrow_before_entropy_and_unused_principal_refunds
     assert_eq!(v.c.s.bond(&sponsor).unwrap().collateral, native_before - 100);
     assert_eq!(ledger.source_fee_escrow_total().unwrap(), 100);
     assert_eq!(route.panel_source_fee_authority_v2(&terms.source.context).unwrap().sponsor, sponsor);
-    assert!(delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table: kaspa_consensus_core::palw_panel_source_fee_v2::PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2, old: None, new: Some(_), .. })));
+    assert!(delta.entries.iter().any(|e| matches!(
+        e,
+        PalwDeltaEntryV2::KernelRouteRow {
+            table: kaspa_consensus_core::palw_panel_source_fee_v2::PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2,
+            old: None,
+            new: Some(_),
+            ..
+        }
+    )));
     let header = borsh::to_vec(&route.header).unwrap();
     let page = route.rows_page_v1(None, usize::MAX);
     let restored = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(
@@ -1785,7 +1806,8 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
     let route_extras = v.source_route.as_mut().unwrap();
     route_extras.attested_artifacts.push(Hash64::from_bytes(pc.root()));
     route_extras.opv.as_mut().unwrap().test_eligible.push(Hash64::from_bytes(class));
-    let carrier = |actor, object: K| PalwConsensusObjectV2::KernelRouteV1 { signer: actor, bytes: object.encode(), signature: Vec::new() };
+    let carrier =
+        |actor, object: K| PalwConsensusObjectV2::KernelRouteV1 { signer: actor, bytes: object.encode(), signature: Vec::new() };
     let registration = K::RegisterClassV2 {
         mode: misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification,
         descriptor: descriptor.digest(),
@@ -1884,8 +1906,12 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
             2,
         )
         .unwrap();
-        let claim =
-            misaka_palw_kernel::job::KernelClaimV1 { job_id: job.id(), producer_bond: producer, generated, evidence_root: evidence.root() };
+        let claim = misaka_palw_kernel::job::KernelClaimV1 {
+            job_id: job.id(),
+            producer_bond: producer,
+            generated,
+            evidence_root: evidence.root(),
+        };
         let salt = [70 + i as u8; 64];
         let seal = misaka_palw_kernel::route::claim_seal_v2(&claim.id(), &salt);
         seals.push(carrier(producers[i], K::SealClaim { producer, job: job.id(), seal }));
@@ -1905,7 +1931,11 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
             claim.id(),
             K::CommitClaimSalted {
                 salt,
-                commit: misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, evidence, commitments: trace.evidence().commitments },
+                commit: misaka_palw_kernel::route::SaltedCommitV1::Claim {
+                    claim,
+                    evidence,
+                    commitments: trace.evidence().commitments,
+                },
             },
         ));
     }
@@ -1968,8 +1998,10 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
     }
     v.step_at(terms.source.hold_until, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     let held = v.c.s.clone();
-    let before_r: Vec<_> =
-        pending.iter().map(|(_, row)| (row.bond, v.c.s.bond_budget().unwrap().bond_row(&row.bond).unwrap().window.reward_sompi)).collect();
+    let before_r: Vec<_> = pending
+        .iter()
+        .map(|(_, row)| (row.bond, v.c.s.bond_budget().unwrap().bond_row(&row.bond).unwrap().window.reward_sompi))
+        .collect();
     let delta = v.step_at(terms.source.hold_until + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().beacon_source_fees[&terms.source.context].paid, 100);
     assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().source_fee_escrow_total().unwrap(), 0);

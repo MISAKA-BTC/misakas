@@ -50,8 +50,15 @@ fn backends(tag: &str) -> Vec<(String, TirBackendV1)> {
         let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
             params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
         };
-        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&lay).unwrap(),
+            [2; 64],
+            name.clone(),
+            &mut tensor,
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
         let artifact = Arc::new(TirArtifactV1::open(&path).unwrap_or_else(|e| panic!("{name}: {e}")));
         let (root, _) = artifact.inventory_root().unwrap();
         let class = artifact.class().unwrap();
@@ -127,13 +134,16 @@ fn tir_free_prompt_run_is_a_frame_original_whose_work_the_lane_derives() {
         let prompt = prompt_of(&backend, k);
         let job = fp_job(&backend, &prompt, 2);
         let mut streamed = Vec::new();
-        let run = backend.execute_free_prompt_streaming(&job, &usize_ids(&prompt), &mut |id| streamed.push(id)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let run = backend
+            .execute_free_prompt_streaming(&job, &usize_ids(&prompt), &mut |id| streamed.push(id))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(streamed, run.output_token_ids, "{name}: the streamed ids are the committed run's");
         let shape = backend.capture_shape(&run.outcome.material).expect("an IR capture has a shape");
         let commitment = palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, 999_999)
             .unwrap_or_else(|e| panic!("{name}: the producer's assembly: {e:?}"));
         assert_eq!(commitment.stop_reason, PalwFpStopReasonV3::ExactBudgetReached);
-        let PalwPublicExecutionBindingHeaderV1::Tir(header) = backend.public_execution_binding_header_v1(&run.outcome.material).unwrap()
+        let PalwPublicExecutionBindingHeaderV1::Tir(header) =
+            backend.public_execution_binding_header_v1(&run.outcome.material).unwrap()
         else {
             panic!("{name}: an IR capture exports a TIR header");
         };
@@ -163,8 +173,9 @@ fn tir_free_prompt_run_is_a_frame_original_whose_work_the_lane_derives() {
         };
         // testnet-12's custodian upper (a five-seat Panel and the producer): the frame's resource arithmetic holds there for every
         // corpus class (`tir_frame_allocation_holds_at_testnet12s_custodian_upper`, which also holds it at testnet-12's 257).
-        let quote = derive_tir_public_allocation_v1(&geometry, &commitment, &header, &record, &backend.class().layout, None, None, rules(6))
-            .unwrap_or_else(|e| panic!("{name}: the frame's allocation: {e}"));
+        let quote =
+            derive_tir_public_allocation_v1(&geometry, &commitment, &header, &record, &backend.class().layout, None, None, rules(6))
+                .unwrap_or_else(|e| panic!("{name}: the frame's allocation: {e}"));
         assert!(matches!(quote, PalwTirPublicAllocationQuoteV1::Complete(_)), "{name}: a complete frame plan");
         framed.push(name.clone());
         // The decode-token door under the job's own rule: no committed token is beaten by the runner-up lane.
@@ -366,7 +377,6 @@ fn tir_free_prompt_refuses_outside_the_lane() {
     assert!(backend.execute_free_prompt(&other, &usize_ids(&prompt)).is_err(), "another class's job");
 }
 
-
 /// **Audit 02-B: the registered runtime semantics reach the run.** A class registered with a non-default model profile, runtime
 /// manifest and class, and CU ruleset (`PalwClassSemanticsV1`): a backend left at its defaults builds a context the registered
 /// statement does not match (the frame refuses it: `matches_context`), and the same backend after the node's
@@ -388,13 +398,17 @@ fn tir_free_prompt_contexts_carry_the_registered_semantics_the_node_sets() {
     let context_of = |b: &TirBackendV1| {
         let run = b.execute_free_prompt(&job, &usize_ids(&prompt)).unwrap_or_else(|e| panic!("{name}: {e}"));
         let shape = b.capture_shape(&run.outcome.material).expect("an IR capture has a shape");
-        let PalwPublicExecutionBindingHeaderV1::Tir(header) = b.public_execution_binding_header_v1(&run.outcome.material).unwrap() else {
+        let PalwPublicExecutionBindingHeaderV1::Tir(header) = b.public_execution_binding_header_v1(&run.outcome.material).unwrap()
+        else {
             panic!("{name}: an IR capture exports a TIR header");
         };
         (shape.job_context, header.job_context)
     };
     let (default_shape, default_header) = context_of(&backend);
-    assert!(!semantics.matches_context(&default_shape) && !semantics.matches_context(&default_header), "the defaults are not the statement");
+    assert!(
+        !semantics.matches_context(&default_shape) && !semantics.matches_context(&default_header),
+        "the defaults are not the statement"
+    );
     backend.set_registered_class_facts_v1(PalwFpClassFactsV3 {
         model_profile_id: semantics.model_profile_id,
         runtime_manifest_hash: semantics.runtime_manifest_hash,
@@ -423,8 +437,12 @@ fn tir_free_prompt_builder_executes_a_non_default_class_under_its_registered_sem
     let mut pair = backends("semantics-builder").into_iter();
     let (name, default_backend) = pair.next().unwrap();
     let (_, mut set_backend) = backends("semantics-builder").into_iter().next().unwrap();
-    let mut semantics =
-        PalwClassSemanticsV1::of_registration(default_backend.class_id(), default_backend.artifact_root(), default_backend.canonical(), 0);
+    let mut semantics = PalwClassSemanticsV1::of_registration(
+        default_backend.class_id(),
+        default_backend.artifact_root(),
+        default_backend.canonical(),
+        0,
+    );
     semantics.model_profile_id = Hash64::from_u64_word(0x4E01);
     semantics.runtime_manifest_hash = Hash64::from_u64_word(0x4E02);
     semantics.runtime_class_id = Hash64::from_u64_word(0x4E03);
@@ -442,7 +460,8 @@ fn tir_free_prompt_builder_executes_a_non_default_class_under_its_registered_sem
     let context_of = |b: &TirBackendV1| {
         let run = b.execute_free_prompt(&job, &usize_ids(&prompt)).unwrap_or_else(|e| panic!("{name}: {e}"));
         let shape = b.capture_shape(&run.outcome.material).expect("an IR capture has a shape");
-        let PalwPublicExecutionBindingHeaderV1::Tir(header) = b.public_execution_binding_header_v1(&run.outcome.material).unwrap() else {
+        let PalwPublicExecutionBindingHeaderV1::Tir(header) = b.public_execution_binding_header_v1(&run.outcome.material).unwrap()
+        else {
             panic!("{name}: an IR capture exports a TIR header");
         };
         (shape.job_context, header.job_context)

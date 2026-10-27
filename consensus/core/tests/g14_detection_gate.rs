@@ -106,12 +106,21 @@ fn attempt_rig() -> AttemptRig {
     let (floor, leaves, target, _) = genesis_classes(&p)[0];
     let pwu = palw_pwu_v1(target, leaves);
     let g = genesis_state(&p);
-    let s = fold_sp(&p, &sp_of(&p), &g, &ctx(0xDE00_0001, 1_000, 1, 0), &[bond_obj(PROBE, 1_000_000_000_000_000)], PalwBlockWorkV3::None, Hash64::default())
-        .expect("the probe bond registers");
+    let s = fold_sp(
+        &p,
+        &sp_of(&p),
+        &g,
+        &ctx(0xDE00_0001, 1_000, 1, 0),
+        &[bond_obj(PROBE, 1_000_000_000_000_000)],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+    )
+    .expect("the probe bond registers");
     let (env, key, id) =
         junk_attempt(floor, bond_key(PROBE), pubkey_of(PROBE), &operator_pubkey_of(PROBE), pwu, 0xDE_5EED, 0xDE_0000_5EED);
-    let old = fold_sp(&p, &sp_of(&p), &s, &ctx(0xDE00_0002, FENCE, 2, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
-        .expect("the attempt is admitted without the fence");
+    let old =
+        fold_sp(&p, &sp_of(&p), &s, &ctx(0xDE00_0002, FENCE, 2, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
+            .expect("the attempt is admitted without the fence");
     let reserved = old.claim(&id).expect("claim").reserved;
     assert!(reserved > 0, "the fixture's claim reserves collateral");
     AttemptRig { p, s, floor, env, key, id, reserved }
@@ -289,14 +298,25 @@ fn a_free_prompt_commitment_past_the_fence_obeys_the_same_gate() {
     let (floor, ..) = genesis_classes(&p)[0];
     let attacker = 1u64;
     let g = genesis_state(&p);
-    let s = fold_sp(&p, &sp_of(&p), &g, &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, at_least_the_floor(&p, 100_000_000_000))], PalwBlockWorkV3::None, Hash64::default())
-        .expect("the bond registers");
+    let s = fold_sp(
+        &p,
+        &sp_of(&p),
+        &g,
+        &ctx(1, 1_000, 1, 0),
+        &[bond_obj(attacker, at_least_the_floor(&p, 100_000_000_000))],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+    )
+    .expect("the bond registers");
     let s = seed_prereqs(&p, &s);
     let publish =
         PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
-    let s = fold_sp(&p, &sp_of(&p), &s, &ctx(2, 1_000, 2, 0), &[publish], PalwBlockWorkV3::None, Hash64::default()).expect("published");
+    let s =
+        fold_sp(&p, &sp_of(&p), &s, &ctx(2, 1_000, 2, 0), &[publish], PalwBlockWorkV3::None, Hash64::default()).expect("published");
     let commit = fp_commit(&s, floor, bond_key(attacker), pubkey_of(attacker), h(0xB1));
-    let fold_at = |sp: &PalwStateParamsV2, daa: u64| fold_sp(&p, sp, &s, &ctx(3, daa, 3, 0), &[commit.clone()], PalwBlockWorkV3::None, Hash64::default());
+    let fold_at = |sp: &PalwStateParamsV2, daa: u64| {
+        fold_sp(&p, sp, &s, &ctx(3, daa, 3, 0), &[commit.clone()], PalwBlockWorkV3::None, Hash64::default())
+    };
     let old = fold_at(&sp_of(&p), FENCE).expect("admitted without the fence");
     let reserved = old.claim(&h(0xB1)).expect("the FP claim").reserved;
     assert!(reserved > 0);
@@ -381,7 +401,11 @@ fn the_claim_gate_checks_the_policys_needs_against_the_courts_per_claim_reservat
     };
     if plan.k_round > budget.compellable_openings {
         assert_eq!(gate(&sp, 999_999), None, "below the court fence: the declared values admit it");
-        assert_eq!(gate(&with_court, 999_999), Some("DETECTION_COURT_BUDGET_BELOW_DRAW"), "past it: the reservation cannot compel the draw");
+        assert_eq!(
+            gate(&with_court, 999_999),
+            Some("DETECTION_COURT_BUDGET_BELOW_DRAW"),
+            "past it: the reservation cannot compel the draw"
+        );
         // The fold's attempt gate reads the same budget.
         let e = r.attempt(&with_court, FENCE, 0xDE00_0002).expect_err("the attempt gate refuses it too");
         assert_eq!(code(&e), Some("DETECTION_COURT_BUDGET_BELOW_DRAW"), "{e:?}");

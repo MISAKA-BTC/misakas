@@ -271,18 +271,25 @@ pub fn load_unsigned_commitment(path: &Path) -> Result<Vec<u8>, FpSubmitError> {
 ///
 /// Done before anything is broadcast: a payload that does not decode is a transaction whose
 /// material can never be written, and that is a fact about the file on disk, not about the chain.
-pub fn decode_commitment_payload(tx: &Transaction) -> Result<(kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwFpCommitmentTxPayloadV3>, Hash64), FpSubmitError> {
+pub fn decode_commitment_payload(
+    tx: &Transaction,
+) -> Result<(kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwFpCommitmentTxPayloadV3>, Hash64), FpSubmitError> {
     if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT {
         return Err(FpSubmitError::WrongSubnetwork { got: tx.subnetwork_id.to_string() });
     }
     let inner = if tx.payload.starts_with(b"FPA1") {
         kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
-            .ok_or_else(|| FpSubmitError::UndecodablePayload("invalid accounting envelope".into()))?.inner
-    } else { &tx.payload };
-    let payload = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_accounting_original_decode_v1(inner)
-        .map_err(|e| match e {
+            .ok_or_else(|| FpSubmitError::UndecodablePayload("invalid accounting envelope".into()))?
+            .inner
+    } else {
+        &tx.payload
+    };
+    let payload =
+        kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_accounting_original_decode_v1(inner).map_err(|e| match e {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => FpSubmitError::NativeCapacity(why),
-            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => FpSubmitError::UndecodablePayload(why.into()),
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
+                FpSubmitError::UndecodablePayload(why.into())
+            }
         })?;
     let claim = fp_claim_id_v3(&payload.commitment);
     Ok((payload, claim))
@@ -445,10 +452,14 @@ pub struct SubmissionPlan {
 pub fn plan_submission(tx: &Transaction, staging: &FpStaging<'_>, chain_daa: u64) -> Result<SubmissionPlan, FpSubmitError> {
     let (payload, claim_id) = decode_commitment_payload(tx)?;
     if tx.payload.starts_with(b"FPA1") {
-        let view = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, payload.commitment.decode_tokens_executed as usize)
-            .ok_or(FpSubmitError::AccountingAnswerMismatch)?;
+        let view = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(
+            &tx.payload,
+            payload.commitment.decode_tokens_executed as usize,
+        )
+        .ok_or(FpSubmitError::AccountingAnswerMismatch)?;
         if view.answer_len_v1() != payload.commitment.decode_tokens_executed as usize
-            || staging.output_token_ids.is_some_and(|ids| !ids.iter().copied().eq(view.answer_ids_v1())) {
+            || staging.output_token_ids.is_some_and(|ids| !ids.iter().copied().eq(view.answer_ids_v1()))
+        {
             return Err(FpSubmitError::AccountingAnswerMismatch);
         }
     }
@@ -1111,11 +1122,15 @@ mod tests {
         let plan = plan_submission(&tx, &FpStaging { output_token_ids: Some(&ids), ..Default::default() }, 0).unwrap();
         assert_eq!(plan.claim_id, payload.claim_id());
         assert_eq!(plan.txid, tx.id().to_string());
-        let mut other = ids.clone(); other[0] ^= 1;
-        assert!(matches!(plan_submission(&tx, &FpStaging { output_token_ids: Some(&other), ..Default::default() }, 0),
-            Err(FpSubmitError::AccountingAnswerMismatch)));
+        let mut other = ids.clone();
+        other[0] ^= 1;
+        assert!(matches!(
+            plan_submission(&tx, &FpStaging { output_token_ids: Some(&other), ..Default::default() }, 0),
+            Err(FpSubmitError::AccountingAnswerMismatch)
+        ));
         let mut nested = tx.clone();
-        nested.payload = b"FPA1broken".to_vec(); nested.finalize();
+        nested.payload = b"FPA1broken".to_vec();
+        nested.finalize();
         assert!(matches!(plan_submission(&nested, &FpStaging::default(), 0), Err(FpSubmitError::UndecodablePayload(_))));
     }
 

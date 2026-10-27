@@ -989,8 +989,11 @@ mod tests {
                             }
                         });
                     assert_eq!(palw_registration_attribution_v1(profile, canonical, armed, form), processor, "{label}, armed {armed}");
-                    assert_eq!(palw_registration_attribution_v2(profile, canonical, armed, form, false), processor,
-                        "dormant new route preserves legacy: {label}, armed {armed}");
+                    assert_eq!(
+                        palw_registration_attribution_v2(profile, canonical, armed, form, false),
+                        processor,
+                        "dormant new route preserves legacy: {label}, armed {armed}"
+                    );
                 }
             }
         }
@@ -1060,7 +1063,11 @@ mod tests {
         let admission = include_str!("palw_class_admission_v2.rs");
         assert!(admission.contains("offence_attribution: params.palw_offence_attribution_active_at(daa_score),"));
         assert!(admission.contains("prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),"));
-        assert!(admission.contains("memory_routing_court: params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(daa_score)),"));
+        assert!(
+            admission.contains(
+                "memory_routing_court: params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(daa_score)),"
+            )
+        );
     }
 
     /// **testnet-12's genesis rows are attributable** (addendum §4-bis.8: "genesis rows already

@@ -736,10 +736,11 @@ pub fn palw_court_claim_budget_for_retention_v1(
     let held_da = params.g14_route_required_v1().and_then(|m| m.legacy_held_da_from).is_some_and(|from| accepted_daa >= from);
     let mut compellable = u32::from(crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1);
     if held_da {
-        compellable = compellable.saturating_add(u32::from(crate::palw_legacy_parallel_v1::PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1));
+        compellable =
+            compellable.saturating_add(u32::from(crate::palw_legacy_parallel_v1::PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1));
     }
-    let unit_bytes =
-        (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64).saturating_mul(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+    let unit_bytes = (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64)
+        .saturating_mul(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
     let turn = params.turn_deadline_daa();
     let hard = trace_retention_daa.saturating_sub(crate::palw_state_v2::palw_da_disclose_window_daa_v1(params));
     let lead = if fused {
@@ -793,4 +794,3 @@ pub fn palw_attempt_trace_retention_daa_v1(
     // RFC-0018 Gate C (user decision 2026-10-17): and through the latest certification and receipt lane (0 below its fence).
     base.saturating_add(crate::palw_rfc0018_v1::palw_gate_c_retention_extension_daa_v1(params, daa))
 }
-

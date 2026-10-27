@@ -27,7 +27,12 @@ fn program() -> TirProgramV39 {
             BlockV39 {
                 name: "pre".into(),
                 carry_in: vec![],
-                nodes: vec![NodeV39 { prim: NodePrimV39::Frozen(Prim::Cast), inputs: vec![Ref::Const(0)], out: out.clone(), commit: true }],
+                nodes: vec![NodeV39 {
+                    prim: NodePrimV39::Frozen(Prim::Cast),
+                    inputs: vec![Ref::Const(0)],
+                    out: out.clone(),
+                    commit: true,
+                }],
                 carry_out: vec![0],
             },
             BlockV39 {
@@ -84,7 +89,14 @@ fn a_fixed_stage_composes_into_exactly_what_the_native_rule_accepts() {
     let s = source(&p);
     let pipeline = PipelineV39 {
         version: 39,
-        stages: vec![StageDecl { name: "only".into(), program: 0, trip: TripRule::Fixed { n: 1 }, max_trip: 1, tokens: None, bind: vec![] }],
+        stages: vec![StageDecl {
+            name: "only".into(),
+            program: 0,
+            trip: TripRule::Fixed { n: 1 },
+            max_trip: 1,
+            tokens: None,
+            bind: vec![],
+        }],
         output_stage: 0,
     }
     .check(&[p])

@@ -208,12 +208,15 @@ fn the_tick_accuses_after_the_unavailable_and_before_the_carriers() {
     assert!(step < rechecked && rechecked < asked && asked < built && built < queued && queued < carriers);
     let pruned = queued
         + source[queued..]
-            .find_code("court_outbox.retain_submitted(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));",
+            .find_code(
+                "court_outbox.retain_submitted(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));",
             )
             .expect("the debounce leaves with the book entry");
     assert!(pruned < carriers);
     let licence = retirement.find_code("if palw_seat_unserved_licence_v1(phase) {").expect("the licence seam");
-    assert!(retirement[licence..].contains_code("accusations.want(claim, current_daa.saturating_add(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));"));
+    assert!(
+        retirement[licence..].contains_code("accusations.want(claim, current_daa.saturating_add(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));")
+    );
     assert!(!source.contains_code("the DefaultAccused filing that answers it is Phase 2's"), "the seam files now");
 }
 
@@ -586,10 +589,13 @@ fn the_tick_records_service_where_it_sees_it() {
     let block = &source[source.find_code("let verdict = 'verdict: {").unwrap()..];
     let block = &block[..block.find_code("let Some(verdict) = verdict else { continue };").unwrap()];
     let pre = source.find_code("if seat_r && duty.free_prompt && service.is_unserved(&duty.claim_id) {").expect("the pre-check");
-    let budget = source.find_code("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("deferral");
+    let budget =
+        source.find_code("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("deferral");
     let verdict = source.find_code("let verdict = 'verdict: {").unwrap();
     assert!(pre < budget && budget < verdict, "asked before a replay deferred for memory skips the verdict");
-    assert!(source[pre..budget].contains_code(".fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)"));
+    assert!(
+        source[pre..budget].contains_code(".fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)")
+    );
     assert_eq!(block.matches("match service.resumed(duty.claim_id, current_daa, holds_job, step) {").count(), 1, "the FP resume");
     assert_eq!(block.matches("if palw_seat_replay_served_v1(&pass.0) {").count(), 1, "the FP replay");
     let fault = block.find_code("if self.seat_found_fault_v1(&duty.claim_id) {").unwrap();
@@ -604,7 +610,8 @@ fn the_tick_records_service_where_it_sees_it() {
         "the tensor claim's pass (RFC-0003), the FP replay, the tail"
     );
     let valid = source.find_code("if valid {\n                    service.note_served(duty.claim_id);").expect("a Valid");
-    let hook = source.find_code("if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })\n                    && service.is_unserved(&duty.claim_id)",
+    let hook = source.find_code(
+        "if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })\n                    && service.is_unserved(&duty.claim_id)",
     );
     assert!(hook.is_some_and(|hook| valid < hook), "an Unavailable accuses only an unserved claim");
     assert!(source.contains_code("let ended = service.ended(|claim| duty_claims.contains(claim));"), "the seam");

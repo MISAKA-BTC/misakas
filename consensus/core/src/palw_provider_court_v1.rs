@@ -102,7 +102,9 @@ impl Params {
     /// **The fence's record gate** (lane g14p/kernel-route, U03/U04): needs `palw_probabilistic_constraints_v1` at or below it and a
     /// pinned arm-readiness record (`crate::palw_kernel_route_arming_v1`; the pinned list is empty, so every armed height is refused).
     pub fn validate_palw_provider_court_v1(&self) -> Result<(), PalwModeV2Error> {
-        self.validate_palw_kernel_route_fence_record_v1(crate::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1::ProviderCourtV1)
+        self.validate_palw_kernel_route_fence_record_v1(
+            crate::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1::ProviderCourtV1,
+        )
     }
 }
 

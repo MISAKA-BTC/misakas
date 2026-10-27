@@ -87,7 +87,8 @@ pub mod tests {
         let bytes = tiny_tokenizer_json();
         let t = kernel_tokenizer_v1(&bytes, None).unwrap();
         assert!(!t.verified, "no commitment: used as given, never claimed verified");
-        let job = kernel_job_from_text_v1(&t.tokenizer, "hi there", Hash64::from_bytes([7; 64]), 32, 64, 3, Hash64::default()).unwrap();
+        let job =
+            kernel_job_from_text_v1(&t.tokenizer, "hi there", Hash64::from_bytes([7; 64]), 32, 64, 3, Hash64::default()).unwrap();
         assert_eq!(job.prompt.len(), 8);
         assert_eq!(kernel_result_text_v1(&t.tokenizer, &job.prompt).unwrap(), "hi there");
         assert!(kernel_job_from_text_v1(&t.tokenizer, "hi", Hash64::default(), 5, 64, 1, Hash64::default()).is_err(), "token bound");

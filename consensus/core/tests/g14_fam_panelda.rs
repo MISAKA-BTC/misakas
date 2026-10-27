@@ -3,7 +3,9 @@
 //! Fixture-only fence heights (`FENCE`, below) — test values, not a pin.
 
 use kaspa_consensus_core::config::params::{ForkActivation, TESTNET_PARAMS};
-use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFreePromptJobV3};
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFreePromptJobV3,
+};
 use kaspa_consensus_core::palw_g14_gates_v1::{
     PalwG14RouteFamilyV1 as F, PalwG14RouteMirrorV1, palw_g14_fp_route_families_at_v1, palw_g14_fp_route_families_v1,
     palw_g14_route_family_fences_v1,

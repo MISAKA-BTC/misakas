@@ -1481,7 +1481,10 @@ mod tests {
         for flag in ["--palw-drill-kernel-inject=lie", "--palw-drill-kernel-inject=junk-flood", "--palw-drill-kernel-flood=10"] {
             let why = refusal(&with(&[flag]));
             assert!(why.contains("DRILL ONLY") && why.contains("--palw-drill-genesis-salt"), "{flag}: {why}");
-            assert!(refusal(&parse(&["--testnet", "--netsuffix=12", flag])).contains("DRILL ONLY"), "public testnet-12 refuses {flag}");
+            assert!(
+                refusal(&parse(&["--testnet", "--netsuffix=12", flag])).contains("DRILL ONLY"),
+                "public testnet-12 refuses {flag}"
+            );
         }
         let salted = with(&[&salt_flag, "--palw-drill-kernel-inject=lie", "--palw-drill-kernel-inject=wrong-challenge"]);
         assert_eq!(salted.palw_drill_kernel_inject, vec!["lie".to_string(), "wrong-challenge".to_string()]);

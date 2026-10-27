@@ -873,8 +873,11 @@ pub fn step_merkle_range_siblings_capped_v1(
 /// root. No full tree or interior leaf list is fetched; this authenticates data
 /// identity only. The caller admits the bounded output allocation and hash work.
 pub fn step_range_siblings_from_edges_capped_v1(
-    leaf_count: u64, first: &PalwStepOpeningV1, last: &PalwStepOpeningV1,
-    expected_root: Hash64, max_step_leaf_count: u64,
+    leaf_count: u64,
+    first: &PalwStepOpeningV1,
+    last: &PalwStepOpeningV1,
+    expected_root: Hash64,
+    max_step_leaf_count: u64,
 ) -> Result<Vec<Hash64>, PalwStepLegError> {
     if first.leaf_index > last.leaf_index {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index: first.leaf_index, count: leaf_count });
@@ -891,9 +894,15 @@ pub fn step_range_siblings_from_edges_capped_v1(
     while width > 1 {
         let l = if width % 2 == 1 && a == width - 1 { None } else { left.next().copied() };
         let r = if width % 2 == 1 && b == width { None } else { right.next().copied() };
-        if a % 2 == 1 { out.push(l.ok_or(PalwStepLegError::OpeningPathTooShort)?); }
-        if b % 2 == 1 && b < width { out.push(r.ok_or(PalwStepLegError::OpeningPathTooShort)?); }
-        a /= 2; b = b.div_ceil(2); width = width.div_ceil(2);
+        if a % 2 == 1 {
+            out.push(l.ok_or(PalwStepLegError::OpeningPathTooShort)?);
+        }
+        if b % 2 == 1 && b < width {
+            out.push(r.ok_or(PalwStepLegError::OpeningPathTooShort)?);
+        }
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
     }
     Ok(out)
 }
@@ -4208,30 +4217,36 @@ mod range_from_edges_tests {
     #[test]
     fn boundary_openings_reconstruct_every_ragged_range() {
         for n in 1..=33usize {
-            let leaves: Vec<_> = (0..n).map(|i| Hash64::from_bytes([i as u8;64])).collect();
-            let root = step_merkle_root_capped_v1(&leaves,n as u64).unwrap();
-            for a in 0..n { for b in a+1..=n {
-                let first = step_opening_capped_v1(&leaves,a as u64,n as u64).unwrap();
-                let last = step_opening_capped_v1(&leaves,(b-1) as u64,n as u64).unwrap();
-                let siblings = step_range_siblings_from_edges_capped_v1(n as u64,&first,&last,root,n as u64).unwrap();
-                assert_eq!(siblings,step_merkle_range_siblings_capped_v1(&leaves,a,b-a,n as u64).unwrap());
-                let range=PalwStepRangeOpeningV1 {first_leaf_index:a as u64,leaf_hashes:leaves[a..b].to_vec(),siblings};
-                assert_eq!(step_range_opening_root_capped_v1(n as u64,&range,n as u64).unwrap(),root);
-            }}
+            let leaves: Vec<_> = (0..n).map(|i| Hash64::from_bytes([i as u8; 64])).collect();
+            let root = step_merkle_root_capped_v1(&leaves, n as u64).unwrap();
+            for a in 0..n {
+                for b in a + 1..=n {
+                    let first = step_opening_capped_v1(&leaves, a as u64, n as u64).unwrap();
+                    let last = step_opening_capped_v1(&leaves, (b - 1) as u64, n as u64).unwrap();
+                    let siblings = step_range_siblings_from_edges_capped_v1(n as u64, &first, &last, root, n as u64).unwrap();
+                    assert_eq!(siblings, step_merkle_range_siblings_capped_v1(&leaves, a, b - a, n as u64).unwrap());
+                    let range = PalwStepRangeOpeningV1 { first_leaf_index: a as u64, leaf_hashes: leaves[a..b].to_vec(), siblings };
+                    assert_eq!(step_range_opening_root_capped_v1(n as u64, &range, n as u64).unwrap(), root);
+                }
+            }
         }
     }
     #[test]
     fn mixed_roots_invalid_boundaries_and_bad_paths_refuse() {
-        let leaves: Vec<_> = (0..5).map(|i| Hash64::from_bytes([i;64])).collect();
-        let root=step_merkle_root_v1(&leaves).unwrap();
-        let first=step_opening_capped_v1(&leaves,0,5).unwrap();let last=step_opening_capped_v1(&leaves,4,5).unwrap();
-        assert!(step_range_siblings_from_edges_capped_v1(5,&last,&first,root,5).is_err());
-        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&last,root,4).is_err());
-        let mut bent=last.clone();bent.leaf_hash=Hash64::default();
-        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&bent,root,5).is_err());
-        let mut missing=first.clone();missing.siblings.pop();
-        assert!(step_range_siblings_from_edges_capped_v1(5,&missing,&last,root,5).is_err());
-        let mut extra=last;extra.siblings.push(Hash64::default());
-        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&extra,root,5).is_err());
+        let leaves: Vec<_> = (0..5).map(|i| Hash64::from_bytes([i; 64])).collect();
+        let root = step_merkle_root_v1(&leaves).unwrap();
+        let first = step_opening_capped_v1(&leaves, 0, 5).unwrap();
+        let last = step_opening_capped_v1(&leaves, 4, 5).unwrap();
+        assert!(step_range_siblings_from_edges_capped_v1(5, &last, &first, root, 5).is_err());
+        assert!(step_range_siblings_from_edges_capped_v1(5, &first, &last, root, 4).is_err());
+        let mut bent = last.clone();
+        bent.leaf_hash = Hash64::default();
+        assert!(step_range_siblings_from_edges_capped_v1(5, &first, &bent, root, 5).is_err());
+        let mut missing = first.clone();
+        missing.siblings.pop();
+        assert!(step_range_siblings_from_edges_capped_v1(5, &missing, &last, root, 5).is_err());
+        let mut extra = last;
+        extra.siblings.push(Hash64::default());
+        assert!(step_range_siblings_from_edges_capped_v1(5, &first, &extra, root, 5).is_err());
     }
 }

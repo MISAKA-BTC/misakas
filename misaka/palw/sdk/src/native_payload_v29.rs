@@ -1502,7 +1502,11 @@ pub fn prepare_terminal_v39(job: Digest, refund: bool) -> Result<PreparedNativeP
 // ---- Owning39 mining (stage actions 73–77/79) and the PNR9 receipt-block carriage ----
 // Frames only: the dormant fold re-derives everything (economic class, work, price, budget, Gate C) from original rows.
 // There is no model-level approval action (user decision 2026-10-15, round 5).
-pub fn prepare_mining_register_v39(template_master: Digest, sequence: u64, share_permille: u16) -> Result<PreparedNativePayloadV29, String> {
+pub fn prepare_mining_register_v39(
+    template_master: Digest,
+    sequence: u64,
+    share_permille: u16,
+) -> Result<PreparedNativePayloadV29, String> {
     use kaspa_consensus_core::palw_native_mining_v39::*;
     let w = NativeMiningModelWireV39 { version: 39, template_master, sequence, share_permille };
     let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
@@ -1553,7 +1557,15 @@ pub fn native_receipt_spend_unsigned_v39(
     let spend = PalwNativeReceiptSpendV39 {
         version: 39,
         network_domain,
-        challenge: native_receipt_spend_challenge_v39(network_domain, pre_pow_hash, timestamp, nonce, receipt, quantum_index, &producer_bond),
+        challenge: native_receipt_spend_challenge_v39(
+            network_domain,
+            pre_pow_hash,
+            timestamp,
+            nonce,
+            receipt,
+            quantum_index,
+            &producer_bond,
+        ),
         receipt,
         quantum_index,
         producer_bond,

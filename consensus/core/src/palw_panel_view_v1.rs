@@ -440,9 +440,7 @@ pub fn palw_panel_network_view_v1(
             let free = crate::palw_state_v2::palw_bond_free_collateral_v1(bond, held, params.bond_collateral_is_net_v1());
             let ancestry_ready = ancestry.as_ref().is_some_and(|ancestors| {
                 ancestors.iter().all(|parent| {
-                    readiness_by_bond_class
-                        .get(&(*bond_key, *parent))
-                        .is_some_and(|r| r.fresh && r.not_ready_reason.is_empty())
+                    readiness_by_bond_class.get(&(*bond_key, *parent)).is_some_and(|r| r.fresh && r.not_ready_reason.is_empty())
                 })
             });
             let eligible = ready

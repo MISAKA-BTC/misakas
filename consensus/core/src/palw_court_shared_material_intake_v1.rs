@@ -21,14 +21,14 @@
 //!
 //! Authentication is data identity only (existing Merkle commitments/openings),
 //! never a computation proof, a duty completion, a custody grant or a credit.
-use crate::Hash64;
 use crate::BlockHash;
-use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2};
-use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+use crate::Hash64;
 use crate::palw_court_shared_tir_state_v1 as shared;
-use crate::palw_tir_public_source_v1::{PalwTirPublicSourceV1 as Source, PalwTirPublicRequestV1 as Query};
-use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART;
 use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1 as PromptForm, PalwPromptIdsOpeningV1};
+use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2};
+use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART;
+use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Query, PalwTirPublicSourceV1 as Source};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const MATERIAL_INTAKE_CONTEXT_V1: &[u8] = b"misaka-palw/material-intake/v1/mldsa87";
@@ -49,10 +49,17 @@ impl MaterialTargetV1 {
         crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/material-target/v1", &(claim, self))
     }
 }
-pub fn material_draft_id_v1(claim: Hash64, target: MaterialTargetV1, submitter: PalwBondKeyV2, total_bytes: u64, body_hash: Hash64)
-    -> Result<Hash64, String> {
-    crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/material-draft/v1",
-        &(claim, target, submitter, total_bytes, body_hash))
+pub fn material_draft_id_v1(
+    claim: Hash64,
+    target: MaterialTargetV1,
+    submitter: PalwBondKeyV2,
+    total_bytes: u64,
+    body_hash: Hash64,
+) -> Result<Hash64, String> {
+    crate::palw_court_shared_tir_stream_v1::stream_digest(
+        b"misaka-palw/material-draft/v1",
+        &(claim, target, submitter, total_bytes, body_hash),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -118,15 +125,21 @@ impl SignedMaterialIntakeV1 {
         if self.version != 1 {
             return Err("material intake version".into());
         }
-        crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/material-intake/v1",
-            &(network, self.version, self.claim, self.scope_id, self.target, self.submitter, &self.action))
+        crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/material-intake/v1",
+            &(network, self.version, self.claim, self.scope_id, self.target, self.submitter, &self.action),
+        )
     }
     pub fn verify_v1(&self, network: Hash64, pubkey: &[u8]) -> Result<(), String> {
         if self.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
             return Err("material intake signature length".into());
         }
-        if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(pubkey,
-            self.signing_message(network)?.as_byte_slice(), &self.signature, MATERIAL_INTAKE_CONTEXT_V1) {
+        if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
+            pubkey,
+            self.signing_message(network)?.as_byte_slice(),
+            &self.signature,
+            MATERIAL_INTAKE_CONTEXT_V1,
+        ) {
             return Err("material intake signature invalid".into());
         }
         Ok(())
@@ -235,8 +248,11 @@ impl MaterialDraftV1 {
     pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
         self.check(&Key::CourtMaterialDraft(self.claim, self.draft_id))?;
         let c = shared::context(state, self.claim)?;
-        if self.scope_id != c.scope_id || self.material_until_daa != c.material_until_daa
-            || self.begun_daa < c.original_accepted_daa || self.expires_daa > c.hard_daa {
+        if self.scope_id != c.scope_id
+            || self.material_until_daa != c.material_until_daa
+            || self.begun_daa < c.original_accepted_daa
+            || self.expires_daa > c.hard_daa
+        {
             return Err("material draft substitutes original scope/window".into());
         }
         Ok(())
@@ -271,8 +287,12 @@ impl MaterialDraftV1 {
 }
 impl MaterialPartV1 {
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1 || *key != Key::CourtMaterialPart(self.draft_id, self.offset)
-            || self.bytes.is_empty() || self.bytes.len() > PART || self.offset % PART as u64 != 0 {
+        if self.version != 1
+            || *key != Key::CourtMaterialPart(self.draft_id, self.offset)
+            || self.bytes.is_empty()
+            || self.bytes.len() > PART
+            || self.offset % PART as u64 != 0
+        {
             return Err("material part version/key/bound".into());
         }
         Ok(())
@@ -280,11 +300,13 @@ impl MaterialPartV1 {
 }
 impl MaterialRowV1 {
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1 || *key != Key::CourtMaterial(self.claim, self.target_id)
+        if self.version != 1
+            || *key != Key::CourtMaterial(self.claim, self.target_id)
             || self.target.id_v1(self.claim)? != self.target_id
             || matches!(self.target, MaterialTargetV1::FullIds)
             || self.bytes.is_empty()
-            || self.digest != crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&self.bytes) {
+            || self.digest != crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&self.bytes)
+        {
             return Err("material row version/key/target/digest".into());
         }
         Ok(())
@@ -293,8 +315,11 @@ impl MaterialRowV1 {
     pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
         self.check(&Key::CourtMaterial(self.claim, self.target_id))?;
         let c = shared::context(state, self.claim)?;
-        if self.scope_id != c.scope_id || self.material_until_daa != c.material_until_daa
-            || self.accepted_daa < c.original_accepted_daa || self.accepted_daa >= c.hard_daa {
+        if self.scope_id != c.scope_id
+            || self.material_until_daa != c.material_until_daa
+            || self.accepted_daa < c.original_accepted_daa
+            || self.accepted_daa >= c.hard_daa
+        {
             return Err("material row substitutes original scope/clock".into());
         }
         let source = c.source(state)?;
@@ -303,8 +328,8 @@ impl MaterialRowV1 {
 }
 impl MaterialLedgerV1 {
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1 || *key != Key::CourtMaterialLedger(self.claim, self.submitter)
-            || self.reserved_bytes > self.budget_bytes {
+        if self.version != 1 || *key != Key::CourtMaterialLedger(self.claim, self.submitter) || self.reserved_bytes > self.budget_bytes
+        {
             return Err("material ledger version/key/budget".into());
         }
         Ok(())
@@ -330,7 +355,8 @@ fn prompt_tile_bound(count: u32, tile: u32) -> Result<u64, String> {
     if u64::from(tile) >= tiles {
         return Err("material prompt tile outside original".into());
     }
-    let len = crate::palw_prompt_ids_v1::prompt_ids_tile_len_v1(u64::from(count), u64::from(tile)).ok_or("material prompt tile len")? as u64;
+    let len =
+        crate::palw_prompt_ids_v1::prompt_ids_tile_len_v1(u64::from(count), u64::from(tile)).ok_or("material prompt tile len")? as u64;
     let depth = if tiles <= 1 { 0 } else { 64 - u64::from((tiles - 1).leading_zeros()) };
     // count + tile_index + Vec len + ids + (leaf_index + leaf_hash + Vec len + siblings)
     Ok(4 + 4 + 4 + 4 * len + 8 + 64 + 4 + 64 * depth)
@@ -350,8 +376,10 @@ fn prompt_bound(state: &PalwChainStateV2, claim: Hash64, source: &Source) -> Res
     }
 }
 /// The original's registered program, decoded under native admission.
-pub(crate) fn class_program_v1(state: &PalwChainStateV2, claim: Hash64)
-    -> Result<crate::palw_native_resource_v1::NativeRetainedV1<misaka_palw_tir::program::TirProgramV1>, String> {
+pub(crate) fn class_program_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<misaka_palw_tir::program::TirProgramV1>, String> {
     let frame = frame_of(state, claim)?;
     let record = state.tir_class_v1(&frame.original_v1().job.class_id).ok_or("material registered class absent")?;
     crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|e| e.to_string())
@@ -359,28 +387,46 @@ pub(crate) fn class_program_v1(state: &PalwChainStateV2, claim: Hash64)
 /// Ascending union of the parameter coordinates any numerical root of the
 /// original may read — the same input cover the preclaim requirement
 /// derivation (`palw_tir_prepared_original_requirements_v1`) retains.
-pub(crate) fn required_parameter_leaves_v1(state: &PalwChainStateV2, claim: Hash64,
-    budget: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1) -> Result<Vec<u32>, String> {
+pub(crate) fn required_parameter_leaves_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    budget: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
+) -> Result<Vec<u32>, String> {
     let frame = frame_of(state, claim)?;
     let class = frame.original_v1().job.class_id;
     let record = state.tir_class_v1(&class).ok_or("material registered class absent")?;
-    let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, class).ok_or("material registered layout absent")?;
-    let source = Source::new_native_v1(record, layout, frame.header_v1(), frame.original_v1().execution_root,
-        frame.original_v1().trace_root, frame.descriptor_v1().maximum_leaves).map_err(|e| e.to_string())?;
+    let layout =
+        crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, class).ok_or("material registered layout absent")?;
+    let source = Source::new_native_v1(
+        record,
+        layout,
+        frame.header_v1(),
+        frame.original_v1().execution_root,
+        frame.original_v1().trace_root,
+        frame.descriptor_v1().maximum_leaves,
+    )
+    .map_err(|e| e.to_string())?;
     let cover = Source::root_input_cover_native_v1(&source, record, layout, budget).map_err(|e| e.to_string())?;
     Ok(cover.parameters_v1().union.clone())
 }
 /// Exact native byte bound of one target. Declared sizes above it are refused.
-pub(crate) fn target_bound_v1(state: &PalwChainStateV2, c: &shared::SharedTirContextV1, source: &Source,
-    target: MaterialTargetV1, program: &misaka_palw_tir::program::TirProgramV1, leaves: &[u32]) -> Result<u64, String> {
-    use crate::palw_tir_court_v1::{palw_tir_param_carriage_bytes_v1, PalwTirParamCarriageV1};
+pub(crate) fn target_bound_v1(
+    state: &PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    source: &Source,
+    target: MaterialTargetV1,
+    program: &misaka_palw_tir::program::TirProgramV1,
+    leaves: &[u32],
+) -> Result<u64, String> {
+    use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1};
     match target {
         MaterialTargetV1::Parameter { leaf } => {
             if leaves.binary_search(&leaf).is_err() {
                 return Err("material parameter is not an input of any numerical root of the original".into());
             }
             palw_tir_param_carriage_bytes_v1(program, PalwTirParamCarriageV1::PerLeafOpenings, &[leaf])
-                .and_then(|n| n.checked_sub(4)).ok_or_else(|| "material parameter width not derivable".into())
+                .and_then(|n| n.checked_sub(4))
+                .ok_or_else(|| "material parameter width not derivable".into())
         }
         MaterialTargetV1::PromptFlat => match prompt_form(state, c.claim)? {
             PromptForm::Flat => Ok(4 + 4 * u64::from(source.header_v1().job_context.declared_prefill_tokens)),
@@ -403,9 +449,14 @@ pub(crate) fn target_bound_v1(state: &PalwChainStateV2, c: &shared::SharedTirCon
 }
 /// The per-claim requirement: every unit, the complete IDs, every required
 /// parameter at its exact opening width and the whole prompt in native form.
-pub(crate) fn claim_budget_v1(state: &PalwChainStateV2, c: &shared::SharedTirContextV1, source: &Source,
-    program: &misaka_palw_tir::program::TirProgramV1, leaves: &[u32]) -> Result<u64, String> {
-    use crate::palw_tir_court_v1::{palw_tir_param_carriage_bytes_v1, PalwTirParamCarriageV1};
+pub(crate) fn claim_budget_v1(
+    state: &PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    source: &Source,
+    program: &misaka_palw_tir::program::TirProgramV1,
+    leaves: &[u32],
+) -> Result<u64, String> {
+    use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1};
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame_of(state, c.claim)?, source, c.profile_id)?;
     let mut total = 0u64;
     for ordinal in 0..set.len() {
@@ -419,8 +470,11 @@ pub(crate) fn claim_budget_v1(state: &PalwChainStateV2, c: &shared::SharedTirCon
         total = add(total, ids)?;
     }
     if !leaves.is_empty() {
-        total = add(total, palw_tir_param_carriage_bytes_v1(program, PalwTirParamCarriageV1::PerLeafOpenings, leaves)
-            .ok_or("material parameter union width not derivable")?)?;
+        total = add(
+            total,
+            palw_tir_param_carriage_bytes_v1(program, PalwTirParamCarriageV1::PerLeafOpenings, leaves)
+                .ok_or("material parameter union width not derivable")?,
+        )?;
     }
     add(total, prompt_bound(state, c.claim, source)?)
 }
@@ -437,8 +491,15 @@ pub(crate) enum DecodedMaterialV1 {
 }
 /// `leaves`: when given, a parameter must be in the original's input union
 /// (enforced at ingress; reload re-authenticates identity only).
-pub(crate) fn decode_material_v1(state: &PalwChainStateV2, c: &shared::SharedTirContextV1, source: &Source, claim: Hash64,
-    target: MaterialTargetV1, bytes: &[u8], leaves: Option<&[u32]>) -> Result<DecodedMaterialV1, String> {
+pub(crate) fn decode_material_v1(
+    state: &PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    source: &Source,
+    claim: Hash64,
+    target: MaterialTargetV1,
+    bytes: &[u8],
+    leaves: Option<&[u32]>,
+) -> Result<DecodedMaterialV1, String> {
     if c.claim != claim {
         return Err("material context of another original".into());
     }
@@ -457,14 +518,16 @@ pub(crate) fn decode_material_v1(state: &PalwChainStateV2, c: &shared::SharedTir
             }
             let ids: Vec<u32> = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
             if ids.len() != ctx.declared_prefill_tokens as usize
-                || !crate::palw_prompt_ids_v1::prompt_token_ids_match_v1(form, &ids, &ctx.prompt_token_ids_hash) {
+                || !crate::palw_prompt_ids_v1::prompt_token_ids_match_v1(form, &ids, &ctx.prompt_token_ids_hash)
+            {
                 return Err("material flat prompt does not match original count/commitment".into());
             }
             Ok(DecodedMaterialV1::PromptFlat(ids))
         }
         MaterialTargetV1::PromptTile { tile } => {
             if !matches!(prompt_form(state, claim)?, PromptForm::MerkleV1)
-                || bytes.len() as u64 > prompt_tile_bound(ctx.declared_prefill_tokens, tile)? {
+                || bytes.len() as u64 > prompt_tile_bound(ctx.declared_prefill_tokens, tile)?
+            {
                 return Err("material prompt tile form/width".into());
             }
             let opening: PalwPromptIdsOpeningV1 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
@@ -486,8 +549,13 @@ pub(crate) fn decode_material_v1(state: &PalwChainStateV2, c: &shared::SharedTir
         MaterialTargetV1::FullIds => Err("material FullIds are retained as the shared ID row".into()),
     }
 }
-fn decode_unit(state: &PalwChainStateV2, c: &shared::SharedTirContextV1, source: &Source, q: Query, bytes: &[u8])
-    -> Result<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1, String> {
+fn decode_unit(
+    state: &PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    source: &Source,
+    q: Query,
+    bytes: &[u8],
+) -> Result<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1, String> {
     let bound = source.unit_bound_v1(&q)?;
     let _scratch = crate::palw_native_resource_v1::reserve_native_requests_v1(bound.resident_ram_bytes).map_err(|e| e.to_string())?;
     let response = source.decode_response_v1(&q, bytes)?;
@@ -563,7 +631,9 @@ impl RootedMaterialV1 {
         let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame_of(state, claim)?, &source, c.profile_id)?;
         for ordinal in 0..set.len() {
             let q = set.request_at(ordinal)?;
-            if matches!(q, Query::Ids { .. }) || units.iter().any(|u: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1| u.request_v1() == q) {
+            if matches!(q, Query::Ids { .. })
+                || units.iter().any(|u: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1| u.request_v1() == q)
+            {
                 continue;
             }
             if let Some(Row::CourtSharedQuery(row)) = state.staged_court_row_v1(&Key::CourtSharedQuery(set.request_id(ordinal)?)) {
@@ -589,15 +659,27 @@ impl RootedMaterialV1 {
         self.params.len()
     }
     /// The existing builder store over this rooted material (retained-parameter path).
-    pub(crate) fn store_v1<'a>(&'a self, state: &PalwChainStateV2, claim: Hash64, scope: Hash64)
-        -> Result<crate::palw_court_shared_tir_builder_store_v1::SharedTirBuilderStoreV1<'a>, String> {
+    pub(crate) fn store_v1<'a>(
+        &'a self,
+        state: &PalwChainStateV2,
+        claim: Hash64,
+        scope: Hash64,
+    ) -> Result<crate::palw_court_shared_tir_builder_store_v1::SharedTirBuilderStoreV1<'a>, String> {
         use crate::palw_court_shared_tir_builder_store_v1::{PromptMaterialV1, SharedTirBuilderStoreV1};
         let prompt = match &self.prompt {
             RootedPromptV1::Missing => PromptMaterialV1::Missing,
             RootedPromptV1::Flat(v) => PromptMaterialV1::Flat(v),
             RootedPromptV1::Merkle(t) => PromptMaterialV1::Merkle(t),
         };
-        SharedTirBuilderStoreV1::new_with_retained_parameters(state, claim, scope, &self.units, &self.params, self.ids.as_deref(), prompt)
+        SharedTirBuilderStoreV1::new_with_retained_parameters(
+            state,
+            claim,
+            scope,
+            &self.units,
+            &self.params,
+            self.ids.as_deref(),
+            prompt,
+        )
     }
 }
 
@@ -615,14 +697,36 @@ mod tests {
         let t = MaterialTargetV1::Parameter { leaf: 3 };
         assert_ne!(t.id_v1(h(1)).unwrap(), t.id_v1(h(2)).unwrap());
         assert_ne!(t.id_v1(h(1)).unwrap(), MaterialTargetV1::Parameter { leaf: 4 }.id_v1(h(1)).unwrap());
-        let a = material_draft_id_v1(h(1), t, PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(7), 0)), 10, h(9)).unwrap();
-        let b = material_draft_id_v1(h(1), t, PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(8), 0)), 10, h(9)).unwrap();
+        let a = material_draft_id_v1(
+            h(1),
+            t,
+            PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(7), 0)),
+            10,
+            h(9),
+        )
+        .unwrap();
+        let b = material_draft_id_v1(
+            h(1),
+            t,
+            PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(8), 0)),
+            10,
+            h(9),
+        )
+        .unwrap();
         assert_ne!(a, b, "two submitters' partial bodies never share a key");
     }
     #[test]
     fn material_part_wire_is_bounded() {
-        let p = MaterialPartV1 { version: 1, claim: Hash64::default(), draft_id: Hash64::default(), offset: 0,
-            previous: Hash64::default(), bytes: vec![1; PART], daa: 1, expires_daa: 2 };
+        let p = MaterialPartV1 {
+            version: 1,
+            claim: Hash64::default(),
+            draft_id: Hash64::default(),
+            offset: 0,
+            previous: Hash64::default(),
+            bytes: vec![1; PART],
+            daa: 1,
+            expires_daa: 2,
+        };
         let wire = borsh::to_vec(&p).unwrap();
         assert_eq!(borsh::from_slice::<MaterialPartV1>(&wire).unwrap(), p);
         let mut big = p.clone();

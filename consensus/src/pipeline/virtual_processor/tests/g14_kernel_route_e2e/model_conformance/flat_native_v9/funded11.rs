@@ -2,11 +2,11 @@
 //! nodes. Small synthetic fixtures are not checkpoint/model coverage evidence.
 use super::*;
 mod chunks;
-mod public_filing;
-mod text29;
 mod owning39;
+mod public_filing;
 mod real_checkpoint;
 mod source16;
+mod text29;
 use kaspa_consensus_core::palw_flat_execution_v11::*;
 use kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11;
 use misaka_palw_kernel::flat_execution11::{ExecutionTerminalV11, nonce_bytes_v11};

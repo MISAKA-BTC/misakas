@@ -227,7 +227,8 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
                 PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
                 borsh::to_vec(&palw_kernel_bond_id_v1(&bond)).unwrap(),
                 Some(borsh::to_vec(&bond).unwrap()),
-            ).unwrap();
+            )
+            .unwrap();
         }
         b.reserve_bond_income_v1(&ctx(2, 100, 2), bond_key(1), 50, 50, PalwBudgetOriginV1::MarketFee).unwrap();
         let settlement = |bond, amount, kind| {
@@ -373,7 +374,8 @@ fn named_native_reporter_freezes_funded_payee_and_pays_above_one_cap_in_exact_tr
             collected,
             claim_id: Hash64::default(),
         }),
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(
         b.open_reporter_reward(200, offence, 0, PalwConvictionBasisV1::CourtVerdict { challenger: bond_key(1) }).unwrap(),
         Some(125)

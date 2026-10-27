@@ -9,11 +9,11 @@ use crate::palw_rendering_resources_v1::{PalwRenderingClaimTermsV1, PalwRenderin
 use crate::palw_rendering_stream_v1::LeafHashContinuationV1;
 use crate::palw_staged_court_state_v1::PalwSharedCourtV1;
 use crate::palw_step_leg::{PalwStepOpeningV1, step_merkle_leaf_v1, step_merkle_node_v1, step_opening_root_capped_v1};
+use crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1;
 use crate::palw_tir_public_source_v1::{
     PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicAuthenticatedIdsV1, PalwTirPublicAuthenticatedUnitV1, PalwTirPublicDemandScopeV1,
     PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1, PalwTirPublicResponseV1, PalwTirPublicSourceV1,
 };
-use crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1;
 use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2989,7 +2989,13 @@ mod tests {
             1 << 40,
         )
         .unwrap();
-        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, PalwStagedPublicCourtConfigV1::network_v1(), crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock).unwrap();
+        let plan = PalwTirPublicOwnedPlanV1::derive_v1(
+            &source,
+            3,
+            PalwStagedPublicCourtConfigV1::network_v1(),
+            crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
+        )
+        .unwrap();
         let terms = PalwRenderingClaimTermsV1::derive(
             10,
             plan.envelope,
@@ -3174,7 +3180,11 @@ mod tests {
         config.prices.rent_per_parser_step = u64::MAX;
         assert!(PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config, contract.plan.clock).is_err());
         assert!(contract.check_native_config_v1(&source, config, contract.plan.clock, contract.plan.maximum_custodians).is_err());
-        assert!(contract.check_native_config_v1(&source, contract.plan.config, contract.plan.clock, contract.plan.maximum_custodians + 1).is_err());
+        assert!(
+            contract
+                .check_native_config_v1(&source, contract.plan.config, contract.plan.clock, contract.plan.maximum_custodians + 1)
+                .is_err()
+        );
     }
     #[test]
     fn history_frontier_matches_original_step_merkle_and_part_decoder_bounds_before_allocation() {
@@ -3233,4 +3243,3 @@ mod tests {
         }
     }
 }
-

@@ -738,7 +738,8 @@ impl PalwFoldReadV1<'_> {
     pub(super) fn check_model_market_admits(&self, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
         let mut inputs = NativeEvmMarketGateInputsV2::from_extras_v2(self.extras);
         inputs.virtual_active = false; // This entry is the ordinary admission predicate.
-        self.state.evm_market_refusal_v2(self.params.base_class_id(), inputs, class_id)
+        self.state
+            .evm_market_refusal_v2(self.params.base_class_id(), inputs, class_id)
             .map_or(Ok(()), |reason| Err(reason.into_legacy_error_v2(*class_id)))
     }
 
@@ -755,7 +756,8 @@ impl PalwFoldReadV1<'_> {
     pub(super) fn check_model_trading_v2(&self, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
         let mut inputs = NativeEvmMarketGateInputsV2::from_extras_v2(self.extras);
         inputs.virtual_active = true; // Trading always checks class/status before registry.
-        self.state.evm_market_refusal_v2(self.params.base_class_id(), inputs, class_id)
+        self.state
+            .evm_market_refusal_v2(self.params.base_class_id(), inputs, class_id)
             .map_or(Ok(()), |reason| Err(reason.into_legacy_error_v2(*class_id)))
     }
 
@@ -955,7 +957,8 @@ impl PalwFoldReadV1<'_> {
             return Err(PalwStateV2Error::ClassNotRewardable {
                 class: *class_id,
                 code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
-                why: "past palw_tir_container_identity_v1 a TIR class's attempt needs the class bound to its PALWART3 container".into(),
+                why: "past palw_tir_container_identity_v1 a TIR class's attempt needs the class bound to its PALWART3 container"
+                    .into(),
             });
         }
         // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1b)**: past the fence, a class whose graph the

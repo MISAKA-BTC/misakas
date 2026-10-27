@@ -241,7 +241,9 @@ pub fn mount_native_attempt_v3(
     }
     let checkpoint = template.observation.facts.chain_point;
     if !template_header.direct_parents().contains(&checkpoint) {
-        return Err(AttemptError::Executor("the template's chain point is not a direct parent of its header: no provider checkpoint".into()));
+        return Err(AttemptError::Executor(
+            "the template's chain point is not a direct parent of its header: no provider checkpoint".into(),
+        ));
     }
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(template_header);
     let nonce_bucket = match *cursor {

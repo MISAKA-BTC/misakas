@@ -26,7 +26,10 @@ fn retention_release71_is_exact_kind_and_identity() {
     assert!(prepare_retention_release_v39(true, [0; 64]).is_err());
     let mut raw = vec![1u8];
     raw.extend_from_slice(&id);
-    assert_eq!(decode_native_payload_v39("source-release39", &raw, None).unwrap().bytes(), prepare_retention_release_v39(true, id).unwrap().bytes());
+    assert_eq!(
+        decode_native_payload_v39("source-release39", &raw, None).unwrap().bytes(),
+        prepare_retention_release_v39(true, id).unwrap().bytes()
+    );
     raw[0] = 2;
     assert!(decode_native_payload_v39("source-release39", &raw, None).is_err());
     assert!(decode_native_payload_v39("source-release39", &raw[..64], None).is_err());
@@ -38,7 +41,10 @@ fn consent_hold_reap72_is_the_exact_hold_id() {
     let (action, body, encoded) = stage(&prepare_consent_hold_reap_v39(id).unwrap());
     assert_eq!((action, body.as_slice(), encoded), (72, id.as_slice(), 64 + 7));
     assert!(prepare_consent_hold_reap_v39([0; 64]).is_err());
-    assert_eq!(decode_native_payload_v39("source-hold-reap39", &id, None).unwrap().bytes(), prepare_consent_hold_reap_v39(id).unwrap().bytes());
+    assert_eq!(
+        decode_native_payload_v39("source-hold-reap39", &id, None).unwrap().bytes(),
+        prepare_consent_hold_reap_v39(id).unwrap().bytes()
+    );
     assert!(decode_native_payload_v39("source-hold-reap39", &id[..63], None).is_err());
 }
 

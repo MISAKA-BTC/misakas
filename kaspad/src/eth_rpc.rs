@@ -132,7 +132,9 @@ impl NodeEthProvider {
                         || self.heads_tx.receiver_count() > 0,
                         shutdown.clone(),
                         std::time::Duration::from_millis(250),
-                    ).await.unwrap_or_default()
+                    )
+                    .await
+                    .unwrap_or_default()
                 } else {
                     Vec::new()
                 };
@@ -152,15 +154,16 @@ impl NodeEthProvider {
                             let manager = self.consensus_manager.clone();
                             async move {
                                 let session = manager.consensus().session().await;
-                                session.spawn_blocking(move |c| {
-                                    reorg_ordered_checked_v2(&removed, &added, |l1| c.get_evm_block_logs(l1))
-                                }).await
+                                session
+                                    .spawn_blocking(move |c| reorg_ordered_checked_v2(&removed, &added, |l1| c.get_evm_block_logs(l1)))
+                                    .await
                             }
                         },
                         || self.logs_tx.receiver_count() > 0,
                         shutdown.clone(),
                         std::time::Duration::from_millis(250),
-                    ).await;
+                    )
+                    .await;
                     if let Some(events) = log_events {
                         for (e, removed) in events {
                             let _ = self.logs_tx.send(EthLogEvent { log: to_eth_log_entry(e), removed });
@@ -342,8 +345,8 @@ impl EthProvider for NodeEthProvider {
                 with_canonical_receipt_v2(c, h, |view| {
                     // Existing optional enrichment remains compatible; only
                     // the canonical receipt authority is checked here.
-                    let base_fee = c.get_evm_header_of(view.accepting_block).ok().flatten()
-                        .and_then(|hdr| hdr.base_fee_per_gas.try_to_u128());
+                    let base_fee =
+                        c.get_evm_header_of(view.accepting_block).ok().flatten().and_then(|hdr| hdr.base_fee_per_gas.try_to_u128());
                     let decoded = c.get_evm_raw_tx(h).ok().flatten().and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok());
                     Ok((view, decoded, base_fee))
                 })
@@ -434,10 +437,13 @@ impl EthProvider for NodeEthProvider {
         // Mempool raw (pending) — in-memory, no consensus session.
         let pending_raw = self.flow_context.mining_manager().get_evm_transaction_raw(&h);
         let session = self.consensus_manager.consensus().session().await;
-        let prepared = session.clone().spawn_blocking(move |c| {
-            with_candidate_authority_v2(c, h, pending_raw, |raw, skip, accepted| Ok((raw, skip, accepted)))
-        }).await?;
-        let Some((raw, recorded_skip_class, accepted)) = prepared else { return Ok(None); };
+        let prepared = session
+            .clone()
+            .spawn_blocking(move |c| with_candidate_authority_v2(c, h, pending_raw, |raw, skip, accepted| Ok((raw, skip, accepted))))
+            .await?;
+        let Some((raw, recorded_skip_class, accepted)) = prepared else {
+            return Ok(None);
+        };
         // Resolve authority before head reconstruction or candidate execution.
         let (snapshot, env) = self.head_snapshot_and_env().await?;
         // §11.5: cap concurrent replays; the permit is held across the blocking work.
@@ -485,9 +491,9 @@ impl EthProvider for NodeEthProvider {
         // selected-chain acceptance and is the ONLY source of truth for "accepted"
         // (audit H-06 — a reorged-out acceptance must never read as accepted).
         let session = self.consensus_manager.consensus().session().await;
-        let (locs, canon) = session.spawn_blocking(move |c| {
-            with_status_authority_v2(c, h, |locations, receipt| Ok((Some(locations), receipt)))
-        }).await?;
+        let (locs, canon) = session
+            .spawn_blocking(move |c| with_status_authority_v2(c, h, |locations, receipt| Ok((Some(locations), receipt))))
+            .await?;
         // The L1 block ids are 64-byte (BLAKE2b-512); expose the leading 32 as
         // standard-shaped, client-opaque ids (as elsewhere here).
         let to32 = |b: &kaspa_hashes::Hash64| {
@@ -762,21 +768,23 @@ impl NodeEthProvider {
                     // with (gas-pool v1/v2, withdraw-cap, bridge ledger, F003) — read from the
                     // network Params, not assumed inert (testnet runs a finite gas-pool-v2 fence).
                     let (gas_pool_v2, f002_withdraw_cap, bridge_ledger, f003_mldsa_verify) = c.evm_activation_fences();
-                    let traced = with_replay_market_owned_v2(c, accepting, &body, |market| kaspa_evm::trace::trace_accepted_tx_with_market_owned_v2(
-                        &parent_snapshot,
-                        parent_header.as_ref(),
-                        &body,
-                        view.receipt_index,
-                        &view.receipt,
-                        gas_pool_v2,
-                        f002_withdraw_cap,
-                        bridge_ledger,
-                        f003_mldsa_verify,
-                        capture_struct_logs,
-                        kaspa_evm::trace::TraceLimits::default(),
-                        market,
-                    )
-                    .map_err(|e| EthRpcError::server(format!("{e}"))))?;
+                    let traced = with_replay_market_owned_v2(c, accepting, &body, |market| {
+                        kaspa_evm::trace::trace_accepted_tx_with_market_owned_v2(
+                            &parent_snapshot,
+                            parent_header.as_ref(),
+                            &body,
+                            view.receipt_index,
+                            &view.receipt,
+                            gas_pool_v2,
+                            f002_withdraw_cap,
+                            bridge_ledger,
+                            f003_mldsa_verify,
+                            capture_struct_logs,
+                            kaspa_evm::trace::TraceLimits::default(),
+                            market,
+                        )
+                        .map_err(|e| EthRpcError::server(format!("{e}")))
+                    })?;
                     let originating = kaspa_evm::trace::candidate_index_for_receipt(&body, view.receipt_index)
                         .map(|i| body.txs[i].originating_payload_block);
                     Ok((traced, accepting, originating))
@@ -811,7 +819,9 @@ impl NodeEthProvider {
                     // §12.6 env from the TARGET block's committed header.
                     let header = match c.get_evm_header_of(l1) {
                         Ok(Some(h)) => h,
-                        Ok(None) => return Err(EthRpcError::server("eth_call/eth_estimateGas: the requested block is not an EVM block")),
+                        Ok(None) => {
+                            return Err(EthRpcError::server("eth_call/eth_estimateGas: the requested block is not an EVM block"));
+                        }
                         Err(e) => return Err(EthRpcError::server(format!("consensus: {e:?}"))),
                     };
                     // State: hot snapshot, else §12 reconstruction past the window.
@@ -819,7 +829,9 @@ impl NodeEthProvider {
                         Ok(Some(s)) => s,
                         Ok(None) | Err(_) => match c.reconstruct_evm_state_at(l1) {
                             Ok(Some(s)) => s,
-                            Ok(None) => return Err(EthRpcError::server("eth_call/eth_estimateGas: state unavailable (not an EVM block)")),
+                            Ok(None) => {
+                                return Err(EthRpcError::server("eth_call/eth_estimateGas: state unavailable (not an EVM block)"));
+                            }
                             Err(e) => return Err(EthRpcError::server(format!("EVM state unavailable at the requested block: {e}"))),
                         },
                     };
@@ -905,20 +917,21 @@ fn with_replay_market_owned_v2<T>(
     body: &kaspa_consensus_core::evm::EvmTraceReplayBodyV1,
     visit: impl FnOnce(Option<&kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>) -> EthResult<T>,
 ) -> EthResult<T> {
-    let context = c.palw_evm_replay_market_owned_v2(accepting)
+    let context = c
+        .palw_evm_replay_market_owned_v2(accepting)
         .map_err(|e| EthRpcError::server(format!("historical replay market unavailable: {e}")))?;
     if let Some(context) = &context {
-        if context.accepting != accepting || context.selected_parent != body.selected_parent || context.accepting_daa != body.env.daa_score {
+        if context.accepting != accepting
+            || context.selected_parent != body.selected_parent
+            || context.accepting_daa != body.env.daa_score
+        {
             return Err(EthRpcError::server("historical replay market identity differs from accepted replay body"));
         }
     }
     visit(context.as_ref())
 }
 
-fn transaction_read_v2<T>(
-    label: &str,
-    result: kaspa_consensus_core::errors::consensus::ConsensusResult<T>,
-) -> EthResult<T> {
+fn transaction_read_v2<T>(label: &str, result: kaspa_consensus_core::errors::consensus::ConsensusResult<T>) -> EthResult<T> {
     result.map_err(|e| EthRpcError::server(format!("{label}: {e}")))
 }
 
@@ -935,7 +948,9 @@ fn exact_hash_logs_v2(
     topics: Vec<Vec<[u8; 32]>>,
 ) -> EthResult<Option<Vec<EthLogEntry>>> {
     let Some(mut logs) = transaction_read_v2("exact block-hash logs", c.get_evm_block_logs_by_rpc_hash(EvmH256::from_bytes(hash)))?
-    else { return Ok(None) };
+    else {
+        return Ok(None);
+    };
     if logs.iter().any(|log| log.block_l1_hash.as_bytes()[..32] != hash[..]) {
         return Err(EthRpcError::server("exact block-hash reader returned a different block"));
     }
@@ -1000,15 +1015,18 @@ fn with_replay_authority_v2<T>(
     ) -> EthResult<T>,
 ) -> EthResult<Option<T>> {
     with_canonical_receipt_v2(c, tx, |view| {
-        let body = transaction_read_v2("trace replay body", c.get_evm_trace_replay_body(view.accepting_block))?
-            .ok_or_else(|| EthRpcError::server("trace data unavailable for this transaction's block (pruned or recorded before trace support)"))?;
+        let body = transaction_read_v2("trace replay body", c.get_evm_trace_replay_body(view.accepting_block))?.ok_or_else(|| {
+            EthRpcError::server("trace data unavailable for this transaction's block (pruned or recorded before trace support)")
+        })?;
         let parent_header = transaction_read_v2("trace parent execution header", c.get_evm_header_of(body.selected_parent))?;
         // A true absent parent header keeps the existing genesis prestate
         // contract. An unreadable header must never select that default.
         let snapshot = if parent_header.is_some() {
             transaction_read_v2("trace parent execution state", c.get_evm_state_snapshot_of(body.selected_parent))?
                 .ok_or_else(|| EthRpcError::server("historical state unavailable for trace (selected-parent state snapshot pruned)"))?
-        } else { Default::default() };
+        } else {
+            Default::default()
+        };
         visit(view, body, parent_header, snapshot)
     })
 }
@@ -1031,13 +1049,19 @@ fn with_canonical_receipt_v2<T>(
 fn canonical_head_snapshot_and_env_v2(
     c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
 ) -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
-    let heads = c.get_evm_canonical_heads().map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?
+    let heads = c
+        .get_evm_canonical_heads()
+        .map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?
         .ok_or_else(|| EthRpcError::server("canonical EVM heads unavailable"))?;
     let head = heads.latest_head().ok_or_else(|| EthRpcError::server("latest executed EVM head unavailable"))?;
     with_executed_l1_daa(c, head, |head_daa| {
-        let snapshot = c.get_evm_state_snapshot_of(head).map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?
+        let snapshot = c
+            .get_evm_state_snapshot_of(head)
+            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?
             .ok_or_else(|| EthRpcError::server("EVM state snapshot unavailable for head; refusing to simulate against empty state"))?;
-        let header = c.get_evm_header_of(head).map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?
+        let header = c
+            .get_evm_header_of(head)
+            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?
             .ok_or_else(|| EthRpcError::server("latest executed EVM header unavailable"))?;
         with_historical_market_view_v2(c, head, |market| {
             let (.., f003_fence) = c.evm_activation_fences();
@@ -1063,8 +1087,8 @@ fn with_historical_market_view_v2<T>(
     target: kaspa_consensus_core::BlockHash,
     visit: impl FnOnce(Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewAtV2>) -> EthResult<T>,
 ) -> EthResult<T> {
-    let view = c.palw_evm_view_at_owned_v2(target)
-        .map_err(|e| EthRpcError::server(format!("historical PALW view unavailable: {e}")))?;
+    let view =
+        c.palw_evm_view_at_owned_v2(target).map_err(|e| EthRpcError::server(format!("historical PALW view unavailable: {e}")))?;
     visit(view)
 }
 
@@ -1277,7 +1301,9 @@ async fn retry_reorg_logs_v2<T, E: std::fmt::Debug, F: std::future::Future<Outpu
             Ok(events) => return wanted().then_some(events),
             Err(error) => {
                 if !warned {
-                    kaspa_core::warn!("[{ETH_RPC}] immutable notification read unavailable; retaining notification for retry: {error:?}");
+                    kaspa_core::warn!(
+                        "[{ETH_RPC}] immutable notification read unavailable; retaining notification for retry: {error:?}"
+                    );
                     warned = true;
                 }
             }

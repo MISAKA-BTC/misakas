@@ -21,7 +21,9 @@ fn mul(a: u64, b: u64) -> Result<u64, String> {
     a.checked_mul(b).ok_or_else(|| "original numerical inventory overflow".into())
 }
 fn accumulate(total: &mut NumericalTreeInventoryV1, one: NumericalTreeInventoryV1, count: u64) -> Result<(), String> {
-    if count == 0 { return Ok(()); }
+    if count == 0 {
+        return Ok(());
+    }
     total.disclosures = add(total.disclosures, mul(one.disclosures, count)?)?;
     total.terminals = add(total.terminals, mul(one.terminals, count)?)?;
     total.child_claims = add(total.child_claims, mul(one.child_claims, count)?)?;
@@ -37,7 +39,9 @@ fn accumulate(total: &mut NumericalTreeInventoryV1, one: NumericalTreeInventoryV
 /// H-free blocks collapse to one group; unsaturated histories remain distinct.
 /// No group is a selected path or an assumed participant response.
 fn histories(first: u32, end: u32, window: Option<u32>, mut visit: impl FnMut(u32, u64) -> Result<(), String>) -> Result<(), String> {
-    if first >= end { return Ok(()); }
+    if first >= end {
+        return Ok(());
+    }
     match window {
         None => visit(1, u64::from(end - first)),
         Some(0) => Err("original numerical history window is zero".into()),
@@ -73,10 +77,9 @@ impl PalwTirPublicSourceV1 {
         if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
             return Err("original numerical inventory arity".into());
         }
-        let binding = self.header.resolve_registered_layout_v1(registered, layout,
-            self.header.committed_execution_root, self.maximum_leaves)?;
-        let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, self.maximum_leaves)
-            .map_err(|e| e.to_string())?;
+        let binding =
+            self.header.resolve_registered_layout_v1(registered, layout, self.header.committed_execution_root, self.maximum_leaves)?;
+        let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, self.maximum_leaves).map_err(|e| e.to_string())?;
         if verified.class_id != self.class_id || verified.context_hash != self.context_hash {
             return Err("original numerical inventory substitutes source geometry".into());
         }
@@ -84,26 +87,39 @@ impl PalwTirPublicSourceV1 {
         let job = space.job_shape(&self.header.job_context).map_err(|e| e.to_string())?;
         let occurrences = space.occurrences();
         let last = occurrences.len().checked_sub(1).ok_or("original has no occurrences")?;
-        let mut out = TirPublicNumericalInventoryV1 { source_id: self.source_id,
-            original_leaves: self.header.step_leaf_count, eligible_roots: 0, arity, demand,
-            trees: NumericalTreeInventoryV1::default() };
+        let mut out = TirPublicNumericalInventoryV1 {
+            source_id: self.source_id,
+            original_leaves: self.header.step_leaf_count,
+            eligible_roots: 0,
+            arity,
+            demand,
+            trees: NumericalTreeInventoryV1::default(),
+        };
         for (bi, block) in space.program.blocks.iter().enumerate() {
             let block_id = u8::try_from(bi).map_err(|_| "original block index overflow")?;
             let non_post = occurrences.iter().take(last).filter(|(b, _)| *b == block_id).count() as u64;
             let post = u64::from(occurrences[last].0 == block_id);
-            if non_post == 0 && post == 0 { continue; }
+            if non_post == 0 && post == 0 {
+                continue;
+            }
             for (ni, node) in block.nodes.iter().enumerate() {
-                if !node.commit { continue; }
+                if !node.commit {
+                    continue;
+                }
                 let node_id = u16::try_from(ni).map_err(|_| "original node index overflow")?;
                 let reductions = d::palw_tir_cone_reductions_v1(block, node_id).len();
-                if reductions == 0 { continue; }
+                if reductions == 0 {
+                    continue;
+                }
                 d::palw_tir_dissect_obligations_v1(block, node_id).map_err(|e| e.to_string())?;
                 let tile = space.commit_tile_len(block_id, node_id).ok_or("original commit tile missing")?;
                 let values = d::palw_tir_dissect_value_bound_v2(&space.program, block, node_id, tile, demand);
                 let mut charge = |h: u32, positions: u64, copies: u64| -> Result<(), String> {
                     let output_tiles = node.out.elements_at(u64::from(h)).div_ceil(u64::from(tile));
                     let roots = mul(output_tiles, mul(positions, copies)?)?;
-                    if roots == 0 { return Ok(()); }
+                    if roots == 0 {
+                        return Ok(());
+                    }
                     let tree = numerical_tree_inventory_v1(h.div_ceil(layout.h_tile), arity, reductions, values)
                         .ok_or("original numerical tree exceeds existing native bounds")?;
                     out.eligible_roots = add(out.eligible_roots, roots)?;
@@ -134,9 +150,15 @@ mod tests {
             for first in 0..=end {
                 for window in [None, Some(1), Some(2), Some(7), Some(32)] {
                     let mut actual = std::collections::BTreeMap::new();
-                    histories(first, end, window, |h, n| { *actual.entry(h).or_insert(0) += n; Ok(()) }).unwrap();
+                    histories(first, end, window, |h, n| {
+                        *actual.entry(h).or_insert(0) += n;
+                        Ok(())
+                    })
+                    .unwrap();
                     let mut expected = std::collections::BTreeMap::new();
-                    for p in first..end { *expected.entry(window.map(|w| (p + 1).min(w)).unwrap_or(1)).or_insert(0) += 1; }
+                    for p in first..end {
+                        *expected.entry(window.map(|w| (p + 1).min(w)).unwrap_or(1)).or_insert(0) += 1;
+                    }
                     assert_eq!(actual, expected);
                 }
             }

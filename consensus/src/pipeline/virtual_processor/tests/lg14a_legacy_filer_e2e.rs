@@ -55,6 +55,10 @@ use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
 };
+use kaspa_consensus_core::palw_ruling_fences_v1::{
+    PalwClaimHardDeadlineFenceV1, palw_claim_deadlines_v1, palw_claim_effective_deadline_v1, palw_claim_hard_deadline_of_v1,
+    palw_claim_pursuit_may_start_v1, palw_x3_hard_deadline_at_v1,
+};
 use kaspa_consensus_core::palw_state_v2::{
     PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT, PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT,
     PalwBondKeyV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwLegacyDisputeViewV1, palw_accuser_exposure_v1,
@@ -66,10 +70,6 @@ use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionInput, Tra
 use kaspa_hashes::Hash64;
 use kaspa_muhash::MuHash;
 use misaka_palw_base0::backend::Base0Backend;
-use kaspa_consensus_core::palw_ruling_fences_v1::{
-    PalwClaimHardDeadlineFenceV1, palw_claim_deadlines_v1, palw_claim_effective_deadline_v1, palw_claim_hard_deadline_of_v1,
-    palw_claim_pursuit_may_start_v1, palw_x3_hard_deadline_at_v1,
-};
 use std::collections::BTreeMap;
 
 type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
@@ -92,7 +92,11 @@ fn lg14a_config(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine
 }
 
 /// `d2` / `x3`: the 2026-10-12 ruling fences armed from genesis on their mirror, WITHOUT their validation. D2 is `palw_court_model_scope_v1`.
-fn lg14a_config_with(armed: bool, d2: bool, x3: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine, (TransactionOutpoint, UtxoEntry)) {
+fn lg14a_config_with(
+    armed: bool,
+    d2: bool,
+    x3: bool,
+) -> (Config, PalwConsensusParamsV2, Premine, Premine, (TransactionOutpoint, UtxoEntry)) {
     let (config, _, mut premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
     let main = premine_outpoint_for(params.net, MAIN_PREMINE_INDEX);
@@ -122,8 +126,11 @@ fn lg14a_config_with(armed: bool, d2: bool, x3: bool) -> (Config, PalwConsensusP
             // The composition (ADR-0188): resolve = B_disclose + B_court + Delta, i.e. the pursuit budget. The probe's own resolve (200)
             // is shorter than that budget, so no pursuit is admitted at all; the test sets resolve to the composed value.
             let mut fence = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(0));
-            let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };
-            fence.policy.resolve_daa = kaspa_consensus_core::palw_ruling_fences_v1::palw_claim_pursuit_budget_v1(&bundle.state, &fence.policy);
+            let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+                unreachable!("testnet-12 is ConsensusV2")
+            };
+            fence.policy.resolve_daa =
+                kaspa_consensus_core::palw_ruling_fences_v1::palw_claim_pursuit_budget_v1(&bundle.state, &fence.policy);
             params.palw_claim_hard_deadline_v1 = Some(fence);
             // X3 governs the held-DA pursuit too (REQ-X3-5's open session is a reserved held session): arm LG14-B with it.
             if armed {
@@ -1026,8 +1033,12 @@ async fn lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer() {
     let producer_funding = lg.funding[&EXECUTOR].clone();
     let producer_collateral = lg.collateral(EXECUTOR);
     let newcomer_input = lg.funding[&NEWCOMER].0;
-    let bytes: Vec<_> = prepared.iter().map(|(_, object)| borsh::to_vec(&PalwLifecycleTxPayloadV2 {
-        version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap()).collect();
+    let bytes: Vec<_> = prepared
+        .iter()
+        .map(|(_, object)| {
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap()
+        })
+        .collect();
     // After preparation, send only constructs/signs NEWCOMER's outer UTXO
     // carriers. It does not ask the producer to re-sign a court response.
     let (carrying, _) = lg.send(prepared.into_iter().map(|(_, object)| (NEWCOMER, object)).collect()).await;
@@ -1035,7 +1046,9 @@ async fn lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer() {
     for block in carrying {
         for tx in block.transactions.iter() {
             if bytes.contains(&tx.payload) {
-                if seen == 0 { assert_eq!(tx.inputs[0].previous_outpoint, newcomer_input); }
+                if seen == 0 {
+                    assert_eq!(tx.inputs[0].previous_outpoint, newcomer_input);
+                }
                 assert_ne!(tx.inputs[0].previous_outpoint, producer_funding.0);
                 seen += 1;
             }
@@ -1044,8 +1057,10 @@ async fn lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer() {
     assert_eq!(seen, bytes.len(), "the node template included every unchanged signed answer");
     assert_eq!(lg.funding[&EXECUTOR], producer_funding, "producer's funding UTXO was not spent");
     assert_eq!(lg.collateral(EXECUTOR), producer_collateral, "a correct relayed answer does not slash its signer");
-    assert!(!lg.chain.ctx.consensus.palw_disclosure_duties_v1(vec![producer]).duties.iter().any(|d| d.claim_id == id),
-        "native fold discharged the producer's answered duty");
+    assert!(
+        !lg.chain.ctx.consensus.palw_disclosure_duties_v1(vec![producer]).duties.iter().any(|d| d.claim_id == id),
+        "native fold discharged the producer's answered duty"
+    );
     assert!(verifier.learn(&lg, probe), "the independent verifier learns the authenticated binding");
     assert!(verifier.binding.is_some());
     // Query the real ledger, independently of the helper's funding map.
@@ -1132,9 +1147,11 @@ async fn conviction_before_final(d2: bool) {
             if demand.claim == id && matches!(demand.unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::KernelWitness { .. }))));
         assert!(accepted.iter().any(|o| matches!(o, Obj::LegacyHeldAnsweredV2 { answer } if answer.claim == id)));
         assert!(accepted.iter().any(|o| matches!(o, Obj::ShardCourtAccused { accusation } if accusation.claim == id)));
-        assert!(!accepted.iter().any(|o| matches!(o, Obj::DefaultAccusedHeld { accusation }
+        assert!(
+            !accepted.iter().any(|o| matches!(o, Obj::DefaultAccusedHeld { accusation }
             if accusation.claim == id && matches!(accusation.missing, PalwHeldMissingV1::StepLeaf { .. }))),
-            "no forbidden held StepLeaf demand reached the accepted chain");
+            "no forbidden held StepLeaf demand reached the accepted chain"
+        );
     }
     assert!(view.court_convicted || view.executor_refuted, "a recorded conviction");
     assert_eq!(v.bisect.located(), produced.lie_leaf, "the located leaf is the lie");
@@ -1506,9 +1523,17 @@ async fn x3_req_1_2_3_the_hard_deadline_is_fixed_at_acceptance_on_the_node() {
     let claim = lg.chain.tip_state().1.claim(&id).expect("the claim is on the tip").clone();
     let policy = lg.bundle.state.claim_hard_deadline_v1().expect("armed").policy;
     let hard = palw_claim_hard_deadline_of_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
-    assert_eq!(hard, palw_x3_hard_deadline_at_v1(&policy, claim.accepted_daa), "REQ-X3-1: fixed at acceptance by the composed windows");
+    assert_eq!(
+        hard,
+        palw_x3_hard_deadline_at_v1(&policy, claim.accepted_daa),
+        "REQ-X3-1: fixed at acceptance by the composed windows"
+    );
     assert_eq!(palw_claim_effective_deadline_v1(hard + 500, Some(hard)), hard, "REQ-X3-2: min(proposed, hard)");
-    assert_eq!(palw_claim_effective_deadline_v1(hard - 1, Some(hard)), hard - 1, "REQ-X3-2: a proposed deadline inside the hard one stands");
+    assert_eq!(
+        palw_claim_effective_deadline_v1(hard - 1, Some(hard)),
+        hard - 1,
+        "REQ-X3-2: a proposed deadline inside the hard one stands"
+    );
     lg.beat(30).await;
     let later = lg.chain.tip_state().1.claim(&id).expect("still on the tip").clone();
     assert_eq!(later.accepted_daa, claim.accepted_daa);
@@ -1565,7 +1590,10 @@ async fn x3_req_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim_o
     let object = v.demand(&mut lg, PalwLegacyProbeV1::HeldNode { unit });
     lg.send(vec![(NEWCOMER, object)]).await;
     assert!(
-        lg.view(id).sessions.iter().any(|(accuser, session)| *accuser == newcomer && session.units.contains(&PalwDaUnitV1::LegacyHeldV2(unit))),
+        lg.view(id)
+            .sessions
+            .iter()
+            .any(|(accuser, session)| *accuser == newcomer && session.units.contains(&PalwDaUnitV1::LegacyHeldV2(unit))),
         "the reserved held session is open"
     );
     let claim = lg.chain.tip_state().1.claim(&id).expect("on the tip").clone();
@@ -1576,7 +1604,10 @@ async fn x3_req_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim_o
     let mut daa = lg.daa();
     while daa <= hard + 2 {
         let phase = lg.view(id).phase.clone();
-        assert!(!matches!(phase, PalwClaimPhaseV2::Final { .. }), "REQ-X3-5: an unresolved claim is never Final by a deadline (daa {daa}, hard {hard}, phase {phase:?})");
+        assert!(
+            !matches!(phase, PalwClaimPhaseV2::Final { .. }),
+            "REQ-X3-5: an unresolved claim is never Final by a deadline (daa {daa}, hard {hard}, phase {phase:?})"
+        );
         if matches!(phase, PalwClaimPhaseV2::Voided { .. }) {
             break;
         }
@@ -1639,7 +1670,11 @@ async fn x3_the_fixed_deadline_survives_a_restart_and_replays() {
         assert_eq!(root_at(&lg.chain, b.header.hash), *want, "the delta row of {} survived", b.header.hash);
     }
     let after = lg.chain.tip_state().1.claim(&id).expect("the claim survives the restart").clone();
-    assert_eq!(palw_claim_hard_deadline_of_v1(&lg.bundle.state, &after), Some(hard), "REQ-X3-1: the fixed deadline survives the restart");
+    assert_eq!(
+        palw_claim_hard_deadline_of_v1(&lg.bundle.state, &after),
+        Some(hard),
+        "REQ-X3-1: the fixed deadline survives the restart"
+    );
     // A fresh node replays the chain and reaches the same roots, block by block.
     let z = t12_genesis_chain_on(TestConsensus::new(&lg.config), &lg.config, &lg.bundle, &lg.premine, &lg.floats);
     for block in chain_blocks(&lg.chain, lg.chain.sink()) {
@@ -1677,15 +1712,16 @@ async fn x3_shallow_hold_reorg(with_session: bool) {
         // Binding acquisition is common to both branches, so the disputed
         // transition itself occupies at most the existing shallow-tie window.
         for _ in 0..8 {
-            if v.binding.is_some() { break; }
+            if v.binding.is_some() {
+                break;
+            }
             v.step(&mut lg, &produced, &withhold).await;
         }
         assert!(v.binding.is_some(), "binding acquired from authenticated public answers");
     }
     let fork = lg.chain.sink();
     let fork_time = lg.chain.ctx.consensus.get_block(fork).unwrap().header.timestamp;
-    let deadlines = palw_claim_deadlines_v1(&lg.bundle.state,
-        lg.chain.tip_state().1.claim(&id).unwrap()).unwrap();
+    let deadlines = palw_claim_deadlines_v1(&lg.bundle.state, lg.chain.tip_state().1.claim(&id).unwrap()).unwrap();
     assert!(lg.chain.daa_of(fork) <= deadlines.open_cutoff_daa);
     if with_session {
         let binding = v.binding.clone().unwrap();
@@ -1698,9 +1734,11 @@ async fn x3_shallow_hold_reorg(with_session: bool) {
     }
     let hold = |c: &T12Chain| {
         let state = c.tip_state().1;
-        (state.legacy_dispute_v1(&id).is_some_and(|r| r.holds()),
-         state.da_claim(&id).map_or(0, |r| r.open_sessions()),
-         std::mem::discriminant(&state.claim(&id).unwrap().phase))
+        (
+            state.legacy_dispute_v1(&id).is_some_and(|r| r.holds()),
+            state.da_claim(&id).map_or(0, |r| r.open_sessions()),
+            std::mem::discriminant(&state.claim(&id).unwrap().phase),
+        )
     };
     let a_hold = hold(&lg.chain);
     assert!(a_hold.0);
@@ -1735,7 +1773,10 @@ async fn x3_shallow_hold_reorg(with_session: bool) {
         let header = b.ctx.consensus.get_block(b.sink()).unwrap().header;
         let order = SortableBlock { hash: header.hash, blue_work: header.blue_work };
         assert_eq!(header.blue_work, a_header.blue_work, "a genuine GHOSTDAG work tie");
-        if order > a_order { winner = Some((b, blocks)); break; }
+        if order > a_order {
+            winner = Some((b, blocks));
+            break;
+        }
     }
     let (b, blocks) = winner.expect("a distinct shallow sibling wins the hash tie within the test search budget");
     for block in blocks {
@@ -1747,8 +1788,10 @@ async fn x3_shallow_hold_reorg(with_session: bool) {
     let b_hold = hold(&z);
     assert_eq!(b_hold.1, 0, "no stale session on B");
     assert_eq!(b_hold.0, with_session, "only the shared reservation remains");
-    assert!(!matches!(z.tip_state().1.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
-        "the return must remain an economic tie, not undo a Final with heartbeat work");
+    assert!(
+        !matches!(z.tip_state().1.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
+        "the return must remain an economic tie, not undo a Final with heartbeat work"
+    );
     let old_len = chain_blocks(&lg.chain, lg.chain.sink()).len();
     lg.beat(1).await;
     for block in chain_blocks(&lg.chain, lg.chain.sink()).into_iter().skip(old_len) {

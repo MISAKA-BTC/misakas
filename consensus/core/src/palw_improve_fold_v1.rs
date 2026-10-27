@@ -302,7 +302,8 @@ impl PalwImproveCreditV1 {
         &self,
         bond: &PalwBondKeyV2,
         amount: u64,
-    ) -> (crate::palw_settlement_once_v1::PalwSettlementObligationV1, super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1) {
+    ) -> (crate::palw_settlement_once_v1::PalwSettlementObligationV1, super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1)
+    {
         use super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1 as L;
         use crate::palw_settlement_once_v1::{PalwSettlementLegV1, PalwSettlementObligationV1, palw_settlement_subject_v1};
         let party = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(bond);
@@ -921,7 +922,11 @@ impl TransitionBuilder<'_> {
     // ---- hooks spec 15's arms call ----
 
     /// **Usage at `Final`** (spec 17 §17.4.5): each governed line the claim's class heads counts it.
-    pub(super) fn note_improvement_usage_at_final_v1(&mut self, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
+    pub(super) fn note_improvement_usage_at_final_v1(
+        &mut self,
+        claim: &PalwClaimStateV2,
+        final_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
         if !self.params.improve_active_at(final_daa) || palw_improve_claim_is_evaluation_hook_v1(claim) {
             return Ok(());
         }
@@ -1079,7 +1084,8 @@ pub(super) fn apply_improvement_policy_set_v1(
                 regression_epoch: None,
                 regression_check: None,
             };
-            builder.write_improvement_policy(line_id, Some(PalwImprovementPolicyRecordV1 { policy: policy.clone(), pending: None }))?;
+            builder
+                .write_improvement_policy(line_id, Some(PalwImprovementPolicyRecordV1 { policy: policy.clone(), pending: None }))?;
             builder.write_improvement_usage(line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }))?;
             builder.write_improvement_pool(line_id, Some(PalwImprovementPoolV1::default()))?;
             push_head_v1(
@@ -1144,7 +1150,12 @@ fn role_refusal(role: &str) -> &'static str {
 }
 
 /// Append a head entry at `seq`, dropping the one 64 behind it.
-fn push_head_v1(builder: &mut TransitionBuilder<'_>, line_id: &Hash64, seq: u32, entry: PalwLineageHeadEntryV1) -> Result<(), PalwStateV2Error> {
+fn push_head_v1(
+    builder: &mut TransitionBuilder<'_>,
+    line_id: &Hash64,
+    seq: u32,
+    entry: PalwLineageHeadEntryV1,
+) -> Result<(), PalwStateV2Error> {
     builder.write_improvement_head((*line_id, seq), Some(entry))?;
     if seq >= PALW_IMPROVE_HEAD_HISTORY_MAX_V1 as u32 {
         builder.write_improvement_head((*line_id, seq - PALW_IMPROVE_HEAD_HISTORY_MAX_V1 as u32), None)?;
@@ -2012,7 +2023,11 @@ fn vest_improvement_grants_v1(builder: &mut TransitionBuilder<'_>, line_id: &Has
 
 /// Delete decided epochs whose detail rows are gone, whose grants are settled, and that no rollback
 /// can name (spec 17 §17.5.4): the header, its candidates and its grants.
-fn retire_settled_epochs_v1(builder: &mut TransitionBuilder<'_>, line: &PalwImprovementLineV1, _daa: u64) -> Result<(), PalwStateV2Error> {
+fn retire_settled_epochs_v1(
+    builder: &mut TransitionBuilder<'_>,
+    line: &PalwImprovementLineV1,
+    _daa: u64,
+) -> Result<(), PalwStateV2Error> {
     let line_id = line.line_id;
     let decided: Vec<u64> = builder
         .state
@@ -2789,7 +2804,10 @@ mod tests {
         });
         let s = at(&s, &p, 1_510, |b| {
             for _ in 0..3 {
-                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL), None, &h(0xE7), 0).unwrap(), 1);
+                assert_eq!(
+                    b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL), None, &h(0xE7), 0).unwrap(),
+                    1
+                );
             }
         });
         assert_eq!(s.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Evaluating);

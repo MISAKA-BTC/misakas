@@ -36,7 +36,8 @@ pub const PALW_G14_VALUES_STATUS_V1: &str = "provisional estimates 2026-10-26 (l
 /// 2026-10-26 (verbatim): 「500 MSK で承認」. Basis: [`PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1`]. Review
 /// condition: an economic audit of off-chain value per claim, or a change of the ledger's dismissal fee / adjudication cap /
 /// liability window.
-pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1: Option<u64> = Some(PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1);
+pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1: Option<u64> =
+    Some(PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1);
 
 /// sompi per MSK.
 pub const SOMPI_PER_MSK_V1: u64 = 100_000_000;
@@ -177,7 +178,11 @@ pub const PALW_G14_T12_TURN_DEADLINE_DAA_V1: u64 = 42;
 /// arming requirement (slowest supported node, release build) is NOT met and the fence stays refused.
 pub const PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1: PalwCourtCapacityPolicyV1 = PalwCourtCapacityPolicyV1 {
     version: PALW_COURT_CAPACITY_POLICY_VERSION_V1,
-    block_budget: PalwCourtCostV1 { work: 13, bytes: PALW_G14_PACKET_BYTES_V1 * PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1, memory: 64 * 1_048_576 },
+    block_budget: PalwCourtCostV1 {
+        work: 13,
+        bytes: PALW_G14_PACKET_BYTES_V1 * PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
+        memory: 64 * 1_048_576,
+    },
     op_work: [5, 13, 1, 11],
     memory_per_byte: 8,
     rho_sompi: PALW_G14_RHO_COURT_SOMPI_V1,
@@ -192,7 +197,8 @@ pub const PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1: PalwCourtCapacityPolicyV1 
 /// **V4 (estimate)**: once-only ingress fee = the carriage of one opening (16,571 B × 50 = 828,550) rounded up to 1.1 M sompi; the
 /// occupancy (ρ_court) is charged separately. Paid by every opener, inside parties
 /// (producer, seat) included, so colluders cannot fill the non-reserved room for free. R = ⌊cap / 2⌋ is kept (21 at cap 42).
-pub const PALW_G14_COURT_INGRESS_ESTIMATE_V1: PalwCourtIngressScheduleV1 = PalwCourtIngressScheduleV1 { fee_sompi_per_session: 1_100_000 };
+pub const PALW_G14_COURT_INGRESS_ESTIMATE_V1: PalwCourtIngressScheduleV1 =
+    PalwCourtIngressScheduleV1 { fee_sompi_per_session: 1_100_000 };
 /// V4: the ingress fee applies to inside openers as well.
 pub const PALW_G14_COURT_INGRESS_INSIDERS_PAY_V1: bool = true;
 
@@ -241,7 +247,12 @@ pub fn palw_g14_funded_original_schedule_estimate_v1() -> crate::palw_funded_ori
             max_path_bytes: pb,
         },
         PALW_G14_PARAMETER_COVER_BUDGET_V1,
-        crate::palw_court_source_material_graph_v3::SourceGraphBudgetV3 { max_queries: q, max_roles: ro, max_vertices: v, max_edges: se },
+        crate::palw_court_source_material_graph_v3::SourceGraphBudgetV3 {
+            max_queries: q,
+            max_roles: ro,
+            max_vertices: v,
+            max_edges: se,
+        },
         0,
         palw_g14_funded_admission_estimate_v1(),
     )
@@ -368,7 +379,12 @@ mod tests {
                 max_path_bytes: pb,
             },
             PALW_G14_PARAMETER_COVER_BUDGET_V1,
-            crate::palw_court_source_material_graph_v3::SourceGraphBudgetV3 { max_queries: q, max_roles: ro, max_vertices: v, max_edges: se },
+            crate::palw_court_source_material_graph_v3::SourceGraphBudgetV3 {
+                max_queries: q,
+                max_roles: ro,
+                max_vertices: v,
+                max_edges: se,
+            },
             0,
         )
         .with_admission_v1(admission);
@@ -448,7 +464,10 @@ mod tests {
         assert!(FundedAdmissionScheduleV1::new_v1(bad, PALW_G14_SOURCE_PACKET_COST_V1, 1, 1, 1, 1).is_err());
         let big = ServiceCost { bytes: 34_001, work: 1, io: 1, controls: 1 };
         assert!(FundedAdmissionScheduleV1::new_v1(PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1, big, 1, 1, 1, 1).is_err());
-        assert!(FundedAdmissionScheduleV1::new_v1(PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1, PALW_G14_SOURCE_PACKET_COST_V1, 0, 1, 1, 1).is_err());
+        assert!(
+            FundedAdmissionScheduleV1::new_v1(PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1, PALW_G14_SOURCE_PACKET_COST_V1, 0, 1, 1, 1)
+                .is_err()
+        );
         let e = palw_g14_escrow_schedule_estimate_v1(h(1), PALW_G14_FUNDED_FEE_SOMPI_V1, h(2), h(3)).expect("in range");
         let _ = e;
         assert!(PalwEscrowFeeScheduleV1::new_v1(h(1), vec![], 8).is_err());
@@ -500,7 +519,11 @@ mod tests {
         );
         assert!(cost.clock.maximum_door_daa <= 120 + 3_000, "inside the liability horizon the candidate read");
         assert_eq!(cost.clock.inclusion_daa_v1(1, 0).expect("no overflow"), 1, "one control fits one DAA's inclusion capacity");
-        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
+        assert!(
+            PALW_TIR_FRAME_COST_RECORDS_V1
+                .iter()
+                .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+        );
         assert_eq!(
             palw_tir_frame_cost_record_admits_v1(h(9), 17_000, Some(&cost), PALW_TIR_FRAME_COST_RECORDS_V1),
             Err(PalwTirFrameCostRefusalV1::NoRecord),
@@ -524,13 +547,19 @@ mod tests {
 
     #[test]
     fn val_production_sites_take_the_user_approved_estimates() {
-        assert_eq!(crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1, Some(PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1));
+        assert_eq!(
+            crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1,
+            Some(PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1)
+        );
         assert_eq!(
             crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_INCLUSION_PREMISE_V1.map(|p| (p.version, p.inclusion_delay_daa)),
             Some((1, PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1))
         );
         assert_eq!(crate::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1(), Ok(PALW_G14_COURT_INGRESS_ESTIMATE_V1));
-        assert_eq!(crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1(), Ok(PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1));
+        assert_eq!(
+            crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1(),
+            Ok(PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1)
+        );
         // G14-FIX SPEC-1 (2026-10-27): the kernel-route admission schedule is derived from the approved estimates only.
         let k = crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.expect("pinned");
         assert_eq!(k.profile, PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1);

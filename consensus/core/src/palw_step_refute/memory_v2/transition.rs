@@ -23,10 +23,10 @@
 //! identity and membership only, and nothing here is validator approval or consensus credit.
 use super::capture::{gdn_chunk_witness_v2, gdn_input_rows_from_capture_v2, gdn_recurrence_section_v2, gdn_selected_delta_chunks_v2};
 use super::*;
-#[path = "conv_request_owner_v3.rs"]
-mod conv_request_owner;
 #[path = "conv_demand_borrow_v3.rs"]
 mod conv_demand_borrow;
+#[path = "conv_request_owner_v3.rs"]
+mod conv_request_owner;
 pub use conv_demand_borrow::gdn_check_conv_demands_borrowed_v3;
 #[path = "transition_demand_borrow_v3.rs"]
 mod transition_demand_borrow;
@@ -35,9 +35,10 @@ pub use transition_demand_borrow::gdn_check_transition_demands_borrowed_v3;
 mod transition_predecessor_retained;
 pub use transition_predecessor_retained::{PalwGdnTransitionBuiltV3, gdn_transition_refutation_with_accused_retained_v3};
 
-pub use conv_request_owner::{PalwGdnConvAdmissionV3, PalwGdnConvOwnerV3, PalwGdnConvRefutationRequestsV3, PalwGdnConvRequiredRowV3,
-    gdn_conv_refutation_requests_v3, visit_gdn_conv_required_rows_v3};
-
+pub use conv_request_owner::{
+    PalwGdnConvAdmissionV3, PalwGdnConvOwnerV3, PalwGdnConvRefutationRequestsV3, PalwGdnConvRequiredRowV3,
+    gdn_conv_refutation_requests_v3, visit_gdn_conv_required_rows_v3,
+};
 
 /// The evidence version of both checkpoint terminals.
 pub const PALW_GDN_CHECKPOINT_EVIDENCE_VERSION_V2: u16 = 2;
@@ -561,7 +562,10 @@ pub fn gdn_conv_window_required_v2(
     let mut out = Vec::new();
     visit_gdn_conv_required_rows_v3(binding, conv_slot, head, checkpoint_index, |source| {
         let mut row = Vec::new();
-        source.visit_tiles_v3(|index, coordinate| { row.push((index, coordinate)); Ok(()) })?;
+        source.visit_tiles_v3(|index, coordinate| {
+            row.push((index, coordinate));
+            Ok(())
+        })?;
         out.push(row);
         Ok(())
     })?;
@@ -709,22 +713,25 @@ fn transition_refutation_v2(
     tile: &dyn Fn(PalwStepCoordinateV1) -> Option<leg::PalwStepTileLeafV1>,
     checkpoint: &dyn Fn(u32) -> Option<(leg::PalwCheckpointLeafV2, Vec<Vec<u8>>)>,
 ) -> Result<PalwGdnTransitionRefutationV2, PalwGdnCourtErrorV2> {
-    let witness = |at: u32, positions: u32, layer: u16, selection: Option<u32>| -> Result<PalwGdnCheckpointWitnessV2, PalwGdnCourtErrorV2> {
-        let (leaf, chunks) = checkpoint(at).ok_or_else(|| evidence("the capture lacks a checkpoint"))?;
-        let opening = leg::step_opening_capped_v1(capture.checkpoint_leaf_hashes, u64::from(at), capture.max_leaves)?;
-        let mut out = Vec::new();
-        for flat in gdn_selected_delta_chunks_v2(&capture.binding.shape_profile, positions, layer, selection)? {
-            out.push(gdn_chunk_witness_v2(&capture.binding.shape_profile, positions, &chunks, flat)?);
-        }
-        Ok(PalwGdnCheckpointWitnessV2 { leaf, opening, chunks: out })
-    };
+    let witness =
+        |at: u32, positions: u32, layer: u16, selection: Option<u32>| -> Result<PalwGdnCheckpointWitnessV2, PalwGdnCourtErrorV2> {
+            let (leaf, chunks) = checkpoint(at).ok_or_else(|| evidence("the capture lacks a checkpoint"))?;
+            let opening = leg::step_opening_capped_v1(capture.checkpoint_leaf_hashes, u64::from(at), capture.max_leaves)?;
+            let mut out = Vec::new();
+            for flat in gdn_selected_delta_chunks_v2(&capture.binding.shape_profile, positions, layer, selection)? {
+                out.push(gdn_chunk_witness_v2(&capture.binding.shape_profile, positions, &chunks, flat)?);
+            }
+            Ok(PalwGdnCheckpointWitnessV2 { leaf, opening, chunks: out })
+        };
     transition_refutation_with_witness_v3(capture, node_slot, head, index, supplied, tile, &witness)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn transition_refutation_with_witness_v3(
     capture: &super::capture::PalwGdnCaptureV2<'_>,
-    node_slot: u32, head: u32, index: u32,
+    node_slot: u32,
+    head: u32,
+    index: u32,
     supplied: Option<PalwGdnCheckpointWitnessV2>,
     tile: &dyn Fn(PalwStepCoordinateV1) -> Option<leg::PalwStepTileLeafV1>,
     witness: &dyn Fn(u32, u32, u16, Option<u32>) -> Result<PalwGdnCheckpointWitnessV2, PalwGdnCourtErrorV2>,

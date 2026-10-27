@@ -473,15 +473,7 @@ impl AnchoredReceiptPointV39 {
             };
             masters.insert(intended.master, MasterObservationV39 { master: intended.master, record, components, aggregate });
         }
-        Ok(Self {
-            child: anchor.child(),
-            parent: anchor.parent(),
-            daa,
-            state: anchor.inner(),
-            auxiliary: rows.root(),
-            queue,
-            masters,
-        })
+        Ok(Self { child: anchor.child(), parent: anchor.parent(), daa, state: anchor.inner(), auxiliary: rows.root(), queue, masters })
     }
 }
 /// Bounded transcript accumulator. Every consecutive selected-parent state is
@@ -539,7 +531,11 @@ impl<'a> ReceiptAccumulatorV39<'a> {
                 for (a, b) in old.components.iter().zip(&new.components) {
                     if let Some(a) = a {
                         let b = b.as_ref().ok_or("receipt39 funded original component disappeared")?;
-                        if a.job != b.job || a.funding != b.funding || a.admitted != b.admitted || a.claim.is_some() && a.claim != b.claim {
+                        if a.job != b.job
+                            || a.funding != b.funding
+                            || a.admitted != b.admitted
+                            || a.claim.is_some() && a.claim != b.claim
+                        {
                             return Err("receipt39 original component Fund/claim changed".into());
                         }
                     }
@@ -673,7 +669,9 @@ impl<'a> ReceiptAccumulatorV39<'a> {
             .map(|member| {
                 let all = windows.iter().all(|w| {
                     w["per_member"].as_array().is_some_and(|a| {
-                        a.iter().any(|m| m["member"] == *member && m["met"].as_u64() == m["intended"].as_u64() && m["intended"].as_u64() > Some(0))
+                        a.iter().any(|m| {
+                            m["member"] == *member && m["met"].as_u64() == m["intended"].as_u64() && m["intended"].as_u64() > Some(0)
+                        })
                     })
                 });
                 serde_json::json!({"member": member, "both_windows": if all { "MET" } else { "NOT_MET" }})

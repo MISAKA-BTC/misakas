@@ -365,7 +365,8 @@ fn class_registration_origins_have_their_own_exact_aux_codec() {
     .unwrap();
     assert_eq!(reader.remaining(), 0);
     let mut empty = NativeWireReaderV1::new(&[][..], 0);
-    let error = super::wire_kernel_aux::scan_native_aux_row_v1(PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1, &[0xEE; 65], &mut empty).unwrap_err();
+    let error =
+        super::wire_kernel_aux::scan_native_aux_row_v1(PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1, &[0xEE; 65], &mut empty).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
 
@@ -396,8 +397,12 @@ fn paid_claim_trap_rows_have_their_own_exact_aux_codec() {
     };
     let bytes = borsh::to_vec(&conviction).unwrap();
     let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
-    super::wire_kernel_aux::scan_native_aux_row_v1(PALW_PAID_CLAIM_TRAP_TABLE_V1, &palw_paid_trap_conviction_key_v1(&[1; 64]), &mut reader)
-        .unwrap();
+    super::wire_kernel_aux::scan_native_aux_row_v1(
+        PALW_PAID_CLAIM_TRAP_TABLE_V1,
+        &palw_paid_trap_conviction_key_v1(&[1; 64]),
+        &mut reader,
+    )
+    .unwrap();
     assert_eq!(reader.remaining(), 0);
     let held = PalwHeldCheckFeeRowV1 {
         version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
@@ -422,7 +427,10 @@ fn paid_claim_trap_rows_have_their_own_exact_aux_codec() {
         version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
         enrollment: [6; 64],
         base_claim: [1; 64],
-        producer: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(1), 0)),
+        producer: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+            crate::tx::TransactionId::from_u64_word(1),
+            0,
+        )),
         commitment: [8; 64],
         committed_daa: 3,
         deposit: PALW_PAID_CLAIM_TRAP_COMMIT_DEPOSIT_SOMPI_V1,
@@ -430,8 +438,12 @@ fn paid_claim_trap_rows_have_their_own_exact_aux_codec() {
     };
     let bytes = borsh::to_vec(&commitment).unwrap();
     let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
-    super::wire_kernel_aux::scan_native_aux_row_v1(PALW_PAID_CLAIM_TRAP_TABLE_V1, &palw_paid_trap_commitment_key_v1(&[6; 64]), &mut reader)
-        .unwrap();
+    super::wire_kernel_aux::scan_native_aux_row_v1(
+        PALW_PAID_CLAIM_TRAP_TABLE_V1,
+        &palw_paid_trap_commitment_key_v1(&[6; 64]),
+        &mut reader,
+    )
+    .unwrap();
     assert_eq!(reader.remaining(), 0);
     for bad_key in [vec![0xEE; 65], vec![PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1; 137], vec![0xEE; 64]] {
         let mut empty = NativeWireReaderV1::new(&[][..], 0);
@@ -450,7 +462,10 @@ fn native_liability_hold_rows_have_their_own_exact_aux_codec() {
         family: PALW_NATIVE_FAMILY_JOB_V39,
         job: [1; 64],
         claim: [2; 64],
-        producer: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(1), 0)),
+        producer: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+            crate::tx::TransactionId::from_u64_word(1),
+            0,
+        )),
         queue: [3; 64],
         payload: [4; 64],
         amount: 5,

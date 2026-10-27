@@ -45,7 +45,8 @@ fn install_hook() {
             .next()
             .unwrap_or_default();
         let loc = format!("{} <- {}", info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default(), caller);
-        let msg = info.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned());
+        let msg =
+            info.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned());
         PANICS.lock().unwrap().push((loc, msg.unwrap_or_default()));
     }));
 }
@@ -87,9 +88,17 @@ fn fixture() -> Fixture {
     };
     let lid_job = job2.id();
     let samples = vec![
-        ("FileProof/Kernel vs lying", O::FileProof { accuser: OUTSIDER, claim: lid, proof: ProsecutionV1::Kernel(proof.clone()) }, OUTSIDER),
+        (
+            "FileProof/Kernel vs lying",
+            O::FileProof { accuser: OUTSIDER, claim: lid, proof: ProsecutionV1::Kernel(proof.clone()) },
+            OUTSIDER,
+        ),
         ("FileProof/Kernel vs honest", O::FileProof { accuser: OUTSIDER, claim: hid, proof: ProsecutionV1::Kernel(proof) }, OUTSIDER),
-        ("FileProof/Decode vs honest", O::FileProof { accuser: OUTSIDER, claim: hid, proof: ProsecutionV1::Decode(decode.clone()) }, OUTSIDER),
+        (
+            "FileProof/Decode vs honest",
+            O::FileProof { accuser: OUTSIDER, claim: hid, proof: ProsecutionV1::Decode(decode.clone()) },
+            OUTSIDER,
+        ),
         ("FileProof/Decode vs lying", O::FileProof { accuser: OUTSIDER, claim: lid, proof: ProsecutionV1::Decode(decode) }, OUTSIDER),
         ("Respond", O::Respond { claim: lid, stage: 0, position: 1, bytes: resp }, SPAM1),
         ("FileDemand", O::FileDemand { demander: SPAM1, claim: lid, stage: 0, position: 2 }, SPAM1),
@@ -175,7 +184,8 @@ fn structured(name: &str, obj: &O) -> Vec<(String, O)> {
     match obj {
         O::FileProof { accuser, claim, proof: ProsecutionV1::Kernel(bytes) } => {
             let Ok(w) = borsh::from_slice::<FaultProofWireV1>(bytes) else { return out };
-            let put = |m: FaultProofWireV1| O::FileProof { accuser: *accuser, claim: *claim, proof: ProsecutionV1::Kernel(m.to_bytes()) };
+            let put =
+                |m: FaultProofWireV1| O::FileProof { accuser: *accuser, claim: *claim, proof: ProsecutionV1::Kernel(m.to_bytes()) };
             for (i, t) in tensor_mutants(&w.output).into_iter().enumerate() {
                 out.push((format!("{name}/output#{i}"), put(FaultProofWireV1 { output: t, ..w.clone() })));
             }
@@ -211,13 +221,23 @@ fn structured(name: &str, obj: &O) -> Vec<(String, O)> {
                     }
                 }
             }
-            for (i, (p, oc, n)) in [(u32::MAX, 0, 0), (0, u16::MAX, 0), (0, 0, u16::MAX), (1, 0, 0), (u32::MAX, u16::MAX, u16::MAX)].into_iter().enumerate() {
+            for (i, (p, oc, n)) in [(u32::MAX, 0, 0), (0, u16::MAX, 0), (0, 0, u16::MAX), (1, 0, 0), (u32::MAX, u16::MAX, u16::MAX)]
+                .into_iter()
+                .enumerate()
+            {
                 out.push((format!("{name}/where#{i}"), put(FaultProofWireV1 { position: p, occurrence: oc, node: n, ..w.clone() })));
             }
             for k in [0u8, 1, 2, 3, 4, 255] {
                 out.push((format!("{name}/kind{k}"), put(FaultProofWireV1 { kind: k, ..w.clone() })));
             }
-            for sc in [(u64::MAX, u64::MAX, u64::MAX), (0, 0, 0), (u64::MAX, 0, 0), (0, u64::MAX, 0), (0, 0, u64::MAX), (1 << 63, 1 << 63, 1 << 63)] {
+            for sc in [
+                (u64::MAX, u64::MAX, u64::MAX),
+                (0, 0, 0),
+                (u64::MAX, 0, 0),
+                (0, u64::MAX, 0),
+                (0, 0, u64::MAX),
+                (1 << 63, 1 << 63, 1 << 63),
+            ] {
                 out.push((format!("{name}/scalar{sc:?}"), put(FaultProofWireV1 { scalar: sc, ..w.clone() })));
             }
         }
@@ -225,19 +245,32 @@ fn structured(name: &str, obj: &O) -> Vec<(String, O)> {
             for (i, t) in tensor_mutants(&f.logits).into_iter().enumerate() {
                 out.push((
                     format!("{name}/logits#{i}"),
-                    O::FileProof { accuser: *accuser, claim: *claim, proof: ProsecutionV1::Decode(DecodeFaultV1 { index: f.index, logits: t }) },
+                    O::FileProof {
+                        accuser: *accuser,
+                        claim: *claim,
+                        proof: ProsecutionV1::Decode(DecodeFaultV1 { index: f.index, logits: t }),
+                    },
                 ));
             }
             for idx in [u32::MAX, 1 << 31, 2, 3] {
                 out.push((
                     format!("{name}/index{idx}"),
-                    O::FileProof { accuser: *accuser, claim: *claim, proof: ProsecutionV1::Decode(DecodeFaultV1 { index: idx, logits: f.logits.clone() }) },
+                    O::FileProof {
+                        accuser: *accuser,
+                        claim: *claim,
+                        proof: ProsecutionV1::Decode(DecodeFaultV1 { index: idx, logits: f.logits.clone() }),
+                    },
                 ));
             }
         }
         O::Respond { claim, stage, position, bytes } => {
             let Ok(r) = borsh::from_slice::<PositionResponseV1>(bytes) else { return out };
-            let put = |m: PositionResponseV1| O::Respond { claim: *claim, stage: *stage, position: *position, bytes: borsh::to_vec(&m).unwrap() };
+            let put = |m: PositionResponseV1| O::Respond {
+                claim: *claim,
+                stage: *stage,
+                position: *position,
+                bytes: borsh::to_vec(&m).unwrap(),
+            };
             for (s, occ) in r.values.iter().enumerate() {
                 for (n, v) in occ.iter().enumerate() {
                     if let MaterialResponseV1::Whole(t) = v {
@@ -389,7 +422,8 @@ fn every_byte_flip_of_a_class_registration_is_refused_or_applied_without_a_panic
     {
         let mut ok = base.clone();
         ok.begin_block(2).unwrap();
-        ok.apply_encoded(&obj.encode(), &AuthV1 { signer_bond: PRODUCER }).expect("the unflipped registration applies to the minimal ledger");
+        ok.apply_encoded(&obj.encode(), &AuthV1 { signer_bond: PRODUCER })
+            .expect("the unflipped registration applies to the minimal ledger");
     }
     let (applied, refused, panics) = support::exhaustive_flips(&base, &obj, PRODUCER);
     let _ = std::panic::take_hook();

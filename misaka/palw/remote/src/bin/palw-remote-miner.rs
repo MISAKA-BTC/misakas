@@ -570,7 +570,8 @@ fn parse_args() -> Args {
                 fork_choice_limits.min_peers = n;
             }
             "--native-provider" => native_providers.push(
-                misaka_palw_remote::native_custody_exchange_v3::parse_provider_flag_v3(&value("--native-provider")).unwrap_or_else(|e| die(e)),
+                misaka_palw_remote::native_custody_exchange_v3::parse_provider_flag_v3(&value("--native-provider"))
+                    .unwrap_or_else(|e| die(e)),
             ),
             "--native-max-body-mib" => {
                 let mib: u64 = value("--native-max-body-mib").parse().unwrap_or_else(|_| die("--native-max-body-mib is not a number"));
@@ -596,7 +597,9 @@ fn parse_args() -> Args {
         );
     }
     if !native_providers.is_empty() && pin.is_none() {
-        die("--native-provider needs --pin: a provider's key and operator are used only after they are proven against your pinned bond table");
+        die(
+            "--native-provider needs --pin: a provider's key and operator are used only after they are proven against your pinned bond table",
+        );
     }
     let network = network.unwrap_or_else(|| die("--network is required"));
     let (daa, block_hash) =
@@ -742,10 +745,21 @@ fn main() {
                 };
                 match misaka_palw_remote::proof::verify_bond_against_pin(&header, pin, &fact, &flag.bond, &key) {
                     Ok(state) => {
-                        say("native-provider-proven", serde_json::json!({ "bond": format!("{}:{}", flag.bond.0.transaction_id, flag.bond.0.index), "url": flag.url }));
-                        native_endpoints.push(ProviderEndpointV3 { bond: flag.bond, url: flag.url.clone(), pubkey: key, operator_id: state.operator_id });
+                        say(
+                            "native-provider-proven",
+                            serde_json::json!({ "bond": format!("{}:{}", flag.bond.0.transaction_id, flag.bond.0.index), "url": flag.url }),
+                        );
+                        native_endpoints.push(ProviderEndpointV3 {
+                            bond: flag.bond,
+                            url: flag.url.clone(),
+                            pubkey: key,
+                            operator_id: state.operator_id,
+                        });
                     }
-                    Err(e) => die(format!("native provider {}:{} is not proven against your pin: {e}", flag.bond.0.transaction_id, flag.bond.0.index)),
+                    Err(e) => die(format!(
+                        "native provider {}:{} is not proven against your pin: {e}",
+                        flag.bond.0.transaction_id, flag.bond.0.index
+                    )),
                 }
             }
         }
@@ -901,22 +915,19 @@ fn main() {
         // Session open: refresh the AUTHENTICATED row view (op 242 pages, finished by the proof pager) at the current sink each step.
         // A failed read leaves no rows, so no session is selected and nothing is mounted (fail closed, never a PAV2 fallback).
         if let Some(exchange) = native_exchange.as_mut() {
-            let rows = runtime
-                .block_on(nodes[0].client.get_block_dag_info())
-                .map_err(|e| e.to_string())
-                .and_then(|info| {
-                    let daa = info.virtual_daa_score;
-                    runtime
-                        .block_on(misaka_palw_remote::monetary_material_rpc::fetch_monetary_material_contracts_v1(
-                            &nodes[0].client,
-                            info.sink,
-                            params.palw_monetary_material_v1.as_ref().map(|f| f.activation),
-                            1 << 20,
-                            64 << 20,
-                            4096,
-                        ))
-                        .map(|rows| (rows, daa))
-                });
+            let rows = runtime.block_on(nodes[0].client.get_block_dag_info()).map_err(|e| e.to_string()).and_then(|info| {
+                let daa = info.virtual_daa_score;
+                runtime
+                    .block_on(misaka_palw_remote::monetary_material_rpc::fetch_monetary_material_contracts_v1(
+                        &nodes[0].client,
+                        info.sink,
+                        params.palw_monetary_material_v1.as_ref().map(|f| f.activation),
+                        1 << 20,
+                        64 << 20,
+                        4096,
+                    ))
+                    .map(|rows| (rows, daa))
+            });
             match rows {
                 Ok((rows, daa)) => exchange.set_rows(rows, daa),
                 Err(e) => {
@@ -926,7 +937,8 @@ fn main() {
             }
         }
         let custody = native_exchange.as_mut().map(|x| x as &mut dyn misaka_palw_remote::attempt::NativeCustodyV3);
-        let outcome = step_with_custody(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw, &custody_in_force, custody);
+        let outcome =
+            step_with_custody(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw, &custody_in_force, custody);
         if let Some(mode) = state.last_mode {
             say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim(), "l2": state.last_l2 }));
         }

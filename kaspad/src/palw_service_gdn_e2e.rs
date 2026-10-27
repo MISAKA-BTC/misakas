@@ -135,10 +135,15 @@ impl GdnFixture {
         admission.signature =
             signed(0, message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT);
         let registration = chain.send(0, &object, &mut floats[0], &[]).await;
-        assert!(chain.history.iter().any(|block| block.transactions.iter().any(|tx| tx.id() == registration.id())),
-            "the ordinary template must actually carry the GDN registration");
-        assert!(chain.tc.palw_v2_class_table().iter().any(|row| row.class_id == self.profile.shape_profile_id()),
-            "the carried GDN registration must enter the class table at DAA {}", chain.daa());
+        assert!(
+            chain.history.iter().any(|block| block.transactions.iter().any(|tx| tx.id() == registration.id())),
+            "the ordinary template must actually carry the GDN registration"
+        );
+        assert!(
+            chain.tc.palw_v2_class_table().iter().any(|row| row.class_id == self.profile.shape_profile_id()),
+            "the carried GDN registration must enter the class table at DAA {}",
+            chain.daa()
+        );
         assert_eq!(
             chain.tc.palw_registered_class_carriage_v1(self.profile.shape_profile_id()),
             Some((self.profile.clone(), self.canonical.clone()))

@@ -508,7 +508,8 @@ pub fn compose_component_request_v39(
     }
     let (stop, maximum_positions) = match s.trip {
         TripRule::TextStream | TripRule::Decode => {
-            let stop = RequestStopV39::Decode { prompt: r.prompt.clone(), requested_new_tokens: r.requested_new_tokens, eos: r.eos.clone() };
+            let stop =
+                RequestStopV39::Decode { prompt: r.prompt.clone(), requested_new_tokens: r.requested_new_tokens, eos: r.eos.clone() };
             let n = stop.maximum_positions()?;
             (stop, n)
         }
@@ -594,7 +595,8 @@ pub fn compose_component_request_v39(
                         }
                     }
                     Binding::StageRowCount { stage: from, drop } => {
-                        let q = prior.iter().find(|p| p.stage == *from as u16).ok_or("compose39 upstream row count is not Final yet")?;
+                        let q =
+                            prior.iter().find(|p| p.stage == *from as u16).ok_or("compose39 upstream row count is not Final yet")?;
                         let rows_from = if matches!(wire.stages[*from as usize].trip, TripRule::Decode) {
                             r.prompt.len().saturating_sub(1) as u32
                         } else {
@@ -661,7 +663,9 @@ impl ComposedComponentV39 {
                     bindings.push(InputBindingV39::Random { seed: *seed, domain: *domain, per_step: *per_step });
                     continue;
                 }
-                ComposedInputV39::Public { input, tensor, .. } | ComposedInputV39::Image { input, tensor, .. } => (*input, Some(*tensor)),
+                ComposedInputV39::Public { input, tensor, .. } | ComposedInputV39::Image { input, tensor, .. } => {
+                    (*input, Some(*tensor))
+                }
                 ComposedInputV39::Upstream { input, .. } => (*input, None),
             };
             let d = next.next().ok_or("compose39 material descriptor absent")?;
@@ -681,8 +685,16 @@ impl ComposedComponentV39 {
                         return Err("compose39 public material differs from the request-derived tensor".into());
                     }
                 }
-                (ComposedInputV39::Image { dtype, shape, raw_source, .. }, MaterialOriginV39::External { original_task, raw_source: r }) => {
-                    if d.dtype != *dtype || d.shape != *shape || Some(d.tensor) != expected || r != raw_source || *original_task != self.original_task {
+                (
+                    ComposedInputV39::Image { dtype, shape, raw_source, .. },
+                    MaterialOriginV39::External { original_task, raw_source: r },
+                ) => {
+                    if d.dtype != *dtype
+                        || d.shape != *shape
+                        || Some(d.tensor) != expected
+                        || r != raw_source
+                        || *original_task != self.original_task
+                    {
                         return Err("compose39 image material differs from the request commitment".into());
                     }
                 }

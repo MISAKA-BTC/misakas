@@ -2488,7 +2488,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0024 position terminal and lookahead moves (dormant; witness and frontier bounds unadopted)",
         true,
     ),
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 245, hi: 245 }, "palw_tir_designated_answers_v1", "ADR-0191 designated-custodian event", true),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 245, hi: 245 },
+        "palw_tir_designated_answers_v1",
+        "ADR-0191 designated-custodian event",
+        true,
+    ),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 255, hi: 255 }, "palw_staged_tir_route_v1", "staged TIR shared material intake", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 175, hi: 175 }, "palw_tir_container_identity_v1", "G14 TIR class container binding", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 246, hi: 246 }, "palw_selected_source_bootstrap_v1", "RFC07 selected source approval", true),
@@ -2804,7 +2809,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
-        PalwA2SlotV1::StateEncoding { what: "kernel route aux 141 class registration origins (one row per class registered past the fence)" },
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux 141 class registration origins (one row per class registered past the fence)",
+        },
         "palw_class_registration_origin_v1",
         "RFC06-8 registering block and admission digest of each class",
         true,
@@ -4250,14 +4257,18 @@ pub(crate) mod tests {
                 },
                 245 => PalwConsensusObjectV2::TirDesignatedEventV1 {
                     event: crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1::Answer {
-                        key: crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1 { claim: [0; 32], root: [0; 32], coordinates: 0 },
+                        key: crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1 {
+                            claim: [0; 32],
+                            root: [0; 32],
+                            coordinates: 0,
+                        },
                         custodian: [0; 32],
                         body: [0; 32],
                         at_daa: 0,
                     },
                 },
                 _ => minimal_decode(&[tag]).unwrap_or_else(|| {
-                panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample in the A2U sweeps instead")
+                    panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample in the A2U sweeps instead")
                 }),
             };
             assert_eq!(borsh::to_vec(&object).unwrap()[0], tag);
@@ -5750,9 +5761,16 @@ pub(crate) mod tests {
             super::palw_lifecycle_kind_owner_v1(&begin),
             super::PalwLifecycleKindOwnerV1::Fence(super::PalwLifecycleKindFenceV1::StagedTirRouteV1)
         );
-        assert!(super::PALW_LIFECYCLE_NEW_KINDS_V1.contains(&(255, "MaterialIntakeV1", super::PalwLifecycleKindFenceV1::StagedTirRouteV1)));
+        assert!(super::PALW_LIFECYCLE_NEW_KINDS_V1.contains(&(
+            255,
+            "MaterialIntakeV1",
+            super::PalwLifecycleKindFenceV1::StagedTirRouteV1
+        )));
         super::palw_lifecycle_object_may_ride_v2(&begin).expect("a signed Begin rides");
-        assert!(super::palw_lifecycle_object_may_ride_v2(&step(MaterialActionV1::Finish { draft_id: Default::default() }, vec![])).is_err());
+        assert!(
+            super::palw_lifecycle_object_may_ride_v2(&step(MaterialActionV1::Finish { draft_id: Default::default() }, vec![]))
+                .is_err()
+        );
         let part = |n: usize| step(MaterialActionV1::Part { draft_id: Default::default(), offset: 0, bytes: vec![7; n] }, vec![1; 4]);
         super::palw_lifecycle_object_may_ride_v2(&part(16_384)).expect("one full part rides");
         assert!(super::palw_lifecycle_object_may_ride_v2(&part(0)).is_err());

@@ -51,9 +51,7 @@ async fn t06_last_inclusive_notice_and_latest_lawful_response_fit_the_hard_bound
             assert_eq!((minted, owed), (0, 0), "the liar never earns the reward");
         } else {
             w.net.beat_to(hard + 2).await;
-            let ClaimStateV1::Final { final_daa } = w.net.claim_state(&claim.id) else {
-                panic!("{:?}", w.net.claim_state(&claim.id))
-            };
+            let ClaimStateV1::Final { final_daa } = w.net.claim_state(&claim.id) else { panic!("{:?}", w.net.claim_state(&claim.id)) };
             assert!(final_daa <= hard, "Final {final_daa} within the hard bound {hard} on the latest lawful path");
         }
         let z = w.net.replay().await;
@@ -80,7 +78,9 @@ async fn t06_every_remaining_legal_branch_fits_the_original_hard_bound() {
         }
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("legal branches are derived only by derive_funded_admission_v1 under FundedAdmissionScheduleV1, whose only constructor is #[cfg(test)] (V2); EXEC worker / provider lease horizons are not state fields (r5-clock-deps-relay notes 3 OPEN); the staged court retention on network_v1 is below a+10,256 (V9); intended palw_funded_original_v1().legal_branches() does not exist");
+    blocked_on!(
+        "legal branches are derived only by derive_funded_admission_v1 under FundedAdmissionScheduleV1, whose only constructor is #[cfg(test)] (V2); EXEC worker / provider lease horizons are not state fields (r5-clock-deps-relay notes 3 OPEN); the staged court retention on network_v1 is below a+10,256 (V9); intended palw_funded_original_v1().legal_branches() does not exist"
+    );
 }
 
 /// **T07 (demand window, node-level): −1 / = / +1 at `window_end`.** One card files a demand for every position in ONE send: the i-th
@@ -219,5 +219,7 @@ async fn t07_every_connected_native_deadline_minus_one_equal_plus_one() {
         }
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("funded-original accept_until, escrow settlement and position-terminal deadlines live only on rows no node can create (V2, V3, V8 typed-missing); the dependency lease end is not a state field; intended palw_connected_deadlines_v1 does not exist");
+    blocked_on!(
+        "funded-original accept_until, escrow settlement and position-terminal deadlines live only on rows no node can create (V2, V3, V8 typed-missing); the dependency lease end is not a state field; intended palw_connected_deadlines_v1 does not exist"
+    );
 }

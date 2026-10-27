@@ -425,19 +425,28 @@ mod tests {
             1_000,
             old.body.clone(),
             signer(&executor),
-        ).unwrap();
+        )
+        .unwrap();
         let policy = ProviderTransportPolicyV1::new(Hash64::from_u64_word(1), 1 << 20);
         let verify = |message: &ProviderTransportRequestV1, purpose| {
-            provider_transport_verify_request_v1(message, purpose, &policy, NOW, Some(1_000),
-                &mut ProviderTransportReplayGuardV1::new(16, policy.max_skew_ms))
+            provider_transport_verify_request_v1(
+                message,
+                purpose,
+                &policy,
+                NOW,
+                Some(1_000),
+                &mut ProviderTransportReplayGuardV1::new(16, policy.max_skew_ms),
+            )
         };
         verify(&manifest, ProviderTransportPurposeV1::NativeManifestV3).unwrap();
         assert!(verify(&manifest, ProviderTransportPurposeV1::NativeReadyV3).is_err());
         assert!(verify(&old, ProviderTransportPurposeV1::NativeManifestV3).is_err());
         let mut relabelled = old;
         relabelled.header.purpose = ProviderTransportPurposeV1::NativeManifestV3;
-        assert!(verify(&relabelled, ProviderTransportPurposeV1::NativeManifestV3).is_err(),
-            "changing the ordinal must invalidate the original signed request");
+        assert!(
+            verify(&relabelled, ProviderTransportPurposeV1::NativeManifestV3).is_err(),
+            "changing the ordinal must invalidate the original signed request"
+        );
     }
     #[test]
     fn a_signed_request_verifies_once_and_every_tamper_or_replay_is_refused() {

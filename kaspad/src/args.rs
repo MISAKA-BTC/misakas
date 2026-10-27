@@ -5240,7 +5240,11 @@ pub fn parse_palw_drill_fp_fault_v1(spec: &str) -> Result<crate::palw_panel::Pal
     use kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1 as B;
     let fields: Vec<&str> = spec.split(':').collect();
     let n = |i: usize| -> Result<i64, String> {
-        fields.get(i).ok_or_else(|| format!("{spec}: too few fields"))?.parse::<i64>().map_err(|_| format!("{spec}: field {i} is not a number"))
+        fields
+            .get(i)
+            .ok_or_else(|| format!("{spec}: too few fields"))?
+            .parse::<i64>()
+            .map_err(|_| format!("{spec}: field {i} is not a number"))
     };
     let fit = |v: i64, max: i64, what: &str| -> Result<i64, String> {
         if (0..=max).contains(&v) { Ok(v) } else { Err(format!("{spec}: {what} out of range")) }

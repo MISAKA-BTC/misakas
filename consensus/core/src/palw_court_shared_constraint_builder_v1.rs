@@ -8,8 +8,8 @@ use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
 use crate::palw_fp_constraint_job_v1::{PalwTokenTableEogOpeningV1, PalwTokenTableOpeningV1};
 use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
 use crate::{
-    palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2},
     Hash64,
+    palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2},
 };
 
 pub(crate) const CONSTRAINT_INTENT_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/shared-constraint-terminal/v1/mldsa87";

@@ -270,7 +270,9 @@ impl PalwNativeRoutingWorkAuthorityV2 {
     pub fn accepts_context_v2(&self, job: &PalwJobContextV2) -> bool {
         if self.fp.is_some() { fp_context_matches_budget_v2(&self.job, job) } else { *self.job == *job }
     }
-    pub fn import_epoch(&self) -> u64 { self.import_epoch }
+    pub fn import_epoch(&self) -> u64 {
+        self.import_epoch
+    }
     /// Normal forward progress may change the current snapshot. The native
     /// refresh door separately proves canonical ancestry and current eligibility.
     /// No caller may use this comparison as a substitute for that native read.

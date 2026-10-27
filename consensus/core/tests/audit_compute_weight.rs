@@ -176,7 +176,6 @@ fn t12_genesis_state(p: &Params, b: &PalwConsensusParamsV2, collateral: u64) -> 
     state
 }
 
-
 #[test]
 fn audit_l1_a_new_root_on_a_genesis_graph_is_admitted_and_priced_as_the_graph() {
     let p = t12();

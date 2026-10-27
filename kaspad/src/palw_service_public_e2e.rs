@@ -39,12 +39,12 @@ use kaspa_muhash::MuHash;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
 use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 
+#[path = "palw_service_gdn_e2e.rs"]
+mod gdn;
 #[path = "palw_service_tokenizer_e2e.rs"]
 mod staged_tokenizer;
 #[path = "palw_service_terminal_e2e.rs"]
 mod terminal;
-#[path = "palw_service_gdn_e2e.rs"]
-mod gdn;
 #[path = "palw_service_tiled_e2e.rs"]
 mod tiled;
 #[path = "palw_service_tir_frame_e2e.rs"]
@@ -1528,7 +1528,8 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
             let (outcome, _, _) = foreign.as_ref().unwrap();
             tiled.as_ref().unwrap().backend(&chain).public_execution_binding_header_v1(&outcome.material).unwrap()
         });
-        carry_fp_commitment_with_original(&mut chain, &mut floats, commitment, prompt, case.large_constraint(), original.as_ref()).await
+        carry_fp_commitment_with_original(&mut chain, &mut floats, commitment, prompt, case.large_constraint(), original.as_ref())
+            .await
     } else {
         let (attempt, claim) = chain.build_attempt_roots(
             0,
@@ -2283,7 +2284,16 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     |m, c| Some(signed(0, m, c)),
                 )
                 .unwrap();
-                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[harness_payer], harness_payer).await;
+                tiled::carry_public_rpc_answer(
+                    &mut chain,
+                    &manager,
+                    &pool,
+                    &retained_flow,
+                    &object,
+                    &mut floats[harness_payer],
+                    harness_payer,
+                )
+                .await;
                 assert!(chain.view(claim).unit_was_answered_v1(&unit));
                 if matches!(unit, PalwDaUnitV1::Event { row: 2, .. }) {
                     selected_tiles_submitted.insert(unit);
@@ -2322,7 +2332,16 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     |message, context| Some(signed(0, message, context)),
                 )
                 .unwrap();
-                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[harness_payer], harness_payer).await;
+                tiled::carry_public_rpc_answer(
+                    &mut chain,
+                    &manager,
+                    &pool,
+                    &retained_flow,
+                    &object,
+                    &mut floats[harness_payer],
+                    harness_payer,
+                )
+                .await;
                 assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)));
                 prefix_tiles_submitted.insert(unit);
                 eprintln!("[service-prefix] canonical public CKW {unit:?} authenticated through ordinary H1/PQ");
@@ -2384,7 +2403,16 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     |message, context| Some(signed(0, message, context)),
                 )
                 .unwrap();
-                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[harness_payer], harness_payer).await;
+                tiled::carry_public_rpc_answer(
+                    &mut chain,
+                    &manager,
+                    &pool,
+                    &retained_flow,
+                    &object,
+                    &mut floats[harness_payer],
+                    harness_payer,
+                )
+                .await;
                 assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)), "the lane {unit:?} is answered");
                 held_lanes_submitted.insert(unit);
             }

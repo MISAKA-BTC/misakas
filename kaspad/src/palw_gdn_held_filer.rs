@@ -40,9 +40,10 @@ use kaspa_hashes::Hash64;
 use misaka_palw_base0::GdnInventoryOracleV2;
 use misaka_palw_base0::fp_recompute::Base0FpRecomputeKernelsV1;
 use misaka_palw_base0::gdn_evidence_v2::{
-    Base0GdnCheckpointCourtV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_conv_window_evidence_from_disclosures_retained_v3,
-    base0_gdn_first_forged_checkpoint_retained_v3, base0_gdn_forged_checkpoint_demands_retained_v3, base0_gdn_transition_evidence_from_disclosures_retained_v3,
-    base0_gdn_conv_window_evidence_from_disclosures_retained_v4, base0_gdn_transition_evidence_from_disclosures_retained_v4,
+    Base0GdnCheckpointCourtV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2,
+    base0_gdn_conv_window_evidence_from_disclosures_retained_v3, base0_gdn_conv_window_evidence_from_disclosures_retained_v4,
+    base0_gdn_first_forged_checkpoint_retained_v3, base0_gdn_forged_checkpoint_demands_retained_v3,
+    base0_gdn_transition_evidence_from_disclosures_retained_v3, base0_gdn_transition_evidence_from_disclosures_retained_v4,
 };
 
 #[path = "palw_gdn_held_action_owner_v2.rs"]
@@ -118,19 +119,34 @@ pub fn palw_gdn_held_open_retained_v3<K: Base0FpRecomputeKernelsV1>(
     if material.binding.committed_execution_root != claim.execution_root {
         return Err("the material's binding is not the claim's execution".into());
     }
-    let Some(index) = base0_gdn_first_forged_checkpoint_retained_v3(material, kernels()).map_err(retained_leg_error_v3)? else { return Ok(None) };
+    let Some(index) = base0_gdn_first_forged_checkpoint_retained_v3(material, kernels()).map_err(retained_leg_error_v3)? else {
+        return Ok(None);
+    };
     let (candidates, candidate_owner) = geometry_owner::candidates(material.binding)?;
     if candidates.is_empty() {
         return Err(format!("checkpoint {index} is forged but no supported recurrence or convolution terminal reads it").into());
     }
-    let mut case = PalwGdnHeldCaseV1 { claim, index, candidates, candidate_owner, at: 0, demands: Vec::new(), demand_owner: None, answers: Vec::new(), answer_slots: None, demanded: None };
+    let mut case = PalwGdnHeldCaseV1 {
+        claim,
+        index,
+        candidates,
+        candidate_owner,
+        at: 0,
+        demands: Vec::new(),
+        demand_owner: None,
+        answers: Vec::new(),
+        answer_slots: None,
+        demanded: None,
+    };
     load_candidate_v1(&mut case, 0, material, &mut kernels)?;
     Ok(Some(case))
 }
 
 /// Compatibility error interface; the returned case still retains its answers.
 pub fn palw_gdn_held_open_v1<K: Base0FpRecomputeKernelsV1>(
-    claim: PalwGdnHeldClaimV1, material: &Base0GdnMaterialV2<'_>, kernels: impl FnMut() -> K,
+    claim: PalwGdnHeldClaimV1,
+    material: &Base0GdnMaterialV2<'_>,
+    kernels: impl FnMut() -> K,
 ) -> Result<Option<PalwGdnHeldCaseV1>, String> {
     palw_gdn_held_open_retained_v3(claim, material, kernels).map_err(|why| why.to_string())
 }
@@ -145,7 +161,8 @@ fn load_candidate_v1<K: Base0FpRecomputeKernelsV1>(
     // Covers the pure helper's returned demands, selected-index and layer-list
     // arrays. Earlier Base0 leg/prefix work remains a separate input boundary.
     let admission = geometry_owner::DemandAdmissionV4::prepare(material.binding, candidate)?;
-    let demands = base0_gdn_forged_checkpoint_demands_retained_v3(material, candidate, case.index, &mut *kernels).map_err(retained_leg_error_v3)?;
+    let demands = base0_gdn_forged_checkpoint_demands_retained_v3(material, candidate, case.index, &mut *kernels)
+        .map_err(retained_leg_error_v3)?;
     let owner = admission.finish(&demands, demands.capacity())?;
     let (answers, slots) = answer_owner::slots(demands.len())?;
     // Refused construction must not pair the next candidate with the old
@@ -178,14 +195,22 @@ fn answer_on_chain_v1(
                 answer: PalwDaAnswerV1::Held(carriage),
                 ..
             } if *c == claim.claim && missing == unit => carriage.as_ref(),
-            PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } if disclosure.claim == claim.claim && disclosure.missing == *unit => {
+            PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure }
+                if disclosure.claim == claim.claim && disclosure.missing == *unit =>
+            {
                 disclosure.as_ref()
             }
             _ => continue,
         };
         let checked = kaspa_consensus_core::palw_held_da_v1::palw_held_da_state_chunk_auth_request_v2(
-            &claim.execution_root, unit, binding, &carriage.disclosure, max_leaves, form,
-        ).and_then(|request| request.check_v2());
+            &claim.execution_root,
+            unit,
+            binding,
+            &carriage.disclosure,
+            max_leaves,
+            form,
+        )
+        .and_then(|request| request.check_v2());
         match checked {
             Ok(()) => return NativeRetainedV1::try_from_clone_v1(&carriage.disclosure).map(Some),
             Err(NativeDecodeErrorV1::Decode(_)) => continue,
@@ -244,14 +269,27 @@ pub fn palw_gdn_held_step_retained_v2<K: Base0FpRecomputeKernelsV1>(
         // Every unit of this candidate is answered: the evidence, held to the court's own terminal before it is signed.
         let answers = answer_owner::complete_batch(&case.answers)?;
         let evidence = match case.candidates[case.at] {
-            Base0GdnCheckpointCourtV2::Transition { node_slot, head } =>
-                base0_gdn_transition_evidence_from_disclosures_retained_v4(
-                    material, node_slot, head, case.index, &case.demands, &answers, &mut kernels,
-                ).map_err(retained_leg_error_v3)?.map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnTransition { refutation }),
-            Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } =>
-                base0_gdn_conv_window_evidence_from_disclosures_retained_v4(
-                    material, conv_slot, head, case.index, &case.demands, &answers,
-                ).map_err(retained_leg_error_v3)?.map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation }),
+            Base0GdnCheckpointCourtV2::Transition { node_slot, head } => base0_gdn_transition_evidence_from_disclosures_retained_v4(
+                material,
+                node_slot,
+                head,
+                case.index,
+                &case.demands,
+                &answers,
+                &mut kernels,
+            )
+            .map_err(retained_leg_error_v3)?
+            .map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnTransition { refutation }),
+            Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } => base0_gdn_conv_window_evidence_from_disclosures_retained_v4(
+                material,
+                conv_slot,
+                head,
+                case.index,
+                &case.demands,
+                &answers,
+            )
+            .map_err(retained_leg_error_v3)?
+            .map_v4(|refutation| PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation }),
         };
         // The accused-witness input guard spans both the actual native court
         // and signed-output preadmission. The output's independent ticket is
@@ -259,10 +297,17 @@ pub fn palw_gdn_held_step_retained_v2<K: Base0FpRecomputeKernelsV1>(
         let object = evidence.try_handoff_v4(|evidence| {
             let verdict = match &evidence {
                 PalwMemoryRoutingEvidenceV2::GdnTransition { refutation } => check_gdn_transition_refutation_v2(
-                    refutation, case.claim.execution_root, case.claim.shape_profile_id, accuser.oracle, material.max_leaves,
+                    refutation,
+                    case.claim.execution_root,
+                    case.claim.shape_profile_id,
+                    accuser.oracle,
+                    material.max_leaves,
                 ),
                 PalwMemoryRoutingEvidenceV2::GdnConvWindow { refutation } => check_gdn_conv_window_refutation_v2(
-                    refutation, case.claim.execution_root, case.claim.shape_profile_id, material.max_leaves,
+                    refutation,
+                    case.claim.execution_root,
+                    case.claim.shape_profile_id,
+                    material.max_leaves,
                 ),
                 _ => unreachable!("held GDN candidates use checkpoint terminals"),
             };
@@ -290,20 +335,29 @@ pub fn palw_gdn_held_step_retained_v2<K: Base0FpRecomputeKernelsV1>(
 /// Legacy raw-object interface. Production uses the retained step and atomic
 /// handoff below; callers extracting raw objects own their destination boundary.
 pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
-    case: &mut PalwGdnHeldCaseV1, material: &Base0GdnMaterialV2<'_>, kernels: impl FnMut() -> K,
-    objects: &[PalwConsensusObjectV2], now: u64, disclose_window: u64, accuser: &PalwGdnHeldAccuserV1<'_>,
+    case: &mut PalwGdnHeldCaseV1,
+    material: &Base0GdnMaterialV2<'_>,
+    kernels: impl FnMut() -> K,
+    objects: &[PalwConsensusObjectV2],
+    now: u64,
+    disclose_window: u64,
+    accuser: &PalwGdnHeldAccuserV1<'_>,
 ) -> Result<PalwGdnHeldNextV1, String> {
     use PalwGdnHeldNextRetainedV2 as N;
-    Ok(match palw_gdn_held_step_retained_v2(case, material, kernels, objects, now, disclose_window, accuser).map_err(|e| e.to_string())? {
-        N::Demand { index, unit, object } => {
-            case.demanded = Some((index, now));
-            PalwGdnHeldNextV1::Demand { unit, object: object.into_parts_v1().0 }
+    Ok(
+        match palw_gdn_held_step_retained_v2(case, material, kernels, objects, now, disclose_window, accuser)
+            .map_err(|e| e.to_string())?
+        {
+            N::Demand { index, unit, object } => {
+                case.demanded = Some((index, now));
+                PalwGdnHeldNextV1::Demand { unit, object: object.into_parts_v1().0 }
+            }
+            N::Accuse { object } => PalwGdnHeldNextV1::Accuse { object: object.into_parts_v1().0 },
+            N::Wait => PalwGdnHeldNextV1::Wait,
+            N::DefaultDue { unit } => PalwGdnHeldNextV1::DefaultDue { unit },
+            N::Exhausted => PalwGdnHeldNextV1::Exhausted,
         },
-        N::Accuse { object } => PalwGdnHeldNextV1::Accuse { object: object.into_parts_v1().0 },
-        N::Wait => PalwGdnHeldNextV1::Wait,
-        N::DefaultDue { unit } => PalwGdnHeldNextV1::DefaultDue { unit },
-        N::Exhausted => PalwGdnHeldNextV1::Exhausted,
-    })
+    )
 }
 
 /// **What the filer needs of the node** — a seam over the service, so the tick runs against a fixture in the tests.
@@ -311,7 +365,10 @@ pub trait PalwGdnHeldHostV1 {
     /// Held hybrid claims this node's bond may accuse (not its own, not final or voided), with their chain facts.
     fn accusable_claims(&self) -> Vec<PalwGdnHeldClaimV1>;
     /// The accuser's view of the claim's PUBLIC served material (never the producer's heap), or why there is none yet.
-    fn material(&self, claim: &PalwGdnHeldClaimV1) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Base0GdnOwnedMaterialV2>, String>;
+    fn material(
+        &self,
+        claim: &PalwGdnHeldClaimV1,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Base0GdnOwnedMaterialV2>, String>;
     /// Fresh recompute kernels of the claim's class (the node's own resolve door).
     fn kernels(&self, claim: &PalwGdnHeldClaimV1) -> Result<Box<dyn Base0FpRecomputeKernelsV1 + '_>, String>;
     /// Every accepted object naming the claim (its demands' answers among them).
@@ -319,7 +376,9 @@ pub trait PalwGdnHeldHostV1 {
     /// The class inventory's openings and the oracle over them.
     fn openings(&self, claim: &PalwGdnHeldClaimV1) -> Result<GdnInventoryOracleV2, String>;
     /// Complete accepted-history watermark. None holds moves while a page scan is incomplete.
-    fn observed_through_daa(&self, now: u64) -> Option<u64> { Some(now) }
+    fn observed_through_daa(&self, now: u64) -> Option<u64> {
+        Some(now)
+    }
     fn disclose_window_daa(&self) -> u64;
     fn bond(&self) -> PalwBondKeyV2;
     fn network_domain(&self) -> Hash64;
@@ -347,10 +406,15 @@ pub struct PalwGdnHeldBookV1 {
 /// One object for the priority lane: `(claim, object)`.
 pub type PalwGdnHeldOutV1 = (Hash64, PalwConsensusObjectV2);
 
-fn note_answers_v1(case: &mut PalwGdnHeldCaseV1, material: &Base0GdnMaterialV2<'_>, objects: &[PalwConsensusObjectV2]) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+fn note_answers_v1(
+    case: &mut PalwGdnHeldCaseV1,
+    material: &Base0GdnMaterialV2<'_>,
+    objects: &[PalwConsensusObjectV2],
+) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
     for (i, unit) in case.demands.iter().enumerate() {
         if case.answers[i].is_none() {
-            case.answers[i] = answer_on_chain_v1(objects, &case.claim, material.binding, unit, material.max_leaves, material.prompt_ids_form)?;
+            case.answers[i] =
+                answer_on_chain_v1(objects, &case.claim, material.binding, unit, material.max_leaves, material.prompt_ids_form)?;
         }
     }
     Ok(())
@@ -360,7 +424,11 @@ fn note_answers_v1(case: &mut PalwGdnHeldCaseV1, material: &Base0GdnMaterialV2<'
 pub struct PalwGdnBoxedKernelsV1<'a>(pub Box<dyn Base0FpRecomputeKernelsV1 + 'a>);
 
 impl Base0FpRecomputeKernelsV1 for PalwGdnBoxedKernelsV1<'_> {
-    fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), misaka_palw_base0::fp_recompute::Base0FpRecomputeError> {
+    fn forward_no_capture(
+        &mut self,
+        token: usize,
+        position: usize,
+    ) -> Result<(), misaka_palw_base0::fp_recompute::Base0FpRecomputeError> {
         self.0.forward_no_capture(token, position)
     }
     fn state_chunks(
@@ -371,19 +439,24 @@ impl Base0FpRecomputeKernelsV1 for PalwGdnBoxedKernelsV1<'_> {
         self.0.state_chunks(profile, positions)
     }
     fn state_chunks_snapshot_retained_v4(
-        &self, profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, positions: u32,
+        &self,
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        positions: u32,
     ) -> Result<Vec<Vec<u8>>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
         self.0.state_chunks_snapshot_retained_v4(profile, positions)
     }
-
 }
 
 /// **One tick**: open a case for every accusable claim not yet seen (the accuser's own recompute decides), step every open case,
 /// and return the objects to carry. A claim whose recompute finds every checkpoint honest is settled `honest` and never demanded.
 pub fn palw_gdn_held_filer_emit_v2<H: PalwGdnHeldHostV1>(
-    host: &H, book: &mut PalwGdnHeldBookV1, now: u64,
-    mut emit: impl FnMut(Hash64, &kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwConsensusObjectV2>)
-        -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>,
+    host: &H,
+    book: &mut PalwGdnHeldBookV1,
+    now: u64,
+    mut emit: impl FnMut(
+        Hash64,
+        &kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwConsensusObjectV2>,
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>,
 ) {
     let claims = host.accusable_claims();
     let live: std::collections::BTreeSet<Hash64> = claims.iter().map(|c| c.claim).collect();
@@ -400,12 +473,16 @@ pub fn palw_gdn_held_filer_emit_v2<H: PalwGdnHeldHostV1>(
             continue;
         }
         let Ok(owned) = host.material(&claim) else {
-            if book.history.is_some() { book.history_failed_claims.insert(claim.claim); }
+            if book.history.is_some() {
+                book.history_failed_claims.insert(claim.claim);
+            }
             continue;
         };
         let view = owned.view();
         if host.kernels(&claim).is_err() {
-            if book.history.is_some() { book.history_failed_claims.insert(claim.claim); }
+            if book.history.is_some() {
+                book.history_failed_claims.insert(claim.claim);
+            }
             continue;
         }
         let kernels = || PalwGdnBoxedKernelsV1(host.kernels(&claim).expect("the class resolved above"));
@@ -419,15 +496,16 @@ pub fn palw_gdn_held_filer_emit_v2<H: PalwGdnHeldHostV1>(
                     continue;
                 }
                 Err(_) => {
-                    if book.history.is_some() { book.history_failed_claims.insert(claim.claim); }
+                    if book.history.is_some() {
+                        book.history_failed_claims.insert(claim.claim);
+                    }
                     continue;
-                },
+                }
             }
         }
         let objects = host.objects(&claim);
         let case = book.cases.get_mut(&claim.claim).expect("opened above");
-        let Some(observed_daa) = host.observed_through_daa(now)
-            .filter(|_| !book.history_failed_claims.contains(&claim.claim)) else {
+        let Some(observed_daa) = host.observed_through_daa(now).filter(|_| !book.history_failed_claims.contains(&claim.claim)) else {
             if let Err(why) = note_answers_v1(case, &view, &objects) {
                 kaspa_core::debug!("held GDN answer storage pending: {why}");
             }
@@ -436,18 +514,25 @@ pub fn palw_gdn_held_filer_emit_v2<H: PalwGdnHeldHostV1>(
         let Ok(input) = host.openings(&claim) else { continue };
         let sign = |m: &[u8], c: &[u8]| host.sign(m, c);
         let accuser = PalwGdnHeldAccuserV1 {
-            bond: host.bond(), network_domain: host.network_domain(),
-            openings: input.openings(), oracle: input.oracle(), sign: &sign,
+            bond: host.bond(),
+            network_domain: host.network_domain(),
+            openings: input.openings(),
+            oracle: input.oracle(),
+            sign: &sign,
         };
         match palw_gdn_held_step_retained_v2(case, &view, kernels, &objects, observed_daa, host.disclose_window_daa(), &accuser) {
             Ok(PalwGdnHeldNextRetainedV2::Demand { index, object, .. }) => {
-                if emit(claim.claim, &object).is_err() { continue; }
+                if emit(claim.claim, &object).is_err() {
+                    continue;
+                }
                 // A backfilled observation is older than this submission. Its
                 // clock must not shorten a newly queued demand's answer window.
                 case.demanded = Some((index, now.max(observed_daa)));
             }
             Ok(PalwGdnHeldNextRetainedV2::Accuse { object }) => {
-                if emit(claim.claim, &object).is_err() { continue; }
+                if emit(claim.claim, &object).is_err() {
+                    continue;
+                }
                 book.settled.insert(claim.claim, "accused");
             }
             Ok(PalwGdnHeldNextRetainedV2::DefaultDue { .. }) => {

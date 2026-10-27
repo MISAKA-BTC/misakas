@@ -193,7 +193,10 @@ impl PalwPanelService {
                                      member's turn covers it, and this node retries after {PALW_AUDIT_RETRY_DAA_V1} DAA (ADR-0160 F-Q)",
                                     result.as_ref().err()
                                 );
-                                duty.verdicts.insert(claim, PalwAuditVerdictV1::Unjudged { retry_at: current_daa.saturating_add(PALW_AUDIT_RETRY_DAA_V1) });
+                                duty.verdicts.insert(
+                                    claim,
+                                    PalwAuditVerdictV1::Unjudged { retry_at: current_daa.saturating_add(PALW_AUDIT_RETRY_DAA_V1) },
+                                );
                             }
                         }
                     }
@@ -260,7 +263,8 @@ impl PalwPanelService {
                 "[{PALW_PANEL}] claim {claim}: this operator is in the credited claim's audit pool and cannot replay it now — {why}; retried \
                  after {PALW_AUDIT_RETRY_DAA_V1} DAA (ADR-0160 F-Q)"
             );
-            duty.verdicts.insert(claim, PalwAuditVerdictV1::Unjudged { retry_at: current_daa.saturating_add(PALW_AUDIT_RETRY_DAA_V1) });
+            duty.verdicts
+                .insert(claim, PalwAuditVerdictV1::Unjudged { retry_at: current_daa.saturating_add(PALW_AUDIT_RETRY_DAA_V1) });
         };
         let Some(artifact_root) = job.artifact_root.filter(|_| super::palw_operator_da::palw_operator_da_replayable_v1(job)) else {
             return unjudged(duty, "the lane does not replay this claim");

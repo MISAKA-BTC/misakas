@@ -412,39 +412,39 @@ impl PalwPanelService {
                 (*canonical_last_daa) = current_daa;
                 match self.build_canonical_claim(&session, network_domain, bond, current_daa, funding_outpoint, &funding_entry).await {
                     Ok((tx, claim_id, material, _answer_wire_and_signing_lease, routing_work)) => {
-                        if let Err(why)=crate::palw_native_routing_work_v2::refresh_v2(&session,routing_work.as_ref()) {
+                        if let Err(why) = crate::palw_native_routing_work_v2::refresh_v2(&session, routing_work.as_ref()) {
                             warn!("[{PALW_PANEL}] canonical native routing publication deferred: {why}");
                         } else {
-                        // The accounting wire/signing reservation follows the actual outer TX through submission.
-                        let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
-                        let txid = prepared_carrier.id();
-                        match self.submit_prepared_direct_v1(&session, prepared_carrier).await {
-                            Ok(sent_carrier) => {
-                                info!("[{PALW_PANEL}] committed canonical claim {claim_id} in tx {txid}");
-                                // The answer beside the question, retained under the claim id
-                                // (the resolver serves it) and broadcast to the seats.
-                                self.retain_own_material(&claim_id, &material);
-                                // DRILL (ADR-0111): the answer envelope, never the capture — the
-                                // width at which no seat holds one and every seat judges by
-                                // intervals, so a named leaf's evidence must come from here.
-                                let served = if self.config.drill_answer_only {
-                                    self.derive_answer_envelope_v1(&material).unwrap_or(material)
-                                } else {
-                                    material
-                                };
-                                self.flow_context.broadcast_palw_material(claim_id, served).await;
-                                sent_carrier.record_change(
-                                    &mut carrier_chain.book_with_funding(&mut funding),
-                                    CarrierInFlightUpdateV1::Increment,
-                                    |next| self.persist_fee_outpoint(next),
-                                );
-                            }
-                            Err(e) => {
-                                warn!("[{PALW_PANEL}] the mempool refused the canonical claim: {e}");
-                                funding = None;
+                            // The accounting wire/signing reservation follows the actual outer TX through submission.
+                            let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
+                            let txid = prepared_carrier.id();
+                            match self.submit_prepared_direct_v1(&session, prepared_carrier).await {
+                                Ok(sent_carrier) => {
+                                    info!("[{PALW_PANEL}] committed canonical claim {claim_id} in tx {txid}");
+                                    // The answer beside the question, retained under the claim id
+                                    // (the resolver serves it) and broadcast to the seats.
+                                    self.retain_own_material(&claim_id, &material);
+                                    // DRILL (ADR-0111): the answer envelope, never the capture — the
+                                    // width at which no seat holds one and every seat judges by
+                                    // intervals, so a named leaf's evidence must come from here.
+                                    let served = if self.config.drill_answer_only {
+                                        self.derive_answer_envelope_v1(&material).unwrap_or(material)
+                                    } else {
+                                        material
+                                    };
+                                    self.flow_context.broadcast_palw_material(claim_id, served).await;
+                                    sent_carrier.record_change(
+                                        &mut carrier_chain.book_with_funding(&mut funding),
+                                        CarrierInFlightUpdateV1::Increment,
+                                        |next| self.persist_fee_outpoint(next),
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!("[{PALW_PANEL}] the mempool refused the canonical claim: {e}");
+                                    funding = None;
+                                }
                             }
                         }
-                    }
                     }
                     Err(e) => warn!("[{PALW_PANEL}] cannot build a canonical claim: {e}"),
                 }

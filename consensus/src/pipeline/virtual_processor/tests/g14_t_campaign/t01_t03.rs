@@ -86,7 +86,9 @@ async fn t01_honest_miner_and_wrong_challenger_through_shared_original_duties_an
         assert_eq!(outcome, Outcome::HonestFinal { challenger_charged: ticket.fee });
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("no funded original can be admitted on a node (palw_funded_original_schedule_v1 typed-missing, V2) so no PalwFundedEscrowRowV1 exists; escrow dues palw_escrow_fee_schedule_v1 = None (V3); there is no paid-ingress object (the paid ingress is a once-only fee on TIR CourtOpened, palw_court_ingress_schedule_v1 typed-missing, V4); intended palw_funded_original_v1 / palw_paid_ingress_quote_v1 / palw_original_escrow_outcome_v1 / K::PaidIngressOpen do not exist; a kernel-route claim carries no shared original");
+    blocked_on!(
+        "no funded original can be admitted on a node (palw_funded_original_schedule_v1 typed-missing, V2) so no PalwFundedEscrowRowV1 exists; escrow dues palw_escrow_fee_schedule_v1 = None (V3); there is no paid-ingress object (the paid ingress is a once-only fee on TIR CourtOpened, palw_court_ingress_schedule_v1 typed-missing, V4); intended palw_funded_original_v1 / palw_paid_ingress_quote_v1 / palw_original_escrow_outcome_v1 / K::PaidIngressOpen do not exist; a kernel-route claim carries no shared original"
+    );
 }
 
 /// **T02 (route part): permanent miner silence.** The miner publishes everything but one value and never answers again; an outsider
@@ -142,7 +144,8 @@ async fn t02_permanent_silence_on_the_shared_original_uses_current_duty_authorit
         let (silent, seats) = covered_claim(&mut w, 0, true).await;
         let outsider = w.outsiders(&silent, &seats, 1)[0];
         // INTENDED API (r5-f02-wire): the shared-court op opening a supplied duty against the original.
-        let op = K::SharedCourtOp { claim: silent.id, actor: w.net.kid(outsider), op: misaka_palw_kernel::court::SharedOpV1::OpenDuty };
+        let op =
+            K::SharedCourtOp { claim: silent.id, actor: w.net.kid(outsider), op: misaka_palw_kernel::court::SharedOpV1::OpenDuty };
         let o = w.net.route(outsider, &op);
         w.net.send(vec![(outsider, o)]).await;
         let duty = w.net.chain.tip_state().1.palw_shared_duty_v1(&silent.id).expect("supplied duty");
@@ -151,7 +154,9 @@ async fn t02_permanent_silence_on_the_shared_original_uses_current_duty_authorit
         assert!(w.net.chain.tip_state().1.palw_shared_duty_v1(&silent.id).unwrap().defaulted_by_current_authority());
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("tag 178 SharedCourtOpV1 carries Body/Ids/Request/Numerical/NativeHeldDefault (no OpenDuty) and needs a CourtSharedContext row that only #[cfg(test)] code installs; the post-Final default (NativeHeldDefault) needs a text29/funded11 held row and its slash PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1 = None (V6); the real reader court_duty_clocks_for_claim_v1 is empty for every kernel-route claim; intended palw_shared_duty_v1 does not exist");
+    blocked_on!(
+        "tag 178 SharedCourtOpV1 carries Body/Ids/Request/Numerical/NativeHeldDefault (no OpenDuty) and needs a CourtSharedContext row that only #[cfg(test)] code installs; the post-Final default (NativeHeldDefault) needs a text29/funded11 held row and its slash PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1 = None (V6); the real reader court_duty_clocks_for_claim_v1 is empty for every kernel-route claim; intended palw_shared_duty_v1 does not exist"
+    );
 }
 
 /// **T03: forged signatures and fake Panel completion reports are rejected before any culpability or monetary effect.** (a) A proof

@@ -15,14 +15,14 @@ use kaspad_lib::{
         PrivateNativeCustodySpecV3, PrivatePaidMaterialGenerationExportSpecV5, PrivatePaidObservationClaimsV5,
         PrivateRecoveryAckFeeSpecV4, PrivateSourceBootstrapCheckerSpecV1, PrivateSourceBootstrapProducerSpecV1,
         create_private_integration_core_with_campaign_workers_v1, create_private_integration_core_with_native_custody_v3,
-        create_private_integration_core_with_native_custody_v4,
-        create_private_integration_core_with_runtime, create_private_integration_core_with_source_workers_v1,
-        export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
-        export_private_paid_program_work_v3, export_private_source_paid_bootstrap_v1, generate_private_paid_request_v4,
-        prepare_private_integration_probe, private_complete_check_params_v1, private_g14_drill_params_v1,
-        private_late_retirement_params_v1, private_native_settlement_params_v1, private_paid_claim_params_v3,
-        private_paid_claim_params_v4, private_probe_manifest, private_source_bootstrap_paid_params_with_consumer_v6,
-        private_source_bootstrap_params_v1, private_source_verifier_economics_params_v2,
+        create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
+        create_private_integration_core_with_source_workers_v1, export_private_complete_bootstrap_v1,
+        export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4, export_private_paid_program_work_v3,
+        export_private_source_paid_bootstrap_v1, generate_private_paid_request_v4, prepare_private_integration_probe,
+        private_complete_check_params_v1, private_g14_drill_params_v1, private_late_retirement_params_v1,
+        private_native_settlement_params_v1, private_paid_claim_params_v3, private_paid_claim_params_v4, private_probe_manifest,
+        private_source_bootstrap_paid_params_with_consumer_v6, private_source_bootstrap_params_v1,
+        private_source_verifier_economics_params_v2,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -141,7 +141,6 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-request-spec"
                         | "--private-probe-request-inputs"
                         | "--private-probe-generate-paid-request"
-
                         | "--private-probe-kernel-paid-material-generation-v5"
                         | "--private-probe-kernel-paid-material-generation-v7"
                         | "--private-probe-kernel-material-replacement"
@@ -542,12 +541,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             kernel_replacement,
             kernel_generation,
             observations,
-            AdditionalCampaignWorkersV1 {
-                source_checker,
-                source_producer,
-                generation_export,
-                kernel_paid_replace: kernel_replace,
-            },
+            AdditionalCampaignWorkersV1 { source_checker, source_producer, generation_export, kernel_paid_replace: kernel_replace },
         )?
     } else {
         match native {

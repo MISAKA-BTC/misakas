@@ -160,7 +160,8 @@ impl Params {
                     || !at_or_below(self.palw_material_release_recovery_v2.as_ref().map(|r| r.activation))
                 {
                     return Err(PalwModeV2Error::InvalidOwned(
-                        "palw_claim_challenge_v2 requires the monetary material covenant and release recovery V2 at or below it".into(),
+                        "palw_claim_challenge_v2 requires the monetary material covenant and release recovery V2 at or below it"
+                            .into(),
                     ));
                 }
                 // RFC07-5 (user decision 2026-10-15 §8, note §4.1 T6): a drawn checker that approves without checking must lose its
@@ -168,7 +169,8 @@ impl Params {
                 // fence. (The trap requires this fence at or below it in turn: the two arm at one height.)
                 if !at_or_below(self.palw_paid_claim_trap_v1) {
                     return Err(PalwModeV2Error::InvalidOwned(
-                        "palw_claim_challenge_v2 requires palw_paid_claim_trap_v1 (lazy-verifier deterrence, RFC07-5) at or below it".into(),
+                        "palw_claim_challenge_v2 requires palw_paid_claim_trap_v1 (lazy-verifier deterrence, RFC07-5) at or below it"
+                            .into(),
                     ));
                 }
                 // Native all-target acceptance and the economics are measured: a pinned record (EMPTY: dormant).
@@ -406,7 +408,8 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     /// enrollment, that enrollment's lock row.
     pub fn paid_claim_bootstrap_locked_v2(&self, claim: &Digest) -> bool {
         use borsh::BorshDeserialize;
-        let Some(raw) = self.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, claim))) else {
+        let Some(raw) = self.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, claim)))
+        else {
             return false;
         };
         let Ok(index) = borsh::from_slice::<PalwPaidClaimIndexV3>(raw) else { return false };

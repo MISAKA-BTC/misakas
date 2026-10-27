@@ -37,13 +37,14 @@ fn gatec_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let mut params = config.params.clone();
     params.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
     if params.palw_model_tier_v1.is_none() {
-        params.palw_model_tier_v1 =
-            Some(kaspa_consensus_core::palw_model_tier_v1::PalwModelTierFenceV1::at(ForkActivation::new(0)));
+        params.palw_model_tier_v1 = Some(kaspa_consensus_core::palw_model_tier_v1::PalwModelTierFenceV1::at(ForkActivation::new(0)));
     }
     let mut tmp = params.clone();
     tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     tmp.sync_palw_rfc0018_v1();
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(mut bundle) = tmp.palw_consensus_mode else { unreachable!() };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(mut bundle) = tmp.palw_consensus_mode else {
+        unreachable!()
+    };
     let mirror =
         PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*bundle.state.rfc0018_v1().expect("Gate C mirrored") };
     assert!(mirror.gate_c_at(0));

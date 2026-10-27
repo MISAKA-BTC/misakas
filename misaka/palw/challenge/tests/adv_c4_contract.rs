@@ -147,7 +147,11 @@ fn every_permutation_of_the_same_events_gives_the_same_beacon() {
         }
         heap(k - 1, a, out);
         for i in 0..k - 1 {
-            if k % 2 == 0 { a.swap(i, k - 1) } else { a.swap(0, k - 1) }
+            if k % 2 == 0 {
+                a.swap(i, k - 1)
+            } else {
+                a.swap(0, k - 1)
+            }
             heap(k - 1, a, out);
         }
     }
@@ -249,7 +253,10 @@ fn a_panel_licensed_final_never_seeds_a_panel_assignment() {
     mix.extend(good()); // three independent
     let b = locked(&c, &mix, 200);
     assert_eq!(b, locked(&c, &good(), 200), "licensed works are inert");
-    assert!(collect_work_beacon_v1(&ctx(SubjectKindV1::ClaimVerification), &all_licensed, 200).is_ok_and(|s| matches!(s, WorkBeaconStateV1::Locked(_))));
+    assert!(
+        collect_work_beacon_v1(&ctx(SubjectKindV1::ClaimVerification), &all_licensed, 200)
+            .is_ok_and(|s| matches!(s, WorkBeaconStateV1::Locked(_)))
+    );
 }
 
 /// EXPECTED (before running): a forgetful consumer cannot make a candidate beacon itself for MODEL/KERNEL conformance:
@@ -276,7 +283,11 @@ fn a_forgetful_consumer_cannot_let_a_conformance_candidate_seed_its_own_challeng
     c.eligible_profiles.insert(CANDIDATE);
     let mut evs = good();
     evs.push(work(30, CANDIDATE, 103, 108));
-    assert_ne!(locked(&c, &evs, 150), locked(&c, &good(), 150), "GAP-C4-A: a forgetful consumer's self-beacon is accepted for CLAIM_VERIFICATION");
+    assert_ne!(
+        locked(&c, &evs, 150),
+        locked(&c, &good(), 150),
+        "GAP-C4-A: a forgetful consumer's self-beacon is accepted for CLAIM_VERIFICATION"
+    );
 }
 
 // ── lock, reorg, verification ────────────────────────────────────────────────────────────────────────────────────────────
@@ -488,7 +499,10 @@ fn six_subject_kinds_six_seeds_and_no_single_subject_field_is_a_free_edit() {
 // ── samplers ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 fn stream(label: u32, rep: u32) -> ChallengeStreamV1 {
-    ChallengeStreamV1::new(&[0x5E; 64], &StreamLabelV1 { kind: StreamKindV1::Query, scope_id: [7; 64], relation: label, repetition: rep })
+    ChallengeStreamV1::new(
+        &[0x5E; 64],
+        &StreamLabelV1 { kind: StreamKindV1::Query, scope_id: [7; 64], relation: label, repetition: rep },
+    )
 }
 
 /// Pearson chi-square of `counts` against uniform.
@@ -578,11 +592,23 @@ fn the_field_sampler_is_in_range_unbiased_bounded_and_label_separated() {
         }
     }
     assert!((48_000..52_000).contains(&top), "top bit {top}");
-    let mut tiny = ChallengeStreamV1::with_bound(&[1; 64], &StreamLabelV1 { kind: StreamKindV1::Freivalds, scope_id: [0; 64], relation: 0, repetition: 0 }, 3);
+    let mut tiny = ChallengeStreamV1::with_bound(
+        &[1; 64],
+        &StreamLabelV1 { kind: StreamKindV1::Freivalds, scope_id: [0; 64], relation: 0, repetition: 0 },
+        3,
+    );
     assert!(tiny.field_m127().is_ok());
     assert_eq!(tiny.field_m127(), Err(SampleRefusalV1::Exhausted(3)), "a bound hit is an error, not a biased fallback");
     let mut firsts = BTreeSet::new();
-    for kind in [StreamKindV1::Query, StreamKindV1::Segment, StreamKindV1::TensorRange, StreamKindV1::Vector, StreamKindV1::Freivalds, StreamKindV1::Aggregation, StreamKindV1::ProofRound] {
+    for kind in [
+        StreamKindV1::Query,
+        StreamKindV1::Segment,
+        StreamKindV1::TensorRange,
+        StreamKindV1::Vector,
+        StreamKindV1::Freivalds,
+        StreamKindV1::Aggregation,
+        StreamKindV1::ProofRound,
+    ] {
         for scope in [[0u8; 64], [1; 64]] {
             for relation in 0..3 {
                 for repetition in 0..3 {
@@ -766,14 +792,21 @@ fn the_onboarding_lifecycle_has_no_shortcut_to_active() {
             if legal(rec.state, step) {
                 // A legal step either advances or records a permitted failure; a forbidden failure payload is WrongFailure.
                 if let Err(e) = &res {
-                    assert!(matches!(e, misaka_palw_challenge::lifecycle::OnboardingRefusalV1::WrongFailure(_)), "{:?} {step:?}: {e}", rec.state);
+                    assert!(
+                        matches!(e, misaka_palw_challenge::lifecycle::OnboardingRefusalV1::WrongFailure(_)),
+                        "{:?} {step:?}: {e}",
+                        rec.state
+                    );
                     assert_eq!(&x, rec, "a refused step changed the record");
                 }
             } else {
                 assert!(res.is_err(), "{:?} accepted {step:?}", rec.state);
                 assert_eq!(&x, rec, "a refused step changed the record");
             }
-            assert!(!x.state.rewardable() || (rec.state == OnboardingStateV1::G14Eligible && matches!(step, P::Activated { availability: true })));
+            assert!(
+                !x.state.rewardable()
+                    || (rec.state == OnboardingStateV1::G14Eligible && matches!(step, P::Activated { availability: true }))
+            );
         }
     }
 }
@@ -890,13 +923,25 @@ fn conformance_evidence_is_recomputed_and_every_forged_field_or_non_pass_status_
         ("status incomplete", Box::new(|e| e.status = ConformanceStatusV1::Incomplete)),
         ("status failed", Box::new(|e| e.status = ConformanceStatusV1::Failed)),
         ("status unavailable", Box::new(|e| e.status = ConformanceStatusV1::BeaconUnavailable)),
-        ("zero required", Box::new(|e| { e.checks_required = 0; e.checks_run = 0; })),
+        (
+            "zero required",
+            Box::new(|e| {
+                e.checks_required = 0;
+                e.checks_run = 0;
+            }),
+        ),
         ("fewer run", Box::new(|e| e.checks_run = 9)),
         ("more run", Box::new(|e| e.checks_run = 11)),
         ("one failed", Box::new(|e| e.checks_failed = 1)),
         ("one missing", Box::new(|e| e.missing_checks = vec!["x".into()])),
         ("weak epsilon", Box::new(|e| e.derived_epsilon_bits = 39)),
-        ("skipped with passing counters", Box::new(|e| { e.status = ConformanceStatusV1::Skipped; e.checks_run = e.checks_required; })),
+        (
+            "skipped with passing counters",
+            Box::new(|e| {
+                e.status = ConformanceStatusV1::Skipped;
+                e.checks_run = e.checks_required;
+            }),
+        ),
     ];
     for (what, f) in &forged {
         let mut e = ok.clone();

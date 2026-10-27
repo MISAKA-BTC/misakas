@@ -203,7 +203,8 @@ mod tests {
 
     #[test]
     fn a_row_authenticates_exactly_its_bytes_door_class_and_registration() {
-        let policy = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::from_bytes([1; 64]), Hash64::from_bytes([2; 64]));
+        let policy =
+            crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::from_bytes([1; 64]), Hash64::from_bytes([2; 64]));
         let mut route = PalwKernelRouteStateV1::new(policy, None, Default::default());
         let bytes = vec![5u8; 300];
         let good = row(Some(palw_class_admission_bytes_digest_v1(&bytes)));

@@ -329,7 +329,10 @@ fn concurrent_liability_cap_binds_beside_the_period_caps() {
     w.tick(100);
     w.try_claim(1, capital, 100, PalwHoldModeV1::PanelZero, 2_000 * KAS).unwrap();
     w.tick(200);
-    assert_eq!(w.try_claim(1, capital, 200, PalwHoldModeV1::PanelZero, 2_000 * KAS), Err(PalwBudgetRefusalV1::LiabilityExceedsCapital));
+    assert_eq!(
+        w.try_claim(1, capital, 200, PalwHoldModeV1::PanelZero, 2_000 * KAS),
+        Err(PalwBudgetRefusalV1::LiabilityExceedsCapital)
+    );
     w.close_all_open(201);
     w.tick(300);
     w.try_claim(1, capital, 300, PalwHoldModeV1::PanelZero, 2_000 * KAS).expect("collateral freed by the terminal claims");

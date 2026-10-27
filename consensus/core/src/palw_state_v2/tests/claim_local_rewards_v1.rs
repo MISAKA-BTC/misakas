@@ -400,7 +400,9 @@ fn rfc23s2_checkpoint_below_the_fence_keeps_the_shared_frontier() {
     let a_blue = s.claim(&a).unwrap().accepted_blue_score;
     let (s2, _) = step(&s, &p, 10, 148, &[], None, &extra());
     assert!(checkpoint_bytes(&s2).is_none());
-    if s2.claim(&a).is_some() && !matches!(s2.claim(&a).unwrap().phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. }) {
+    if s2.claim(&a).is_some()
+        && !matches!(s2.claim(&a).unwrap().phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. })
+    {
         assert!(s2.safe_frontier().0 < a_blue, "below the fence an unresolved A still holds the shared frontier");
     }
     let _ = b;
@@ -417,7 +419,11 @@ fn rfc23s2_checkpoint_reorg_reverts_the_row_and_the_frontier() {
     let (s2, delta) = step(&s, &p, 10, 148, &[], None, &extra());
     assert_ne!(checkpoint_bytes(&s2), before.0, "the row moved with the block");
     let back = revert_delta_v2(&s2, &delta, &p).unwrap();
-    assert_eq!((checkpoint_bytes(&back), back.safe_frontier(), back.state_root()), before, "a reorg restores row and frontier exactly");
+    assert_eq!(
+        (checkpoint_bytes(&back), back.safe_frontier(), back.state_root()),
+        before,
+        "a reorg restores row and frontier exactly"
+    );
     let again = apply_delta_v2(&back, &delta, &p).unwrap();
     assert_eq!(again.state_root(), s2.state_root());
 }
@@ -474,15 +480,21 @@ fn rfc23s2_checkpoint_resource_owner_child() {
     let blocker = reserve_native_requests_v1(memory).unwrap();
     let build = || super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&s, &p, &point);
     assert!(matches!(build(), Err(PalwStateV2Error::NativeResource(_))));
-    assert!(matches!(
-        super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&malformed, &p, &point),
-        Err(PalwStateV2Error::NativeResource(_))
-    ), "capacity refusal precedes decoding even a malformed retained frame");
+    assert!(
+        matches!(
+            super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&malformed, &p, &point),
+            Err(PalwStateV2Error::NativeResource(_))
+        ),
+        "capacity refusal precedes decoding even a malformed retained frame"
+    );
     drop(blocker);
-    assert!(matches!(
-        super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&malformed, &p, &point),
-        Err(PalwStateV2Error::CarriageInconsistent(_))
-    ), "with capacity available the original malformed-frame error remains distinct");
+    assert!(
+        matches!(
+            super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&malformed, &p, &point),
+            Err(PalwStateV2Error::CarriageInconsistent(_))
+        ),
+        "with capacity available the original malformed-frame error remains distinct"
+    );
     let owner = build().unwrap().unwrap();
     assert_eq!(borsh::to_vec(&owner).unwrap(), canonical, "owner retains the exact checkpoint encoding");
     assert!(reserve_native_requests_v1(memory).is_err(), "the returned checkpoint keeps its demand live");
@@ -498,11 +510,7 @@ fn rfc23s2_checkpoint_resource_owner_child() {
 #[test]
 fn rfc23s2_checkpoint_admits_before_build_and_retains_until_drop() {
     let child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "palw_state_v2::tests::claim_local_rewards_v1::rfc23s2_checkpoint_resource_owner_child",
-            "--nocapture",
-        ])
+        .args(["--exact", "palw_state_v2::tests::claim_local_rewards_v1::rfc23s2_checkpoint_resource_owner_child", "--nocapture"])
         .env("MISAKA_CHECKPOINT_RESOURCE_OWNER", "1")
         .output()
         .unwrap();

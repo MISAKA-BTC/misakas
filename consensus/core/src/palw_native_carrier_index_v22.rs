@@ -23,13 +23,23 @@ impl NativeCarrierCandidateV22 {
     /// unit in a block, never many variants against an immutable old counter.
     pub fn key(&self) -> (u8, u8, [u8; 64], u16) {
         let (kind, id, part) = match self.request {
-            NativePaidCarrierRequestV22::ProofPartV39 {seal,index,mode,..}=>(if mode==0 {7} else if mode==1 {8} else {12},seal,index),
-            NativePaidCarrierRequestV22::AnswerPartV39 {pending,index,..}=>(9,pending,index),
-            NativePaidCarrierRequestV22::CommitPartV39 {job,index,..}=>(10,job,index),
-            NativePaidCarrierRequestV22::CommitAssembleV39 {job,..}=>(11,job,0),
-            NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,index,..}=>(4,pending,index),
-            NativePaidCarrierRequestV22::FundedCommitPartV32 {job,index,..}=>(5,job,index),
-            NativePaidCarrierRequestV22::FundedCommitAssembleV32 {job,..}=>(6,job,0),
+            NativePaidCarrierRequestV22::ProofPartV39 { seal, index, mode, .. } => (
+                if mode == 0 {
+                    7
+                } else if mode == 1 {
+                    8
+                } else {
+                    12
+                },
+                seal,
+                index,
+            ),
+            NativePaidCarrierRequestV22::AnswerPartV39 { pending, index, .. } => (9, pending, index),
+            NativePaidCarrierRequestV22::CommitPartV39 { job, index, .. } => (10, job, index),
+            NativePaidCarrierRequestV22::CommitAssembleV39 { job, .. } => (11, job, 0),
+            NativePaidCarrierRequestV22::ProducerAnswerPartV29 { pending, index, .. } => (4, pending, index),
+            NativePaidCarrierRequestV22::FundedCommitPartV32 { job, index, .. } => (5, job, index),
+            NativePaidCarrierRequestV22::FundedCommitAssembleV32 { job, .. } => (6, job, 0),
             NativePaidCarrierRequestV22::SourceAnswer { pending } => (0, pending, 0),
             NativePaidCarrierRequestV22::TraceAnswer { pending } => (1, pending, 0),
             NativePaidCarrierRequestV22::OwnProofPart { seal, index, .. } => (2, seal, index as u16),
@@ -78,13 +88,24 @@ pub fn native_carrier_candidate_v22(tx: &Transaction) -> Option<NativeCarrierCan
                         count: part.count,
                     }
                 }
-                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,39)=>{
-                    let p=crate::palw_flat_stage_v28::borrowed_invocation_commit_metadata_v32(a.body)?;
-                    NativePaidCarrierRequestV22::FundedCommitPartV32{job:p.job,group:p.group,index:p.index,count:p.count,total:p.total}
+                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 39) => {
+                    let p = crate::palw_flat_stage_v28::borrowed_invocation_commit_metadata_v32(a.body)?;
+                    NativePaidCarrierRequestV22::FundedCommitPartV32 {
+                        job: p.job,
+                        group: p.group,
+                        index: p.index,
+                        count: p.count,
+                        total: p.total,
+                    }
                 }
-                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,40)=>{
-                    if a.body.len()!=130||a.body[..2]!=32u16.to_le_bytes(){return None;}
-                    NativePaidCarrierRequestV22::FundedCommitAssembleV32{job:a.body[2..66].try_into().ok()?,group:a.body[66..130].try_into().ok()?}
+                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 40) => {
+                    if a.body.len() != 130 || a.body[..2] != 32u16.to_le_bytes() {
+                        return None;
+                    }
+                    NativePaidCarrierRequestV22::FundedCommitAssembleV32 {
+                        job: a.body[2..66].try_into().ok()?,
+                        group: a.body[66..130].try_into().ok()?,
+                    }
                 }
                 // Owning39 paid lanes: proof/discovery pages (50), producer
                 // answers (48, the same fixed frame naming pending/group),
@@ -126,11 +147,15 @@ pub fn native_carrier_candidate_v22(tx: &Transaction) -> Option<NativeCarrierCan
                     let (job, group) = crate::palw_native_job_v39::borrowed_native_commit_assembly_v39(a.body)?;
                     NativePaidCarrierRequestV22::CommitAssembleV39 { job, group }
                 }
-                (misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11,37)
-                |(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,32)=>{
-                    let p=crate::palw_native_reply_parts_v29::borrowed_native_reply_metadata_v29(a.body)?;
+                (misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11, 37)
+                | (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 32) => {
+                    let p = crate::palw_native_reply_parts_v29::borrowed_native_reply_metadata_v29(a.body)?;
                     NativePaidCarrierRequestV22::ProducerAnswerPartV29 {
-                        pending:p.pending,group:p.group,index:p.index,count:p.count,total:p.total,
+                        pending: p.pending,
+                        group: p.group,
+                        index: p.index,
+                        count: p.count,
+                        total: p.total,
                     }
                 }
                 _ => return None,
@@ -213,29 +238,42 @@ impl NativeCarriageSnapshotV22 {
         // Stage's separate physical consent/lease must be connected before its
         // carriers can enter this lane. Sharing a tag or source pending ID is
         // never enough to reinterpret a text native23 lease as a stage grant.
-        let route=self.state.kernel_route()?;
-        let e=match c.namespace {
-            misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11=>
-                route.native_paid_carrier_eligibility_v22(&c.request,self.now,&self.mass,&self.service)?,
-            misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14=>match &c.request {
-                NativePaidCarrierRequestV22::SourceAnswer{pending}=>
-                    route.stage_paid_answer_eligibility_v28(*pending,self.now,&self.mass,&self.service)?,
-                NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,group,index,count,total}=>
-                    route.stage_paid_reply_eligibility_v28(*pending,*group,*index,*count,*total,self.now,&self.mass,&self.service)?,
-                NativePaidCarrierRequestV22::FundedCommitPartV32 {job,group,index,count,total}=>
-                    route.native_paid_invocation_commit_eligibility_v32(*job,*group,*index,*count,*total,self.now,&self.mass,&self.service)?,
-                NativePaidCarrierRequestV22::FundedCommitAssembleV32 {job,group}=>
-                    route.native_paid_invocation_assemble_eligibility_v32(*job,*group,self.now,&self.mass,&self.service)?,
+        let route = self.state.kernel_route()?;
+        let e = match c.namespace {
+            misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 => {
+                route.native_paid_carrier_eligibility_v22(&c.request, self.now, &self.mass, &self.service)?
+            }
+            misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => match &c.request {
+                NativePaidCarrierRequestV22::SourceAnswer { pending } => {
+                    route.stage_paid_answer_eligibility_v28(*pending, self.now, &self.mass, &self.service)?
+                }
+                NativePaidCarrierRequestV22::ProducerAnswerPartV29 { pending, group, index, count, total } => route
+                    .stage_paid_reply_eligibility_v28(*pending, *group, *index, *count, *total, self.now, &self.mass, &self.service)?,
+                NativePaidCarrierRequestV22::FundedCommitPartV32 { job, group, index, count, total } => route
+                    .native_paid_invocation_commit_eligibility_v32(
+                        *job,
+                        *group,
+                        *index,
+                        *count,
+                        *total,
+                        self.now,
+                        &self.mass,
+                        &self.service,
+                    )?,
+                NativePaidCarrierRequestV22::FundedCommitAssembleV32 { job, group } => {
+                    route.native_paid_invocation_assemble_eligibility_v32(*job, *group, self.now, &self.mass, &self.service)?
+                }
                 // Owning39 lanes resolve through the shared route reader,
                 // which reads only bounded original rows.
                 NativePaidCarrierRequestV22::ProofPartV39 { .. }
                 | NativePaidCarrierRequestV22::AnswerPartV39 { .. }
                 | NativePaidCarrierRequestV22::CommitPartV39 { .. }
-                | NativePaidCarrierRequestV22::CommitAssembleV39 { .. } =>
-                    route.native_paid_carrier_eligibility_v22(&c.request,self.now,&self.mass,&self.service)?,
-                _=>return None,
+                | NativePaidCarrierRequestV22::CommitAssembleV39 { .. } => {
+                    route.native_paid_carrier_eligibility_v22(&c.request, self.now, &self.mass, &self.service)?
+                }
+                _ => return None,
             },
-            _=>return None,
+            _ => return None,
         };
         (e.owner == c.owner && e.deadline >= self.now && e.original_service == self.service.root()).then_some(e)
     }
@@ -247,14 +285,17 @@ impl NativeCarriageSnapshotV22 {
             if (0..tx.tx().inputs.len()).any(|i| tx.utxo(i).is_none_or(|e| e.block_daa_score > self.selected_parent_daa)) {
                 return None;
             }
-        } else if matches!(c.request, NativePaidCarrierRequestV22::OwnProofPartV29 { .. }
-            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }
-            |NativePaidCarrierRequestV22::FundedCommitPartV32 { .. }
-            |NativePaidCarrierRequestV22::FundedCommitAssembleV32 { .. }
-            |NativePaidCarrierRequestV22::ProofPartV39 { .. }
-            |NativePaidCarrierRequestV22::AnswerPartV39 { .. }
-            |NativePaidCarrierRequestV22::CommitPartV39 { .. }
-            |NativePaidCarrierRequestV22::CommitAssembleV39 { .. }) {
+        } else if matches!(
+            c.request,
+            NativePaidCarrierRequestV22::OwnProofPartV29 { .. }
+                | NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }
+                | NativePaidCarrierRequestV22::FundedCommitPartV32 { .. }
+                | NativePaidCarrierRequestV22::FundedCommitAssembleV32 { .. }
+                | NativePaidCarrierRequestV22::ProofPartV39 { .. }
+                | NativePaidCarrierRequestV22::AnswerPartV39 { .. }
+                | NativePaidCarrierRequestV22::CommitPartV39 { .. }
+                | NativePaidCarrierRequestV22::CommitAssembleV39 { .. }
+        ) {
             return None;
         }
         Some(e)
@@ -285,15 +326,43 @@ mod tests {
         )
     }
     #[test]
-    fn compact_commit32_metadata_keeps_one_original_part_identity(){
-        let mut body=Vec::new();body.extend_from_slice(&32u16.to_le_bytes());body.push(0);body.extend_from_slice(&[21;64]);body.extend_from_slice(&[22;64]);body.extend_from_slice(&0u16.to_le_bytes());body.extend_from_slice(&1u16.to_le_bytes());body.extend_from_slice(&3u32.to_le_bytes());body.extend_from_slice(&u32::MAX.to_le_bytes());body.extend_from_slice(&[1,2,3]);
-        let frame=|b:Vec<u8>|{let mut x=vec![1,misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,39];x.extend_from_slice(&(b.len() as u32).to_le_bytes());x.extend(b);x};
-        let candidate=|b:Vec<u8>|native_carrier_candidate_v22(&tx(PalwConsensusObjectV2::KernelRouteV1{bytes:frame(b),signer:owner(),signature:vec![1]})).unwrap();
-        let a=candidate(body.clone());assert_eq!(a.key(),(64,5,[21;64],0));
+    fn compact_commit32_metadata_keeps_one_original_part_identity() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&32u16.to_le_bytes());
+        body.push(0);
+        body.extend_from_slice(&[21; 64]);
+        body.extend_from_slice(&[22; 64]);
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&3u32.to_le_bytes());
+        body.extend_from_slice(&u32::MAX.to_le_bytes());
+        body.extend_from_slice(&[1, 2, 3]);
+        let frame = |b: Vec<u8>| {
+            let mut x = vec![1, misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14, 39];
+            x.extend_from_slice(&(b.len() as u32).to_le_bytes());
+            x.extend(b);
+            x
+        };
+        let candidate = |b: Vec<u8>| {
+            native_carrier_candidate_v22(&tx(PalwConsensusObjectV2::KernelRouteV1 {
+                bytes: frame(b),
+                signer: owner(),
+                signature: vec![1],
+            }))
+            .unwrap()
+        };
+        let a = candidate(body.clone());
+        assert_eq!(a.key(), (64, 5, [21; 64], 0));
         // Hostile nested part length is left for original paid predebit.
-        body[67..131].fill(23);let b=candidate(body);assert_eq!(a.key(),b.key());
-        let assembly=NativeCarrierCandidateV22{namespace:64,owner:owner(),request:NativePaidCarrierRequestV22::FundedCommitAssembleV32{job:[21;64],group:[22;64]}};
-        assert_ne!(a.key(),assembly.key());
+        body[67..131].fill(23);
+        let b = candidate(body);
+        assert_eq!(a.key(), b.key());
+        let assembly = NativeCarrierCandidateV22 {
+            namespace: 64,
+            owner: owner(),
+            request: NativePaidCarrierRequestV22::FundedCommitAssembleV32 { job: [21; 64], group: [22; 64] },
+        };
+        assert_ne!(a.key(), assembly.key());
     }
     /// Owning39 producer pages (54), assembly (55), proof pages (50) and
     /// answers (48) yield distinct original units; a hostile nested length or a

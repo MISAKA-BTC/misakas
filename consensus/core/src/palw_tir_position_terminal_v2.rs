@@ -157,7 +157,10 @@ pub enum PalwTirPositionMoveErrorV2 {
 
 /// The responder's position round a terminal `phase` expects, built honestly from `round` (a builder
 /// helper: binds everything a [`PalwTirPositionDissectionV2`] must carry).
-pub fn palw_tir_position_dissection_for_v2(phase: &PalwTirDissectPhaseV1, round: PalwTirDissectRoundV1) -> Option<PalwTirPositionDissectionV2> {
+pub fn palw_tir_position_dissection_for_v2(
+    phase: &PalwTirDissectPhaseV1,
+    round: PalwTirDissectRoundV1,
+) -> Option<PalwTirPositionDissectionV2> {
     let narrowing = phase.position_narrowing_v1()?;
     let (from, to) = narrowing.tile_range();
     Some(PalwTirPositionDissectionV2 {
@@ -273,7 +276,10 @@ pub fn palw_tir_position_witness_bytes_v2(close: &PalwTirPositionCloseV2) -> u64
 
 /// **The position witness budget** — checked before any evaluation. `budget` is the adopted bound
 /// ([`PALW_TIR_POSITION_WITNESS_BUDGET_V2`] at the call sites).
-pub fn check_tir_position_witness_budget_v2(close: &PalwTirPositionCloseV2, budget: Option<u64>) -> Result<u64, PalwTirPositionWitnessErrorV2> {
+pub fn check_tir_position_witness_budget_v2(
+    close: &PalwTirPositionCloseV2,
+    budget: Option<u64>,
+) -> Result<u64, PalwTirPositionWitnessErrorV2> {
     let budget = budget.ok_or(PalwTirPositionWitnessErrorV2::PositionWitnessBudgetIncomplete)?;
     let bytes = palw_tir_position_witness_bytes_v2(close);
     if bytes > budget {
@@ -480,13 +486,7 @@ mod tests {
         for n in [1u64, 2, 3, 5, 7, 8, 9, 16, 17, 33, 100] {
             let l = leaves(n);
             let root = crate::palw_step_leg::step_merkle_root_v1(&l).unwrap();
-            let sets: Vec<Vec<u64>> = vec![
-                vec![0],
-                vec![n - 1],
-                (0..n).collect(),
-                (0..n).step_by(3).collect(),
-                (n / 2..n).collect(),
-            ];
+            let sets: Vec<Vec<u64>> = vec![vec![0], vec![n - 1], (0..n).collect(), (0..n).step_by(3).collect(), (n / 2..n).collect()];
             for set in sets {
                 let mp = PalwStepMultiproofV2::build(&l, &set).unwrap();
                 assert_eq!(mp.root().unwrap(), root, "n={n} set={set:?}");
@@ -562,7 +562,9 @@ mod tests {
     /// value: every reduction carries one element), for the disclosure (tag 203) and the chosen path (tag 204).
     #[test]
     fn p3_a_lookahead_at_the_frontier_bound_fits_one_carrier_part() {
-        use crate::palw_tir_dissect_v1::{PalwTirChoicePathV2, PalwTirLookaheadDisclosureV2, PalwTirLookaheadExpansionV2, PalwTirRangeClaimV1};
+        use crate::palw_tir_dissect_v1::{
+            PalwTirChoicePathV2, PalwTirLookaheadDisclosureV2, PalwTirLookaheadExpansionV2, PalwTirRangeClaimV1,
+        };
         let cap = PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2.expect("decided");
         let budget = PALW_TIR_POSITION_WITNESS_BUDGET_V2.expect("decided");
         assert_eq!(cap, 3_072);
@@ -583,7 +585,8 @@ mod tests {
                 disclosure: disclosure.clone(),
                 signature: vec![0xA5; 4_627],
             };
-            let path = PalwTirChoicePathV2 { version: 2, session_id: Hash64::from_bytes([7; 64]), round: u32::MAX, path: vec![15, 15] };
+            let path =
+                PalwTirChoicePathV2 { version: 2, session_id: Hash64::from_bytes([7; 64]), round: u32::MAX, path: vec![15, 15] };
             let chosen = PalwTirLookaheadChosenV2 { disclosure, path, signature: vec![0x5A; 4_627] };
             for bytes in [borsh::to_vec(&disclosed).unwrap().len() as u64, borsh::to_vec(&chosen).unwrap().len() as u64] {
                 assert!(bytes <= budget, "{bytes} B is over one carrier part");

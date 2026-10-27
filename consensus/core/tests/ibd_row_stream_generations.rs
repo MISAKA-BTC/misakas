@@ -73,7 +73,12 @@ fn stream(
 /// The whole-state step used by these tests: read the spill back and check a global invariant across collections
 /// (every claim names a class index that exists) — standing in for `restore_native_carriage_v1`'s full root
 /// recomputation and `assert_internal_consistency*`, which need a real typed state.
-fn whole_state(spill: &mut SpillFile, preimage: &[u8], root: Hash64, require: impl Fn(&[(Vec<u8>, Rows)]) -> bool) -> Result<(), String> {
+fn whole_state(
+    spill: &mut SpillFile,
+    preimage: &[u8],
+    root: Hash64,
+    require: impl Fn(&[(Vec<u8>, Rows)]) -> bool,
+) -> Result<(), String> {
     if palw_state_root_of_preimage_v1(preimage) != root {
         return Err("preimage".into());
     }
@@ -253,7 +258,8 @@ fn a_root_matching_stream_that_fails_the_whole_state_check_is_not_verified() {
 /// verified generation unless the rename happened, in which case the new verified one is active.
 #[test]
 fn a_crash_between_verification_and_switch_recovers_to_a_verified_generation() {
-    for (point, switched) in [(CrashPoint::VerifyAfterMarker, false), (CrashPoint::SwitchAfterJournalTmp, false), (CrashPoint::SwitchAfterJournal, true)]
+    for (point, switched) in
+        [(CrashPoint::VerifyAfterMarker, false), (CrashPoint::SwitchAfterJournalTmp, false), (CrashPoint::SwitchAfterJournal, true)]
     {
         let c = three();
         let cap = 32 << 10;

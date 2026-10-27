@@ -440,7 +440,10 @@ impl ConsensusSessionOwned {
     }
 
     /// RFC-0006 read-only census of the historical headers the EXEC origin migration needs (authorizes nothing).
-    pub fn palw_exec_origin_coverage_v1(&self, listed: usize) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageOwnedV1, String> {
+    pub fn palw_exec_origin_coverage_v1(
+        &self,
+        listed: usize,
+    ) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageOwnedV1, String> {
         self.consensus.palw_exec_origin_coverage_v1(listed)
     }
 
@@ -459,7 +462,9 @@ impl ConsensusSessionOwned {
         requester: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         pubkey: &[u8],
     ) -> Result<
-        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+        >,
         String,
     > {
         self.consensus.palw_kernel_material_query_authority_v4(query, requester, pubkey)
@@ -473,7 +478,9 @@ impl ConsensusSessionOwned {
         executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     ) -> Result<
-        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4,
+        >,
         String,
     > {
         self.consensus.palw_native_recovery_session_quote_v4(checkpoint, daa, class, executor, providers)
@@ -867,15 +874,37 @@ impl ConsensusSessionOwned {
         self.consensus.palw_native_routing_execution_authority_v2(checkpoint, candidate, job, executor)
     }
     pub fn palw_native_routing_fp_work_authority_v2(
-        &self, fp: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
-    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.consensus.palw_native_routing_fp_work_authority_v2(fp,job) }
+        &self,
+        fp: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    ) -> Result<
+        Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        self.consensus.palw_native_routing_fp_work_authority_v2(fp, job)
+    }
     pub fn palw_native_routing_rider_work_authority_v2(
-        &self, job: &kaspa_consensus_core::palw_v2::PalwJobContextV2, executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        lead: kaspa_consensus_core::Hash64, index: u32, retention: u64,
-    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.consensus.palw_native_routing_rider_work_authority_v2(job,executor,lead,index,retention) }
+        &self,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        lead: kaspa_consensus_core::Hash64,
+        index: u32,
+        retention: u64,
+    ) -> Result<
+        Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        self.consensus.palw_native_routing_rider_work_authority_v2(job, executor, lead, index, retention)
+    }
     pub fn palw_native_routing_refresh_work_authority_v2(
-        &self, original: &kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
-    ) -> Result<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.consensus.palw_native_routing_refresh_work_authority_v2(original) }
+        &self,
+        original: &kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
+    ) -> Result<
+        Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        self.consensus.palw_native_routing_refresh_work_authority_v2(original)
+    }
     pub fn palw_native_routing_claim_authority_v2(
         &self,
         claim: Hash64,
@@ -1231,14 +1260,20 @@ impl ConsensusSessionOwned {
     pub fn palw_evm_view_at_owned_v2(
         &self,
         target: kaspa_consensus_core::BlockHash,
-    ) -> Result<Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewAtV2>, kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2> {
+    ) -> Result<
+        Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewAtV2>,
+        kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2,
+    > {
         self.consensus.palw_evm_view_at_owned_v2(target)
     }
 
     pub fn palw_evm_replay_market_owned_v2(
         &self,
         accepting: kaspa_consensus_core::BlockHash,
-    ) -> Result<Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>, kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2> {
+    ) -> Result<
+        Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>,
+        kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2,
+    > {
         self.consensus.palw_evm_replay_market_owned_v2(accepting)
     }
 

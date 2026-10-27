@@ -50,7 +50,11 @@ fn row_of<T: borsh::BorshDeserialize>(state: &PalwChainStateV2, key: &[u8]) -> O
     state.kernel_route.as_ref()?.aux_row::<T>(PALW_MODEL_ELIGIBILITY_TABLE_V1, key)
 }
 
-fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) -> Result<(), PalwStateV2Error> {
+fn write_row<T: borsh::BorshSerialize>(
+    builder: &mut TransitionBuilder<'_>,
+    key: Vec<u8>,
+    row: Option<&T>,
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_MODEL_ELIGIBILITY_TABLE_V1,
         key,

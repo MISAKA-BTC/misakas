@@ -33,7 +33,9 @@ use kaspa_consensus_core::palw_state_v2::{
     PalwStateV2Error, palw_false_valid_lock_slashable_v1, palw_g13_relied_lock_lost_v1, palw_lock_is_committed_v1,
     palw_max_concurrent_court_sessions_v1,
 };
-use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepTableV1, canonical_step_leaf_index, step_leaf_count_capped_v1};
+use kaspa_consensus_core::palw_step::{
+    PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepTableV1, canonical_step_leaf_index, step_leaf_count_capped_v1,
+};
 use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, PalwStepOpeningV1, PalwStepTileLeafV1};
 use kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1;
 
@@ -160,7 +162,12 @@ fn reservation(s: &PalwChainStateV2, claim: Hash64, reserver: PalwBondKeyV2) -> 
 /// route at the release height — the only change option (b)'s gate reads.
 #[test]
 fn lg14_arming_needs_a_record_naming_the_network_and_height() {
-    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
+    assert!(
+        PALW_G14_ARMING_RECORDS_V1
+            .iter()
+            .all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash),
+        "no record is pinned in this binary"
+    );
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     // Both new gated fences: listed, measured, refused without a record.
@@ -171,8 +178,14 @@ fn lg14_arming_needs_a_record_naming_the_network_and_height() {
     }
     assert_eq!(PalwG14GatedFenceV1::LegacyPublicFilerV1.requirements(), PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1);
     assert_eq!(PalwG14GatedFenceV1::LegacyHeldDaV2.requirements(), PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1);
-    assert!(PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1.iter().any(|r| r.contains("legacy_v2_attempt_full_collusion_outside_bond_convicts")));
-    assert!(PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1.iter().any(|r| r.contains("legacy_v2_attempt_held_da_withholding_ends_in_da_default")));
+    assert!(
+        PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1.iter().any(|r| r.contains("legacy_v2_attempt_full_collusion_outside_bond_convicts"))
+    );
+    assert!(
+        PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1
+            .iter()
+            .any(|r| r.contains("legacy_v2_attempt_held_da_withholding_ends_in_da_default"))
+    );
 
     // LG14-A + LG14-B + option (b) at DAA 14,000 on testnet-12: refused unpinned, validates with exactly its records.
     let (p, records) = arm_legacy(t12.clone(), RELEASE, true, true);
@@ -183,14 +196,14 @@ fn lg14_arming_needs_a_record_naming_the_network_and_height() {
         assert!(p.validate_palw_v2_with_arming_records_v1(&fewer).is_err(), "every record is load-bearing");
         // The whole validation stops at the first fence's F02/F03 refusal, so the dropped fence's own record gate is read directly.
         let at = dropped.fence.armed(&p).expect("armed").daa_score();
-        let why = palw_g14_arming_record_admits_v1(dropped.fence, p.genesis.hash, at, &fewer).expect_err("every record is load-bearing");
+        let why =
+            palw_g14_arming_record_admits_v1(dropped.fence, p.genesis.hash, at, &fewer).expect_err("every record is load-bearing");
         assert!(matches!(why, PalwG14ArmingRefusalV1::NoRecord), "{:?}: {why:?}", dropped.fence);
     }
     let elsewhere: Vec<PalwG14ArmingRecordV1> =
         records.iter().map(|r| PalwG14ArmingRecordV1 { activation_daa: RELEASE + 1, ..*r }).collect();
     assert!(p.validate_palw_v2_with_arming_records_v1(&elsewhere).is_err(), "a record for another height authorizes nothing");
-    let other_net: Vec<PalwG14ArmingRecordV1> =
-        records.iter().map(|r| PalwG14ArmingRecordV1 { genesis: h(0xBAD), ..*r }).collect();
+    let other_net: Vec<PalwG14ArmingRecordV1> = records.iter().map(|r| PalwG14ArmingRecordV1 { genesis: h(0xBAD), ..*r }).collect();
     assert!(p.validate_palw_v2_with_arming_records_v1(&other_net).is_err(), "a record for another network authorizes nothing");
     let malformed: Vec<PalwG14ArmingRecordV1> = records.iter().map(|r| PalwG14ArmingRecordV1 { review: [0; 32], ..*r }).collect();
     assert!(p.validate_palw_v2_with_arming_records_v1(&malformed).is_err(), "a record without a review is refused");
@@ -362,7 +375,14 @@ struct Held {
 }
 
 impl Held {
-    fn fold(&self, daa: u64, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, rule: Rule) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    fn fold(
+        &self,
+        daa: u64,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+        key: Hash64,
+        rule: Rule,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
         let f = flags(&self.p, daa);
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
             &self.s,
@@ -390,7 +410,13 @@ impl Held {
         self.step_work(objects, PalwBlockWorkV3::None, Hash64::default(), rule)
     }
 
-    fn step_work(&mut self, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, rule: Rule) -> Result<(), PalwStateV2Error> {
+    fn step_work(
+        &mut self,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+        key: Hash64,
+        rule: Rule,
+    ) -> Result<(), PalwStateV2Error> {
         let daa = self.daa + 1;
         let next = self.fold(daa, objects, work, key, rule)?;
         let reloaded = PalwStateCarriageV2::from_state(&next).into_state(&self.sp, Some(next.state_root())).expect("reloads");
@@ -462,7 +488,8 @@ fn held_chain_lane(armed: bool, lane: bool, sybils: u64) -> (Held, HeldRow, Vec<
         genesis_bonds(&p)[..b.panel.seat_count() as usize].iter().map(|(k, o, _)| (*k, *o)).collect();
     let mut s = genesis_state(&p);
     let mut c = PalwStateCarriageV2::from_state(&s);
-    c.model_lifecycles.get_mut(&row.id).expect("the row").state = kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Active;
+    c.model_lifecycles.get_mut(&row.id).expect("the row").state =
+        kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Active;
     s = c.into_state_v3(&sp, None, flags(&p, 0).uncertified_weightless, p.palw_canonical_work_daa()).expect("a consistent carriage");
     let mut chain = Held { p, sp, s, daa: 999 };
     let mut bonds = vec![bond_obj(EXECUTOR, RICH), bond_obj(BYSTANDER, RICH), bond_obj(OUTSIDER, RICH)];
@@ -482,8 +509,11 @@ fn licensed(c: &mut Held, row: &HeldRow, seats: &[(PalwBondKeyV2, Hash64)], nonc
     let (env, key, claim_id) =
         junk_attempt(row.id, bond_key(EXECUTOR), pubkey_of(EXECUTOR), &operator_pubkey_of(EXECUTOR), pwu, nonce, 0x0614_A000 + nonce);
     c.step_work(&[], PalwBlockWorkV3::Attempt(&env), key, Rule::T12).expect("the attempt folds (option (b) is not armed here)");
-    c.step(&[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0x0614_AA00 + nonce), seats: seats_of(seats) }], Rule::T12)
-        .expect("the panel binds");
+    c.step(
+        &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0x0614_AA00 + nonce), seats: seats_of(seats) }],
+        Rule::T12,
+    )
+    .expect("the panel binds");
     let keys: Vec<PalwBondKeyV2> = seats.iter().map(|s| s.0).collect();
     c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: valid_receipts(claim_id, &keys) }], Rule::T12)
         .expect("every seat signs Valid");
@@ -622,10 +652,9 @@ fn g07_a_coalition_cannot_spend_the_outsiders_budget() {
     c.step(&[PalwConsensusObjectV2::ReceiptLicensedV2 { claim: id, receipts }]);
     // The coalition: DA-8's shared budget spent, and 64 live reservations on the claim.
     c.s = edited(&c.sp, &c.s, |carriage| {
-        carriage.da_claims.insert(
-            id,
-            kaspa_consensus_core::palw_da_rcore_v1::PalwDaClaimV1 { opened_non_seat_total: 16, ..Default::default() },
-        );
+        carriage
+            .da_claims
+            .insert(id, kaspa_consensus_core::palw_da_rcore_v1::PalwDaClaimV1 { opened_non_seat_total: 16, ..Default::default() });
     });
     for n in first..first + coalition {
         c.step(&[reservation(&c.s, id, bond_key(n))]);
@@ -794,7 +823,9 @@ fn g13_a_valid_lock_lives_to_the_liability_horizon() {
         // The fold's conviction funnel reads this predicate (the funnel is reached only with an admissible contradiction, which the
         // node E2E `legacy_v2_attempt_full_collusion_outside_bond_convicts` files for every Valid seat).
         let funnel = include_str!("../src/palw_state_v2/transition_builder.rs");
-        assert!(funnel.contains("if palw_g13_relied_lock_lost_v1(&self.state, self.params, &claim_id, &accused, now, self.second_clock_depth(now))"));
+        assert!(funnel.contains(
+            "if palw_g13_relied_lock_lost_v1(&self.state, self.params, &claim_id, &accused, now, self.second_clock_depth(now))"
+        ));
     }
     eprintln!("[G-13] (armed, F) = {results:?}");
 }
@@ -841,7 +872,9 @@ fn g14_close_legacy_from_genesis() {
     c.step(&[PalwConsensusObjectV2::DisputeReleasedV1 { claim: id, reserver, signature: Vec::new() }]);
     let resumed = c.s.deadline_of(&id).expect("the hold ended: DL-1 re-arms");
     c.step_at(resumed.max(c.daa) + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
-    let PalwClaimPhaseV2::Final { final_daa } = c.claim(&id).phase else { panic!("Final once the hold ends: {:?}", c.claim(&id).phase) };
+    let PalwClaimPhaseV2::Final { final_daa } = c.claim(&id).phase else {
+        panic!("Final once the hold ends: {:?}", c.claim(&id).phase)
+    };
     // The hold re-dated every lock to the reservation's `hard + window_challenge` (DA-5 / L-3, only ever raised), and Final keeps
     // it: never below the liability horizon `F + window_court` (G-13), never lane V02's `F + 1,000`.
     let horizon = final_daa + c.sp.window_court();
@@ -871,7 +904,11 @@ fn g14_close_legacy_from_genesis() {
 fn testnet12_identity_did_not_move() {
     let launch = palw_t12_launch_params_v1();
     assert_eq!(
-        (launch.consensus_params_id().to_string(), launch.consensus_identity_id().to_string(), launch.consensus_schedule_id().to_string()),
+        (
+            launch.consensus_params_id().to_string(),
+            launch.consensus_identity_id().to_string(),
+            launch.consensus_schedule_id().to_string()
+        ),
         (
             "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f".to_string(),
             "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5".to_string(),

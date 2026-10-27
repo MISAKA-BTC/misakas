@@ -285,7 +285,8 @@ pub fn palw_tir_public_selection_probe_v1(
         Ok(_) => {
             let mut proof = PalwCourtVerdictProofV2::TirDecodeTokenTiled { binding: Box::new(binding.clone()), pin };
             proof.tir_strip_program_v1();
-            let evidence = crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::DecodeToken { proof: Box::new(proof) };
+            let evidence =
+                crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::DecodeToken { proof: Box::new(proof) };
             evidence.check_v1()?;
             Ok(PalwTirSelectionProbeV1::Ready { position, evidence })
         }

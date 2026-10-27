@@ -249,7 +249,11 @@ pub fn read_verified_marker(gen_dir: &Path, number: u64) -> io::Result<Option<Ve
     if get("gen").and_then(|g| g.parse::<u64>().ok()) != Some(number) || get("whole_state_checked").as_deref() != Some("1") {
         return Ok(None);
     }
-    Ok(Some(VerifiedMarker { subject: get("subject").unwrap_or_default(), root_hex: get("root").unwrap_or_default(), whole_state_checked: true }))
+    Ok(Some(VerifiedMarker {
+        subject: get("subject").unwrap_or_default(),
+        root_hex: get("root").unwrap_or_default(),
+        whole_state_checked: true,
+    }))
 }
 
 impl GenerationStore {
@@ -266,8 +270,10 @@ impl GenerationStore {
         let on_disk: Vec<u64> = Self::scan(&root)?;
         let mut journal = match fs::read_to_string(root.join(JOURNAL_FILE)) {
             Ok(text) => Journal::parse(&text).map_err(|why| {
-                let verified =
-                    on_disk.iter().copied().filter(|n| read_verified_marker(&root.join(gen_dir_name(*n)), *n).ok().flatten().is_some());
+                let verified = on_disk
+                    .iter()
+                    .copied()
+                    .filter(|n| read_verified_marker(&root.join(gen_dir_name(*n)), *n).ok().flatten().is_some());
                 GenerationError::JournalCorrupt(why, verified.collect())
             })?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {

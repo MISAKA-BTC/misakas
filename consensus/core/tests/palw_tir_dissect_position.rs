@@ -18,9 +18,9 @@ use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
 use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
 use kaspa_consensus_core::palw_tir_court_v1::{
-    build_tir_dissect_bottom_v1, build_tir_dissect_position_bottom_v1, build_tir_dissect_position_round_v1, build_tir_dissect_round_v1,
-    build_tir_root_claim_v1, check_tir_dissect_bottom_v1, check_tir_dissect_position_bottom_v1, check_tir_root_claim_v1,
-    tir_dissect_terminal_narrows_to_position_v1,
+    build_tir_dissect_bottom_v1, build_tir_dissect_position_bottom_v1, build_tir_dissect_position_round_v1,
+    build_tir_dissect_round_v1, build_tir_root_claim_v1, check_tir_dissect_bottom_v1, check_tir_dissect_position_bottom_v1,
+    check_tir_root_claim_v1, tir_dissect_terminal_narrows_to_position_v1,
 };
 use kaspa_consensus_core::palw_tir_dissect_v1::{
     PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1, PalwTirDissectPhaseV1, PalwTirDissectSiteV1, PalwTirFoldV1,

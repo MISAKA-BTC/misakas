@@ -1814,9 +1814,12 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         ))
     }
     fn bind_native_routing_work_v2(
-        &mut self, _authority: std::sync::Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+        &mut self,
+        _authority: std::sync::Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
     ) -> Result<(), crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
-        Err(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::Unsupported("backend has no prospective FP/rider native plan".into()))
+        Err(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::Unsupported(
+            "backend has no prospective FP/rider native plan".into(),
+        ))
     }
     /// Replay of an accepted stamped claim uses its own authority and job,
     /// including free-prompt and rider anchors. It is never block authority.
@@ -2306,7 +2309,7 @@ mod output_root_tests {
 }
 
 mod operations;
-pub use operations::{PalwExecutionOpsV1, PalwReplayOpsV1, PalwMaterialOpsV1, PalwCourtEvidenceOpsV1, PalwResourceOpsV1};
+pub use operations::{PalwCourtEvidenceOpsV1, PalwExecutionOpsV1, PalwMaterialOpsV1, PalwReplayOpsV1, PalwResourceOpsV1};
 
 #[cfg(test)]
 mod operation_view_tests {
@@ -2318,22 +2321,29 @@ mod operation_view_tests {
         calls: AtomicUsize,
     }
     impl PalwExecutionBackendV1 for Configured {
-        fn model_id(&self) -> &str { "configured-operation-view" }
+        fn model_id(&self) -> &str {
+            "configured-operation-view"
+        }
         fn job_for_anchor(&self, _anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
             Err("no anchor fixture".into())
         }
         fn set_attempt_rules_v1(&mut self, rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1) {
             self.rules = rules;
         }
-        fn attempt_rules_v1(&self) -> crate::palw_attempt_rules_v1::PalwAttemptRulesV1 { self.rules }
+        fn attempt_rules_v1(&self) -> crate::palw_attempt_rules_v1::PalwAttemptRulesV1 {
+            self.rules
+        }
         fn execute(&self, _job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
             assert_eq!(prompt, &[3, 5]);
             self.calls.fetch_add(1, Ordering::SeqCst);
             let answer = if self.rules == crate::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 { 11 } else { 12 };
             Ok(PalwExecutionOutcomeV1 {
-                trace_root: Hash64::from_u64_word(1), output_root: Hash64::from_u64_word(answer),
-                execution_root: Hash64::from_u64_word(3), trace_manifest_root: Hash64::from_u64_word(4),
-                trace_chunk_count: 1, material: Vec::new(),
+                trace_root: Hash64::from_u64_word(1),
+                output_root: Hash64::from_u64_word(answer),
+                execution_root: Hash64::from_u64_word(3),
+                trace_manifest_root: Hash64::from_u64_word(4),
+                trace_chunk_count: 1,
+                material: Vec::new(),
             })
         }
         fn verify_material(&self, _material: &[u8], _claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
@@ -2350,7 +2360,9 @@ mod operation_view_tests {
     fn operation_views_keep_the_configured_instance_and_its_inherited_replay() {
         let backend = configured();
         let job = crate::palw_base0_profile::rc_job_context(
-            &crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap(), 8, 4,
+            &crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap(),
+            8,
+            4,
         );
         let execution = PalwExecutionOpsV1::new(&backend);
         assert_eq!(execution.attempt_rules_v1(), crate::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1);

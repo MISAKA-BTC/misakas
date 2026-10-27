@@ -34,15 +34,9 @@ mod floor_material_tests;
 
 // BASE native Attempt/Rider allocations have no paid recovery session (the
 // native admission and recovery quote enforce this same boundary).
-fn native_floor_issuer_v1(
-    params: &PalwStateParamsV2,
-    claim: Option<&PalwClaimStateV2>,
-    origin: PalwBudgetOriginV1,
-) -> bool {
+fn native_floor_issuer_v1(params: &PalwStateParamsV2, claim: Option<&PalwClaimStateV2>, origin: PalwBudgetOriginV1) -> bool {
     matches!(origin, PalwBudgetOriginV1::Attempt | PalwBudgetOriginV1::Rider)
-        && claim.is_some_and(|claim| {
-            matches!(claim.source, PalwClaimSourceV2::Attempt) && claim.class_id == params.base_class_id()
-        })
+        && claim.is_some_and(|claim| matches!(claim.source, PalwClaimSourceV2::Attempt) && claim.class_id == params.base_class_id())
 }
 
 /// **RFC-0006 (RFC06-1): the audited write ceiling of a POINT engine op** — one whose rows are named by its arguments (a reservation
@@ -674,9 +668,12 @@ impl TransitionBuilder<'_> {
         let maximum = if shard { pool } else { pool / bonds.len().max(1) as u64 };
         let until = super::palw_exec_v2_rewards_v1::horizon(&self.state, self.params, &root)?.unwrap_or(claim.trace_retention_daa);
         let floor_issuer = self.params.material_income_active_at(now)
-            && self.state.bond_budget.as_ref().and_then(|book| book.claim_row(&root)).is_some_and(|row| {
-            row.bond == claim.bond && native_floor_issuer_v1(self.params, Some(&claim), row.origin)
-        });
+            && self
+                .state
+                .bond_budget
+                .as_ref()
+                .and_then(|book| book.claim_row(&root))
+                .is_some_and(|row| row.bond == claim.bond && native_floor_issuer_v1(self.params, Some(&claim), row.origin));
         if floor_issuer && self.state.panels.get(&root).is_none_or(|panel| panel.seats.as_slice() != seats) {
             return Err(PalwStateV2Error::BondBudgetRefused("floor Panel income requires the exact stored selected seats".into()));
         }
@@ -922,7 +919,8 @@ impl TransitionBuilder<'_> {
             return Err(super::native_writers::native_err_v1(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
                 PalwBudgetWriteV1,
             >(
-                "bond budget engine op", "the op journaled more writes than its admitted bound"
+                "bond budget engine op",
+                "the op journaled more writes than its admitted bound",
             )));
         }
         self.journal_bond_budget(journal);
@@ -1024,9 +1022,10 @@ impl TransitionBuilder<'_> {
     ) -> Result<(), PalwStateV2Error> {
         if plan.origin != PalwBudgetOriginV1::KernelRoute
             && plan.reservation.reward_sompi > 0
-            && !self.state.claim(&claim_id).is_some_and(|claim| {
-                claim.bond == plan.bond && native_floor_issuer_v1(self.params, Some(claim), plan.origin)
-            })
+            && !self
+                .state
+                .claim(&claim_id)
+                .is_some_and(|claim| claim.bond == plan.bond && native_floor_issuer_v1(self.params, Some(claim), plan.origin))
         {
             self.state.require_monetary_material_enrollment_v1(self.params, claim_id, ctx.daa_score, None)?;
         }
@@ -1293,7 +1292,8 @@ impl TransitionBuilder<'_> {
         ctx: &PalwBlockContextV2,
         mirror: &PalwBondBudgetMirrorV1,
     ) -> Result<(), PalwStateV2Error> {
-        self.bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| budget.activate_reporter_income_v2(j))?.expect("reporter fence requires budget");
+        self.bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| budget.activate_reporter_income_v2(j))?
+            .expect("reporter fence requires budget");
         // Pending old winners retain authenticated bond provenance in their
         // rooted best record. Old awarded/pending cash does not: quarantine its
         // exact queue rather than inferring recipient ownership from addresses.
@@ -2203,7 +2203,9 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             }
         }
         builder
-            .bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| budget.confirm_native_income_payment_v1(&mirror.policy, &id, now, j))?
+            .bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| {
+                budget.confirm_native_income_payment_v1(&mirror.policy, &id, now, j)
+            })?
             .expect("created")
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
     }
@@ -2235,7 +2237,9 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     }
     // RFC-0006 (RFC06-1): each sweep is admitted for the rows it may touch — every material income row, every reporter binding,
     // every reservation and liability hold due at `now` — counted from the engine before it runs.
-    builder.bond_budget_op(PalwBudgetGrowthV1::rows(material_rows_v1(builder)), |budget, _, j| budget.release_material_income_v1(now, j))?;
+    builder.bond_budget_op(PalwBudgetGrowthV1::rows(material_rows_v1(builder)), |budget, _, j| {
+        budget.release_material_income_v1(now, j)
+    })?;
     let reporter_rows = builder.state.bond_budget.as_ref().map_or(0, |b| b.reporter_income.len());
     builder.bond_budget_op(PalwBudgetGrowthV1::rows(reporter_rows), |budget, _, j| {
         budget.release_reporter_income_v1(&mirror.policy, now, j)
@@ -2294,9 +2298,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             [0; 64],
             progress,
         );
-        if builder.params.settlement_once_active_at(now)
-            && builder.settled_row_checked_v1(&tranche)?.is_some()
-        {
+        if builder.params.settlement_once_active_at(now) && builder.settled_row_checked_v1(&tranche)?.is_some() {
             continue;
         }
         let amount = builder
@@ -2354,7 +2356,8 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
                     None => (0, false),
                 };
                 let eligible_capital = |model: &Hash64, capital: u128| {
-                    let class = if state.class(model).is_some() { Some(*model) } else { state.model_line(model).map(|line| line.class_id) };
+                    let class =
+                        if state.class(model).is_some() { Some(*model) } else { state.model_line(model).map(|line| line.class_id) };
                     let stage = class.and_then(|class| {
                         super::palw_model_eligibility_fold_v1::eligibility_of_v1(state, params, &class, now).map(|(stage, _)| stage)
                     });
@@ -2466,7 +2469,10 @@ impl TransitionBuilder<'_> {
             let Some((model, _)) = budget.claim_row(claim_id).and_then(|row| row.model) else { continue };
             let claim_live = self.state.claims.get(claim_id).is_some_and(|claim| !claim.phase.is_terminal());
             let counted = crate::palw_bond_budget_v1::palw_verifier_capital_counted_v1(
-                crate::palw_bond_budget_v1::PalwVerifierCapitalSourceV1::PanelSeatExposure { exposure: duty.seat_exposure, claim_live },
+                crate::palw_bond_budget_v1::PalwVerifierCapitalSourceV1::PanelSeatExposure {
+                    exposure: duty.seat_exposure,
+                    claim_live,
+                },
             );
             if counted == 0 {
                 continue;
@@ -2752,7 +2758,13 @@ impl PalwChainStateV2 {
     /// The native receipt block's strict draw, asked against any state: a budget is REQUIRED (no unbudgeted native receipt), one
     /// block unit and `carve` must remain, and the exports so far plus `carve` stay within `floor(0.51 x liability)` while the
     /// liability holds.
-    pub fn bond_budget_native_receipt_fits_v39(&self, params: &PalwStateParamsV2, budget_id: &Hash64, now_daa: u64, carve: u64) -> bool {
+    pub fn bond_budget_native_receipt_fits_v39(
+        &self,
+        params: &PalwStateParamsV2,
+        budget_id: &Hash64,
+        now_daa: u64,
+        carve: u64,
+    ) -> bool {
         let Some(mirror) = params.bond_budget().filter(|m| m.active_at(now_daa)) else { return false };
         let Some(budget) = self.bond_budget.as_ref() else { return false };
         let Some(row) = budget.claim_row(budget_id).filter(|r| r.open && r.origin == PalwBudgetOriginV1::FreePrompt) else {
@@ -2786,7 +2798,8 @@ impl TransitionBuilder<'_> {
         let block_units = PALW_BUDGET_BLOCK_UNIT_V1.checked_mul(quanta).ok_or_else(|| bad("native39 block units overflow"))?;
         let reward_sompi = carve.checked_mul(quanta).ok_or_else(|| bad("native39 reward ask overflow"))?;
         let final_weight = weight_per_quantum.checked_mul(quanta as u128).ok_or_else(|| bad("native39 weight ask overflow"))?;
-        let liability_sompi = self.bond_formula_native_mining_liability_v39(ctx, reward_sompi, final_weight, block_units, exposure_sompi);
+        let liability_sompi =
+            self.bond_formula_native_mining_liability_v39(ctx, reward_sompi, final_weight, block_units, exposure_sompi);
         let plan = self
             .plan_bond_budget_v1(
                 ctx,

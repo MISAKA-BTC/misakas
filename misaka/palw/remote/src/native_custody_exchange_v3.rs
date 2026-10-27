@@ -164,7 +164,11 @@ pub struct ProviderEndpointV3 {
 
 /// The wire between the miner and one provider.
 pub trait ProviderLinkV3 {
-    fn round_trip(&mut self, provider: &ProviderEndpointV3, request: &ProviderTransportRequestV1) -> Result<ProviderTransportResponseV1, String>;
+    fn round_trip(
+        &mut self,
+        provider: &ProviderEndpointV3,
+        request: &ProviderTransportRequestV1,
+    ) -> Result<ProviderTransportResponseV1, String>;
 }
 
 /// [`ProviderLinkV3`] over the provider service's framed socket: one request per connection.
@@ -174,13 +178,21 @@ pub struct TcpProviderLinkV3 {
 }
 
 impl ProviderLinkV3 for TcpProviderLinkV3 {
-    fn round_trip(&mut self, provider: &ProviderEndpointV3, request: &ProviderTransportRequestV1) -> Result<ProviderTransportResponseV1, String> {
+    fn round_trip(
+        &mut self,
+        provider: &ProviderEndpointV3,
+        request: &ProviderTransportRequestV1,
+    ) -> Result<ProviderTransportResponseV1, String> {
         use std::net::ToSocketAddrs;
         let addr = provider
             .url
             .strip_prefix("tcp://")
             .ok_or_else(|| format!("{}: not a tcp://<host>:<port> provider address", provider.url))?;
-        let addr = addr.to_socket_addrs().map_err(|e| format!("{}: {e}", provider.url))?.next().ok_or("the provider address resolves to nothing")?;
+        let addr = addr
+            .to_socket_addrs()
+            .map_err(|e| format!("{}: {e}", provider.url))?
+            .next()
+            .ok_or("the provider address resolves to nothing")?;
         let mut stream = std::net::TcpStream::connect_timeout(&addr, self.timeout).map_err(|e| format!("{}: {e}", provider.url))?;
         stream.set_read_timeout(Some(self.timeout)).map_err(|e| e.to_string())?;
         stream.set_write_timeout(Some(self.timeout)).map_err(|e| e.to_string())?;
@@ -384,15 +396,14 @@ impl NativeCustodyV3 for ProviderExchangeV3 {
         let mut out = BTreeMap::new();
         for bond in &ready.providers {
             let body = self.ask(bond, ProviderTransportPurposeV1::NativeReadyV3, request)?;
-            let signatures = match borsh::from_slice::<PalwNativeReadyResponseV3>(&body)
-                .map_err(|e| format!("undecodable sign answer: {e}"))?
-            {
-                PalwNativeReadyResponseV3::Signed { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, signatures } => signatures,
-                PalwNativeReadyResponseV3::Refused { reason, .. } => {
-                    return Err(format!("provider {}:{} refused: {reason}", bond.0.transaction_id, bond.0.index));
-                }
-                PalwNativeReadyResponseV3::Signed { .. } => return Err("unknown native exchange answer version".into()),
-            };
+            let signatures =
+                match borsh::from_slice::<PalwNativeReadyResponseV3>(&body).map_err(|e| format!("undecodable sign answer: {e}"))? {
+                    PalwNativeReadyResponseV3::Signed { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, signatures } => signatures,
+                    PalwNativeReadyResponseV3::Refused { reason, .. } => {
+                        return Err(format!("provider {}:{} refused: {reason}", bond.0.transaction_id, bond.0.index));
+                    }
+                    PalwNativeReadyResponseV3::Signed { .. } => return Err("unknown native exchange answer version".into()),
+                };
             // A provider service holding several roster bonds signs for each of them; only the asked bond's signature is taken.
             let signature = signatures
                 .into_iter()
@@ -401,7 +412,10 @@ impl NativeCustodyV3 for ProviderExchangeV3 {
                 .ok_or("the provider's answer carries no signature of the asked bond")?;
             let key = &self.providers.get(bond).ok_or("roster provider vanished")?.pubkey;
             if !verify_ready_signature_v3(key, id.as_byte_slice(), &signature, PALW_MATERIAL_READY_CONTEXT_V3) {
-                return Err(format!("provider {}:{} signature over Ready does not verify under its registered key", bond.0.transaction_id, bond.0.index));
+                return Err(format!(
+                    "provider {}:{} signature over Ready does not verify under its registered key",
+                    bond.0.transaction_id, bond.0.index
+                ));
             }
             out.insert(*bond, signature);
         }
@@ -439,7 +453,10 @@ pub fn parse_provider_flag_v3(text: &str) -> Result<ProviderFlagV3, String> {
     let txid: Hash64 = txid.trim().parse().map_err(|_| "--native-provider bond txid is not a 128-hex hash".to_string())?;
     let index: u32 = index.parse().map_err(|_| "--native-provider bond index is not a number".to_string())?;
     // Audit C-03: the one canonical provider wire is the provider service's length-framed authenticated socket.
-    if url.strip_prefix("tcp://").is_none_or(|addr| addr.rsplit_once(':').is_none_or(|(host, port)| host.is_empty() || port.parse::<u16>().is_err())) {
+    if url
+        .strip_prefix("tcp://")
+        .is_none_or(|addr| addr.rsplit_once(':').is_none_or(|(host, port)| host.is_empty() || port.parse::<u16>().is_err()))
+    {
         return Err("--native-provider address must be tcp://<host>:<port> (the provider service's framed socket)".into());
     }
     let pubkey = match key.strip_prefix('@') {
@@ -458,7 +475,10 @@ pub fn decode_hex_v3(text: &str) -> Result<Vec<u8>, String> {
     if t.len() % 2 != 0 || t.is_empty() {
         return Err("a provider key is not even-length hex".into());
     }
-    (0..t.len()).step_by(2).map(|i| u8::from_str_radix(&t[i..i + 2], 16).map_err(|_| "a provider key is not hex".to_string())).collect()
+    (0..t.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&t[i..i + 2], 16).map_err(|_| "a provider key is not hex".to_string()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -530,13 +550,16 @@ mod tests {
                 log.lock().unwrap().push((asked, purpose));
                 let expected = manifest_for(&native);
                 let body = match (purpose, behaviour) {
-                    (_, Behaviour::Refuse) => borsh::to_vec(&PalwNativeManifestResponseV3::Refused { version: 3, reason: "busy".into() }).unwrap(),
+                    (_, Behaviour::Refuse) => {
+                        borsh::to_vec(&PalwNativeManifestResponseV3::Refused { version: 3, reason: "busy".into() }).unwrap()
+                    }
                     (ProviderTransportPurposeV1::NativeManifestV3, b) => {
                         let mut m = expected;
                         if b == Behaviour::OtherManifest {
                             m.scopes[0].units += 1;
                         }
-                        borsh::to_vec(&PalwNativeManifestResponseV3::Manifest { version: 3, manifest: m, prompt: vec![1, 2, 3] }).unwrap()
+                        borsh::to_vec(&PalwNativeManifestResponseV3::Manifest { version: 3, manifest: m, prompt: vec![1, 2, 3] })
+                            .unwrap()
                     }
                     (ProviderTransportPurposeV1::NativeReadyV3, b) => {
                         let ready = &native.envelope.ready;
@@ -683,7 +706,8 @@ mod tests {
         let mut row = row_for(roster, root);
         row.terms.native_session = Some(session_of(&a));
         let draw = kaspa_consensus_core::palw_attempt_material_v3::palw_native_draw_manifest_v3(&row, &a).unwrap();
-        let ready = kaspa_consensus_core::palw_attempt_material_v3::draft_native_ready_v3(&row, &a, Hash64::from_u64_word(9), draw).unwrap();
+        let ready =
+            kaspa_consensus_core::palw_attempt_material_v3::draft_native_ready_v3(&row, &a, Hash64::from_u64_word(9), draw).unwrap();
         let dummy = vec![0u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
         let envelope = PalwAttemptMaterialEnvelopeV3 {
             version: 3,
@@ -741,7 +765,8 @@ mod tests {
         let (mut req, row) = request(&f.bonds, Hash64::from_u64_word(42), &f.executor);
         let a = req.envelope.base.attempt.clone();
         req.envelope.ready =
-            kaspa_consensus_core::palw_attempt_material_v3::draft_native_ready_v3(&row, &a, Hash64::from_u64_word(9), rebuilt(&req)).unwrap();
+            kaspa_consensus_core::palw_attempt_material_v3::draft_native_ready_v3(&row, &a, Hash64::from_u64_word(9), rebuilt(&req))
+                .unwrap();
         // Without the prompt the provider derived: refused (the provider re-derives and compares).
         assert!(f.exchange.collect(&req).unwrap_err().contains("refused"));
         req.prompt = vec![1, 2, 3];
@@ -750,7 +775,8 @@ mod tests {
         let mut f = fixture(&[Behaviour::Honest, Behaviour::BadReadySignature]);
         let (mut req, row) = request(&f.bonds, Hash64::from_u64_word(42), &f.executor);
         req.envelope.ready =
-            kaspa_consensus_core::palw_attempt_material_v3::draft_native_ready_v3(&row, &a, Hash64::from_u64_word(9), rebuilt(&req)).unwrap();
+            kaspa_consensus_core::palw_attempt_material_v3::draft_native_ready_v3(&row, &a, Hash64::from_u64_word(9), rebuilt(&req))
+                .unwrap();
         req.prompt = vec![1, 2, 3];
         assert!(f.exchange.collect(&req).unwrap_err().contains("does not verify"));
     }
@@ -828,7 +854,8 @@ mod tests {
                 not_ready_reason: String::new(),
             },
         };
-        let policy = TemplatePolicy { min_agree: 2, max_template_age_daa: 30, held_pubkey: vec![9; 8], held_artifact_root: artifact_root };
+        let policy =
+            TemplatePolicy { min_agree: 2, max_template_age_daa: 30, held_pubkey: vec![9; 8], held_artifact_root: artifact_root };
         let template = check_templates(&[obs("a"), obs("b")], &policy, DAA + 5).unwrap();
         let mounted = mount_native_attempt_v3(
             &template,
@@ -870,7 +897,17 @@ mod tests {
         other.parents_by_level = vec![vec![Hash64::from_u64_word(77)]].try_into().unwrap();
         assert!(
             mount_native_attempt_v3(
-                &template, &other, &params, 7_708, 3_000, artifact_root, class_id, &mut None, &mut Exec, &signer, &mut f.exchange,
+                &template,
+                &other,
+                &params,
+                7_708,
+                3_000,
+                artifact_root,
+                class_id,
+                &mut None,
+                &mut Exec,
+                &signer,
+                &mut f.exchange,
                 &|_, _, _| true
             )
             .is_err()
@@ -884,7 +921,10 @@ mod tests {
         assert_eq!(f.bond, PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(9), 2)));
         assert_eq!(f.url, "tcp://10.0.0.1:7000");
         assert_eq!(f.pubkey, ProviderKeySourceV3::Hex(vec![0x0a, 0xff]));
-        assert_eq!(parse_provider_flag_v3(&format!("{txid}:0=tcp://p:1=@/k.hex")).unwrap().pubkey, ProviderKeySourceV3::File("/k.hex".into()));
+        assert_eq!(
+            parse_provider_flag_v3(&format!("{txid}:0=tcp://p:1=@/k.hex")).unwrap().pubkey,
+            ProviderKeySourceV3::File("/k.hex".into())
+        );
         for bad in [
             format!("{txid}:0=tcp://p:1"),
             format!("{txid}=tcp://p:1=00"),
@@ -914,8 +954,9 @@ mod tests {
         row_b.terms.native_session = Some(session);
         let rows = vec![row_a.clone(), row_b.clone()];
         let chain_operator = |b: &PalwBondKeyV2| Some(b.0.transaction_id);
-        let consensus = kaspa_consensus_core::palw_attempt_material_v3::select_native_session_v3(rows.clone(), &a, daa, chain_operator)
-            .expect("consensus selects a session");
+        let consensus =
+            kaspa_consensus_core::palw_attempt_material_v3::select_native_session_v3(rows.clone(), &a, daa, chain_operator)
+                .expect("consensus selects a session");
         assert_eq!(consensus.terms.root, row_a.terms.root, "consensus picks the canonical smaller-root session");
         f.exchange.set_rows(rows, daa);
         let miner_root = f.exchange.session(&a, daa).map(|r| r.terms.root);

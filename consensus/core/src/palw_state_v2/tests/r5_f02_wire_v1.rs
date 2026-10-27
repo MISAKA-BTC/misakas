@@ -399,7 +399,12 @@ fn r5_f02_wire_shared_bottom_captures_its_actual_end_evidence() {
         total_bytes: 3,
         body_hash: h64(3),
     };
-    let parts = vec![crate::palw_court_numerical_transport_v1::NumericalPartV1 { version: 1, stream_id: h64(4), offset: 0, bytes: vec![1, 2, 3] }];
+    let parts = vec![crate::palw_court_numerical_transport_v1::NumericalPartV1 {
+        version: 1,
+        stream_id: h64(4),
+        offset: 0,
+        bytes: vec![1, 2, 3],
+    }];
     assert!(b.court_end_evidence.is_none());
     let previous = lifecycle::capture_shared_bottom_evidence_v1(&mut b, &at, &manifest, &parts).unwrap();
     assert!(previous.is_none());

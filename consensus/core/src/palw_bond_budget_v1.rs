@@ -506,7 +506,9 @@ impl PalwBondBudgetPolicyV1 {
             (PALW_BOND_BUDGET_POLICY_VERSION_V3, Some(hold)) => {
                 hold.validate()?;
                 if self.window_daa != hold.window_daa(PalwHoldModeV1::PanelZero) {
-                    return Err("a V3 policy's window W is Panel=0's hold span (panel_zero_days · daa_per_day; 1 day since 2026-10-16)");
+                    return Err(
+                        "a V3 policy's window W is Panel=0's hold span (panel_zero_days · daa_per_day; 1 day since 2026-10-16)",
+                    );
                 }
             }
             (PALW_BOND_BUDGET_POLICY_VERSION_V2 | PALW_BOND_BUDGET_POLICY_VERSION_V3, _) => {
@@ -2488,15 +2490,7 @@ impl PalwBondBudgetStateV1 {
         self.put_release((row.reuse_not_before, income_id), true, j);
         if extra > 0 {
             let growth = palw_bond_hold_rate_growth_id_v1(&income_id, accepted_daa, prior);
-            self.write_hold_shadows_v1(
-                policy,
-                &growth,
-                &bond,
-                accepted_daa,
-                &extra_vector,
-                PalwBudgetOriginV1::NativeIncome,
-                j,
-            )?;
+            self.write_hold_shadows_v1(policy, &growth, &bond, accepted_daa, &extra_vector, PalwBudgetOriginV1::NativeIncome, j)?;
         }
         Ok(())
     }

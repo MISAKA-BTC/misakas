@@ -18,10 +18,10 @@ use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeMap;
 
-#[path = "palw_tir_source_validation_owner_v3.rs"]
-pub(crate) mod source_validation_v3;
 #[path = "palw_tir_legacy_original_owner_v4.rs"]
 pub(crate) mod legacy_original_v4;
+#[path = "palw_tir_source_validation_owner_v3.rs"]
+pub(crate) mod source_validation_v3;
 
 #[cfg(test)]
 thread_local! {
@@ -88,10 +88,17 @@ trait SourceValueV2: Sized {
     fn original_v4(
         state: &crate::palw_state_v2::PalwChainStateV2,
         claim: Hash64,
-    ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>, Self::Error>;
+    ) -> Result<
+        Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,
+        Self::Error,
+    >;
 
-    fn preparation_validation_v3(row: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error>;
-    fn acquisition_validation_v3(row: &PalwTirPublicAcquisitionRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error>;
+    fn preparation_validation_v3(
+        row: &PalwTirPublicPreparationRowV1,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error>;
+    fn acquisition_validation_v3(
+        row: &PalwTirPublicAcquisitionRowV1,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error>;
 
     fn construct_v2(
         record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
@@ -110,14 +117,26 @@ trait SourceValueV2: Sized {
 }
 impl SourceValueV2 for PalwTirPublicSourceV1 {
     type Error = String;
-    fn original_v4(state: &crate::palw_state_v2::PalwChainStateV2, claim: Hash64)
-        -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>, String> {
-        state.staged_original_job_v1(claim).map(|value| value.map(|value|
-            crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(value, None)))
+    fn original_v4(
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        claim: Hash64,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>, String>
+    {
+        state
+            .staged_original_job_v1(claim)
+            .map(|value| value.map(|value| crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(value, None)))
     }
 
-    fn preparation_validation_v3(_: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, String> { Ok(None) }
-    fn acquisition_validation_v3(_: &PalwTirPublicAcquisitionRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, String> { Ok(None) }
+    fn preparation_validation_v3(
+        _: &PalwTirPublicPreparationRowV1,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, String> {
+        Ok(None)
+    }
+    fn acquisition_validation_v3(
+        _: &PalwTirPublicAcquisitionRowV1,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, String> {
+        Ok(None)
+    }
 
     fn payload_v2(&self) -> &PalwTirPublicSourceV1 {
         self
@@ -143,15 +162,24 @@ impl SourceValueV2 for PalwTirPublicSourceV1 {
 }
 impl SourceValueV2 for crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1> {
     type Error = PalwTirPublicSourceErrorV2;
-    fn original_v4(state: &crate::palw_state_v2::PalwChainStateV2, claim: Hash64)
-        -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>, Self::Error> {
+    fn original_v4(
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        claim: Hash64,
+    ) -> Result<
+        Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,
+        Self::Error,
+    > {
         state.staged_original_job_native_v4(claim).map_err(Into::into)
     }
 
-    fn preparation_validation_v3(row: &PalwTirPublicPreparationRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error> {
+    fn preparation_validation_v3(
+        row: &PalwTirPublicPreparationRowV1,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error> {
         source_validation_v3::preparation_reserve_v3(row).map_err(Into::into)
     }
-    fn acquisition_validation_v3(row: &PalwTirPublicAcquisitionRowV1) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error> {
+    fn acquisition_validation_v3(
+        row: &PalwTirPublicAcquisitionRowV1,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, Self::Error> {
         source_validation_v3::acquisition_reserve_v3(row).map_err(Into::into)
     }
 
@@ -253,7 +281,10 @@ fn palw_tir_public_source_for_preparation_row_with_v2<S: SourceValueV2>(
             || c.material_until_daa != plan.terms.material_until_daa
             || c.producer != custody.pledge_v1().producer
             || &c.drawn_panel != custody.drawn_panel_v1()
-            || !c.custodians.iter().all(|bond| *bond == custody.pledge_v1().producer || frame.original_custody_v1().grant_v1(bond).is_some())
+            || !c
+                .custodians
+                .iter()
+                .all(|bond| *bond == custody.pledge_v1().producer || frame.original_custody_v1().grant_v1(bond).is_some())
             || c.plan != plan.preparation
             || row.preparation.work_v1().allocation != plan.preparation_work
         {
@@ -1515,7 +1546,13 @@ mod tests {
         )
         .unwrap();
         let config = PalwStagedPublicCourtConfigV1::network_v1();
-        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock).unwrap();
+        let plan = PalwTirPublicOwnedPlanV1::derive_v1(
+            &source,
+            3,
+            config,
+            crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
+        )
+        .unwrap();
         let terms = PalwRenderingClaimTermsV1::derive(
             10,
             plan.envelope,
@@ -1536,9 +1573,17 @@ mod tests {
             custodians: BTreeSet::from([bond(1)]),
         };
         let capital = terms.plan.rent_sompi.checked_add(terms.plan.deposit_sompi).unwrap();
-        let owned =
-            PalwTirPublicOwnedV1::admit_native_v1(contract, &source, &BTreeSet::from([bond(2), bond(3)]), config, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock, 3, 11, capital)
-                .unwrap();
+        let owned = PalwTirPublicOwnedV1::admit_native_v1(
+            contract,
+            &source,
+            &BTreeSet::from([bond(2), bond(3)]),
+            config,
+            crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
+            3,
+            11,
+            capital,
+        )
+        .unwrap();
         let row = PalwTirPublicAcquisitionRowV1 {
             descriptor: PalwTirPublicSourceDescriptorV1 {
                 class_id: record.facts.class_id,
@@ -1554,8 +1599,9 @@ mod tests {
             owned: Box::new(owned).into(),
         };
         let key = row.key_v1().unwrap();
-        let body = borsh::to_vec(&PalwTirPublicResponseV1::StepLeaf { preimage: leaf, opening: step_opening_v1(&hashes, wide).unwrap() })
-            .unwrap();
+        let body =
+            borsh::to_vec(&PalwTirPublicResponseV1::StepLeaf { preimage: leaf, opening: step_opening_v1(&hashes, wide).unwrap() })
+                .unwrap();
         (source, BTreeMap::from([(key, Row::TirAcquisition(Box::new(row).into()))]), key, body)
     }
     fn wide_leaf() -> u64 {
@@ -1830,4 +1876,6 @@ mod tests {
 
 #[path = "palw_tir_finished_material_owned_v2.rs"]
 pub(crate) mod finished_material_owned_v2;
-pub use finished_material_owned_v2::{palw_tir_public_material_context_v2, PalwTirPublicMaterialContextV2, PalwTirPublicFinishedOwnedV2};
+pub use finished_material_owned_v2::{
+    PalwTirPublicFinishedOwnedV2, PalwTirPublicMaterialContextV2, palw_tir_public_material_context_v2,
+};

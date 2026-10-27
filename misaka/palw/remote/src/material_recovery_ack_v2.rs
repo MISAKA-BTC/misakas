@@ -41,11 +41,7 @@ pub(crate) fn verify_saved_carrier_v4(tx: &Transaction, saved: &[u8]) -> Result<
     }
     let mut compare = Compare(saved);
     let matched = borsh::to_writer(&mut compare, tx).is_ok() && compare.0.is_empty();
-    if matched {
-        Ok(())
-    } else {
-        Err("funded carrier has a different durable transaction; retain the saved spend".into())
-    }
+    if matched { Ok(()) } else { Err("funded carrier has a different durable transaction; retain the saved spend".into()) }
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct MaterialRecoveryAckSubmissionV2 {
@@ -573,22 +569,30 @@ mod tests {
         let payload = borsh::to_vec(&(
             kaspa_consensus_core::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
             outbox.pending().next().unwrap().object(),
-        )).unwrap();
-        let carrier = |funding| Transaction::new(
-            0,
-            vec![kaspa_consensus_core::tx::TransactionInput::new(
-                TransactionOutpoint::new(h(funding), 0), vec![1], 0, 1,
-            )],
-            vec![], 0, kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE, 0, payload.clone(),
-        );
+        ))
+        .unwrap();
+        let carrier = |funding| {
+            Transaction::new(
+                0,
+                vec![kaspa_consensus_core::tx::TransactionInput::new(TransactionOutpoint::new(h(funding), 0), vec![1], 0, 1)],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                0,
+                payload.clone(),
+            )
+        };
         let tx = carrier(20);
         let other_spend = carrier(21);
         outbox.record_submitted(id, &tx).unwrap();
         outbox.record_accepted(id, h(22)).unwrap();
         let submitted = fs::read(&file).unwrap();
         outbox.record_submitted(id, &tx).unwrap();
-        assert_eq!(outbox.pending().next().unwrap().submission.as_ref().unwrap().accepted_block, Some(h(22)),
-            "an identical retry must preserve the inclusion hint");
+        assert_eq!(
+            outbox.pending().next().unwrap().submission.as_ref().unwrap().accepted_block,
+            Some(h(22)),
+            "an identical retry must preserve the inclusion hint"
+        );
         assert!(outbox.record_submitted(id, &other_spend).is_err(), "the same signed ACK cannot acquire another spend");
         assert_eq!(fs::read(&file).unwrap(), submitted, "retry/refusal cannot rewrite the durable submission");
         drop(outbox);
@@ -600,11 +604,15 @@ mod tests {
         // The same spend may be re-included after a reorg. Inclusion is still
         // only a hint; the unchanged native-finalized callback decides retirement.
         outbox.record_accepted(id, h(23)).unwrap();
-        assert!(!outbox.retire_finalized(id, |_, bytes, block| {
-            assert_eq!(bytes, borsh::to_vec(&tx).unwrap());
-            assert_eq!(block, h(23));
-            Ok(false)
-        }).unwrap());
+        assert!(
+            !outbox
+                .retire_finalized(id, |_, bytes, block| {
+                    assert_eq!(bytes, borsh::to_vec(&tx).unwrap());
+                    assert_eq!(block, h(23));
+                    Ok(false)
+                })
+                .unwrap()
+        );
         assert!(!outbox.retire_checkpoint_finalized(id, |_| Ok(false)).unwrap());
         assert_eq!(outbox.pending().count(), 1);
         let mut current = checkpoint.clone();

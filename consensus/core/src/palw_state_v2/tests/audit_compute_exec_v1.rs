@@ -62,8 +62,9 @@ fn audit_cx01_a_paid_answer_resold_as_the_next_prompt_is_credited_again() {
     let fenced = answered(&armed, &[(0xC0, &answer), (0xC1, &c1_answer)]);
     let (c0_state, _) =
         apply_derived(&chain, &p, &ctx(4, 103, 4), &[derived_commit(0xC0, &prompt, d0, leaves(8, d0))], &fenced).expect("C0 applies");
-    let (c1_state, _) = apply_derived(&c0_state, &p, &ctx(5, 104, 5), &[derived_commit(0xC1, &continued, d1, leaves(32, d1))], &fenced)
-        .expect("C1 applies");
+    let (c1_state, _) =
+        apply_derived(&c0_state, &p, &ctx(5, 104, 5), &[derived_commit(0xC1, &continued, d1, leaves(32, d1))], &fenced)
+            .expect("C1 applies");
     let c1 = c1_state.claim(&h64(0xC1)).unwrap();
     // C0 touched positions 0 ..= 30 (31 positions); what is new in C1 is everything past them.
     let new_work = leaves(32, d1) - prefill(31);
@@ -98,8 +99,8 @@ fn audit_cx02_the_same_run_under_a_second_bond_is_credited_again() {
     let answer: Vec<u32> = (500..524).collect();
     let d = 24u32;
     let fenced = answered(&armed, &[(0xD1, &answer), (0xD2, &answer)]);
-    let (first, _) =
-        apply_derived(&chain, &p, &ctx(4, 103, 4), &[derived_commit_from(1, 0xD1, &prompt, d, leaves(8, d))], &fenced).expect("bond 1");
+    let (first, _) = apply_derived(&chain, &p, &ctx(4, 103, 4), &[derived_commit_from(1, 0xD1, &prompt, d, leaves(8, d))], &fenced)
+        .expect("bond 1");
     let copy = apply_derived(&first, &p, &ctx(5, 104, 5), &[derived_commit_from(2, 0xD2, &prompt, d, leaves(8, d))], &fenced);
     let credited = copy.as_ref().ok().and_then(|(state, _)| state.claim(&h64(0xD2))).map_or(0, |claim| claim.pwu);
     assert_eq!(credited, 0, "CX-02: a copy of a paid run under a second bond is credited {credited} pwu for no new position");

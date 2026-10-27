@@ -443,9 +443,13 @@ pub trait ConsensusApi: Send + Sync {
 
     /// Native answer-aware producer quote; never enables a local fence.
     fn palw_fp_commitment_price_answered_v1(
-        &self, _commitment: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
-        _prompt_token_ids: &[u32], _answer: &[u32],
-    ) -> Option<crate::palw_state_v2::PalwFpPriceAnswerV1> { None }
+        &self,
+        _commitment: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        _prompt_token_ids: &[u32],
+        _answer: &[u32],
+    ) -> Option<crate::palw_state_v2::PalwFpPriceAnswerV1> {
+        None
+    }
 
     /// **The certified free-prompt quanta this bond may spend into receipt blocks (FP-R5).**
     ///
@@ -545,17 +549,42 @@ pub trait ConsensusApi: Send + Sync {
         Err("own native routing execution authority unavailable".into())
     }
     fn palw_native_routing_fp_work_authority_v2(
-        &self, fp: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, job: &crate::palw_v2::PalwJobContextV2,
-    ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { let _ = (fp,job); Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own prospective FP routing API unavailable")) }
+        &self,
+        fp: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        job: &crate::palw_v2::PalwJobContextV2,
+    ) -> Result<
+        Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        let _ = (fp, job);
+        Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own prospective FP routing API unavailable"))
+    }
     fn palw_native_routing_rider_work_authority_v2(
-        &self, job: &crate::palw_v2::PalwJobContextV2, executor: crate::palw_state_v2::PalwBondKeyV2,
-        lead: crate::Hash64, index: u32, retention: u64,
-    ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { let _ = (job,executor,lead,index,retention); Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own prospective rider routing API unavailable")) }
+        &self,
+        job: &crate::palw_v2::PalwJobContextV2,
+        executor: crate::palw_state_v2::PalwBondKeyV2,
+        lead: crate::Hash64,
+        index: u32,
+        retention: u64,
+    ) -> Result<
+        Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        let _ = (job, executor, lead, index, retention);
+        Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own prospective rider routing API unavailable"))
+    }
     /// Exact native accepted-claim stamp and whole job, independently of any
     /// provider record. None preserves historical unstamped V1 claims only.
     fn palw_native_routing_refresh_work_authority_v2(
-        &self, original: &crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
-    ) -> Result<Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>, crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { let _ = original; Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own native routing work refresh unavailable")) }
+        &self,
+        original: &crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
+    ) -> Result<
+        Arc<crate::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+        crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        let _ = original;
+        Err(crate::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("own native routing work refresh unavailable"))
+    }
     fn palw_native_routing_claim_authority_v2(
         &self,
         _claim: crate::Hash64,
@@ -732,7 +761,10 @@ pub trait ConsensusApi: Send + Sync {
     }
     /// RFC-0006 read-only census of the eligible historical headers the EXEC origin migration needs, from this node's own
     /// store at its tip (`listed` caps the returned claim lists). Authorizes nothing.
-    fn palw_exec_origin_coverage_v1(&self, _listed: usize) -> Result<crate::palw_work_slice_v2::PalwExecOriginCoverageOwnedV1, String> {
+    fn palw_exec_origin_coverage_v1(
+        &self,
+        _listed: usize,
+    ) -> Result<crate::palw_work_slice_v2::PalwExecOriginCoverageOwnedV1, String> {
         Err("historical header coverage census unavailable".into())
     }
     fn palw_material_generation_authority_v4(
@@ -1868,7 +1900,10 @@ pub trait ConsensusApi: Send + Sync {
 
     /// **Lane UX-A (op 227's view kinds): a status view** (`palw_user_status_v1::palw_status_view_json_v1`) at the tip, judged at the
     /// next block's DAA, answered as [`Self::palw_claim_detail_v1`] answers. Read-only.
-    fn palw_status_view_v1(&self, _view: crate::palw_user_status_v1::PalwStatusViewV1) -> Result<Option<(u64, Option<String>)>, String> {
+    fn palw_status_view_v1(
+        &self,
+        _view: crate::palw_user_status_v1::PalwStatusViewV1,
+    ) -> Result<Option<(u64, Option<String>)>, String> {
         Ok(None)
     }
 

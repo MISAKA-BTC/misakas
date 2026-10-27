@@ -16,9 +16,11 @@ use kaspa_consensus_core::palw_detection_policy_v1::*;
 use std::collections::BTreeSet;
 
 fn kernel_policy(class: Hash64) -> PalwDetectionPolicyV1 {
-    let mut p = palw_detection_genesis_design_v1(class, PalwDetectionRouteV1::Kernel, PalwIntervalCountRuleV1::PricedLeaves {
-        leaves_per_interval: 1,
-    });
+    let mut p = palw_detection_genesis_design_v1(
+        class,
+        PalwDetectionRouteV1::Kernel,
+        PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval: 1 },
+    );
     // Positions are sampled (the element courts check a position); the fault set is "at least 3 of the claim's positions", 90%.
     p.method = PalwInspectionMethodV1::IntervalReplay;
     p.localisation = PalwLocalisationV1::RootDescentElementCourt;

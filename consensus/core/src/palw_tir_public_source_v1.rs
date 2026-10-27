@@ -86,8 +86,11 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 fn allocation_error(native: bool) -> io::Error {
-    if native { io::Error::new(io::ErrorKind::OutOfMemory, "TIR public allocation failed") }
-    else { invalid("TIR public allocation failed") }
+    if native {
+        io::Error::new(io::ErrorKind::OutOfMemory, "TIR public allocation failed")
+    } else {
+        invalid("TIR public allocation failed")
+    }
 }
 fn vector<T: BorshDeserialize, R: Read>(r: &mut R, maximum: usize, native: bool) -> io::Result<Vec<T>> {
     let length = u32::deserialize_reader(r)? as usize;
@@ -96,7 +99,9 @@ fn vector<T: BorshDeserialize, R: Read>(r: &mut R, maximum: usize, native: bool)
     }
     let mut values = Vec::new();
     values.try_reserve_exact(length).map_err(|_| allocation_error(native))?;
-    if native && values.capacity() != length { return Err(allocation_error(true)); }
+    if native && values.capacity() != length {
+        return Err(allocation_error(true));
+    }
     for _ in 0..length {
         values.push(T::deserialize_reader(r)?);
     }
@@ -114,7 +119,9 @@ fn leaf<R: Read>(r: &mut R, maximum_bytes: usize, native: bool) -> io::Result<Pa
         version: BorshDeserialize::deserialize_reader(r)?,
         coord: BorshDeserialize::deserialize_reader(r)?,
         value_count: BorshDeserialize::deserialize_reader(r)?,
-        values_le: if native { vector(r, maximum_bytes, true)? } else {
+        values_le: if native {
+            vector(r, maximum_bytes, true)?
+        } else {
             crate::palw_public_binding_v1::read_bounded_bytes_v1(r, maximum_bytes)?
         },
     })
@@ -130,7 +137,9 @@ impl PalwTirPublicResponseV1 {
     }
     fn decode_mode_v2<R: Read>(r: &mut R, maximum_leaf_bytes: usize, native: bool) -> io::Result<Self> {
         Ok(match u8::deserialize_reader(r)? {
-            0 => Self::StepNode { frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1, native)?, siblings: vector(r, PATH, native)? },
+            0 => {
+                Self::StepNode { frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1, native)?, siblings: vector(r, PATH, native)? }
+            }
             1 => Self::StepLeaf { preimage: leaf(r, maximum_leaf_bytes, native)?, opening: opening(r, native)? },
             2 => {
                 let length = u32::deserialize_reader(r)? as usize;
@@ -140,9 +149,13 @@ impl PalwTirPublicResponseV1 {
                 let mut preimages = if native {
                     let mut out = Vec::new();
                     out.try_reserve_exact(length).map_err(|_| allocation_error(true))?;
-                    if out.capacity() != length { return Err(allocation_error(true)); }
+                    if out.capacity() != length {
+                        return Err(allocation_error(true));
+                    }
                     out
-                } else { Vec::with_capacity(length) };
+                } else {
+                    Vec::with_capacity(length)
+                };
                 for _ in 0..length {
                     preimages.push(leaf(r, maximum_leaf_bytes, native)?);
                 }
@@ -155,7 +168,9 @@ impl PalwTirPublicResponseV1 {
                     },
                 }
             }
-            3 => Self::RowsNode { frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1, native)?, siblings: vector(r, PATH, native)? },
+            3 => {
+                Self::RowsNode { frontier: vector(r, PALW_TIR_PUBLIC_FRONTIER_HASHES_V1, native)?, siblings: vector(r, PATH, native)? }
+            }
             4 => Self::TileNode {
                 row_root: BorshDeserialize::deserialize_reader(r)?,
                 row_opening: opening(r, native)?,
@@ -218,14 +233,14 @@ impl PalwTirPublicSourceV1 {
         original_execution_root: Hash64,
         original_trace_root: Hash64,
         maximum_leaves: u64,
-    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,
-                crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    {
         use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1, reserve_native_requests_v1};
-        let requests = Self::native_construction_requests_v1(registered,layout,header)?;
+        let requests = Self::native_construction_requests_v1(registered, layout, header)?;
         let lease = reserve_native_requests_v1(requests).map_err(E::Resource)?;
-        let source = Self::new_v1(registered,layout,header,original_execution_root,original_trace_root,maximum_leaves)
+        let source = Self::new_v1(registered, layout, header, original_execution_root, original_trace_root, maximum_leaves)
             .map_err(E::Decode)?;
-        Ok(NativeRetainedV1::from_owner_reserved_v1(source,lease))
+        Ok(NativeRetainedV1::from_owner_reserved_v1(source, lease))
     }
 
     /// Construction request quote only; not a lease or policy authentication.
@@ -234,16 +249,18 @@ impl PalwTirPublicSourceV1 {
         layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
         header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeHeapV1,
-            TirNativeRequestsV1, source_tir_program_shape_v1};
+        use crate::palw_native_resource_v1::{
+            NativeDecodeErrorV1 as E, NativeHeapV1, TirNativeRequestsV1, source_tir_program_shape_v1,
+        };
         // Check real byte/count identity before scanner, clone or class builder.
-        registered.check_program_v1().map_err(|e|E::Decode(e.into()))?;
+        registered.check_program_v1().map_err(|e| E::Decode(e.into()))?;
         if layout.commit_tiles.len() as u64 > u64::from(registered.program_bytes)
-            || layout.state_tiles.len() as u64 > u64::from(registered.program_bytes) {
+            || layout.state_tiles.len() as u64 > u64::from(registered.program_bytes)
+        {
             return Err(E::Decode("source layout exceeds registered program geometry".into()));
         }
-        let (shape,source_program_requests)=source_tir_program_shape_v1(&registered.program)?;
-        let mut q=TirNativeRequestsV1::new();
+        let (shape, source_program_requests) = source_tir_program_shape_v1(&registered.program)?;
+        let mut q = TirNativeRequestsV1::new();
         q.add_v1(source_program_requests).map_err(E::Resource)?;
         q.add_v1(crate::palw_tir_step_v1::native_tir_step_space_additional_requests_v1(&shape).map_err(E::Resource)?)
             .map_err(E::Resource)?;
@@ -252,13 +269,15 @@ impl PalwTirPublicSourceV1 {
         // most ONE live decoded program/analysis/StepSpace at a time. Its
         // binding's raw program/layout remain live through the second pass.
         q.exact_v1::<u8>(registered.program.len() as u64).map_err(E::Resource)?;
-        for _ in 0..2 { // class binding layout + verified-space layout
-            let bound=layout.native_heap_v1("native Source layout clone");
+        for _ in 0..2 {
+            // class binding layout + verified-space layout
+            let bound = layout.native_heap_v1("native Source layout clone");
             q.add_v1(bound.bytes().ok_or(E::Resource(bound))?).map_err(E::Resource)?;
         }
-        for _ in 0..3 { // binding context + decode-view context + retained Source.header
+        for _ in 0..3 {
+            // binding context + decode-view context + retained Source.header
             // The full header overbounds the binding's job_context-only clone.
-            let bound=header.native_heap_v1("native Source header clone");
+            let bound = header.native_heap_v1("native Source header clone");
             q.add_v1(bound.bytes().ok_or(E::Resource(bound))?).map_err(E::Resource)?;
         }
         // maximum_window_lanes (RUN calls) and cone_runs_bound only iterate the
@@ -271,10 +290,11 @@ impl PalwTirPublicSourceV1 {
         // CanonicalWriter starts at512 and emits the SAME field widths/order
         // as Borsh for this context. Reserve their maximum coexisting writer,
         // including geometric growth, rather than only logical output bytes.
-        let encoded=borsh::object_length(layout).and_then(|a|borsh::object_length(header).map(|b|a.max(b)))
-            .and_then(|a|borsh::object_length(&header.job_context).map(|b|a.max(b)))
-            .map_err(|e|E::Decode(e.to_string()))? as u64;
-        let writer=Self::native_identity_writer_requests_v3(encoded)?;
+        let encoded = borsh::object_length(layout)
+            .and_then(|a| borsh::object_length(header).map(|b| a.max(b)))
+            .and_then(|a| borsh::object_length(&header.job_context).map(|b| a.max(b)))
+            .map_err(|e| E::Decode(e.to_string()))? as u64;
+        let writer = Self::native_identity_writer_requests_v3(encoded)?;
         q.exact_v1::<u8>(writer).map_err(E::Resource)?;
         Ok(q.bytes_v1())
     }
@@ -282,10 +302,14 @@ impl PalwTirPublicSourceV1 {
     /// Borrowed identity serialization span only, not a decoded-heap ratio.
     /// A span just over a power of two can have both its old and doubled
     /// writer allocations live; twice the logical span is not that peak.
-    pub(crate) fn native_identity_writer_requests_v3(encoded: u64)
-        -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeCoverageV1};
-        encoded.max(1024).checked_next_power_of_two().and_then(|n| n.checked_mul(2))
+    pub(crate) fn native_identity_writer_requests_v3(
+        encoded: u64,
+    ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E};
+        encoded
+            .max(1024)
+            .checked_next_power_of_two()
+            .and_then(|n| n.checked_mul(2))
             .ok_or_else(|| E::Resource(NativeCoverageV1::overflow::<Self>("native Source hash writer capacity")))
     }
 
@@ -455,34 +479,48 @@ impl PalwTirPublicSourceV1 {
     /// Reserve the concrete temporary ID-byte writer before hashing.
     pub(crate) fn validate_complete_ids_v1(&self, rows_root: Hash64, ids: &[u32]) -> Result<(), String> {
         self.trace()?;
-        if ids.len() != self.decode_count_v1() as usize { return Err("shared IDs have no exact original EOF".into()); }
-        let mut q=crate::palw_native_resource_v1::TirNativeRequestsV1::new();
-        q.exact_v1::<u8>((ids.len() as u64).checked_mul(4).ok_or("shared ID byte count overflow")?)
-            .map_err(|e|e.to_string())?;
-        let _scratch=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e|e.to_string())?;
-        if crate::palw_step_refute::tiled_logits_outer_root_v1(&self.header.job_context,
-            u64::from(self.decode_count_v1()),&rows_root,ids) != self.header.full_logits_trace_root {
+        if ids.len() != self.decode_count_v1() as usize {
+            return Err("shared IDs have no exact original EOF".into());
+        }
+        let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        q.exact_v1::<u8>((ids.len() as u64).checked_mul(4).ok_or("shared ID byte count overflow")?).map_err(|e| e.to_string())?;
+        let _scratch = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e| e.to_string())?;
+        if crate::palw_step_refute::tiled_logits_outer_root_v1(
+            &self.header.job_context,
+            u64::from(self.decode_count_v1()),
+            &rows_root,
+            ids,
+        ) != self.header.full_logits_trace_root
+        {
             return Err("shared complete IDs do not reach original outer trace root".into());
         }
         Ok(())
     }
     /// Recheck the borrowed sequence against the original outer root, but retain
     /// only its rows identity. No ID Vec clone or serialized trust flag.
-    pub(crate) fn rows_anchor_from_complete_ids_v1(&self,rows_root:Hash64,ids:&[u32])
-        ->Result<PalwTirPublicRowsAnchorV1,String>{
-        self.validate_complete_ids_v1(rows_root,ids)?;
-        Ok(PalwTirPublicRowsAnchorV1 {source_id:self.source_id,trace_root:self.header.full_logits_trace_root,rows_root})
+    pub(crate) fn rows_anchor_from_complete_ids_v1(
+        &self,
+        rows_root: Hash64,
+        ids: &[u32],
+    ) -> Result<PalwTirPublicRowsAnchorV1, String> {
+        self.validate_complete_ids_v1(rows_root, ids)?;
+        Ok(PalwTirPublicRowsAnchorV1 { source_id: self.source_id, trace_root: self.header.full_logits_trace_root, rows_root })
     }
 
     /// Owned output remains necessary at FullIds ingestion, not per-query reads.
-    pub(crate) fn retain_complete_ids_v1(&self, rows_root: Hash64, ids: &[u32])
-        -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, String> {
-        self.validate_complete_ids_v1(rows_root,ids)?;
-        let mut q=crate::palw_native_resource_v1::TirNativeRequestsV1::new();
-        q.exact_v1::<u32>(ids.len() as u64).map_err(|e|e.to_string())?;
-        let lease=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e|e.to_string())?;
+    pub(crate) fn retain_complete_ids_v1(
+        &self,
+        rows_root: Hash64,
+        ids: &[u32],
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, String> {
+        self.validate_complete_ids_v1(rows_root, ids)?;
+        let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        q.exact_v1::<u32>(ids.len() as u64).map_err(|e| e.to_string())?;
+        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e| e.to_string())?;
         Ok(crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(
-            PalwTirPublicAuthenticatedIdsV1 {source_id:self.source_id,rows_root,ids:ids.to_vec()},lease))
+            PalwTirPublicAuthenticatedIdsV1 { source_id: self.source_id, rows_root, ids: ids.to_vec() },
+            lease,
+        ))
     }
     fn ids<'a>(&self, ids: Option<&'a PalwTirPublicAuthenticatedIdsV1>) -> Result<&'a PalwTirPublicAuthenticatedIdsV1, String> {
         self.trace()?;
@@ -669,9 +707,7 @@ impl PalwTirPublicSourceV1 {
             StepNode { level, index } => node(self.leaf_count_v1(), level, index)?,
             // G14 audit §11 (a): leaf values at the job's actual widest leaf / window (`window_value_bytes`), framing as before.
             StepLeaf { .. } => 1 + self.window_value_bytes[0] + 26 + 76 + h * 64,
-            StepRun { count, .. } => {
-                1 + 4 + self.window_value_bytes[count as usize - 1] + u64::from(count) * (26 + 64) + 16 + h * 128
-            }
+            StepRun { count, .. } => 1 + 4 + self.window_value_bytes[count as usize - 1] + u64::from(count) * (26 + 64) + 16 + h * 128,
             RowsNode { level, index } => node(u64::from(self.decode_count_v1()), level, index)?,
             TileNode { level, index, .. } => 64 + 76 + rows_h * 64 + node(tiles, level, index)?,
             TraceTile { tile, .. } => {
@@ -832,7 +868,10 @@ mod tests {
         let x = tiny_execution(None);
         let src = source(&x);
         let cost = fc::palw_tir_frame_test_only_cost_v1();
-        assert!(fc::tir_public_localization_path_bounded_v1(&src, 6, &cost.config, &cost.clock, None).is_err(), "gather unbounded: refused");
+        assert!(
+            fc::tir_public_localization_path_bounded_v1(&src, 6, &cost.config, &cost.clock, None).is_err(),
+            "gather unbounded: refused"
+        );
         let base = fc::tir_public_localization_path_bounded_v1(&src, 6, &cost.config, &cost.clock, Some(0)).unwrap();
         let with_gather = fc::tir_public_localization_path_bounded_v1(&src, 6, &cost.config, &cost.clock, Some(1_000)).unwrap();
         assert_eq!(base.cone_runs, src.cone_runs_v1(), "the cone is the source's own run count");
@@ -842,7 +881,12 @@ mod tests {
         let restarts = cost.config.prices.reorg_replay_moves;
         assert_eq!(
             base.turns,
-            tiled + src.step_descent_units_v1() + 1 + fc::PALW_TIR_BOUNDED_CONE_ROUNDS_V1 + 1 + restarts * fc::PALW_TIR_BOUNDED_CONE_ROUNDS_V1,
+            tiled
+                + src.step_descent_units_v1()
+                + 1
+                + fc::PALW_TIR_BOUNDED_CONE_ROUNDS_V1
+                + 1
+                + restarts * fc::PALW_TIR_BOUNDED_CONE_ROUNDS_V1,
             "two cone rounds, not one per run"
         );
     }
@@ -1063,12 +1107,13 @@ mod tests {
         assert!(source.authenticate_v1(&request, &response, None).is_err(), "wire material cannot mint a native rows anchor");
         let native = PalwTirPublicRowsAnchorV1::from_native_v1(&source, ids.rows_root_v1());
         assert_eq!(source.authenticate_with_rows_v1(&request, &response, None, Some(&native)).unwrap().response_v1(), &response);
-        let borrowed=source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),ids.ids_v1()).unwrap();
-        assert_eq!(source.authenticate_with_rows_v1(&request,&response,None,Some(&borrowed)).unwrap().response_v1(),&response);
-        let mut altered=ids.ids_v1().to_vec();altered[0]^=1;
-        assert!(source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),&altered).is_err());
-        assert!(source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),&[]).is_err());
-        assert!(source.rows_anchor_from_complete_ids_v1(Hash64::from_u64_word(999),ids.ids_v1()).is_err());
+        let borrowed = source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(), ids.ids_v1()).unwrap();
+        assert_eq!(source.authenticate_with_rows_v1(&request, &response, None, Some(&borrowed)).unwrap().response_v1(), &response);
+        let mut altered = ids.ids_v1().to_vec();
+        altered[0] ^= 1;
+        assert!(source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(), &altered).is_err());
+        assert!(source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(), &[]).is_err());
+        assert!(source.rows_anchor_from_complete_ids_v1(Hash64::from_u64_word(999), ids.ids_v1()).is_err());
         let wrong = PalwTirPublicRowsAnchorV1::from_native_v1(&source, Hash64::from_u64_word(999));
         assert!(source.authenticate_with_rows_v1(&request, &response, None, Some(&wrong)).is_err());
         let (foreign, _) = geometry(8, 1);
@@ -1138,7 +1183,10 @@ mod tests {
 
     /// Registered geometry with no execution or model tensors allocated: the
     /// original header may commit any root; acquisition still has to open it.
-    pub(super) fn geometry(vocab: u32, decode: u32) -> (PalwTirPublicSourceV1, crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1) {
+    pub(super) fn geometry(
+        vocab: u32,
+        decode: u32,
+    ) -> (PalwTirPublicSourceV1, crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1) {
         geometry_with_trace(vocab, decode, None)
     }
     pub(super) fn geometry_with_trace(
@@ -1331,131 +1379,112 @@ mod native_source_owner_tests_v1 {
     use super::*;
     #[test]
     fn retained_native_source_preserves_real_source_identity_and_bounds() {
-        for f in [crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None,2),
-                  crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1()] {
-            let original=f.frame.original_v1();
-            let old=PalwTirPublicSourceV1::new_v1(&f.record,&f.layout,f.frame.header_v1(),
-                original.execution_root,original.trace_root,f.rules.maximum_leaves).unwrap();
-            let retained=PalwTirPublicSourceV1::new_native_v1(&f.record,&f.layout,f.frame.header_v1(),
-                original.execution_root,original.trace_root,f.rules.maximum_leaves).unwrap();
-            assert_eq!(retained.source_id_v1(),old.source_id_v1());
-            assert_eq!(retained.window_value_bytes,old.window_value_bytes);
-            assert_eq!(retained.maximum_leaf_bytes,old.maximum_leaf_bytes);
-            assert_eq!(retained.cone_runs,old.cone_runs);
-            assert!(PalwTirPublicSourceV1::native_construction_requests_v1(&f.record,&f.layout,f.frame.header_v1()).unwrap()>0);
-            let mut wrong=f.record.clone();wrong.program_bytes=wrong.program_bytes.checked_add(1).unwrap();
-            assert!(matches!(PalwTirPublicSourceV1::new_native_v1(&wrong,&f.layout,f.frame.header_v1(),
-                original.execution_root,original.trace_root,f.rules.maximum_leaves),
-                Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))));
+        for f in [
+            crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 2),
+            crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1(),
+        ] {
+            let original = f.frame.original_v1();
+            let old = PalwTirPublicSourceV1::new_v1(
+                &f.record,
+                &f.layout,
+                f.frame.header_v1(),
+                original.execution_root,
+                original.trace_root,
+                f.rules.maximum_leaves,
+            )
+            .unwrap();
+            let retained = PalwTirPublicSourceV1::new_native_v1(
+                &f.record,
+                &f.layout,
+                f.frame.header_v1(),
+                original.execution_root,
+                original.trace_root,
+                f.rules.maximum_leaves,
+            )
+            .unwrap();
+            assert_eq!(retained.source_id_v1(), old.source_id_v1());
+            assert_eq!(retained.window_value_bytes, old.window_value_bytes);
+            assert_eq!(retained.maximum_leaf_bytes, old.maximum_leaf_bytes);
+            assert_eq!(retained.cone_runs, old.cone_runs);
+            assert!(PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, f.frame.header_v1()).unwrap() > 0);
+            let mut wrong = f.record.clone();
+            wrong.program_bytes = wrong.program_bytes.checked_add(1).unwrap();
+            assert!(matches!(
+                PalwTirPublicSourceV1::new_native_v1(
+                    &wrong,
+                    &f.layout,
+                    f.frame.header_v1(),
+                    original.execution_root,
+                    original.trace_root,
+                    f.rules.maximum_leaves
+                ),
+                Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))
+            ));
         }
     }
 
-/// Logical limits are global OnceLock settings. Run each case in a fresh
-/// process so neither quota nor outstanding leases escape into other tests.
-#[test]
-fn retained_native_source_refuses_before_construction_and_holds_owner_quota() {
-    let worker = format!(
-        "{}::native_source_quota_worker",
-        module_path!().split_once("::").unwrap().1
-    );
-    for case in ["short", "retained"] {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &worker,
-                "--ignored",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env("MISAKA_SOURCE_NATIVE_QUOTA_CHILD", case)
-            .status()
-            .unwrap();
-        assert!(
-            status.success(),
-            "isolated Source quota {case} failed: {status}"
-        );
+    /// Logical limits are global OnceLock settings. Run each case in a fresh
+    /// process so neither quota nor outstanding leases escape into other tests.
+    #[test]
+    fn retained_native_source_refuses_before_construction_and_holds_owner_quota() {
+        let worker = format!("{}::native_source_quota_worker", module_path!().split_once("::").unwrap().1);
+        for case in ["short", "retained"] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &worker, "--ignored", "--nocapture", "--test-threads=1"])
+                .env("MISAKA_SOURCE_NATIVE_QUOTA_CHILD", case)
+                .status()
+                .unwrap();
+            assert!(status.success(), "isolated Source quota {case} failed: {status}");
+        }
     }
-}
-#[test]
-#[ignore = "isolated quota worker; invoke through parent test"]
-fn native_source_quota_worker() {
-    use crate::palw_native_resource_v1::{
-        arm_native_logical_limits_v1, reserve_native_requests_v1, NativeDecodeErrorV1,
-        NativeSnapshotResourceLimitsV1,
-    };
-    let case = std::env::var("MISAKA_SOURCE_NATIVE_QUOTA_CHILD")
-        .expect("invoke through isolated Source quota parent test");
-    // All fixture construction/quote work occurs before the global checker
-    // is armed. This tests the new constructor, not unrelated fixture costs.
-    let f = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 2);
-    let original = f.frame.original_v1();
-    let header = f.frame.header_v1();
-    let q = PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, header)
-        .unwrap();
-    assert!(q > 0);
-    let wrong = Hash64::from_u64_word(0x534F55524345);
-    assert_ne!(wrong, original.execution_root);
-    let construct = |root| {
-        PalwTirPublicSourceV1::new_native_v1(
-            &f.record,
-            &f.layout,
-            header,
-            root,
-            original.trace_root,
-            f.rules.maximum_leaves,
-        )
-    };
-    let quota = match case.as_str() {
-        "short" => q.checked_sub(1).unwrap(),
-        "retained" => q,
-        _ => panic!("unknown Source quota case"),
-    };
-    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 {
-        memory_bytes: quota,
-        database_bytes: 0,
-    }));
-    if case == "short" {
-        assert!(matches!(
-            construct(original.execution_root),
-            Err(NativeDecodeErrorV1::Resource(_))
-        ));
-        // Quote inputs are valid. A wrong expected root would be semantic
-        // Decode if new_v1 ran: Resource proves reservation comes first.
-        assert!(matches!(
-            construct(wrong),
-            Err(NativeDecodeErrorV1::Resource(_))
-        ));
-        // A failed reservation must not debit any partial outstanding size.
-        let probe = reserve_native_requests_v1(quota)
-            .unwrap()
-            .expect("logical checker armed");
-        drop(probe);
-    } else {
-        let source = construct(original.execution_root).unwrap();
-        assert_eq!(source.source_id_v1(), f.frame.descriptor_v1().source_id);
-        assert!(
-            reserve_native_requests_v1(1).is_err(),
-            "returned owner must retain full construction ticket"
-        );
-        drop(source);
-        let probe = reserve_native_requests_v1(q)
-            .unwrap()
-            .expect("owner drop returned reservation");
-        assert!(reserve_native_requests_v1(1).is_err());
-        drop(probe);
-        // Reservation succeeds first, semantic constructor then refuses.
-        // Its RAII lease must also be returned when construction fails.
-        assert!(matches!(
-            construct(wrong),
-            Err(NativeDecodeErrorV1::Decode(_))
-        ));
-        let retry = reserve_native_requests_v1(q)
-            .unwrap()
-            .expect("semantic refusal returned reservation");
-        drop(retry);
-        let again = construct(original.execution_root).unwrap();
-        drop(again);
+    #[test]
+    #[ignore = "isolated quota worker; invoke through parent test"]
+    fn native_source_quota_worker() {
+        use crate::palw_native_resource_v1::{
+            NativeDecodeErrorV1, NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
+        };
+        let case = std::env::var("MISAKA_SOURCE_NATIVE_QUOTA_CHILD").expect("invoke through isolated Source quota parent test");
+        // All fixture construction/quote work occurs before the global checker
+        // is armed. This tests the new constructor, not unrelated fixture costs.
+        let f = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 2);
+        let original = f.frame.original_v1();
+        let header = f.frame.header_v1();
+        let q = PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, header).unwrap();
+        assert!(q > 0);
+        let wrong = Hash64::from_u64_word(0x534F55524345);
+        assert_ne!(wrong, original.execution_root);
+        let construct = |root| {
+            PalwTirPublicSourceV1::new_native_v1(&f.record, &f.layout, header, root, original.trace_root, f.rules.maximum_leaves)
+        };
+        let quota = match case.as_str() {
+            "short" => q.checked_sub(1).unwrap(),
+            "retained" => q,
+            _ => panic!("unknown Source quota case"),
+        };
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: quota, database_bytes: 0 }));
+        if case == "short" {
+            assert!(matches!(construct(original.execution_root), Err(NativeDecodeErrorV1::Resource(_))));
+            // Quote inputs are valid. A wrong expected root would be semantic
+            // Decode if new_v1 ran: Resource proves reservation comes first.
+            assert!(matches!(construct(wrong), Err(NativeDecodeErrorV1::Resource(_))));
+            // A failed reservation must not debit any partial outstanding size.
+            let probe = reserve_native_requests_v1(quota).unwrap().expect("logical checker armed");
+            drop(probe);
+        } else {
+            let source = construct(original.execution_root).unwrap();
+            assert_eq!(source.source_id_v1(), f.frame.descriptor_v1().source_id);
+            assert!(reserve_native_requests_v1(1).is_err(), "returned owner must retain full construction ticket");
+            drop(source);
+            let probe = reserve_native_requests_v1(q).unwrap().expect("owner drop returned reservation");
+            assert!(reserve_native_requests_v1(1).is_err());
+            drop(probe);
+            // Reservation succeeds first, semantic constructor then refuses.
+            // Its RAII lease must also be returned when construction fails.
+            assert!(matches!(construct(wrong), Err(NativeDecodeErrorV1::Decode(_))));
+            let retry = reserve_native_requests_v1(q).unwrap().expect("semantic refusal returned reservation");
+            drop(retry);
+            let again = construct(original.execution_root).unwrap();
+            drop(again);
+        }
     }
-}
-
 }

@@ -4,45 +4,45 @@
 
 mod kernel_route_locator_v1;
 // Liveness audit (lane lifecycle): per-object rehearsal / per-block fold cost vs state rows.
+mod claim_local_rewards_v1;
+mod claim_local_v1;
 mod liveness_lifecycle_v1;
 mod public_filer_targeting_v1;
-mod claim_local_v1;
-mod claim_local_rewards_v1;
 // RFC-0017: model eligibility through the actual fold (claim gate, commit-then-draw, fee, promotion, lapse, renewal).
+mod gdn_court_v2;
 mod model_eligibility_fold_v1;
-mod public_prefix_fold_v1;
 mod model_tier_line_root_v1;
+mod public_prefix_fold_v1;
 mod reward_gate_genesis;
 mod terminal_carriage_v1;
-mod gdn_court_v2;
 // RFC-0006: remaining shared writer admission (payout/exposure/court/index/encoded/kernel rows) and the lenient-consumer guard.
+mod court_admission_workspace_v2;
+mod court_capacity_workspace_v2;
+mod court_deadline_workspace_v2;
+mod legacy_court_ingress_workspace_v2;
 mod native_writers_v1;
 mod vesting_workspace_v2;
-mod court_deadline_workspace_v2;
-mod court_capacity_workspace_v2;
-mod court_admission_workspace_v2;
-mod legacy_court_ingress_workspace_v2;
 // G14 lane F03 (P0-2, T05 slice): unlinked colluding Sybil on the outside reservation.
-mod f03_outsider_sybil_refill_v1;
-mod claim_court_admission_workspace_v2;
-mod queue_drain_workspace_v2;
 mod aux_sweep_workspace_v2;
+mod claim_court_admission_workspace_v2;
+mod f03_outsider_sybil_refill_v1;
 mod native_routing_work_v2;
+mod queue_drain_workspace_v2;
 // RFC-0008: once-only settlement across consumers (dormant fence; kernel route aux 140).
 mod settlement_once_v1;
 // RFC-0008 RFC08-2: the combined liability predicate at every leg and admission (dormant).
 mod settlement_liability_v1;
 // RFC-0007 §4.1 T6: paid-claim traps, the receipt signers' liability and held check fees (dormant; kernel route aux 142).
-mod paid_claim_trap_v1;
 mod paid_claim_reader_v1;
+mod paid_claim_trap_v1;
 // RFC08 08-B: native claim fees held from Final to the liability horizon (dormant; kernel route aux 144).
 mod native_liability_hold_v1;
 // G14 lane r5-f02-wire: tag 178 dispatch, the F02 post-Final default / hold / recovery, the per-claim court index, bottom evidence.
 mod r5_f02_wire_v1;
 // G14 r6 D4: native post-Final duty clocks (text29 / funded v11).
-mod r6_d4_post_final_duty_v1;
 mod f02b_kernel_court_admission_v1;
 mod paid_consumer_retention_v1;
+mod r6_d4_post_final_duty_v1;
 // Compute-claim audit (lane compute-exec, 2026-10-22): a decoded answer re-sold as prefill / under a second bond.
 mod audit_compute_exec_v1;
 // RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
@@ -7842,10 +7842,7 @@ fn r5_f03_colluders_refill_every_slot_and_one_outsider_reaches_a_verdict_in_time
     const FEE: u64 = 5;
     for armed in [true, false] {
         set_palw_court_ingress_test_schedule_v1(Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: FEE }));
-        let p = params()
-            .with_turn_deadline_daa(8)
-            .unwrap()
-            .with_court_outsider_lane_from_daa(armed.then_some(0));
+        let p = params().with_turn_deadline_daa(8).unwrap().with_court_outsider_lane_from_daa(armed.then_some(0));
         let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
         assert_eq!(cap, 8, "the fixture's cap");
         let genesis = PalwChainStateV2::genesis();
@@ -7878,10 +7875,8 @@ fn r5_f03_colluders_refill_every_slot_and_one_outsider_reaches_a_verdict_in_time
             .collect();
         (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &binds, None);
         daa += 1;
-        let licences: Vec<PalwConsensusObjectV2> = claims
-            .iter()
-            .map(|c| PalwConsensusObjectV2::ReceiptLicensed { claim: *c, receipts: seat_says(true) })
-            .collect();
+        let licences: Vec<PalwConsensusObjectV2> =
+            claims.iter().map(|c| PalwConsensusObjectV2::ReceiptLicensed { claim: *c, receipts: seat_says(true) }).collect();
         (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &licences, None);
         daa += 1;
         // The coalition opens one court a block on every decoy and space until the fold refuses: the non-reserved room
@@ -14236,8 +14231,11 @@ mod fp_compute_pricing {
             for (reading, active) in [(99, false), (100, true), (500, true)] {
                 let point = ctx(7, reading, 7);
                 assert_eq!(extras.rules_at(&point).canonical_work_active(), active);
-                assert_eq!(extras.rules_for_claim(&claim).prices_in_compute(&p), compute,
-                    "claim accepted at {accepted} must keep its unit when read at {reading}");
+                assert_eq!(
+                    extras.rules_for_claim(&claim).prices_in_compute(&p),
+                    compute,
+                    "claim accepted at {accepted} must keep its unit when read at {reading}"
+                );
             }
         }
         assert_eq!(state.state_root(), before, "the views cannot write chain state");
@@ -14346,7 +14344,7 @@ mod fp_compute_pricing {
                     daa_score: 103,
                     receipt_rights: None,
                     tir_free_prompt_active: false,
-                panel_da_deferred_prompt: false,
+                    panel_da_deferred_prompt: false,
                 };
                 let quoted = palw_fp_commitment_price_v1(
                     &s3,
@@ -14383,7 +14381,7 @@ mod fp_compute_pricing {
                     daa_score: 103,
                     receipt_rights: None,
                     tir_free_prompt_active: false,
-                panel_da_deferred_prompt: false,
+                    panel_da_deferred_prompt: false,
                 },
                 &h64(0xEF),
                 &plain,
@@ -14454,7 +14452,7 @@ mod fp_compute_pricing {
                 daa_score: 103,
                 receipt_rights: Some(rights_inputs),
                 tir_free_prompt_active: false,
-            panel_da_deferred_prompt: false,
+                panel_da_deferred_prompt: false,
             },
             &h64(0xE0),
             &plain,
@@ -32570,7 +32568,11 @@ mod rcore_s1_api {
                 id,
                 PalwPanelStateV2 {
                     anchor: h64(0xA0),
-                    seats: seats.iter().enumerate().map(|(i, b)| PalwPanelSeatV2 { bond: *b, operator_id: op_id(0x22 + i as u64) }).collect(),
+                    seats: seats
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| PalwPanelSeatV2 { bond: *b, operator_id: op_id(0x22 + i as u64) })
+                        .collect(),
                     bound_daa: 110,
                 },
             );
@@ -32645,7 +32647,11 @@ mod rcore_s1_api {
             assert!(legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x82), false, 1_000).is_err());
             // Once the outsider opens, a further outside session on the target is a follow-on.
             s.court_sessions.insert(h64(0x7702), session(target, outsider));
-            assert_eq!(court_outsider_lane_followons_v1(&s), palw_court_outsider_lane_followon_cap_v1(cap), "two firsts on the target");
+            assert_eq!(
+                court_outsider_lane_followons_v1(&s),
+                palw_court_outsider_lane_followon_cap_v1(cap),
+                "two firsts on the target"
+            );
             assert!(court_outsider_lane_is_followon_v1(&s, target, bond_key(0x901)));
             assert!(legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x901), false, 1_000).is_err());
             // Below the fence the old rule (open < cap) alone.
@@ -32720,10 +32726,13 @@ mod rcore_s1_api {
             let reserved = court_ingress_reserved_claims_v1(&s, &p, 1_000);
             assert_eq!(reserved.len() as u64, r, "every in-flight claim holds its reservation");
             assert!(reserved.contains(&target));
-            assert!(matches!(
-                palw_court_ingress_claim_admits_v1(&s, &p, &h64(0xC1), 1_000),
-                Err(PalwStateV2Error::CourtClaimAdmissionFull { .. })
-            ), "the admission coordinator bounds the reserved claims");
+            assert!(
+                matches!(
+                    palw_court_ingress_claim_admits_v1(&s, &p, &h64(0xC1), 1_000),
+                    Err(PalwStateV2Error::CourtClaimAdmissionFull { .. })
+                ),
+                "the admission coordinator bounds the reserved claims"
+            );
             let outsider = bond_key(0x900);
             let mut next_id = 0u64;
             let mut sybil = 0u64;
@@ -32806,7 +32815,10 @@ mod rcore_s1_api {
             claimed(&mut s, target, bond_key(0x80), &[bond_key(0x81)]);
             let outsider = bond_key(0x900);
             s.bonds.insert(outsider, bond(COLLATERAL, PalwBondStatusV2::Active));
-            for (schedule, fee) in [(None, crate::palw_g14_values_v1::PALW_G14_COURT_INGRESS_ESTIMATE_V1.fee_sompi_per_session), (Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), 5)] {
+            for (schedule, fee) in [
+                (None, crate::palw_g14_values_v1::PALW_G14_COURT_INGRESS_ESTIMATE_V1.fee_sompi_per_session),
+                (Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), 5),
+            ] {
                 set_palw_court_ingress_test_schedule_v1(schedule);
                 let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
                 let admitted = court_ingress_admission_v1(&mut b, &at, target, outsider, false, 20).expect("admitted");

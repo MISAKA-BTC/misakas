@@ -206,7 +206,11 @@ pub(super) fn plan_fund(
     };
     Ok(NativeCapacityAdmissionV23 { global, lease, plan, pursuit, consent: c, queue })
 }
-pub(super) fn write(builder: &mut TransitionBuilder<'_>, admission: NativeCapacityAdmissionV23, job: Digest) -> Result<(), PalwStateV2Error> {
+pub(super) fn write(
+    builder: &mut TransitionBuilder<'_>,
+    admission: NativeCapacityAdmissionV23,
+    job: Digest,
+) -> Result<(), PalwStateV2Error> {
     if let Some((global, lease)) = admission.queue {
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))))?;
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, job, 1u8)), Some(key(&(lease.root(), lease))))?;
@@ -243,7 +247,11 @@ fn slots(builder: &TransitionBuilder<'_>, job: Digest) -> Result<Option<NativePh
     }
     Ok(Some(s))
 }
-fn write_slots(builder: &mut TransitionBuilder<'_>, job: Digest, slots: Option<NativePhysicalSlotsV22>) -> Result<(), PalwStateV2Error> {
+fn write_slots(
+    builder: &mut TransitionBuilder<'_>,
+    job: Digest,
+    slots: Option<NativePhysicalSlotsV22>,
+) -> Result<(), PalwStateV2Error> {
     if let Some(s) = slots {
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(s.root(), s))))?;
     }
@@ -295,7 +303,11 @@ pub(super) fn request(
     write_slots(builder, job, slots)?;
     Ok(())
 }
-pub(super) fn commit_owner(builder: &mut TransitionBuilder<'_>, job: Digest, slots: Option<NativePhysicalSlotsV22>) -> Result<(), PalwStateV2Error> {
+pub(super) fn commit_owner(
+    builder: &mut TransitionBuilder<'_>,
+    job: Digest,
+    slots: Option<NativePhysicalSlotsV22>,
+) -> Result<(), PalwStateV2Error> {
     write_slots(builder, job, slots)?;
     Ok(())
 }

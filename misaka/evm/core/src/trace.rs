@@ -213,9 +213,20 @@ pub fn trace_accepted_tx(
     capture_struct_logs: bool,
     limits: TraceLimits,
 ) -> Result<TracedTx, TraceError> {
-    trace_accepted_tx_with_market_owned_v2(parent_snapshot, parent_header, body, receipt_index, expected_receipt,
-        gas_pool_v2_activation_daa_score, f002_withdraw_cap_activation_daa_score, bridge_ledger_activation_daa_score,
-        f003_mldsa_verify_activation_daa_score, capture_struct_logs, limits, None)
+    trace_accepted_tx_with_market_owned_v2(
+        parent_snapshot,
+        parent_header,
+        body,
+        receipt_index,
+        expected_receipt,
+        gas_pool_v2_activation_daa_score,
+        f002_withdraw_cap_activation_daa_score,
+        bridge_ledger_activation_daa_score,
+        f003_mldsa_verify_activation_daa_score,
+        capture_struct_logs,
+        limits,
+        None,
+    )
 }
 
 /// Same replay engine with exact native post-parent market rows and child fences.
@@ -235,7 +246,8 @@ pub fn trace_accepted_tx_with_market_owned_v2(
     market_context: Option<&kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>,
 ) -> Result<TracedTx, TraceError> {
     if let Some(context) = market_context {
-        if context.selected_parent != body.selected_parent || context.accepting_daa != body.env.daa_score || !context.fences.evm_active {
+        if context.selected_parent != body.selected_parent || context.accepting_daa != body.env.daa_score || !context.fences.evm_active
+        {
             return Err(TraceError::Internal("replay market context does not match selected parent/accepting DAA".into()));
         }
     }
@@ -260,8 +272,13 @@ pub fn trace_accepted_tx_with_market_owned_v2(
     let prefix = &all_candidates[..target_idx];
     let input_prefix = EvmBlockInput {
         market: match market_context {
-            Some(context) => crate::EvmMarketInput { palw_view: None, palw_view_owned_v2: None, fences: context.fences,
-                expected_settlements: &context.settlements, chain_id: context.view.chain_id },
+            Some(context) => crate::EvmMarketInput {
+                palw_view: None,
+                palw_view_owned_v2: None,
+                fences: context.fences,
+                expected_settlements: &context.settlements,
+                chain_id: context.view.chain_id,
+            },
             None => Default::default(),
         },
         parent: parent_header,
@@ -288,7 +305,8 @@ pub fn trace_accepted_tx_with_market_owned_v2(
     let (prefix_result, mut pre_state) = match market_context {
         Some(context) => crate::executor::execute_block_evm_with_retained_market_v2(seed, &input_prefix, context.view.clone()),
         None => execute_block_evm(seed, &input_prefix),
-    }.map_err(TraceError::Exec)?;
+    }
+    .map_err(TraceError::Exec)?;
 
     // Defense-in-depth (fail closed): the re-derived prefix MUST reproduce the
     // recorded per-candidate outcomes exactly. If it does not — a wrong activation
@@ -322,8 +340,9 @@ pub fn trace_accepted_tx_with_market_owned_v2(
     // fresh handler at zero would change the next action's sequence/per-account cap.
     let market = match market_context {
         Some(context) => {
-            let handler = crate::model_market::MarketHandlers::new_retained_v2(context.view.clone(), context.fences, context.view.chain_id)
-                .map_err(|e| TraceError::Exec(EvmExecError::NativeResource(e)))?;
+            let handler =
+                crate::model_market::MarketHandlers::new_retained_v2(context.view.clone(), context.fences, context.view.chain_id)
+                    .map_err(|e| TraceError::Exec(EvmExecError::NativeResource(e)))?;
             handler.set_committed(&prefix_result.market_actions);
             Some(handler)
         }
@@ -520,7 +539,9 @@ pub fn trace_candidate_tx(
                 b.difficulty = U256::ZERO;
                 b.prevrandao = Some(B256::ZERO);
             })
-            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, market.clone())))
+            .append_handler_register_box(Box::new(move |h| {
+                crate::precompiles::register_all_misaka_precompiles(h, f003_active, market.clone())
+            }))
             .append_handler_register(inspector_handle_register)
             .build();
         evm.context.evm.env.tx = txenv;
@@ -832,7 +853,13 @@ mod tests {
     const SELECTED_PARENT: [u8; 64] = [0xAA; 64];
 
     /// Sign a 1559 tx with the fixed default key → (sender, raw EIP-2718 bytes).
-    pub(super) fn signed_tx(nonce: u64, to: revm::primitives::TxKind, value: u128, gas_limit: u64, input: Bytes) -> (Address, Vec<u8>) {
+    pub(super) fn signed_tx(
+        nonce: u64,
+        to: revm::primitives::TxKind,
+        value: u128,
+        gas_limit: u64,
+        input: Bytes,
+    ) -> (Address, Vec<u8>) {
         signed_tx_key(0x42, nonce, to, value, gas_limit, input)
     }
 

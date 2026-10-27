@@ -113,8 +113,10 @@ pub(super) fn with_detection_policies(
 ) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, _, premine, floats) = parts;
     let mut params = config.params.clone();
-    params.palw_detection_policy_v1 =
-        Some(kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyFenceV1 { activation: ForkActivation::new(0), policies });
+    params.palw_detection_policy_v1 = Some(kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyFenceV1 {
+        activation: ForkActivation::new(0),
+        policies,
+    });
     params.sync_palw_detection_policy_v1();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         unreachable!("testnet-12 is ConsensusV2")
@@ -127,9 +129,16 @@ pub(super) fn with_detection_policies(
 /// **A kernel-route detection policy for `class`** (full re-execution over the claim's evaluated positions, one position an interval),
 /// its honest cost per position `cost`, its declared resources wide enough that only the deterrence bound and the plan's own checks
 /// decide.
-pub(super) fn kernel_detection_policy(class: Hash64, cost: u64) -> kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1 {
+pub(super) fn kernel_detection_policy(
+    class: Hash64,
+    cost: u64,
+) -> kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1 {
     use kaspa_consensus_core::palw_detection_policy_v1::*;
-    let mut p = palw_detection_genesis_design_v1(class, PalwDetectionRouteV1::Kernel, PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval: 1 });
+    let mut p = palw_detection_genesis_design_v1(
+        class,
+        PalwDetectionRouteV1::Kernel,
+        PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval: 1 },
+    );
     p.economics.cost_per_interval_sompi = cost;
     p.economics.collateral_per_interval_sompi = cost.saturating_mul(2);
     p.resources.retention_pairs_cap = u32::MAX;
@@ -399,11 +408,19 @@ impl Net {
             self.chain.heartbeat(ttpb, Vec::new()).await;
             beats += 1;
             if beats % 1_000 == 0 {
-                eprintln!("g14/node: heartbeat advance {start} -> {daa}: now {}, {beats} blocks, {:.1}s", self.daa(), began.elapsed().as_secs_f64());
+                eprintln!(
+                    "g14/node: heartbeat advance {start} -> {daa}: now {}, {beats} blocks, {:.1}s",
+                    self.daa(),
+                    began.elapsed().as_secs_f64()
+                );
             }
         }
         if long || beats >= 1_000 {
-            eprintln!("g14/node: heartbeat target {daa} reached at {}, {beats} blocks, {:.1}s", self.daa(), began.elapsed().as_secs_f64());
+            eprintln!(
+                "g14/node: heartbeat target {daa} reached at {}, {beats} blocks, {:.1}s",
+                self.daa(),
+                began.elapsed().as_secs_f64()
+            );
         }
     }
 

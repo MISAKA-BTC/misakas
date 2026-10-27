@@ -1278,14 +1278,14 @@ pub(super) enum PalwMergedOwnedWorkV1 {
 
 mod dns;
 mod evm;
+mod native_reserve_v1;
 mod palw;
 pub(in crate::pipeline::virtual_processor) mod palw_accept;
+mod palw_evm_asof_v2;
 pub(crate) mod palw_h1_guard;
+mod palw_pruning_capture_v1;
 mod palw_validate;
 mod template;
-mod native_reserve_v1;
-mod palw_pruning_capture_v1;
-mod palw_evm_asof_v2;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
 pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
 
@@ -2358,7 +2358,8 @@ impl VirtualStateProcessor {
                     // walk currently holds — which IS this block's selected parent, since the
                     // transition below has not run yet. Set before `calculate_utxo_state` because
                     // that is where the coinbase is verified against it.
-                    ctx.palw_v2_payout_outputs = palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).transpose()?.unwrap_or_default();
+                    ctx.palw_v2_payout_outputs =
+                        palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).transpose()?.unwrap_or_default();
                     // Audit C-08: and the collateral this block may not let anyone spend, from the
                     // same parent state and for the same reason — PLUS every bond this block's own
                     // mergeset declares.
@@ -2680,16 +2681,17 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
-                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers) = self.palw_v2_accepted_objects_and_originals(
-                                    state,
-                                    state_params,
-                                    &point,
-                                    objects,
-                                    current,
-                                    own_attempt_class,
-                                    &ctx.palw_round_fee_incomes,
-                                    &ctx.palw_escrow_settlements,
-                                )?;
+                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers) = self
+                                    .palw_v2_accepted_objects_and_originals(
+                                        state,
+                                        state_params,
+                                        &point,
+                                        objects,
+                                        current,
+                                        own_attempt_class,
+                                        &ctx.palw_round_fee_incomes,
+                                        &ctx.palw_escrow_settlements,
+                                    )?;
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
@@ -2843,7 +2845,8 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &*fp_answers.attach_v1({
-                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
+                                        let mut extras =
+                                            self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.tir_public_originals = tir_public_originals;
                                         extras.tir_funded_originals = tir_funded_originals;

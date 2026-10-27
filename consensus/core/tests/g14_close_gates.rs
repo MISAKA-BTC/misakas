@@ -257,7 +257,8 @@ fn rig(p: Params) -> Rig {
     let s = seed_prereqs(&p, &s);
     let publish =
         PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
-    let s = fold_sp(&p, &sp, &s, &ctx(2, 1_000, 2, 0), &[publish], PalwBlockWorkV3::None, Hash64::default()).expect("profile published");
+    let s =
+        fold_sp(&p, &sp, &s, &ctx(2, 1_000, 2, 0), &[publish], PalwBlockWorkV3::None, Hash64::default()).expect("profile published");
     Rig { p, s, floor, bond: bond_key(attacker), pk: pubkey_of(attacker) }
 }
 
@@ -333,7 +334,12 @@ fn set(p: &mut Params, fence: PalwG14GatedFenceV1, at: Option<ForkActivation>) {
 /// real network until a record for exactly that network and height is pinned; this binary pins none. `None` and `never()` pass.
 #[test]
 fn armable_g14_fences_refuse_without_a_measured_record() {
-    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
+    assert!(
+        PALW_G14_ARMING_RECORDS_V1
+            .iter()
+            .all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash),
+        "no record is pinned in this binary"
+    );
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_g14_gates_v1().expect("testnet-12 as shipped arms none of them");
     for fence in PalwG14GatedFenceV1::ALL {
@@ -395,7 +401,10 @@ fn an_arming_record_admits_exactly_its_network_and_height() {
         palw_g14_arming_record_form_v1(&PalwG14ArmingRecordV1 { source_commit: [0; 20], ..good }),
         Err(PalwG14ArmingRefusalV1::SourceCommit)
     );
-    assert_eq!(palw_g14_arming_record_form_v1(&PalwG14ArmingRecordV1 { review: [0; 32], ..good }), Err(PalwG14ArmingRefusalV1::Review));
+    assert_eq!(
+        palw_g14_arming_record_form_v1(&PalwG14ArmingRecordV1 { review: [0; 32], ..good }),
+        Err(PalwG14ArmingRefusalV1::Review)
+    );
     assert!(matches!(
         palw_g14_arming_record_form_v1(&PalwG14ArmingRecordV1 { evidence: &[[1; 32]], ..good }),
         Err(PalwG14ArmingRefusalV1::EvidenceCount { .. })
@@ -466,8 +475,9 @@ fn n4_v5_image_and_panel_da_claims_take_no_new_reward() {
     for (n, job) in [(0xA1u64, v5_image()), (0xA2, panel_da())] {
         let claim = h(n);
         let commit = fp_commit(&r.s, r.floor, r.bond, r.pk.clone(), claim, Some(job.clone()));
-        let refused = fold_sp(&r.p, &armed, &r.s, &ctx(3, FENCE + 1, 3, 0), &[commit.clone()], PalwBlockWorkV3::None, Hash64::default())
-            .expect_err("past N4: refused at the claim gate");
+        let refused =
+            fold_sp(&r.p, &armed, &r.s, &ctx(3, FENCE + 1, 3, 0), &[commit.clone()], PalwBlockWorkV3::None, Hash64::default())
+                .expect_err("past N4: refused at the claim gate");
         assert_eq!(refusal_code(&refused), Some("N4_NONPUBLIC_EVIDENCE"), "{refused:?}");
         // Below the fence (a claim accepted before it): the old ruleset takes it.
         let below = sp_of(&r.p).with_public_evidence_reward_from_daa(Some(FENCE + 10));
@@ -516,8 +526,16 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     const PROBE: u64 = 0xAD_0009;
     let base = sp_of(&p);
     let g = genesis_state(&p);
-    let s = fold_sp(&p, &base, &g, &ctx(0xAD00_0001, 1_000, 1, 0), &[bond_obj(PROBE, 1_000_000_000_000_000)], PalwBlockWorkV3::None, Hash64::default())
-        .expect("the probe bond registers");
+    let s = fold_sp(
+        &p,
+        &base,
+        &g,
+        &ctx(0xAD00_0001, 1_000, 1, 0),
+        &[bond_obj(PROBE, 1_000_000_000_000_000)],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+    )
+    .expect("the probe bond registers");
     let (env, key, id) =
         junk_attempt(floor, bond_key(PROBE), pubkey_of(PROBE), &operator_pubkey_of(PROBE), pwu, 0xAD_5EED, 0xAD_0000_5EED);
     let attempt_at = |sp: &PalwStateParamsV2, daa: u64| {
@@ -540,7 +558,12 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     let routed = route_sp(
         &p,
         FENCE,
-        PalwG14RouteMirrorV1 { legacy_filer_from: Some(0), legacy_held_da_from: Some(FENCE), court_capacity_from: Some(FENCE), ..none },
+        PalwG14RouteMirrorV1 {
+            legacy_filer_from: Some(0),
+            legacy_held_da_from: Some(FENCE),
+            court_capacity_from: Some(FENCE),
+            ..none
+        },
     );
     let s2 = attempt_at(&routed, FENCE).expect("the armed route restores admission");
     assert!(s2.claim(&id).is_some());
@@ -563,11 +586,19 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
         ..none
     };
     assert!(r.s.class_semantics_v1(&r.floor).is_none(), "the floor class registers no tokenizer material");
-    let no_material = fold_sp(&r.p, &route_sp(&r.p, FENCE, every), &r.s, &ctx(3, FENCE, 3, 0), &[commit.clone()], PalwBlockWorkV3::None, Hash64::default())
-        .expect_err("no tokenizer material: refused through the fold");
+    let no_material = fold_sp(
+        &r.p,
+        &route_sp(&r.p, FENCE, every),
+        &r.s,
+        &ctx(3, FENCE, 3, 0),
+        &[commit.clone()],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+    )
+    .expect_err("no tokenizer material: refused through the fold");
     assert_eq!(refusal_code(&no_material), Some(PALW_G14_ROUTE_ABSENT_CODE_V1), "{no_material:?}");
     assert!(format!("{no_material:?}").contains("FpTokenizer"), "{no_material:?}");
-    let s3 =fold_sp(&r.p, &fp_armed, &r.s, &ctx(3, FENCE - 1, 3, 0), &[commit], PalwBlockWorkV3::None, Hash64::default())
+    let s3 = fold_sp(&r.p, &fp_armed, &r.s, &ctx(3, FENCE - 1, 3, 0), &[commit], PalwBlockWorkV3::None, Hash64::default())
         .expect("admitted before the fence");
     assert!(s3.claim(&h(0xB1)).is_some());
     // Below every fence (testnet-12 as shipped): byte-identical — the mirror is `None`, the gate answers nothing.
@@ -645,8 +676,9 @@ fn legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_arme
     // The fold refuses the constraint commitment at the claim gate with the G-05 code, before any constraint-specific check.
     let r = rig(p);
     let commit = fp_commit(&r.s, r.floor, r.bond, r.pk.clone(), h(0xC6), Some(constraint_v6()));
-    let refused = fold_sp(&r.p, &route_sp(&r.p, FENCE, none), &r.s, &ctx(3, FENCE, 3, 0), &[commit], PalwBlockWorkV3::None, Hash64::default())
-        .expect_err("a G-05 job version past the fence");
+    let refused =
+        fold_sp(&r.p, &route_sp(&r.p, FENCE, none), &r.s, &ctx(3, FENCE, 3, 0), &[commit], PalwBlockWorkV3::None, Hash64::default())
+            .expect_err("a G-05 job version past the fence");
     assert_eq!(refusal_code(&refused), Some(PALW_G14_JOB_UNJUDGEABLE_CODE_V1), "{refused:?}");
     // The families each job version needs (the table in `palw_g14_gates_v1`).
     use PalwG14RouteFamilyV1 as F;
@@ -733,7 +765,15 @@ fn certified_and_final_rewards_are_held_until_the_liability_horizon() {
     let spend = kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3 {
         version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
         network_domain: h(0x0D05_0012),
-        challenge: kaspa_consensus_core::palw_freeprompt_v3::spend_challenge_v3(h(0x0D05_0012), h(0xB0), 1_700, 7, claim, 0, &r.bond.0),
+        challenge: kaspa_consensus_core::palw_freeprompt_v3::spend_challenge_v3(
+            h(0x0D05_0012),
+            h(0xB0),
+            1_700,
+            7,
+            claim,
+            0,
+            &r.bond.0,
+        ),
         claim_id: claim,
         quantum_index: 0,
         beacon_block: h(0xBEAC),
@@ -741,7 +781,8 @@ fn certified_and_final_rewards_are_held_until_the_liability_horizon() {
         producer_pubkey: r.pk.clone(),
     };
     assert!(
-        fold_sp(&r.p, &held, &at_old, &ctx(7, old_final + 2, 7, 0), &[], PalwBlockWorkV3::ReceiptSpend(&spend), Hash64::default()).is_err(),
+        fold_sp(&r.p, &held, &at_old, &ctx(7, old_final + 2, 7, 0), &[], PalwBlockWorkV3::ReceiptSpend(&spend), Hash64::default())
+            .is_err(),
         "no receipt spend (no coinbase leg) before the liability horizon"
     );
     let before = fold_sp(&r.p, &held, &s, &ctx(6, horizon - 1, 6, 0), &[], PalwBlockWorkV3::None, Hash64::default()).expect("sweep");
@@ -767,7 +808,8 @@ fn certified_and_final_rewards_are_held_until_the_liability_horizon() {
     let deadlines = include_str!("../src/palw_state_v2/deadlines.rs");
     assert!(
         deadlines.contains("release_deferred_certified_reward_at_retirement_v1(")
-            && deadlines.find("release_deferred_certified_reward_at_retirement_v1(") < deadlines.find("builder.retire_claim(claim_id, &claim)?;"),
+            && deadlines.find("release_deferred_certified_reward_at_retirement_v1(")
+                < deadlines.find("builder.retire_claim(claim_id, &claim)?;"),
         "the deadline sweep names a deferred reward before the claim retires"
     );
 }
@@ -796,7 +838,10 @@ fn x3_candidate_is_derived_from_existing_horizons_and_stays_refused() {
     // B_disclose is the network's DA disclose window (`palw_da_disclose_window_daa_v1` = the unshortened `window_challenge`).
     let disclose = kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&sp);
     assert_eq!((pol.prepare_daa, pol.observe_daa, pol.resolve_daa), (bind + receipt, wc, disclose + court));
-    assert_eq!(palw_x3_unmeasured_terms_v1(&pol), vec!["B_cold_fetch", "B_check", "B_localize", "B_carrier", "B_reorg_slack", "c_retain"]);
+    assert_eq!(
+        palw_x3_unmeasured_terms_v1(&pol),
+        vec!["B_cold_fetch", "B_check", "B_localize", "B_carrier", "B_reorg_slack", "c_retain"]
+    );
     let hard = pol.prepare_daa + pol.observe_daa + pol.resolve_daa;
     // (i) a pursuit at the open cutoff finishes at hard with the unmeasured terms at 0 (B_remaining = disclose + court).
     let mut x3 = sp.clone();
@@ -857,7 +902,10 @@ fn g14_genesis_ruleset_validates_and_its_exception_reaches_no_shipped_preset() {
     forged.genesis.nonce ^= 1;
     assert!(!forged.has_isolated_g14_genesis_v1(), "the header must hash to the genesis");
     // Every G14 fence the ruleset carries is at block 0, and the mirrors agree. The two ruling fences (D2, X3) are not part of G14-from-genesis.
-    for fence in PalwG14GatedFenceV1::ALL.into_iter().filter(|f| !matches!(f, PalwG14GatedFenceV1::CourtModelScopeV1 | PalwG14GatedFenceV1::ClaimHardDeadlineV1)) {
+    for fence in PalwG14GatedFenceV1::ALL
+        .into_iter()
+        .filter(|f| !matches!(f, PalwG14GatedFenceV1::CourtModelScopeV1 | PalwG14GatedFenceV1::ClaimHardDeadlineV1))
+    {
         assert_eq!(fence.armed(&g), Some(ForkActivation::new(0)), "{fence:?}");
     }
     assert_eq!(g.palw_legacy_public_filer_v1, Some(ForkActivation::new(0)));
@@ -904,7 +952,11 @@ fn g14_genesis_from_block_zero_only_families_with_an_armed_route_earn() {
     // Non-public material never pays; an unframed public job never pays.
     for c in [v5_image(), panel_da(), public_v4(), constraint_v6(), prefix_v11()] {
         for daa in [0, 1, 1_000] {
-            assert!(palw_g14_route_fp_refusal_v1(&sp, daa, Some(&c), false, true).is_some(), "version {} unframed at {daa}", c.job.version);
+            assert!(
+                palw_g14_route_fp_refusal_v1(&sp, daa, Some(&c), false, true).is_some(),
+                "version {} unframed at {daa}",
+                c.job.version
+            );
         }
         assert!(
             palw_g14_route_fp_refusal_v1(&sp, 0, Some(&c), true, true).is_some() || mirror.tir_conviction_from == Some(0),
@@ -919,7 +971,10 @@ fn g14_genesis_from_block_zero_only_families_with_an_armed_route_earn() {
     // Lane FPTOK: the tokenizer family also needs the job ↔ class tokenizer binding in force.
     let tok = mirror.tokenizer_match_from.expect("the tokenizer binding resolves on g14-genesis");
     if tok > tir {
-        assert!(palw_g14_route_fp_refusal_v1(&sp, tok - 1, Some(&public_v4()), true, true).is_some(), "framed, tokenizer still unbound");
+        assert!(
+            palw_g14_route_fp_refusal_v1(&sp, tok - 1, Some(&public_v4()), true, true).is_some(),
+            "framed, tokenizer still unbound"
+        );
     }
     let tir = tir.max(tok);
     for c in [public_v4(), constraint_v6(), prefix_v11()] {
@@ -937,7 +992,11 @@ fn g14_genesis_from_block_zero_only_families_with_an_armed_route_earn() {
 fn testnet12_identity_did_not_move() {
     let launch = palw_t12_launch_params_v1();
     assert_eq!(
-        (launch.consensus_params_id().to_string(), launch.consensus_identity_id().to_string(), launch.consensus_schedule_id().to_string()),
+        (
+            launch.consensus_params_id().to_string(),
+            launch.consensus_identity_id().to_string(),
+            launch.consensus_schedule_id().to_string()
+        ),
         (
             "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f".to_string(),
             "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5".to_string(),

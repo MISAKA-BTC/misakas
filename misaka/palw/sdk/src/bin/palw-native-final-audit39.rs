@@ -72,7 +72,8 @@ fn run() -> Result<(), String> {
         Some(d) => Some(NativeArchiveDirV39::open(std::path::Path::new(d))?),
         None => None,
     };
-    let archive_ref = archive.as_ref().map(|a| a as &dyn kaspa_consensus_core::palw_native_execution_v39::NativeOriginalSourceArchiveV39);
+    let archive_ref =
+        archive.as_ref().map(|a| a as &dyn kaspa_consensus_core::palw_native_execution_v39::NativeOriginalSourceArchiveV39);
     let anchor = serde_json::json!({
         "child": child.to_string(),
         "selected_parent": parent.to_string(),
@@ -83,13 +84,8 @@ fn run() -> Result<(), String> {
     let report = match mode.as_str() {
         "job" => {
             let id = id.ok_or("final-audit39 --id <job> required")?.as_bytes();
-            let audit = PalwChainStateV2::native_job_audit_from_stream_v39(
-                stream.auxiliary(),
-                stream.anchor(),
-                params,
-                id,
-                archive_ref,
-            )?;
+            let audit =
+                PalwChainStateV2::native_job_audit_from_stream_v39(stream.auxiliary(), stream.anchor(), params, id, archive_ref)?;
             let book = audit.book();
             serde_json::json!({
                 "schema": "misaka.palw.native-job-audit.v39",

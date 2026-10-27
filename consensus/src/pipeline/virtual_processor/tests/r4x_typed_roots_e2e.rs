@@ -888,7 +888,6 @@ async fn g14r2_a_typed_kernel_claim_meets_its_policys_full_plan() {
     assert!(!run(kernel_detection_policy(class, collateral)).await.0, "collateral below the deterrence bound: dropped");
 }
 
-
 /// **Lane g14-court-capacity-r2: no public checker, no reward.** A typed `Composite` claim — a kind no node's public kernel verifier
 /// re-executes (it needs a model and a snapshot) — is dropped past `palw_detection_policy_v1` even under an adequate policy for its
 /// class; below the fence (the composite tests above) it commits as before.
@@ -913,7 +912,8 @@ async fn g14r2_a_composite_claim_no_node_checks_is_not_reward_bearing_past_the_f
     let prompt: Vec<u32> = job.prompt.iter().copied().chain(payloads.iter().flatten().copied()).collect();
     let (model_stage, _) = produce_model_stage_v1(&model, &row, &jid, 1, prompt, 2, &net.kid(0), &model_fx.params, 2, |_| {}).unwrap();
     let tool_stage = StageClaimV1::Retrieval { query: job.query.clone(), result, payloads };
-    let claim = SpecClaimV1::Composite(CompositeClaimV1 { job_id: jid, producer_bond: net.kid(0), stages: vec![tool_stage, model_stage] });
+    let claim =
+        SpecClaimV1::Composite(CompositeClaimV1 { job_id: jid, producer_bond: net.kid(0), stages: vec![tool_stage, model_stage] });
     let id = claim.id();
     net.commit_try(0, claim).await;
     assert!(!net.ledger().claims.contains_key(&id), "no node checks a composite: past the fence it takes no claim (no reward)");

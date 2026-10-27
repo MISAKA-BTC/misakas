@@ -496,7 +496,9 @@ impl PalwChainStateV2 {
                 self.monetary_material_rows_v1().into_iter().find(|r| r.native_binding.as_ref().is_some_and(|b| b.claim == root))
             })
             .ok_or_else(|| {
-                crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("new paid material has no explicit signed monetary covenant".into())
+                crate::palw_state_v2::PalwStateV2Error::ExecV2Refused(
+                    "new paid material has no explicit signed monetary covenant".into(),
+                )
             })?;
         if row.terms.policy != policy.id()
             || (!row.root_seen && accepted_daa > row.terms.enrollment_until_daa)

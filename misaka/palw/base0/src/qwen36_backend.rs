@@ -1405,9 +1405,7 @@ impl Qwen36Backend {
     /// GDN parameter tensor openings under the unchanged complete artifact root.
     /// Other weight rows are streamed and discarded, rather than copied or opened.
     /// The existing court determines which per-head parameter slice it reads.
-    pub fn gdn_inventory_openings_v2(
-        &self,
-    ) -> Result<(crate::GdnInventoryOpeningsV2, kaspa_hashes::Hash64), String> {
+    pub fn gdn_inventory_openings_v2(&self) -> Result<(crate::GdnInventoryOpeningsV2, kaspa_hashes::Hash64), String> {
         let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered profile".to_string())?;
         crate::gdn_inventory_openings_v2::qwen36_gdn_inventory_openings_streamed_v2(&self.artifact, profile)
     }
@@ -2847,7 +2845,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         self.bind_native_routing_plan_v2(authority)
     }
     fn bind_native_routing_work_v2(
-        &mut self, authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+        &mut self,
+        authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
     ) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
         self.bind_native_work_plan_v2(authority)
     }

@@ -1,8 +1,12 @@
 //! RFC-0030 isolated pending-liability archive. An archive is not escrow,
 //! settlement, default permission, credit or a funded original admission.
-use crate::{Hash64, palw_state_v2::*, palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row}};
+use crate::{
+    Hash64,
+    palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row},
+    palw_state_v2::*,
+};
 use borsh::{BorshDeserialize, BorshSerialize};
-use std::collections::{BTreeMap,BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Accepted native material, not a caller-carried verdict/permission flag.
 /// Uncaptured preserves unresolved material on still-unadapted internal paths;
@@ -10,15 +14,24 @@ use std::collections::{BTreeMap,BTreeSet};
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum CourtEndEvidenceV1 {
     Uncaptured,
-    Native { point: PalwBlockContextV2, object: Box<PalwConsensusObjectV2> },
-    TirConviction { point: PalwBlockContextV2, claim: Hash64, filer: PalwBondKeyV2,
-        evidence: Box<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1> },
+    Native {
+        point: PalwBlockContextV2,
+        object: Box<PalwConsensusObjectV2>,
+    },
+    TirConviction {
+        point: PalwBlockContextV2,
+        claim: Hash64,
+        filer: PalwBondKeyV2,
+        evidence: Box<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1>,
+    },
     /// **audit B-04/B-05 (fix-b): the session was ended by the per-block court deadline sweep at `point`.** The sweep's outcome is a
     /// deterministic function of the archived session (its ladder / phase / groups) and this point, and the sweep applied every
     /// charge it decides in the same block (a silent challenger's challenger-side close; a silent responder on a service-bound claim
     /// is a no-fault close, never a default). Nothing stays owed through the archive, so it is resolvable and prunable after its
     /// material retention (user decision D3).
-    DeadlineSweep { point: PalwBlockContextV2 },
+    DeadlineSweep {
+        point: PalwBlockContextV2,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PendingCourtArchiveV1 {
@@ -43,80 +56,123 @@ pub struct PendingCourtArchiveV1 {
 /// Read-only description, never an authentication or release capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CourtEndDispositionV1 {
-    Uncaptured, NativeCourtVerdict(PalwCourtVerdictV2), TirClaimFault,
-    CompletedAssemblyFault(PalwCourtSideV1), RelatedNativeTransition,
+    Uncaptured,
+    NativeCourtVerdict(PalwCourtVerdictV2),
+    TirClaimFault,
+    CompletedAssemblyFault(PalwCourtSideV1),
+    RelatedNativeTransition,
     /// audit B-05 (fix-b): ended by the deadline sweep; every charge was applied by the sweep itself.
     DeadlineSwept,
 }
 impl PendingCourtArchiveV1 {
     /// Forward material append only. Neither completion nor elapsed time is a
     /// settlement capability: every contract, disposition and nominal hold stays.
-    pub(crate) fn check_material_extension(&self, old:&Self)->Result<(),String>{
-        if self.version!=old.version || self.session_id!=old.session_id
-            || self.service_profile_id!=old.service_profile_id || self.archive_profile_id!=old.archive_profile_id
-            || self.allocation_id!=old.allocation_id || self.source_id!=old.source_id || self.producer!=old.producer
-            || self.material_until_daa!=old.material_until_daa || self.session!=old.session
-            || self.court_stake_nominal!=old.court_stake_nominal || self.tir_phase!=old.tir_phase
-            || self.applied_deposit_debits!=old.applied_deposit_debits || self.fulfilled_groups!=old.fulfilled_groups
-            || self.evidence!=old.evidence || self.groups.len()!=old.groups.len()
-        {return Err("archive material append changes original contract or responsibility".into());}
-        for (side,previous) in &old.groups {
-            let next=self.groups.get(side).ok_or("archive material append removes a side")?;
-            if next.declarer!=previous.declarer || next.count!=previous.count || next.chunk_digests!=previous.chunk_digests
-                || next.close_digest!=previous.close_digest || next.verdict!=previous.verdict
-                || next.declared_daa!=previous.declared_daa || next.assembly_deadline_daa!=previous.assembly_deadline_daa
-                || next.deposit_outpoint!=previous.deposit_outpoint || next.deposit!=previous.deposit
-                || previous.present & !next.present!=0
-                || previous.chunks.iter().any(|(i,bytes)|next.chunks.get(i)!=Some(bytes))
-            {return Err("archive material append changes accepted contract or prefix".into());}
+    pub(crate) fn check_material_extension(&self, old: &Self) -> Result<(), String> {
+        if self.version != old.version
+            || self.session_id != old.session_id
+            || self.service_profile_id != old.service_profile_id
+            || self.archive_profile_id != old.archive_profile_id
+            || self.allocation_id != old.allocation_id
+            || self.source_id != old.source_id
+            || self.producer != old.producer
+            || self.material_until_daa != old.material_until_daa
+            || self.session != old.session
+            || self.court_stake_nominal != old.court_stake_nominal
+            || self.tir_phase != old.tir_phase
+            || self.applied_deposit_debits != old.applied_deposit_debits
+            || self.fulfilled_groups != old.fulfilled_groups
+            || self.evidence != old.evidence
+            || self.groups.len() != old.groups.len()
+        {
+            return Err("archive material append changes original contract or responsibility".into());
+        }
+        for (side, previous) in &old.groups {
+            let next = self.groups.get(side).ok_or("archive material append removes a side")?;
+            if next.declarer != previous.declarer
+                || next.count != previous.count
+                || next.chunk_digests != previous.chunk_digests
+                || next.close_digest != previous.close_digest
+                || next.verdict != previous.verdict
+                || next.declared_daa != previous.declared_daa
+                || next.assembly_deadline_daa != previous.assembly_deadline_daa
+                || next.deposit_outpoint != previous.deposit_outpoint
+                || next.deposit != previous.deposit
+                || previous.present & !next.present != 0
+                || previous.chunks.iter().any(|(i, bytes)| next.chunks.get(i) != Some(bytes))
+            {
+                return Err("archive material append changes accepted contract or prefix".into());
+            }
         }
         self.check(&Key::CourtEndArchive(self.session_id))
     }
-    pub fn adjudication(&self)->CourtEndDispositionV1 {
-        if let Some(side)=self.applied_deposit_debits.keys().next(){return CourtEndDispositionV1::CompletedAssemblyFault(*side);}
-        match self.evidence.as_ref(){
-            CourtEndEvidenceV1::Uncaptured=>CourtEndDispositionV1::Uncaptured,
-            CourtEndEvidenceV1::Native {object,..}=>match object.as_ref(){
-                PalwConsensusObjectV2::CourtClosed {session_id,verdict,..} if *session_id==self.session_id=>CourtEndDispositionV1::NativeCourtVerdict(*verdict),
+    pub fn adjudication(&self) -> CourtEndDispositionV1 {
+        if let Some(side) = self.applied_deposit_debits.keys().next() {
+            return CourtEndDispositionV1::CompletedAssemblyFault(*side);
+        }
+        match self.evidence.as_ref() {
+            CourtEndEvidenceV1::Uncaptured => CourtEndDispositionV1::Uncaptured,
+            CourtEndEvidenceV1::Native { object, .. } => match object.as_ref() {
+                PalwConsensusObjectV2::CourtClosed { session_id, verdict, .. } if *session_id == self.session_id => {
+                    CourtEndDispositionV1::NativeCourtVerdict(*verdict)
+                }
                 // G14 lane r5-f02-wire: a shared numerical BOTTOM bundle on this claim is the conviction's own evidence (RFC-0029).
-                PalwConsensusObjectV2::SharedCourtOpV1 {op} if matches!(op.as_ref(),
+                PalwConsensusObjectV2::SharedCourtOpV1 { op }
+                    if matches!(op.as_ref(),
                     crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1::Numerical {manifest,..}
                         if manifest.claim==self.session.claim
-                            && manifest.kind==crate::palw_court_numerical_transport_v1::NumericalKindV1::Bottom)
-                    =>CourtEndDispositionV1::TirClaimFault,
-                _=>CourtEndDispositionV1::RelatedNativeTransition,
+                            && manifest.kind==crate::palw_court_numerical_transport_v1::NumericalKindV1::Bottom) =>
+                {
+                    CourtEndDispositionV1::TirClaimFault
+                }
+                _ => CourtEndDispositionV1::RelatedNativeTransition,
             },
-            CourtEndEvidenceV1::TirConviction {claim,..} if *claim==self.session.claim=>CourtEndDispositionV1::TirClaimFault,
-            CourtEndEvidenceV1::DeadlineSweep {..}=>CourtEndDispositionV1::DeadlineSwept,
-            _=>CourtEndDispositionV1::RelatedNativeTransition,
+            CourtEndEvidenceV1::TirConviction { claim, .. } if *claim == self.session.claim => CourtEndDispositionV1::TirClaimFault,
+            CourtEndEvidenceV1::DeadlineSweep { .. } => CourtEndDispositionV1::DeadlineSwept,
+            _ => CourtEndDispositionV1::RelatedNativeTransition,
         }
     }
 
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1 || *key != Key::CourtEndArchive(self.session_id)
+        if self.version != 1
+            || *key != Key::CourtEndArchive(self.session_id)
             || self.session.ladder.session_id() != self.session_id
             || self.session.deadline_daa <= self.session.opened_daa
             || self.session.dissection.as_ref().is_some_and(|p| p.session_id() != self.session_id)
             || self.tir_phase.as_ref().is_some_and(|p| p.session_id() != self.session_id)
             || self.archive_profile_id != court_end_archive_profile_id_v1(self.service_profile_id)
-            || self.groups.len() > 2 || self.applied_deposit_debits.len() > self.groups.len()
+            || self.groups.len() > 2
+            || self.applied_deposit_debits.len() > self.groups.len()
             || self.fulfilled_groups.len() > self.groups.len()
-        { return Err("court archive scope/session/phase is inconsistent".into()); }
+        {
+            return Err("court archive scope/session/phase is inconsistent".into());
+        }
         for (side, group) in &self.groups {
-            let declarer = match side { PalwCourtSideV1::Executor => self.producer, PalwCourtSideV1::Challenger => self.session.challenger_bond };
-            if group.declarer != declarer || group.deposit_outpoint != declarer.0
-                || group.count == 0 || group.count > PALW_COURT_CLOSE_MAX_CHUNKS
+            let declarer = match side {
+                PalwCourtSideV1::Executor => self.producer,
+                PalwCourtSideV1::Challenger => self.session.challenger_bond,
+            };
+            if group.declarer != declarer
+                || group.deposit_outpoint != declarer.0
+                || group.count == 0
+                || group.count > PALW_COURT_CLOSE_MAX_CHUNKS
                 || group.chunk_digests.len() != group.count as usize
                 || group.assembly_deadline_daa > self.session.deadline_daa
                 || group.declared_daa < self.session.opened_daa
                 || group.declared_daa.checked_add(palw_close_assembly_daa_v1(group.count)) != Some(group.assembly_deadline_daa)
                 || group.present & !PalwCourtCloseGroupV2::full_mask(group.count) != 0
                 || group.chunks.len() != group.present.count_ones() as usize
-            { return Err("court archive changes an accepted group contract".into()); }
+            {
+                return Err("court archive changes an accepted group contract".into());
+            }
             for (i, bytes) in &group.chunks {
-                if *i >= group.count || !group.has(*i) || bytes.is_empty() || bytes.len() > PALW_COURT_CLOSE_CHUNK_MAX_BYTES
+                if *i >= group.count
+                    || !group.has(*i)
+                    || bytes.is_empty()
+                    || bytes.len() > PALW_COURT_CLOSE_CHUNK_MAX_BYTES
                     || palw_court_close_chunk_digest_v1(bytes) != group.chunk_digests[*i as usize]
-                { return Err("court archive chunk/bitmap/digest mismatch".into()); }
+                {
+                    return Err("court archive chunk/bitmap/digest mismatch".into());
+                }
             }
         }
         for (side, debit) in &self.applied_deposit_debits {
@@ -129,7 +185,7 @@ impl PendingCourtArchiveV1 {
             if !group.is_complete() || self.applied_deposit_debits.contains_key(side) {
                 return Err("fulfilled group cannot also carry an applied penalty".into());
             }
-            let CourtEndEvidenceV1::Native {object,..} = self.evidence.as_ref() else {
+            let CourtEndEvidenceV1::Native { object, .. } = self.evidence.as_ref() else {
                 return Err("fulfilled group lacks its complete native close".into());
             };
             // Raw accepted chunks are authoritative material. Do not require
@@ -139,8 +195,10 @@ impl PendingCourtArchiveV1 {
             // completed object before using it as evidence.
             if !matches!(object.as_ref(),PalwConsensusObjectV2::CourtClosed {session_id,verdict,..}
                 if *session_id==self.session_id && *verdict==group.verdict)
-                || palw_court_close_group_digest_v1(group).map_err(|e|e.to_string())? != group.close_digest
-            { return Err("fulfilled group does not assemble to its retained native close".into()); }
+                || palw_court_close_group_digest_v1(group).map_err(|e| e.to_string())? != group.close_digest
+            {
+                return Err("fulfilled group does not assemble to its retained native close".into());
+            }
         }
         let point = match self.evidence.as_ref() {
             CourtEndEvidenceV1::Uncaptured => None,
@@ -155,19 +213,27 @@ impl PendingCourtArchiveV1 {
     }
     pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
         self.check(&Key::CourtEndArchive(self.session_id))?;
-        if state.court_session(&self.session_id).is_some() || state.tir_dissection_v1(&self.session_id).is_some()
+        if state.court_session(&self.session_id).is_some()
+            || state.tir_dissection_v1(&self.session_id).is_some()
             || state.court_close_groups_iter().any(|((id, _), _)| *id == self.session_id)
-        { return Err("archived court still has active rows".into()); }
+        {
+            return Err("archived court still has active rows".into());
+        }
         let service = state.court_service_state_v1().ok_or("court archive service book missing")?;
         let binding = service.claims.get(&self.session.claim).ok_or("court archive original binding missing")?;
         let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, self.session.claim)
             .ok_or("court archive original frame missing")?;
         let until = crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame, binding.hard_deadline_daa)?;
-        if self.service_profile_id != service.profile_id || self.allocation_id != binding.allocation_id
-            || self.source_id != binding.source_id || self.producer != frame.custody_v1().pledge_v1().producer
-            || self.material_until_daa != until || state.claim(&self.session.claim).is_none()
-        { return Err("court archive substitutes original scope/material".into()); }
-        for bond in [self.producer,self.session.challenger_bond] {
+        if self.service_profile_id != service.profile_id
+            || self.allocation_id != binding.allocation_id
+            || self.source_id != binding.source_id
+            || self.producer != frame.custody_v1().pledge_v1().producer
+            || self.material_until_daa != until
+            || state.claim(&self.session.claim).is_none()
+        {
+            return Err("court archive substitutes original scope/material".into());
+        }
+        for bond in [self.producer, self.session.challenger_bond] {
             if self.pending_nominal(&bond) != 0 && state.bond(&bond).is_none() {
                 return Err("court archive lost a pending financial actor".into());
             }
@@ -180,8 +246,9 @@ impl PendingCourtArchiveV1 {
         self.check_context(state)?;
         let point = match self.evidence.as_ref() {
             CourtEndEvidenceV1::Uncaptured => None,
-            CourtEndEvidenceV1::Native {point,..} | CourtEndEvidenceV1::TirConviction {point,..}
-                | CourtEndEvidenceV1::DeadlineSweep {point} => Some(point),
+            CourtEndEvidenceV1::Native { point, .. }
+            | CourtEndEvidenceV1::TirConviction { point, .. }
+            | CourtEndEvidenceV1::DeadlineSweep { point } => Some(point),
         };
         if point.is_some_and(|p| state.last_point().is_none_or(|tip| p.daa_score > tip.daa_score)) {
             return Err("court archive receipt is beyond the loaded accepted clock".into());
@@ -194,59 +261,91 @@ impl PendingCourtArchiveV1 {
         if self.adjudication() == CourtEndDispositionV1::DeadlineSwept {
             return 0;
         }
-        let groups: u128 = self.groups.iter().filter(|(side, g)| g.declarer == *bond
-            && !self.applied_deposit_debits.contains_key(side) && !self.fulfilled_groups.contains(side))
-            .map(|(_, g)| u128::from(g.deposit)).sum();
+        let groups: u128 = self
+            .groups
+            .iter()
+            .filter(|(side, g)| {
+                g.declarer == *bond && !self.applied_deposit_debits.contains_key(side) && !self.fulfilled_groups.contains(side)
+            })
+            .map(|(_, g)| u128::from(g.deposit))
+            .sum();
         // An unadapted or merely related ending cannot silently free the unresolved
         // court stake. This is a nominal hold, not new debt or deposited money.
-        if *bond == self.session.challenger_bond && matches!(self.adjudication(),CourtEndDispositionV1::Uncaptured | CourtEndDispositionV1::RelatedNativeTransition) {
+        if *bond == self.session.challenger_bond
+            && matches!(self.adjudication(), CourtEndDispositionV1::Uncaptured | CourtEndDispositionV1::RelatedNativeTransition)
+        {
             groups.saturating_add(self.court_stake_nominal)
-        } else {groups}
+        } else {
+            groups
+        }
     }
 }
 impl PalwChainStateV2 {
     pub fn court_end_archive_v1(&self, id: Hash64) -> Option<&PendingCourtArchiveV1> {
-        match self.staged_court_row_v1(&Key::CourtEndArchive(id)) { Some(Row::CourtEndArchive(a)) => Some(a.as_ref()), _ => None }
+        match self.staged_court_row_v1(&Key::CourtEndArchive(id)) {
+            Some(Row::CourtEndArchive(a)) => Some(a.as_ref()),
+            _ => None,
+        }
     }
     /// Conservative financial exposure, not an escrow or a supply certificate.
     pub fn court_archive_pending_exposure_v1(&self, bond: &PalwBondKeyV2) -> u128 {
-        self.staged_cache_lease_rows_v1().filter_map(|(_,r)| match r { Row::CourtEndArchive(a) => Some(self.archive_pending_nominal_v1(a,bond)), _ => None })
+        self.staged_cache_lease_rows_v1()
+            .filter_map(|(_, r)| match r {
+                Row::CourtEndArchive(a) => Some(self.archive_pending_nominal_v1(a, bond)),
+                _ => None,
+            })
             .fold(0u128, u128::saturating_add)
     }
     pub fn court_archive_holds_bond_v1(&self, bond: &PalwBondKeyV2) -> bool {
-        self.staged_cache_lease_rows_v1().any(|(_,r)| matches!(r, Row::CourtEndArchive(a) if self.archive_pending_nominal_v1(a,bond) != 0))
+        self.staged_cache_lease_rows_v1()
+            .any(|(_, r)| matches!(r, Row::CourtEndArchive(a) if self.archive_pending_nominal_v1(a,bond) != 0))
     }
     /// RFC-0034 S1 / ADR-0201: a side is resolved only by an actual applied
     /// native debit, a fulfilled native close, or a rooted on-time positive
     /// fulfillment record. Late or unclocked material never resolves a side.
-    pub fn court_archive_side_resolved_v1(&self,a:&PendingCourtArchiveV1,side:PalwCourtSideV1)->bool{
-        a.applied_deposit_debits.contains_key(&side) || a.fulfilled_groups.contains(&side)
-            || self.qualified_archive_deposit_v1(a.session_id,side)
+    pub fn court_archive_side_resolved_v1(&self, a: &PendingCourtArchiveV1, side: PalwCourtSideV1) -> bool {
+        a.applied_deposit_debits.contains_key(&side)
+            || a.fulfilled_groups.contains(&side)
+            || self.qualified_archive_deposit_v1(a.session_id, side)
     }
     /// Every declared side is resolved AND neither financial actor retains a
     /// nominal hold (including the unresolved court stake of an uncaptured or
     /// related ending, which therefore is never prunable) AND (user decision
     /// D3, 2026-10-22) the archived session's material retention has passed:
     /// `now > material_until_daa`. Read-only.
-    pub fn court_archive_fully_resolved_v1(&self,id:Hash64,now:u64)->bool{
-        let Some(a)=self.court_end_archive_v1(id) else {return false};
-        now>a.material_until_daa
-            && (a.adjudication()==CourtEndDispositionV1::DeadlineSwept
-                || a.groups.keys().all(|side|self.court_archive_side_resolved_v1(a,*side)))
-            && self.archive_pending_nominal_v1(a,&a.producer)==0
-            && self.archive_pending_nominal_v1(a,&a.session.challenger_bond)==0
+    pub fn court_archive_fully_resolved_v1(&self, id: Hash64, now: u64) -> bool {
+        let Some(a) = self.court_end_archive_v1(id) else { return false };
+        now > a.material_until_daa
+            && (a.adjudication() == CourtEndDispositionV1::DeadlineSwept
+                || a.groups.keys().all(|side| self.court_archive_side_resolved_v1(a, *side)))
+            && self.archive_pending_nominal_v1(a, &a.producer) == 0
+            && self.archive_pending_nominal_v1(a, &a.session.challenger_bond) == 0
     }
-    fn archive_pending_nominal_v1(&self,a:&PendingCourtArchiveV1,bond:&PalwBondKeyV2)->u128{
-        let discharged=a.groups.iter().filter(|(side,g)|g.declarer==*bond
-            && !a.applied_deposit_debits.contains_key(side) && !a.fulfilled_groups.contains(side)
-            && self.qualified_archive_deposit_v1(a.session_id,**side))
-            .map(|(_,g)|u128::from(g.deposit)).sum::<u128>();
+    fn archive_pending_nominal_v1(&self, a: &PendingCourtArchiveV1, bond: &PalwBondKeyV2) -> u128 {
+        let discharged = a
+            .groups
+            .iter()
+            .filter(|(side, g)| {
+                g.declarer == *bond
+                    && !a.applied_deposit_debits.contains_key(side)
+                    && !a.fulfilled_groups.contains(side)
+                    && self.qualified_archive_deposit_v1(a.session_id, **side)
+            })
+            .map(|(_, g)| u128::from(g.deposit))
+            .sum::<u128>();
         a.pending_nominal(bond).saturating_sub(discharged)
     }
 }
 
 /// Candidate namespace identity only; not a funded fee/capacity profile.
-pub fn court_end_archive_profile_id_v1(service:Hash64)->Hash64 {
-    Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/court-end-archive/v1")
-        .hash(service.as_byte_slice()).as_bytes().try_into().expect("64-byte archive namespace"))
+pub fn court_end_archive_profile_id_v1(service: Hash64) -> Hash64 {
+    Hash64::from_bytes(
+        blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(b"misaka-palw/court-end-archive/v1")
+            .hash(service.as_byte_slice())
+            .as_bytes()
+            .try_into()
+            .expect("64-byte archive namespace"),
+    )
 }

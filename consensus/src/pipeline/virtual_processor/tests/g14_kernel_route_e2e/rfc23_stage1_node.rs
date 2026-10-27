@@ -46,7 +46,11 @@ async fn rfc23s1_node_restart_and_genesis_replay_agree_on_the_resolved_prefix_ac
     assert!(opened > 0, "an attempt claim entered the unresolved set");
     net.beat_to(160).await;
     let (sink, root, prefix) = (net.chain.sink(), net.chain.tip_state().1.state_root(), resolved_through(&net));
-    println!("rfc23s1/node: tip daa {}, resolved prefix {prefix}, open {:?}", net.daa(), net.chain.tip_state().1.unresolved_first_blue_score_v1());
+    println!(
+        "rfc23s1/node: tip daa {}, resolved prefix {prefix}, open {:?}",
+        net.daa(),
+        net.chain.tip_state().1.unresolved_first_blue_score_v1()
+    );
     let net = net.restart(db.clone());
     assert_eq!((net.chain.sink(), net.chain.tip_state().1.state_root()), (sink, root), "the restarted node's tip off disk");
     assert_eq!(resolved_through(&net), prefix, "the same resolved prefix after a restart");

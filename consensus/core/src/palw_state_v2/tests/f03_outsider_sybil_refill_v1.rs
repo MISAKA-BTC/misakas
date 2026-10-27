@@ -185,4 +185,3 @@ fn f03_t05_outsider_convicts_with_every_non_reserved_slot_held() {
     assert!(matches!(w.s.claim(&w.target).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the lying claim is voided");
     assert_eq!(before - w.s.bond(&bond_key(2)).unwrap().collateral, FEE, "no second ingress charge on the close");
 }
-

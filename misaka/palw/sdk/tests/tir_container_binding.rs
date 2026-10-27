@@ -3,7 +3,9 @@
 //! refused by the chain's own check (`check_tir_container_binding_v1`).
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_step_refute::{PALW_LOGITS_TILE_LANES, tiled_logits_scheme_id_v1};
-use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1};
+use kaspa_consensus_core::palw_tir_class_v1::{
+    PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1,
+};
 use kaspa_consensus_core::palw_tir_container_v1::check_tir_container_binding_v1;
 use misaka_palw_sdk::tir_container::{palwart_root_opening_v1, tir_container_binding_v1};
 use misaka_palw_sdk::tir_stream::palw_tir_inventory_root_of_file_v1;
@@ -59,11 +61,21 @@ fn legacy(dir: &Path) -> (PathBuf, PalwTirClassV1) {
     };
     let tokenizer = [9u8; 64];
     let path = dir.join("dense.palwtir");
-    misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&layout).unwrap(), tokenizer, "{}".into(), &mut |j, l| {
-        tensors.get(&(j, l)).cloned().ok_or_else(|| format!("no tensor {j} {l:?}"))
-    })
+    misaka_palw_tir_artifact::write_container_v1(
+        &path,
+        &program,
+        borsh::to_vec(&layout).unwrap(),
+        tokenizer,
+        "{}".into(),
+        &mut |j, l| tensors.get(&(j, l)).cloned().ok_or_else(|| format!("no tensor {j} {l:?}")),
+    )
     .expect("the container");
-    let class = PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: program.encode(), layout, tokenizer_id: Hash64::from_bytes(tokenizer) };
+    let class = PalwTirClassV1 {
+        version: PALW_TIR_CLASS_VERSION_V1,
+        program: program.encode(),
+        layout,
+        tokenizer_id: Hash64::from_bytes(tokenizer),
+    };
     (path, class)
 }
 

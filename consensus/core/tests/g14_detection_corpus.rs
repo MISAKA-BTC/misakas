@@ -608,9 +608,24 @@ fn every_fault_class_is_detected_at_its_analytic_rate_and_the_fault_set_at_the_t
             Event::Fault,
             Some((0, 1)),
         ),
-        ("other_job_rows_one_interval", Deviation { rows_from_other_job_interval: Some((20, 0xBEEF)), ..Default::default() }, Event::Fault, Some((1, 1))),
-        ("other_model_one_interval", Deviation { other_model_interval: Some((20, 0xD00D)), ..Default::default() }, Event::Fault, Some((1, 1))),
-        ("consistent_borrowed_trace", Deviation { computed_on_prompt: Some(0x0B0E), ..Default::default() }, Event::Fault, Some((N - 1, N))),
+        (
+            "other_job_rows_one_interval",
+            Deviation { rows_from_other_job_interval: Some((20, 0xBEEF)), ..Default::default() },
+            Event::Fault,
+            Some((1, 1)),
+        ),
+        (
+            "other_model_one_interval",
+            Deviation { other_model_interval: Some((20, 0xD00D)), ..Default::default() },
+            Event::Fault,
+            Some((1, 1)),
+        ),
+        (
+            "consistent_borrowed_trace",
+            Deviation { computed_on_prompt: Some(0x0B0E), ..Default::default() },
+            Event::Fault,
+            Some((N - 1, N)),
+        ),
     ];
     for (i, (name, dev, want, d_bounds)) in fault_classes.iter().enumerate() {
         let seed = 0x1000 + i as u64;
@@ -702,13 +717,18 @@ fn honest_claims_are_never_flagged_and_a_wrong_verifier_never_convicts() {
                 for j in 0..N {
                     if let PalwDetectionOutcomeV2::Fault { first_leaf_index, .. } = inspect(&seat, &c, &[j]) {
                         wrong_flags += 1;
-                        assert!(court_dismisses(&m, &c.trace, first_leaf_index), "a wrong verifier's finding convicted an honest claim");
+                        assert!(
+                            court_dismisses(&m, &c.trace, first_leaf_index),
+                            "a wrong verifier's finding convicted an honest claim"
+                        );
                     }
                 }
             }
             checked += 1;
         }
     }
-    eprintln!("corpus honest: {checked} claims × all intervals clean under 2 correct seats; {wrong_flags} local flags by wrong seats, all dismissed");
+    eprintln!(
+        "corpus honest: {checked} claims × all intervals clean under 2 correct seats; {wrong_flags} local flags by wrong seats, all dismissed"
+    );
     assert!(wrong_flags > 0, "the wrong verifiers must actually disagree somewhere, or this test proves nothing");
 }

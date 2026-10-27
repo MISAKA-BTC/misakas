@@ -617,8 +617,15 @@ pub fn check_eval_dissect_position_bottom_v1(
         return Err(PalwEvalCourtErrorV1::NotTheNarrowedLeaf { opened: phase.leaf_index(), narrowed });
     }
     let (v, close, params) = open_eval_cone_close_v1(bottom, facts, Some(narrowed))?;
-    match palw_gen_check_dissect_position_bottom_with_v1(&v.case(), &close, phase, narrowing, PalwGenParamsV1::Authenticated(&params), limits)
-        .map_err(PalwEvalCourtErrorV1::Refused)?
+    match palw_gen_check_dissect_position_bottom_with_v1(
+        &v.case(),
+        &close,
+        phase,
+        narrowing,
+        PalwGenParamsV1::Authenticated(&params),
+        limits,
+    )
+    .map_err(PalwEvalCourtErrorV1::Refused)?
     {
         PalwGenVerdictV1::Acquitted => Ok(None),
         PalwGenVerdictV1::Convicted { fault, .. } => Ok(Some(fault)),

@@ -657,14 +657,13 @@ fn rule_e_mode_v2(
     let bonds = window_bonds_v2(&served, &tips);
     if let Some(fork) = fork.filter(|_| !bonds.is_empty()) {
         for node in nodes {
-            for chunk in bonds.chunks(
-                kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2,
-            ) {
+            for chunk in bonds.chunks(kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2) {
                 if let Ok(got) = node.fork_choice_committed_v2(&[fork.hash], None, chunk) {
                     for entry in got {
-                        for existing in served.iter_mut().filter(|s| {
-                            s.block == entry.block && s.leaf == entry.leaf && s.inner_root == entry.inner_root
-                        }) {
+                        for existing in served
+                            .iter_mut()
+                            .filter(|s| s.block == entry.block && s.leaf == entry.leaf && s.inner_root == entry.inner_root)
+                        {
                             for proof in &entry.registry {
                                 if !existing.registry.contains(proof) {
                                     existing.registry.push(proof.clone());

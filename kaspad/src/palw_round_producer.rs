@@ -269,9 +269,8 @@ impl PalwRoundProducerService {
         // A round ends a second after it starts; a block solved past it still carries its round's
         // timestamp and stays valid while the chain can merge it, so it is submitted either way.
         let late = kaspa_core::time::unix_now().saturating_sub(header.timestamp) > PALW_EXEC_ROUND_MS;
-        let block: kaspa_consensus_core::block::Block = adapted
-            .into_immutable_v3()
-            .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
+        let block: kaspa_consensus_core::block::Block =
+            adapted.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
         let hash = block.hash();
         // T12-049: a submit past the exit signal waits on a stopped pipeline forever.
         crate::palw_producer::palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))

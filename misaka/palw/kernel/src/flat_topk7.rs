@@ -329,9 +329,13 @@ pub(crate) fn output_point(o: &FlatOperandV5, shape: &[usize], index: u64) -> Re
 /// a correct sorted TopK set cannot have a dominated member and an authenticated gap.
 pub fn verify_topk_fault_v7(c: &TopKContextV7<'_>, f: &TopKFaultV7) -> Result<(), DismissalV1> {
     let pr = common::prepare(&c.base)?;
-    verify_topk_prepared_v32(c,f,&pr)
+    verify_topk_prepared_v32(c, f, &pr)
 }
-pub(crate) fn verify_topk_prepared_v32(c:&TopKContextV7<'_>,f:&TopKFaultV7,pr:&crate::element::PreparedV1<'_>)->Result<(),DismissalV1>{
+pub(crate) fn verify_topk_prepared_v32(
+    c: &TopKContextV7<'_>,
+    f: &TopKFaultV7,
+    pr: &crate::element::PreparedV1<'_>,
+) -> Result<(), DismissalV1> {
     f.structure().map_err(|_| bad("malformed TopK fault"))?;
     let o = f.output.node.as_ref().unwrap();
     let (p, s, n) = (o.position, o.occurrence, o.node);

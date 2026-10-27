@@ -2,8 +2,8 @@
 //! testnet-12 ruleset. Diagnostic: lists every refusal of the node's own validation (`validate_palw_v2`, the binary's pinned records).
 //! Nothing is waived here and nothing is skipped: a refusal is printed as it is.
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_G14_17000_DAA_V1, PALW_T12_G14_17000_FENCES_V1, PALW_T12_KERNEL_SLICE_FENCES_V1, palw_t12_arm_after_int13_at_v1,
-    palw_t12_fence_held_by_int13_v1, palw_t12_shipped_params,
+    ForkActivation, PALW_T12_G14_17000_DAA_V1, PALW_T12_G14_17000_FENCES_V1, PALW_T12_KERNEL_SLICE_FENCES_V1,
+    palw_t12_arm_after_int13_at_v1, palw_t12_fence_held_by_int13_v1, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::palw_g14_gates_v1::{PalwG14RouteFamilyV1 as F, palw_g14_route_family_fences_v1};
 
@@ -24,7 +24,12 @@ fn the_17000_list_covers_the_slice_six_families_and_panel_da() {
     // `palw_panel_da` @0) — never both (re-arming a live fence would fork below 17,000).
     for fam in FAMILIES.into_iter().chain([F::FpPanelDaDisclosure]) {
         for n in palw_g14_route_family_fences_v1(fam) {
-            assert!(names.contains(n) != live.contains(n), "{fam:?} needs {n} (listed {}, live {})", names.contains(n), live.contains(n));
+            assert!(
+                names.contains(n) != live.contains(n),
+                "{fam:?} needs {n} (listed {}, live {})",
+                names.contains(n),
+                live.contains(n)
+            );
         }
     }
     assert!(!names.contains(&"palw_claim_challenge_v2"), "RFC07 probe is not on the list");
@@ -98,8 +103,9 @@ fn peel_the_whole_list_at_17000() {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 use kaspa_consensus_core::palw_arming_waiver_v1::{
-    PALW_ARMING_WAIVER_REVIEW_V1, PALW_ARMING_WAIVERS_V1, PalwArmingEvidenceV1, PalwArmingSlotClassV1, PalwArmingWaiverKindV1,
-    PalwArmingWaiverV1, palw_arming_evidence_kind_v1, palw_arming_slot_class_v1, palw_arming_slot_class_for_v1, PALW_ARMING_SLOT_CLASS_OVERRIDES_V1,
+    PALW_ARMING_SLOT_CLASS_OVERRIDES_V1, PALW_ARMING_WAIVER_REVIEW_V1, PALW_ARMING_WAIVERS_V1, PalwArmingEvidenceV1,
+    PalwArmingSlotClassV1, PalwArmingWaiverKindV1, PalwArmingWaiverV1, palw_arming_evidence_kind_v1, palw_arming_slot_class_for_v1,
+    palw_arming_slot_class_v1,
 };
 
 /// The requirement text of `fence`'s slot `slot` ("" for the review slot; the frame cost record's one slot is a measured value).
@@ -138,7 +144,15 @@ fn every_pinned_waiver_fits_its_slot_and_is_never_a_run() {
         let text = requirement_text(w.fence, w.requirement);
         let class = palw_arming_slot_class_for_v1(w.fence, w.requirement, text);
         assert_eq!(w.form(class), Ok(()), "{} slot {}: {:?} in {class:?}", w.fence, w.requirement, w.kind);
-        let got = palw_arming_evidence_kind_v1(w.fence, w.genesis, w.activation_daa, w.requirement, text, &w.digest(), PALW_ARMING_WAIVERS_V1);
+        let got = palw_arming_evidence_kind_v1(
+            w.fence,
+            w.genesis,
+            w.activation_daa,
+            w.requirement,
+            text,
+            &w.digest(),
+            PALW_ARMING_WAIVERS_V1,
+        );
         assert!(matches!(got, Ok(PalwArmingEvidenceV1::Waived(_))), "{} slot {}: {got:?}", w.fence, w.requirement);
     }
 }

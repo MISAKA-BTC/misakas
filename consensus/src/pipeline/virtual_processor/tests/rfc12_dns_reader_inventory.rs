@@ -238,7 +238,8 @@ fn rfc12_every_dns_authority_read_is_inventoried_and_gated_by_the_retirement() {
         if let Why::OnlyCalledFrom(callers) = why {
             for h in hits.iter().filter(|h| h.token.trim_end_matches('(') == *f) {
                 if !callers.iter().any(|c| *c == h.func) {
-                    problems.push(format!("`{f}` is called from `{}` at {}:{}, outside its inventory callers", h.func, h.file, h.line));
+                    problems
+                        .push(format!("`{f}` is called from `{}` at {}:{}, outside its inventory callers", h.func, h.file, h.line));
                 }
             }
         }

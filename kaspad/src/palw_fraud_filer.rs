@@ -4505,9 +4505,8 @@ impl PalwPanelService {
                                 // R-D2-NODE: the claim part with this verifier's own rows (a fused site keeps the fused terminal,
                                 // which already reads the witness and own rows only).
                                 let witness = witness.as_deref().ok_or("the claim-part route needs the public committed witness")?;
-                                return replica.claim_part_terminal(
-                                    witness, leaf, claim, &bound_to, trace_root, producer, bond_key, ladder,
-                                );
+                                return replica
+                                    .claim_part_terminal(witness, leaf, claim, &bound_to, trace_root, producer, bond_key, ladder);
                             }
                             replica.terminal(
                                 &binding,
@@ -9413,7 +9412,8 @@ pub(super) mod tests {
     fn d2_c1_node_filer_demands_and_the_seat_answers_through_the_fold() {
         use kaspa_consensus_core::palw_court_model_scope_routes_v1::{readiness_disclosure as dc, readiness_root as rr};
         use std::num::NonZeroU32;
-        let key = |n: u64| PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(n), 0));
+        let key =
+            |n: u64| PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(n), 0));
         let (seat, challenger) = (key(3), key(9));
         let ctx = rr::ReadinessContextV1 {
             beacon: kaspa_hashes::Hash64::from_u64_word(11),
@@ -9444,7 +9444,10 @@ pub(super) mod tests {
         assert_eq!(Some(demand.ordinal), dc::palw_d2_disclosure_ordinal_draw_v1(&root, &challenger));
         let (k, e) = dc::palw_d2_disclosure_open_v1(&reg, demand, cap, fees, 101).unwrap();
         reg.insert(k, e);
-        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 102, cap, fees, all, no_path).is_empty(), "no second demand");
+        assert!(
+            palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 102, cap, fees, all, no_path).is_empty(),
+            "no second demand"
+        );
 
         // Seat: answers from its own commitment inside the deadline, not after; without a path it files nothing.
         let ordinal = demand.ordinal;

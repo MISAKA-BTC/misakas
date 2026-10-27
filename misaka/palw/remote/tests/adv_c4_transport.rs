@@ -37,7 +37,14 @@ fn manifest() -> EvidenceManifestV1 {
 }
 
 fn roots() -> ClaimRoots {
-    ClaimRoots { network_domain: h(9), trace_root: h(1), output_root: h(2), execution_root: h(3), trace_chunk_count: 3, retention_deadline: 9_000 }
+    ClaimRoots {
+        network_domain: h(9),
+        trace_root: h(1),
+        output_root: h(2),
+        execution_root: h(3),
+        trace_chunk_count: 3,
+        retention_deadline: 9_000,
+    }
 }
 
 fn claim_hex() -> String {
@@ -83,7 +90,11 @@ impl EvidenceProvider for Scripted {
 
 fn good(name: &'static str) -> Scripted {
     let c = chunks();
-    Scripted { name, manifest: Some(manifest()), chunk: Box::new(move |i| c.get(i as usize).cloned().ok_or(ProviderError("no such chunk".into()))) }
+    Scripted {
+        name,
+        manifest: Some(manifest()),
+        chunk: Box::new(move |i| c.get(i as usize).cloned().ok_or(ProviderError("no such chunk".into()))),
+    }
 }
 
 /// EXPECTED (before running): material is whatever hashes to the claim's roots and nothing else. A provider that flips a byte of a
@@ -93,23 +104,42 @@ fn good(name: &'static str) -> Scripted {
 #[test]
 fn hostile_providers_cannot_make_a_client_accept_material_the_claim_does_not_commit() {
     let c = chunks();
-    let flipped: Vec<Vec<u8>> = c.iter().map(|x| {
-        let mut y = x.clone();
-        y[0] ^= 1;
-        y
-    }).collect();
+    let flipped: Vec<Vec<u8>> = c
+        .iter()
+        .map(|x| {
+            let mut y = x.clone();
+            y[0] ^= 1;
+            y
+        })
+        .collect();
     let (c1, c2) = (c.clone(), c.clone());
     let bad_flip = Scripted { name: "flip", manifest: Some(manifest()), chunk: Box::new(move |i| Ok(flipped[i as usize].clone())) };
-    let bad_swap = Scripted { name: "swap", manifest: Some(manifest()), chunk: Box::new(move |i| Ok(c1[(i as usize + 1) % 3].clone())) };
-    let bad_trunc = Scripted { name: "trunc", manifest: Some(manifest()), chunk: Box::new(move |i| Ok(c2[i as usize][..c2[i as usize].len() - 1].to_vec())) };
+    let bad_swap =
+        Scripted { name: "swap", manifest: Some(manifest()), chunk: Box::new(move |i| Ok(c1[(i as usize + 1) % 3].clone())) };
+    let bad_trunc = Scripted {
+        name: "trunc",
+        manifest: Some(manifest()),
+        chunk: Box::new(move |i| Ok(c2[i as usize][..c2[i as usize].len() - 1].to_vec())),
+    };
     let c3 = c.clone();
-    let bad_pad = Scripted { name: "pad", manifest: Some(manifest()), chunk: Box::new(move |i| { let mut y = c3[i as usize].clone(); y.push(0); Ok(y) }) };
+    let bad_pad = Scripted {
+        name: "pad",
+        manifest: Some(manifest()),
+        chunk: Box::new(move |i| {
+            let mut y = c3[i as usize].clone();
+            y.push(0);
+            Ok(y)
+        }),
+    };
     let silent = Scripted { name: "silent", manifest: Some(manifest()), chunk: Box::new(|_| Err(ProviderError("down".into()))) };
     // Manifests of OTHER claims: other roots, other network, other chunk count.
-    let other_roots = EvidenceManifestV1::build(h(9), &TransactionOutpoint::new(h(0xB0), 1), &[5u8; 32], h(0x11), h(2), h(3), 3, 10_000, &chunks());
-    let other_net = EvidenceManifestV1::build(h(0x99), &TransactionOutpoint::new(h(0xB0), 1), &[5u8; 32], h(1), h(2), h(3), 3, 10_000, &chunks());
+    let other_roots =
+        EvidenceManifestV1::build(h(9), &TransactionOutpoint::new(h(0xB0), 1), &[5u8; 32], h(0x11), h(2), h(3), 3, 10_000, &chunks());
+    let other_net =
+        EvidenceManifestV1::build(h(0x99), &TransactionOutpoint::new(h(0xB0), 1), &[5u8; 32], h(1), h(2), h(3), 3, 10_000, &chunks());
     let two = vec![vec![1u8; 10], vec![2u8; 10]];
-    let other_count = EvidenceManifestV1::build(h(9), &TransactionOutpoint::new(h(0xB0), 1), &[5u8; 32], h(1), h(2), h(3), 2, 10_000, &two);
+    let other_count =
+        EvidenceManifestV1::build(h(9), &TransactionOutpoint::new(h(0xB0), 1), &[5u8; 32], h(1), h(2), h(3), 2, 10_000, &two);
     let c4 = c.clone();
     let wrong_manifests: Vec<Scripted> = [other_roots, other_net, other_count]
         .into_iter()
@@ -118,7 +148,11 @@ fn hostile_providers_cannot_make_a_client_accept_material_the_claim_does_not_com
             let c = c4.clone();
             // These providers hold a manifest of ANOTHER claim and serve garbage for every chunk.
             let _ = &c;
-            Scripted { name: ["roots", "net", "count"][k], manifest: Some(m), chunk: Box::new(move |i| Ok(vec![0x66; 100 + i as usize])) }
+            Scripted {
+                name: ["roots", "net", "count"][k],
+                manifest: Some(m),
+                chunk: Box::new(move |i| Ok(vec![0x66; 100 + i as usize])),
+            }
         })
         .collect();
     let limits = ManifestLimits::default();
@@ -186,32 +220,66 @@ fn hostile_server(script: impl Fn(&mut std::net::TcpStream) + Send + 'static) ->
 fn a_hostile_http_peer_cannot_make_the_client_buffer_more_than_it_asked_for() {
     let max = 64 * 1024;
     let cases: Vec<(&str, Box<dyn Fn(&mut std::net::TcpStream) + Send>)> = vec![
-        ("huge content-length", Box::new(|s| {
-            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\n\r\n");
-            let junk = vec![0x41u8; 1 << 20];
-            for _ in 0..16 { if s.write_all(&junk).is_err() { break; } }
-        })),
-        ("endless body", Box::new(|s| {
-            let _ = write!(s, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
-            let junk = vec![0x42u8; 1 << 20];
-            for _ in 0..16 { if s.write_all(&junk).is_err() { break; } }
-        })),
-        ("unterminated header", Box::new(|s| {
-            let _ = write!(s, "HTTP/1.1 200 OK\r\n");
-            let junk = vec![b'X'; 1 << 20];
-            for _ in 0..8 { if s.write_all(&junk).is_err() { break; } }
-        })),
-        ("chunked, absurd size", Box::new(|s| {
-            let _ = write!(s, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nFFFFFFFFFFFF\r\n");
-            let junk = vec![0x43u8; 1 << 20];
-            for _ in 0..16 { if s.write_all(&junk).is_err() { break; } }
-        })),
-        ("garbage", Box::new(|s| {
-            let _ = s.write_all(&[0xFF, 0xFE, 0x00, 0x01, 0x02]);
-        })),
-        ("redirect", Box::new(|s| {
-            let _ = write!(s, "HTTP/1.1 302 Found\r\nLocation: file:///etc/passwd\r\nContent-Length: 0\r\n\r\n");
-        })),
+        (
+            "huge content-length",
+            Box::new(|s| {
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\n\r\n");
+                let junk = vec![0x41u8; 1 << 20];
+                for _ in 0..16 {
+                    if s.write_all(&junk).is_err() {
+                        break;
+                    }
+                }
+            }),
+        ),
+        (
+            "endless body",
+            Box::new(|s| {
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+                let junk = vec![0x42u8; 1 << 20];
+                for _ in 0..16 {
+                    if s.write_all(&junk).is_err() {
+                        break;
+                    }
+                }
+            }),
+        ),
+        (
+            "unterminated header",
+            Box::new(|s| {
+                let _ = write!(s, "HTTP/1.1 200 OK\r\n");
+                let junk = vec![b'X'; 1 << 20];
+                for _ in 0..8 {
+                    if s.write_all(&junk).is_err() {
+                        break;
+                    }
+                }
+            }),
+        ),
+        (
+            "chunked, absurd size",
+            Box::new(|s| {
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nFFFFFFFFFFFF\r\n");
+                let junk = vec![0x43u8; 1 << 20];
+                for _ in 0..16 {
+                    if s.write_all(&junk).is_err() {
+                        break;
+                    }
+                }
+            }),
+        ),
+        (
+            "garbage",
+            Box::new(|s| {
+                let _ = s.write_all(&[0xFF, 0xFE, 0x00, 0x01, 0x02]);
+            }),
+        ),
+        (
+            "redirect",
+            Box::new(|s| {
+                let _ = write!(s, "HTTP/1.1 302 Found\r\nLocation: file:///etc/passwd\r\nContent-Length: 0\r\n\r\n");
+            }),
+        ),
     ];
     let http = StdHttp { timeout: Duration::from_secs(4) };
     for (what, script) in cases {

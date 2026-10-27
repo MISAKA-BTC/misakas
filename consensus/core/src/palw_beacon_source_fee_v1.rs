@@ -32,8 +32,9 @@ impl PalwBeaconSourceCostBoundsV1 {
         x3_policy: &crate::palw_ruling_fences_v1::PalwClaimHardDeadlinePolicyV1,
         extension: Option<&crate::palw_ruling_fences_v1::PalwX3RetentionExtensionV1>,
     ) -> Result<u64, String> {
-        let material = crate::palw_ruling_fences_v1::palw_x3_material_term_with_retention_v1(self.material_sompi, x3_policy, extension)
-            .map_err(str::to_owned)?;
+        let material =
+            crate::palw_ruling_fences_v1::palw_x3_material_term_with_retention_v1(self.material_sompi, x3_policy, extension)
+                .map_err(str::to_owned)?;
         self.minimum_gross_fee_with_material(terms, material)
     }
 
@@ -131,7 +132,8 @@ impl Params {
             return Ok(());
         };
         // Fees are charged on opt-in sources and on paid-claim targets: both armed at or below.
-        let at_or_below = |a: Option<ForkActivation>| a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score());
+        let at_or_below =
+            |a: Option<ForkActivation>| a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score());
         if !at_or_below(self.palw_beacon_source_opt_in_v1.map(|o| o.activation))
             || !at_or_below(self.palw_claim_challenge_v2.map(|c| c.activation))
         {

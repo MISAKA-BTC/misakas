@@ -669,14 +669,19 @@ pub fn trace_streaming_stage_v32(
     source: &misaka_palw_tir::program_v2::TirProgramV2,
     params: &dyn ParamSource,
     tokens: &[u32],
-    inputs: &dyn Fn(u16,u32)->Option<Tensor>,
+    inputs: &dyn Fn(u16, u32) -> Option<Tensor>,
     visit: &mut dyn FnMut(u32, &[Vec<Tensor>]) -> TirResult<()>,
 ) -> TirResult<()> {
     misaka_palw_tir::validate_v2::validate_v2(source)?;
-    let view=source.v1_view();let program=&view;
-    let post=u16::try_from(source.occurrences().len()-1).map_err(|_|malformed("stage32 occurrence overflow"))?;
-    let binding=StageBindingV1{first_input:u16::try_from(source.params.len()).map_err(|_|malformed("stage32 input boundary overflow"))?,inputs:u16::try_from(source.inputs.len()).map_err(|_|malformed("stage32 input count overflow"))?,post_writers:source.post_writes().into_iter().map(|(node,state)|(state,post,node)).collect()};
-    let w = WiringV1::for_stage_v32(program,&binding)?;
+    let view = source.v1_view();
+    let program = &view;
+    let post = u16::try_from(source.occurrences().len() - 1).map_err(|_| malformed("stage32 occurrence overflow"))?;
+    let binding = StageBindingV1 {
+        first_input: u16::try_from(source.params.len()).map_err(|_| malformed("stage32 input boundary overflow"))?,
+        inputs: u16::try_from(source.inputs.len()).map_err(|_| malformed("stage32 input count overflow"))?,
+        post_writers: source.post_writes().into_iter().map(|(node, state)| (state, post, node)).collect(),
+    };
+    let w = WiringV1::for_stage_v32(program, &binding)?;
     let mut prev: Vec<Vec<Tensor>> = Vec::new();
     // Each window's appended rows, newest last: a `HistAppend` reads the rows its appender appended at the previous
     // `min(p, window − 1)` positions (`WiringV1::hist_prior_sources`), so those rows — not the positions — are what is kept.
@@ -708,11 +713,19 @@ pub fn trace_streaming_stage_v32(
                         SourceV1::Zeros { dtype, shape } => Ok(Tensor::zeros(dtype, &shape)),
                         SourceV1::Public(v) => Tensor::scalar(DType::Idx, v as i128),
                         SourceV1::Input { k, position } => {
-                            if position!=p{return Err(malformed("stage32 direct input must name its current position"));}
-                            let index=binding.first_input.checked_add(k).ok_or_else(||malformed("stage32 input parameter overflow"))?;
-                            let t=inputs(k,position).ok_or_else(||TirError::new(misaka_palw_tir::TirErrorKind::Missing,format!("stage32 original input {k} at {position}")))?;
-                            typed_parameter_tensor(program,index,t)
-                        },
+                            if position != p {
+                                return Err(malformed("stage32 direct input must name its current position"));
+                            }
+                            let index =
+                                binding.first_input.checked_add(k).ok_or_else(|| malformed("stage32 input parameter overflow"))?;
+                            let t = inputs(k, position).ok_or_else(|| {
+                                TirError::new(
+                                    misaka_palw_tir::TirErrorKind::Missing,
+                                    format!("stage32 original input {k} at {position}"),
+                                )
+                            })?;
+                            typed_parameter_tensor(program, index, t)
+                        }
                     }
                 };
                 let node = w.node(s, n);

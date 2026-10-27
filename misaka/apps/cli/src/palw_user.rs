@@ -782,8 +782,9 @@ async fn kernel_route_view_v1(
         .palw_verifier_pay_v1
         .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
         .map(|f| f.daa_score());
-    let ledger = misaka_palw_remote::pursuit::kernel_consumer_ledger_v1(&route, in_force(nv.params.palw_provider_court_v1), verifier_pay)
-        .map_err(|e| CliError::new(exit::GENERIC, e))?;
+    let ledger =
+        misaka_palw_remote::pursuit::kernel_consumer_ledger_v1(&route, in_force(nv.params.palw_provider_court_v1), verifier_pay)
+            .map_err(|e| CliError::new(exit::GENERIC, e))?;
     Ok((route, ledger))
 }
 
@@ -999,7 +1000,13 @@ pub(crate) async fn build(ctx: &Ctx, cmd: BuildCmd) -> CliResult {
             let nonce = nonce.map(|n| parse_hash("--nonce", &n)).transpose()?;
             let (nv, signer, poster) = bond_signer_v1(ctx, &key.source(), &bond).await?;
             let armed = nv.params.palw_probabilistic_constraints_v1.is_some_and(|a| a.is_active(nv.virtual_daa));
-            refuse_unless_armed(&nv, "palw_probabilistic_constraints_v1 (the kernel route)", armed, allow_dormant, "a kernel route object")?;
+            refuse_unless_armed(
+                &nv,
+                "palw_probabilistic_constraints_v1 (the kernel route)",
+                armed,
+                allow_dormant,
+                "a kernel route object",
+            )?;
             let nonce = nonce.unwrap_or_else(|| {
                 let mut seed = palw_kernel_bond_id_v1(&poster).to_vec();
                 seed.extend_from_slice(&nv.virtual_daa.to_le_bytes());
@@ -1033,16 +1040,21 @@ pub(crate) async fn build(ctx: &Ctx, cmd: BuildCmd) -> CliResult {
         BuildCmd::FileProof { key, claim, bond, model, dry_run, out_dir } => {
             use misaka_palw_remote::pursuit::{
                 KERNEL_SERVICE_CHUNK_CAP_V1, KernelFilingV1, KernelGoalV1, KernelPursuitV1, KernelSendV1, kernel_check_program_v1,
-                kernel_class_model_root_v1, kernel_model_read_v1, kernel_model_roots_v1, kernel_step_sends_v1, plan_kernel_pursuit_on_v1,
+                kernel_class_model_root_v1, kernel_model_read_v1, kernel_model_roots_v1, kernel_step_sends_v1,
+                plan_kernel_pursuit_on_v1,
             };
             let claim = parse_hash("--claim", &claim)?;
             let params = kernel_model_read_v1(&model).map_err(|e| CliError::new(exit::GENERIC, e))?;
             let (nv, signer, accuser) = bond_signer_v1(ctx, &key.source(), &bond).await?;
             let (route, ledger) = kernel_route_view_v1(&nv).await?;
             let id = claim.as_bytes();
-            let row = ledger.claims.get(&id).ok_or_else(|| CliError::new(exit::GENERIC, format!("the kernel route holds no claim {claim}")))?;
-            let root = kernel_class_model_root_v1(&ledger, &row.class_binding_id)
-                .ok_or_else(|| CliError::new(exit::GENERIC, "this claim's class is not checkable with one model (pipeline/composite)"))?;
+            let row = ledger
+                .claims
+                .get(&id)
+                .ok_or_else(|| CliError::new(exit::GENERIC, format!("the kernel route holds no claim {claim}")))?;
+            let root = kernel_class_model_root_v1(&ledger, &row.class_binding_id).ok_or_else(|| {
+                CliError::new(exit::GENERIC, "this claim's class is not checkable with one model (pipeline/composite)")
+            })?;
             if !kernel_model_roots_v1(&params).contains(&root) {
                 return Err(CliError::new(exit::GENERIC, "--model does not open to the class's registered parameter commitments"));
             }
@@ -1068,23 +1080,34 @@ pub(crate) async fn build(ctx: &Ctx, cmd: BuildCmd) -> CliResult {
             let domain = crate::bond::network_domain(&nv);
             let pursuit = KernelPursuitV1 { claim: id, bond: accuser, goal, synced_collateral: Some(synced) };
             let filing = match &pursuit.goal {
-                KernelGoalV1::Prove(proof) => {
-                    Some(kernel_route_object_v1(domain, accuser, &KernelObj::FileProof { accuser: me, claim: id, proof: proof.clone() }, &signer))
-                }
+                KernelGoalV1::Prove(proof) => Some(kernel_route_object_v1(
+                    domain,
+                    accuser,
+                    &KernelObj::FileProof { accuser: me, claim: id, proof: proof.clone() },
+                    &signer,
+                )),
                 KernelGoalV1::Demand(_) => None,
             };
             let f = filing.as_ref().map(|signed| KernelFilingV1 { signed, chunk_cap: KERNEL_SERVICE_CHUNK_CAP_V1 });
-            let step = plan_kernel_pursuit_on_v1(&route, &ledger, &pursuit, f.as_ref()).map_err(|e| CliError::new(exit::GENERIC, e))?;
+            let step =
+                plan_kernel_pursuit_on_v1(&route, &ledger, &pursuit, f.as_ref()).map_err(|e| CliError::new(exit::GENERIC, e))?;
             let shown: String = format!("{step:?}").chars().take(400).collect();
             println!("claim {claim}: next step {shown}");
             let sends = kernel_step_sends_v1(&step, &pursuit, f.as_ref()).map_err(|e| CliError::new(exit::GENERIC, e))?;
             let objects: Vec<(String, PalwConsensusObjectV2)> = sends
                 .into_iter()
                 .map(|send| match send {
-                    KernelSendV1::Route(KernelObj::FileProof { .. }) => ("FileProof".to_string(), filing.clone().expect("a Prove goal")),
-                    KernelSendV1::Route(k) => (format!("{:?}", k).split([' ', '{', '(']).next().unwrap_or("Route").to_string(), kernel_route_object_v1(domain, accuser, &k, &signer)),
+                    KernelSendV1::Route(KernelObj::FileProof { .. }) => {
+                        ("FileProof".to_string(), filing.clone().expect("a Prove goal"))
+                    }
+                    KernelSendV1::Route(k) => (
+                        format!("{:?}", k).split([' ', '{', '(']).next().unwrap_or("Route").to_string(),
+                        kernel_route_object_v1(domain, accuser, &k, &signer),
+                    ),
                     KernelSendV1::Chunk(chunk) => {
-                        use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1, palw_kernel_chunk_message_v1};
+                        use kaspa_consensus_core::palw_kernel_route_v1::{
+                            PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1, palw_kernel_chunk_message_v1,
+                        };
                         let m = palw_kernel_chunk_message_v1(domain, &chunk);
                         let signature = signer.sign_with_context(m.as_byte_slice(), PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1).to_vec();
                         ("Chunk".to_string(), PalwConsensusObjectV2::KernelRouteChunkV1 { chunk: Box::new(chunk), signature })
@@ -1129,7 +1152,9 @@ pub(crate) async fn build(ctx: &Ctx, cmd: BuildCmd) -> CliResult {
                          (inside openers too) once palw_court_outsider_lane_v1 is in force — there is no separate ingress object.",
                         s.fee_sompi_per_session
                     );
-                    println!("open the court: misaka palw build court-open --claim {claim} --bond <txid:index> --key-file <key> --out <file>");
+                    println!(
+                        "open the court: misaka palw build court-open --claim {claim} --bond <txid:index> --key-file <key> --out <file>"
+                    );
                     Ok(())
                 }
                 Err(_) => refuse_unless_adopted("court paid-ingress schedule"),
@@ -1273,7 +1298,21 @@ mod tests {
         let ok = |a: &[&str]| crate::Cli::try_parse_from([&["misaka", "palw", "build"], a].concat()).is_ok();
         assert!(ok(&["court-open", "--claim", &id, "--bond", &bond, "--key-file", "k", "--dry-run"]));
         assert!(!ok(&["court-open", "--claim", &id, "--bond", &bond, "--key-file", "k"]));
-        assert!(ok(&["kernel-post-job", "--bond", &bond, "--class", &id, "--prompt", "1,2", "--max-new", "2", "--key-file", "k", "--out", "x"]));
+        assert!(ok(&[
+            "kernel-post-job",
+            "--bond",
+            &bond,
+            "--class",
+            &id,
+            "--prompt",
+            "1,2",
+            "--max-new",
+            "2",
+            "--key-file",
+            "k",
+            "--out",
+            "x"
+        ]));
         assert!(ok(&["court-ingress", "--claim", &id]));
         assert!(ok(&["file-proof", "--claim", &id, "--bond", &bond, "--model", "m.palwkm", "--key-file", "k", "--dry-run"]));
         assert!(!ok(&["file-proof", "--claim", &id, "--bond", &bond, "--model", "m.palwkm", "--key-file", "k"]));

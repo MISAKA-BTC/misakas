@@ -20,11 +20,15 @@ fn decode_error<E: std::fmt::Display>(e: NativeDecodeErrorV1<E>) -> PalwStateV2E
         NativeDecodeErrorV1::Decode(e) => refuse(e.to_string()),
     }
 }
-fn raw<'a>(state:&'a PalwChainStateV2,k:&[u8])->Result<Option<&'a[u8]>,PalwStateV2Error>{
-    let Some(route)=state.kernel_route() else{return Ok(None)};
-    let _key=crate::palw_native_resource_v1::reserve_native_requests_v1(k.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
-    let mut owned=Vec::new();owned.try_reserve_exact(k.len()).map_err(|why|PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<u8>>("source fixed key",&why.to_string())))?;owned.extend_from_slice(k);
-    Ok(route.aux.get(&(PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1,owned)).map(Vec::as_slice))
+fn raw<'a>(state: &'a PalwChainStateV2, k: &[u8]) -> Result<Option<&'a [u8]>, PalwStateV2Error> {
+    let Some(route) = state.kernel_route() else { return Ok(None) };
+    let _key = crate::palw_native_resource_v1::reserve_native_requests_v1(k.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+    let mut owned = Vec::new();
+    owned.try_reserve_exact(k.len()).map_err(|why| {
+        PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<u8>>("source fixed key", &why.to_string()))
+    })?;
+    owned.extend_from_slice(k);
+    Ok(route.aux.get(&(PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1, owned)).map(Vec::as_slice))
 }
 fn key(prefix: u8, id: Hash64) -> [u8; 65] {
     let mut k = [0; 65];
@@ -44,7 +48,10 @@ impl PalwChainStateV2 {
         route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
         ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
         epoch: &PalwSourceBootstrapEpochRowV1,
-        id: Hash64, now: u64, consumer_liability_until: u64, liability_slack: u64,
+        id: Hash64,
+        now: u64,
+        consumer_liability_until: u64,
+        liability_slack: u64,
     ) -> Result<Option<misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1>, PalwStateV2Error> {
         current_paid_source_event_v6(route, ledger, epoch, id, now, consumer_liability_until, liability_slack)
     }
@@ -71,7 +78,10 @@ impl PalwChainStateV2 {
         validate_cohort(&epoch)?;
         let row = self.source_bootstrap_work_v1(id)?.ok_or_else(|| refuse("bootstrap checker work absent"))?;
         validate_work(&epoch, &row)?;
-        if let Some(route)=self.kernel_route(){crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route,&epoch,&row).map_err(decode_error)?;}
+        if let Some(route) = self.kernel_route() {
+            crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route, &epoch, &row)
+                .map_err(decode_error)?;
+        }
         if row.work.id() != id {
             return Err(refuse("bootstrap checker work key differs from statement"));
         }
@@ -124,7 +134,10 @@ impl PalwChainStateV2 {
         let Some(row) = self.source_bootstrap_work_v1(id)? else { return Ok(None) };
         validate_cohort(&epoch)?;
         validate_work(&epoch, &row)?;
-        if let Some(route)=self.kernel_route(){crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route,&epoch,&row).map_err(decode_error)?;}
+        if let Some(route) = self.kernel_route() {
+            crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route, &epoch, &row)
+                .map_err(decode_error)?;
+        }
         let Some((final_position, settlement_position)) = row.settlement else { return Ok(None) };
         let Some((anchor, _)) = epoch.context.anchor else { return Ok(None) };
         Ok(Some(misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1 {
@@ -200,7 +213,8 @@ impl PalwChainStateV2 {
             if k[0] == 1 {
                 let row = self.source_bootstrap_work_v1(id)?.ok_or_else(|| refuse("bootstrap work vanished"))?;
                 validate_work(e, &row)?;
-                crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route,e,&row).map_err(decode_error)?;
+                crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route, e, &row)
+                    .map_err(decode_error)?;
                 if row.work.id() != id || raw(self, &key(2, row.work.canonical_work))? != Some(id.as_byte_slice()) {
                     return Err(refuse("bootstrap work identity/canonical-work index mismatch"));
                 }
@@ -402,7 +416,7 @@ pub(super) fn prepare(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContex
             return Err(refuse("bootstrap epoch cannot replace its frozen roster/anchor"));
         }
         if old.context.anchor == own.anchor {
-            return super::palw_source_verifier_economics_fold_v2::prepare(builder,ctx);
+            return super::palw_source_verifier_economics_fold_v2::prepare(builder, ctx);
         }
     }
     use crate::palw_native_resource_v1::NativeHeapV1;
@@ -444,7 +458,7 @@ pub(super) fn prepare(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContex
         source_works: previous.as_ref().map(|r| r.source_works).unwrap_or(0),
     };
     builder.source_bootstrap_write_v1(&[0], &row)?;
-    super::palw_source_verifier_economics_fold_v2::prepare(builder,ctx)
+    super::palw_source_verifier_economics_fold_v2::prepare(builder, ctx)
 }
 
 pub(super) fn apply(
@@ -495,7 +509,10 @@ pub(super) fn apply(
             }
             let row = PalwSourceBootstrapWorkRowV1 { work, approvals: Vec::new(), settlement: None };
             validate_work(&epoch, &row)?;
-        if let Some(route)=builder.state.kernel_route(){crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route,&epoch,&row).map_err(decode_error)?;}
+            if let Some(route) = builder.state.kernel_route() {
+                crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route, &epoch, &row)
+                    .map_err(decode_error)?;
+            }
             builder.source_bootstrap_write_v1(&key(1, id), &row)?;
             builder.source_bootstrap_write_v1(&key(2, work.canonical_work), &id)?;
             use crate::palw_native_resource_v1::NativeHeapV1;
@@ -513,7 +530,7 @@ pub(super) fn apply(
             builder.source_bootstrap_write_v1(&[0], &next)?;
         }
         PalwSourceBootstrapActionV1::FundVerifierEconomicsV2 { terms } => {
-            return super::palw_source_verifier_economics_fold_v2::fund(builder,ctx,actor,&epoch,&terms);
+            return super::palw_source_verifier_economics_fold_v2::fund(builder, ctx, actor, &epoch, &terms);
         }
         PalwSourceBootstrapActionV1::Approve { work, slot, statement, signed_daa }
         | PalwSourceBootstrapActionV1::ApproveWithLiabilityV2 { work, slot, statement, signed_daa, .. } => {
@@ -538,9 +555,9 @@ pub(super) fn apply(
                 return Err(refuse("bootstrap approval slot already consumed"));
             }
             if let PalwSourceBootstrapActionV1::ApproveWithLiabilityV2 { funding_id, .. } = action {
-                super::palw_source_verifier_economics_fold_v2::approve(builder,ctx,actor,&epoch,&row,*funding_id)?;
+                super::palw_source_verifier_economics_fold_v2::approve(builder, ctx, actor, &epoch, &row, *funding_id)?;
             } else {
-                super::palw_source_verifier_economics_fold_v2::legacy_approval_allowed(builder,ctx,&epoch)?;
+                super::palw_source_verifier_economics_fold_v2::legacy_approval_allowed(builder, ctx, &epoch)?;
             }
             use crate::palw_native_resource_v1::NativeHeapV1;
             let heap =
@@ -642,7 +659,7 @@ pub(super) fn settle(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContext
         validate_work(&epoch, &next)?;
         builder.source_bootstrap_write_v1(&key(1, id), &next)?;
     }
-    super::palw_source_verifier_economics_fold_v2::sweep(builder,ctx)
+    super::palw_source_verifier_economics_fold_v2::sweep(builder, ctx)
 }
 
 fn derive_native_work(
@@ -734,64 +751,101 @@ pub(crate) fn current_paid_source_event_v6(
     liability_slack: u64,
 ) -> Result<Option<misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1>, PalwStateV2Error> {
     use crate::palw_native_resource_v1::NativeHeapV1;
-    let epoch_overlap = epoch.native_heap_v1("V6 source cohort validation overlap").bytes()
-        .and_then(|n| n.checked_mul(4)).and_then(|n| n.checked_add(65536))
-        .ok_or_else(|| PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwSourceBootstrapEpochRowV1>("V6 epoch validation")))?;
-    let _epoch_overlap = crate::palw_native_resource_v1::reserve_native_requests_v1(epoch_overlap)
-        .map_err(PalwStateV2Error::NativeResource)?;
+    let epoch_overlap = epoch
+        .native_heap_v1("V6 source cohort validation overlap")
+        .bytes()
+        .and_then(|n| n.checked_mul(4))
+        .and_then(|n| n.checked_add(65536))
+        .ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwSourceBootstrapEpochRowV1>("V6 epoch validation"))
+        })?;
+    let _epoch_overlap =
+        crate::palw_native_resource_v1::reserve_native_requests_v1(epoch_overlap).map_err(PalwStateV2Error::NativeResource)?;
     validate_cohort(epoch)?;
-    if epoch.draw_refused || epoch.context.anchor.is_none()
+    if epoch.draw_refused
+        || epoch.context.anchor.is_none()
         || consumer_liability_until.checked_add(liability_slack).is_none_or(|until| until > epoch.context.policy.stake_release_daa)
     {
         return Ok(None);
     }
     let bytes = crate::palw_material_challenge_checkpoint_v4::material_challenge_fixed_row_v4(
-        route, PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1, &key(1, id),
-    ).map_err(PalwStateV2Error::NativeResource)?;
+        route,
+        PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1,
+        &key(1, id),
+    )
+    .map_err(PalwStateV2Error::NativeResource)?;
     let Some(bytes) = bytes else { return Ok(None) };
-    let row = retain_native_value_decode_classified_v1::<PalwSourceBootstrapWorkRowV1, _>(
-        bytes, || borsh::from_slice(bytes),
-    ).map_err(decode_error)?;
+    let row = retain_native_value_decode_classified_v1::<PalwSourceBootstrapWorkRowV1, _>(bytes, || borsh::from_slice(bytes))
+        .map_err(decode_error)?;
     validate_work(epoch, &row)?;
     crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route, epoch, &row).map_err(decode_error)?;
-    if row.work.id() != id { return Err(refuse("V6 bootstrap source key differs from its own statement")); }
+    if row.work.id() != id {
+        return Err(refuse("V6 bootstrap source key differs from its own statement"));
+    }
     let Some((final_position, settlement_position)) = row.settlement else { return Ok(None) };
     let Some(source) = ledger.claims.get(&row.work.claim.as_bytes()) else { return Ok(None) };
-    let source_overlap = source.body.native_heap_v1("V6 direct source identity serialization overlap").bytes()
-        .and_then(|n| n.checked_mul(4)).and_then(|n| n.checked_add(
-            (row.approvals.len() as u64).checked_mul(512)?))
-        .ok_or_else(|| PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwSourceBootstrapWorkRowV1>("V6 source validation")))?;
-    let _source_overlap = crate::palw_native_resource_v1::reserve_native_requests_v1(source_overlap)
-        .map_err(PalwStateV2Error::NativeResource)?;
+    let source_overlap = source
+        .body
+        .native_heap_v1("V6 direct source identity serialization overlap")
+        .bytes()
+        .and_then(|n| n.checked_mul(4))
+        .and_then(|n| n.checked_add((row.approvals.len() as u64).checked_mul(512)?))
+        .ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwSourceBootstrapWorkRowV1>("V6 source validation"))
+        })?;
+    let _source_overlap =
+        crate::palw_native_resource_v1::reserve_native_requests_v1(source_overlap).map_err(PalwStateV2Error::NativeResource)?;
     let Some(until) = source.liability_until else { return Ok(None) };
-    if source.convicted || until >= epoch.context.policy.stake_release_daa
+    if source.convicted
+        || until >= epoch.context.policy.stake_release_daa
         || ledger.paid_claim_consumers_v2.contains_key(&row.work.claim.as_bytes())
         || now < settlement_position
-    { return Ok(None); }
+    {
+        return Ok(None);
+    }
     let native = match derive_native_work(epoch, ledger, row.work.claim) {
         Ok(native) => native,
         Err(PalwStateV2Error::NativeResource(error)) => return Err(PalwStateV2Error::NativeResource(error)),
         Err(_) => return Ok(None),
     };
-    if native != row.work { return Ok(None); }
+    if native != row.work {
+        return Ok(None);
+    }
     let Some(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Settled { final_daa, settled_from_daa }) =
         crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(ledger, &row.work.claim.as_bytes(), now)
-    else { return Ok(None) };
-    if final_daa != final_position || settled_from_daa > settlement_position || settlement_position > epoch.context.policy.stake_release_daa {
+    else {
+        return Ok(None);
+    };
+    if final_daa != final_position
+        || settled_from_daa > settlement_position
+        || settlement_position > epoch.context.policy.stake_release_daa
+    {
         return Ok(None);
     }
     let anchor = epoch.context.anchor.expect("checked anchor").0;
     Ok(Some(misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1 {
-        version: 1, network: epoch.context.policy.network.as_bytes(),
-        bootstrap_epoch: row.work.epoch.as_bytes(), bootstrap_policy: row.work.policy.as_bytes(),
-        frozen_population: epoch.context.population_root().map_err(refuse)?, frozen_block: epoch.context.frozen_block.as_bytes(),
-        anchor: anchor.as_bytes(), anchor_position: epoch.context.policy.anchor_cutoff_daa,
-        source_profile: row.work.source_profile.as_bytes(), checker_scope: row.work.checker_scope.as_bytes(),
-        claim: row.work.claim.as_bytes(), canonical_work: row.work.canonical_work.as_bytes(), statement: id.as_bytes(),
-        material_scope: row.work.material_scope.as_bytes(), execution_commitment: row.work.execution_commitment.as_bytes(),
+        version: 1,
+        network: epoch.context.policy.network.as_bytes(),
+        bootstrap_epoch: row.work.epoch.as_bytes(),
+        bootstrap_policy: row.work.policy.as_bytes(),
+        frozen_population: epoch.context.population_root().map_err(refuse)?,
+        frozen_block: epoch.context.frozen_block.as_bytes(),
+        anchor: anchor.as_bytes(),
+        anchor_position: epoch.context.policy.anchor_cutoff_daa,
+        source_profile: row.work.source_profile.as_bytes(),
+        checker_scope: row.work.checker_scope.as_bytes(),
+        claim: row.work.claim.as_bytes(),
+        canonical_work: row.work.canonical_work.as_bytes(),
+        statement: id.as_bytes(),
+        material_scope: row.work.material_scope.as_bytes(),
+        execution_commitment: row.work.execution_commitment.as_bytes(),
         approval_root: hash_serialized(b"MISAKA/PALW/SOURCE-APPROVAL-ROOT/V1", &row.approvals),
-        producer: row.work.producer.as_bytes(), consumer: row.work.consumer.as_bytes(), accepted_position: row.work.accepted_daa,
-        final_position, settlement_position, approved_slots: row.approvals.len() as u16,
+        producer: row.work.producer.as_bytes(),
+        consumer: row.work.consumer.as_bytes(),
+        accepted_position: row.work.accepted_daa,
+        final_position,
+        settlement_position,
+        approved_slots: row.approvals.len() as u16,
         required_slots: epoch.context.policy.selection.quorum,
     }))
 }

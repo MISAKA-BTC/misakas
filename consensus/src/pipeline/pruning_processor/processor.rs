@@ -246,9 +246,10 @@ impl PruningProcessor {
         // This indicates the node crashed or was forced to stop during a former data prune operation hence
         // we need to complete it
         if retention_checkpoint != retention_period_root {
-            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_v1(
-                pruning_point, || self.prune(pruning_point, retention_period_root),
-            ) {
+            if let Err(why) = self
+                .virtual_processor
+                .with_pruning_snapshots_before_delete_v1(pruning_point, || self.prune(pruning_point, retention_period_root))
+            {
                 warn!("Pruning recovery deferred before snapshot readiness at {pruning_point}: {why}");
                 return false;
             }
@@ -315,9 +316,9 @@ impl PruningProcessor {
 
             // Both normal advancement and cold recovery require exact servable
             // snapshots before the first below-point row may be removed.
-            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_v1(
-                new_pruning_point, || self.prune(new_pruning_point, adjusted_retention_period_root),
-            ) {
+            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_v1(new_pruning_point, || {
+                self.prune(new_pruning_point, adjusted_retention_period_root)
+            }) {
                 warn!("Pruning deferred before snapshot readiness at {new_pruning_point}: {why}");
                 return false;
             }

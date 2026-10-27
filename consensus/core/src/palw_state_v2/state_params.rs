@@ -1804,7 +1804,9 @@ impl PalwStateParamsV2 {
         self.claim_local_settlement_from_daa = from;
         self
     }
-    pub fn claim_local_settlement_from_daa(&self) -> Option<u64> { self.claim_local_settlement_from_daa }
+    pub fn claim_local_settlement_from_daa(&self) -> Option<u64> {
+        self.claim_local_settlement_from_daa
+    }
     pub fn claim_local_settlement_active_at(&self, daa: u64) -> bool {
         self.claim_local_settlement_from_daa.is_some_and(|from| daa >= from)
     }

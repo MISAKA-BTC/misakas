@@ -1367,11 +1367,7 @@ mod tests {
             .expect("the evaluation court's pass");
         assert!(one_move < court, "the evaluation accusations are queued after the IR pass, on the same court path");
         assert!(
-            court
-                < panel[one_move..]
-                    .find_code("self.court_progress_tick_v1(")
-                    .expect("the court's half")
-                    + one_move,
+            court < panel[one_move..].find_code("self.court_progress_tick_v1(").expect("the court's half") + one_move,
             "and before the court's half answers its duties"
         );
         assert!(

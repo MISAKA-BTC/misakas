@@ -137,11 +137,24 @@ fn attn_program(rng: &mut R, a: &Attn) -> Program {
     let sc =
         b.node(lay, Prim::MatMul, &[Ref::Node(q3), Ref::Node(kt)], ty(DType::I32, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
     let m = b.node(lay, Prim::ReduceMax { axis: 2 }, &[Ref::Node(sc)], fixed(DType::I32, &[a.nh, 1, 1]), a.commit_m);
-    let diff = b.node(lay, Prim::Sub, &[Ref::Node(sc), Ref::Node(m)], ty(DType::I64, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
+    let diff =
+        b.node(lay, Prim::Sub, &[Ref::Node(sc), Ref::Node(m)], ty(DType::I64, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
     let diff = if a.select_exempt {
         let floor = b.konst(DType::I64, &[1], &[-(1i128 << 22)]);
-        let cmp = b.node(lay, Prim::Compare { cmp: ref2::Cmp::Lt }, &[Ref::Node(diff), Ref::Const(floor)], ty(DType::I8, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
-        b.node(lay, Prim::Select, &[Ref::Node(cmp), Ref::Const(floor), Ref::Node(diff)], ty(DType::I64, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false)
+        let cmp = b.node(
+            lay,
+            Prim::Compare { cmp: ref2::Cmp::Lt },
+            &[Ref::Node(diff), Ref::Const(floor)],
+            ty(DType::I8, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]),
+            false,
+        );
+        b.node(
+            lay,
+            Prim::Select,
+            &[Ref::Node(cmp), Ref::Const(floor), Ref::Node(diff)],
+            ty(DType::I64, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]),
+            false,
+        )
     } else {
         diff
     };
@@ -1100,10 +1113,19 @@ fn cone_functions() {
                         let mv = value_bound(&prog, b, n16, tile_len as u64);
                         let mv7 = ref2::dissect::value_bound_with(&prog, b, n16, tile_len as u64, ref2::admit::TopkRow::Fence2);
                         let fv7 = catch_any(|| {
-                            cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v2(&fp, fb, n16, tile_len, cc::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7)
+                            cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v2(
+                                &fp,
+                                fb,
+                                n16,
+                                tile_len,
+                                cc::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7,
+                            )
                         });
                         if Ok(mv7) != fv7 {
-                            t.disagree("value bound (H7 rules)", format!("{name} b{b} n{n} tile_len {tile_len}: ref2 {mv7} first {fv7:?}"));
+                            t.disagree(
+                                "value bound (H7 rules)",
+                                format!("{name} b{b} n{n} tile_len {tile_len}: ref2 {mv7} first {fv7:?}"),
+                            );
                         }
                         let fv = catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, fb, n16, tile_len));
                         if Ok(mv) != fv {
@@ -1221,7 +1243,8 @@ fn h1_empty_list_probe() {
 #[test]
 fn range_request_refusals() {
     let mut rng = R::seed_from_u64(0x9A9E);
-    let a = Attn { nh: 1, dh: 2, window: 16, layers: 1, commit_m: false, extra: false, select_o2: false, select_exempt: false, many: 1 };
+    let a =
+        Attn { nh: 1, dh: 2, window: 16, layers: 1, commit_m: false, extra: false, select_o2: false, select_exempt: false, many: 1 };
     let prog = attn_program(&mut rng, &a);
     let pp = prepare(&prog).unwrap();
     let tokens: Vec<u64> = (0..6).map(|i| i % 16).collect();
@@ -1346,13 +1369,17 @@ fn value_bound_against_closures() {
                     if mv7 != fv7 {
                         rows.push(format!("H7 rules: seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv7}, first V {fv7}, the largest real closure {worst}"));
                     } else if (mv7 as usize) < worst {
-                        rows.push(format!("H7 rules: seed {seed} b{b} n{n} tile_len {tl}: V {mv7} (both) below the largest real closure {worst}"));
+                        rows.push(format!(
+                            "H7 rules: seed {seed} b{b} n{n} tile_len {tl}: V {mv7} (both) below the largest real closure {worst}"
+                        ));
                     }
                     if (mv as usize) < worst {
                         h7_fixed += usize::from((mv7 as usize) >= worst);
                     }
                     if mv != fv {
-                        rows.push(format!("seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv}, first V {fv}, the largest real closure {worst}"));
+                        rows.push(format!(
+                            "seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv}, first V {fv}, the largest real closure {worst}"
+                        ));
                     } else if (mv as usize) < worst {
                         // Finding H7: both follow the text, and the text's V (the TopK row of the
                         // box demand) falls below a real closure.

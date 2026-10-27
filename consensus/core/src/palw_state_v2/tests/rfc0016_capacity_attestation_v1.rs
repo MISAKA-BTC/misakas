@@ -74,7 +74,12 @@ fn step_delta(
     apply_palw_transition_v2_with_extras(parent, p, &ctx(daa, daa, daa), objects, None, false, false, false, false, &extras())
 }
 
-fn step(parent: &PalwChainStateV2, p: &PalwStateParamsV2, daa: u64, objects: &[PalwConsensusObjectV2]) -> Result<PalwChainStateV2, PalwStateV2Error> {
+fn step(
+    parent: &PalwChainStateV2,
+    p: &PalwStateParamsV2,
+    daa: u64,
+    objects: &[PalwConsensusObjectV2],
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
     step_delta(parent, p, daa, objects).map(|(s, _)| s)
 }
 
@@ -158,7 +163,11 @@ fn read(s: &PalwChainStateV2, p: &PalwStateParamsV2, class: u64, now: u64, terms
 /// Demand of `claims` claims of `class` (one seat), in the terms' unit.
 fn demand(s: &PalwChainStateV2, class: u64, claims: u128) -> u128 {
     let row = &s.model_lifecycles[&h64(class)];
-    crate::palw_work_target_v1::palw_panel_demand_term_v1(claims, row.work.economic_ccu_per_claim, row.profile.verification_window_spans as u64)
+    crate::palw_work_target_v1::palw_panel_demand_term_v1(
+        claims,
+        row.work.economic_ccu_per_claim,
+        row.profile.verification_window_spans as u64,
+    )
 }
 
 #[test]

@@ -28,7 +28,9 @@ use kaspa_consensus_core::{
         params::{ForkActivation, Params},
     },
     palw_g14_gates_v1::{PALW_G14_ARMING_RECORD_VERSION_V1, PalwG14ArmingRecordV1, PalwG14GatedFenceV1},
-    palw_kernel_route_arming_v1::{PALW_KERNEL_ROUTE_ARMING_RECORD_VERSION_V1, PalwKernelRouteArmingRecordV1, PalwKernelRouteGatedFenceV1},
+    palw_kernel_route_arming_v1::{
+        PALW_KERNEL_ROUTE_ARMING_RECORD_VERSION_V1, PalwKernelRouteArmingRecordV1, PalwKernelRouteGatedFenceV1,
+    },
     palw_mode_v2::PalwConsensusMode,
     palw_panel_v2::PalwPanelParamsV2,
     palw_state_v2::PalwConsensusObjectV2,
@@ -112,7 +114,11 @@ fn digest32(label: &[u8]) -> [u8; 32] {
 /// **One drill arm-readiness record** for `fence` at `at_daa` on `genesis`: one distinct labelled digest per requirement, a labelled
 /// review and source commit. It authorizes exactly this (fence, genesis, height) through the record path and nothing else; it is
 /// never pinned in [`kaspa_consensus_core::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1`].
-pub fn private_g14_drill_record_v1(fence: PalwG14GatedFenceV1, genesis: kaspa_consensus_core::Hash64, at_daa: u64) -> PalwG14ArmingRecordV1 {
+pub fn private_g14_drill_record_v1(
+    fence: PalwG14GatedFenceV1,
+    genesis: kaspa_consensus_core::Hash64,
+    at_daa: u64,
+) -> PalwG14ArmingRecordV1 {
     let subject = |what: &str, i: usize| {
         let mut label = Vec::new();
         label.extend_from_slice(what.as_bytes());
@@ -173,7 +179,9 @@ pub fn private_kernel_route_drill_record_v1(
 pub fn private_kernel_route_drill_records_v1(params: &Params) -> Vec<PalwKernelRouteArmingRecordV1> {
     PalwKernelRouteGatedFenceV1::ALL
         .into_iter()
-        .filter_map(|fence| fence.armed(params).map(|at| private_kernel_route_drill_record_v1(fence, params.genesis.hash, at.daa_score())))
+        .filter_map(|fence| {
+            fence.armed(params).map(|at| private_kernel_route_drill_record_v1(fence, params.genesis.hash, at.daa_score()))
+        })
         .collect()
 }
 
@@ -305,7 +313,11 @@ mod tests {
             for record in &drill.records {
                 let mut fewer = drill.records.clone();
                 fewer.retain(|r| r.fence != record.fence);
-                assert!(p.validate_palw_v2_with_arming_records_v1(&fewer).is_err(), "{:?}: every drill record is load-bearing", record.fence);
+                assert!(
+                    p.validate_palw_v2_with_arming_records_v1(&fewer).is_err(),
+                    "{:?}: every drill record is load-bearing",
+                    record.fence
+                );
             }
             let route = p.palw_g14_route_required_v1_mirror().expect("option (b) is armed in every drill set");
             assert_eq!(route.from_daa, mode.at_daa());

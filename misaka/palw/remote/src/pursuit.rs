@@ -225,7 +225,8 @@ pub fn kernel_consumer_ledger_v1(
     let mut ledger = route.ledger()?;
     ledger.preview_mut_v1().court_scope_policy =
         provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa });
-    ledger.preview_mut_v1().verifier_pay_policy = verifier_pay.map(kaspa_consensus_core::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
+    ledger.preview_mut_v1().verifier_pay_policy =
+        verifier_pay.map(kaspa_consensus_core::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
     Ok(ledger)
 }
 
@@ -758,5 +759,8 @@ pub fn kernel_model_read_v1(path: &std::path::Path) -> Result<misaka_palw_tir::M
 
 /// The parameter-commitment roots a model opens to (v1/v2 single programs commit `of`, v4/v5 `of_v3`).
 pub fn kernel_model_roots_v1(params: &misaka_palw_tir::MapParams) -> [Digest; 2] {
-    [misaka_palw_kernel::trace::ParamCommitmentsV1::of(params).root(), misaka_palw_kernel::trace::ParamCommitmentsV1::of_v3(params).root()]
+    [
+        misaka_palw_kernel::trace::ParamCommitmentsV1::of(params).root(),
+        misaka_palw_kernel::trace::ParamCommitmentsV1::of_v3(params).root(),
+    ]
 }

@@ -661,20 +661,27 @@ fn h7_topk_tile_exceeds_v() {
         for leaf in space.leaves_of_position(&jc, 6) {
             let cc::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, first_element, .. } = leaf.kind else { continue };
             let b = block as usize;
-            if !matches!(prog.blocks[b].nodes[node as usize].prim, Prim::TopK { .. }) || ref2::dissect::cone_reductions(&prog, b, node).is_empty() {
+            if !matches!(prog.blocks[b].nodes[node as usize].prim, Prim::TopK { .. })
+                || ref2::dissect::cone_reductions(&prog, b, node).is_empty()
+            {
                 continue;
             }
             let v_first = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v1(&fp, &fp.blocks[b], node, 4);
             let v_ref2 = ref2::dissect::value_bound(&prog, b, node, 4);
-            let v7_first = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v2(&fp, &fp.blocks[b], node, 4, cc::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7);
+            let v7_first = cc::palw_tir_dissect_v1::palw_tir_dissect_value_bound_v2(
+                &fp,
+                &fp.blocks[b],
+                node,
+                4,
+                cc::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7,
+            );
             let v7_ref2 = ref2::dissect::value_bound_with(&prog, b, node, 4, ref2::admit::TopkRow::Fence2);
             let built = cc::palw_tir_court_v1::build_tir_root_claim_v1(&exec.binding, leaf.index, &exec, &rules);
             let values = built.as_ref().map(|r| r.elements.iter().map(|l| l.len()).sum::<usize>());
             let graded = built.as_ref().map(|r| cc::palw_tir_court_v1::check_tir_root_claim_v1(r, leaf.index, &rules).is_ok());
             println!(
                 "H7 seed {seed} b{b} n{node} ({:?}) tile {first_element}+{}: V ref2 {v_ref2} first {v_first}, under palw_tir_fence2 ref2 {v7_ref2} first {v7_first}; the court's own honest claim carries {values:?} values (admitted: {graded:?})",
-                prog.blocks[b].nodes[node as usize].prim,
-                leaf.value_count
+                prog.blocks[b].nodes[node as usize].prim, leaf.value_count
             );
         }
     }

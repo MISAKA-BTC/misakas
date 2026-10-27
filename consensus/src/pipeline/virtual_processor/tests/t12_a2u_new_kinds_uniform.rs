@@ -48,12 +48,12 @@ use kaspa_consensus_core::palw_lifecycle_objects_v2::{
     palw_int12_kind_refused_past_fence_v1, palw_lifecycle_kind_owner_v1, palw_lifecycle_object_may_ride_v2,
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
+use kaspa_consensus_core::palw_state_v2::{
+    PalwBondKeyV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, palw_object_chunk_group_id_v1,
+};
 use kaspa_consensus_core::palw_tir_designated_answers_v1::{
     PalwTirDesignatedEventV1, PalwTirDesignatedOutcomeV1, PalwTirDesignatedRequestV1, PalwTirRequestKeyV1,
     palw_tir_designated_outcome_v1,
-};
-use kaspa_consensus_core::palw_state_v2::{
-    PalwBondKeyV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, palw_object_chunk_group_id_v1,
 };
 use kaspa_consensus_core::pow_layer0::{
     POW_ALGO_ID_PALW_RECEIPT_V3, PalwAttemptLaneV1, PalwHeaderFormFenceV1, PowLayer0Error, check_palw_commitment_shape_at,
@@ -246,7 +246,9 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             // fence (armed above through `MonetaryMaterialV1`), with its unapproved probe terms.
             PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => {
                 params.palw_material_release_recovery_v2 = Some(
-                    kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at),
+                    kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(
+                        at,
+                    ),
                 );
             }
             // RFC-0006 memory/routing court v2 (tags 243-244): in force at the later of its own and the shard court's fence.
@@ -531,21 +533,22 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 }
             }
             "palw_paid_bootstrap_source_v6" => {
-                params.palw_paid_bootstrap_source_v6 = Some(kaspa_consensus_core::palw_paid_bootstrap_source_v6::PalwPaidBootstrapSourceFenceV6 {
-                    activation: at,
-                    policy: misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6 {
-                        version: 6,
-                        network: [9; 64],
-                        bootstrap_policy: [10; 64],
-                        required_sources: 1,
-                        maximum_events: 1,
-                        anchor_delay: 1,
-                        window: 1,
-                        settlement_depth: 1,
-                        maximum_consumers: 1,
-                        source_liability_slack: 1,
-                    },
-                });
+                params.palw_paid_bootstrap_source_v6 =
+                    Some(kaspa_consensus_core::palw_paid_bootstrap_source_v6::PalwPaidBootstrapSourceFenceV6 {
+                        activation: at,
+                        policy: misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6 {
+                            version: 6,
+                            network: [9; 64],
+                            bootstrap_policy: [10; 64],
+                            required_sources: 1,
+                            maximum_events: 1,
+                            anchor_delay: 1,
+                            window: 1,
+                            settlement_depth: 1,
+                            maximum_consumers: 1,
+                            source_liability_slack: 1,
+                        },
+                    });
                 params.sync_palw_paid_bootstrap_source_v6();
             }
             // RFC07 (tag 246): a fixture policy (never release terms), mirrored; far above the chain it judges nothing here.

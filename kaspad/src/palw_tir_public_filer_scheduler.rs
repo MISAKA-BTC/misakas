@@ -41,11 +41,11 @@ const PALW_PANEL: &str = "palw-panel";
 
 #[path = "palw_tir_filer_journal_v2.rs"]
 mod journal;
-use journal::{JournalFaultV2,ReloadPayloadV2};
+use journal::{JournalFaultV2, ReloadPayloadV2};
 
 #[path = "palw_tir_filer_preparation_v2.rs"]
 mod preparation;
-use preparation::{FilerClaimListV2,PreparedFilingV2,FilerPreparationFaultV2};
+use preparation::{FilerClaimListV2, FilerPreparationFaultV2, PreparedFilingV2};
 
 /// The court queue's lane of a public conviction against an ORIGINAL frame (free: `u32::MAX − 26`; the custodian's lanes are
 /// `− 24` and `− 25`). Keyed by claim with `responder = false`: this node accuses.
@@ -82,7 +82,10 @@ pub(crate) struct PalwTirPublicFilerBookV1 {
     load_task: Option<tokio::task::JoinHandle<Result<Option<journal::JournalDecodedV2>, JournalFaultV2>>>,
     // Remains after clear/removal: Vec retains capacity. Field order ensures
     // both the pending values and sidecar buffer drop before this whole-table ticket.
-    owned_membership: Option<(Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_memory_ledger::PalwMemoryReservationV1)>,
+    owned_membership: Option<(
+        Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+        crate::palw_memory_ledger::PalwMemoryReservationV1,
+    )>,
     dirty: bool,
 }
 
@@ -223,7 +226,9 @@ impl PalwTirPublicFilerBookV1 {
     /// preflight asks it). One finding per claim — a claim is convicted once, so a second finding adds nothing — and at most
     /// [`PALW_TIR_PUBLIC_FILER_PENDING_V1`] at once. Persisted before it returns `true`.
     pub(crate) fn queue_finding_v1(&mut self, claim: Hash64, evidence: PalwTirPublicConvictionEvidenceV1, now_daa: u64) -> bool {
-        if self.loading {return false;}
+        if self.loading {
+            return false;
+        }
         if evidence.check_staged_v1().is_err()
             || self.filings.contains_key(&claim)
             || self.filings.len() >= PALW_TIR_PUBLIC_FILER_PENDING_V1
@@ -246,10 +251,17 @@ impl PalwTirPublicFilerBookV1 {
             palw_backend::PalwTirPublicConeFaultV2 as Fault, palw_native_resource_v1::reserve_native_requests_v1,
             palw_routed_material_v2::PalwMaterialConstructionRequestsV2,
         };
-        if self.loading{return Err(Fault::Unavailable("journal loading is pending".into()));}
+        if self.loading {
+            return Err(Fault::Unavailable("journal loading is pending".into()));
+        }
         if cfg!(not(target_pointer_width = "64")) {
-            return Err(Fault::LocalResource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                "owned TIR pending membership", "pinned BTree allocation layout only covers 64-bit targets").to_string()));
+            return Err(Fault::LocalResource(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                    "owned TIR pending membership",
+                    "pinned BTree allocation layout only covers 64-bit targets",
+                )
+                .to_string(),
+            ));
         }
         if self.filings.contains_key(&claim) {
             return Ok(false);
@@ -265,10 +277,11 @@ impl PalwTirPublicFilerBookV1 {
             .checked_add(self.owned_filings.len() + 1)
             .ok_or_else(|| Fault::LocalResource("TIR finding membership overflow".into()))?;
         q.vec_v1::<Slot>(slots as u64).map_err(|e| Fault::LocalResource(e.to_string()))?;
-        q.vec_v1::<(Hash64,std::sync::Arc<ReloadPayloadV2>)>(self.loaded_filings.capacity() as u64).map_err(|e|Fault::LocalResource(e.to_string()))?;
-        if !self.loaded_filings.is_empty(){
-            q.vec_v1::<ReloadPayloadV2>(1).map_err(|e|Fault::LocalResource(e.to_string()))?;
-            q.vec_v1::<usize>(3).map_err(|e|Fault::LocalResource(e.to_string()))?;
+        q.vec_v1::<(Hash64, std::sync::Arc<ReloadPayloadV2>)>(self.loaded_filings.capacity() as u64)
+            .map_err(|e| Fault::LocalResource(e.to_string()))?;
+        if !self.loaded_filings.is_empty() {
+            q.vec_v1::<ReloadPayloadV2>(1).map_err(|e| Fault::LocalResource(e.to_string()))?;
+            q.vec_v1::<usize>(3).map_err(|e| Fault::LocalResource(e.to_string()))?;
         }
         // Pinned typed BTree envelope: old table plus at most one full node per
         // new entry, including split/root growth. No codec-byte multiplier.
@@ -303,7 +316,7 @@ impl PalwTirPublicFilerBookV1 {
         self.owned_filings.push((claim, hold));
         // The new full-table lease already covers old/new allocations. Replace
         // the previous ticket only after all infallible insertions complete.
-        self.owned_membership=Some((native,host));
+        self.owned_membership = Some((native, host));
         self.dirty = true;
         self.persist();
         Ok(true)
@@ -329,8 +342,8 @@ impl PalwTirPublicFilerBookV1 {
 
     pub(super) fn drop_v1(&mut self, claim: &Hash64, why: &str) {
         if self.filings.remove(claim).is_some() {
-            self.owned_filings.retain(|(key,_)|key!=claim);
-            self.loaded_filings.retain(|(key,_)|key!=claim);
+            self.owned_filings.retain(|(key, _)| key != claim);
+            self.loaded_filings.retain(|(key, _)| key != claim);
             self.dirty = true;
             debug!("[{PALW_PANEL}] TIR frame {claim}: public filing dropped: {why}");
         }

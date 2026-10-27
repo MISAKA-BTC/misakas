@@ -19,8 +19,11 @@ fn prefix_config(k: usize, at: u64) -> (Config, PalwConsensusParamsV2, Premine, 
     let (config, _, premine, floats) = cert_panel_one_config();
     let mut params = config.params.clone();
     palw_t12_arm_after_int13_at_v1(&mut params, &PALW_T12_G14_17000_FENCES_V1[..k], Some(at));
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode else { unreachable!() };
-    let mirror = PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*b.state.rfc0018_v1().expect("Gate C mirrored") };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode else {
+        unreachable!()
+    };
+    let mirror =
+        PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*b.state.rfc0018_v1().expect("Gate C mirrored") };
     b.state = b
         .state
         .clone()
@@ -34,8 +37,16 @@ fn prefix_config(k: usize, at: u64) -> (Config, PalwConsensusParamsV2, Premine, 
 async fn probe_claim(parts: (Config, PalwConsensusParamsV2, Premine, Premine)) -> Result<(), String> {
     let mut w = World::on(Net::over_cfg(parts, TestConsensus::new)).await;
     let tok = kernel_tokenizer_v1(&tiny_tokenizer_json(), None).unwrap();
-    let job = kernel_job_from_text_v1(&tok.tokenizer, "hi a", Hash64::from_bytes(w.class), 64, MAX_POSITIONS, 3, Hash64::from_bytes([0x71u8; 64]))
-        .map_err(|e| format!("job: {e:?}"))?;
+    let job = kernel_job_from_text_v1(
+        &tok.tokenizer,
+        "hi a",
+        Hash64::from_bytes(w.class),
+        64,
+        MAX_POSITIONS,
+        3,
+        Hash64::from_bytes([0x71u8; 64]),
+    )
+    .map_err(|e| format!("job: {e:?}"))?;
     let o = w.net.route(1, &K::PostJob { job: job.clone() });
     w.net.send(vec![(1, o)]).await;
     if !w.net.ledger().jobs.contains_key(&job.id()) {
@@ -53,7 +64,10 @@ async fn probe_claim(parts: (Config, PalwConsensusParamsV2, Premine, Premine)) -
     let after_seal = w.net.ledger();
     let sealed = after_seal.seals.contains_key(&(job.id(), kid));
     let mut replay = KernelLedgerV1::clone(&after_seal);
-    let replayed = replay.apply_object(&reveal, &misaka_palw_kernel::route::AuthV1 { signer_bond: kid }).map(|_| ()).map_err(|e| format!("{e:?}"));
+    let replayed = replay
+        .apply_object(&reveal, &misaka_palw_kernel::route::AuthV1 { signer_bond: kid })
+        .map(|_| ())
+        .map_err(|e| format!("{e:?}"));
     let o = w.net.route(producer, &reveal);
     w.net.send(vec![(producer, o)]).await;
     if w.net.ledger().claims.contains_key(&produced.claim.id()) {
@@ -74,7 +88,9 @@ async fn probe_claim(parts: (Config, PalwConsensusParamsV2, Premine, Premine)) -
 async fn vfuzz_claim_commit_bisect_the_17400_list() {
     kaspa_core::log::try_init_logger("error");
     let n = PALW_T12_G14_17000_FENCES_V1.len();
-    let run = |k: usize, at: u64| async move { AssertUnwindSafe(probe_claim(prefix_config(k, at))).catch_unwind().await.map_err(panic_text) };
+    let run = |k: usize, at: u64| async move {
+        AssertUnwindSafe(probe_claim(prefix_config(k, at))).catch_unwind().await.map_err(panic_text)
+    };
     eprintln!("VFUZZ-BISECT prefix=0/{n} -> {:?}", run(0, 0).await);
     eprintln!("VFUZZ-BISECT prefix={n}/{n} -> {:?}", run(n, 0).await);
     let (mut lo, mut hi) = (0usize, n);

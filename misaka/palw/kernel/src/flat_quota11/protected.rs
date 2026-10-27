@@ -671,8 +671,11 @@ impl QuotaStateV11 {
             };
             let block = block_old.consume(&spent, &policy.block)?;
             let network = self.network.consume(&spent, &policy.network)?;
-            let actor =
-                self.actors.get(&seal.key.seal_actor).ok_or("lapsed seal owner aggregate is absent")?.consume(&spent, &policy.actor)?;
+            let actor = self
+                .actors
+                .get(&seal.key.seal_actor)
+                .ok_or("lapsed seal owner aggregate is absent")?
+                .consume(&spent, &policy.actor)?;
             self.block = block;
             self.network = network;
             self.actors.insert(seal.key.seal_actor, actor);

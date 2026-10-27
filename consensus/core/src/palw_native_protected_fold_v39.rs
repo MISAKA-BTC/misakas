@@ -159,7 +159,12 @@ fn consume(
     n.consumed.checked_add(&n.reserved).map_err(bad)?.within(cap).map_err(bad)?;
     Ok(n)
 }
-fn put_rows(builder: &mut TransitionBuilder<'_>, g: &QuotaGlobalRowV11, a: &QuotaActorRowV11, s: &QuotaSubjectSummaryV11) -> Result<(), PalwStateV2Error> {
+fn put_rows(
+    builder: &mut TransitionBuilder<'_>,
+    g: &QuotaGlobalRowV11,
+    a: &QuotaActorRowV11,
+    s: &QuotaSubjectSummaryV11,
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(QUOTA, vec![0], Some(b(&(g.root(), g))))?;
     builder.write_kernel_row(QUOTA, b(&(1u8, a.actor)), Some(b(&(a.root(), a))))?;
     builder.write_kernel_row(QUOTA, b(&(2u8, s.binding.job_id)), Some(b(&(s.row_root(), s))))?;
@@ -241,8 +246,12 @@ fn admit(
     let temporal = &max.record().temporal;
     // RFC08 08-B: past a held Final the opportunity runs to the liability horizon (the deadline below it).
     let horizon = super::accusation_horizon_v39(builder, &h);
-    let latest = if h.terminal == NativeJobTerminalV39::Final { horizon.checked_sub(temporal.acquisition) } else { claim.challenge_end.checked_sub(temporal.acquisition) }
-        .ok_or_else(|| bad("native39 full opportunity cutoff absent"))?;
+    let latest = if h.terminal == NativeJobTerminalV39::Final {
+        horizon.checked_sub(temporal.acquisition)
+    } else {
+        claim.challenge_end.checked_sub(temporal.acquisition)
+    }
+    .ok_or_else(|| bad("native39 full opportunity cutoff absent"))?;
     let until = ctx
         .daa_score
         .checked_add(temporal.acquisition)

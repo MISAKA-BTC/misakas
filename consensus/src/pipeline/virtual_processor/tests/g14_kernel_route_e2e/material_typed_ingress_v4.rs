@@ -4,12 +4,12 @@ use super::*;
 mod pruning;
 #[path = "material_typed_reorg_v4.rs"]
 mod reorg;
-#[path = "material_typed_terminal_v4.rs"]
-mod terminal;
-#[path = "material_typed_source_manifest_v4.rs"]
-mod source_manifest;
 #[path = "signed_provider_challenge_v4.rs"]
 mod signed_provider;
+#[path = "material_typed_source_manifest_v4.rs"]
+mod source_manifest;
+#[path = "material_typed_terminal_v4.rs"]
+mod terminal;
 use kaspa_consensus_core::{
     api::ConsensusApi,
     palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4,
@@ -321,7 +321,10 @@ async fn typed_writer_child() {
     let diagnostic_replay = observed.apply_object(&reveal, &misaka_palw_kernel::ledger::AuthV1 { signer_bond: w.net.kid(0) });
     eprintln!("TYPED_INGRESS_V4 observed_ledger_replay={:?}", diagnostic_replay.as_ref().map(|events| events.len()));
     drop(observed);
-    let committing = match paid { Some((class, job)) => signed_provider::paid_commit(&w, class, job, commit, *salt, admission.consent), None => reveal.clone() };
+    let committing = match paid {
+        Some((class, job)) => signed_provider::paid_commit(&w, class, job, commit, *salt, admission.consent),
+        None => reveal.clone(),
+    };
     let object = w.net.route(0, &committing);
     let folded = w.net.send(vec![(0, object)]).await;
     let native: &dyn ConsensusApi = w.net.chain.ctx.consensus.as_ref();

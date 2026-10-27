@@ -24,8 +24,8 @@ use common::ledger_world::*;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::KernelClaimV1;
 use misaka_palw_kernel::ledger::{
-    AuthV1, KernelLedgerV1, KernelRouteObjectV1 as O, LedgerEventV1 as E, LedgerTxV1, OutsiderFindingV1, OutsiderV1,
-    ProsecutionV1, RefusalKindV1,
+    AuthV1, KernelLedgerV1, KernelRouteObjectV1 as O, LedgerEventV1 as E, LedgerTxV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1,
+    RefusalKindV1,
 };
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
 use misaka_palw_kernel::settle::SettlementKindV1 as K;
@@ -128,7 +128,12 @@ fn state_of(n: &Net, id: &Digest) -> ClaimStateV1 {
 }
 
 /// A lying claim committed and covered by a colluding Panel, its DA fully published.
-fn lying_covered(n: &mut Net, daa_post: u64, daa_commit: u64, nonce: u8) -> (Digest, (u32, u16, u16), Da, misaka_palw_kernel::trace::TraceV1) {
+fn lying_covered(
+    n: &mut Net,
+    daa_post: u64,
+    daa_commit: u64,
+    nonce: u8,
+) -> (Digest, (u32, u16, u16), Da, misaka_palw_kernel::trace::TraceV1) {
     let job = n.post_job(daa_post, &[3, 17, 9], 3, nonce);
     let (at, lie) = n.w.lying(&job, 3);
     let (id, da, trace) = (lie.claim.id(), Da::publishing(&lie.trace, &[]), lie.trace.clone());
@@ -318,7 +323,9 @@ fn a_single_lie_at_any_node_of_position_one_is_refused_at_inclusion_or_convicted
                     assert_eq!(convicted2(&ev), Some((1000, 500, false)), "({s},{nd}): {ev:?}");
                     *stats.entry("convicted".into()).or_insert(0) += 1;
                 }
-                OutsiderFindingV1::Clean => panic!("a lie at ({s},{nd}) of position 1 was committed and found CLEAN by a fresh outsider"),
+                OutsiderFindingV1::Clean => {
+                    panic!("a lie at ({s},{nd}) of position 1 was committed and found CLEAN by a fresh outsider")
+                }
                 OutsiderFindingV1::Demand(d) => panic!("({s},{nd}): all material was public yet the outsider demands {d:?}"),
             }
         }
@@ -355,7 +362,14 @@ fn garbage_borrowed_and_substituted_traces_are_all_refused_or_convicted() {
     let j2 = n.post_job(13, &[4, 18, 10], 3, 2);
     let h1 = n.w.honest(&j1, 3);
     let T::CommitClaim { claim, evidence, commitments } = h1.tx.clone() else { unreachable!() };
-    let ev = n.blk(14, vec![T::CommitClaim { claim: KernelClaimV1 { job_id: j2.id(), ..claim.clone() }, evidence: evidence.clone(), commitments: commitments.clone() }]);
+    let ev = n.blk(
+        14,
+        vec![T::CommitClaim {
+            claim: KernelClaimV1 { job_id: j2.id(), ..claim.clone() },
+            evidence: evidence.clone(),
+            commitments: commitments.clone(),
+        }],
+    );
     assert_eq!(refused(&ev).as_deref(), Some("binding fault WrongInput"), "{ev:?}");
 
     // Input substitution: the trace of a DIFFERENT prompt under this job's id (re-rooting the evidence honestly).
@@ -466,7 +480,8 @@ fn court_pre_emption_and_simultaneous_challengers_convict_once_and_pay_once() {
     let mut n = Net::new();
     let (id, _, da, _) = lying_covered(&mut n, 2, 10, 1);
     let proof = proof_of(outsider2(&n.w, id, &da));
-    let demands: Vec<T> = (0..5).map(|p| T::FileDemand { demander: if p % 2 == 0 { SPAM1 } else { SPAM2 }, claim: id, stage: 0, position: p }).collect();
+    let demands: Vec<T> =
+        (0..5).map(|p| T::FileDemand { demander: if p % 2 == 0 { SPAM1 } else { SPAM2 }, claim: id, stage: 0, position: p }).collect();
     n.blk(11, demands);
     assert_eq!(n.w.l.demands.len(), 5);
     let c = n.book.coll[&OUTSIDER];
@@ -846,7 +861,12 @@ fn observation_a_copyist_answers_its_own_identical_prompt_job_with_a_published_t
     // The copyist's own job: same prompt, other nonce.
     let job2 = n.post_job(11, &[3, 17, 9], 3, 2);
     let evidence2 = misaka_palw_kernel::evidence::VerificationEvidenceV1 { ..evidence.clone() };
-    let copy = KernelClaimV1 { job_id: job2.id(), producer_bond: [0xC9; 64], generated: claim.generated.clone(), evidence_root: evidence2.root() };
+    let copy = KernelClaimV1 {
+        job_id: job2.id(),
+        producer_bond: [0xC9; 64],
+        generated: claim.generated.clone(),
+        evidence_root: evidence2.root(),
+    };
     let cid = copy.id();
     let ev = n.blk(12, vec![T::CommitClaim { claim: copy, evidence: evidence2, commitments }, T::PanelCovered { claim: cid }]);
     let accepted = ev.contains(&E::ClaimCommitted { claim: cid });
@@ -921,7 +941,10 @@ fn observation_the_panel_s_coverage_order_not_the_commit_order_decides_the_holde
     assert!(refused(&ev).is_some_and(|w| w.contains("one claim per job")), "{ev:?}");
     n.blk_raw(80, vec![]);
     n.blk_raw(200, vec![]);
-    assert!(n.w.l.claims[&copy.id()].rewarded && !n.w.l.claims[&claim.id()].rewarded, "R-C4-12: the later copy was paid, the original was not");
+    assert!(
+        n.w.l.claims[&copy.id()].rewarded && !n.w.l.claims[&claim.id()].rewarded,
+        "R-C4-12: the later copy was paid, the original was not"
+    );
     assert!(matches!(state_of(&n, &claim.id()), ClaimStateV1::TimedOut { .. } | ClaimStateV1::Checking { .. }));
     assert_eq!(n.w.l.bonds[&PRODUCER].reserved, 0, "the loser's collateral is returned at the timeout");
 }
@@ -984,7 +1007,8 @@ fn seal_re_seal_expiry_exit_and_signer_edges() {
     l.begin_block(l.daa + 1).unwrap();
     let r = l.apply_encoded(&O::SealClaim { producer: SPAM1, job: job.id(), seal: [1; 64] }.encode(), &AuthV1 { signer_bond: SPAM2 });
     assert_eq!(r.unwrap_err().kind, RefusalKindV1::Unauthorized);
-    let r = l.apply_encoded(&O::SealClaim { producer: SPAM1, job: [0x44; 64], seal: [1; 64] }.encode(), &AuthV1 { signer_bond: SPAM1 });
+    let r =
+        l.apply_encoded(&O::SealClaim { producer: SPAM1, job: [0x44; 64], seal: [1; 64] }.encode(), &AuthV1 { signer_bond: SPAM1 });
     assert!(r.unwrap_err().why.contains("no such job"));
     let mut n2 = Net::new();
     let job2 = n2.post_job(4, &[3, 17, 9], 3, 1);
@@ -993,7 +1017,10 @@ fn seal_re_seal_expiry_exit_and_signer_edges() {
     n2.blk_raw(10, vec![seal_obj(PRODUCER, &job2, &cc)]);
     n2.blk_raw(11, vec![T::RequestExit { bond: PRODUCER }]);
     let ev = n2.blk_raw(12, vec![hh.tx.clone()]);
-    assert!(refused(&ev).is_some_and(|w| w.contains("exiting")), "a seal made before the exit request cannot be revealed after it: {ev:?}");
+    assert!(
+        refused(&ev).is_some_and(|w| w.contains("exiting")),
+        "a seal made before the exit request cannot be revealed after it: {ev:?}"
+    );
     let ev = n2.blk_raw(13, vec![seal_obj(PRODUCER, &job2, &cc)]);
     assert!(refused(&ev).is_some_and(|w| w.contains("exiting")), "an exiting bond seals nothing: {ev:?}");
 
@@ -1021,7 +1048,10 @@ fn seal_re_seal_expiry_exit_and_signer_edges() {
     let T::CommitClaim { claim: c3, .. } = h3.tx.clone() else { unreachable!() };
     n3.blk_raw(200, vec![seal_obj(PRODUCER, &job3, &c3)]);
     let ev = n3.blk_raw(301, vec![h3.tx]);
-    eprintln!("O-C4-13 lazy expiry: a seal of age 101 > ttl 100 revealed in the block that sweeps it: committed={}", ev.contains(&E::ClaimCommitted { claim: c3.id() }));
+    eprintln!(
+        "O-C4-13 lazy expiry: a seal of age 101 > ttl 100 revealed in the block that sweeps it: committed={}",
+        ev.contains(&E::ClaimCommitted { claim: c3.id() })
+    );
 }
 
 /// EXPECTED (before running): the cheap check should come first. An UNSEALED but structurally valid `CommitClaim` is refused at the
@@ -1059,7 +1089,8 @@ fn a_conviction_never_instructs_more_than_the_synced_collateral() {
         let mut l = n.w.l.clone();
         fold_collecting(&mut l, &b)
     };
-    let max_slash = ev.iter().filter_map(|e| if let E::Settlement(s) = e { (s.kind == K::SlashFraud).then_some(s.amount) } else { None }).max();
+    let max_slash =
+        ev.iter().filter_map(|e| if let E::Settlement(s) = e { (s.kind == K::SlashFraud).then_some(s.amount) } else { None }).max();
     assert_eq!(max_slash, Some(500), "SlashFraud clamps to the synced collateral");
     assert!(ev.iter().any(|e| matches!(e, E::Settlement(s) if s.kind == K::ReleaseClaim && s.amount == 500)), "the rest is released");
     // The same through the accountant (it refuses an instruction a real bond could not execute and checks conservation).
@@ -1110,7 +1141,8 @@ fn observation_class_and_job_registration_are_free_at_the_ledger_level() {
     let d = misaka_palw_kernel::descriptor::k2_tir_v1_descriptor();
     let mut accepted = 0;
     for max_positions in 8..40u32 {
-        let plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &n.w.program, common::root_of(&n.w.program), max_positions).unwrap();
+        let plan =
+            misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &n.w.program, common::root_of(&n.w.program), max_positions).unwrap();
         let t = T::RegisterClass { descriptor: d.digest(), program_bytes: n.w.program.encode(), plan, params: n.w.params.clone() };
         let ev = n.blk(2 + max_positions as u64, vec![T::RegisterBond { bond: [0xDD; 64], collateral: 0 }, t]);
         if ev.iter().any(|e| matches!(e, E::ClassRegistered { .. })) {
@@ -1135,7 +1167,16 @@ fn route_samples(n: &mut Net) -> Vec<(&'static str, O, Digest)> {
     let proof = proof_of(outsider2(&n.w, id, &da));
     let T::RegisterClass { descriptor, program_bytes, plan, params } = n.w.register() else { unreachable!() };
     vec![
-        ("RegisterClass", O::RegisterClass { descriptor, program_bytes, plan, param_commitments: misaka_palw_kernel::trace::ParamCommitmentsV1::of(&params) }, PRODUCER),
+        (
+            "RegisterClass",
+            O::RegisterClass {
+                descriptor,
+                program_bytes,
+                plan,
+                param_commitments: misaka_palw_kernel::trace::ParamCommitmentsV1::of(&params),
+            },
+            PRODUCER,
+        ),
         ("PostJob", O::PostJob { job: n.w.l.jobs.values().next().cloned().unwrap() }, PRODUCER),
         ("CommitClaim", O::CommitClaim { claim, evidence, commitments }, PRODUCER),
         ("FileProof", O::FileProof { accuser: OUTSIDER, claim: id, proof }, OUTSIDER),
@@ -1156,7 +1197,15 @@ fn an_object_signed_by_anyone_but_the_actor_it_names_is_unauthorized_and_changes
     let samples = route_samples(&mut n);
     let others = [PRODUCER, OUTSIDER, SPAM1, SPAM2, [0x77; 64]];
     for (name, obj, signer) in &samples {
-        let named = matches!(obj, O::CommitClaim { .. } | O::FileProof { .. } | O::FileDemand { .. } | O::RequestExit { .. } | O::Withdraw { .. } | O::SealClaim { .. });
+        let named = matches!(
+            obj,
+            O::CommitClaim { .. }
+                | O::FileProof { .. }
+                | O::FileDemand { .. }
+                | O::RequestExit { .. }
+                | O::Withdraw { .. }
+                | O::SealClaim { .. }
+        );
         for other in others.iter().filter(|o| *o != signer) {
             let mut l = n.w.l.clone();
             l.begin_block(l.daa + 1).unwrap();

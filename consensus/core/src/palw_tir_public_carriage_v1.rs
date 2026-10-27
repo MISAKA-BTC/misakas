@@ -163,7 +163,9 @@ impl PalwTirPublicWitnessRowV1 {
             || self.received.is_empty()
             || self.received.len() as u64 >= self.total_bytes
         {
-            return Err("TIR staged witness row changes its key or is empty/complete (a complete witness is adjudicated, never kept)".into());
+            return Err(
+                "TIR staged witness row changes its key or is empty/complete (a complete witness is adjudicated, never kept)".into()
+            );
         }
         Ok(())
     }

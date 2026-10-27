@@ -318,7 +318,9 @@ pub(super) fn collect(
         &builder.state,
         crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
         &id,
-    ).is_some() {
+    )
+    .is_some()
+    {
         return Err(bad("native39 collection cannot erase a job with an unpaid held fee"));
     }
     let h = header(r, id)?;

@@ -251,7 +251,6 @@ fn f4_f5_answerability_is_the_classs_compute_turn() {
     assert_eq!(held.iter().filter(|(_, _, why)| why.is_none()).count(), 1, "the 8k row, answerable");
 }
 
-
 /// The new route does not reinterpret old profiles or remove the cost/context bounds.
 /// This test alone is not node/P2P qualification or activation approval.
 #[test]
@@ -303,10 +302,14 @@ fn memory_routing_registration_keeps_canonical_job_check_after_held_gate() {
     let (p, d) = palw_attempt_canonical_v1(&profile, false).unwrap();
     let canonical = rc_job_context(&profile, p, d);
     let form = PalwPromptIdsFormV1::MerkleV1;
-    assert!(matches!(palw_registration_attribution_v2(&profile, &canonical, true, form, false),
-        Err(PalwRegistrationAttributionErrorV1::Held(_))));
+    assert!(matches!(
+        palw_registration_attribution_v2(&profile, &canonical, true, form, false),
+        Err(PalwRegistrationAttributionErrorV1::Held(_))
+    ));
     assert_eq!(palw_registration_attribution_v2(&profile, &canonical, true, form, true), Ok(()));
     let wrong = rc_job_context(&profile, p + 1, d);
-    assert!(matches!(palw_registration_attribution_v2(&profile, &wrong, true, form, true),
-        Err(PalwRegistrationAttributionErrorV1::Class(PalwAttributableClassErrorV1::CanonicalNotTheFormula { .. }))));
+    assert!(matches!(
+        palw_registration_attribution_v2(&profile, &wrong, true, form, true),
+        Err(PalwRegistrationAttributionErrorV1::Class(PalwAttributableClassErrorV1::CanonicalNotTheFormula { .. }))
+    ));
 }

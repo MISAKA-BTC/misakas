@@ -1461,7 +1461,10 @@ mod g14_lane_closure_tests {
         assert_eq!((s.producer_credit, s.requester_credit, s.actual_slash, s.finder_credit), (0, 100, 1_000, 490));
         assert!(b.convict_after_final(400, 400, [0x51; 64], 1_000, finder_operator).is_err(), "once");
         assert!(final_book().convict_after_final(401, 400, [0x51; 64], 1_000, finder_operator).is_err(), "past the horizon");
-        assert!(final_book().convict_after_final(300, 400, [0x51; 64], 1_000, [0x17; 64]).is_err(), "the producer's operator is no finder");
+        assert!(
+            final_book().convict_after_final(300, 400, [0x51; 64], 1_000, [0x17; 64]).is_err(),
+            "the producer's operator is no finder"
+        );
         assert!(challengeable(1_000, 490).convict_after_final(40, 400, [0x51; 64], 1_000, finder_operator).is_err(), "not a Final");
     }
 }

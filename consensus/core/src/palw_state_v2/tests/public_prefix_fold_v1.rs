@@ -409,7 +409,9 @@ fn targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound
     for n in 1..=65 {
         let mut contract = builder.state.staged_claim_contract_v1(&claim).unwrap().clone();
         contract.terms.bond_exit_after_daa = deadline;
-        builder.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(h64(10_000 + n)), Some(PalwStagedCourtRowV1::Claim(contract))).unwrap();
+        builder
+            .write_staged_row_v1(PalwStagedCourtKeyV1::Claim(h64(10_000 + n)), Some(PalwStagedCourtRowV1::Claim(contract)))
+            .unwrap();
     }
     palw_staged_court_fold_v1::sweep(&mut builder, &ctx(3, deadline + 1, deadline + 1)).unwrap();
     assert!(builder.state.consumed_offences.is_empty(), "maintenance deliberately has not reached the target");
@@ -1101,10 +1103,12 @@ fn public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal
             action: Action::PrefixPublicDemand(demand),
             signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
-        builder.write_staged_row_v1(
-            PalwStagedCourtKeyV1::Owner(claim, owner),
-            Some(PalwStagedCourtRowV1::PublicPrefix(Box::new(row).into())),
-        ).unwrap();
+        builder
+            .write_staged_row_v1(
+                PalwStagedCourtKeyV1::Owner(claim, owner),
+                Some(PalwStagedCourtRowV1::PublicPrefix(Box::new(row).into())),
+            )
+            .unwrap();
         palw_staged_court_fold_v1::movement(&mut builder, &ctx(2, 101, 101), &movement).unwrap();
     }
     let indexed = builder.state.staged_prefix_responders.clone();
@@ -1227,10 +1231,12 @@ fn flat_response_index_pages_literal_phase_deadlines_and_roundtrips_seed_journal
             opened: vec![],
         };
         row.check_v1().unwrap();
-        builder.write_staged_row_v1(
-            PalwStagedCourtKeyV1::Owner(claim, owner),
-            Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(row).into())),
-        ).unwrap();
+        builder
+            .write_staged_row_v1(
+                PalwStagedCourtKeyV1::Owner(claim, owner),
+                Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(row).into())),
+            )
+            .unwrap();
     }
     let indexed = builder.state.staged_flat_responders.clone();
     assert_eq!(indexed.len(), 130);

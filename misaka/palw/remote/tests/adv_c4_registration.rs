@@ -69,7 +69,12 @@ fn unsigned_object(root: Hash64) -> (PalwConsensusObjectV2, Hash64) {
             initial_target: 1u128 << 100,
             share_permille: 10,
             activation_daa: 0,
-            admission: Some(Box::new(PalwClassAdmissionCarriageV2 { profile, canonical, registrant_bond: PalwBondKeyV2(bond_outpoint()), signature: Vec::new() })),
+            admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+                profile,
+                canonical,
+                registrant_bond: PalwBondKeyV2(bond_outpoint()),
+                signature: Vec::new(),
+            })),
         },
         class_id,
     )
@@ -116,7 +121,8 @@ fn fixture() -> Fx {
     let root = h(0x77);
     let (object, class_id) = unsigned_object(root);
     let payer_spk = funding_spk_of_pubkey_v1(&payer.public_key());
-    let quote = quote_registration_v1(facts_for(&object, class_id, root, &owner.public_key(), 200_000), 600, 300_000).expect("the quote holds");
+    let quote = quote_registration_v1(facts_for(&object, class_id, root, &owner.public_key(), 200_000), 600, 300_000)
+        .expect("the quote holds");
     let bundle = build_bundle_v1(BundleInputsV1 {
         network: NET.into(),
         network_domain: h(0x11),
@@ -273,8 +279,17 @@ fn a_relay_that_edits_any_field_or_any_carrier_byte_of_a_signed_registration_cha
     .into_iter()
     .collect();
     let unexpected: Vec<_> = accepted_fields.iter().filter(|f| !allowed.contains(f.as_str())).collect();
-    eprintln!("accepted display-only fields (see F-C4-12): {:?}", accepted_fields.iter().filter(|f| ["/class_id", "/artifact_root", "/owner_bond", "/object_digest"].contains(&f.as_str())).collect::<Vec<_>>());
-    assert!(unexpected.is_empty(), "edits accepted without changing the verified carrier, outside the documented unsigned set: {unexpected:?}");
+    eprintln!(
+        "accepted display-only fields (see F-C4-12): {:?}",
+        accepted_fields
+            .iter()
+            .filter(|f| ["/class_id", "/artifact_root", "/owner_bond", "/object_digest"].contains(&f.as_str()))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        unexpected.is_empty(),
+        "edits accepted without changing the verified carrier, outside the documented unsigned set: {unexpected:?}"
+    );
     assert!(silent.is_empty(), "carrier byte flips that verify as a different carrier: {silent:?}");
 }
 
@@ -306,19 +321,93 @@ fn observation_the_signer_signs_whatever_object_fields_the_builder_chose_beyond_
             Err(_) => {}
         }
     }
-    eprintln!("unsigned bundle: {tried} edits; signed an IDENTICAL carrier: {signed_same}; signed a DIFFERENT carrier via edits of: {signed_other:?}");
+    eprintln!(
+        "unsigned bundle: {tried} edits; signed an IDENTICAL carrier: {signed_same}; signed a DIFFERENT carrier via edits of: {signed_other:?}"
+    );
     // A targeted look at the signed object's fields: mutate the object itself (re-hex it, re-derive digest/message/quote so every
     // self-consistency check passes) and see which fields the signer will sign.
     let obj_hex = fx.bundle.object_hex.clone();
     let raw: Vec<u8> = (0..obj_hex.len() / 2).map(|i| u8::from_str_radix(&obj_hex[2 * i..2 * i + 2], 16).unwrap()).collect();
     let obj: PalwConsensusObjectV2 = borsh::from_slice(&raw).unwrap();
-    let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target, share_permille, activation_daa, admission } = obj.clone() else { unreachable!() };
+    let PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule,
+        initial_target,
+        share_permille,
+        activation_daa,
+        admission,
+    } = obj.clone()
+    else {
+        unreachable!()
+    };
     let variants: Vec<(&str, PalwConsensusObjectV2)> = vec![
-        ("activation_daa", PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule: pwu_rule.clone(), initial_target, share_permille, activation_daa: 3_999, admission: admission.clone() }),
-        ("share_permille", PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule: pwu_rule.clone(), initial_target, share_permille: 1000, activation_daa, admission: admission.clone() }),
-        ("slash_value_per_pwu", PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu: 0, pwu_rule: pwu_rule.clone(), initial_target, share_permille, activation_daa, admission: admission.clone() }),
-        ("initial_target", PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule: pwu_rule.clone(), initial_target: 1, share_permille, activation_daa, admission: admission.clone() }),
-        ("pwu_rule", PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1), initial_target, share_permille, activation_daa, admission: admission.clone() }),
+        (
+            "activation_daa",
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id,
+                artifact_root,
+                slash_value_per_pwu,
+                pwu_rule: pwu_rule.clone(),
+                initial_target,
+                share_permille,
+                activation_daa: 3_999,
+                admission: admission.clone(),
+            },
+        ),
+        (
+            "share_permille",
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id,
+                artifact_root,
+                slash_value_per_pwu,
+                pwu_rule: pwu_rule.clone(),
+                initial_target,
+                share_permille: 1000,
+                activation_daa,
+                admission: admission.clone(),
+            },
+        ),
+        (
+            "slash_value_per_pwu",
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id,
+                artifact_root,
+                slash_value_per_pwu: 0,
+                pwu_rule: pwu_rule.clone(),
+                initial_target,
+                share_permille,
+                activation_daa,
+                admission: admission.clone(),
+            },
+        ),
+        (
+            "initial_target",
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id,
+                artifact_root,
+                slash_value_per_pwu,
+                pwu_rule: pwu_rule.clone(),
+                initial_target: 1,
+                share_permille,
+                activation_daa,
+                admission: admission.clone(),
+            },
+        ),
+        (
+            "pwu_rule",
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id,
+                artifact_root,
+                slash_value_per_pwu,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1),
+                initial_target,
+                share_permille,
+                activation_daa,
+                admission: admission.clone(),
+            },
+        ),
     ];
     let mut signable = Vec::new();
     for (what, o) in variants {
@@ -417,7 +506,10 @@ fn quote_agreement_stops_on_any_identity_difference_and_merges_the_rest_to_the_w
         ("bond known", Box::new(|f| f.bond.known = !f.bond.known)),
         ("bond key", Box::new(|f| f.bond.key_matches = !f.bond.key_matches)),
         ("bond retiring", Box::new(|f| f.bond.retiring = !f.bond.retiring)),
-        ("filings", Box::new(|f| f.filings.push(misaka_palw_remote::register::FilingV1 { what: "x".into(), sompi: 1, from_wallet: true }))),
+        (
+            "filings",
+            Box::new(|f| f.filings.push(misaka_palw_remote::register::FilingV1 { what: "x".into(), sompi: 1, from_wallet: true })),
+        ),
     ];
     for (what, d) in diffs {
         let mut f = base.clone();

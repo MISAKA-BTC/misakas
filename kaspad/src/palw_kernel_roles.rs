@@ -40,7 +40,9 @@ use kaspa_consensus_core::palw_kernel_route_v1::{
 use misaka_palw_kernel::evidence::build_evidence_v1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::{DecodeFaultV1, DecodeRuleV1, KernelClaimV1, KernelJobV1};
-use misaka_palw_kernel::ledger::{ClaimBodyV1, KernelLedgerV1, ProsecutionV1, SaltedCommitV1, claim_seal_v1, claim_seal_v2, proof_seal_v1};
+use misaka_palw_kernel::ledger::{
+    ClaimBodyV1, KernelLedgerV1, ProsecutionV1, SaltedCommitV1, claim_seal_v1, claim_seal_v2, proof_seal_v1,
+};
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
 use misaka_palw_kernel::public::{MaterialResponseV1, PositionResponseV1, TensorWireV1};
 use misaka_palw_kernel::route::KernelRouteObjectV1 as K;
@@ -117,8 +119,10 @@ impl PalwKernelRolesConfigV1 {
 /// Parse `--palw-kernel-post-job=<tok,tok,..>:<max_new>`.
 pub fn palw_kernel_post_job_parse_v1(s: &str) -> Result<(Vec<u32>, u32), String> {
     let (prompt, n) = s.rsplit_once(':').ok_or("expected <tok,tok,..>:<max_new_tokens>")?;
-    let prompt: Vec<u32> =
-        prompt.split(',').map(|t| t.trim().parse::<u32>().map_err(|e| format!("prompt token {t:?}: {e}"))).collect::<Result<_, _>>()?;
+    let prompt: Vec<u32> = prompt
+        .split(',')
+        .map(|t| t.trim().parse::<u32>().map_err(|e| format!("prompt token {t:?}: {e}")))
+        .collect::<Result<_, _>>()?;
     let n: u32 = n.trim().parse().map_err(|e| format!("max_new_tokens {n:?}: {e}"))?;
     if prompt.is_empty() || n == 0 {
         return Err("a job needs a non-empty prompt and max_new_tokens >= 1".into());
@@ -261,7 +265,11 @@ pub(crate) fn palw_kernel_position_bytes_v1(
 }
 
 /// **A wrong challenge** (drill): accuse the claim's first decoded token with its TRUE logits from this node's own replay.
-pub(crate) fn palw_kernel_wrong_challenge_v1(ledger: &KernelLedgerV1, claim: &Digest, model: &MapParams) -> Result<ProsecutionV1, String> {
+pub(crate) fn palw_kernel_wrong_challenge_v1(
+    ledger: &KernelLedgerV1,
+    claim: &Digest,
+    model: &MapParams,
+) -> Result<ProsecutionV1, String> {
     let row = ledger.claims.get(claim).ok_or("no such claim")?;
     let ClaimBodyV1::Program { claim: c, .. } = &row.body else { return Err("not a single-program claim".into()) };
     let job = ledger.jobs.get(&row.job_id).ok_or("the claim's job is gone")?;
@@ -280,7 +288,12 @@ pub(crate) fn palw_kernel_wrong_challenge_v1(ledger: &KernelLedgerV1, claim: &Di
 
 /// **The Gate C duties of bond `me`**: kernel claims whose `'K'` row is drawn, undecided, before its deadline at `daa`, names `me`
 /// among its draws and holds no attestation of `me`.
-pub(crate) fn palw_kernel_cert_duties_v1(route: &PalwKernelRouteStateV1, ledger: &KernelLedgerV1, me: &Digest, daa: u64) -> Vec<Digest> {
+pub(crate) fn palw_kernel_cert_duties_v1(
+    route: &PalwKernelRouteStateV1,
+    ledger: &KernelLedgerV1,
+    me: &Digest,
+    daa: u64,
+) -> Vec<Digest> {
     use kaspa_consensus_core::palw_security_certification_v1::{
         PALW_SECURITY_CERTIFICATION_TABLE_V1, PalwClaimCertificationRowV1, certification_kernel_claim_key_v1,
         palw_kernel_claim_certification_id_v1,
@@ -363,10 +376,14 @@ pub(crate) fn palw_kernel_relay_read_v1(dir: &std::path::Path) -> (Vec<PalwKerne
         bad.push(format!("cannot read the relay directory {}", dir.display()));
         return (items, bad);
     };
-    let mut paths: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "palwresp")).collect();
+    let mut paths: Vec<_> =
+        entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "palwresp")).collect();
     paths.sort();
     for p in paths {
-        match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| borsh::from_slice::<PalwKernelRelayItemV1>(&b).map_err(|e| e.to_string())) {
+        match std::fs::read(&p)
+            .map_err(|e| e.to_string())
+            .and_then(|b| borsh::from_slice::<PalwKernelRelayItemV1>(&b).map_err(|e| e.to_string()))
+        {
             Ok(item) => items.push(item),
             Err(why) => bad.push(format!("{}: {why}", p.display())),
         }
@@ -400,7 +417,12 @@ impl PalwPanelService {
             .palw_probabilistic_constraints_v1
             .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(current_daa))
             || params.palw_panel_free_active_at(current_daa);
-        let mine = |r: u32| matches!(r, PALW_KERNEL_PRODUCER_ROUND_V1 | PALW_KERNEL_CERT_ROUND_V1 | PALW_KERNEL_RELAY_ROUND_V1 | PALW_KERNEL_INJECT_ROUND_V1);
+        let mine = |r: u32| {
+            matches!(
+                r,
+                PALW_KERNEL_PRODUCER_ROUND_V1 | PALW_KERNEL_CERT_ROUND_V1 | PALW_KERNEL_RELAY_ROUND_V1 | PALW_KERNEL_INJECT_ROUND_V1
+            )
+        };
         court_outbox.retain_submitted(|(claim, round, responder), at| {
             if !mine(*round) || *responder {
                 return true;
@@ -463,8 +485,9 @@ impl PalwPanelService {
             match K::decode(bytes) {
                 Ok(object @ K::RegisterClass { .. }) => {
                     let K::RegisterClass { descriptor, program_bytes, plan, param_commitments } = &object else { unreachable!() };
-                    let class = misaka_palw_kernel::ledger::single_class_binding_v1(*descriptor, program_bytes, plan, param_commitments)
-                        .class_binding_id();
+                    let class =
+                        misaka_palw_kernel::ledger::single_class_binding_v1(*descriptor, program_bytes, plan, param_commitments)
+                            .class_binding_id();
                     if ledger.classes.contains_key(&class) {
                         info!("[{PALW_PANEL}] kernel registrant: class {} is on the route", Hash64::from_bytes(class));
                         book.registered = true;
@@ -504,7 +527,9 @@ impl PalwPanelService {
                 None => None,
             };
             if free_collateral.is_none() && cfg.admission_schedule.is_some() {
-                warn!("[{PALW_PANEL}] kernel producer: this bond's facts are unreadable — the admission preflight counts 0 free collateral");
+                warn!(
+                    "[{PALW_PANEL}] kernel producer: this bond's facts are unreadable — the admission preflight counts 0 free collateral"
+                );
             }
             let lie = cfg.injects(PalwKernelInjectV1::Lie);
             for (job_id, job) in &ledger.jobs {
@@ -525,16 +550,32 @@ impl PalwPanelService {
                     .palw_kernel_route_panel_one_v1
                     .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
                     .map(|f| f.daa_score());
-                let (seats, _) = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_seats_and_quorum_v1(panel_one, committed_daa);
+                let (seats, _) =
+                    kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_seats_and_quorum_v1(panel_one, committed_daa);
                 let free = free_collateral.unwrap_or(0);
-                match palw_kernel_admission_preflight_v1(cfg.admission_schedule.as_ref(), panel_one, &id, job, committed_daa, bond_key, seats, free) {
+                match palw_kernel_admission_preflight_v1(
+                    cfg.admission_schedule.as_ref(),
+                    panel_one,
+                    &id,
+                    job,
+                    committed_daa,
+                    bond_key,
+                    seats,
+                    free,
+                ) {
                     Ok(capital) => {
                         if let Some(capital) = capital {
-                            info!("[{PALW_PANEL}] kernel producer: job {}: court admission preflight passes (capital {capital} of free {free})", Hash64::from_bytes(*job_id));
+                            info!(
+                                "[{PALW_PANEL}] kernel producer: job {}: court admission preflight passes (capital {capital} of free {free})",
+                                Hash64::from_bytes(*job_id)
+                            );
                         }
                     }
                     Err(why) => {
-                        warn!("[{PALW_PANEL}] kernel producer: job {}: LOCAL REFUSAL, nothing sealed or revealed — {why}", Hash64::from_bytes(*job_id));
+                        warn!(
+                            "[{PALW_PANEL}] kernel producer: job {}: LOCAL REFUSAL, nothing sealed or revealed — {why}",
+                            Hash64::from_bytes(*job_id)
+                        );
                         continue;
                     }
                 }
@@ -557,7 +598,9 @@ impl PalwPanelService {
                             if let Some(dir) = &cfg.export_dir {
                                 let path = dir.join(palw_kernel_relay_file_name_v1(&claim, stage, position));
                                 let item: PalwKernelRelayItemV1 = (claim, stage, position, bytes.clone());
-                                if let Err(e) = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&path, borsh::to_vec(&item).expect("serializes"))) {
+                                if let Err(e) = std::fs::create_dir_all(dir)
+                                    .and_then(|_| std::fs::write(&path, borsh::to_vec(&item).expect("serializes")))
+                                {
                                     warn!("[{PALW_PANEL}] kernel producer: cannot export {}: {e}", path.display());
                                 }
                             }
@@ -565,7 +608,10 @@ impl PalwPanelService {
                                 out.push((claim, PALW_KERNEL_PRODUCER_ROUND_V1, o, "Respond"));
                             }
                         }
-                        Err(why) => warn!("[{PALW_PANEL}] kernel producer: claim {}: cannot answer position {position}: {why}", Hash64::from_bytes(claim)),
+                        Err(why) => warn!(
+                            "[{PALW_PANEL}] kernel producer: claim {}: cannot answer position {position}: {why}",
+                            Hash64::from_bytes(claim)
+                        ),
                     }
                 }
             }
@@ -573,7 +619,9 @@ impl PalwPanelService {
 
         // -- Gate C drawn verifier (identity-armed) --
         for claim in palw_kernel_cert_duties_v1(&route, ledger, &me, current_daa) {
-            use misaka_palw_kernel::model_eligibility_v1::{ELIGIBILITY_ATTESTATION_VERSION_V1, EligibilityAttestationV1, EligibilityVerdictV1};
+            use misaka_palw_kernel::model_eligibility_v1::{
+                ELIGIBILITY_ATTESTATION_VERSION_V1, EligibilityAttestationV1, EligibilityVerdictV1,
+            };
             let row = &ledger.claims[&claim];
             let (verdict, transcript) = match model_of(&row.class_binding_id) {
                 None => (EligibilityVerdictV1::Unavailable, [0u8; 64]),
@@ -584,11 +632,17 @@ impl PalwPanelService {
                             let mut seen = Vec::with_capacity(128);
                             seen.extend_from_slice(&claim);
                             seen.extend_from_slice(&me);
-                            (EligibilityVerdictV1::Reproduced, misaka_palw_kernel::hash::id(b"misaka-palw/kaspad/kernel-cert/transcript/v1", &seen))
+                            (
+                                EligibilityVerdictV1::Reproduced,
+                                misaka_palw_kernel::hash::id(b"misaka-palw/kaspad/kernel-cert/transcript/v1", &seen),
+                            )
                         }
                         Ok(Some(_)) => (EligibilityVerdictV1::NotReproducible, [0u8; 64]),
                         Err(why) => {
-                            warn!("[{PALW_PANEL}] Gate C: claim {}: not checkable here ({why}) — attesting Unavailable", Hash64::from_bytes(claim));
+                            warn!(
+                                "[{PALW_PANEL}] Gate C: claim {}: not checkable here ({why}) — attesting Unavailable",
+                                Hash64::from_bytes(claim)
+                            );
                             (EligibilityVerdictV1::Unavailable, [0u8; 64])
                         }
                     }
@@ -631,8 +685,12 @@ impl PalwPanelService {
         }
 
         // -- queue --
-        let (pooled, orphans) =
-            self.flow_context.mining_manager().clone().get_all_transactions(kaspa_mining::model::tx_query::TransactionQuery::All).await;
+        let (pooled, orphans) = self
+            .flow_context
+            .mining_manager()
+            .clone()
+            .get_all_transactions(kaspa_mining::model::tx_query::TransactionQuery::All)
+            .await;
         let in_pool: HashSet<Hash64> = pooled
             .iter()
             .chain(orphans.iter())
@@ -676,13 +734,20 @@ impl PalwPanelService {
         let open: Vec<Digest> = ledger
             .claims
             .iter()
-            .filter(|(_, r)| r.producer != me && !r.convicted && !matches!(r.life.state, ClaimStateV1::Convicted { .. } | ClaimStateV1::TimedOut { .. }))
+            .filter(|(_, r)| {
+                r.producer != me
+                    && !r.convicted
+                    && !matches!(r.life.state, ClaimStateV1::Convicted { .. } | ClaimStateV1::TimedOut { .. })
+            })
             .map(|(id, _)| *id)
             .collect();
         for claim in open {
             if cfg.injects(PalwKernelInjectV1::ForgedReceipt) && !book.injected.contains(&(claim, 1)) {
                 if let Some(o) = self.kernel_roles_forged_receipt_v1(route, ledger, &claim, current_daa) {
-                    warn!("[{PALW_PANEL}] DRILL INJECTION: a forged seat receipt for claim {} (the fold must drop it)", Hash64::from_bytes(claim));
+                    warn!(
+                        "[{PALW_PANEL}] DRILL INJECTION: a forged seat receipt for claim {} (the fold must drop it)",
+                        Hash64::from_bytes(claim)
+                    );
                     out.push((claim, PALW_KERNEL_INJECT_ROUND_V1, o, "forged KernelConstraintReceiptV1"));
                     book.injected.insert((claim, 1));
                 }
@@ -704,13 +769,20 @@ impl PalwPanelService {
                                     if sealed { "FileProof" } else { "SealProof" },
                                     Hash64::from_bytes(claim)
                                 );
-                                out.push((claim, PALW_KERNEL_INJECT_ROUND_V1, o, if sealed { "wrong FileProof" } else { "wrong SealProof" }));
+                                out.push((
+                                    claim,
+                                    PALW_KERNEL_INJECT_ROUND_V1,
+                                    o,
+                                    if sealed { "wrong FileProof" } else { "wrong SealProof" },
+                                ));
                                 if sealed {
                                     book.injected.insert((claim, 2));
                                 }
                             }
                         }
-                        Err(why) => warn!("[{PALW_PANEL}] DRILL INJECTION: no wrong challenge of {}: {why}", Hash64::from_bytes(claim)),
+                        Err(why) => {
+                            warn!("[{PALW_PANEL}] DRILL INJECTION: no wrong challenge of {}: {why}", Hash64::from_bytes(claim))
+                        }
                     }
                 }
             }
@@ -791,17 +863,38 @@ mod tests {
 
     #[test]
     fn the_admission_preflight_is_typed_missing_in_production_and_refuses_short_capital_with_test_values() {
-        use kaspa_consensus_core::palw_kernel_court_admission_v1::{KernelCourtAdmissionScheduleV1, PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1};
-        let job = KernelJobV1 { class_binding_id: [1; 64], prompt: vec![3, 17, 9], max_new_tokens: 3, decode: DecodeRuleV1::Greedy, nonce: [2; 64] };
+        use kaspa_consensus_core::palw_kernel_court_admission_v1::{
+            KernelCourtAdmissionScheduleV1, PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1,
+        };
+        let job = KernelJobV1 {
+            class_binding_id: [1; 64],
+            prompt: vec![3, 17, 9],
+            max_new_tokens: 3,
+            decode: DecodeRuleV1::Greedy,
+            nonce: [2; 64],
+        };
         let producer = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(7), 0));
         let claim = [9u8; 64];
         assert_eq!(
-            palw_kernel_admission_preflight_v1(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.as_ref(), Some(0), &claim, &job, 100, producer, 1, 0),
+            palw_kernel_admission_preflight_v1(
+                PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.as_ref(),
+                Some(0),
+                &claim,
+                &job,
+                100,
+                producer,
+                1,
+                0
+            ),
             Ok(None),
             "production: typed-missing, no admission"
         );
         let test = KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1();
-        assert_eq!(palw_kernel_admission_preflight_v1(Some(&test), None, &claim, &job, 100, producer, 1, 0), Ok(None), "below the slice fence");
+        assert_eq!(
+            palw_kernel_admission_preflight_v1(Some(&test), None, &claim, &job, 100, producer, 1, 0),
+            Ok(None),
+            "below the slice fence"
+        );
         assert_eq!(palw_kernel_admission_preflight_v1(Some(&test), Some(200), &claim, &job, 100, producer, 1, 0), Ok(None));
         let refused = palw_kernel_admission_preflight_v1(Some(&test), Some(0), &claim, &job, 100, producer, 1, 0).unwrap_err();
         assert!(refused.contains("InsufficientCapital"), "{refused}");
@@ -811,7 +904,10 @@ mod tests {
         assert!(capital > 0 && capital % u128::from(test.capital_per_packet_sompi) == 0);
         let short = palw_kernel_admission_preflight_v1(Some(&test), Some(0), &claim, &job, 100, producer, 1, capital - 1).unwrap_err();
         assert!(short.contains("InsufficientCapital"), "one sompi short is a local refusal: {short}");
-        assert!(palw_kernel_admission_preflight_v1(Some(&test), Some(0), &claim, &job, 100, producer, 1, capital).is_ok(), "exactly enough");
+        assert!(
+            palw_kernel_admission_preflight_v1(Some(&test), Some(0), &claim, &job, 100, producer, 1, capital).is_ok(),
+            "exactly enough"
+        );
     }
 
     #[test]

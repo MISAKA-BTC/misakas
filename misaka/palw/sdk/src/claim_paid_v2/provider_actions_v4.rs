@@ -15,9 +15,7 @@ fn bad(e: impl ToString) -> Refusal {
 /// unit's decode/authentication boundary. A native caller still needs its own
 /// current generation, query authority, explicit funding and deadline. No
 /// cross-unit checker failure, local capacity or opaque error selects a duty.
-pub fn provider_material_challenge_unit_v4(
-    failure: &super::provider_reader_v4::ProviderReaderFailureV4,
-) -> Option<(u8, u32)> {
+pub fn provider_material_challenge_unit_v4(failure: &super::provider_reader_v4::ProviderReaderFailureV4) -> Option<(u8, u32)> {
     match failure.cause() {
         super::provider_reader_v4::ProviderReaderErrorV4::InvalidMaterial(_) => failure.invalid_unit(),
         _ => None,

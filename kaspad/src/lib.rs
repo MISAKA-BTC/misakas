@@ -23,13 +23,13 @@ pub mod palw_economics;
 pub mod palw_exec_slice_producer;
 /// ADR-0152 v3.1 N10 / §7.3 P2-8c: the automatic `PanelFalseValidV2` filer. See the module's own header.
 pub mod palw_filer_false_valid;
-/// RFC-0006 06-A: the automatic held-GDN checkpoint filer (dormant with `palw_memory_routing_court_v2`). See the module's header.
-pub mod palw_gdn_held_filer;
-pub mod palw_gdn_step_filer;
 mod palw_flat_public_source;
 /// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;
+/// RFC-0006 06-A: the automatic held-GDN checkpoint filer (dormant with `palw_memory_routing_court_v2`). See the module's header.
+pub mod palw_gdn_held_filer;
+pub mod palw_gdn_step_filer;
 /// RFC-0003 §II.2.1: the seat's receipt and a party's court objects for a pipeline class's V5 claim (dormant).
 pub mod palw_gen_seat;
 pub mod palw_heartbeat_miner;
@@ -44,12 +44,12 @@ pub mod palw_licence_order;
 pub mod palw_memory_ledger;
 /// RFC-0008 PAV3: the in-node producer's native custody exchange (the transport trait and the producer-side checks).
 pub mod palw_native_custody_v3;
+mod palw_native_routing_work_v2;
 pub mod palw_panel;
 /// int-10.2 A2: the prefill run width a replay runs at, chosen from the memory the ledger can grant
 /// (node policy).
 pub mod palw_prefill_run;
 pub mod palw_producer;
-mod palw_native_routing_work_v2;
 /// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
 /// (node policy).
 pub mod palw_producer_backpressure;
@@ -61,7 +61,6 @@ pub mod palw_readiness_escalation;
 pub mod palw_receipt_pool;
 pub mod palw_resource_admission_v2;
 pub mod palw_retention;
-pub mod storage_capacity;
 pub mod palw_rider_outbox;
 pub mod palw_root_fetch;
 pub mod palw_round_producer;
@@ -72,6 +71,7 @@ mod palw_tokenizer_witness;
 pub mod palw_verified_resync;
 #[cfg(feature = "private-integration-config")]
 pub mod private_integration;
+pub mod storage_capacity;
 pub mod validator_service;
 
 #[cfg(test)]

@@ -1,17 +1,17 @@
 //! Native39 original maximum/actual-EOS journal. All expensive restoration is
 //! preceded by a current ordinary or original producer reservation debit.
 use super::*;
-use crate::{
-    palw_flat_execution_capacity_v22::*,
-    palw_native_mining_v39::ACCUSE_MINING_ACTION_V39,
-    palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},
-    palw_native_execution_v39::*,
-    palw_native_job_v39::*,
-    palw_native_queue_v30::*,
-};
 use crate::palw_native_liability_hold_v1::{
     PALW_NATIVE_FAMILY_JOB_V39, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
     PalwNativeHeldFeeRowV1, palw_native_held_fee_key_v1,
+};
+use crate::{
+    palw_flat_execution_capacity_v22::*,
+    palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},
+    palw_native_execution_v39::*,
+    palw_native_job_v39::*,
+    palw_native_mining_v39::ACCUSE_MINING_ACTION_V39,
+    palw_native_queue_v30::*,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::{
@@ -362,7 +362,13 @@ pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128
                         && r.aux_row::<PalwNativeHeldFeeRowV1>(
                             PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
                             &palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_JOB_V39, &h.id),
-                        ).is_some_and(|row| row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1 && row.family == PALW_NATIVE_FAMILY_JOB_V39 && row.job == h.id && row.producer == *bond)))
+                        )
+                        .is_some_and(|row| {
+                            row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1
+                                && row.family == PALW_NATIVE_FAMILY_JOB_V39
+                                && row.job == h.id
+                                && row.producer == *bond
+                        })))
         })
         .fold(0u128, |n, h| n.saturating_add(h.original.reserve as u128))
         .saturating_add(public::reserved(r, bond))
@@ -1012,18 +1018,22 @@ pub(super) fn clear_held_producer_slot_v39(
     // retained capacity with the actual fee transition, preserving all debits.
     // Authenticate any present row before changing it or the producer index.
     let subject_key = b(&(2u8, row.job));
-    let subject = route.aux.get(&(QUOTA, subject_key.clone())).map(|raw| {
-        if raw.len() >= 8192 {
-            return Err(bad("native39 held subject extent"));
-        }
-        let (root, mut subject): (Digest, QuotaSubjectSummaryV11) =
-            borsh::from_slice(raw).map_err(|_| bad("native39 held subject grammar"))?;
-        if root != subject.row_root() || subject.binding.job_id != row.job {
-            return Err(bad("native39 held subject root/job differs"));
-        }
-        subject.closed = true;
-        Ok(subject)
-    }).transpose()?;
+    let subject = route
+        .aux
+        .get(&(QUOTA, subject_key.clone()))
+        .map(|raw| {
+            if raw.len() >= 8192 {
+                return Err(bad("native39 held subject extent"));
+            }
+            let (root, mut subject): (Digest, QuotaSubjectSummaryV11) =
+                borsh::from_slice(raw).map_err(|_| bad("native39 held subject grammar"))?;
+            if root != subject.row_root() || subject.binding.job_id != row.job {
+                return Err(bad("native39 held subject root/job differs"));
+            }
+            subject.closed = true;
+            Ok(subject)
+        })
+        .transpose()?;
     if let Some(subject) = subject {
         builder.write_kernel_row(QUOTA, subject_key, Some(b(&(subject.row_root(), subject))))?;
     }

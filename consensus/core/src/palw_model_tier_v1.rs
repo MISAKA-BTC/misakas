@@ -327,7 +327,8 @@ fn palw_founding_line_runs_another_root_v1(state: &PalwChainStateV2, class_id: &
     if line.retired_daa.is_some_and(|retired| daa >= retired) {
         return false;
     }
-    (1..=line.versions_published).any(|n| state.model_version(class_id, n).is_some_and(|v| v.in_force_at(daa) && v.root != *class_root))
+    (1..=line.versions_published)
+        .any(|n| state.model_version(class_id, n).is_some_and(|v| v.in_force_at(daa) && v.root != *class_root))
 }
 
 impl PalwStateParamsV2 {
@@ -449,11 +450,9 @@ pub fn palw_model_tier_arming_record_admits_v1(
 ) -> Result<(), &'static str> {
     let at = fence.activation.daa_score();
     let Some(r) = records.iter().find(|r| r.genesis == genesis && r.activation_daa == at) else {
-        return Err(
-            "palw_model_tier_v1 cannot be armed: no arm-readiness record is pinned for this network and height \
+        return Err("palw_model_tier_v1 cannot be armed: no arm-readiness record is pinned for this network and height \
              (PALW_MODEL_TIER_ARMING_RECORDS_V1 is empty: c and κ are design values without approval and a measured record, and no annual \
-             catalog edition has a signed release manifest and recorded mixed-binary drills; ADR-0179, RFC-0019 §16)",
-        );
+             catalog edition has a signed release manifest and recorded mixed-binary drills; ADR-0179, RFC-0019 §16)");
     };
     if r.version != PALW_MODEL_TIER_ARMING_RECORD_VERSION_V1 {
         return Err("the model-tier arm-readiness record's version is not this binary's");

@@ -432,9 +432,10 @@ mod tests {
         geometry.tile_len = geometry.attn_head_dim;
         let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v8(geometry).unwrap();
         let canonical = kaspa_consensus_core::palw_qwen36_profile::qwen36_held_canonical_v1(profile.n_ctx);
-        let backend = Qwen36Backend::from_registered_profile(
-            artifact, b"held-route-capability-test".to_vec(), profile, canonical,
-        ).unwrap().with_held_answerability_v1(true).with_step_ladder_cap(1024);
+        let backend = Qwen36Backend::from_registered_profile(artifact, b"held-route-capability-test".to_vec(), profile, canonical)
+            .unwrap()
+            .with_held_answerability_v1(true)
+            .with_step_ladder_cap(1024);
         assert!(!backend.supports_dissection(), "the old C5-era advertisement is preserved");
         assert!(!backend.supports_dissection_with_memory_routing_v2(false), "a future fence is not active");
         assert!(backend.supports_dissection_with_memory_routing_v2(true), "the explicit new route uses the implemented held builders");

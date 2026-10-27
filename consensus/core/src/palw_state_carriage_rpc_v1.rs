@@ -10,9 +10,7 @@ use crate::{
     Hash64,
     config::params::Params,
     header::Header,
-    palw_fork_choice_commitment_v1::{
-        PalwForkChoiceOpeningV1, PalwForkChoicePointV1, palw_fork_choice_committed_at_v1,
-    },
+    palw_fork_choice_commitment_v1::{PalwForkChoiceOpeningV1, PalwForkChoicePointV1, palw_fork_choice_committed_at_v1},
     palw_state_proof_v1::state_root_of_pinned_header_v1,
     palw_state_v2::{PalwChainStateV2, PalwStateCarriageV2},
 };
@@ -172,7 +170,8 @@ impl PalwStateCarriageAssemblerV1 {
         // the header's below, and that envelope binds the inner root — so nothing unverified is accepted.
         let rule_e_form = matches!(
             crate::palw_fork_choice_rule_e_leaf_v3::palw_rule_e_commit_form_v1(params, self.parent_header.daa_score),
-            crate::palw_fork_choice_rule_e_leaf_v3::PalwCommitFormV1::RuleEV2 | crate::palw_fork_choice_rule_e_leaf_v3::PalwCommitFormV1::RuleEV3
+            crate::palw_fork_choice_rule_e_leaf_v3::PalwCommitFormV1::RuleEV2
+                | crate::palw_fork_choice_rule_e_leaf_v3::PalwCommitFormV1::RuleEV3
         );
         let inner = match &self.fork_choice {
             Some(opening) if rule_e_form => opening.inner_root,

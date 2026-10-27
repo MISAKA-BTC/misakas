@@ -2668,7 +2668,8 @@ async fn palw_v2_an_unbonded_merged_blue_is_not_paid() {
 
     // Honest chain: nothing is withheld. A filter that dropped an honest miner's subsidy would be
     // a worse bug than the one it closes.
-    let unentitled = vp.palw_v2_unentitled_blues_checked_v1(&parent_state, &ghostdag_data, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled =
+        vp.palw_v2_unentitled_blues_checked_v1(&parent_state, &ghostdag_data, &non_daa, &point).expect("the merged pay set resolves");
     assert!(unentitled.is_empty(), "every blue of an honest V2 chain is bonded and paid, got {unentitled:?}");
 
     // And the predicate really separates: the same attempt, naming a bond this chain does not hold.
@@ -3195,7 +3196,9 @@ async fn palw_v2_a_merged_blocks_carve_is_withheld_and_escrowed_past_the_deep_fe
     };
 
     // The withhold map the sink's coinbase used, recomputed from the same selected-parent state.
-    let withheld = vp.palw_v2_merged_escrow_withheld_checked_v1(&parent_state, &ghostdag_data, &non_daa, &point).expect("the merged pay set resolves");
+    let withheld = vp
+        .palw_v2_merged_escrow_withheld_checked_v1(&parent_state, &ghostdag_data, &non_daa, &point)
+        .expect("the merged pay set resolves");
     assert!(!withheld.is_empty(), "past the fence, a merged attempt's carve is withheld — otherwise this proves nothing");
     for (blue, carve) in &withheld {
         assert!(*carve > 0, "the withheld carve is the merged block's worker share, non-zero");
@@ -14308,7 +14311,8 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
     //      produces a spend the pay set accepts. If this failed, an empty result below would be
     //      "both rejected", not "both paid". ----
     let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1]), anticone());
-    let unentitled_one = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_one, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled_one =
+        vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_one, &non_daa, &point).expect("the merged pay set resolves");
     assert!(
         unentitled_one.is_empty(),
         "positive control: one valid receipt spend must be entitled (paid), so the fixture really produces a valid spend; \
@@ -14613,7 +14617,8 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // Positive control: ONE valid V4 spend, as a merged red, is entitled — and the payout map names the executor bond's registered payout
     // (`0x9A11`, derived to a script) and the authorization's fee, so the coinbase splits it.
     let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a]), anticone());
-    let unentitled_one = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_one, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled_one =
+        vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_one, &non_daa, &point).expect("the merged pay set resolves");
     assert!(unentitled_one.is_empty(), "positive control: a valid V4 spend is entitled; got unentitled={unentitled_one:?}");
     let payouts = vp.palw_v2_receipt_v4_payouts(&injected, &gd_one, &non_daa, &unentitled_one);
     let expected_script = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_miner_script(&h64(0x9A11));
@@ -14625,7 +14630,8 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // Two V4 siblings of ONE quantum: exactly one is entitled, and only that one has a payout entry (B-5's dedup runs on the fold view).
     let gd_two =
         GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a, v4_b]), anticone());
-    let unentitled_two = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_two, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled_two =
+        vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_two, &non_daa, &point).expect("the merged pay set resolves");
     assert_eq!(unentitled_two.len(), 1, "one quantum, two V4 siblings: paid once");
     assert!(unentitled_two.contains(&v4_b) && !unentitled_two.contains(&v4_a), "the first in acceptance order wins");
     let payouts_two = vp.palw_v2_receipt_v4_payouts(&injected, &gd_two, &non_daa, &unentitled_two);
@@ -14634,7 +14640,8 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // A V3 and a V4 spend of the SAME quantum are the same double spend: paid once, whichever is first.
     let gd_mixed =
         GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v3_hash, v4_a]), anticone());
-    let unentitled_mixed = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_mixed, &non_daa, &point).expect("the merged pay set resolves");
+    let unentitled_mixed =
+        vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_mixed, &non_daa, &point).expect("the merged pay set resolves");
     assert_eq!(unentitled_mixed.len(), 1, "V3 and V4 share one spent-quantum ledger: paid once");
     assert!(unentitled_mixed.contains(&v4_a));
     let payouts_mixed = vp.palw_v2_receipt_v4_payouts(&injected, &gd_mixed, &non_daa, &unentitled_mixed);
@@ -14950,7 +14957,10 @@ async fn l_court_01_a_refused_split_close_completion_spends_the_slot_past_the_fe
             verdict: PalwCourtVerdictV2::ExecutorGuilty,
             proof: kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::DecodeToken {
                 binding: (**binding).clone(),
-                pin: kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: vec![], generated_token_ids: vec![] },
+                pin: kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 {
+                    logits_rows: vec![],
+                    generated_token_ids: vec![],
+                },
                 position: 0,
             },
         };
@@ -15002,7 +15012,8 @@ async fn l_court_01_a_refused_split_close_completion_spends_the_slot_past_the_fe
             assert_eq!(carried, vec![f.honest.clone()], "below the fence AC-SLOT is unchanged: a refused completion spends nothing");
         }
         // AC-SLOT's own property holds on both sides: a root claim the FOLD refuses spends nothing.
-        let carried = vp.palw_v2_accepted_objects_for_tests(&state, &f.params, &point, vec![f.junk.clone(), f.honest.clone()], point.block);
+        let carried =
+            vp.palw_v2_accepted_objects_for_tests(&state, &f.params, &point, vec![f.junk.clone(), f.honest.clone()], point.block);
         assert_eq!(carried, vec![f.honest.clone()], "armed = {armed}: a fold-refused root claim still spends no slot");
     }
 }
@@ -15117,8 +15128,9 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
     let fold_arm =
         &fold[fold_at..fold_at + fold[fold_at..].find("PalwConsensusObjectV2::CheckpointAccused { accusation } => {").unwrap()];
     assert!(
-        fold_arm
-            .contains("builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim)"),
+        fold_arm.contains(
+            "builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim)"
+        ),
         "the fold refuses under the same fence and mirror"
     );
 }
@@ -15146,7 +15158,10 @@ fn the_acceptance_layer_takes_the_held_root_claim_past_the_fence_and_refuses_an_
     let after = &source[registration..registration + 6_000];
     let c5 = after.find("palw_held_class_is_attributable_v2(").expect("C5 beside the gate");
     assert!(after[c5..c5 + 200].contains("self.palw_offence_attribution_at(point.daa_score)"), "at the block's fence");
-    assert!(after[c5..c5 + 300].contains("self.palw_memory_routing_court_v2_at(point.daa_score)"), "the versioned route uses the same block height");
+    assert!(
+        after[c5..c5 + 300].contains("self.palw_memory_routing_court_v2_at(point.daa_score)"),
+        "the versioned route uses the same block height"
+    );
     assert!(source.contains("O::CourtAttnRootClaimedHeld { .. } => \"CourtAttnRootClaimedHeld\","), "and it has a name");
 }
 
@@ -16389,7 +16404,9 @@ async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
 
         // The escrows its coinbase withholds for the merged blocks it did not select, sized from the
         // record its fold escrowed from.
-        let merged_withheld = vp.palw_v2_merged_escrow_withheld_checked_v1(&state_before, &ghostdag, &non_daa, &point).expect("the merged pay set resolves");
+        let merged_withheld = vp
+            .palw_v2_merged_escrow_withheld_checked_v1(&state_before, &ghostdag, &non_daa, &point)
+            .expect("the merged pay set resolves");
         for (merged, carve) in &merged_withheld {
             let merged_daa = vp.headers_store.get_daa_score(*merged).unwrap();
             let subsidy = vp.coinbase_manager.calc_block_subsidy(merged_daa) as u128;
@@ -16813,8 +16830,8 @@ mod hb_fork_choice_probe;
 mod t12_h1_carrier_gate;
 mod t12_held_leaf_challenge_gate;
 // RFC-0007 Part I (tags 91, 92): the verification vertex and its equivocation at the gate.
-mod t12_mesh_gate;
 mod paid_trap_native_admission;
+mod t12_mesh_gate;
 mod t12_offence_attribution_gate;
 mod t12_vertex_gate;
 // ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
@@ -16959,8 +16976,8 @@ mod rfc12_zero_dns_matrix;
 mod rfc12_c_items;
 // RFC-0012 R12-AUTHORITY item 4 (port of codex/rfc12-remove-dns-bft, 2026-10-15): every DNS authority read in the consensus crate is
 // inventoried and asks the retirement — a source scan, no feature needed.
-mod rfc12_dns_reader_inventory;
 mod rfc12_acceptance_reads;
+mod rfc12_dns_reader_inventory;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`

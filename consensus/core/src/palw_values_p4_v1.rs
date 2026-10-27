@@ -21,8 +21,7 @@ use crate::palw_bond_budget_v1::{
 use misaka_palw_kernel::hash::{Digest, object_id};
 
 /// The status of this module after the 2026-10-22 parameter-register pin. Fences stay unarmed.
-pub const PALW_P4_VALUES_STATUS_V1: &str =
-    "pinned 2026-10-22 in the parameter register; fences unarmed";
+pub const PALW_P4_VALUES_STATUS_V1: &str = "pinned 2026-10-22 in the parameter register; fences unarmed";
 
 /// **V12 / R1: the allocation epoch, DAA** — one day-equivalent (720 DAA): the coarsest epoch that divides the user's 7-day average
 /// (5,040 DAA) into whole days, equal to the common 1-day hold of both Panel modes.
@@ -208,10 +207,7 @@ mod tests {
         assert_eq!(p.average_epochs(), Some(7), "7 day-equivalents over 1-day epochs");
         assert_eq!(p.curve.alpha_halves, 3, "alpha = 1.5");
         assert_eq!(p.epoch_daa, 720);
-        assert_eq!(
-            PALW_P4_VALUES_STATUS_V1,
-            "pinned 2026-10-22 in the parameter register; fences unarmed"
-        );
+        assert_eq!(PALW_P4_VALUES_STATUS_V1, "pinned 2026-10-22 in the parameter register; fences unarmed");
         // Refusals: every user term is pinned by validate, and the lane's terms keep their invariants.
         let refused = |f: &dyn Fn(&mut PalwModelAllocationPolicyV1)| {
             let mut q = palw_model_allocation_policy_decided_v1();
@@ -373,7 +369,11 @@ mod tests {
             crate::palw_rfc0016_v1::values::PALW_RFC0016_MEASURED_RECORDS_V1
         ));
         // R3: the beacon shape is not an approval.
-        assert_eq!(crate::palw_panel_beacon_v1::approved_panel_beacon_policies_v1().len(), 1, "the 2026-10-26 user-approved policy only");
+        assert_eq!(
+            crate::palw_panel_beacon_v1::approved_panel_beacon_policies_v1().len(),
+            1,
+            "the 2026-10-26 user-approved policy only"
+        );
     }
 
     #[test]

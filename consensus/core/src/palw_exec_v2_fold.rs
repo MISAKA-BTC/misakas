@@ -27,9 +27,9 @@
 use super::*;
 use crate::palw_exec_v2::PalwWorkRangeV1;
 use crate::palw_exec_v2_verify::{
-    PalwExecV2PrefixInputsV1, PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1,
-    palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1,
-    palw_exec_v2_credit_approval_v1, palw_exec_v2_root_slice_job_nonce_v2, palw_exec_v2_route_reward_v1,
+    PalwExecV2PrefixInputsV1, PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_credit_approval_v1,
+    palw_exec_v2_kernel_key_v1, palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1,
+    palw_exec_v2_retention_terms_v1, palw_exec_v2_root_slice_job_nonce_v2, palw_exec_v2_route_reward_v1,
     palw_exec_v2_verification_binding_v2,
 };
 use crate::palw_work_slice_v2::{
@@ -950,7 +950,9 @@ pub(super) fn apply_root_declared_v2(
                 builder.params.window_court(),
                 &kernel.header.policy,
             )?,
-            None => declaration.expiry_daa.checked_add(builder.params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC floor"))?,
+            None => {
+                declaration.expiry_daa.checked_add(builder.params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC floor"))?
+            }
         };
         crate::palw_court_clock_v2::palw_court_clock_v2_admission_dependencies_v2(
             builder.params,

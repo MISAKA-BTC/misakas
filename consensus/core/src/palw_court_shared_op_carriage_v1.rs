@@ -16,7 +16,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{self, Read};
 
 /// Upper bound of one shared body (the existing public control ceiling; a unit's own bound is the fold's `unit_bound_v1`).
-pub const PALW_SHARED_COURT_BODY_MAX_BYTES_V1: usize = crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1 as usize;
+pub const PALW_SHARED_COURT_BODY_MAX_BYTES_V1: usize =
+    crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1 as usize;
 /// Upper bound of one complete-ID vector (the same byte ceiling at four bytes per id).
 pub const PALW_SHARED_COURT_MAX_IDS_V1: usize = PALW_SHARED_COURT_BODY_MAX_BYTES_V1 / 4;
 /// Upper bound of numerical parts in one object (parts are ≤ `NUMERICAL_PART_BYTES_V1` = 16 KiB each, so ≤ ~80 KiB in total).

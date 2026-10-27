@@ -325,14 +325,18 @@ pub fn element_value_v1(
     e: u64,
     ops: &dyn OperandsV1,
 ) -> Result<Option<i128>, MissingV1> {
-    element_value_with_states_v39(&program.states,node,sh,e,ops)
+    element_value_with_states_v39(&program.states, node, sh, e, ops)
 }
 /// Shared scalar integer arithmetic over an original owning39 node. The
 /// enclosing39 court authenticates its own source/wiring/profile; no V1 program
 /// or legacy Prepared grant is synthesized by this function.
 pub(crate) fn element_value_with_states_v39(
-    states:&[misaka_palw_tir::StateDecl],node:&Node,sh:&ElementShapesV1,e:u64,ops:&dyn OperandsV1,
-)->Result<Option<i128>,MissingV1>{
+    states: &[misaka_palw_tir::StateDecl],
+    node: &Node,
+    sh: &ElementShapesV1,
+    e: u64,
+    ops: &dyn OperandsV1,
+) -> Result<Option<i128>, MissingV1> {
     // A rank-one lookup table gathered by an arbitrary-shaped index tensor has no
     // coordinate transform: its output's flat position IS the index tensor's position.
     // Check the index before touching the table, exactly as the generic branch does.

@@ -33,12 +33,12 @@ use std::time::Instant;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
-use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
-use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
 use kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_disclosure as dc;
 use kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_root as rr;
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwCourtVerdictV2};
+use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
+use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, build_tir_dissect_bottom_v1, build_tir_dissect_position_bottom_v1, build_tir_dissect_position_round_v1,
     build_tir_dissect_round_v1, build_tir_root_claim_v1, check_tir_cone_refutation_v1, check_tir_dissect_bottom_v1,
@@ -436,7 +436,14 @@ fn court_verify_cpu_measure() {
                 let verdict = check_tir_dissect_position_bottom_v1(phase, &named, bottom, *leaf, &RULES);
                 if forged { verdict.is_ok() } else { verdict == Err(PalwStepRefuteError::NoFaultFound) }
             });
-            report_x(&op, n, distinct, bytes, &s, &format!(" tile_positions={tile} max_close_bytes={max_bytes} signature_bytes={}", 2 * SIG));
+            report_x(
+                &op,
+                n,
+                distinct,
+                bytes,
+                &s,
+                &format!(" tile_positions={tile} max_close_bytes={max_bytes} signature_bytes={}", 2 * SIG),
+            );
         }
         // RFC-0024 §5: the depth-2 lookahead disclosure expanded and checked against the phase (Σ/max reconstruction of the
         // omitted level). Test-side frontier ceiling only (the production bound V8 is typed-missing).
@@ -463,9 +470,12 @@ fn court_verify_cpu_measure() {
                             frontier.push(level2.children);
                         }
                     }
-                    let values: u64 =
-                        frontier.iter().flatten().map(|c| c.partials.iter().map(|v| v.len() as u64).sum::<u64>()).sum();
-                    cases.push((phase, PalwTirLookaheadDisclosureV2 { version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, frontier }, values));
+                    let values: u64 = frontier.iter().flatten().map(|c| c.partials.iter().map(|v| v.len() as u64).sum::<u64>()).sum();
+                    cases.push((
+                        phase,
+                        PalwTirLookaheadDisclosureV2 { version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, frontier },
+                        values,
+                    ));
                     if cases.len() >= DISTINCT_CAP {
                         break 'o;
                     }
@@ -581,7 +591,12 @@ fn court_verify_cpu_measure() {
             let bytes = cases[0].2.len() as u64;
             let pk_bytes = cases[0].0.len();
             let s = run(&mut cases, n, |(pk, msg, sig)| {
-                kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(pk, msg, sig, b"misaka-palw/measure/v1")
+                kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
+                    pk,
+                    msg,
+                    sig,
+                    b"misaka-palw/measure/v1",
+                )
             });
             report_x(&op, n, distinct_n, bytes, &s, &format!(" public_key_bytes={pk_bytes}"));
         }

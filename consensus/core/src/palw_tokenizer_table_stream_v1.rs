@@ -539,14 +539,8 @@ mod tests {
             let packet = if let Some((namespace, key)) = probe.pending_key() {
                 let compact = PalwJsonKeyCompactProofV1::compress(&book.proof(namespace, key))
                     .map_err(|e| format!("plan compact proof: {e}"))?;
-                let packet = PalwTokenizerStreamPacketV1 {
-                    offset,
-                    bytes: vec![],
-                    proofs: vec![compact],
-                };
-                probe
-                    .packet(base.context, &packet)
-                    .map_err(|e| format!("plan native packet: {e}"))?;
+                let packet = PalwTokenizerStreamPacketV1 { offset, bytes: vec![], proofs: vec![compact] };
+                probe.packet(base.context, &packet).map_err(|e| format!("plan native packet: {e}"))?;
                 book.insert(namespace, key);
                 out.push(packet);
                 continue;
@@ -554,9 +548,8 @@ mod tests {
                 let mut parser = probe.parser.clone();
                 let maximum = if bytewise { 1 } else { 65536 };
                 let end = (offset as usize + maximum).min(raw.len());
-                let consumed = parser
-                    .push(base.context, offset, &raw[offset as usize..end])
-                    .map_err(|e| format!("plan native parser: {e}"))?;
+                let consumed =
+                    parser.push(base.context, offset, &raw[offset as usize..end]).map_err(|e| format!("plan native parser: {e}"))?;
                 if consumed == 0 {
                     return Err("plan native parser made no progress".into());
                 }
@@ -566,24 +559,16 @@ mod tests {
                     proofs: vec![],
                 }
             };
-            probe
-                .packet(base.context, &packet)
-                .map_err(|e| format!("plan native packet: {e}"))?;
+            probe.packet(base.context, &packet).map_err(|e| format!("plan native packet: {e}"))?;
             out.push(packet);
         }
         Ok(out)
     }
-    fn fixture_maximal_packet(
-        atoms: &[PalwTokenizerStreamPacketV1],
-    ) -> Vec<PalwTokenizerStreamPacketV1> {
+    fn fixture_maximal_packet(atoms: &[PalwTokenizerStreamPacketV1]) -> Vec<PalwTokenizerStreamPacketV1> {
         // This nonempty fixture's ENTIRE authenticated file and every necessary
         // proof fit one legal carrier. Thus this is maximal for these materials,
         // not an asserted general-purpose packet planner or upper-bound closure.
-        let mut packet = PalwTokenizerStreamPacketV1 {
-            offset: 0,
-            bytes: vec![],
-            proofs: vec![],
-        };
+        let mut packet = PalwTokenizerStreamPacketV1 { offset: 0, bytes: vec![], proofs: vec![] };
         for p in atoms {
             packet.bytes.extend_from_slice(&p.bytes);
             packet.proofs.extend(p.proofs.clone());
@@ -598,15 +583,7 @@ mod tests {
         packets: &[PalwTokenizerStreamPacketV1],
         rendering: &[u8],
         small: bool,
-    ) -> Result<
-        (
-            bool,
-            Option<PalwTokenizerRenderingDigestV1>,
-            u64,
-            PalwTokenizerTableStreamV1,
-        ),
-        String,
-    > {
+    ) -> Result<(bool, Option<PalwTokenizerRenderingDigestV1>, u64, PalwTokenizerTableStreamV1), String> {
         let mut c = base.clone();
         for p in packets {
             c.packet(base.context, p)?;
@@ -626,11 +603,7 @@ mod tests {
             let atoms = replay_atoms(&base, raw, false).unwrap();
             let canonical = fixture_maximal_packet(&atoms);
             let alternative = replay_atoms(&base, raw, true).unwrap();
-            assert!(
-                alternative
-                    .iter()
-                    .any(|p| p.bytes.is_empty() && !p.proofs.is_empty())
-            );
+            assert!(alternative.iter().any(|p| p.bytes.is_empty() && !p.proofs.is_empty()));
             assert!(alternative.len() > canonical.len());
             let a = run_replay(&base, &canonical, table_bytes, false).unwrap();
             let b = run_replay(&base, &alternative, table_bytes, true).unwrap();
@@ -654,16 +627,9 @@ mod tests {
         unauthenticated[i] = b'C';
         for small in [false, true] {
             match replay_atoms(&base, &unauthenticated, small) {
-                Err(stage) => assert!(
-                    stage.starts_with("plan "),
-                    "native planning refusal must be explicit: {stage}"
-                ),
+                Err(stage) => assert!(stage.starts_with("plan "), "native planning refusal must be explicit: {stage}"),
                 Ok(atoms) => {
-                    let packets = if small {
-                        atoms
-                    } else {
-                        fixture_maximal_packet(&atoms)
-                    };
+                    let packets = if small { atoms } else { fixture_maximal_packet(&atoms) };
                     assert!(
                         run_replay(&base, &packets, b"A", small).is_err(),
                         "unauthenticated raw must never expose a semantic result"
@@ -676,128 +642,179 @@ mod tests {
     #[test]
     fn private_tokenizer_canonical_builder_consumes_real_ordered_proofs_and_authenticates_operands() {
         use super::canonical_replay::{self as replay, Budget, Material, Refusal};
-        let budget=Budget {max_material_bytes:1<<25,max_proofs:1000,max_native_calls:100_000,max_packets:10_000};
-        let mut vocab=serde_json::Map::new();
-        vocab.insert("A".into(),serde_json::json!(0));
-        for id in 1..100u32 {vocab.insert(format!("B{}{:04}","a".repeat(1024),id),serde_json::json!(id));}
-        let raw=serde_json::to_vec(&serde_json::json!({"model":{"vocab":vocab,"merges":[]},"added_tokens":[]})).unwrap();
-        let base=replay_fixture(&raw,b"A");
-        let saved=borsh::to_vec(&base).unwrap();
-        let atoms=replay_atoms(&base,&raw,false).unwrap();
-        let proofs:Vec<_>=atoms.iter().flat_map(|p|p.proofs.clone()).collect();
-        assert!(proofs.len()>64 && raw.len()>65536);
-        let input=Material {raw:&raw,proofs:&proofs,rendering:Some(b"A")};
-        let got=replay::build(&base,input,budget).unwrap();
-        let direct=run_replay(&base,&atoms,b"A",false).unwrap();
-        assert_eq!(got.violation(),direct.0);
+        let budget = Budget { max_material_bytes: 1 << 25, max_proofs: 1000, max_native_calls: 100_000, max_packets: 10_000 };
+        let mut vocab = serde_json::Map::new();
+        vocab.insert("A".into(), serde_json::json!(0));
+        for id in 1..100u32 {
+            vocab.insert(format!("B{}{:04}", "a".repeat(1024), id), serde_json::json!(id));
+        }
+        let raw = serde_json::to_vec(&serde_json::json!({"model":{"vocab":vocab,"merges":[]},"added_tokens":[]})).unwrap();
+        let base = replay_fixture(&raw, b"A");
+        let saved = borsh::to_vec(&base).unwrap();
+        let atoms = replay_atoms(&base, &raw, false).unwrap();
+        let proofs: Vec<_> = atoms.iter().flat_map(|p| p.proofs.clone()).collect();
+        assert!(proofs.len() > 64 && raw.len() > 65536);
+        let input = Material { raw: &raw, proofs: &proofs, rendering: Some(b"A") };
+        let got = replay::build(&base, input, budget).unwrap();
+        let direct = run_replay(&base, &atoms, b"A", false).unwrap();
+        assert_eq!(got.violation(), direct.0);
         assert!(!got.violation());
-        assert_eq!(got.key_events(),direct.2);
-        assert_eq!(got.key_root(),direct.3.key_set_root());
-        assert!(got.work().packets>=2);
-        assert_eq!(got.work().proofs,proofs.len() as u64);
-        assert_eq!(borsh::to_vec(&base).unwrap(),saved);
-        let missing=Material {proofs:&proofs[..proofs.len()-1],..input};
-        assert!(matches!(replay::build(&base,missing,budget),Err(Refusal::NeedProof {..})));
-        let mut extra=proofs.clone();extra.push(proofs[0].clone());
-        assert!(matches!(replay::build(&base,Material {proofs:&extra,..input},budget),Err(Refusal::ExtraProof {..})));
-        let mut foreign=proofs.clone();foreign[0].namespace^=1;
-        assert!(matches!(replay::build(&base,Material {proofs:&foreign,..input},budget),Err(Refusal::Native(_))));
-        let mut badraw=raw.clone();let at=badraw.iter().position(|b|*b==b'A').unwrap();badraw[at]=b'X';
-        assert!(replay::build(&base,Material {raw:&badraw,..input},budget).is_err());
-        assert!(matches!(replay::build(&base,Material {raw:&raw[..raw.len()-1],..input},budget),Err(Refusal::OperandLength)));
-        assert!(matches!(replay::build(&base,Material {rendering:None,..input},budget),Err(Refusal::RenderingOperand)));
-        assert!(matches!(replay::build(&base,input,Budget {max_packets:got.work().packets-1,..budget}),Err(Refusal::Budget)));
-        assert_eq!(borsh::to_vec(&base).unwrap(),saved);
+        assert_eq!(got.key_events(), direct.2);
+        assert_eq!(got.key_root(), direct.3.key_set_root());
+        assert!(got.work().packets >= 2);
+        assert_eq!(got.work().proofs, proofs.len() as u64);
+        assert_eq!(borsh::to_vec(&base).unwrap(), saved);
+        let missing = Material { proofs: &proofs[..proofs.len() - 1], ..input };
+        assert!(matches!(replay::build(&base, missing, budget), Err(Refusal::NeedProof { .. })));
+        let mut extra = proofs.clone();
+        extra.push(proofs[0].clone());
+        assert!(matches!(replay::build(&base, Material { proofs: &extra, ..input }, budget), Err(Refusal::ExtraProof { .. })));
+        let mut foreign = proofs.clone();
+        foreign[0].namespace ^= 1;
+        assert!(matches!(replay::build(&base, Material { proofs: &foreign, ..input }, budget), Err(Refusal::Native(_))));
+        let mut badraw = raw.clone();
+        let at = badraw.iter().position(|b| *b == b'A').unwrap();
+        badraw[at] = b'X';
+        assert!(replay::build(&base, Material { raw: &badraw, ..input }, budget).is_err());
+        assert!(matches!(replay::build(&base, Material { raw: &raw[..raw.len() - 1], ..input }, budget), Err(Refusal::OperandLength)));
+        assert!(matches!(replay::build(&base, Material { rendering: None, ..input }, budget), Err(Refusal::RenderingOperand)));
+        assert!(matches!(replay::build(&base, input, Budget { max_packets: got.work().packets - 1, ..budget }), Err(Refusal::Budget)));
+        assert_eq!(borsh::to_vec(&base).unwrap(), saved);
     }
 
     fn data_producer_budget() -> producer::Budget {
-        producer::Budget {max_proofs:1000,max_nodes:513000,max_requests:1<<30,max_hash_calls:1000000,max_hash_bytes:1<<30}
+        producer::Budget {
+            max_proofs: 1000,
+            max_nodes: 513000,
+            max_requests: 1 << 30,
+            max_hash_calls: 1000000,
+            max_hash_bytes: 1 << 30,
+        }
     }
     #[test]
     fn production_key_material_is_data_identical_across_native_contexts_and_rechecks() {
-        let raw=br#"{"model":{"vocab":{"A":0,"B":1},"merges":[]},"added_tokens":[]}"#;
-        let a=replay_fixture(raw,b"A");
-        let mut b=replay_fixture(raw,b"A");
-        b.context=Hash64::from_u64_word(109);
-        b.parser=PalwTokenizerJsonStreamV1::new(b.context,crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw),raw.len() as u64,0);
-        b.table.context=b.context;
-        let first=producer::generate(&a,raw,data_producer_budget()).unwrap();
-        let second=producer::generate(&b,raw,data_producer_budget()).unwrap();
+        let raw = br#"{"model":{"vocab":{"A":0,"B":1},"merges":[]},"added_tokens":[]}"#;
+        let a = replay_fixture(raw, b"A");
+        let mut b = replay_fixture(raw, b"A");
+        b.context = Hash64::from_u64_word(109);
+        b.parser = PalwTokenizerJsonStreamV1::new(
+            b.context,
+            crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw),
+            raw.len() as u64,
+            0,
+        );
+        b.table.context = b.context;
+        let first = producer::generate(&a, raw, data_producer_budget()).unwrap();
+        let second = producer::generate(&b, raw, data_producer_budget()).unwrap();
         assert!(!first.proofs().is_empty());
-        assert_eq!(first.proofs(),second.proofs());
-        assert_eq!(first.root(),second.root());
+        assert_eq!(first.proofs(), second.proofs());
+        assert_eq!(first.root(), second.root());
         // Independent preexisting test Book and actual parser grammar, not generator twice only.
-        let atoms=replay_atoms(&a,raw,true).unwrap();
-        let expected:Vec<_>=atoms.iter().flat_map(|p|p.proofs.clone()).collect();
-        assert_eq!(first.proofs(),expected);
-        let budget=canonical_replay::Budget{max_material_bytes:1<<20,max_proofs:1000,max_native_calls:10000,max_packets:10000};
-        for base in [&a,&b] {
-            let material=canonical_replay::Material{raw,proofs:first.proofs(),rendering:Some(b"A")};
-            let finding=canonical_replay::build(base,material,budget).unwrap();
+        let atoms = replay_atoms(&a, raw, true).unwrap();
+        let expected: Vec<_> = atoms.iter().flat_map(|p| p.proofs.clone()).collect();
+        assert_eq!(first.proofs(), expected);
+        let budget =
+            canonical_replay::Budget { max_material_bytes: 1 << 20, max_proofs: 1000, max_native_calls: 10000, max_packets: 10000 };
+        for base in [&a, &b] {
+            let material = canonical_replay::Material { raw, proofs: first.proofs(), rendering: Some(b"A") };
+            let finding = canonical_replay::build(base, material, budget).unwrap();
             assert!(!finding.violation());
-            assert_eq!(finding.key_root(),first.root());
+            assert_eq!(finding.key_root(), first.root());
         }
         // Counts only wrapped producer hash invocations, not verifier CPU/hash totals.
-        assert_eq!(first.hash_calls,first.native_proof_calls*514);
-        assert_eq!(first.hash_bytes,first.native_proof_calls*(72+64+512*130));
+        assert_eq!(first.hash_calls, first.native_proof_calls * 514);
+        assert_eq!(first.hash_bytes, first.native_proof_calls * (72 + 64 + 512 * 130));
     }
     #[test]
     fn production_key_material_obeys_actual_overrun_duplicate_and_eof_authentication() {
-        let raw=br#"{"model":{"vocab":{"A":0,"A":1},"merges":[]}}"#;
-        for bound in [0,1,512] {
-            let mut base=replay_fixture(raw,b"A");
-            base.signed_key_bound=bound;
-            let result=producer::generate(&base,raw,data_producer_budget()).unwrap();
-            assert!(result.proofs().len() as u64<=bound);
-            if bound==0 {assert!(result.proofs().is_empty());}
-            let budget=canonical_replay::Budget{max_material_bytes:1<<20,max_proofs:1000,max_native_calls:10000,max_packets:10000};
-            let finding=canonical_replay::build(&base,canonical_replay::Material{raw,proofs:result.proofs(),rendering:Some(b"A")},budget).unwrap();
+        let raw = br#"{"model":{"vocab":{"A":0,"A":1},"merges":[]}}"#;
+        for bound in [0, 1, 512] {
+            let mut base = replay_fixture(raw, b"A");
+            base.signed_key_bound = bound;
+            let result = producer::generate(&base, raw, data_producer_budget()).unwrap();
+            assert!(result.proofs().len() as u64 <= bound);
+            if bound == 0 {
+                assert!(result.proofs().is_empty());
+            }
+            let budget = canonical_replay::Budget {
+                max_material_bytes: 1 << 20,
+                max_proofs: 1000,
+                max_native_calls: 10000,
+                max_packets: 10000,
+            };
+            let finding = canonical_replay::build(
+                &base,
+                canonical_replay::Material { raw, proofs: result.proofs(), rendering: Some(b"A") },
+                budget,
+            )
+            .unwrap();
             assert!(finding.violation());
-            if bound==512 {
+            if bound == 512 {
                 // Duplicate membership causes no new leaf/ancestor hashes.
-                assert!(result.hash_calls<result.native_proof_calls*514);
+                assert!(result.hash_calls < result.native_proof_calls * 514);
             }
         }
-        let base=replay_fixture(raw,b"A");
-        let mut bad=raw.to_vec();
-        *bad.last_mut().unwrap()=b' ';
-        assert!(matches!(producer::generate(&base,&bad,data_producer_budget()),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))));
-        let mut budget=data_producer_budget();budget.max_requests=0;
-        assert!(matches!(producer::generate(&base,raw,budget),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
-        let good=producer::generate(&base,raw,data_producer_budget()).unwrap();
-        let mut budget=data_producer_budget();budget.max_hash_calls=good.hash_calls-1;
-        assert!(matches!(producer::generate(&base,raw,budget),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+        let base = replay_fixture(raw, b"A");
+        let mut bad = raw.to_vec();
+        *bad.last_mut().unwrap() = b' ';
+        assert!(matches!(
+            producer::generate(&base, &bad, data_producer_budget()),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))
+        ));
+        let mut budget = data_producer_budget();
+        budget.max_requests = 0;
+        assert!(matches!(
+            producer::generate(&base, raw, budget),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+        ));
+        let good = producer::generate(&base, raw, data_producer_budget()).unwrap();
+        let mut budget = data_producer_budget();
+        budget.max_hash_calls = good.hash_calls - 1;
+        assert!(matches!(
+            producer::generate(&base, raw, budget),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+        ));
     }
     #[test]
     fn production_key_material_owner_refuses_before_construction_holds_quota_and_releases() {
-        use crate::palw_native_resource_v1::{NativeDemandCheckerV1,NativeSnapshotResourceLimitsV1,NativeDecodeErrorV1};
-        let raw=br#"{"model":{"vocab":{"A":0,"B":1},"merges":[]}}"#;
-        let base=replay_fixture(raw,b"A");
-        let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:u64::MAX,database_bytes:0});
-        let first=producer::generate_reserved(&base,raw,data_producer_budget(),|q|checker.reserve_requests_v1(q,0).map(Some)).unwrap();
-        let q=checker.outstanding().0;
-        assert!(q>0);
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1, NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1};
+        let raw = br#"{"model":{"vocab":{"A":0,"B":1},"merges":[]}}"#;
+        let base = replay_fixture(raw, b"A");
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: u64::MAX, database_bytes: 0 });
+        let first =
+            producer::generate_reserved(&base, raw, data_producer_budget(), |q| checker.reserve_requests_v1(q, 0).map(Some)).unwrap();
+        let q = checker.outstanding().0;
+        assert!(q > 0);
         drop(first);
-        assert_eq!(checker.outstanding(),(0,0));
-        let mut wrong=raw.to_vec();*wrong.last_mut().unwrap()=b' ';
-        for bytes in [raw.as_slice(),wrong.as_slice()] {
-            let short=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:q-1,database_bytes:0});
-            assert!(matches!(producer::generate_reserved(&base,bytes,data_producer_budget(),|n|short.reserve_requests_v1(n,0).map(Some)),Err(NativeDecodeErrorV1::Resource(_))));
-            assert_eq!(short.outstanding(),(0,0));
+        assert_eq!(checker.outstanding(), (0, 0));
+        let mut wrong = raw.to_vec();
+        *wrong.last_mut().unwrap() = b' ';
+        for bytes in [raw.as_slice(), wrong.as_slice()] {
+            let short = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: q - 1, database_bytes: 0 });
+            assert!(matches!(
+                producer::generate_reserved(&base, bytes, data_producer_budget(), |n| short.reserve_requests_v1(n, 0).map(Some)),
+                Err(NativeDecodeErrorV1::Resource(_))
+            ));
+            assert_eq!(short.outstanding(), (0, 0));
         }
-        let exact=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:q,database_bytes:0});
-        let owner=producer::generate_reserved(&base,raw,data_producer_budget(),|n|exact.reserve_requests_v1(n,0).map(Some)).unwrap();
-        assert_eq!(exact.outstanding(),(q,0));
-        assert!(exact.reserve_requests_v1(1,0).is_err());
+        let exact = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: q, database_bytes: 0 });
+        let owner =
+            producer::generate_reserved(&base, raw, data_producer_budget(), |n| exact.reserve_requests_v1(n, 0).map(Some)).unwrap();
+        assert_eq!(exact.outstanding(), (q, 0));
+        assert!(exact.reserve_requests_v1(1, 0).is_err());
         drop(owner);
-        assert_eq!(exact.outstanding(),(0,0));
-        let ticket=exact.reserve_requests_v1(q,0).unwrap();drop(ticket);
-        assert!(matches!(producer::generate_reserved(&base,&wrong,data_producer_budget(),|n|exact.reserve_requests_v1(n,0).map(Some)),Err(NativeDecodeErrorV1::Decode(_))));
-        assert_eq!(exact.outstanding(),(0,0));
-        let ticket=exact.reserve_requests_v1(q,0).unwrap();drop(ticket);
-        assert_eq!(exact.outstanding(),(0,0));
+        assert_eq!(exact.outstanding(), (0, 0));
+        let ticket = exact.reserve_requests_v1(q, 0).unwrap();
+        drop(ticket);
+        assert!(matches!(
+            producer::generate_reserved(&base, &wrong, data_producer_budget(), |n| exact.reserve_requests_v1(n, 0).map(Some)),
+            Err(NativeDecodeErrorV1::Decode(_))
+        ));
+        assert_eq!(exact.outstanding(), (0, 0));
+        let ticket = exact.reserve_requests_v1(q, 0).unwrap();
+        drop(ticket);
+        assert_eq!(exact.outstanding(), (0, 0));
     }
-
 }
 
 // Read-only native allocation inventory; no state/root/codec field is added.

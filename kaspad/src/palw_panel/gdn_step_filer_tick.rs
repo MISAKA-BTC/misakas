@@ -5,10 +5,10 @@
 //! lane (`court_pending`, due now), like the held filer's.
 use super::*;
 use crate::palw_gdn_step_filer::{
-    PALW_GDN_STEP_CLAIMS_PER_TICK_V1, PALW_GDN_STEP_DISCOVER_PER_TICK_V1, PALW_GDN_STEP_FINAL_MARGIN_DAA_V1, PalwGdnStepCaseV1, PALW_GDN_STEP_PROBES_PER_TICK_V1, PalwGdnStepBookV1,
-    PalwGdnStepClaimV1, PalwGdnStepReservationAtTipV1, PalwGdnStepResendV1, PalwGdnStepStageV1, PalwGdnStepWindowFactsV1,
-    PalwGdnStepWindowV1, palw_gdn_step_convicted_v1, palw_gdn_step_false_valid_proof_v1, palw_gdn_step_probe_case_v1,
-    palw_gdn_step_resend_v1, palw_gdn_step_window_v1,
+    PALW_GDN_STEP_CLAIMS_PER_TICK_V1, PALW_GDN_STEP_DISCOVER_PER_TICK_V1, PALW_GDN_STEP_FINAL_MARGIN_DAA_V1,
+    PALW_GDN_STEP_PROBES_PER_TICK_V1, PalwGdnStepBookV1, PalwGdnStepCaseV1, PalwGdnStepClaimV1, PalwGdnStepResendV1,
+    PalwGdnStepReservationAtTipV1, PalwGdnStepStageV1, PalwGdnStepWindowFactsV1, PalwGdnStepWindowV1, palw_gdn_step_convicted_v1,
+    palw_gdn_step_false_valid_proof_v1, palw_gdn_step_probe_case_v1, palw_gdn_step_resend_v1, palw_gdn_step_window_v1,
 };
 use crate::palw_panel::court_outbox::CourtOutboxV1;
 use crate::palw_panel::gdn_filer_tick::PALW_GDN_FILER_ROUND_V1;
@@ -35,13 +35,16 @@ impl PalwPanelService {
     ) {
         use kaspa_consensus_core::config::params::ForkActivation;
         let params = &self.consensus_config.params;
-        let armed = params.palw_memory_routing_court_v2_fence().is_some_and(|f| f != ForkActivation::never() && f.is_active(current_daa));
+        let armed =
+            params.palw_memory_routing_court_v2_fence().is_some_and(|f| f != ForkActivation::never() && f.is_active(current_daa));
         if !self.config.gdn_step_filer {
             return;
         }
         if !armed {
             crate::palw_backends::note_throttled_v1("panel-gdn-step-filer-dormant", || {
-                format!("[{PALW_PANEL}] the GDN step filer is enabled but palw_memory_routing_court_v2 is not in force at DAA {current_daa}: idle")
+                format!(
+                    "[{PALW_PANEL}] the GDN step filer is enabled but palw_memory_routing_court_v2 is not in force at DAA {current_daa}: idle"
+                )
             });
             return;
         }
@@ -70,7 +73,10 @@ impl PalwPanelService {
         let limits: HashMap<Hash64, kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2> = session
             .clone()
             .spawn_blocking(move |c| {
-                classes.into_iter().filter_map(|class| c.palw_gdn_court_limits_v2(class).map(|l| (class, l))).collect::<HashMap<_, _>>()
+                classes
+                    .into_iter()
+                    .filter_map(|class| c.palw_gdn_court_limits_v2(class).map(|l| (class, l)))
+                    .collect::<HashMap<_, _>>()
             })
             .await;
         let mut probed = 0usize;
@@ -89,11 +95,15 @@ impl PalwPanelService {
                 continue;
             }
             let Some(class_limits) = limits.get(&e.d.class_id).copied() else {
-                debug!("[{PALW_PANEL}] claim {claim_id}: the GDN step filer has no court limits for class {} at the tip", e.d.class_id);
+                debug!(
+                    "[{PALW_PANEL}] claim {claim_id}: the GDN step filer has no court limits for class {} at the tip",
+                    e.d.class_id
+                );
                 continue;
             };
             let Some(q36) = e.backend.as_any_v1().and_then(|a| a.downcast_ref::<Qwen36Backend>()) else { continue };
-            let owned = match q36.gdn_accuser_view_retained_v3(&e.capture, Some(e.prompt.as_slice()), e.d.execution_root, e.d.class_id) {
+            let owned = match q36.gdn_accuser_view_retained_v3(&e.capture, Some(e.prompt.as_slice()), e.d.execution_root, e.d.class_id)
+            {
                 Ok(owned) => owned,
                 Err(why) => {
                     debug!("[{PALW_PANEL}] claim {claim_id}: the GDN step filer has no accuser view yet: {why}");
@@ -174,7 +184,8 @@ impl PalwPanelService {
             };
             // The verdict: a conviction hands every liable Valid signer to the false-Valid filer.
             if let Some(voided_daa) = palw_gdn_step_convicted_v1(&view.phase) {
-                let fv_armed = crate::palw_filer_false_valid::palw_false_valid_armed_v1(params, self.config.fee_outpoint.is_some(), current_daa);
+                let fv_armed =
+                    crate::palw_filer_false_valid::palw_false_valid_armed_v1(params, self.config.fee_outpoint.is_some(), current_daa);
                 let mut noted = false_valid.holds(&claim_id);
                 if !noted && fv_armed {
                     noted = false_valid.note_proof_v1(
@@ -221,12 +232,11 @@ impl PalwPanelService {
                     network_domain,
                     kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_reservation_v1(&view, bond_key),
                     |m| {
-                        sign(m, kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1).unwrap_or_else(
-                            || {
+                        sign(m, kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1)
+                            .unwrap_or_else(|| {
                                 signed = false;
                                 Vec::new()
-                            },
-                        )
+                            })
                     },
                 );
                 signed.then_some(object)
@@ -261,7 +271,9 @@ impl PalwPanelService {
                                 court_outbox.set_due(accuse_key, current_daa);
                                 sent.accusation = Some((current_daa, 1));
                             }
-                            Err(why) => warn!("[{PALW_PANEL}] claim {claim_id}: GDN accusation admission refused; retained for retry: {why}"),
+                            Err(why) => {
+                                warn!("[{PALW_PANEL}] claim {claim_id}: GDN accusation admission refused; retained for retry: {why}")
+                            }
                         }
                     }
                     PalwGdnStepWindowV1::Closed(why) => {
@@ -302,7 +314,9 @@ impl PalwPanelService {
                                     let n = sent.accusation.map_or(0, |(_, n)| n);
                                     sent.accusation = Some((current_daa, n.saturating_add(1)));
                                 }
-                                Err(why) => warn!("[{PALW_PANEL}] claim {claim_id}: GDN resend admission refused; retained for retry: {why}"),
+                                Err(why) => {
+                                    warn!("[{PALW_PANEL}] claim {claim_id}: GDN resend admission refused; retained for retry: {why}")
+                                }
                             }
                         }
                         PalwGdnStepResendV1::GiveUp(why) => {
@@ -317,7 +331,9 @@ impl PalwPanelService {
             match settle_why {
                 Some(why) => book.settle(&claim_id, why),
                 None => {
-                    if let Some(PalwGdnStepCaseV1 { stage: PalwGdnStepStageV1::Filed { sent: slot, .. }, .. }) = book.cases.get_mut(&claim_id) {
+                    if let Some(PalwGdnStepCaseV1 { stage: PalwGdnStepStageV1::Filed { sent: slot, .. }, .. }) =
+                        book.cases.get_mut(&claim_id)
+                    {
                         *slot = sent;
                     }
                 }

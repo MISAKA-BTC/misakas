@@ -2,15 +2,15 @@
 
 use super::*;
 
-mod panel;
-mod execution;
-mod reporting;
-mod court;
-mod model_market;
-mod class_registration;
 mod bond_readiness;
-mod kernel_material;
+mod class_registration;
+mod court;
+mod execution;
 mod improvement;
+mod kernel_material;
+mod model_market;
+mod panel;
+mod reporting;
 mod structural;
 
 /// Admission data faults and local native capacity have different dispositions.
@@ -21,11 +21,16 @@ pub(in crate::pipeline::virtual_processor) enum PalwObjectAdmissionFaultV1 {
     Semantic(String),
 }
 impl From<String> for PalwObjectAdmissionFaultV1 {
-    fn from(why: String) -> Self { Self::Semantic(why) }
+    fn from(why: String) -> Self {
+        Self::Semantic(why)
+    }
 }
 impl std::fmt::Display for PalwObjectAdmissionFaultV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self { Self::Resource(why) => write!(f, "{why}"), Self::Semantic(why) => write!(f, "{why}") }
+        match self {
+            Self::Resource(why) => write!(f, "{why}"),
+            Self::Semantic(why) => write!(f, "{why}"),
+        }
     }
 }
 
@@ -96,15 +101,17 @@ impl VirtualStateProcessor {
                 | Obj::OptimisticLicensed { .. }
                 | Obj::TirShardReceiptLicensed { .. }
                 | Obj::ShardReceiptLicensed { .. }
-                | Obj::MaterialDisclosed { .. } => self.palw_validate_panel_object_v1(state, state_params, point, panel_params, object)?,
+                | Obj::MaterialDisclosed { .. } => {
+                    self.palw_validate_panel_object_v1(state, state_params, point, panel_params, object)?
+                }
                 Obj::ExecWorkRootOpenedV2 { .. }
                 | Obj::ExecOriginRecordedV1 { .. }
                 | Obj::FreePromptCommitted { .. }
                 | Obj::GenTensorCommitted { .. }
                 | Obj::DerivedArtifactV1 { .. } => self.palw_validate_execution_object_v1(state, state_params, point, object)?,
-                Obj::ReporterCommitted { .. }
-                | Obj::ReporterRevealed { .. }
-                | Obj::ObjectiveOffence { .. } => self.palw_validate_reporting_object_v1(state, state_params, point, object)?,
+                Obj::ReporterCommitted { .. } | Obj::ReporterRevealed { .. } | Obj::ObjectiveOffence { .. } => {
+                    self.palw_validate_reporting_object_v1(state, state_params, point, object)?
+                }
                 Obj::CourtOpened { .. }
                 | Obj::CourtCloseDeclared { .. }
                 | Obj::CourtCloseChunk { .. }
@@ -188,7 +195,9 @@ impl VirtualStateProcessor {
                 | Obj::TirClassLayoutPublishedV1 { .. }
                 | Obj::TirClassContainerBoundV1 { .. }
                 | Obj::ClassSemanticsDeclaredV1 { .. }
-                | Obj::AdapterClassListed { .. } => self.palw_validate_class_registration_object_v1(state, state_params, point, object)?,
+                | Obj::AdapterClassListed { .. } => {
+                    self.palw_validate_class_registration_object_v1(state, state_params, point, object)?
+                }
                 Obj::BondRetireRequested { .. }
                 | Obj::BondRegistered { .. }
                 | Obj::BondCapabilityDeclared { .. }
@@ -213,7 +222,9 @@ impl VirtualStateProcessor {
                 | Obj::ProviderChallengeV1 { .. }
                 | Obj::ProviderAnswerV1 { .. }
                 | Obj::DaTransferV1 { .. }
-                | Obj::KernelConstraintReceiptV1 { .. } => self.palw_validate_kernel_material_object_v1(state, state_params, point, object)?,
+                | Obj::KernelConstraintReceiptV1 { .. } => {
+                    self.palw_validate_kernel_material_object_v1(state, state_params, point, object)?
+                }
                 Obj::ModelLineImprovementPolicySet { .. }
                 | Obj::ImprovementPoolFunded { .. }
                 | Obj::LineageHeadRolledBack { .. }
@@ -228,9 +239,9 @@ impl VirtualStateProcessor {
                 | Obj::TeachingArtifactRevealed { .. }
                 | Obj::TeacherLicenceRegistered { .. }
                 | Obj::CandidateSubmitted { .. } => self.palw_validate_improvement_object_v1(state, point, object)?,
-                Obj::SignedRegistrationV1 { .. }
-                | Obj::ReservedPipelineDa84(..)
-                | Obj::ReservedPipelineDa85(..) => self.palw_validate_structural_object_v1(object)?,
+                Obj::SignedRegistrationV1 { .. } | Obj::ReservedPipelineDa84(..) | Obj::ReservedPipelineDa85(..) => {
+                    self.palw_validate_structural_object_v1(object)?
+                }
                 Obj::SourceBootstrapV1 { actor, action, signature } => {
                     use kaspa_consensus_core::palw_source_bootstrap_v1 as bootstrap;
                     let policy = self
@@ -296,9 +307,13 @@ impl VirtualStateProcessor {
                     }
                     let signer = state.bond(&answer.provider).ok_or("routed material provider bond absent")?;
                     if !Self::verify_mldsa87_with_context_bool(
-                        &signer.pubkey, answer.message(self.palw_network_domain_v2()).as_byte_slice(),
-                        &answer.signature, kaspa_consensus_core::palw_routed_material_v2::PALW_ROUTED_MATERIAL_CONTEXT_V2,
-                    ) { return Err("routed material answer lacks its exact provider signature".into()); }
+                        &signer.pubkey,
+                        answer.message(self.palw_network_domain_v2()).as_byte_slice(),
+                        &answer.signature,
+                        kaspa_consensus_core::palw_routed_material_v2::PALW_ROUTED_MATERIAL_CONTEXT_V2,
+                    ) {
+                        return Err("routed material answer lacks its exact provider signature".into());
+                    }
                     // Native membership and local workspace admission run in the
                     // typed fold. A local refusal is not a peer-object verdict.
                 }

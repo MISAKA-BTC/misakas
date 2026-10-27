@@ -459,14 +459,18 @@ fn execute_block_evm_inner_v2(
     // ADR-0089 Decisions 2 and 5: the window and the hand, bound to this block's view, registered
     // only when the fence says so and a view was given.
     let market: Option<MarketHandlers> = if input.market.fences.evm_active && retained_view.is_some() {
-        Some(MarketHandlers::new_retained_v2(retained_view.expect("checked retained view"), input.market.fences, input.market.chain_id)
-            .map_err(EvmExecError::NativeResource)?)
-    } else { input
-        .market
-        .palw_view
-        .clone()
-        .filter(|_| input.market.fences.evm_active)
-        .map(|view| MarketHandlers::new(view, input.market.fences, input.market.chain_id)) };
+        Some(
+            MarketHandlers::new_retained_v2(retained_view.expect("checked retained view"), input.market.fences, input.market.chain_id)
+                .map_err(EvmExecError::NativeResource)?,
+        )
+    } else {
+        input
+            .market
+            .palw_view
+            .clone()
+            .filter(|_| input.market.fences.evm_active)
+            .map(|view| MarketHandlers::new(view, input.market.fences, input.market.chain_id))
+    };
     let market_for_seam = market.clone();
     let mut market_actions: Vec<PalwEvmMarketActionV1> = Vec::new();
     let mut burn_this_block: u128 = 0;
@@ -1322,9 +1326,12 @@ mod tests {
         // ADR0139 round gas is part of the exact same input, even when no
         // user transaction executes. Cover both parent shapes and receipt
         // layouts, including the historical minimum clamp and round ceiling.
-        for cap in [0, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
+        for cap in [
+            0,
+            MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
             kaspa_consensus_core::evm::evm_user_gas_cap_v1(Some(1)),
-            kaspa_consensus_core::evm::EVM_CHAIN_BLOCK_GAS_CEILING_V1] {
+            kaspa_consensus_core::evm::EVM_CHAIN_BLOCK_GAS_CEILING_V1,
+        ] {
             for receipt_fence in [0, u64::MAX] {
                 input.user_gas_cap = cap;
                 input.typed_receipt_root_activation_daa_score = receipt_fence;
@@ -2378,5 +2385,4 @@ mod tests {
     }
     include!("accepted_market_replay_tests_v2.rs");
     include!("production_market_owned_tests_v2.rs");
-
 }

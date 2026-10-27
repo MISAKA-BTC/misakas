@@ -167,13 +167,17 @@ fn prepay(
         q.set(axis, v);
     }
     let e = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(bad)?;
-    let mut s =
-        super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
+    let mut s = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
     s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope((&q).into())).map_err(bad)?;
     super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64])?;
     Ok(true)
 }
-fn matured(builder: &TransitionBuilder<'_>, signer: &PalwBondKeyV2, p: &NativeExecutionPoliciesV39, now: u64) -> Result<Digest, PalwStateV2Error> {
+fn matured(
+    builder: &TransitionBuilder<'_>,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV39,
+    now: u64,
+) -> Result<Digest, PalwStateV2Error> {
     let bond = builder.state.bonds.get(signer).ok_or_else(|| bad("mining39 signer bond absent"))?;
     if !matches!(bond.status, PalwBondStatusV2::Active)
         || now.saturating_sub(bond.registered_daa) < p.execution.execution.horizons.seal_maturity
@@ -302,8 +306,8 @@ fn seat_or_retire(
                 last_use: ctx.daa_score,
                 live_claims: 0,
             };
-            let free =
-                (builder.state.bonds.get(signer).map(|b| b.collateral).unwrap_or(0) as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score));
+            let free = (builder.state.bonds.get(signer).map(|b| b.collateral).unwrap_or(0) as u128)
+                .saturating_sub(builder.committed_at(signer, ctx.daa_score));
             if free < s.stake as u128 {
                 return Err(bad("mining39 seat stake exceeds the bond's free collateral"));
             }
@@ -457,7 +461,14 @@ fn commit(
     let model_hash = Hash64::from_bytes(w.model);
     // ADR-0176 shared budget (B/R/F, bond formula v2 liability, ADR-0177 allocation for this model line) — refused whole, never
     // silently reduced; planned BEFORE any write.
-    let plan = builder.plan_native_mining_budget_v39(ctx, *signer, model_hash, price.quanta, policy.weight_per_quantum, price.reserved_exposure)?;
+    let plan = builder.plan_native_mining_budget_v39(
+        ctx,
+        *signer,
+        model_hash,
+        price.quanta,
+        policy.weight_per_quantum,
+        price.reserved_exposure,
+    )?;
     let record = NativeMiningClaimRecordV39 {
         version: 39,
         id,
@@ -550,7 +561,10 @@ fn issue(
             master: c.master,
             producer: c.producer,
             operator: c.operator,
-            approval: object_id(b"misaka-palw/native/mining-certification-approval/v39", &(row.claim, decided, row.draws.len() as u32, row.positive_positions())),
+            approval: object_id(
+                b"misaka-palw/native/mining-certification-approval/v39",
+                &(row.claim, decided, row.draws.len() as u32, row.positive_positions()),
+            ),
             price: c.price.clone(),
             established_daa: ctx.daa_score,
             expires: ctx.daa_score.saturating_add(policy.receipt_lifetime_daa),
@@ -591,14 +605,15 @@ fn collect(
             (c.id, None)
         }
         _ => {
-            let (rc, c) =
-                native_mining_receipt_view_v39(&builder.state, &Hash64::from_bytes(w.id)).ok_or_else(|| bad("mining39 receipt absent"))?;
+            let (rc, c) = native_mining_receipt_view_v39(&builder.state, &Hash64::from_bytes(w.id))
+                .ok_or_else(|| bad("mining39 receipt absent"))?;
             if ctx.daa_score <= rc.expires && rc.spent_quanta < rc.price.quanta {
                 return Err(bad("mining39 receipt still live"));
             }
             // G-N2: a rewarded claim stays accusable (and its material held) through its liability horizon.
             let policy = policy(builder, ctx)?;
-            let certification = builder.params.rfc0018_v1().map(|m| m.certification).ok_or_else(|| bad("mining39 requires RFC-0018"))?;
+            let certification =
+                builder.params.rfc0018_v1().map(|m| m.certification).ok_or_else(|| bad("mining39 requires RFC-0018"))?;
             if ctx.daa_score <= palw_native_mining_liability_until_v39(c.admitted_daa, &policy, &certification) {
                 return Err(bad("mining39 receipt's claim is still within its liability horizon"));
             }
@@ -665,7 +680,12 @@ pub(super) fn apply_native_receipt_block_v39(
     {
         return Err(bad("mining39 receipt block producer/expiry/quantum or single use differs"));
     }
-    if !crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39(builder.params, &builder.state, &c.claim_hash(), c.admitted_daa) {
+    if !crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39(
+        builder.params,
+        &builder.state,
+        &c.claim_hash(),
+        c.admitted_daa,
+    ) {
         return Err(bad("mining39 receipt block's mining claim is not SecurityCertified (Gate C)"));
     }
     if crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&builder.state, &c.claim_hash()) {
@@ -706,8 +726,13 @@ pub(super) fn apply_native_receipt_block_v39(
         }
     }
     let last = rc.spent_quanta + 1 >= rc.price.quanta;
-    let granted =
-        builder.bond_budget_native_receipt_spend_v39(ctx, &native_mining_budget_id_v39(&c.id), rc.producer, policy.weight_per_quantum, last)?;
+    let granted = builder.bond_budget_native_receipt_spend_v39(
+        ctx,
+        &native_mining_budget_id_v39(&c.id),
+        rc.producer,
+        policy.weight_per_quantum,
+        last,
+    )?;
     builder.state.safe_weight = builder.state.safe_weight.checked_add(granted).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     // G-N2: what this receipt granted, so a conviction takes all of it back.
     let total: u128 = read::<u128>(route(builder)?, MINING_RECEIPT_GRANTED_KIND_V39, &rc.id, 32).unwrap_or(0);
@@ -722,7 +747,8 @@ pub(super) fn apply_native_receipt_block_v39(
 /// Final still stands.
 pub(super) fn native_mining_claim_live_v39(state: &PalwChainStateV2, mining_claim: &Hash64) -> bool {
     let Some(r) = state.kernel_route.as_ref() else { return false };
-    claim(r, &mining_claim.as_bytes()).is_ok_and(|c| c.closed.is_none() && master_final(r, &c.master).is_some_and(|f| f.root() == c.master_final))
+    claim(r, &mining_claim.as_bytes())
+        .is_ok_and(|c| c.closed.is_none() && master_final(r, &c.master).is_some_and(|f| f.root() == c.master_final))
 }
 /// Readonly view for RPC/SDK: a model and its tier coefficient (permille) as `palw_model_tier_v1` reports it.
 pub fn palw_native_mining_model_view_v39(
@@ -746,6 +772,9 @@ mod r5_mining_receipt_leg_tests {
     #[test]
     fn mining39_receipt_leg_is_not_held_to_the_liability_horizon() {
         assert!(matches!(super::native_mining_receipt_leg_v39(), PalwLegLiabilityV1::NoLiableClaim(_)));
-        assert!(!matches!(super::native_mining_receipt_leg_v39(), PalwLegLiabilityV1::NativeClaim { .. } | PalwLegLiabilityV1::Unsourced(_)));
+        assert!(!matches!(
+            super::native_mining_receipt_leg_v39(),
+            PalwLegLiabilityV1::NativeClaim { .. } | PalwLegLiabilityV1::Unsourced(_)
+        ));
     }
 }

@@ -185,7 +185,13 @@ impl OperationalLedgerV1 {
         if *permit.scope_v1() != expected {
             return Err("TIR work permit changes exact accepted execution scope".into());
         }
-        Ok(Self { source_id: expected.source_id, maximum: permit.work_v1(), spent: Default::default(), permit: Some(permit), pass: false })
+        Ok(Self {
+            source_id: expected.source_id,
+            maximum: permit.work_v1(),
+            spent: Default::default(),
+            permit: Some(permit),
+            pass: false,
+        })
     }
 
     pub(super) fn require_current_v1(

@@ -313,20 +313,29 @@ impl PalwPanelService {
                 };
                 // Last native read after disclosure, immediately before signing.
                 // Existing snapshot/packet reservations remain live here.
-                let Some(signature)=super::response_presign::sign_current_v1(
-                    session.palw_staged_tir_prefix_v1((claim,owner)),
-                    |fresh|super::response_presign::tir_current_v1(&progress,fresh,&movement,signer),
-                    ||self.sign(&movement.signing_message(),PALW_CONSTRAINT_STREAM_CONTEXT_V1),
-                )? else {return Ok(())};
-                movement.signature=signature;
+                let Some(signature) = super::response_presign::sign_current_v1(
+                    session.palw_staged_tir_prefix_v1((claim, owner)),
+                    |fresh| super::response_presign::tir_current_v1(&progress, fresh, &movement, signer),
+                    || self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1),
+                )?
+                else {
+                    return Ok(());
+                };
+                movement.signature = signature;
                 movement.check()?;
                 let deadline = row.respond_until_daa;
-                let clock=progress.now_daa;
-                let object=PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
-                court_outbox.try_push_source_response(
-                    key,&object,deadline.saturating_sub(1),
-                    super::court_outbox::SourceResponseSnapshotV1::Tir(progress),snapshot,Some(packet_memory),
-                ).map_err(|why|why.to_string())?;
+                let clock = progress.now_daa;
+                let object = PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
+                court_outbox
+                    .try_push_source_response(
+                        key,
+                        &object,
+                        deadline.saturating_sub(1),
+                        super::court_outbox::SourceResponseSnapshotV1::Tir(progress),
+                        snapshot,
+                        Some(packet_memory),
+                    )
+                    .map_err(|why| why.to_string())?;
                 court_outbox.mark_submitted(key, clock);
                 Ok::<(), String>(())
             }

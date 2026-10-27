@@ -312,7 +312,6 @@ pub trait PalwTirEvidenceStoreV1 {
     }
 }
 
-
 /// Test-only observation of unchanged builder store calls; never a custody certificate.
 #[cfg(test)]
 pub(crate) struct ObservedEvidenceStoreV1<'a> {
@@ -322,66 +321,92 @@ pub(crate) struct ObservedEvidenceStoreV1<'a> {
 }
 #[cfg(test)]
 impl PalwTirEvidenceStoreV1 for ObservedEvidenceStoreV1<'_> {
-    fn begin_builder_move_v1(&self) { self.inner.begin_builder_move_v1(); }
+    fn begin_builder_move_v1(&self) {
+        self.inner.begin_builder_move_v1();
+    }
     fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
-        self.calls.borrow_mut().insert(format!("step_leaf({:?})" ,index));
-        if self.deny == Some("step_leaf") { return None; }
+        self.calls.borrow_mut().insert(format!("step_leaf({:?})", index));
+        if self.deny == Some("step_leaf") {
+            return None;
+        }
         self.inner.step_leaf(index)
     }
     fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
-        self.calls.borrow_mut().insert(format!("step_opening({:?})" ,index));
-        if self.deny == Some("step_opening") { return None; }
+        self.calls.borrow_mut().insert(format!("step_opening({:?})", index));
+        if self.deny == Some("step_opening") {
+            return None;
+        }
         self.inner.step_opening(index)
     }
     fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
-        self.calls.borrow_mut().insert(format!("step_range_siblings({:?},{:?})" ,first,count));
-        if self.deny == Some("step_range_siblings") { return None; }
-        self.inner.step_range_siblings(first,count)
+        self.calls.borrow_mut().insert(format!("step_range_siblings({:?},{:?})", first, count));
+        if self.deny == Some("step_range_siblings") {
+            return None;
+        }
+        self.inner.step_range_siblings(first, count)
     }
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
-        self.calls.borrow_mut().insert(format!("param_opening({:?})" ,leaf));
-        if self.deny == Some("param_opening") { return None; }
+        self.calls.borrow_mut().insert(format!("param_opening({:?})", leaf));
+        if self.deny == Some("param_opening") {
+            return None;
+        }
         self.inner.param_opening(leaf)
     }
-    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1>  {
-        self.calls.borrow_mut().insert(format!("param_multiproof({:?})" ,leaves));
-        if self.deny == Some("param_multiproof") { return None; }
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        self.calls.borrow_mut().insert(format!("param_multiproof({:?})", leaves));
+        if self.deny == Some("param_multiproof") {
+            return None;
+        }
         self.inner.param_multiproof(leaves)
     }
-    fn param_carriage(&self, leaves: &[u32]) -> Option<PalwTirParamOpeningV1>  {
-        self.calls.borrow_mut().insert(format!("param_carriage({:?})" ,leaves));
-        if self.deny == Some("param_carriage") { return None; }
+    fn param_carriage(&self, leaves: &[u32]) -> Option<PalwTirParamOpeningV1> {
+        self.calls.borrow_mut().insert(format!("param_carriage({:?})", leaves));
+        if self.deny == Some("param_carriage") {
+            return None;
+        }
         self.inner.param_carriage(leaves)
     }
     fn prompt_token_ids(&self) -> Option<Vec<u32>> {
         self.calls.borrow_mut().insert(format!("prompt_token_ids()"));
-        if self.deny == Some("prompt_token_ids") { return None; }
+        if self.deny == Some("prompt_token_ids") {
+            return None;
+        }
         self.inner.prompt_token_ids()
     }
     fn prompt_ids_opening(&self, tile: u32) -> Option<PalwPromptIdsOpeningV1> {
-        self.calls.borrow_mut().insert(format!("prompt_ids_opening({:?})" ,tile));
-        if self.deny == Some("prompt_ids_opening") { return None; }
+        self.calls.borrow_mut().insert(format!("prompt_ids_opening({:?})", tile));
+        if self.deny == Some("prompt_ids_opening") {
+            return None;
+        }
         self.inner.prompt_ids_opening(tile)
     }
     fn decode_pin(&self) -> Option<PalwDecodeTokenPinV1> {
         self.calls.borrow_mut().insert(format!("decode_pin()"));
-        if self.deny == Some("decode_pin") { return None; }
+        if self.deny == Some("decode_pin") {
+            return None;
+        }
         self.inner.decode_pin()
     }
-    fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1>  {
-        self.calls.borrow_mut().insert(format!("row_pin({:?},{:?})" ,row,lane));
-        if self.deny == Some("row_pin") { return None; }
-        self.inner.row_pin(row,lane)
+    fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+        self.calls.borrow_mut().insert(format!("row_pin({:?},{:?})", row, lane));
+        if self.deny == Some("row_pin") {
+            return None;
+        }
+        self.inner.row_pin(row, lane)
     }
-    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)>  {
-        self.calls.borrow_mut().insert(format!("step_node({:?},{:?})" ,level,index));
-        if self.deny == Some("step_node") { return None; }
-        self.inner.step_node(level,index)
+    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        self.calls.borrow_mut().insert(format!("step_node({:?},{:?})", level, index));
+        if self.deny == Some("step_node") {
+            return None;
+        }
+        self.inner.step_node(level, index)
     }
-    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)>  {
-        self.calls.borrow_mut().insert(format!("row_node({:?},{:?})" ,level,index));
-        if self.deny == Some("row_node") { return None; }
-        self.inner.row_node(level,index)
+    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        self.calls.borrow_mut().insert(format!("row_node({:?},{:?})", level, index));
+        if self.deny == Some("row_node") {
+            return None;
+        }
+        self.inner.row_node(level, index)
     }
 }
 /// Why a builder could not build a refutation.
@@ -780,7 +805,7 @@ impl TirSource<'_, '_> {
         if let Some(i) = self.leaf_cache.get(&(ctx, node, tile)) {
             return Ok(*i);
         }
-        let coord=source_geometry::commit(self.space,self.job,ctx,node,tile)?;
+        let coord = source_geometry::commit(self.space, self.job, ctx, node, tile)?;
         let Some(index) = self.space.leaf_index(self.ctx, &coord) else {
             return tir_err(TirErrorKind::Malformed, format!("{coord:?} is no leaf of this job"));
         };
@@ -789,7 +814,7 @@ impl TirSource<'_, '_> {
     }
 
     fn reserved_coord(&self, pos: u32, reserved: u32, tile: u64) -> PalwStepCoordinateV1 {
-        source_geometry::reserved(self.space,self.job,pos,reserved,tile)
+        source_geometry::reserved(self.space, self.job, pos, reserved, tile)
     }
 }
 
@@ -840,35 +865,37 @@ impl DemandSource for TirSource<'_, '_> {
 
     fn state(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> TirResult<StateSupply> {
         self.source_read()?;
-        match source_geometry::fixed(self.space,self.job,pos,state,layer,index)? {
-            source_geometry::SupplyGeometryV1::Zero=>Ok(StateSupply::Value(0)),
-            source_geometry::SupplyGeometryV1::Replay=>Ok(StateSupply::Replay),
-            source_geometry::SupplyGeometryV1::Step{coord,dtype,lane}=>self.step_lane(coord,dtype,lane).map(StateSupply::Value),
-            source_geometry::SupplyGeometryV1::Node{..}=>unreachable!(),
+        match source_geometry::fixed(self.space, self.job, pos, state, layer, index)? {
+            source_geometry::SupplyGeometryV1::Zero => Ok(StateSupply::Value(0)),
+            source_geometry::SupplyGeometryV1::Replay => Ok(StateSupply::Replay),
+            source_geometry::SupplyGeometryV1::Step { coord, dtype, lane } => {
+                self.step_lane(coord, dtype, lane).map(StateSupply::Value)
+            }
+            source_geometry::SupplyGeometryV1::Node { .. } => unreachable!(),
         }
     }
 
-    fn hist_row(&mut self,pos:u32,state:u16,layer:Option<u16>,row_pos:u32,index:usize)->TirResult<i128> {
+    fn hist_row(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> TirResult<i128> {
         self.source_read()?;
-        match source_geometry::history(self.space,self.job,pos,state,layer,row_pos,index)? {
-            source_geometry::SupplyGeometryV1::Step{coord,dtype,lane}=>self.step_lane(coord,dtype,lane),
-            source_geometry::SupplyGeometryV1::Node{ctx,node,index}=>self.node(ctx,node,index),
-            _=>unreachable!(),
+        match source_geometry::history(self.space, self.job, pos, state, layer, row_pos, index)? {
+            source_geometry::SupplyGeometryV1::Step { coord, dtype, lane } => self.step_lane(coord, dtype, lane),
+            source_geometry::SupplyGeometryV1::Node { ctx, node, index } => self.node(ctx, node, index),
+            _ => unreachable!(),
         }
     }
 
     fn token(&mut self, pos: u32) -> TirResult<u32> {
         self.source_read()?;
-        if let crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(prompt)=self.job.token_source_v1(pos) {
+        if let crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(prompt) = self.job.token_source_v1(pos) {
             let Some(id) = self.units.prompt_id(prompt) else {
                 return tir_err(TirErrorKind::Missing, format!("the prompt id at {pos}"));
             };
             self.used.prompt.insert(pos);
             Ok(id)
         } else {
-            let generated=match self.job.token_source_v1(pos) {
-                crate::palw_tir_step_v1::PalwTirTokenSourceV1::Generated(index)=>index,
-                crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(_)=>unreachable!(),
+            let generated = match self.job.token_source_v1(pos) {
+                crate::palw_tir_step_v1::PalwTirTokenSourceV1::Generated(index) => index,
+                crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(_) => unreachable!(),
             };
             let Some(id) = self.units.generated_id(generated) else {
                 return tir_err(TirErrorKind::Missing, format!("the generated id read at {pos}"));
@@ -1112,14 +1139,25 @@ impl<'a> TirInventoryOpeningVerifierV1<'a> {
             q.exact_v1::<BTreeSet<u8>>(count)?;
             q.vec_v1::<Vec<Option<u16>>>(count)?;
             for (j, param) in program.params.iter().enumerate() {
-                let reads = |block: usize| program.blocks[block].nodes.iter().any(|n|
-                    n.inputs.iter().any(|r| matches!(r, misaka_palw_tir::Ref::Param(k) if usize::from(*k) == j)));
+                let reads = |block: usize| {
+                    program.blocks[block]
+                        .nodes
+                        .iter()
+                        .any(|n| n.inputs.iter().any(|r| matches!(r, misaka_palw_tir::Ref::Param(k) if usize::from(*k) == j)))
+                };
                 let readers = (0..program.blocks.len()).filter(|b| reads(*b)).count() as u64;
                 q.add_v1(TirNativeRequestsV1::product_v1(readers, btree_node_envelope_bytes_v1::<u8, ()>() as u64)?)?;
                 if param.per_layer {
-                    let layers = program.schedule.layers.iter().filter(|k| program.blocks.get(usize::from(**k)).is_some() && reads(usize::from(**k))).count();
+                    let layers = program
+                        .schedule
+                        .layers
+                        .iter()
+                        .filter(|k| program.blocks.get(usize::from(**k)).is_some() && reads(usize::from(**k)))
+                        .count();
                     q.vec_v1::<Option<u16>>(layers as u64)?;
-                } else { q.exact_v1::<Option<u16>>(1)?; }
+                } else {
+                    q.exact_v1::<Option<u16>>(1)?;
+                }
             }
         }
         Ok(q.bytes_v1())
@@ -1133,19 +1171,27 @@ impl<'a> TirInventoryOpeningVerifierV1<'a> {
         let name = &self.program.params.get(usize::from(param)).ok_or("parameter declaration absent")?.name;
         let path = palw_artifact_opening_path_len_v1(self.inventory.leaf_count(), leaf).ok_or("parameter path not derivable")?;
         palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize)
-            .checked_add(12).and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
+            .checked_add(12)
+            .and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
             .ok_or_else(|| "parameter opening byte count overflow".into())
     }
     /// Native bounded read: always preflight and reserve nested ownership before Borsh allocation.
     /// The returned owner is authenticated data only, not a paid/custody/availability certificate.
-    pub(crate) fn decode(&self, leaf: u32, bytes: &[u8])
-        -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>, String> {
-        use crate::palw_native_resource_v1::{preflight_native_value_v1, reserve_native_requests_v1, NativeRetainedV1};
-        if bytes.len() as u64 != self.opening_bytes(leaf)? { return Err("parameter opening exceeds exact coordinate width".into()); }
+    pub(crate) fn decode(
+        &self,
+        leaf: u32,
+        bytes: &[u8],
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>, String> {
+        use crate::palw_native_resource_v1::{NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1};
+        if bytes.len() as u64 != self.opening_bytes(leaf)? {
+            return Err("parameter opening exceeds exact coordinate width".into());
+        }
         let shape = preflight_native_value_v1::<PalwArtifactOpeningV1>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
         let lease = reserve_native_requests_v1(shape.logical_requests_v1()).map_err(|e| e.to_string())?;
         let opening: PalwArtifactOpeningV1 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
-        if opening.leaf_index != leaf { return Err("parameter opening substitutes requested coordinate".into()); }
+        if opening.leaf_index != leaf {
+            return Err("parameter opening substitutes requested coordinate".into());
+        }
         self.check(&opening).map_err(|e| e.to_string())?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(opening, lease))
     }
@@ -3859,9 +3905,12 @@ pub(crate) mod test_support {
     /// job's ACTUAL leaves, so a part-spanning leaf has to be a real one). Returns the execution and that leaf's index.
     /// Test-only wider class through the same execution/commitment builder.
     pub(crate) fn tiny_execution_selecting_wide_in(
-        ctx_of: impl FnOnce(&PalwTirClassV1,Hash64,&[u32])->PalwJobContextV2,
-        forge:Option<(usize,usize)>,select:&dyn Fn(u32,&[i32],&[u32])->u32,
-    )->TinyExecution {tiny_execution_selecting_in_vocab(ctx_of,forge,select,4096)}
+        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
+        forge: Option<(usize, usize)>,
+        select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
+    ) -> TinyExecution {
+        tiny_execution_selecting_in_vocab(ctx_of, forge, select, 4096)
+    }
     pub(crate) fn tiny_execution_wide() -> (TinyExecution, u64) {
         let x = tiny_execution_selecting_in_vocab(
             |class, class_id, prompt| {
@@ -3886,14 +3935,16 @@ pub(crate) mod test_support {
         select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
         vocab: usize,
     ) -> TinyExecution {
-        tiny_execution_selecting_in_vocab_with_tokenizer(ctx_of,forge,select,vocab,Hash64::from_bytes([3;64]))
+        tiny_execution_selecting_in_vocab_with_tokenizer(ctx_of, forge, select, vocab, Hash64::from_bytes([3; 64]))
     }
     /// Test-only real program/class whose tokenizer is bound to actual raw material.
     pub(crate) fn tiny_execution_selecting_in_vocab_with_tokenizer(
-        ctx_of:impl FnOnce(&PalwTirClassV1,Hash64,&[u32])->PalwJobContextV2,
-        forge:Option<(usize,usize)>,select:&dyn Fn(u32,&[i32],&[u32])->u32,
-        vocab:usize,tokenizer_id:Hash64,
-    )->TinyExecution {
+        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
+        forge: Option<(usize, usize)>,
+        select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
+        vocab: usize,
+        tokenizer_id: Hash64,
+    ) -> TinyExecution {
         let (program, params) = program_and_params_with_vocab(vocab);
         let bytes = program.encode();
         let class = PalwTirClassV1 {
@@ -4566,15 +4617,22 @@ mod inventory_material_tests {
             let wire = borsh::to_vec(&opening).unwrap();
             assert_eq!(verifier.opening_bytes(leaf).unwrap(), wire.len() as u64);
             assert_eq!(*verifier.decode(leaf, &wire).unwrap(), opening);
-            for cut in [0, wire.len()/2, wire.len()-1] { assert!(verifier.decode(leaf, &wire[..cut]).is_err()); }
-            let mut extra = wire.clone(); extra.push(0); assert!(verifier.decode(leaf, &extra).is_err());
-            let mut huge_name = wire.clone(); huge_name[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+            for cut in [0, wire.len() / 2, wire.len() - 1] {
+                assert!(verifier.decode(leaf, &wire[..cut]).is_err());
+            }
+            let mut extra = wire.clone();
+            extra.push(0);
+            assert!(verifier.decode(leaf, &extra).is_err());
+            let mut huge_name = wire.clone();
+            huge_name[..4].copy_from_slice(&u32::MAX.to_le_bytes());
             assert!(verifier.decode(leaf, &huge_name).is_err());
             let body_prefix = 4 + opening.operand.tensor_name.len() + if opening.operand.layer.is_some() { 3 } else { 1 } + 4;
-            let mut huge_body = wire.clone(); huge_body[body_prefix..body_prefix+4].copy_from_slice(&u32::MAX.to_le_bytes());
+            let mut huge_body = wire.clone();
+            huge_body[body_prefix..body_prefix + 4].copy_from_slice(&u32::MAX.to_le_bytes());
             assert!(verifier.decode(leaf, &huge_body).is_err());
             let path_prefix = wire.len() - 64 * opening.path.len() - 4;
-            let mut huge_path = wire.clone(); huge_path[path_prefix..path_prefix+4].copy_from_slice(&u32::MAX.to_le_bytes());
+            let mut huge_path = wire.clone();
+            huge_path[path_prefix..path_prefix + 4].copy_from_slice(&u32::MAX.to_le_bytes());
             assert!(verifier.decode(leaf, &huge_path).is_err());
             assert!(verifier.decode(inventory.leaf_count(), &wire).is_err());
             let next = (leaf + 1) % inventory.leaf_count();
@@ -4582,14 +4640,17 @@ mod inventory_material_tests {
             let proof = palw_artifact_multiproof_from_openings_v1(&[opening.clone()]).unwrap();
             let native = authenticate_params(&x.binding, &v, &inventory, &PalwTirParamOpeningV1::Single(proof)).unwrap();
             assert_eq!(native.get(&leaf), Some(&(opening.operand.row_start, opening.operand.bytes.clone())));
-            let mut bad_path = opening.clone(); bad_path.path.push(Hash64::from_bytes([0; 64]));
+            let mut bad_path = opening.clone();
+            bad_path.path.push(Hash64::from_bytes([0; 64]));
             assert!(verifier.check(&bad_path).is_err());
-            let mut bad_index = opening; bad_index.leaf_index = inventory.leaf_count();
+            let mut bad_index = opening;
+            bad_index.leaf_index = inventory.leaf_count();
             assert!(verifier.check(&bad_index).is_err());
         }
         assert!(inventory.leaf_count() > 1);
         let mut other_root = [0u8; 64];
-        other_root.copy_from_slice(x.binding.artifact_root.as_byte_slice()); other_root[0] ^= 1;
+        other_root.copy_from_slice(x.binding.artifact_root.as_byte_slice());
+        other_root[0] ^= 1;
         let other_root = Hash64::from_bytes(other_root);
         let other = TirInventoryOpeningVerifierV1::new(&program, other_root).unwrap();
         assert!(other.check(&x.param_opening(0).unwrap()).is_err());
@@ -4605,7 +4666,9 @@ mod inventory_material_tests {
                 0 => ops[0].tensor_name.push('!'),
                 1 => ops[0].layer = Some(u16::MAX),
                 2 => ops[0].row_start += 1,
-                3 => { ops[0].bytes.pop().unwrap(); },
+                3 => {
+                    ops[0].bytes.pop().unwrap();
+                }
                 4 => ops.push(ops[0].clone()),
                 _ => unreachable!(),
             }
@@ -4617,7 +4680,8 @@ mod inventory_material_tests {
             assert!(verifier.check(&opening).is_err(), "geometry mutation {mutation}");
         }
         let opening = x.param_opening(0).unwrap();
-        let mut other_program = program.clone(); other_program.params[0].name.push('!');
+        let mut other_program = program.clone();
+        other_program.params[0].name.push('!');
         let other = TirInventoryOpeningVerifierV1::new(&other_program, x.binding.artifact_root).unwrap();
         assert!(other.check(&opening).is_err());
     }

@@ -3,8 +3,9 @@
 //! `rfc9_redemption_v4`; those are not re-run here.)
 
 use kaspa_consensus_core::palw_receipt_v4::{
-    PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS, PALW_RECEIPT_V4_VERSION,
-    PalwReceiptV4Error, PalwRedemptionAuthBundleV4, PalwRedemptionAuthV4, palw_receipt_v4_split_v1, redeem_auth_id_v4,
+    PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS,
+    PALW_RECEIPT_V4_VERSION, PalwReceiptV4Error, PalwRedemptionAuthBundleV4, PalwRedemptionAuthV4, palw_receipt_v4_split_v1,
+    redeem_auth_id_v4,
 };
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
@@ -37,7 +38,8 @@ fn sign(a: &PalwRedemptionAuthV4) -> PalwRedemptionAuthBundleV4 {
     let kp = ml_dsa_87::generate_key_pair([4u8; 32]);
     let pk: &[u8] = kp.verification_key.as_ref();
     let msg = redeem_auth_id_v4(a);
-    let sig = ml_dsa_87::sign(&kp.signing_key, msg.as_bytes().as_slice(), PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, [7u8; 32]).expect("signs");
+    let sig =
+        ml_dsa_87::sign(&kp.signing_key, msg.as_bytes().as_slice(), PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, [7u8; 32]).expect("signs");
     let sig: &[u8] = sig.as_ref();
     PalwRedemptionAuthBundleV4 { authorization: a.clone(), executor_pubkey: pk.to_vec(), signature: sig.to_vec() }
 }
@@ -56,12 +58,27 @@ fn the_redemption_authorization_rules_hold_at_their_edges_and_the_signature_cove
         sign(&a).validate_v4(h(9), verify)
     };
     assert!(check(&|a| a.builder_fee_bps = PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS).is_ok());
-    assert!(matches!(check(&|a| a.builder_fee_bps = PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS + 1), Err(PalwReceiptV4Error::FeeAboveCap { .. })));
+    assert!(matches!(
+        check(&|a| a.builder_fee_bps = PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS + 1),
+        Err(PalwReceiptV4Error::FeeAboveCap { .. })
+    ));
     assert!(matches!(check(&|a| a.builder_fee_bps = u16::MAX), Err(PalwReceiptV4Error::FeeAboveCap { .. })));
     assert!(check(&|a| a.builder_fee_bps = 0).is_ok());
     assert!(matches!(check(&|a| a.quantum_hi = a.quantum_lo), Err(PalwReceiptV4Error::QuantumRangeEmpty { .. })));
-    assert!(matches!(check(&|a| { a.quantum_lo = 5; a.quantum_hi = 2; }), Err(PalwReceiptV4Error::QuantumRangeEmpty { .. })));
-    assert!(check(&|a| { a.quantum_lo = 0; a.quantum_hi = u32::MAX; }).is_ok());
+    assert!(matches!(
+        check(&|a| {
+            a.quantum_lo = 5;
+            a.quantum_hi = 2;
+        }),
+        Err(PalwReceiptV4Error::QuantumRangeEmpty { .. })
+    ));
+    assert!(
+        check(&|a| {
+            a.quantum_lo = 0;
+            a.quantum_hi = u32::MAX;
+        })
+        .is_ok()
+    );
     assert!(matches!(check(&|a| a.network_domain = h(10)), Err(PalwReceiptV4Error::NetworkDomainMismatch)));
     assert!(matches!(check(&|a| a.version = 0), Err(PalwReceiptV4Error::UnsupportedVersion { .. })));
     assert!(matches!(check(&|a| a.version = 2), Err(PalwReceiptV4Error::UnsupportedVersion { .. })));
@@ -96,7 +113,8 @@ fn no_byte_flip_truncation_or_extension_of_an_rda4_bundle_validates() {
         for f in [0x01u8, 0x80] {
             let mut b = bytes.clone();
             b[i] ^= f;
-            let r = std::panic::catch_unwind(|| PalwRedemptionAuthBundleV4::decode(&b).ok().map(|d| d.validate_v4(h(9), verify).is_ok()));
+            let r =
+                std::panic::catch_unwind(|| PalwRedemptionAuthBundleV4::decode(&b).ok().map(|d| d.validate_v4(h(9), verify).is_ok()));
             match r {
                 Ok(Some(true)) => accepted.push(i),
                 Ok(_) => {}
@@ -130,7 +148,10 @@ fn the_builder_miner_split_conserves_value_and_never_overpays_the_builder() {
         for &b in &bps {
             let (miner, fee) = palw_receipt_v4_split_v1(p, b);
             assert_eq!(miner as u128 + fee as u128, p as u128, "value is conserved for {p} at {b} bps");
-            assert!(fee as u128 * 10_000 <= p as u128 * (b.min(10_000) as u128), "the builder never gets more than its share ({p}, {b})");
+            assert!(
+                fee as u128 * 10_000 <= p as u128 * (b.min(10_000) as u128),
+                "the builder never gets more than its share ({p}, {b})"
+            );
             if b <= PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS {
                 assert!(fee as u128 * 10_000 <= p as u128 * PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS as u128);
             }

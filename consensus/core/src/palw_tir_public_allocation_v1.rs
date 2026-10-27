@@ -71,7 +71,10 @@ pub fn tir_public_prepared_bytes_v1(
     // decoded under), not the format's 65,536-lane tile — measured: 13–60 KB generations against 28–118 MB bounds before.
     // §11 (a): at most the job's actual widest leaf (the class's step space), never above the layout's decode bound.
     let raw_format_leaf = add(
-        source.widest_leaf_value_bytes_v1().min(source.maximum_leaf_bytes_v1()).min(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?),
+        source
+            .widest_leaf_value_bytes_v1()
+            .min(source.maximum_leaf_bytes_v1())
+            .min(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?),
         26,
     )?;
     let capture_payload = add(add(mul(prefill, 4)?, mul(d, add(mul(vocab, 4)?, 8)?)?)?, mul(n, raw_format_leaf)?)?;
@@ -149,13 +152,28 @@ pub enum PalwTirPublicAllocationMissingV1 {
     NativeSemanticStatement,
     NativeFloatRoute,
     CanonicalWitnessSizing(String),
-    NativeWitnessCeiling { required: u64, native: u64 },
-    NativeRootClaimCeiling { required: u64, native: u64 },
-    PreparedPublicationBound { required: u64, allocated: u64 },
-    PreparedSliceBound { required: u64, allocated: u64 },
+    NativeWitnessCeiling {
+        required: u64,
+        native: u64,
+    },
+    NativeRootClaimCeiling {
+        required: u64,
+        native: u64,
+    },
+    PreparedPublicationBound {
+        required: u64,
+        allocated: u64,
+    },
+    PreparedSliceBound {
+        required: u64,
+        allocated: u64,
+    },
     /// The frame's conviction door (`collect_until − accepted`) exceeds the measured record's longest accepted pursuit
     /// (`PalwTirFrameClockV1::maximum_door_daa`, at most the network's liability horizon): not built, so not accepted (G-03).
-    DoorBeyondLiabilityHorizon { required: u64, allowed: u64 },
+    DoorBeyondLiabilityHorizon {
+        required: u64,
+        allowed: u64,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwTirPublicAllocationQuoteV1 {

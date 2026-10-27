@@ -105,7 +105,12 @@ impl Params {
         &self,
         records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
     ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false, records, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1, crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1)
+        self.validate_palw_v2_inner(
+            false,
+            records,
+            crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
+            crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1,
+        )
     }
 
     /// **[`Self::validate_palw_v2_with_arming_records_v1`] with kernel-route records too** (lane TNODE, 2026-10-26): `kernel_records`
@@ -127,7 +132,12 @@ impl Params {
         records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
         cost_records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
     ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false, records, cost_records, crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1)
+        self.validate_palw_v2_inner(
+            false,
+            records,
+            cost_records,
+            crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1,
+        )
     }
 
     /// **All three record lists in place of the binary's pinned ones** (lane FPSEL, 2026-10-27): G14 arm-readiness, TIR frame cost and

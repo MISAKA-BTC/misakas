@@ -76,7 +76,8 @@ fn parse_reference_windows(bytes: &[u8], tokens_sha256: &str, n: usize) -> Resul
     if starts.is_empty() || starts.windows(2).any(|w| w[0] >= w[1]) || starts.iter().any(|s| s + window_len > n) {
         return Err("reference window starts are empty, unsorted, duplicated or past the sequence".into());
     }
-    let want = starts.len().checked_mul(window_len).and_then(|v| v.checked_mul(vocab)).and_then(|v| v.checked_mul(4)).ok_or("overflow")?;
+    let want =
+        starts.len().checked_mul(window_len).and_then(|v| v.checked_mul(vocab)).and_then(|v| v.checked_mul(4)).ok_or("overflow")?;
     let body = &bytes[body_at..];
     if body.len() != want {
         return Err(format!("reference body is {} bytes, the header says {want}", body.len()));
@@ -154,7 +155,8 @@ fn kl_summary_v1(reference: &[Vec<f32>], integer: &[Vec<i32>], scale: f64) -> se
     if reference.is_empty() || reference.len() != integer.len() {
         die("incomplete comparison window".into());
     }
-    let values: Vec<f64> = reference.iter().zip(integer).map(|(r, q)| logit_kl_v1(r, q, scale).unwrap_or_else(|why| die(why.into()))).collect();
+    let values: Vec<f64> =
+        reference.iter().zip(integer).map(|(r, q)| logit_kl_v1(r, q, scale).unwrap_or_else(|why| die(why.into()))).collect();
     serde_json::json!({"mean": values.iter().sum::<f64>() / values.len() as f64, "max": values.iter().copied().fold(0.0, f64::max)})
 }
 
@@ -163,9 +165,8 @@ fn main() {
     let path = arg(&args, "--artifact").unwrap_or_else(|| die("--artifact FILE is required".into()));
     let tokens_path = arg(&args, "--tokens").unwrap_or_else(|| die("--tokens FILE is required".into()));
     let reference_path = arg(&args, "--reference-windows").unwrap_or_else(|| die("--reference-windows FILE is required".into()));
-    let scale: Option<f64> = arg(&args, "--logit-scale").map(|v| {
-        v.parse::<f64>().ok().filter(|s| s.is_finite() && *s > 0.0).unwrap_or_else(|| die(format!("bad --logit-scale {v}")))
-    });
+    let scale: Option<f64> = arg(&args, "--logit-scale")
+        .map(|v| v.parse::<f64>().ok().filter(|s| s.is_finite() && *s > 0.0).unwrap_or_else(|| die(format!("bad --logit-scale {v}"))));
     let token_bytes = std::fs::read(tokens_path).unwrap_or_else(|e| die(format!("{tokens_path}: {e}")));
     let tokens: Vec<usize> = serde_json::from_slice(&token_bytes).unwrap_or_else(|e| die(format!("{tokens_path}: {e}")));
     let n = tokens.len();
@@ -173,8 +174,12 @@ fn main() {
         die("an empty sequence".into());
     }
     let tokens_sha256 = hex(&Sha256::digest(&token_bytes));
-    let reference = parse_reference_windows(&std::fs::read(reference_path).unwrap_or_else(|e| die(format!("{reference_path}: {e}"))), &tokens_sha256, n)
-        .unwrap_or_else(|e| die(format!("{reference_path}: {e}")));
+    let reference = parse_reference_windows(
+        &std::fs::read(reference_path).unwrap_or_else(|e| die(format!("{reference_path}: {e}"))),
+        &tokens_sha256,
+        n,
+    )
+    .unwrap_or_else(|e| die(format!("{reference_path}: {e}")));
     let window_len = reference.window_len;
     let keep = |pos: usize| reference.starts.iter().any(|w| pos >= *w && pos < w + window_len);
 
@@ -212,7 +217,8 @@ fn main() {
     let mut report = Vec::new();
     for (w, start) in reference.starts.iter().enumerate() {
         let r = &reference.rows[w];
-        let q: Vec<Vec<i32>> = integer.iter().filter(|(p, _)| *p >= *start && *p < start + window_len).map(|(_, l)| l.clone()).collect();
+        let q: Vec<Vec<i32>> =
+            integer.iter().filter(|(p, _)| *p >= *start && *p < start + window_len).map(|(_, l)| l.clone()).collect();
         let full = qwen36_score_fidelity(r, &q);
         let mut entry = serde_json::json!({
             "window_start": start, "window_len": window_len, "positions": full.positions,

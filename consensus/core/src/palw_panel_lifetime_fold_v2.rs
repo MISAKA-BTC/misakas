@@ -208,7 +208,11 @@ pub(super) fn enroll(
         return Ok(());
     }
     row.authority_kind = 1;
-    builder.write_kernel_row(PALW_PANEL_LIFETIME_TABLE_V2, borsh::to_vec(&terms.claim).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(
+        PALW_PANEL_LIFETIME_TABLE_V2,
+        borsh::to_vec(&terms.claim).unwrap(),
+        Some(borsh::to_vec(&row).unwrap()),
+    )?;
     Ok(())
 }
 

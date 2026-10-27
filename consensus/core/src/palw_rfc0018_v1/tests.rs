@@ -117,7 +117,9 @@ fn rfc18_rule_e_v2_needs_rule_e_at_or_below_it_and_the_mirror_must_agree() {
     let mut p = palw_t12_shipped_params();
     p.palw_rule_e_participation_v2 = Some(ForkActivation::new(FENCE));
     p.sync_palw_rfc0018_v1();
-    assert!(matches!(p.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("needs palw_fork_choice_rule_e_v1")));
+    assert!(
+        matches!(p.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("needs palw_fork_choice_rule_e_v1"))
+    );
     let mut q = palw_t12_shipped_params();
     q.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE));
     // Gate C's prerequisites at or below it (the frozen tier rule and the kernel route's aux 136), so the mirror is what the check
@@ -312,17 +314,17 @@ fn rfc18_certification_verdict_m_of_k_veto_deadline_and_prosecution_window() {
     assert_eq!(palw_certification_verdict_v1(&policy, &drawn_row(k, 2, m), ok, elapsed), Some(PalwCertificationOutcomeV1::Certified));
     // The veto proposal (U-6), where a policy sets it: honest negatives stop certification even with k positives.
     let vetoing = PalwSecurityCertificationPolicyV1 { veto: 2, ..policy };
-    assert_eq!(
-        palw_certification_verdict_v1(&vetoing, &drawn_row(k, 2, m), ok, elapsed),
-        Some(PalwCertificationOutcomeV1::Vetoed)
-    );
+    assert_eq!(palw_certification_verdict_v1(&vetoing, &drawn_row(k, 2, m), ok, elapsed), Some(PalwCertificationOutcomeV1::Vetoed));
     // Fewer than k by the deadline.
     let row = drawn_row(k - 1, 0, m);
     assert_eq!(palw_certification_verdict_v1(&policy, &row, ok, row.deadline_daa), None);
     assert_eq!(palw_certification_verdict_v1(&policy, &row, ok, row.deadline_daa + 1), Some(PalwCertificationOutcomeV1::NotCertified));
     // No longer Final (a conviction reversed it).
     let gone = PalwCertificationClaimFactsV1 { still_final: false, accusation_pending: false };
-    assert_eq!(palw_certification_verdict_v1(&policy, &drawn_row(k, 0, m), gone, elapsed), Some(PalwCertificationOutcomeV1::Withdrawn));
+    assert_eq!(
+        palw_certification_verdict_v1(&policy, &drawn_row(k, 0, m), gone, elapsed),
+        Some(PalwCertificationOutcomeV1::Withdrawn)
+    );
     // Never drawn by `certify_by_daa`.
     let mut undrawn = drawn_row(0, 0, 0);
     undrawn.anchor = None;
@@ -492,7 +494,11 @@ fn rfc18_anchor_seed_excludes_the_producer_and_ignores_unadmitted_contributions(
     assert!(palw_permissionless_anchors_claim_v1(&own, 100, &bond(9)));
     let mut junk = contribution(100, 3, 2, 21);
     junk.admitted = false;
-    assert_eq!(palw_permissionless_anchor_seed_v1(&[own[0], junk], 100, Some(&bond(1)), &policy), None, "an unadmitted header is nothing");
+    assert_eq!(
+        palw_permissionless_anchor_seed_v1(&[own[0], junk], 100, Some(&bond(1)), &policy),
+        None,
+        "an unadmitted header is nothing"
+    );
     let two = [own[0], contribution(102, 5, 4, 41)];
     let (draw_daa, _) = palw_permissionless_anchor_seed_v1(&two, 100, Some(&bond(1)), &policy).expect("another bond seeds");
     assert_eq!(draw_daa, 102, "the draw resolves at the earliest contribution of another bond");
@@ -577,9 +583,8 @@ fn rfc18_round5_every_tier_needs_security_certified_and_none_is_exempt() {
             assert_eq!(palw_gate_c_advances_frontier_v1(&p, &state, &id, &claim), earns, "{tag}: safe frontier");
             let settlement = crate::palw_settlement_v1::palw_settlement_v1(&state, &p, None, 0).unwrap();
             assert_eq!(settlement.uncertified_final, if earns { 0 } else { 1 }, "{tag}: reported uncertified");
-            let record = state
-                .palw_rule_e_record_v1(&p, false, None, &Default::default(), &PalwRuleENoBondBudgetV1, id, &claim)
-                .unwrap();
+            let record =
+                state.palw_rule_e_record_v1(&p, false, None, &Default::default(), &PalwRuleENoBondBudgetV1, id, &claim).unwrap();
             assert_eq!(
                 record.certification,
                 if earns { PalwRuleECertificationV1::Certified } else { PalwRuleECertificationV1::Uncertified },
@@ -784,9 +789,14 @@ fn rfc23s1_a_continuous_hand_over_lags_the_frontier_by_at_most_one_bound() {
             worst_old = worst_old.max(now.saturating_sub(fo));
         }
     }
-    println!("RFC-0023 stage 1 hand-over: L = {l}, gap = {gap}, finality = {finality}: steady-state lag {worst_armed} DAA past the fence, {worst_old} DAA below it");
+    println!(
+        "RFC-0023 stage 1 hand-over: L = {l}, gap = {gap}, finality = {finality}: steady-state lag {worst_armed} DAA past the fence, {worst_old} DAA below it"
+    );
     assert!(worst_armed <= l + gap + finality + 1, "past the fence the lag is one bound plus one gap ({worst_armed})");
-    assert!(worst_old > horizon - 2 * gap, "below the fence the first attacker claim holds the frontier for the whole run ({worst_old})");
+    assert!(
+        worst_old > horizon - 2 * gap,
+        "below the fence the first attacker claim holds the frontier for the whole run ({worst_old})"
+    );
 }
 
 /// **RFC-0023 §3.4 per cause** (stage 1, dormant `palw_unresolved_bound_v1`): the steady-state frontier lag when a stream of claims
@@ -845,11 +855,16 @@ fn rfc23s1_per_cause_steady_state_lag_is_bounded_by_min_hold_and_l_plus_gap() {
             }
         }
         let cap = hold.min(l) + gap + finality + 1;
-        println!("RFC-0023 §3.4 cause '{cause}': hold {} DAA → lag {worst_armed} DAA past the fence (cap {cap}), {worst_old} DAA below it",
-            if hold == u64::MAX { "unbounded".to_string() } else { hold.to_string() });
+        println!(
+            "RFC-0023 §3.4 cause '{cause}': hold {} DAA → lag {worst_armed} DAA past the fence (cap {cap}), {worst_old} DAA below it",
+            if hold == u64::MAX { "unbounded".to_string() } else { hold.to_string() }
+        );
         assert!(worst_armed <= cap, "{cause}: lag {worst_armed} exceeds min(hold, L) + gap + finality = {cap}");
         if hold == u64::MAX {
-            assert!(worst_old > horizon - 2 * gap, "{cause}: below the fence the first held claim stops the frontier for the whole run");
+            assert!(
+                worst_old > horizon - 2 * gap,
+                "{cause}: below the fence the first held claim stops the frontier for the whole run"
+            );
         }
         table.push((cause, worst_armed, worst_old));
     }
@@ -863,7 +878,13 @@ fn first_member_order(works: &[PalwSiblingKeyV1]) -> Vec<usize> {
     for (i, w) in works.iter().enumerate() {
         by_class.entry(w.class_id.unwrap()).or_default().push((palw_sibling_priority_v1(&w.execution_key), i));
     }
-    let mut classes: Vec<Vec<(Hash64, usize)>> = by_class.into_values().map(|mut m| { m.sort(); m }).collect();
+    let mut classes: Vec<Vec<(Hash64, usize)>> = by_class
+        .into_values()
+        .map(|mut m| {
+            m.sort();
+            m
+        })
+        .collect();
     classes.sort_by(|a, b| a[0].cmp(&b[0]));
     let mut out = Vec::new();
     let mut round = 0;
@@ -919,9 +940,15 @@ fn rfc18_long_run_fairness_a_one_attempt_model_is_not_starved_by_flooding_models
          per-model admissions under the set-seed rank {min}..{max} (expected {} each)",
         blocks * CAP as u64 / models
     );
-    assert!(old_hits * 5 < expect_share(blocks, CAP as u64, models), "the first-member rank starves the one-attempt model below a fifth of its share");
+    assert!(
+        old_hits * 5 < expect_share(blocks, CAP as u64, models),
+        "the first-member rank starves the one-attempt model below a fifth of its share"
+    );
     let expect = blocks * CAP as u64 / models;
-    assert!(new_hits * 10 >= expect * 9 && new_hits * 10 <= expect * 11, "the one-attempt model gets its share ({new_hits} vs {expect})");
+    assert!(
+        new_hits * 10 >= expect * 9 && new_hits * 10 <= expect * 11,
+        "the one-attempt model gets its share ({new_hits} vs {expect})"
+    );
     assert!(min * 10 >= expect * 9 && max * 10 <= expect * 11, "every model within ±10% of its share ({min}..{max})");
 }
 
@@ -1075,17 +1102,23 @@ fn gatec_decouple_gate_c_needs_the_tier_fence_and_aux_136_and_a_set_eligibility_
     let mut p = gate_c_ready();
     let rec = [record_for(&p, PalwRfc0018GatedFenceV1::IndependentlyWorkCertifiedV1)];
     p.palw_model_tier_v1 = None;
-    assert!(matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_tier_v1")));
+    assert!(
+        matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_tier_v1"))
+    );
     let mut p = gate_c_ready();
     p.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(ForkActivation::new(FENCE + 1)));
-    assert!(matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_tier_v1")));
+    assert!(
+        matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_tier_v1"))
+    );
     let mut p = gate_c_ready();
     p.palw_probabilistic_constraints_v1 = None;
     assert!(matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("aux 136")));
     // The old dependency is kept where the eligibility fence is set: above Gate C it is refused...
     let mut p = gate_c_ready();
     p.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE + 1));
-    assert!(matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_eligibility_v1")));
+    assert!(
+        matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_eligibility_v1"))
+    );
     // ...at or below it this check passes (RFC-0017's own validation still refuses arming it).
     let mut p = gate_c_ready();
     p.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE));
@@ -1113,7 +1146,11 @@ fn gatec_decouple_rfc18_record_gate_is_exact_and_well_formed() {
     const DUP: [[u8; 32]; 6] = [[1; 32], [1; 32], [3; 32], [4; 32], [5; 32], [6; 32]];
     assert!(refused(PalwRfc0018ArmingRecordV1 { evidence: &DUP, ..good }));
     // The binary's list is empty: nothing is armable by this lane.
-    assert!(PALW_RFC0018_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
+    assert!(
+        PALW_RFC0018_ARMING_RECORDS_V1
+            .iter()
+            .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+    );
     for f in PalwRfc0018GatedFenceV1::ALL {
         assert!(NAMES.contains(&f.name()));
         assert!(f.requirements().len() >= 2);

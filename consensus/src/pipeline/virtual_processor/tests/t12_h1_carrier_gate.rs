@@ -740,7 +740,9 @@ async fn liveness_a_storm_of_distinct_refused_carriers_is_bounded_by_the_budget(
 #[tokio::test]
 async fn liveness_the_guarded_gate_decides_as_before_and_classifies_only_every_tip_faults_as_invalid() {
     use crate::pipeline::virtual_processor::processor::palw_h1_guard::PalwH1RefusalClassV1 as Class;
-    use kaspa_consensus_core::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, palw_artifact_multiproof_v1};
+    use kaspa_consensus_core::palw_artifact::{
+        PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, palw_artifact_multiproof_v1,
+    };
     use kaspa_consensus_core::palw_model_registry_v1::{
         PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT, palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1,
         palw_seat_readiness_message_v2,
@@ -766,10 +768,15 @@ async fn liveness_the_guarded_gate_decides_as_before_and_classifies_only_every_t
     let sign = |signer: u64, span: u64, proof: kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1| {
         let message = palw_seat_readiness_message_v2(g.network_domain, &bond_bytes, &class_id, span, &proof);
         let key = TestConsensus::palw_v2_registry_keypair(signer);
-        let signature = libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, message.as_byte_slice(), PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT, [0u8; 32])
-            .expect("sign")
-            .as_ref()
-            .to_vec();
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            message.as_byte_slice(),
+            PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT,
+            [0u8; 32],
+        )
+        .expect("sign")
+        .as_ref()
+        .to_vec();
         Obj::SeatReadinessProvedV2 { bond, class_id, span, proof: Box::new(proof), signature }
     };
     // `challenge_span` draws the opening; `span` is what the object names.
@@ -799,8 +806,16 @@ async fn liveness_the_guarded_gate_decides_as_before_and_classifies_only_every_t
         ("signed junk: seventeen leaves", sign(card as u64, daa, wide), Some(Class::Invalid)),
         ("signed junk: another span's challenge", sign(card as u64, daa, proof_for(daa + 7, false)), Some(Class::Invalid)),
         ("unsigned junk proof", junk_proof(bond, class_id, daa), None),
-        ("junk accusation", Obj::DefaultAccused { claim: Hash64::from_u64_word(0x4CFF), missing_event_index: 0, accuser: bond, signature: vec![1; 8] }, Some(Class::Timing)),
-        ("orphan reveal", Obj::ReporterRevealed { offence_key: Hash64::from_u64_word(0x4C03), reporter: bond, salt: [0x4C; 32] }, Some(Class::Timing)),
+        (
+            "junk accusation",
+            Obj::DefaultAccused { claim: Hash64::from_u64_word(0x4CFF), missing_event_index: 0, accuser: bond, signature: vec![1; 8] },
+            Some(Class::Timing),
+        ),
+        (
+            "orphan reveal",
+            Obj::ReporterRevealed { offence_key: Hash64::from_u64_word(0x4C03), reporter: bond, salt: [0x4C; 32] },
+            Some(Class::Timing),
+        ),
         ("honest commitment", g.commitment(Hash64::from_u64_word(0x4C04), 1, 1), None),
         ("forged commitment", g.commitment(Hash64::from_u64_word(0x4C05), 1, 2), Some(Class::Timing)),
     ];
@@ -832,6 +847,8 @@ async fn liveness_the_guarded_gate_decides_as_before_and_classifies_only_every_t
     }
     // Signed junk is refused by the read-only pre-check (no state copy) with the fold arm's own text.
     let Obj::SeatReadinessProvedV2 { proof, .. } = sign(card as u64, daa, proof_for(daa + 7, false)) else { unreachable!() };
-    let pre = kaspa_consensus_core::palw_h1_precheck_v1::palw_seat_readiness_v2_precheck_v1(&state, &g.params, daa, &bond, &class_id, daa, &proof);
+    let pre = kaspa_consensus_core::palw_h1_precheck_v1::palw_seat_readiness_v2_precheck_v1(
+        &state, &g.params, daa, &bond, &class_id, daa, &proof,
+    );
     assert!(matches!(pre, Some(kaspa_consensus_core::palw_h1_precheck_v1::PalwH1PrecheckV1::Invalid(_))), "{pre:?}");
 }

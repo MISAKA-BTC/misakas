@@ -179,7 +179,11 @@ async fn t14_shared_path_continues_on_a_pruned_import_node_and_an_ibd_node() {
     agree(&w.net, &pruned, "main after the pruned node's blocks");
     agree(&ibd, &pruned, "the IBD node after the pruned node's blocks");
     w.net.assert_same(&ibd.chain, "main vs the IBD node after the pruned node's blocks");
-    assert_eq!(pruned.chain.ctx.consensus.get_virtual_parents(), w.net.chain.ctx.consensus.get_virtual_parents(), "same virtual parents");
+    assert_eq!(
+        pruned.chain.ctx.consensus.get_virtual_parents(),
+        w.net.chain.ctx.consensus.get_virtual_parents(),
+        "same virtual parents"
+    );
     assert_eq!(Net::utxos_of(&pruned.chain), Net::utxos_of(&w.net.chain), "the pruned node: same complete virtual UTXO set");
     assert!(w.net.ledger().claims[&lie.id].convicted && ibd.ledger().claims[&lie.id].convicted);
 }
@@ -210,5 +214,7 @@ async fn t14_native_shared_original_rows_survive_reorg_restart_pruning_and_prune
         let _ = &mut pruned;
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("none of the four row kinds (shared-court rows under a CourtSharedContext, paid-ingress reservations, funded escrow rows, position-terminal rows) can be created on a node (no production CourtSharedContext installer; V2, V3, V4, V8 typed-missing); intended palw_shared_duty_v1 / palw_paid_ingress_owners_v1 / palw_original_escrow_outcome_v1 / palw_position_terminal_v1 do not exist");
+    blocked_on!(
+        "none of the four row kinds (shared-court rows under a CourtSharedContext, paid-ingress reservations, funded escrow rows, position-terminal rows) can be created on a node (no production CourtSharedContext installer; V2, V3, V4, V8 typed-missing); intended palw_shared_duty_v1 / palw_paid_ingress_owners_v1 / palw_original_escrow_outcome_v1 / palw_position_terminal_v1 do not exist"
+    );
 }

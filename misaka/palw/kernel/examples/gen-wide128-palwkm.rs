@@ -31,7 +31,8 @@ fn main() {
     let plan = plan_for_tir_program_v1(&d, &fx.program, program_root_v1(&program_bytes), MAX_POSITIONS).expect("a K2-TIR-v2 plan");
     let pc = ParamCommitmentsV1::of(&fx.params);
 
-    let rows: Vec<(u16, Option<u16>, TensorWireV1)> = fx.params.tensors.iter().map(|((j, l), t)| (*j, *l, TensorWireV1::of(t))).collect();
+    let rows: Vec<(u16, Option<u16>, TensorWireV1)> =
+        fx.params.tensors.iter().map(|((j, l), t)| (*j, *l, TensorWireV1::of(t))).collect();
     let mut model = b"PALWKM01".to_vec();
     model.extend(borsh::to_vec(&rows).expect("borsh"));
     let model_path = out.join("wide128-v1-7.palwkm");

@@ -21,8 +21,8 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
-use kaspa_consensus_core::palw_artifact::{PalwArtifactOpeningV1, verify_artifact_opening_v1};
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::palw_artifact::{PalwArtifactOpeningV1, verify_artifact_opening_v1};
 
 use super::artifact::TirArtifactV1;
 use super::inventory::{TirByteSourceV1, TirInventoryTreeV1};
@@ -55,7 +55,8 @@ pub struct TirPartialFileV1<'a> {
 
 impl TirByteSourceV1 for TirPartialFileV1<'_> {
     fn read_bytes(&self, param: u16, layer: Option<u16>, at: u64, buf: &mut [u8]) -> Result<(), String> {
-        let (off, len) = self.art.container().locate(param, layer).ok_or_else(|| format!("no tensor for param {param} at {layer:?}"))?;
+        let (off, len) =
+            self.art.container().locate(param, layer).ok_or_else(|| format!("no tensor for param {param} at {layer:?}"))?;
         let end = at.checked_add(buf.len() as u64).ok_or("a read past the end of the instance")?;
         if end > len {
             return Err(format!("param {param} at {layer:?}: bytes {at}..{end} leave an instance of {len}"));

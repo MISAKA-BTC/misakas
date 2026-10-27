@@ -176,7 +176,13 @@ async fn pursue(net: &mut Net, f: &Sparse9, id: Digest, outsider: usize, server:
             .unwrap()
             .aux_row(EXECUTION_DEMAND_SLOT_TABLE_V11, &borsh::to_vec(&(net.bond(outsider), 0u8)).unwrap())
             .expect("the outsider's ordinary demand is admitted");
-        assert_ne!(Some(demand), before, "demand {used} for {unit:?} was refused at DAA {} (pursuit {:?})", net.daa(), pursuit(net, id));
+        assert_ne!(
+            Some(demand),
+            before,
+            "demand {used} for {unit:?} was refused at DAA {} (pursuit {:?})",
+            net.daa(),
+            pursuit(net, id)
+        );
         let answer = server.answer(&unit).to_bytes().unwrap();
         let mut body = demand.as_bytes().to_vec();
         body.extend_from_slice(&(answer.len() as u32).to_le_bytes());
@@ -420,7 +426,11 @@ async fn g14n1_a_lapsed_seal_gives_its_ticket_back_but_one_that_compelled_answer
     let now = pursuit(&net, id).retained_seal_keys;
     assert_eq!(now.len(), 2, "the outsider's own seal is admitted in a released place");
     assert_eq!(seal_of(&net, &now[1]).bond, net.bond(7));
-    println!("G-N1 v11 lapse: reveal windows closed by {lapse}; challenge_end {}; outsider sealed at {}", claim.challenge_end, net.daa());
+    println!(
+        "G-N1 v11 lapse: reveal windows closed by {lapse}; challenge_end {}; outsider sealed at {}",
+        claim.challenge_end,
+        net.daa()
+    );
     let replay = net.replay().await;
     net.assert_same(&replay, "lapsed seals released, compelling seal kept, outsider admitted");
 }

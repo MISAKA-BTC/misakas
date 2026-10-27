@@ -281,10 +281,8 @@ pub fn palw_d2_readiness_path_v1(c: &ReadinessContextV1, ds: &[(u32, Hash64)], o
         if partner < level.len() {
             siblings.push(level[partner]);
         }
-        level = level
-            .chunks(2)
-            .map(|p| if p.len() == 2 { crate::palw_artifact::artifact_node_v1(&p[0], &p[1]) } else { p[0] })
-            .collect();
+        level =
+            level.chunks(2).map(|p| if p.len() == 2 { crate::palw_artifact::artifact_node_v1(&p[0], &p[1]) } else { p[0] }).collect();
         i /= 2;
     }
     ReadinessDigestPathV1 { leaf_index: ds[ordinal].0, claimed_digest: ds[ordinal].1, siblings }

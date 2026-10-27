@@ -378,7 +378,8 @@ pub fn derive_native_redemption_v39(
         }
     }
     let output = coinbase.transaction.outputs.get(output_index as usize).ok_or("native39 real output index absent")?;
-    if output.value != row.amount || output.script_public_key != crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.payload.as_bytes()) {
+    if output.value != row.amount || output.script_public_key != crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.payload.as_bytes())
+    {
         return Err("native39 original payout script/value differs".into());
     }
     Ok(CheckedNativeRedemptionV33 {

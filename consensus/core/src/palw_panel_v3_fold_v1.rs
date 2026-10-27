@@ -862,7 +862,12 @@ fn bind_v2(
         if strata.is_some() {
             for (key, _) in builder.claim_locks_v1(claim_id) {
                 // G14 G-13: a frame-credited lock stays for the ORIGINAL frame's own conviction while its door is open.
-                if crate::palw_tir_public_claim_v1::palw_tir_public_frame_keeps_lock_v1(&builder.state, &key.0, *claim_id, ctx.daa_score) {
+                if crate::palw_tir_public_claim_v1::palw_tir_public_frame_keeps_lock_v1(
+                    &builder.state,
+                    &key.0,
+                    *claim_id,
+                    ctx.daa_score,
+                ) {
                     continue;
                 }
                 builder.write_slashable_lock(key, None)?;

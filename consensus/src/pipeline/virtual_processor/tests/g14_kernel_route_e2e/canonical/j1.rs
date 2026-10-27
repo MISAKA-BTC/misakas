@@ -8,7 +8,9 @@ use super::cert::*;
 use super::*;
 use kaspa_consensus_core::palw_user_job_views_v1::*;
 use kaspa_consensus_core::palw_user_views_v1::PalwUserViewClockV1;
-use misaka_palw_sdk::kernel_job_v1::{kernel_job_from_text_v1, kernel_result_text_v1, kernel_tokenizer_v1, tests::tiny_tokenizer_json};
+use misaka_palw_sdk::kernel_job_v1::{
+    kernel_job_from_text_v1, kernel_result_text_v1, kernel_tokenizer_v1, tests::tiny_tokenizer_json,
+};
 
 fn clock(net: &Net) -> PalwUserViewClockV1 {
     PalwUserViewClockV1 { next_daa: net.daa() + 1, raw_depth: None, objective_offence: false }
@@ -37,8 +39,16 @@ async fn j1_user_journey_text_prompt_to_certified_text_result_on_the_panel_one_k
 
     // ---- the CLI builder: text → PostJob ----
     let prompt = "hi a";
-    let job = kernel_job_from_text_v1(&tok.tokenizer, prompt, Hash64::from_bytes(w.class), bound, positions, 3, Hash64::from_bytes([0x71u8; 64]))
-        .expect("the class admits the job");
+    let job = kernel_job_from_text_v1(
+        &tok.tokenizer,
+        prompt,
+        Hash64::from_bytes(w.class),
+        bound,
+        positions,
+        3,
+        Hash64::from_bytes([0x71u8; 64]),
+    )
+    .expect("the class admits the job");
     assert_eq!(kernel_result_text_v1(&tok.tokenizer, &job.prompt).unwrap(), prompt, "tokenisation round-trips");
     let o = w.net.route(1, &K::PostJob { job: job.clone() });
     w.net.send(vec![(1, o)]).await;

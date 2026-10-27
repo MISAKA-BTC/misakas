@@ -56,7 +56,10 @@ fn tier_class(root: Hash64, registrant: Option<PalwBondKeyV2>) -> crate::palw_st
     }
 }
 
-fn tier_version(root: Hash64, status: crate::palw_model_lines_v1::PalwVersionStatusV1) -> crate::palw_model_lines_v1::PalwModelVersionV1 {
+fn tier_version(
+    root: Hash64,
+    status: crate::palw_model_lines_v1::PalwVersionStatusV1,
+) -> crate::palw_model_lines_v1::PalwModelVersionV1 {
     crate::palw_model_lines_v1::PalwModelVersionV1 {
         root,
         parent: None,

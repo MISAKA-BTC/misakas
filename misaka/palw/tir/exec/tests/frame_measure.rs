@@ -127,7 +127,10 @@ fn t12_court() -> PalwCourtParamsV2 {
 }
 
 /// The frame's native rules at testnet-12's ladder, at a custodian upper of `custodians`, with `cost`.
-fn rules_with(custodians: u64, cost: kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1) -> PalwTirPublicAllocationRulesV1 {
+fn rules_with(
+    custodians: u64,
+    cost: kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1,
+) -> PalwTirPublicAllocationRulesV1 {
     PalwTirPublicAllocationRulesV1 {
         maximum_leaves: 1 << 22,
         maximum_custodians: custodians,
@@ -345,7 +348,8 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: O
         Ok(PalwTirPublicAllocationQuoteV1::Complete(plan)) => Ok(plan),
         other => Err(format!("{other:?}")),
     };
-    let geometry_json = json!({ "leaves": n, "decode": d, "vocab": vocab, "tiles": tiles, "prefill": header.job_context.declared_prefill_tokens });
+    let geometry_json =
+        json!({ "leaves": n, "decode": d, "vocab": vocab, "tiles": tiles, "prefill": header.job_context.declared_prefill_tokens });
     let (plan6, plan257) = match (quote(6), quote(257)) {
         (Ok(a), Ok(b)) => (a, b),
         (a, b) if params.is_none() => {
@@ -456,7 +460,11 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: O
         let budget = tir_public_pass_budget_v1(plan6.preparation_work.per_actor, passes).unwrap();
         let mut spent = kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicWorkV1::default();
         let mut charge = |quote: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1| {
-            spent = spent.checked_add_v1(PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1).unwrap().checked_add_v1(tir_public_slice_work_v1(quote).unwrap()).unwrap();
+            spent = spent
+                .checked_add_v1(PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1)
+                .unwrap()
+                .checked_add_v1(tir_public_slice_work_v1(quote).unwrap())
+                .unwrap();
         };
         let scratch = tempfile::tempdir().unwrap();
         let start = Instant::now();
@@ -512,99 +520,104 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: O
     let (step_check, filing) = match params {
         None => (json!("UNMEASURED: no in-memory params for this class (real-model run)"), json!("UNMEASURED")),
         Some(params) => {
-    // --- per-step check: the owner's replayed refutation and the court's check, every leaf --------------------------------------
-    let c = court(program, params);
-    let tparams = TirParams::from_map(&c.plan, params).unwrap();
-    let held_source = TirParamsSourceV1(&tparams);
-    let inventory = TirHeldInventoryV1::build(program, &held_source).unwrap();
-    let runner = TirClassRunnerV1::new(&c.space, &c.plan, &tparams, c.class.class_id(&c.artifact_root)).unwrap();
-    let court_rules = PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
-    let start = Instant::now();
-    let honest = runner.retain(&c.class, c.artifact_root, &c.ctx, &c.prompt, LADDER).unwrap();
-    let retain_ns = ns(start);
-    let mut dense = Vec::new();
-    let start = Instant::now();
-    runner.run(&c.ctx, &c.prompt, LADDER, true, &mut |l| dense.push(l.preimage.clone())).unwrap();
-    let replay_pass_ns = ns(start);
-    let own = TirEvidenceV1::own(&runner, &honest, &inventory, PalwPromptIdsFormV1::Flat, LADDER).unwrap();
-    let court_n = honest.binding.step_leaf_count;
-    let (mut build_max, mut build_total, mut check_max, mut check_total, mut refutation_bytes_max) = (0u64, 0u64, 0u64, 0u64, 0u64);
-    for i in 0..court_n {
-        let start = Instant::now();
-        let r = own.cone_refutation(i, &court_rules).unwrap();
-        let built = ns(start);
-        let start = Instant::now();
-        assert!(check_tir_cone_refutation_v1(&r, &court_rules).is_err(), "{name}: an honest leaf is acquitted");
-        let checked = ns(start);
-        build_max = build_max.max(built);
-        build_total += built;
-        check_max = check_max.max(checked);
-        check_total += checked;
-        refutation_bytes_max = refutation_bytes_max.max(borsh::to_vec(&r).unwrap().len() as u64);
-    }
+            // --- per-step check: the owner's replayed refutation and the court's check, every leaf --------------------------------------
+            let c = court(program, params);
+            let tparams = TirParams::from_map(&c.plan, params).unwrap();
+            let held_source = TirParamsSourceV1(&tparams);
+            let inventory = TirHeldInventoryV1::build(program, &held_source).unwrap();
+            let runner = TirClassRunnerV1::new(&c.space, &c.plan, &tparams, c.class.class_id(&c.artifact_root)).unwrap();
+            let court_rules = PalwTirCourtRulesV1 {
+                max_step_leaf_count: LADDER,
+                prompt_form: PalwPromptIdsFormV1::Flat,
+                limits: DemandLimits::UNLIMITED,
+            };
+            let start = Instant::now();
+            let honest = runner.retain(&c.class, c.artifact_root, &c.ctx, &c.prompt, LADDER).unwrap();
+            let retain_ns = ns(start);
+            let mut dense = Vec::new();
+            let start = Instant::now();
+            runner.run(&c.ctx, &c.prompt, LADDER, true, &mut |l| dense.push(l.preimage.clone())).unwrap();
+            let replay_pass_ns = ns(start);
+            let own = TirEvidenceV1::own(&runner, &honest, &inventory, PalwPromptIdsFormV1::Flat, LADDER).unwrap();
+            let court_n = honest.binding.step_leaf_count;
+            let (mut build_max, mut build_total, mut check_max, mut check_total, mut refutation_bytes_max) =
+                (0u64, 0u64, 0u64, 0u64, 0u64);
+            for i in 0..court_n {
+                let start = Instant::now();
+                let r = own.cone_refutation(i, &court_rules).unwrap();
+                let built = ns(start);
+                let start = Instant::now();
+                assert!(check_tir_cone_refutation_v1(&r, &court_rules).is_err(), "{name}: an honest leaf is acquitted");
+                let checked = ns(start);
+                build_max = build_max.max(built);
+                build_total += built;
+                check_max = check_max.max(checked);
+                check_total += checked;
+                refutation_bytes_max = refutation_bytes_max.max(borsh::to_vec(&r).unwrap().len() as u64);
+            }
 
-    // --- filing: a forged leaf, refuted from a challenger's store and convicted --------------------------------------------------
-    let intervals = analyze_ranges(&c.space.program).unwrap();
-    let mut filing = Value::Null;
-    for i in (0..court_n).rev() {
-        let leaf = c.space.leaf_at(&c.ctx, i).unwrap();
-        let iv = kaspa_consensus_core::palw_tir_court_v1::palw_tir_leaf_interval_v1(&c.space, &intervals, &leaf).unwrap();
-        let lane = leaf.value_count as usize / 2;
-        let bytes: [u8; 4] = dense[i as usize].values_le[4 * lane..4 * lane + 4].try_into().unwrap();
-        let v = if leaf.dtype == DType::Idx { u32::from_le_bytes(bytes) as i128 } else { i32::from_le_bytes(bytes) as i128 };
-        let Some(w) = [v + 1, v - 1].into_iter().find(|w| iv.contains(*w)) else { continue };
-        let mut lie = dense.clone();
-        let forged = if leaf.dtype == DType::Idx { (w as u32).to_le_bytes() } else { (w as i32).to_le_bytes() };
-        lie[i as usize].values_le[4 * lane..4 * lane + 4].copy_from_slice(&forged);
-        let class_id = c.class.class_id(&c.artifact_root);
-        let ctx_hash = c.ctx.context_hash();
-        let hashes: Vec<Hash64> = lie.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &class_id, p)).collect();
-        let mut binding = honest.binding.clone();
-        binding.step_merkle_root = step_merkle_root_v1(&hashes).unwrap();
-        binding.committed_execution_root = palw_tir_execution_root_v1(
-            &ctx_hash,
-            &binding.full_logits_trace_root,
-            &class_id,
-            binding.step_leaf_count,
-            &binding.step_merkle_root,
-        );
-        let opening = TirStepTreeV1::full(&hashes).opening(i).unwrap();
-        let start = Instant::now();
-        let challenger = TirEvidenceV1::challenger(
-            &runner,
-            &binding,
-            &honest,
-            &opening,
-            lie[i as usize].clone(),
-            &honest.logits_rows,
-            &honest.generated,
-            &inventory,
-            PalwPromptIdsFormV1::Flat,
-            LADDER,
-        )
-        .unwrap();
-        let r = challenger.cone_refutation(i, &court_rules).unwrap();
-        let build = ns(start);
-        let start = Instant::now();
-        let verdict = check_tir_cone_refutation_v1(&r, &court_rules).expect("the forged leaf is convicted");
-        let check = ns(start);
-        filing = json!({
-            "leaf": i,
-            "fault": format!("{:?}", verdict.fault),
-            "challenger_build_ns": build,
-            "court_check_ns": check,
-            "witness_bytes": borsh::to_vec(&r).unwrap().len(),
-        });
-        break;
-    }
-    assert!(!filing.is_null(), "{name}: a forged leaf is filed and convicted");
+            // --- filing: a forged leaf, refuted from a challenger's store and convicted --------------------------------------------------
+            let intervals = analyze_ranges(&c.space.program).unwrap();
+            let mut filing = Value::Null;
+            for i in (0..court_n).rev() {
+                let leaf = c.space.leaf_at(&c.ctx, i).unwrap();
+                let iv = kaspa_consensus_core::palw_tir_court_v1::palw_tir_leaf_interval_v1(&c.space, &intervals, &leaf).unwrap();
+                let lane = leaf.value_count as usize / 2;
+                let bytes: [u8; 4] = dense[i as usize].values_le[4 * lane..4 * lane + 4].try_into().unwrap();
+                let v = if leaf.dtype == DType::Idx { u32::from_le_bytes(bytes) as i128 } else { i32::from_le_bytes(bytes) as i128 };
+                let Some(w) = [v + 1, v - 1].into_iter().find(|w| iv.contains(*w)) else { continue };
+                let mut lie = dense.clone();
+                let forged = if leaf.dtype == DType::Idx { (w as u32).to_le_bytes() } else { (w as i32).to_le_bytes() };
+                lie[i as usize].values_le[4 * lane..4 * lane + 4].copy_from_slice(&forged);
+                let class_id = c.class.class_id(&c.artifact_root);
+                let ctx_hash = c.ctx.context_hash();
+                let hashes: Vec<Hash64> = lie.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &class_id, p)).collect();
+                let mut binding = honest.binding.clone();
+                binding.step_merkle_root = step_merkle_root_v1(&hashes).unwrap();
+                binding.committed_execution_root = palw_tir_execution_root_v1(
+                    &ctx_hash,
+                    &binding.full_logits_trace_root,
+                    &class_id,
+                    binding.step_leaf_count,
+                    &binding.step_merkle_root,
+                );
+                let opening = TirStepTreeV1::full(&hashes).opening(i).unwrap();
+                let start = Instant::now();
+                let challenger = TirEvidenceV1::challenger(
+                    &runner,
+                    &binding,
+                    &honest,
+                    &opening,
+                    lie[i as usize].clone(),
+                    &honest.logits_rows,
+                    &honest.generated,
+                    &inventory,
+                    PalwPromptIdsFormV1::Flat,
+                    LADDER,
+                )
+                .unwrap();
+                let r = challenger.cone_refutation(i, &court_rules).unwrap();
+                let build = ns(start);
+                let start = Instant::now();
+                let verdict = check_tir_cone_refutation_v1(&r, &court_rules).expect("the forged leaf is convicted");
+                let check = ns(start);
+                filing = json!({
+                    "leaf": i,
+                    "fault": format!("{:?}", verdict.fault),
+                    "challenger_build_ns": build,
+                    "court_check_ns": check,
+                    "witness_bytes": borsh::to_vec(&r).unwrap().len(),
+                });
+                break;
+            }
+            assert!(!filing.is_null(), "{name}: a forged leaf is filed and convicted");
 
-    let step_check = json!({
-            "leaves": court_n, "retain_ns": retain_ns, "replay_pass_ns": replay_pass_ns,
-            "owner_refutation_build_max_ns": build_max, "owner_refutation_build_total_ns": build_total,
-            "court_check_max_ns": check_max, "court_check_total_ns": check_total, "refutation_bytes_max": refutation_bytes_max,
-        });
-    (step_check, filing)
+            let step_check = json!({
+                "leaves": court_n, "retain_ns": retain_ns, "replay_pass_ns": replay_pass_ns,
+                "owner_refutation_build_max_ns": build_max, "owner_refutation_build_total_ns": build_total,
+                "court_check_max_ns": check_max, "court_check_total_ns": check_total, "refutation_bytes_max": refutation_bytes_max,
+            });
+            (step_check, filing)
         }
     };
 
@@ -677,8 +690,15 @@ fn tir_frame_operations_are_measured_on_every_corpus_class() {
         let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
             params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
         };
-        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
-            .unwrap();
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&lay).unwrap(),
+            [2; 64],
+            name.clone(),
+            &mut tensor,
+        )
+        .unwrap();
         let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
         let (root, _) = artifact.inventory_root().unwrap();
         let class = artifact.class().unwrap();
@@ -749,9 +769,8 @@ fn tir_frame_operations_on_a_real_class() {
     let canonical =
         kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
     let name = path.file_name().unwrap().to_string_lossy().to_string();
-    let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
-        .unwrap()
-        .with_network_id_v1(NET);
+    let backend =
+        TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER).unwrap().with_network_id_v1(NET);
     let measured = measure(&name, &backend, &program, None, 0);
     let record = json!({
         "record": "misaka-palw/tir-frame-measure-real/v1",
@@ -786,9 +805,8 @@ fn door_breakdown_on_a_real_class() {
     let canonical =
         kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
     let name = path.file_name().unwrap().to_string_lossy().to_string();
-    let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
-        .unwrap()
-        .with_network_id_v1(NET);
+    let backend =
+        TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER).unwrap().with_network_id_v1(NET);
     // --- the same execute + binding + source as `measure` (no answers are produced here) --------------------------------------
     let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
     let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
@@ -852,7 +870,8 @@ fn door_breakdown_on_a_real_class() {
     let body_run = body(PalwTirPublicRequestV1::StepRun { first: 0, count: n.clamp(1, 256) as u32 });
     let body_tile = body(PalwTirPublicRequestV1::TraceTile { row: 0, tile: 0 });
     let body_rows = if d > 1 { body(PalwTirPublicRequestV1::RowsNode { level: level(d), index: 0 }) } else { body_tile };
-    let body_tnode = if tiles > 1 { body(PalwTirPublicRequestV1::TileNode { row: 0, level: level(tiles), index: 0 }) } else { body_tile };
+    let body_tnode =
+        if tiles > 1 { body(PalwTirPublicRequestV1::TileNode { row: 0, level: level(tiles), index: 0 }) } else { body_tile };
     let cone_cap = n.div_ceil(256);
     // The path as production composes it (`tir_public_localization_path_v1`), parameterised by the terms a lever may change:
     // `slots` (upper + 1), the run body, and the cone run count. Returns (turns, DAA, widest span, per-segment DAA).
@@ -890,14 +909,18 @@ fn door_breakdown_on_a_real_class() {
             let parts = b.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64).max(1);
             let custodian = 1 + 2 + parts;
             let all = slots * k;
-            cfg.acquisition_daa + (1 + 1 + custodian) * margin + (all * custodian * clk.control_bytes + all * b).div_ceil(clk.parallel_bytes_per_daa)
+            cfg.acquisition_daa
+                + (1 + 1 + custodian) * margin
+                + (all * custodian * clk.control_bytes + all * b).div_ceil(clk.parallel_bytes_per_daa)
         };
         let leaf = span(body_leaf);
         let node = if n > 1 { span(body_node) } else { leaf };
         let run = if n.clamp(1, 256) > 1 { span(run_body) } else { leaf };
         let tile = span(body_tile);
         let mut segs = vec![];
-        if tiled { segs.push((1u64, span(body_ids))); }
+        if tiled {
+            segs.push((1u64, span(body_ids)));
+        }
         segs.push((descent_units(n), node));
         segs.push((1, leaf));
         segs.push((cone_runs, run));
@@ -973,12 +996,38 @@ fn door_breakdown_on_a_real_class() {
         levers.push(json!({"lever": label, "formula": formula, "door_daa": door, "fits_3120": door <= 3_120, "vs_base": door as i64 - base as i64}));
     };
     lever("baseline (upper 6, production terms)", "as shipped", base);
-    lever("upper 257 (production)", "slots 258", door_of(257, path(258, real_run_body, cone_actual).1, fc::tir_public_owner_queue_wait_v1(acq_daa + margin, &cfg, &clk).unwrap(), fm6, prep6));
-    lever("cone turns = 1 (lower bound of any derived cone bound)", "cone_runs 1", door_of(6, path(7, real_run_body, 1).1, queue6, fm6, prep6));
-    lever("cone turns = ceil(n/256) cap (no derivation)", &format!("cone_runs {cone_cap}"), door_of(6, path(7, real_run_body, cone_cap).1, queue6, fm6, prep6));
-    lever("answer body = real widest leaf x 256 (no run slack)", &format!("run body {} B = 256 x {widest_leaf_value} B value", 256 * widest_leaf_value), door_of(6, path(7, 256 * widest_leaf_value, cone_actual).1, queue6, fm6, prep6));
+    lever(
+        "upper 257 (production)",
+        "slots 258",
+        door_of(
+            257,
+            path(258, real_run_body, cone_actual).1,
+            fc::tir_public_owner_queue_wait_v1(acq_daa + margin, &cfg, &clk).unwrap(),
+            fm6,
+            prep6,
+        ),
+    );
+    lever(
+        "cone turns = 1 (lower bound of any derived cone bound)",
+        "cone_runs 1",
+        door_of(6, path(7, real_run_body, 1).1, queue6, fm6, prep6),
+    );
+    lever(
+        "cone turns = ceil(n/256) cap (no derivation)",
+        &format!("cone_runs {cone_cap}"),
+        door_of(6, path(7, real_run_body, cone_cap).1, queue6, fm6, prep6),
+    );
+    lever(
+        "answer body = real widest leaf x 256 (no run slack)",
+        &format!("run body {} B = 256 x {widest_leaf_value} B value", 256 * widest_leaf_value),
+        door_of(6, path(7, 256 * widest_leaf_value, cone_actual).1, queue6, fm6, prep6),
+    );
     lever("answer body = 0 (fixed-part only, lower bound)", "run body 0", door_of(6, path(7, 0, cone_actual).1, queue6, fm6, prep6));
-    lever("only demanded custodians answer (slots 2)", "slots 2", door_of(1, path(2, real_run_body, cone_actual).1, queue6, fm6, prep6));
+    lever(
+        "only demanded custodians answer (slots 2)",
+        "slots 2",
+        door_of(1, path(2, real_run_body, cone_actual).1, queue6, fm6, prep6),
+    );
     lever("owner queue wait removed", "queue 0", door_of(6, path(7, real_run_body, cone_actual).1, 0, fm6, prep6));
     lever("cone = 1 AND body = real widest leaf x 256", "both", door_of(6, path(7, 256 * widest_leaf_value, 1).1, queue6, fm6, prep6));
     // K_owner lever: the turn span at K concurrent owners (production K = 8), re-derived from its formula and checked at K = 8.
@@ -990,18 +1039,38 @@ fn door_breakdown_on_a_real_class() {
         let parallel = (all * custodian * clk.control_bytes + all * b).div_ceil(clk.parallel_bytes_per_daa);
         cfg.acquisition_daa + (owner + custodian) * margin + parallel
     };
-    assert_eq!(span_k(real_run_body, 7, 8), fc::tir_public_turn_span_v1(real_run_body, 7, &cfg, &clk).unwrap(), "K-span formula == production at K = 8");
-    lever("K_owner = 1 (one owner, not 8)", "all = slots x 1", door_of(6, path_k(7, real_run_body, cone_actual, 1), queue6, fm6, prep6));
+    assert_eq!(
+        span_k(real_run_body, 7, 8),
+        fc::tir_public_turn_span_v1(real_run_body, 7, &cfg, &clk).unwrap(),
+        "K-span formula == production at K = 8"
+    );
+    lever(
+        "K_owner = 1 (one owner, not 8)",
+        "all = slots x 1",
+        door_of(6, path_k(7, real_run_body, cone_actual, 1), queue6, fm6, prep6),
+    );
     lever("K_owner = 4", "all = slots x 4", door_of(6, path_k(7, real_run_body, cone_actual, 4), queue6, fm6, prep6));
     // Regression (step 1): with the liability horizon ARMED at 3,120 DAA the real class is refused on the door, not built.
     // The unlimited setting above only measures; it must never count as arming evidence.
     {
         let mut armed = candidate();
         armed.clock.maximum_door_daa = 3_120;
-        match derive_tir_public_allocation_v1(&geometry, &commitment, &header, &record, &backend.class().layout, None, None, rules_with(6, armed)) {
+        match derive_tir_public_allocation_v1(
+            &geometry,
+            &commitment,
+            &header,
+            &record,
+            &backend.class().layout,
+            None,
+            None,
+            rules_with(6, armed),
+        ) {
             Ok(PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. }) => {
                 assert!(
-                    missing.iter().any(|m| matches!(m, PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon { required: 1_062_231, allowed: 3_120 })),
+                    missing.iter().any(|m| matches!(
+                        m,
+                        PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon { required: 1_062_231, allowed: 3_120 }
+                    )),
                     "armed at 3,120 the door must be refused: {missing:?}"
                 );
             }
@@ -1073,9 +1142,8 @@ fn read_set_on_a_real_class() {
     let canonical =
         kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
     let name = path.file_name().unwrap().to_string_lossy().to_string();
-    let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
-        .unwrap()
-        .with_network_id_v1(NET);
+    let backend =
+        TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER).unwrap().with_network_id_v1(NET);
     let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
     let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
     let decode: u32 = std::env::var("MISAKA_READ_SET_DECODE").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
@@ -1089,7 +1157,8 @@ fn read_set_on_a_real_class() {
     let space = backend.space();
     let program = &space.program;
     drop(capture);
-    let rules = PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+    let rules =
+        PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
 
     // Step kind of every leaf: a commit point by its primitive, a checkpoint tile, or a history tile.
     let prim_name = |p: &misaka_palw_tir::Prim| -> String { format!("{p:?}").chars().take_while(|c| c.is_alphanumeric()).collect() };
@@ -1216,8 +1285,15 @@ fn read_set_containment_on_fixture_classes() {
         let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
             params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
         };
-        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
-            .unwrap();
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&lay).unwrap(),
+            [2; 64],
+            name.clone(),
+            &mut tensor,
+        )
+        .unwrap();
         let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
         let (root, _) = artifact.inventory_root().unwrap();
         let class = artifact.class().unwrap();
@@ -1238,7 +1314,11 @@ fn read_set_containment_on_fixture_classes() {
         drop(capture);
         let space = backend.space();
         let (c, h) = (space.layout.checkpoint_interval as i64, space.layout.h_tile as i64);
-        let rules = PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: LADDER,
+            prompt_form: PalwPromptIdsFormV1::Flat,
+            limits: DemandLimits::UNLIMITED,
+        };
         let mut class_ops = 0u64;
         // A completed history tile's leaves are contiguous in the step index (the structural run count assumes it).
         let mut tile_ranges: std::collections::BTreeMap<u32, (u64, u64, u64)> = std::collections::BTreeMap::new();
@@ -1284,7 +1364,9 @@ fn read_set_containment_on_fixture_classes() {
         classes.push(json!({ "class": name, "step_leaves": n, "disputed_trials": n, "operands_checked": class_ops }));
     }
     assert!(trials > 0 && operands > 0, "no fixture class was checked");
-    println!("[containment] trials={trials} operands={operands} state_operands={state_ops} hist_operands={hist_ops} contiguous_history_tiles={contiguous_tiles}");
+    println!(
+        "[containment] trials={trials} operands={operands} state_operands={state_ops} hist_operands={hist_ops} contiguous_history_tiles={contiguous_tiles}"
+    );
     if let Ok(out) = std::env::var("MISAKA_CONTAINMENT_OUT") {
         let record = json!({ "trials": trials, "operands": operands, "state_operands": state_ops, "hist_operands": hist_ops, "contiguous_history_tiles": contiguous_tiles, "classes": classes });
         std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
@@ -1390,7 +1472,11 @@ fn program_structure_dump_on_a_real_class() {
         .iter()
         .map(|s| json!({ "name": s.name, "kind": format!("{:?}", s.kind), "dtype": format!("{:?}", s.dtype), "shape": s.shape, "per_layer": s.per_layer }))
         .collect();
-    let params: Vec<Value> = p.params.iter().map(|d| json!({ "name": d.name, "dtype": format!("{:?}", d.dtype), "shape": d.shape, "per_layer": d.per_layer })).collect();
+    let params: Vec<Value> = p
+        .params
+        .iter()
+        .map(|d| json!({ "name": d.name, "dtype": format!("{:?}", d.dtype), "shape": d.shape, "per_layer": d.per_layer }))
+        .collect();
     let record = json!({
         "layout": { "checkpoint_interval": space.layout.checkpoint_interval, "h_tile": space.layout.h_tile, "max_context": space.layout.max_context },
         "schedule": { "pre": p.schedule.pre, "layers": p.schedule.layers, "post": p.schedule.post },
@@ -1417,7 +1503,9 @@ fn program_structure_dump_on_a_real_class() {
 // ---------------------------------------------------------------------------------------------------------------------------
 
 use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
-use misaka_palw_tir::demand::{DemandContext, carry_in_node_v1, hist_row_node_v1, history_length_v1, state_occurrence_v1, state_writer_v1};
+use misaka_palw_tir::demand::{
+    DemandContext, carry_in_node_v1, hist_row_node_v1, history_length_v1, state_occurrence_v1, state_writer_v1,
+};
 use misaka_palw_tir::prim::Prim;
 use misaka_palw_tir::program::{INPUT_TOKEN, Ref};
 use misaka_palw_tir::types::strides;
@@ -1640,7 +1728,9 @@ impl<'a> Closure<'a> {
             let inst = self.space.hist_instances()[k];
             let sub = within / inst.tile_lanes as u64;
             let row_lanes = inst.elements.saturating_sub(sub * inst.tile_lanes as u64).min(inst.tile_lanes as u64);
-            self.leaves.entry(CLeaf::Hist { tile_end, inst: k as u32, sub }).or_insert((4 * row_lanes * ht as u64, "HistAppend(tile)"));
+            self.leaves
+                .entry(CLeaf::Hist { tile_end, inst: k as u32, sub })
+                .or_insert((4 * row_lanes * ht as u64, "HistAppend(tile)"));
             Ok(())
         } else {
             let (c, n) = hist_row_node_v1(self.prog, state, layer, row_pos).ok_or("the row appends nothing")?;
@@ -1670,7 +1760,13 @@ impl<'a> Closure<'a> {
         for e in elems {
             let o = unravel_v(e as usize, &ost);
             match &n.prim {
-                Prim::Reshape | Prim::Cast | Prim::Clamp { .. } | Prim::Log2Floor | Prim::IntExp | Prim::IntRsqrt | Prim::IntLn
+                Prim::Reshape
+                | Prim::Cast
+                | Prim::Clamp { .. }
+                | Prim::Log2Floor
+                | Prim::IntExp
+                | Prim::IntRsqrt
+                | Prim::IntLn
                 | Prim::StateWrite { .. } => {
                     self.route(pos, occ, n.inputs[0], e, name)?;
                 }
@@ -1720,13 +1816,12 @@ impl<'a> Closure<'a> {
                     match n.inputs[0] {
                         Ref::Const(_) => {}
                         Ref::Param(j) if a == 0 && bd == 0 => {
-                            let layer = if self.prog.params[j as usize].per_layer { self.layer_of(occ).map(|l| l + 1).unwrap_or(0) } else { 0 };
-                            self.gathers
-                                .entry((pos, occ, node as u16, j, layer))
-                                .or_default()
-                                .entry(xi)
-                                .or_default()
-                                .push(rest);
+                            let layer = if self.prog.params[j as usize].per_layer {
+                                self.layer_of(occ).map(|l| l + 1).unwrap_or(0)
+                            } else {
+                                0
+                            };
+                            self.gathers.entry((pos, occ, node as u16, j, layer)).or_default().entry(xi).or_default().push(rest);
                         }
                         r => {
                             // Worst case over every data row along the gathered axis: enumerated (sound), flagged when large.
@@ -1925,8 +2020,15 @@ fn closure_containment_on_fixture_classes() {
         let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
             params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
         };
-        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
-            .unwrap();
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&lay).unwrap(),
+            [2; 64],
+            name.clone(),
+            &mut tensor,
+        )
+        .unwrap();
         let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
         let (root, _) = artifact.inventory_root().unwrap();
         let class = artifact.class().unwrap();
@@ -1947,7 +2049,11 @@ fn closure_containment_on_fixture_classes() {
         drop(capture);
         let space = backend.space();
         let inv = PalwTirInventoryIndexV1::new(&space.program).unwrap();
-        let rules = PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: LADDER,
+            prompt_form: PalwPromptIdsFormV1::Flat,
+            limits: DemandLimits::UNLIMITED,
+        };
         let (mut class_trials, mut class_skipped, mut class_viol) = (0u64, 0u64, 0u64);
         for i in 0..n {
             let l = space.leaf_at(&ctx, i).unwrap();
@@ -2036,8 +2142,15 @@ fn partial_read_on_fixture_classes() {
         let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
             params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
         };
-        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
-            .unwrap();
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&lay).unwrap(),
+            [2; 64],
+            name.clone(),
+            &mut tensor,
+        )
+        .unwrap();
         let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
         let (root, _) = artifact.inventory_root().unwrap();
         let class = artifact.class().unwrap();
@@ -2086,10 +2199,12 @@ fn partial_read_on_fixture_classes() {
             assert_eq!(got.len(), param_leaves.len(), "{name}: a leaf came back missing");
             for (leaf, piece) in &got {
                 let (j, layer, start, len) = inv.piece_of(*leaf).unwrap();
-                let whole = full_cache
-                    .entry((j, layer))
-                    .or_insert_with(|| artifact.container().read_tensor_bytes(j, layer).unwrap());
-                assert_eq!(piece.as_slice(), &whole[start as usize..(start + len) as usize], "{name}: leaf {leaf} differs from the file");
+                let whole = full_cache.entry((j, layer)).or_insert_with(|| artifact.container().read_tensor_bytes(j, layer).unwrap());
+                assert_eq!(
+                    piece.as_slice(),
+                    &whole[start as usize..(start + len) as usize],
+                    "{name}: leaf {leaf} differs from the file"
+                );
             }
             for (k, (bytes, _)) in &c.leaves {
                 match k {

@@ -3,7 +3,7 @@
 //! initial native contract from actual state. No wire, paid receipt, old move
 //! equivalence, retention certificate or whole-original completion follows.
 use super::{PalwTokenizerStreamPacketV1 as Packet, PalwTokenizerTableStreamV1 as Court};
-use crate::{palw_json_key_set_v1::PalwJsonKeyCompactProofV1 as Proof, Hash64};
+use crate::{Hash64, palw_json_key_set_v1::PalwJsonKeyCompactProofV1 as Proof};
 #[derive(Clone, Copy)]
 pub(crate) struct Material<'a> {
     pub(crate) raw: &'a [u8],

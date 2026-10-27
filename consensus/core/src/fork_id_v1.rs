@@ -821,7 +821,10 @@ mod tests {
             "palw_panel_lifetime_v2" => {
                 params.palw_panel_lifetime_v2 = Some(crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at))
             }
-            "palw_material_release_recovery_v2"=> {params.palw_material_release_recovery_v2=Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));}
+            "palw_material_release_recovery_v2" => {
+                params.palw_material_release_recovery_v2 =
+                    Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));
+            }
             // The retired compact contract v4 (PRINCIPLES §8): validation refuses every activation; the probe asks only the hashers
             // and the schedule, with nominal policy values that only ride along.
             "palw_claim_compact_v4" => {
@@ -989,7 +992,8 @@ mod tests {
                 params.palw_court_capacity_v1 = Some(crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at(at))
             }
             "palw_court_transport_v1" => {
-                params.palw_court_transport_v1 = Some(crate::palw_court_transport_v1::PalwCourtTransportFenceV1::unapproved_probe_at(at))
+                params.palw_court_transport_v1 =
+                    Some(crate::palw_court_transport_v1::PalwCourtTransportFenceV1::unapproved_probe_at(at))
             }
             // RFC-0016's two dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_unresolved_bound_v1" => params.palw_unresolved_bound_v1 = Some(at),
@@ -1357,16 +1361,16 @@ mod tests {
                  the only place the operator log can name the disagreement"
             );
             if !LIVE_IDENTITY_NOT_NORMALISED.contains(&name) {
-            assert_eq!(
-                early.consensus_identity_id(),
-                late.consensus_identity_id(),
-                "{name}: a height that has not fired is normalised out of the identity, or scheduling it partitions the \
+                assert_eq!(
+                    early.consensus_identity_id(),
+                    late.consensus_identity_id(),
+                    "{name}: a height that has not fired is normalised out of the identity, or scheduling it partitions the \
                  fleet at deploy instead of at the height"
-            );
-            assert!(
-                early.fence_schedule_v1().contains(&9_000_000) && late.fence_schedule_v1().contains(&9_000_001),
-                "{name}: a scheduled fence must be on the schedule the fork id is derived from"
-            );
+                );
+                assert!(
+                    early.fence_schedule_v1().contains(&9_000_000) && late.fence_schedule_v1().contains(&9_000_001),
+                    "{name}: a scheduled fence must be on the schedule the fork id is derived from"
+                );
             }
         }
         assert_eq!(

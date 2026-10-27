@@ -4909,18 +4909,17 @@ fn recompute_challenged_row_with_v2(
         binding.job_context.declared_prefill_tokens as u64 + out_coord.call_index as u64
     };
     let (prompt_ids, generated) = check_refutation_id_carriage_v1(refutation, prompt_ids_opening)?;
-    let (recomputed_row, row_offset) =
-        run_program_v2(
-            program,
-            node,
-            layer,
-            &binding.shape_profile,
-            &inputs,
-            weights,
-            kv_len,
-            (&out_coord, prompt_ids, generated),
-            bound_router,
-        )?;
+    let (recomputed_row, row_offset) = run_program_v2(
+        program,
+        node,
+        layer,
+        &binding.shape_profile,
+        &inputs,
+        weights,
+        kv_len,
+        (&out_coord, prompt_ids, generated),
+        bound_router,
+    )?;
 
     let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
     Ok((recomputed_row, row_offset, tile_start))

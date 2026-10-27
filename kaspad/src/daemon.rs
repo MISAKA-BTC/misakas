@@ -1589,16 +1589,21 @@ Do you confirm? (y/n)";
                             Some(spec) if !palw_private_drill => panic!(
                                 "--palw-drill-fault={spec} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
                             ),
-                            Some(_) if args.palw_drill_tamper_leaf.is_some()
-                                || args.palw_drill_tamper_auto_leaf
-                                || args.palw_drill_tamper_boundary.is_some()
-                                || args.palw_drill_sparse_fault_seed.is_some() =>
+                            Some(_)
+                                if args.palw_drill_tamper_leaf.is_some()
+                                    || args.palw_drill_tamper_auto_leaf
+                                    || args.palw_drill_tamper_boundary.is_some()
+                                    || args.palw_drill_sparse_fault_seed.is_some() =>
                             {
-                                panic!("--palw-drill-fault is one lie: not with --palw-drill-tamper-leaf/-auto-leaf/-boundary/-sparse-fault-seed")
+                                panic!(
+                                    "--palw-drill-fault is one lie: not with --palw-drill-tamper-leaf/-auto-leaf/-boundary/-sparse-fault-seed"
+                                )
                             }
                             Some(spec) => match crate::args::parse_palw_drill_fault_v1(spec) {
                                 Ok(fault) => {
-                                    warn!("PALW DRILL (G-17): this producer commits the attempt-lane lie {fault:?} on every draw. Its claims are meant to be convicted or refused.");
+                                    warn!(
+                                        "PALW DRILL (G-17): this producer commits the attempt-lane lie {fault:?} on every draw. Its claims are meant to be convicted or refused."
+                                    );
                                     Some(fault)
                                 }
                                 Err(why) => panic!("--palw-drill-fault={spec}: {why}"),
@@ -1609,11 +1614,14 @@ Do you confirm? (y/n)";
                             Some(seed) if !palw_private_drill => panic!(
                                 "--palw-drill-sparse-fault-seed={seed} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
                             ),
-                            Some(_) if args.palw_drill_tamper_leaf.is_some()
-                                || args.palw_drill_tamper_auto_leaf
-                                || args.palw_drill_tamper_boundary.is_some() =>
+                            Some(_)
+                                if args.palw_drill_tamper_leaf.is_some()
+                                    || args.palw_drill_tamper_auto_leaf
+                                    || args.palw_drill_tamper_boundary.is_some() =>
                             {
-                                panic!("--palw-drill-sparse-fault-seed is one lie: not with --palw-drill-tamper-leaf/-auto-leaf/-boundary")
+                                panic!(
+                                    "--palw-drill-sparse-fault-seed is one lie: not with --palw-drill-tamper-leaf/-auto-leaf/-boundary"
+                                )
                             }
                             Some(seed) => {
                                 warn!("PALW DRILL (G-17 sparse): every draw lies at ONE step leaf drawn uniformly from seed {seed}");
@@ -2148,7 +2156,9 @@ Do you confirm? (y/n)";
                             ),
                             Some(spec) => match crate::args::parse_palw_drill_tamper_tir_frame_v1(spec) {
                                 Ok(fault) => {
-                                    warn!("PALW DRILL: this node's canonical claims will commit the ORIGINAL TIR frame lie {fault:?}. They are meant to be convicted (or, for no-tfp1, refused).");
+                                    warn!(
+                                        "PALW DRILL: this node's canonical claims will commit the ORIGINAL TIR frame lie {fault:?}. They are meant to be convicted (or, for no-tfp1, refused)."
+                                    );
                                     Some(fault)
                                 }
                                 Err(why) => panic!("--palw-drill-tamper-tir-frame={spec}: {why}"),
@@ -2197,9 +2207,10 @@ Do you confirm? (y/n)";
                                 crate::palw_panel::palw_kernel_roles::palw_kernel_post_job_parse_v1(s)
                                     .unwrap_or_else(|e| panic!("--palw-kernel-post-job={s}: {e}"))
                             }),
-                            register_class: args.palw_kernel_register_class.as_ref().map(|p| {
-                                std::fs::read(p).unwrap_or_else(|e| panic!("--palw-kernel-register-class={p}: {e}"))
-                            }),
+                            register_class: args
+                                .palw_kernel_register_class
+                                .as_ref()
+                                .map(|p| std::fs::read(p).unwrap_or_else(|e| panic!("--palw-kernel-register-class={p}: {e}"))),
                             register_class_dry_run: args.palw_kernel_register_class_dry_run,
                             export_dir: args.palw_kernel_export_dir.as_ref().map(std::path::PathBuf::from),
                             relay_dir: args.palw_kernel_relay_dir.as_ref().map(std::path::PathBuf::from),
@@ -2210,7 +2221,8 @@ Do you confirm? (y/n)";
                                 .collect(),
                             flood: args.palw_drill_kernel_flood,
                             // Typed-missing in production (`None`): the producer's admission preflight is a no-op, as the fold's is.
-                            admission_schedule: kaspa_consensus_core::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1,
+                            admission_schedule:
+                                kaspa_consensus_core::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1,
                         },
                         drill_answer_only: {
                             let drill = palw_private_drill;
@@ -2265,7 +2277,9 @@ Do you confirm? (y/n)";
                         },
                         drill_withhold_all_da: match args.palw_drill_withhold_all_da {
                             true if !palw_private_drill => {
-                                panic!("--palw-drill-withhold-all-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
+                                panic!(
+                                    "--palw-drill-withhold-all-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only"
+                                )
                             }
                             true => {
                                 warn!("PALW DRILL: this producer withholds EVERY DA unit it owes (G14 audit G-17 / D-11).");
@@ -2282,7 +2296,9 @@ Do you confirm? (y/n)";
                             }
                             Some(spec) => match crate::args::parse_palw_drill_fp_fault_v1(spec) {
                                 Ok(fault) => {
-                                    warn!("PALW DRILL (G-17): this node's canonical claims commit the lie {fault:?}. They are meant to be convicted.");
+                                    warn!(
+                                        "PALW DRILL (G-17): this node's canonical claims commit the lie {fault:?}. They are meant to be convicted."
+                                    );
                                     Some(fault)
                                 }
                                 Err(why) => panic!("--palw-drill-fp-fault={spec}: {why}"),
@@ -2293,14 +2309,22 @@ Do you confirm? (y/n)";
                             Some(seed) if !palw_private_drill => {
                                 panic!("--palw-drill-sparse-fault-seed={seed} is devnet/simnet (or a salted testnet-12 drill) only")
                             }
-                            Some(_) if args.palw_drill_tamper_fp_leaf.is_some() || args.palw_drill_tamper_tir_frame.is_some() || args.palw_drill_fp_fault.is_some() => {
-                                panic!("--palw-drill-sparse-fault-seed is one lie: not with --palw-drill-tamper-fp-leaf / -tamper-tir-frame / -fp-fault")
+                            Some(_)
+                                if args.palw_drill_tamper_fp_leaf.is_some()
+                                    || args.palw_drill_tamper_tir_frame.is_some()
+                                    || args.palw_drill_fp_fault.is_some() =>
+                            {
+                                panic!(
+                                    "--palw-drill-sparse-fault-seed is one lie: not with --palw-drill-tamper-fp-leaf / -tamper-tir-frame / -fp-fault"
+                                )
                             }
                             other => other,
                         },
                         drill_withhold_held_da: match args.palw_drill_withhold_held_da {
                             true if !palw_private_drill => {
-                                panic!("--palw-drill-withhold-held-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
+                                panic!(
+                                    "--palw-drill-withhold-held-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only"
+                                )
                             }
                             true => {
                                 warn!("PALW DRILL: this producer withholds every legacy held DA unit (the G14 collusion drill D-11).");
@@ -2551,18 +2575,25 @@ Do you confirm? (y/n)";
                 while let Some(event) = node_inbox.blocking_recv() {
                     for tx in &senders {
                         let copy = match &event {
-                            PalwGossipEvent::Material { claim, bytes } => PalwGossipEvent::Material { claim: *claim, bytes: bytes.clone() },
-                            PalwGossipEvent::Receipt { bytes } => PalwGossipEvent::Receipt { bytes: bytes.clone() },
-                            PalwGossipEvent::IntervalOpening { claim, interval_index, bytes } => {
-                                PalwGossipEvent::IntervalOpening { claim: *claim, interval_index: *interval_index, bytes: bytes.clone() }
+                            PalwGossipEvent::Material { claim, bytes } => {
+                                PalwGossipEvent::Material { claim: *claim, bytes: bytes.clone() }
                             }
+                            PalwGossipEvent::Receipt { bytes } => PalwGossipEvent::Receipt { bytes: bytes.clone() },
+                            PalwGossipEvent::IntervalOpening { claim, interval_index, bytes } => PalwGossipEvent::IntervalOpening {
+                                claim: *claim,
+                                interval_index: *interval_index,
+                                bytes: bytes.clone(),
+                            },
                         };
                         let _ = tx.try_send(copy);
                     }
                 }
             })
             .expect("the drill fan-out thread starts");
-        warn!("PALW DRILL: {} seat services share this node's gossip inbox (fan-out + receipt loopback)", palw_drill_extra_panel_services.len() + 1);
+        warn!(
+            "PALW DRILL: {} seat services share this node's gossip inbox (fan-out + receipt loopback)",
+            palw_drill_extra_panel_services.len() + 1
+        );
     }
     for extra in palw_drill_extra_panel_services {
         async_runtime.register(extra);

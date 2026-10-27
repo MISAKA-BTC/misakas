@@ -471,7 +471,11 @@ fn stream(rule: Rule, seat_collateral: Option<u64>, e: u128, cadence: u64, windo
         if drawable && rooms.iter().all(|r| *r >= e) {
             let id = c.floor_claim(seed);
             seed += 1;
-            c.step(&[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&c.floor_seats()) }]);
+            c.step(&[PalwConsensusObjectV2::PanelBound {
+                claim: id,
+                anchor: h(0xAC_0000 + c.daa),
+                seats: seats_of(&c.floor_seats()),
+            }]);
             assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::PanelBound { .. }), "room ≥ eligibility: the Panel binds");
             let bind_daa = c.daa;
             let receipts: Vec<_> = c.floor_seats().iter().map(|(k, _)| valid(id, *k, bind_daa)).collect();
@@ -611,7 +615,8 @@ fn capital_efficiency_against_the_old_rule() {
         assert!(of(Rule::New) >= of(Rule::NoSplit), "{level:?}: the split never takes fewer claims");
         assert!(of(Rule::Old) >= of(Rule::New), "{level:?}: the longer horizon never takes more claims");
     }
-    let genesis = |rule: Rule| rows.iter().find(|(c, r, _)| c.is_none() && *r == rule).map(|(_, _, run)| (run.bound, run.offered)).unwrap();
+    let genesis =
+        |rule: Rule| rows.iter().find(|(c, r, _)| c.is_none() && *r == rule).map(|(_, _, run)| (run.bound, run.offered)).unwrap();
     assert_eq!(genesis(Rule::New).0, genesis(Rule::New).1, "at genesis collateral every offered claim is taken");
     // **User decision 2026-10-17: the Panel floor under G-13's lock rule is 240,000 MSK** (`PALW_PANEL_FLOOR_UNDER_G13_SOMPI_V1`). It is
     // re-derived here from the measured per-claim values: the smallest seat that sustains the healthy per-seat rate under the new rule

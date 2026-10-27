@@ -66,7 +66,11 @@ pub fn palw_fp_answer_row_key_v1(claim: &Hash64) -> Hash64 {
 /// computed every one of its positions; a `prompt ‖ answer` row computed all but the last answer token's
 /// (`ids.len() − 1`). A run of `prompt ‖ answer` computes positions `0 .. prompt + answer − 1`, and position `t` is the same
 /// computation as a paid row's position `t` exactly when the two sequences agree on `0 ..= t`.
-pub fn palw_fp_answer_covered_positions_v1<'a>(rows: impl IntoIterator<Item = (&'a [u32], u32)>, prompt: &[u32], answer: &[u32]) -> u32 {
+pub fn palw_fp_answer_covered_positions_v1<'a>(
+    rows: impl IntoIterator<Item = (&'a [u32], u32)>,
+    prompt: &[u32],
+    answer: &[u32],
+) -> u32 {
     let sequence = || prompt.iter().chain(answer.iter());
     let mut best = 0usize;
     for (ids, prompt_tokens) in rows {

@@ -415,8 +415,13 @@ fn attestor_lock_v1(
         return Err(refuse("the attestor cannot back its Gate C liability lock (GC-DUTY)"));
     }
     let key = palw_native_attestor_lock_key_v1(&palw_kernel_bond_id_v1(signer), claim);
-    let row =
-        PalwKernelSignerLockRowV1 { version: PALW_G14_LANE_CLOSURE_ROW_VERSION_V1, claim: *claim, seat: *signer, amount, locked_daa: ctx.daa_score };
+    let row = PalwKernelSignerLockRowV1 {
+        version: PALW_G14_LANE_CLOSURE_ROW_VERSION_V1,
+        claim: *claim,
+        seat: *signer,
+        amount,
+        locked_daa: ctx.daa_score,
+    };
     builder.write_kernel_row(PALW_G14_LANE_CLOSURE_TABLE_V1, key, Some(borsh::to_vec(&row).expect("fixed lock row")))?;
     builder.note_kernel_bond(signer)?;
     Ok(())
@@ -463,7 +468,10 @@ pub(super) fn release_attestor_locks_of_row_v1(builder: &mut TransitionBuilder<'
 }
 
 /// **lane GC-DUTY: a convicted `Final` chain claim's positive attestors are charged** (from `reverse_convicted_final`).
-pub(super) fn charge_chain_claim_attestors_v1(builder: &mut TransitionBuilder<'_>, claim_id: &Hash64) -> Result<u64, PalwStateV2Error> {
+pub(super) fn charge_chain_claim_attestors_v1(
+    builder: &mut TransitionBuilder<'_>,
+    claim_id: &Hash64,
+) -> Result<u64, PalwStateV2Error> {
     charge_attestor_locks_of_row_v1(builder, &certification_claim_key_v1(&palw_certification_id_v1(claim_id)))
 }
 
@@ -1008,7 +1016,9 @@ fn sweep_kernel_claim_certification_v1(
         if kernel_ledger.is_none() {
             let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("kernel certification: no kernel route"))?;
             *kernel_ledger = Some(
-                route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?,
+                route
+                    .ledger_checked_v1()
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?,
             );
         }
         let ledger = kernel_ledger.as_ref().expect("loaded above");
@@ -1048,7 +1058,9 @@ fn sweep_kernel_claim_certification_v1(
         if kernel_ledger.is_none() {
             let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("kernel certification: no kernel route"))?;
             *kernel_ledger = Some(
-                route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?,
+                route
+                    .ledger_checked_v1()
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?,
             );
         }
         let ledger = kernel_ledger.as_ref().expect("loaded above");
@@ -1179,7 +1191,11 @@ mod gc_duty_tests {
         world(&mut tb, &claim);
         assert_eq!(tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(3)), 600, "in the committed ledger");
         assert_eq!(charge_chain_claim_attestors_v1(&mut tb, &claim).unwrap(), 1_200);
-        assert_eq!([2u64, 3, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [10_000, 9_400, 9_400], "the withholder/negative is untouched");
+        assert_eq!(
+            [2u64, 3, 4].map(|n| tb.state.bonds[&bond(n)].collateral),
+            [10_000, 9_400, 9_400],
+            "the withholder/negative is untouched"
+        );
         assert_eq!(tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(3)), 0);
         assert_eq!(charge_chain_claim_attestors_v1(&mut tb, &claim).unwrap(), 0, "once");
 

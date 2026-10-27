@@ -35,7 +35,8 @@ fn run() -> Result<(), String> {
     if <[u8; 32]>::from(hasher.finalize()) != artifact_sha {
         return Err("q36 differential original .palwq36 artifact pin differs".into());
     }
-    let report = misaka_palw_sdk::native_q36_differential_v40::run_q36_differential_v40(&artifact, &compiled, &tokens, workspace, reads)?;
+    let report =
+        misaka_palw_sdk::native_q36_differential_v40::run_q36_differential_v40(&artifact, &compiled, &tokens, workspace, reads)?;
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&out).map_err(|e| e.to_string())?;
     f.write_all(&serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?).and_then(|_| f.sync_all()).map_err(|e| e.to_string())
 }

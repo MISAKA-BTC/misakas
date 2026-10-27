@@ -3,9 +3,7 @@
 use super::*;
 use kaspa_consensus_core::{
     palw_backend::PalwExecutionBackendV1,
-    palw_native_resource_v1::{
-        NativeCoverageV1, NativeDemandLeaseV1, NativeRetainedV1, reserve_native_requests_v1,
-    },
+    palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, NativeRetainedV1, reserve_native_requests_v1},
     palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2 as Owner,
     palw_routed_material_v2::PalwMaterialConstructionRequestsV2,
     palw_v2::PalwJobContextV2,
@@ -72,27 +70,17 @@ impl BoundSegmentReplayV2 {
         // Quote every newly retained prompt/guard/matched-node allocation before
         // cloning. The independent job owner admits its own nested network bytes.
         let mut q = PalwMaterialConstructionRequestsV2::new();
-        q.vec_v1::<usize>(u64::try_from(prompt.len()).map_err(|_| {
-            SegmentRoutingFaultV2::Resource(NativeCoverageV1::overflow::<Self>(
-                "segment prompt length",
-            ))
-        })?)
+        q.vec_v1::<usize>(
+            u64::try_from(prompt.len())
+                .map_err(|_| SegmentRoutingFaultV2::Resource(NativeCoverageV1::overflow::<Self>("segment prompt length")))?,
+        )
         .map_err(SegmentRoutingFaultV2::Resource)?;
-        q.vec_v1::<SegmentRoutingGuardV2>(1)
-            .map_err(SegmentRoutingFaultV2::Resource)?;
-        q.vec_v1::<usize>(3)
-            .map_err(SegmentRoutingFaultV2::Resource)?;
-        q.vec_v1::<MatchedSegmentV2>(1)
-            .map_err(SegmentRoutingFaultV2::Resource)?;
-        let metadata =
-            reserve_native_requests_v1(q.bytes_v1()).map_err(SegmentRoutingFaultV2::Resource)?;
-        let job =
-            NativeRetainedV1::try_from_clone_v1(job).map_err(SegmentRoutingFaultV2::Resource)?;
-        let authority = if active {
-            read(claim, &job).map_err(SegmentRoutingFaultV2::Retry)?
-        } else {
-            None
-        };
+        q.vec_v1::<SegmentRoutingGuardV2>(1).map_err(SegmentRoutingFaultV2::Resource)?;
+        q.vec_v1::<usize>(3).map_err(SegmentRoutingFaultV2::Resource)?;
+        q.vec_v1::<MatchedSegmentV2>(1).map_err(SegmentRoutingFaultV2::Resource)?;
+        let metadata = reserve_native_requests_v1(q.bytes_v1()).map_err(SegmentRoutingFaultV2::Resource)?;
+        let job = NativeRetainedV1::try_from_clone_v1(job).map_err(SegmentRoutingFaultV2::Resource)?;
+        let authority = if active { read(claim, &job).map_err(SegmentRoutingFaultV2::Retry)? } else { None };
         if let Some(owner) = &authority {
             // Both ordinary attempt and free-prompt native owners are valid here;
             // the exact native job and claim, rather than the form, must agree.
@@ -107,18 +95,8 @@ impl BoundSegmentReplayV2 {
             })?;
         }
         let prompt = prompt.to_vec();
-        let original = Arc::new(SegmentRoutingGuardV2 {
-            claim,
-            segment,
-            job,
-            authority,
-            _metadata: metadata,
-        });
-        Ok(Self {
-            backend,
-            original,
-            prompt,
-        })
+        let original = Arc::new(SegmentRoutingGuardV2 { claim, segment, job, authority, _metadata: metadata });
+        Ok(Self { backend, original, prompt })
     }
     pub(super) fn execute(
         self,
@@ -130,10 +108,7 @@ impl BoundSegmentReplayV2 {
             .replay_segment_from_checkpoint_v1(&self.original.job, &self.prompt, &opening, claim)
             .map(|replay| replay.matches)
             .map_err(palw_seat_s4_refusal_v1);
-        PalwSeatTaskOutV1::RoutedSegment {
-            result,
-            original: self.original,
-        }
+        PalwSeatTaskOutV1::RoutedSegment { result, original: self.original }
     }
 }
 
@@ -170,10 +145,7 @@ impl SegmentMatchBookV2 {
         }
         // This unique node was admitted by the guard before execution. No new
         // growable map or unreserved sidecar array is introduced at completion.
-        self.head = Some(Box::new(MatchedSegmentV2 {
-            original,
-            next: self.head.take(),
-        }));
+        self.head = Some(Box::new(MatchedSegmentV2 { original, next: self.head.take() }));
     }
     pub(super) fn retain_live(&mut self, live: impl Fn(&Hash64) -> bool) {
         let mut link = &mut self.head;
@@ -205,21 +177,9 @@ impl PalwSeatReplaysV1 {
             let _held_for_the_segment = reservation;
             bound.execute(opening, claim)
         });
-        self.running.insert(
-            key,
-            PalwSeatReplayRunV1 {
-                handle,
-                class,
-                started_daa: now_daa,
-                heavy,
-                overdue: false,
-            },
-        );
+        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy, overdue: false });
     }
-    pub(super) fn segment_original_v2(
-        &self,
-        key: &PalwSeatReplayKeyV1,
-    ) -> Option<Arc<SegmentRoutingGuardV2>> {
+    pub(super) fn segment_original_v2(&self, key: &PalwSeatReplayKeyV1) -> Option<Arc<SegmentRoutingGuardV2>> {
         match self.done.get(key).map(|done| &done.result) {
             Some(PalwSeatTaskOutV1::RoutedSegment { original, .. }) => Some(Arc::clone(original)),
             _ => None,

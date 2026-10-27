@@ -5,10 +5,10 @@ pub mod services;
 pub mod storage;
 pub mod test_consensus;
 
-mod palw_material_hold;
 mod evm_replay_market_owned_v2;
 #[cfg(test)]
 mod evm_view_projection_hook_v2;
+mod palw_material_hold;
 mod utxo_set_override;
 
 use kaspa_consensus_core::Hash64;
@@ -866,8 +866,13 @@ impl Consensus {
 
     /// Validates that a valid block *header* exists for `hash`
     fn validate_block_exists(&self, hash: BlockHash) -> Result<(), ConsensusError> {
-        if match self.statuses_store.read().get(hash).optional()
-            .map_err(|e| ConsensusError::GeneralOwned(format!("native block status read: {e}")))? {
+        if match self
+            .statuses_store
+            .read()
+            .get(hash)
+            .optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("native block status read: {e}")))?
+        {
             Some(status) => status.is_valid(),
             None => false,
         } {
@@ -1345,8 +1350,10 @@ impl ConsensusApi for Consensus {
     }
 
     fn palw_fp_commitment_price_answered_v1(
-        &self, commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
-        prompt_token_ids: &[u32], answer: &[u32],
+        &self,
+        commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        prompt_token_ids: &[u32],
+        answer: &[u32],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
         self.virtual_processor.palw_fp_commitment_price_answered_impl(commitment, prompt_token_ids, answer)
     }
@@ -1456,15 +1463,44 @@ impl ConsensusApi for Consensus {
         )
     }
     fn palw_native_routing_fp_work_authority_v2(
-        &self, fp: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
-    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.virtual_processor.palw_native_routing_fp_work_authority_v2_impl(&self.config.params,fp,job) }
+        &self,
+        fp: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    ) -> Result<
+        Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        self.virtual_processor.palw_native_routing_fp_work_authority_v2_impl(&self.config.params, fp, job)
+    }
     fn palw_native_routing_rider_work_authority_v2(
-        &self, job: &kaspa_consensus_core::palw_v2::PalwJobContextV2, executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        lead: kaspa_consensus_core::Hash64, index: u32, retention: u64,
-    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.virtual_processor.palw_native_routing_rider_work_authority_v2_impl(&self.config.params,job,executor,lead,index,retention) }
+        &self,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        lead: kaspa_consensus_core::Hash64,
+        index: u32,
+        retention: u64,
+    ) -> Result<
+        Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        self.virtual_processor.palw_native_routing_rider_work_authority_v2_impl(
+            &self.config.params,
+            job,
+            executor,
+            lead,
+            index,
+            retention,
+        )
+    }
     fn palw_native_routing_refresh_work_authority_v2(
-        &self, original: &kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
-    ) -> Result<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>, kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> { self.virtual_processor.palw_native_routing_refresh_work_authority_v2_impl(&self.config.params,original) }
+        &self,
+        original: &kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
+    ) -> Result<
+        Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        self.virtual_processor.palw_native_routing_refresh_work_authority_v2_impl(&self.config.params, original)
+    }
     fn palw_native_routing_claim_authority_v2(
         &self,
         claim: Hash64,
@@ -2090,7 +2126,8 @@ impl ConsensusApi for Consensus {
         if now > monetary.terms.enrollment_until_daa {
             return Err("kernel funded enrollment expired before claim admission".into());
         }
-        let rid = kaspa_hashes::Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2", terms));
+        let rid =
+            kaspa_hashes::Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2", terms));
         let matches = |state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| {
             state
                 .monetary_material_row_v1(monetary.terms.root)
@@ -2217,8 +2254,12 @@ impl ConsensusApi for Consensus {
         use kaspa_consensus_core::palw_state_v2::PalwStateV2Error as S;
         let state_fault = |why: S| match why {
             S::NativeResource(why) => E::Resource(why),
-            S::NativeContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::Capacity(why)) => E::Resource(why),
-            S::NativeContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable) => E::CapacityUnavailable,
+            S::NativeContextUnavailable(
+                kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::Capacity(why),
+            ) => E::Resource(why),
+            S::NativeContextUnavailable(
+                kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+            ) => E::CapacityUnavailable,
             why => E::Unavailable(why.to_string()),
         };
         let before = self.lkg_virtual_state.load();
@@ -2227,10 +2268,8 @@ impl ConsensusApi for Consensus {
         if !stable || generation.active.is_some() {
             return Err(E::Unavailable("material generation import incomplete".into()));
         }
-        let state = self
-            .virtual_processor
-            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
-            .map_err(|why| match why {
+        let state =
+            self.virtual_processor.palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent).map_err(|why| match why {
                 PalwWeighFaultV2::NativeCapacityUnavailable => E::CapacityUnavailable,
                 why => E::Unavailable(format!("material generation native state unavailable: {why:?}")),
             })?;
@@ -2408,9 +2447,12 @@ impl ConsensusApi for Consensus {
             .virtual_processor
             .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
             .map_err(|e| format!("historical header census state unavailable: {e:?}"))?;
-        let census = kaspa_consensus_core::palw_exec_origin_coverage_v1::palw_exec_origin_coverage_checked_v2(&state, listed.min(4096), |block| {
-            self.headers_store.historical_header_borsh_len_v2(block).optional()
-        }).map_err(|e| e.to_string())?;
+        let census = kaspa_consensus_core::palw_exec_origin_coverage_v1::palw_exec_origin_coverage_checked_v2(
+            &state,
+            listed.min(4096),
+            |block| self.headers_store.historical_header_borsh_len_v2(block).optional(),
+        )
+        .map_err(|e| e.to_string())?;
         let after = self.lkg_virtual_state.load();
         let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
         if !stable
@@ -2785,7 +2827,10 @@ impl ConsensusApi for Consensus {
     fn palw_evm_view_at_owned_v2(
         &self,
         target: BlockHash,
-    ) -> Result<Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewAtV2>, kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2> {
+    ) -> Result<
+        Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewAtV2>,
+        kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2,
+    > {
         use kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2 as E;
         let params = &self.config.params;
         let bundle = match &params.palw_consensus_mode {
@@ -2801,26 +2846,38 @@ impl ConsensusApi for Consensus {
         let generation = self.virtual_processor.evm_asof_import_status_v2();
         let header = self.headers_store.get_header(target).map_err(|e| match e {
             kaspa_database::prelude::StoreError::KeyNotFound(_) => E::HistoryUnavailable,
-            kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason) => E::Resource(
-                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<kaspa_consensus_core::header::Header>("historical EVM header", &reason)),
+            kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason) => {
+                E::Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                    kaspa_consensus_core::header::Header,
+                >("historical EVM header", &reason))
+            }
             other => E::Store(other.to_string()),
         })?;
         let fences = params.palw_evm_market_fences_at(header.daa_score);
-        if !fences.any_active() { return Ok(None); }
+        if !fences.any_active() {
+            return Ok(None);
+        }
         let (generation, stable) = generation.map_err(crate::pipeline::virtual_processor::NativeEvmAsOfFaultV2::into_public_v2)?;
-        if !stable || generation.active.is_some() { return Err(E::Context("import incomplete".into())); }
-        let state = self.virtual_processor.palw_evm_post_state_owned_v2(target)
+        if !stable || generation.active.is_some() {
+            return Err(E::Context("import incomplete".into()));
+        }
+        let state = self
+            .virtual_processor
+            .palw_evm_post_state_owned_v2(target)
             .map_err(crate::pipeline::virtual_processor::NativeEvmAsOfFaultV2::into_public_v2)?
             .ok_or(E::HistoryUnavailable)?;
         if state.last_point().is_some_and(|p| p.block != target || p.daa_score != header.daa_score) {
             return Err(E::Context("post-target state/header point differs".into()));
         }
         let gate = kaspa_consensus_core::palw_state_v2::NativeEvmMarketGateInputsV2::at_params_v2(params, header.daa_score);
-        let view = state.evm_view_owned_v2(kaspa_consensus_core::evm::EVM_CHAIN_ID, bundle.state.base_class_id(), gate)
+        let view = state
+            .evm_view_owned_v2(kaspa_consensus_core::evm::EVM_CHAIN_ID, bundle.state.base_class_id(), gate)
             .map_err(E::Resource)?;
         #[cfg(test)]
         evm_view_projection_hook_v2::invoke(self);
-        let (after, stable) = self.virtual_processor.evm_asof_import_status_v2()
+        let (after, stable) = self
+            .virtual_processor
+            .evm_asof_import_status_v2()
             .map_err(crate::pipeline::virtual_processor::NativeEvmAsOfFaultV2::into_public_v2)?;
         if !stable || after.active.is_some() || after.epoch != generation.epoch {
             return Err(E::Context("import generation changed during historical view projection".into()));
@@ -2831,7 +2888,10 @@ impl ConsensusApi for Consensus {
     fn palw_evm_replay_market_owned_v2(
         &self,
         accepting: BlockHash,
-    ) -> Result<Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>, kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2> {
+    ) -> Result<
+        Option<kaspa_consensus_core::evm::view_owned_v2::NativeEvmReplayMarketV2>,
+        kaspa_consensus_core::evm::view_owned_v2::NativeEvmViewFaultV2,
+    > {
         self.read_evm_replay_market_owned_v2(accepting)
     }
 
@@ -4825,7 +4885,9 @@ impl ConsensusApi for Consensus {
         let _guard = self.pruning_lock.blocking_read();
         self.validate_block_exists(low)?;
         self.validate_block_exists(high)?;
-        self.services.reachability_service.try_is_chain_ancestor_of(low, high)
+        self.services
+            .reachability_service
+            .try_is_chain_ancestor_of(low, high)
             .map_err(|e| ConsensusError::GeneralOwned(format!("native chain reachability read: {e}")))
     }
 
@@ -4840,7 +4902,9 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
-        self.headers_store.get_header(hash).optional()
+        self.headers_store
+            .get_header(hash)
+            .optional()
             .map_err(|e| ConsensusError::GeneralOwned(format!("native header read: {e}")))?
             .ok_or(ConsensusError::HeaderNotFound(hash))
     }
@@ -5008,7 +5072,9 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_evm_tx_locations(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<kaspa_consensus_core::evm::EvmTxLocations> {
-        self.storage.evm_tx_index_store.get_or_default(tx_hash)
+        self.storage
+            .evm_tx_index_store
+            .get_or_default(tx_hash)
             .map_err(|e| ConsensusError::GeneralOwned(format!("EVM transaction locations read: {e}")))
     }
 
@@ -5032,8 +5098,14 @@ impl ConsensusApi for Consensus {
             if idx >= receipts.receipts.len() || receipts.tx_hashes.get(idx) != Some(&tx_hash) {
                 continue; // defensive: index row out of sync with the receipts row
             }
-            let evm_number =
-                self.storage.evm_header_store.get(*accepting).optional().map_err(unavailable)?.map(|h| h.evm_number).unwrap_or_default();
+            let evm_number = self
+                .storage
+                .evm_header_store
+                .get(*accepting)
+                .optional()
+                .map_err(unavailable)?
+                .map(|h| h.evm_number)
+                .unwrap_or_default();
             // Block-global offset of this receipt's first log (audit H-05): the
             // count of all logs in the receipts before this one in the block.
             let log_index_offset: u32 = receipts.receipts[..idx].iter().map(|r| r.logs.len() as u32).sum();
@@ -5055,7 +5127,10 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_header_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmExecutionHeader>> {
         use crate::model::stores::evm::EvmHeaderStoreReader;
-        self.storage.evm_header_store.get(block).optional()
+        self.storage
+            .evm_header_store
+            .get(block)
+            .optional()
             .map_err(|e| ConsensusError::GeneralOwned(format!("EVM execution header read: {e}")))
     }
 
@@ -5186,8 +5261,13 @@ impl ConsensusApi for Consensus {
     fn get_evm_state_snapshot_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmStateSnapshot>> {
         use crate::model::stores::evm::EvmStateStoreReader;
         // Hot path: the per-block 206 snapshot (present on every node that persists it — the default).
-        if let Some(snapshot) = self.storage.evm_state_store.get(block).optional()
-            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM hot snapshot read: {e}")))? {
+        if let Some(snapshot) = self
+            .storage
+            .evm_state_store
+            .get(block)
+            .optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM hot snapshot read: {e}")))?
+        {
             return Ok(Some(snapshot));
         }
         // C-01 S9b: 206 was retired (--evm-retire-206) or this block was committed while retired. Serve
@@ -5196,7 +5276,11 @@ impl ConsensusApi for Consensus {
         // trace / account reads working without the 206 store. Read-path only; behavior-preserving when
         // 206 is present (returned above) and on inert/non-EVM nets (no flat head ⇒ reconstruct ⇒ None).
         #[cfg(feature = "evm")]
-        if let Some(ptr) = self.storage.evm_latest_state_ptr_store.read().get()
+        if let Some(ptr) = self
+            .storage
+            .evm_latest_state_ptr_store
+            .read()
+            .get()
             .map_err(|e| ConsensusError::GeneralOwned(format!("EVM flat state pointer read: {e}")))?
             && ptr.canonical_head == block
         {
@@ -5233,8 +5317,13 @@ impl ConsensusApi for Consensus {
 
         // Not an EVM block (no committed header) ⇒ None — distinct from "EVM block
         // whose state history this node doesn't retain", which is an Err below.
-        let Some(target_header) = self.storage.evm_header_store.get(block).optional()
-            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM reconstruction target header read: {e}")))? else {
+        let Some(target_header) = self
+            .storage
+            .evm_header_store
+            .get(block)
+            .optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM reconstruction target header read: {e}")))?
+        else {
             return Ok(None);
         };
 
@@ -5325,13 +5414,12 @@ impl ConsensusApi for Consensus {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmRawTxStoreReader, EvmReceiptsStoreReader};
         let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM block read: {e}"));
         let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().map_err(unavailable)? else { return Ok(None) };
-        let tx_hashes = self.storage.evm_receipts_store.get(l1_hash).optional().map_err(unavailable)?
-            .map(|r| r.tx_hashes).unwrap_or_default();
+        let tx_hashes =
+            self.storage.evm_receipts_store.get(l1_hash).optional().map_err(unavailable)?.map(|r| r.tx_hashes).unwrap_or_default();
         // RPC §7.3 size: absent immutable raw rows retain their existing zero contribution.
         let mut encoded_size = 0;
         for h in &tx_hashes {
-            encoded_size += self.storage.evm_raw_tx_store.get(*h).map_err(unavailable)?
-                .map(|r| r.raw.len() as u64).unwrap_or(0);
+            encoded_size += self.storage.evm_raw_tx_store.get(*h).map_err(unavailable)?.map(|r| r.raw.len() as u64).unwrap_or(0);
         }
         Ok(Some(kaspa_consensus_core::evm::EvmBlockResponse { header, l1_hash, tx_hashes, encoded_size }))
     }
@@ -5340,8 +5428,8 @@ impl ConsensusApi for Consensus {
         use crate::model::stores::evm::EvmHeaderStoreReader;
         use kaspa_consensus_core::evm::EVM_GENESIS_STATE_ROOT;
         let unavailable = |e| ConsensusError::GeneralOwned(format!("EVM exact parent read: {e}"));
-        let child = self.storage.evm_header_store.get(l1_hash).optional().map_err(unavailable)?
-            .ok_or(ConsensusError::MissingData(l1_hash))?;
+        let child =
+            self.storage.evm_header_store.get(l1_hash).optional().map_err(unavailable)?.ok_or(ConsensusError::MissingData(l1_hash))?;
         if child.evm_number == 0 {
             return Ok(None);
         }
@@ -5414,7 +5502,9 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_raw_tx(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<Vec<u8>>> {
         use crate::model::stores::evm::EvmRawTxStoreReader;
-        self.storage.evm_raw_tx_store.get(tx_hash)
+        self.storage
+            .evm_raw_tx_store
+            .get(tx_hash)
             .map(|row| row.map(|r| r.raw))
             .map_err(|e| ConsensusError::GeneralOwned(format!("EVM raw transaction read: {e}")))
     }
@@ -5441,8 +5531,14 @@ impl ConsensusApi for Consensus {
         rpc_hash: kaspa_hashes::EvmH256,
     ) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
         use crate::model::stores::evm::EvmBlockHashMapStoreReader;
-        let Some(l1_hash) = self.storage.evm_block_hash_map_store.get(rpc_hash)
-            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM RPC hash read: {e}")))? else { return Ok(None) };
+        let Some(l1_hash) = self
+            .storage
+            .evm_block_hash_map_store
+            .get(rpc_hash)
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM RPC hash read: {e}")))?
+        else {
+            return Ok(None);
+        };
         self.get_evm_block_by_l1_hash(l1_hash)
     }
 
@@ -5488,9 +5584,8 @@ impl ConsensusApi for Consensus {
         // the address posting index instead of scanning every block. The floor gate
         // prevents silently missing logs from blocks indexed before the writer was
         // deployed (a backfill lowers the floor — design §14).
-        let indexed_floor = if addresses.is_empty() { None } else {
-            self.storage.evm_log_index_store.try_indexed_floor().map_err(unavailable)?
-        };
+        let indexed_floor =
+            if addresses.is_empty() { None } else { self.storage.evm_log_index_store.try_indexed_floor().map_err(unavailable)? };
         if indexed_floor.is_some_and(|f| from_number >= f) {
             let mut out: Vec<kaspa_consensus_core::evm::EvmLogEntry> = Vec::new();
             let mut seen: std::collections::HashSet<[u8; 20]> = std::collections::HashSet::new();
@@ -5501,11 +5596,18 @@ impl ConsensusApi for Consensus {
                 // Collect this address's in-range postings (ascending block order),
                 // then resolve each (the iterator borrows the store).
                 let mut locs = Vec::new();
-                for loc in self.storage.evm_log_index_store
-                    .try_bucket_locs(kaspa_consensus_core::evm::LogPostingKind::Address, &addr.as_bytes()) {
+                for loc in self
+                    .storage
+                    .evm_log_index_store
+                    .try_bucket_locs(kaspa_consensus_core::evm::LogPostingKind::Address, &addr.as_bytes())
+                {
                     let loc = loc.map_err(unavailable)?;
-                    if loc.evm_number < from_number { continue; }
-                    if loc.evm_number > to_number { break; }
+                    if loc.evm_number < from_number {
+                        continue;
+                    }
+                    if loc.evm_number > to_number {
+                        break;
+                    }
                     locs.push(loc);
                 }
                 for loc in locs {
@@ -5514,11 +5616,14 @@ impl ConsensusApi for Consensus {
                     if !canonical(loc.l1_hash)? {
                         continue;
                     }
-                    let Some(header) = self.storage.evm_header_store.get(loc.l1_hash).optional().map_err(unavailable)? else { continue };
+                    let Some(header) = self.storage.evm_header_store.get(loc.l1_hash).optional().map_err(unavailable)? else {
+                        continue;
+                    };
                     if header.evm_number != loc.evm_number {
                         continue;
                     }
-                    let receipts = self.storage.evm_receipts_store.get(loc.l1_hash).optional().map_err(unavailable)?.unwrap_or_default();
+                    let receipts =
+                        self.storage.evm_receipts_store.get(loc.l1_hash).optional().map_err(unavailable)?.unwrap_or_default();
                     let Some(receipt) = receipts.receipts.get(loc.tx_index as usize) else { continue };
                     let Some(log) = receipt.logs.get(loc.in_receipt_log_index as usize) else { continue };
                     if log.address != addr {

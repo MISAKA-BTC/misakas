@@ -2211,9 +2211,13 @@ impl<'a> Wizard<'a> {
             Ok(_) => {}
             Err(e) if params.palw_dns_retirement.is_some() => {
                 return Err(Halt::Blocked(
-                    Finding::error("E-SETUP-DNS-RETIREMENT-UNREAD", exit::COMPONENT_DOWN, "The DNS retirement status could not be read")
-                        .reason("this network schedules the RFC-0012 retirement, so onboarding needs the node to say it has not passed")
-                        .current(e.to_string()),
+                    Finding::error(
+                        "E-SETUP-DNS-RETIREMENT-UNREAD",
+                        exit::COMPONENT_DOWN,
+                        "The DNS retirement status could not be read",
+                    )
+                    .reason("this network schedules the RFC-0012 retirement, so onboarding needs the node to say it has not passed")
+                    .current(e.to_string()),
                 ));
             }
             Err(_) => {}

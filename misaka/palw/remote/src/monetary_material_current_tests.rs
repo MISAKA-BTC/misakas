@@ -33,8 +33,10 @@ fn typed_store(file: &Path) -> (DurableMonetaryMaterialProviderV1, Hash64, Hash6
     let (store, preferred, fallback, root, provider, _) = typed_store_with_ledger(file);
     (store, preferred, fallback, root, provider)
 }
-fn typed_store_with_ledger(file: &Path) -> (DurableMonetaryMaterialProviderV1, Hash64, Hash64, Hash64, PalwBondKeyV2, misaka_palw_kernel::ledger::KernelLedgerV1) {
-    use crate::monetary_gc_kernel_fixture::ledger_world::{position, World};
+fn typed_store_with_ledger(
+    file: &Path,
+) -> (DurableMonetaryMaterialProviderV1, Hash64, Hash64, Hash64, PalwBondKeyV2, misaka_palw_kernel::ledger::KernelLedgerV1) {
+    use crate::monetary_gc_kernel_fixture::ledger_world::{World, position};
     use kaspa_consensus_core::{
         palw_material_capacity_v1::{PalwKernelMaterialBundleV1, PalwMaterialManifestV1},
         palw_monetary_material_v1::*,
@@ -162,7 +164,7 @@ fn current_generation_capacity_and_reorg_release_actual_answer_owner() {
         return;
     }
     use kaspa_consensus_core::palw_native_resource_v1::{
-        arm_native_logical_limits_v1, reserve_native_requests_v1, NativeSnapshotResourceLimitsV1,
+        NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
     };
     let dir = FixtureDir::new();
     let (store, preferred, _, root, provider) = typed_store(&dir.file());
@@ -256,7 +258,11 @@ fn classified_answer_keeps_local_capacity_unavailable_denied_and_local_apart() {
     let resource = AuthorityError::Resource(NativeCoverageV1::unsupported::<u64>("authority test", "local reservation refused"));
     let cases: [(AuthorityError, fn(&MaterialAnswerErrorV4) -> bool, bool); 3] = [
         (resource, |e| matches!(e, MaterialAnswerErrorV4::Authority(AuthorityError::Resource(_))), true),
-        (AuthorityError::CapacityUnavailable, |e| matches!(e, MaterialAnswerErrorV4::Authority(AuthorityError::CapacityUnavailable)), true),
+        (
+            AuthorityError::CapacityUnavailable,
+            |e| matches!(e, MaterialAnswerErrorV4::Authority(AuthorityError::CapacityUnavailable)),
+            true,
+        ),
         (
             AuthorityError::Unavailable("material generation import incomplete".into()),
             |e| matches!(e, MaterialAnswerErrorV4::Authority(AuthorityError::Unavailable(_))),

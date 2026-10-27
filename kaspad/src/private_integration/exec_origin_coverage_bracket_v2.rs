@@ -27,7 +27,9 @@ mod tests {
 
     #[test]
     fn census_does_not_survive_missing_stamps_or_failed_reads() {
-        assert!(bracketed(|| Err::<(), _>("import unavailable".into()), || -> Result<(), String> { panic!("must not read") }).is_err());
+        assert!(
+            bracketed(|| Err::<(), _>("import unavailable".into()), || -> Result<(), String> { panic!("must not read") }).is_err()
+        );
         let mut reads = [Ok(("a", 100, 7)), Err("import active".into())].into_iter();
         assert!(bracketed(|| reads.next().unwrap(), || Ok(42)).is_err());
         assert!(bracketed(|| Ok(("a", 100, 7)), || Err::<(), _>("header read failed".into())).is_err());

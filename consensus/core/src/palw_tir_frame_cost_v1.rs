@@ -165,7 +165,8 @@ pub struct PalwTirFrameCostRecordV1 {
 
 /// **The pinned frame cost records — EMPTY.** No real network's frame is priced or clocked until a reviewed change pins one.
 // Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
-pub const PALW_TIR_FRAME_COST_RECORDS_V1: &[PalwTirFrameCostRecordV1] = crate::palw_t12_17000_records_v1::PALW_T12_17000_FRAME_COST_RECORDS_V1;
+pub const PALW_TIR_FRAME_COST_RECORDS_V1: &[PalwTirFrameCostRecordV1] =
+    crate::palw_t12_17000_records_v1::PALW_T12_17000_FRAME_COST_RECORDS_V1;
 
 /// Why a frame cost record does not price a network.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -589,7 +590,13 @@ pub const PALW_TIR_DISPUTE_ARITY_V1: u64 = 16;
 ///
 /// Returns `None` on overflow. The adjudication itself is still a deterministic recomputation of the block from authenticated
 /// operands; this function only prices it.
-pub fn palw_tir_dispute_door_fit_v1(rounds: u64, levels: u32, reduction_blocks: &[u64], floor_bytes: u64, contenders: u64) -> Option<u64> {
+pub fn palw_tir_dispute_door_fit_v1(
+    rounds: u64,
+    levels: u32,
+    reduction_blocks: &[u64],
+    floor_bytes: u64,
+    contenders: u64,
+) -> Option<u64> {
     let mut block = floor_bytes;
     let divisor = PALW_TIR_DISPUTE_ARITY_V1.checked_pow(levels)?;
     for bytes in reduction_blocks {
@@ -603,7 +610,13 @@ pub fn palw_tir_dispute_door_fit_v1(rounds: u64, levels: u32, reduction_blocks: 
 }
 
 /// The extra levels in `0..=max_levels` that minimise the door, with the door (ties take the fewer levels).
-pub fn palw_tir_dispute_door_minimum_v1(rounds: u64, reduction_blocks: &[u64], floor_bytes: u64, contenders: u64, max_levels: u32) -> Option<(u32, u64)> {
+pub fn palw_tir_dispute_door_minimum_v1(
+    rounds: u64,
+    reduction_blocks: &[u64],
+    floor_bytes: u64,
+    contenders: u64,
+    max_levels: u32,
+) -> Option<(u32, u64)> {
     let mut best: Option<(u32, u64)> = None;
     for levels in 0..=max_levels {
         let door = palw_tir_dispute_door_fit_v1(rounds, levels, reduction_blocks, floor_bytes, contenders)?;
@@ -717,7 +730,11 @@ mod tests {
 
     #[test]
     fn the_cost_record_list_is_empty_and_refuses_every_network() {
-        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
+        assert!(
+            PALW_TIR_FRAME_COST_RECORDS_V1
+                .iter()
+                .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+        );
         let cost = palw_tir_frame_test_only_cost_v1();
         cost.check_v1().expect("the test-only config is well formed");
         assert_eq!(
@@ -782,7 +799,10 @@ mod tests {
         assert_eq!(palw_tir_dispute_door_minimum_v1(16, &blocks, floor, 8, 7), Some((2, 1_464)), "2M minimum");
         assert!(palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap() <= 3_120, "2M fits 3,120 at the minimum");
         // Fewer owners is NOT the fix (ADR-0191 decision): K = 8 is kept above.
-        assert!(palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap() > palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 4).unwrap());
+        assert!(
+            palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap()
+                > palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 4).unwrap()
+        );
         // The floor is never shrunk: more levels stop helping once only the floor remains.
         let at7 = palw_tir_dispute_door_fit_v1(16, 7, &blocks, floor, 8).unwrap();
         let at2 = palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap();
@@ -813,7 +833,8 @@ mod tests {
         // Non-cone carry-over terms of the shipped door that the dispute door does not replace (door-breakdown-1018): IDs 106,
         // filing allowance 82, open window 5. The shipped trace tiles (4,209), output (2,346), reorg (2,346) and the owner queue
         // (1,536) are replaced by the dispute formula's own terms, so they are not added here.
-        let carry_over = [("IDs / leaf (door-breakdown-1018)", 106u64), ("filing allowance (door-breakdown-1018)", 82), ("open window", 5)];
+        let carry_over =
+            [("IDs / leaf (door-breakdown-1018)", 106u64), ("filing allowance (door-breakdown-1018)", 82), ("open window", 5)];
         let carry_sum: u64 = carry_over.iter().map(|(_, v)| v).sum();
         // Terminal history read (given: ~135.6 KB; not recomputed here). Own adjudication plus one restart.
         let terminal_bytes = 135_600u64;
@@ -838,7 +859,8 @@ mod tests {
                 let terminal_s = terminal_bytes * scale;
                 let adj_block = floor_s + blocks_s.iter().map(|b| b.div_ceil(16u64.pow(levels))).sum::<u64>();
                 let span_adj = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + adj_block.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
-                let terminal_span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + terminal_s.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
+                let terminal_span =
+                    PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + terminal_s.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
                 let core = palw_tir_dispute_door_fit_v1(rounds, levels, &blocks_s, floor_s, k).expect("the door fits in u64");
                 // Identity: prep + (R + L)·46 + output + (K + 1)·span(B_adj).
                 assert_eq!(
@@ -854,34 +876,52 @@ mod tests {
                 let door_b = door_a + terminal_extra;
                 let tag = if scale == 1 { "125,000 B/DAA (sensitivity)" } else { "12,500 B/DAA (1/10 sensitivity)" };
                 println!("[{label}] --- {tag}, bytes scaled x{scale} ---");
-                println!("[{label}]   step block B_adj = {adj_block} B (floor {floor_s} + blocks {blocks_s:?} / 16^{levels} rounded up)");
+                println!(
+                    "[{label}]   step block B_adj = {adj_block} B (floor {floor_s} + blocks {blocks_s:?} / 16^{levels} rounded up)"
+                );
                 println!("[{label}]   span(B_adj) = 44 + ceil(B/920) = {span_adj}");
                 println!("[{label}]   prep = {PALW_TIR_DISPUTE_PREP_DAA_V1}");
-                println!("[{label}]   bisection = (R + L) x 46 = {} x 46 = {}", rounds + u64::from(levels), (rounds + u64::from(levels)) * PALW_TIR_DISPUTE_ROUND_DAA_V1);
+                println!(
+                    "[{label}]   bisection = (R + L) x 46 = {} x 46 = {}",
+                    rounds + u64::from(levels),
+                    (rounds + u64::from(levels)) * PALW_TIR_DISPUTE_ROUND_DAA_V1
+                );
                 println!("[{label}]   output check = {PALW_TIR_DISPUTE_OUTPUT_DAA_V1}");
-                println!("[{label}]   admission queue + own + restart = (K + 1) x span(B_adj) = {} x {span_adj} = {}", k + 1, (k + 1) * span_adj);
+                println!(
+                    "[{label}]   admission queue + own + restart = (K + 1) x span(B_adj) = {} x {span_adj} = {}",
+                    k + 1,
+                    (k + 1) * span_adj
+                );
                 println!("[{label}]   core door (existing fn palw_tir_dispute_door_fit_v1) = {core}");
                 for (name, v) in carry_over {
                     println!("[{label}]   carry-over {name} = {v}");
                 }
                 println!("[{label}]   door_A (no terminal) = {door_a}");
-                println!("[{label}]   terminal history span(B={terminal_s}) = 44 + ceil(B/920) = {terminal_span}; own + restart = {terminal_extra}");
+                println!(
+                    "[{label}]   terminal history span(B={terminal_s}) = 44 + ceil(B/920) = {terminal_span}; own + restart = {terminal_extra}"
+                );
                 println!("[{label}]   door_B (with terminal) = {door_b}");
                 println!("[{label}]   replaced, not added: shipped trace 4,209, output 2,346, reorg 2,346, owner queue 1,536");
                 // **Position terminal row (DORMANT, derived_upper).** The history bisection localises one tile, then ONE more
                 // b = 16 round over its 16 slot partials localises one position; the terminal recomputes that position from
                 // its query row, K row and V row. The round adds one to R; the terminal is ~12 KB (given, not derived).
                 let position_rounds = rounds + 1;
-                let core_p = palw_tir_dispute_door_fit_v1(position_rounds, levels, &blocks_s, floor_s, k).expect("the door fits in u64");
+                let core_p =
+                    palw_tir_dispute_door_fit_v1(position_rounds, levels, &blocks_s, floor_s, k).expect("the door fits in u64");
                 assert_eq!(core_p, core + PALW_TIR_DISPUTE_ROUND_DAA_V1, "one extra round adds exactly one round of DAA");
                 let door_a_p = core_p + carry_sum;
-                let position_span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + (POSITION_TERMINAL_BYTES_GIVEN * scale).div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
+                let position_span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1
+                    + (POSITION_TERMINAL_BYTES_GIVEN * scale).div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
                 let door_b_p = door_a_p + 2 * position_span;
                 println!("[{label}] --- position terminal, {tag} ---");
                 println!("[{label}]   rounds = {position_rounds} (R + 1: one position round over 16 slots)");
                 println!("[{label}]   core door (rounds + 1) = {core_p}");
                 println!("[{label}]   door_A_position (no terminal) = {door_a_p}");
-                println!("[{label}]   position terminal span({} B) = 44 + ceil(B/920) = {position_span}; own + restart = {}", POSITION_TERMINAL_BYTES_GIVEN * scale, 2 * position_span);
+                println!(
+                    "[{label}]   position terminal span({} B) = 44 + ceil(B/920) = {position_span}; own + restart = {}",
+                    POSITION_TERMINAL_BYTES_GIVEN * scale,
+                    2 * position_span
+                );
                 println!("[{label}]   door_B_position (with position terminal) = {door_b_p}");
             }
         }

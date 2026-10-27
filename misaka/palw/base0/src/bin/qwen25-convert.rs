@@ -212,8 +212,7 @@ fn main() {
                 "calibration_tokens": prompt,
                 "note": "offline physical logit scale; not an artifact field or a fidelity result",
             });
-            std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap())
-                .unwrap_or_else(|e| die(format!("{path}: {e}")));
+            std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap_or_else(|e| die(format!("{path}: {e}")));
         }
         // **`--out` is what turns a measurement into a runtime.** Until the artifact could be
         // written, every use of this class re-read a 3 GiB checkpoint and re-quantized it, which

@@ -47,8 +47,11 @@ fn cert_config_over(base: (Config, PalwConsensusParamsV2, Premine, Premine)) -> 
     let mut tmp = params.clone();
     tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     tmp.sync_palw_rfc0018_v1();
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(mut bundle) = tmp.palw_consensus_mode else { unreachable!() };
-    let mirror = PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*bundle.state.rfc0018_v1().expect("Gate C mirrored") };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(mut bundle) = tmp.palw_consensus_mode else {
+        unreachable!()
+    };
+    let mirror =
+        PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*bundle.state.rfc0018_v1().expect("Gate C mirrored") };
     assert!(mirror.gate_c_at(0), "Gate C governs from DAA 0 in this harness");
     TEST_ONLY_KERNEL_CERT_POLICY_V1.validate().expect("the test policy is well-formed");
     bundle.state = bundle.state.clone().with_rfc0018_v1(Some(mirror));
@@ -143,7 +146,12 @@ pub(super) fn drawn_cards(net: &Net, row: &PalwClaimCertificationRowV1) -> Vec<(
         .collect()
 }
 
-pub(super) async fn attest(net: &mut Net, claim: &Digest, card: usize, verdict: misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1) {
+pub(super) async fn attest(
+    net: &mut Net,
+    claim: &Digest,
+    card: usize,
+    verdict: misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1,
+) {
     use misaka_palw_kernel::model_eligibility_v1::*;
     let attestation = EligibilityAttestationV1 {
         version: ELIGIBILITY_ATTESTATION_VERSION_V1,
@@ -254,8 +262,12 @@ pub(super) async fn s3a_prime_shortfall() {
     let short = cert_row(&w.net, &claim).unwrap();
     assert_eq!(short.positive_positions(), positive);
     assert!(short.positive_positions() < k, "short of k = {k}: {}", short.positive_positions());
-    let (producer_before, poster_before) =
-        until_decided(&mut w.net, &claim, TEST_ONLY_KERNEL_CERT_POLICY_V1.attest_window_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50).await;
+    let (producer_before, poster_before) = until_decided(
+        &mut w.net,
+        &claim,
+        TEST_ONLY_KERNEL_CERT_POLICY_V1.attest_window_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50,
+    )
+    .await;
     let decided = cert_row(&w.net, &claim).unwrap();
     assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::NotCertified), "{:?}", decided.outcome);
     assert!(matches!(w.net.claim_state(&claim), ClaimStateV1::Final { .. }), "still a kernel Final");
@@ -274,7 +286,6 @@ pub(super) async fn s3a_prime_shortfall() {
         assert!(w.net.owed(0) <= p0 && w.net.owed(1) <= p1, "no second settlement of the held reward");
     }
 }
-
 
 /// **T-adversarial (C), user-approved 2026-10-27: Gate C when ONLY the colluders hold the model.** The producer and every Panel seat
 /// hold the weights; nobody else can acquire them (every peer outside the coalition refuses). Each drawn colluder attests
@@ -301,7 +312,10 @@ pub(super) async fn adversarial_c_gate_c_with_colluders_only_holding_the_model()
             attest(&mut w.net, &claim, *card, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Unavailable).await;
         }
     }
-    assert!(colluder_positions < k, "honest-fraction premise: the coalition's drawn positions ({colluder_positions}) stay below k = {k}");
+    assert!(
+        colluder_positions < k,
+        "honest-fraction premise: the coalition's drawn positions ({colluder_positions}) stay below k = {k}"
+    );
     let (producer_before, poster_before) = until_decided(
         &mut w.net,
         &claim,
@@ -335,8 +349,11 @@ fn budget_config(allocation: bool) -> (Config, PalwConsensusParamsV2, Premine, P
     list.push(PALW_T12_G14_MODEL_TIER_ENTRY);
     palw_t12_arm_after_int13_at_v1(&mut params, &list, Some(0));
     assert_eq!(params.palw_model_bond_allocation_v1.is_some(), allocation);
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode else { unreachable!() };
-    let mirror = PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*b.state.rfc0018_v1().expect("Gate C mirrored") };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode else {
+        unreachable!()
+    };
+    let mirror =
+        PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*b.state.rfc0018_v1().expect("Gate C mirrored") };
     b.state = b
         .state
         .clone()
@@ -350,7 +367,9 @@ fn budget_config(allocation: bool) -> (Config, PalwConsensusParamsV2, Premine, P
 fn budget_rows(w: &World, claim: &Digest) -> (Vec<u8>, Vec<u8>) {
     let state = w.net.chain.tip_state().1;
     let budget = state.bond_budget().expect("the budget engine is running");
-    let row = budget.claim_row(&kaspa_consensus_core::palw_state_v2::kernel_budget_claim_id_v1(claim)).expect("the claim committed its budget");
+    let row = budget
+        .claim_row(&kaspa_consensus_core::palw_state_v2::kernel_budget_claim_id_v1(claim))
+        .expect("the claim committed its budget");
     assert_eq!(row.model, None, "a kernel claim is user escrow: never inside a model allocation (RFC-0016 P4)");
     let bond = budget.bond_row(&row.bond).copied().unwrap_or_default();
     (borsh::to_vec(row).unwrap(), borsh::to_vec(&bond).unwrap())

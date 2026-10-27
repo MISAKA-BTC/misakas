@@ -191,8 +191,7 @@ impl<'a> PalwGdnStateGeometryV2<'a> {
         if block >= per_head {
             return None;
         }
-        let delta_total =
-            self.recurrence_layers * u64::from(self.heads) * u64::from(self.v_dim.div_ceil(self.delta_rows_per_chunk));
+        let delta_total = self.recurrence_layers * u64::from(self.heads) * u64::from(self.v_dim.div_ceil(self.delta_rows_per_chunk));
         let ordinal = self.layers().position(|candidate| candidate == layer)? as u64;
         Some(delta_total + (ordinal * u64::from(conv_heads) + u64::from(head)) * u64::from(per_head) + u64::from(block))
     }

@@ -789,11 +789,7 @@ fn a_final_reward_is_paid_once_out_of_the_posters_escrow_and_nothing_is_ever_iss
     assert_eq!(w.block(60, vec![]), vec![E::Final { claim: id, reward: 7 }]);
     assert_eq!(
         settlements(&w, 60),
-        vec![
-            ix(POSTER, 7, K::PayJobEscrow, id),
-            ix(POSTER, 0, K::ReleaseJobEscrow, id),
-            ix(PRODUCER, 7, K::FinalReward, id),
-        ],
+        vec![ix(POSTER, 7, K::PayJobEscrow, id), ix(POSTER, 0, K::ReleaseJobEscrow, id), ix(PRODUCER, 7, K::FinalReward, id),],
         "the poster pays exactly what the producer is paid, and the zero remainder retains its terminal release marker"
     );
     assert!(w.l.job_escrows.is_empty(), "an escrow pays once");

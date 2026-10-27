@@ -758,8 +758,7 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` court admission (the challenger's reservation, the escrow,
     // the deadline-aware queue) replaces the fixed concurrency cap — a queued prosecution opens nothing now (`Ok(None)`); below the
     // fence, the cap as it always was.
-    let admission_window =
-        builder.state.class_model_court_window_v1(&claim.class_id).unwrap_or_else(|| builder.params.window_court());
+    let admission_window = builder.state.class_model_court_window_v1(&claim.class_id).unwrap_or_else(|| builder.params.window_court());
     // Lane r5-f03-ingress: the paid public ingress wraps the same admission (identical while its schedule is missing).
     match super::palw_court_capacity_fold_v1::court_ingress_admission_v1(
         builder,
@@ -770,7 +769,8 @@ pub(super) fn open_dissection_at_named_leaf_v1(
         admission_window,
     )? {
         super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(None),
-        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open | super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {}
+        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open
+        | super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {}
     }
     let challenger_collateral =
         builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;

@@ -44,10 +44,12 @@ fn parent(collateral: u64) -> PalwChainStateV2 {
         misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 1, burned: 0 },
     ));
     // The committed claim's row, as the object's flush would have written it before the admission rows.
-    state.kernel_route.as_mut().unwrap().rows.insert(
-        (misaka_palw_kernel::rows::TABLE_CLAIMS_V1, borsh::to_vec(&CLAIM).unwrap()),
-        borsh::to_vec(&program_row()).unwrap(),
-    );
+    state
+        .kernel_route
+        .as_mut()
+        .unwrap()
+        .rows
+        .insert((misaka_palw_kernel::rows::TABLE_CLAIMS_V1, borsh::to_vec(&CLAIM).unwrap()), borsh::to_vec(&program_row()).unwrap());
     state
 }
 fn program_row() -> ClaimRowV1 {
@@ -60,7 +62,14 @@ fn program_row() -> ClaimRowV1 {
         artifact_root: [0; 64],
         plan_root: [0; 64],
     };
-    let suite = SuiteParamsV1 { descriptor_digest: [0; 64], checker_suite_id: 0, challenge_policy_id: 0, repetitions: 0, target_bits: 0, field_bits: 0 };
+    let suite = SuiteParamsV1 {
+        descriptor_digest: [0; 64],
+        checker_suite_id: 0,
+        challenge_policy_id: 0,
+        repetitions: 0,
+        target_bits: 0,
+        field_bits: 0,
+    };
     ClaimRowV1 {
         producer: [5; 64],
         class_binding_id: [0xCB; 64],
@@ -172,7 +181,10 @@ fn f02b_kernel_admission_refusal_changes_nothing() {
     assert!(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_some(), "G14-FIX SPEC-1: the production schedule is pinned");
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
     assert!(admit(&mut b));
-    assert!(b.state.court_service_state_v1().is_none() && b.state.kernel_court_capital_rows_v1().is_empty(), "typed-missing schedule writes nothing");
+    assert!(
+        b.state.court_service_state_v1().is_none() && b.state.kernel_court_capital_rows_v1().is_empty(),
+        "typed-missing schedule writes nothing"
+    );
 }
 
 /// G14-FIX SPEC-1: the processor's schedule is the pinned production one only at/after `palw_kernel_route_panel_one_v1`; below it
@@ -220,16 +232,20 @@ fn f02b_held_set_supply_check_and_capital_release() {
         }
     }
     let mut with_gap = b.state.clone();
-    with_gap.staged_courts.insert(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
-        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(book).into()));
+    with_gap.staged_courts.insert(
+        crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
+        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(book).into()),
+    );
     assert!(with_gap.kernel_court_default_held_v1(Some(&TEST_ONLY_PREMISE)).contains_key(&CLAIM), "missing supply: held (S3c')");
     let mut full = b.state.court_service_state_v1().unwrap().clone();
     for daa in COMMIT_DAA + 1..=hard {
         full.book.observe_block(daa, [1; 64], ServiceCost::default()).unwrap();
     }
     let mut supplied = b.state.clone();
-    supplied.staged_courts.insert(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
-        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(full).into()));
+    supplied.staged_courts.insert(
+        crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
+        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(full).into()),
+    );
     assert!(supplied.kernel_court_default_held_v1(Some(&TEST_ONLY_PREMISE)).is_empty(), "all supplied: ordinary default");
     assert!(supplied.court_service_release_eligible_v1(&claim), "a fully decided kernel binding is release-eligible");
     // Capital release: the row stays before hard while bound, and goes at hard.
@@ -262,13 +278,18 @@ fn s3c_triple_prime_default_needs_an_opportunity_under_the_premise() {
     }
     let first_unit = *full.book.assignments.values().min().unwrap();
     let mut supplied = b.state.clone();
-    supplied.staged_courts.insert(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
-        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(full).into()));
+    supplied.staged_courts.insert(
+        crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
+        crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(full).into()),
+    );
     let base: KernelLedgerV1 =
         (*supplied.kernel_route.as_ref().unwrap().ledger_native_projection_checked_v9().expect("projection")).clone();
     let with_demand = |deadline: u64| {
         let mut l = base.clone();
-        l.demands.insert((CLAIM, 0, 0), DemandRowV1 { demanders: vec![([7; 64], 1)], filed_daa: COMMIT_DAA, deadline_daa: deadline, last: None });
+        l.demands.insert(
+            (CLAIM, 0, 0),
+            DemandRowV1 { demanders: vec![([7; 64], 1)], filed_daa: COMMIT_DAA, deadline_daa: deadline, last: None },
+        );
         l
     };
     // Typed-missing premise: held.

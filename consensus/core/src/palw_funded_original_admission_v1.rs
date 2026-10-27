@@ -22,7 +22,9 @@
 use crate::{
     Hash64,
     palw_court_policy_v1::DISPUTE_WINDOW_DAA,
-    palw_court_service_binding_v1::{CourtServiceBindingRefusalV1, CourtServiceProfileV1, court_service_binding_candidate_v1, court_service_packets_v1},
+    palw_court_service_binding_v1::{
+        CourtServiceBindingRefusalV1, CourtServiceProfileV1, court_service_binding_candidate_v1, court_service_packets_v1,
+    },
     palw_court_service_state_v2::CourtServiceStateV2,
     palw_court_service_v1::{ServiceAssessment, ServiceCost, ServicePacket},
     palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,
@@ -54,7 +56,14 @@ impl FundedAdmissionScheduleV1 {
         heap_bytes_per_branch: u64,
         retention_bytes_per_branch: u64,
     ) -> Self {
-        Self { service, source_packet_cost, capital_per_turn_sompi, capital_per_source_node_sompi, heap_bytes_per_branch, retention_bytes_per_branch }
+        Self {
+            service,
+            source_packet_cost,
+            capital_per_turn_sompi,
+            capital_per_source_node_sompi,
+            heap_bytes_per_branch,
+            retention_bytes_per_branch,
+        }
     }
     /// **Production constructor (lane VAL, 2026-10-26)**: refuses an invalid service profile (zero budget, `controls != 1`, a packet
     /// larger than one DAA's budget, intervals reaching `a + 10,000`), a source packet larger than the budget, zero capital and
@@ -86,7 +95,14 @@ impl FundedAdmissionScheduleV1 {
         if !(1..=MAX_BRANCH_BYTES).contains(&heap_bytes_per_branch) || !(1..=MAX_BRANCH_BYTES).contains(&retention_bytes_per_branch) {
             return Err("funded admission: holdings per branch must be in 1..=1 GiB");
         }
-        Ok(Self { service, source_packet_cost, capital_per_turn_sompi, capital_per_source_node_sompi, heap_bytes_per_branch, retention_bytes_per_branch })
+        Ok(Self {
+            service,
+            source_packet_cost,
+            capital_per_turn_sompi,
+            capital_per_source_node_sompi,
+            heap_bytes_per_branch,
+            retention_bytes_per_branch,
+        })
     }
     pub fn service_profile(&self) -> CourtServiceProfileV1 {
         self.service
@@ -193,7 +209,8 @@ pub fn derive_funded_admission_v1(
     let hard = accepted_daa.checked_add(DISPUTE_WINDOW_DAA).ok_or(R::Overflow)?;
     let first = accepted_daa.checked_add(1).ok_or(R::Overflow)?;
     // (1) Liable signer × turn: court-f02's canonical packets (same order: signer canonical order, then turn).
-    let signer_packets = court_service_packets_v1(claim, allocation, source, accepted_daa, signers, &schedule.service).map_err(R::Binding)?;
+    let signer_packets =
+        court_service_packets_v1(claim, allocation, source, accepted_daa, signers, &schedule.service).map_err(R::Binding)?;
     let mut branches = Vec::new();
     {
         let mut it = signer_packets.iter();
@@ -240,7 +257,15 @@ pub fn derive_funded_admission_v1(
     if branches.iter().map(|(_, id)| *id).collect::<BTreeSet<_>>().len() != branches.len() {
         return Err(R::BranchMismatch);
     }
-    Ok(FundedAdmissionDerivationV1 { branches, signer_packets, source_packets, retention_packet, resources: r, capital_sompi, hard_daa: hard })
+    Ok(FundedAdmissionDerivationV1 {
+        branches,
+        signer_packets,
+        source_packets,
+        retention_packet,
+        resources: r,
+        capital_sompi,
+        hard_daa: hard,
+    })
 }
 
 /// **The escrow amount the payer must have signed for** (RFC-0035 §7.1 one fee allocation). `capital` = max(schedule floor,
@@ -269,7 +294,8 @@ pub fn funded_admission_book_candidate_v1(
 ) -> Result<(CourtServiceStateV2, CourtServiceStateV2), FundedAdmissionRefusalV1> {
     use FundedAdmissionRefusalV1 as R;
     let after_signer =
-        court_service_binding_candidate_v1(existing, claim, allocation, source, accepted_daa, signers, &schedule.service).map_err(R::Binding)?;
+        court_service_binding_candidate_v1(existing, claim, allocation, source, accepted_daa, signers, &schedule.service)
+            .map_err(R::Binding)?;
     let mut full = after_signer.clone();
     let projection = graph.bind_projection_v3(derivation.source_packets.clone()).map_err(R::SourceGraph)?;
     projection.reserve_v3(&mut full.book, derivation.hard_daa).map_err(R::SourceGraph)?;

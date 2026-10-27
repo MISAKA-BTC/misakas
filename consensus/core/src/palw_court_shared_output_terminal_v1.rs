@@ -4,19 +4,14 @@
 use super::SharedTirBuilderStoreV1 as Store;
 use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
 use crate::palw_court_source_material_graph_v3::{
-    NativeSourceMaterialGraphV3 as Graph, SourceMaterialNodeKindV3 as Node,
-    SourceMaterialTargetV3 as Target,
+    NativeSourceMaterialGraphV3 as Graph, SourceMaterialNodeKindV3 as Node, SourceMaterialTargetV3 as Target,
 };
 use crate::palw_native_resource_v1::{
     NativeCoverageV1, NativeDecodeErrorV1 as E, NativeHeapV1, NativeRetainedV1, TirNativeRequestsV1,
 };
-use crate::palw_tir_objective_v1::{
-    PalwTirOutputFaultV1 as Fault, PalwTirOutputOutcomeV1 as Outcome,
-};
+use crate::palw_tir_objective_v1::{PalwTirOutputFaultV1 as Fault, PalwTirOutputOutcomeV1 as Outcome};
 use crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1 as Frame;
-use crate::palw_tir_public_source_v1::{
-    PalwTirPublicAuthenticatedIdsV1 as Ids, PalwTirPublicSourceV1 as Source,
-};
+use crate::palw_tir_public_source_v1::{PalwTirPublicAuthenticatedIdsV1 as Ids, PalwTirPublicSourceV1 as Source};
 use crate::{
     Hash64,
     palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwStateParamsV2},
@@ -58,10 +53,7 @@ fn bad(s: &str) -> E<String> {
     E::Decode(s.into())
 }
 fn resource(s: &str) -> E<String> {
-    E::Resource(NativeCoverageV1::unsupported::<NativeOutputDutyV1>(
-        "original output duty",
-        s,
-    ))
+    E::Resource(NativeCoverageV1::unsupported::<NativeOutputDutyV1>("original output duty", s))
 }
 fn hash<T: borsh::BorshSerialize>(domain: &[u8], v: &T) -> Result<Hash64, String> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(domain, v)
@@ -69,9 +61,7 @@ fn hash<T: borsh::BorshSerialize>(domain: &[u8], v: &T) -> Result<Hash64, String
 impl NativeOutputDutyV1 {
     pub(crate) fn scope_v1(&self) -> OutputDutyScopeV1 {
         match self.regular_stop {
-            RegularStopNodeV1::Native { .. } => {
-                OutputDutyScopeV1::OriginalOutputAndNativeRegularStopOnly
-            }
+            RegularStopNodeV1::Native { .. } => OutputDutyScopeV1::OriginalOutputAndNativeRegularStopOnly,
             _ => OutputDutyScopeV1::OriginalOutputIdentityOnly,
         }
     }
@@ -97,44 +87,24 @@ impl NativeOutputDutyV1 {
     ) -> Result<NativeRetainedV1<Self>, E<String>> {
         let mut q = TirNativeRequestsV1::new();
         let clone = frame.native_heap_v1("output duty frame identity scratch");
-        q.add_v1(clone.bytes().ok_or(E::Resource(clone))?)
-            .map_err(E::Resource)?;
+        q.add_v1(clone.bytes().ok_or(E::Resource(clone))?).map_err(E::Resource)?;
         let bytes = borsh::object_length(frame).map_err(|e| E::Decode(e.to_string()))? as u64;
-        q.exact_v1::<u8>(
-            bytes
-                .max(1024)
-                .checked_mul(2)
-                .ok_or_else(|| resource("frame writer overflow"))?,
-        )
-        .map_err(E::Resource)?;
+        q.exact_v1::<u8>(bytes.max(1024).checked_mul(2).ok_or_else(|| resource("frame writer overflow"))?).map_err(E::Resource)?;
         q.exact_v1::<Self>(1).map_err(E::Resource)?;
-        q.exact_v1::<FullIdsDependencyV1>(graph.role_slots_v3())
-            .map_err(E::Resource)?;
-        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1())
-            .map_err(E::Resource)?;
-        graph
-            .check_frame_binding_v3(frame, source, profile)
-            .map_err(E::Decode)?;
+        q.exact_v1::<FullIdsDependencyV1>(graph.role_slots_v3()).map_err(E::Resource)?;
+        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+        graph.check_frame_binding_v3(frame, source, profile).map_err(E::Decode)?;
         if !source.supports_tiled_trace_v1() {
-            return Err(resource(
-                "Flat FullIds output dependency grammar not covered",
-            ));
+            return Err(resource("Flat FullIds output dependency grammar not covered"));
         }
-        let count = usize::try_from(graph.role_slots_v3())
-            .map_err(|_| resource("role count platform overflow"))?;
+        let count = usize::try_from(graph.role_slots_v3()).map_err(|_| resource("role count platform overflow"))?;
         if count == 0 {
             return Err(bad("native output duty has no source supplier roles"));
         }
         let mut dependencies = Vec::new();
-        dependencies
-            .try_reserve_exact(count)
-            .map_err(|_| resource("dependency allocation"))?;
+        dependencies.try_reserve_exact(count).map_err(|_| resource("dependency allocation"))?;
         for n in graph.nodes_v3() {
-            if let Node::Finish {
-                target: Target::FullIds,
-                role,
-            } = n.kind_v3()
-            {
+            if let Node::Finish { target: Target::FullIds, role } = n.kind_v3() {
                 if dependencies.len() == count {
                     return Err(bad("native graph duplicates FullIds finish roles"));
                 }
@@ -146,12 +116,7 @@ impl NativeOutputDutyV1 {
             }
         }
         dependencies.sort_unstable_by_key(|p| p.role);
-        if dependencies.len() != count
-            || dependencies
-                .iter()
-                .enumerate()
-                .any(|(i, p)| p.role != i as u64)
-        {
+        if dependencies.len() != count || dependencies.iter().enumerate().any(|(i, p)| p.role != i as u64) {
             return Err(bad("native graph lacks exact FullIds supplier finish set"));
         }
         let p = frame.plan_v1();
@@ -159,22 +124,10 @@ impl NativeOutputDutyV1 {
         if output == Hash64::default() {
             return Err(bad("original output commitment is unknown"));
         }
-        let logical = hash(
-            b"misaka-palw/output-duty-logical/v1",
-            &(
-                1u16,
-                graph.scope_v3(),
-                p.original_claim,
-                source.source_id_v1(),
-                output,
-            ),
-        )
-        .map_err(E::Decode)?;
-        let absolute = hash(
-            b"misaka-palw/output-duty-absolute/v1",
-            &(graph.absolute_scope_v3(), logical),
-        )
-        .map_err(E::Decode)?;
+        let logical =
+            hash(b"misaka-palw/output-duty-logical/v1", &(1u16, graph.scope_v3(), p.original_claim, source.source_id_v1(), output))
+                .map_err(E::Decode)?;
+        let absolute = hash(b"misaka-palw/output-duty-absolute/v1", &(graph.absolute_scope_v3(), logical)).map_err(E::Decode)?;
         let original = frame.original_v1();
         let regular_stop = match regular_stop_rule_v1(&original.job) {
             Err(why) => RegularStopNodeV1::Unsupported(why),
@@ -182,24 +135,12 @@ impl NativeOutputDutyV1 {
                 let job = crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original);
                 let count = original.decode_tokens_executed;
                 let reason = original.stop_reason;
-                let stop_logical = hash(
-                    b"misaka-palw/regular-stop-duty-logical/v1",
-                    &(1u16, graph.scope_v3(), logical, job, kind, count, reason),
-                )
-                .map_err(E::Decode)?;
-                let stop_absolute = hash(
-                    b"misaka-palw/regular-stop-duty-absolute/v1",
-                    &(graph.absolute_scope_v3(), stop_logical),
-                )
-                .map_err(E::Decode)?;
-                RegularStopNodeV1::Native {
-                    logical: stop_logical,
-                    absolute: stop_absolute,
-                    kind,
-                    job,
-                    count,
-                    reason,
-                }
+                let stop_logical =
+                    hash(b"misaka-palw/regular-stop-duty-logical/v1", &(1u16, graph.scope_v3(), logical, job, kind, count, reason))
+                        .map_err(E::Decode)?;
+                let stop_absolute = hash(b"misaka-palw/regular-stop-duty-absolute/v1", &(graph.absolute_scope_v3(), stop_logical))
+                    .map_err(E::Decode)?;
+                RegularStopNodeV1::Native { logical: stop_logical, absolute: stop_absolute, kind, job, count, reason }
             }
         };
         Ok(NativeRetainedV1::from_owner_reserved_v1(
@@ -223,26 +164,18 @@ impl NativeOutputDutyV1 {
     }
     fn check_current(&self, frame: &Frame, source: &Source, profile: Hash64) -> Result<(), String> {
         let p = frame.plan_v1();
-        if (
-            self.claim,
-            self.source,
-            self.profile,
-            self.allocation,
-            self.resource,
-            self.accepted,
-            self.output,
-        ) != (
-            p.original_claim,
-            source.source_id_v1(),
-            profile,
-            p.allocation_id,
-            p.resource_plan_id,
-            p.terms.accepted_daa,
-            frame.original_v1().output_root,
-        ) {
-            return Err(
-                "output duty differs from current original/source/profile/allocation".into(),
-            );
+        if (self.claim, self.source, self.profile, self.allocation, self.resource, self.accepted, self.output)
+            != (
+                p.original_claim,
+                source.source_id_v1(),
+                profile,
+                p.allocation_id,
+                p.resource_plan_id,
+                p.terms.accepted_daa,
+                frame.original_v1().output_root,
+            )
+        {
+            return Err("output duty differs from current original/source/profile/allocation".into());
         }
         Ok(())
     }
@@ -265,34 +198,17 @@ impl SignedOutputTerminalIntentV1 {
         }
         hash(
             b"misaka-palw/output-terminal-intent/v1",
-            &(
-                network,
-                self.version,
-                self.claim,
-                self.scope_id,
-                self.policy_id,
-                self.duty_id,
-                self.material_id,
-                self.filer,
-            ),
+            &(network, self.version, self.claim, self.scope_id, self.policy_id, self.duty_id, self.material_id, self.filer),
         )
     }
 }
 pub(crate) fn ids_material_id_v1(ids: &Ids) -> Result<Hash64, String> {
-    hash(
-        b"misaka-palw/output-terminal-ids/v1",
-        &(ids.source_id_v1(), ids.rows_root_v1(), ids.ids_v1()),
-    )
+    hash(b"misaka-palw/output-terminal-ids/v1", &(ids.source_id_v1(), ids.rows_root_v1(), ids.ids_v1()))
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OutputDecisionV1 {
     OutputHolds,
-    Fault {
-        kind: Fault,
-        claim: Hash64,
-        execution: Hash64,
-        computed: Hash64,
-    },
+    Fault { kind: Fault, claim: Hash64, execution: Hash64, computed: Hash64 },
 }
 pub(crate) struct OutputTerminalEvidenceV1<'a> {
     intent: SignedOutputTerminalIntentV1,
@@ -308,14 +224,7 @@ impl OutputTerminalEvidenceV1<'_> {
         params: &PalwStateParamsV2,
         rules: &NativeCourtRulesV1,
     ) -> Result<OutputDecisionV1, String> {
-        let actual = store.replay_output_terminal_v1(
-            state,
-            params,
-            rules,
-            &self.intent,
-            self.duty,
-            self.ids,
-        )?;
+        let actual = store.replay_output_terminal_v1(state, params, rules, &self.intent, self.duty, self.ids)?;
         if actual != self.decision {
             return Err("output terminal evidence reconstruction mismatch".into());
         }
@@ -334,16 +243,9 @@ impl Store<'_> {
         intent: &SignedOutputTerminalIntentV1,
         duty: &'a NativeRetainedV1<NativeOutputDutyV1>,
     ) -> Result<OutputTerminalEvidenceV1<'a>, String> {
-        let ids = self
-            .ids
-            .ok_or("output terminal lacks source-authenticated FullIds")?;
+        let ids = self.ids.ok_or("output terminal lacks source-authenticated FullIds")?;
         let decision = self.replay_output_terminal_v1(state, params, rules, intent, duty, ids)?;
-        let evidence = OutputTerminalEvidenceV1 {
-            intent: intent.clone(),
-            duty,
-            ids,
-            decision,
-        };
+        let evidence = OutputTerminalEvidenceV1 { intent: intent.clone(), duty, ids, decision };
         evidence.recheck(self, state, params, rules)?;
         Ok(evidence)
     }
@@ -358,8 +260,8 @@ impl Store<'_> {
     ) -> Result<OutputDecisionV1, String> {
         let c = crate::palw_court_shared_tir_state_v1::context(state, intent.claim)?;
         let source = c.source(state)?;
-        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, intent.claim)
-            .ok_or("output terminal original absent")?;
+        let frame =
+            crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, intent.claim).ok_or("output terminal original absent")?;
         duty.check_current(frame, &source, c.profile_id)?;
         if intent.scope_id != c.scope_id
             || self.source.source_id_v1() != source.source_id_v1()
@@ -367,26 +269,19 @@ impl Store<'_> {
             || rules.at.daa_score < c.original_accepted_daa
             || rules.at.daa_score >= c.hard_daa
             || rules.step_ladder != frame.plan_v1().owner_work.rules.max_step_leaf_count
-            || intent.policy_id
-                != crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(rules)?
+            || intent.policy_id != crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(rules)?
             || intent.duty_id != duty.absolute_id_v1()
             || intent.material_id != ids_material_id_v1(ids)?
         {
-            return Err(
-                "output terminal current source/policy/clock/duty/material mismatch".into(),
-            );
+            return Err("output terminal current source/policy/clock/duty/material mismatch".into());
         }
-        let bond = state
-            .bond(&intent.filer)
-            .ok_or("output terminal current filer absent")?;
+        let bond = state.bond(&intent.filer).ok_or("output terminal current filer absent")?;
         if intent.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
             || !matches!(bond.status, PalwBondStatusV2::Active)
             || bond.collateral < params.min_collateral_sompi()
             || !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
                 &bond.pubkey,
-                intent
-                    .signing_message(rules.network_domain)?
-                    .as_byte_slice(),
+                intent.signing_message(rules.network_domain)?.as_byte_slice(),
                 &intent.signature,
                 OUTPUT_INTENT_CONTEXT_V1,
             )
@@ -433,12 +328,8 @@ fn regular_stop_rule_v1(
         return Err(NativeRegularStopUnsupportedV1::CarriedTail);
     }
     match crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(job) {
-        Some(crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed { .. }) => {
-            Ok(NativeRegularStopRuleV1::KeyedV3)
-        }
-        Some(crate::palw_tir_court_v1::PalwTirSelectionRuleV1::V4 { .. }) => {
-            Ok(NativeRegularStopRuleV1::PipelineV4)
-        }
+        Some(crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed { .. }) => Ok(NativeRegularStopRuleV1::KeyedV3),
+        Some(crate::palw_tir_court_v1::PalwTirSelectionRuleV1::V4 { .. }) => Ok(NativeRegularStopRuleV1::PipelineV4),
         None => Err(NativeRegularStopUnsupportedV1::NoNativeRule),
     }
 }
@@ -484,32 +375,24 @@ impl NativeOutputDutyV1 {
             parents: TerminalAllocationParentsV1::AllFullIdsFinishes(&self.dependencies),
         };
         let stop = match self.regular_stop {
-            RegularStopNodeV1::Native {
-                logical, absolute, ..
-            } => Some(OriginalTerminalFamilyNodeV1 {
+            RegularStopNodeV1::Native { logical, absolute, .. } => Some(OriginalTerminalFamilyNodeV1 {
                 family: OriginalTerminalFamilyV1::NativeRegularStop,
                 logical,
                 absolute,
-                parents: TerminalAllocationParentsV1::OutputIdentity {
-                    logical: self.logical,
-                    absolute: self.absolute,
-                },
+                parents: TerminalAllocationParentsV1::OutputIdentity { logical: self.logical, absolute: self.absolute },
             }),
             _ => None,
         };
         std::iter::once(output).chain(stop)
     }
-    pub(crate) fn native_regular_stop_id_v1(
-        &self,
-    ) -> Result<Hash64, NativeRegularStopUnsupportedV1> {
+    pub(crate) fn native_regular_stop_id_v1(&self) -> Result<Hash64, NativeRegularStopUnsupportedV1> {
         match self.regular_stop {
             RegularStopNodeV1::Native { absolute, .. } => Ok(absolute),
             RegularStopNodeV1::Unsupported(why) => Err(why),
         }
     }
 }
-pub(crate) const REGULAR_STOP_CONTEXT_V1: &[u8] =
-    b"misaka-palw/shared-native-regular-stop/v1/mldsa87";
+pub(crate) const REGULAR_STOP_CONTEXT_V1: &[u8] = b"misaka-palw/shared-native-regular-stop/v1/mldsa87";
 #[derive(Clone, borsh::BorshSerialize)]
 pub(crate) struct SignedRegularStopIntentV1 {
     pub version: u16,
@@ -581,14 +464,7 @@ impl RegularStopEvidenceV1<'_> {
         params: &PalwStateParamsV2,
         rules: &NativeCourtRulesV1,
     ) -> Result<RegularStopDecisionV1, RegularStopRefusalV1> {
-        let actual = store.replay_regular_stop_v1(
-            state,
-            params,
-            rules,
-            &self.intent,
-            self.duty,
-            self.ids,
-        )?;
+        let actual = store.replay_regular_stop_v1(state, params, rules, &self.intent, self.duty, self.ids)?;
         if actual != self.decision {
             return Err("native regular stop evidence reconstruction mismatch".into());
         }
@@ -604,16 +480,9 @@ impl Store<'_> {
         intent: &SignedRegularStopIntentV1,
         duty: &'a NativeRetainedV1<NativeOutputDutyV1>,
     ) -> Result<RegularStopEvidenceV1<'a>, RegularStopRefusalV1> {
-        let ids = self
-            .ids
-            .ok_or("native regular stop lacks source-authenticated FullIds")?;
+        let ids = self.ids.ok_or("native regular stop lacks source-authenticated FullIds")?;
         let decision = self.replay_regular_stop_v1(state, params, rules, intent, duty, ids)?;
-        let evidence = RegularStopEvidenceV1 {
-            intent: intent.clone(),
-            duty,
-            ids,
-            decision,
-        };
+        let evidence = RegularStopEvidenceV1 { intent: intent.clone(), duty, ids, decision };
         evidence.recheck(self, state, params, rules)?;
         Ok(evidence)
     }
@@ -632,17 +501,9 @@ impl Store<'_> {
             .ok_or("native regular stop original absent")?;
         let original = frame.original_v1();
         duty.check_current(frame, &source, c.profile_id)?;
-        let actual_kind =
-            regular_stop_rule_v1(&original.job).map_err(RegularStopRefusalV1::Unsupported)?;
+        let actual_kind = regular_stop_rule_v1(&original.job).map_err(RegularStopRefusalV1::Unsupported)?;
         let (absolute, kind, job, count, reason) = match duty.regular_stop {
-            RegularStopNodeV1::Native {
-                absolute,
-                kind,
-                job,
-                count,
-                reason,
-                ..
-            } => (absolute, kind, job, count, reason),
+            RegularStopNodeV1::Native { absolute, kind, job, count, reason, .. } => (absolute, kind, job, count, reason),
             RegularStopNodeV1::Unsupported(why) => {
                 return Err(RegularStopRefusalV1::Unsupported(why));
             }
@@ -659,24 +520,19 @@ impl Store<'_> {
             || rules.at.daa_score < c.original_accepted_daa
             || rules.at.daa_score >= c.hard_daa
             || rules.step_ladder != frame.plan_v1().owner_work.rules.max_step_leaf_count
-            || intent.policy_id
-                != crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(rules)?
+            || intent.policy_id != crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(rules)?
             || intent.duty_id != absolute
             || intent.material_id != ids_material_id_v1(ids)?
         {
             return Err("native regular stop actual source/policy/clock/job/count/reason/duty/material mismatch".into());
         }
-        let bond = state
-            .bond(&intent.filer)
-            .ok_or("native regular stop current filer absent")?;
+        let bond = state.bond(&intent.filer).ok_or("native regular stop current filer absent")?;
         if intent.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
             || !matches!(bond.status, PalwBondStatusV2::Active)
             || bond.collateral < params.min_collateral_sompi()
             || !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
                 &bond.pubkey,
-                intent
-                    .signing_message(rules.network_domain)?
-                    .as_byte_slice(),
+                intent.signing_message(rules.network_domain)?.as_byte_slice(),
                 &intent.signature,
                 REGULAR_STOP_CONTEXT_V1,
             )
@@ -686,31 +542,21 @@ impl Store<'_> {
         // Same priority as native original Output arm: only a source-affine
         // output-consistent answer reaches the regular stop predicate. No
         // caller-provided success bit can discharge this dependency.
-        match crate::palw_tir_objective_v1::adjudicate_original_output_v1(
-            state,
-            intent.claim,
-            original.output_root,
-            &source,
-            ids,
-        )? {
+        match crate::palw_tir_objective_v1::adjudicate_original_output_v1(state, intent.claim, original.output_root, &source, ids)? {
             Outcome::Fault(f) => {
                 return Err(RegularStopRefusalV1::OutputPrerequisite(f.fault_v1()));
             }
             Outcome::OutputHolds { .. } => {}
         }
-        Ok(
-            match crate::palw_tir_objective_v1::original_stop_rule_fault_v1(
-                &original.job,
-                source.vocab_v1(),
-                ids.ids_v1(),
-            ) {
-                None => RegularStopDecisionV1::StopRuleHolds,
-                Some(why) => RegularStopDecisionV1::Fault(why),
-            },
-        )
+        Ok(match crate::palw_tir_objective_v1::original_stop_rule_fault_v1(&original.job, source.vocab_v1(), ids.ids_v1()) {
+            None => RegularStopDecisionV1::StopRuleHolds,
+            Some(why) => RegularStopDecisionV1::Fault(why),
+        })
     }
 }
 
 impl NativeOutputDutyV1 {
-    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.claim,self.source,self.relative_graph,self.absolute_graph,self.profile)}
+    pub(super) fn aggregate_binding_v1(&self) -> super::original_aggregate::FamilyBindingV1 {
+        (self.claim, self.source, self.relative_graph, self.absolute_graph, self.profile)
+    }
 }

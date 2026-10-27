@@ -28,12 +28,14 @@
 //! Structural test values only (the parent module's TEST mining policy), never measurements. At most three consensus instances exist
 //! at once (A, B, the replaying node).
 use super::*;
+use crate::model::stores::ghostdag::GhostdagStoreReader;
 use crate::pipeline::virtual_processor::tests::OnetimeTxSelector;
 use crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::{sign_spend_many, stamp_harness_time};
-use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::block::{MutableBlock, TemplateBuildMode};
 use kaspa_consensus_core::coinbase::MinerData;
-use kaspa_consensus_core::palw_native_audit_proof_v39::{NativeAuditRowReaderV39, VerifiedNativeAuxRowsV39, verify_native_aux_stream_v39};
+use kaspa_consensus_core::palw_native_audit_proof_v39::{
+    NativeAuditRowReaderV39, VerifiedNativeAuxRowsV39, verify_native_aux_stream_v39,
+};
 use kaspa_consensus_core::palw_native_receipt_v39::*;
 use kaspa_consensus_core::palw_native_redemption_v33::{
     derive_native_redemption_v39, native_payout_status_v39, verify_native_coinbase_v33,
@@ -143,7 +145,8 @@ struct Point {
 
 fn point(net: &Net, child: BlockHash) -> Point {
     let vp = net.chain.vp();
-    let (header, fact) = vp.palw_state_proof_v1_impl(child, NATIVE_ANCHOR_LABEL_V39).unwrap_or_else(|e| panic!("anchor39 export at {child}: {e}"));
+    let (header, fact) =
+        vp.palw_state_proof_v1_impl(child, NATIVE_ANCHOR_LABEL_V39).unwrap_or_else(|e| panic!("anchor39 export at {child}: {e}"));
     assert_eq!(fact.collection.rows.len(), 1, "one anchor capsule");
     let envelope = NativeStateEnvelopeV39::from_bytes(&fact.collection.rows[0].1).expect("the exported capsule decodes");
     let parent_hash = vp.ghostdag_store.get_selected_parent(child).unwrap();
@@ -155,13 +158,15 @@ fn point(net: &Net, child: BlockHash) -> Point {
     let mut cursor = "-".to_string();
     loop {
         let request = format!("{}{cursor}", kaspa_consensus_core::palw_native_audit_page_v39::AUX_PAGE_PREFIX_V39);
-        let (_, page) = vp.palw_state_proof_v1_impl(child, request.as_bytes()).unwrap_or_else(|e| panic!("aux page39 at {child}: {e}"));
+        let (_, page) =
+            vp.palw_state_proof_v1_impl(child, request.as_bytes()).unwrap_or_else(|e| panic!("aux page39 at {child}: {e}"));
         assert_eq!(page.state.preimage, fact.state.preimage, "every page opens the same anchored state");
         for (k, v) in &page.collection.rows {
             all.insert((k[0], k[5..].to_vec()), v.clone());
         }
         let label = String::from_utf8(page.collection.label.clone()).unwrap();
-        let parts: Vec<&str> = label.trim_start_matches(kaspa_consensus_core::palw_native_audit_page_v39::AUX_PAGE_PREFIX_V39).split('/').collect();
+        let parts: Vec<&str> =
+            label.trim_start_matches(kaspa_consensus_core::palw_native_audit_page_v39::AUX_PAGE_PREFIX_V39).split('/').collect();
         assert_eq!(parts.len(), 3, "page label {label}");
         if parts[1] == "1" {
             assert_eq!(parts[0].parse::<usize>().unwrap(), all.len(), "the pager's total is the rows read");
@@ -196,7 +201,16 @@ impl Point {
 }
 
 /// A PNR9 receipt block on `chain`'s sink spending `quantum` of `receipt` by card `producer`'s bond (the node's own template, algo 7).
-fn pnr9_block(chain: &T12Chain, domain: Hash64, producer: usize, bond: PalwBondKeyV2, receipt: Hash64, quantum: u32, nonce: u64, miner: ScriptPublicKey) -> MutableBlock {
+fn pnr9_block(
+    chain: &T12Chain,
+    domain: Hash64,
+    producer: usize,
+    bond: PalwBondKeyV2,
+    receipt: Hash64,
+    quantum: u32,
+    nonce: u64,
+    miner: ScriptPublicKey,
+) -> MutableBlock {
     let mut t = chain
         .ctx
         .consensus
@@ -210,7 +224,15 @@ fn pnr9_block(chain: &T12Chain, domain: Hash64, producer: usize, bond: PalwBondK
     let spend = PalwNativeReceiptSpendV39 {
         version: 39,
         network_domain: domain,
-        challenge: native_receipt_spend_challenge_v39(domain, pre_pow, block.header.timestamp, block.header.nonce, receipt, quantum, &bond.0),
+        challenge: native_receipt_spend_challenge_v39(
+            domain,
+            pre_pow,
+            block.header.timestamp,
+            block.header.nonce,
+            receipt,
+            quantum,
+            &bond.0,
+        ),
         receipt,
         quantum_index: quantum,
         producer_bond: bond.0,
@@ -277,7 +299,10 @@ fn spend_tx(net: &Net, inputs: &[(TransactionOutpoint, UtxoEntry, usize)], to: S
 }
 
 /// The chain block of `chain` whose acceptance data accepts `txid`, with its complete accepted id list.
-fn accepting_block(chain: &T12Chain, txid: kaspa_consensus_core::tx::TransactionId) -> Option<(BlockHash, Vec<kaspa_consensus_core::tx::TransactionId>)> {
+fn accepting_block(
+    chain: &T12Chain,
+    txid: kaspa_consensus_core::tx::TransactionId,
+) -> Option<(BlockHash, Vec<kaspa_consensus_core::tx::TransactionId>)> {
     for hash in spine(chain).into_iter().rev().take(64) {
         let Ok(data) = chain.ctx.consensus.get_block_acceptance_data(hash) else { continue };
         let ids: Vec<_> = data.iter().flat_map(|m| m.accepted_transactions.iter().map(|a| a.transaction_id)).collect();
@@ -334,7 +359,10 @@ async fn through_credit_delivery(net: &mut Net, producer: usize, began: std::tim
     let final_audit = fin.audit(net, c.job);
     let credit = final_audit.credit().cloned().expect("the independent Final carries the original single credit");
     let status = native_payout_status_v39(&final_audit, &fin.payout_rows()).expect("payout status");
-    eprintln!("[n39] 3. credit {} sompi to {} established {}; status at the Final point: {status:?}", credit.amount, credit.payout, credit.established);
+    eprintln!(
+        "[n39] 3. credit {} sompi to {} established {}; status at the Final point: {status:?}",
+        credit.amount, credit.payout, credit.established
+    );
     assert!(credit.amount > 0, "a positive original credit");
     // Walk the selected chain from the Final window: the paying block P is the chain block whose pre-state (point at P) holds the
     // credit's queue row and whose post-state (point at P's chain child) does not.
@@ -422,7 +450,10 @@ async fn rfc02_native39_node_e2e_job_credit_delivery_witness_derives_on_the_node
     });
     let delivery = delivery.unwrap_or_else(|| panic!("derive_native_redemption_v39 over the node's bracketing states: {refusals:?}"));
     assert_eq!(delivery.amount(), d.credit.amount);
-    assert!(net.chain.ctx.consensus.get_virtual_utxo_entry(delivery.outpoint()).is_some(), "the delivered credit is an unspent output");
+    assert!(
+        net.chain.ctx.consensus.get_virtual_utxo_entry(delivery.outpoint()).is_some(),
+        "the delivered credit is an unspent output"
+    );
     eprintln!("[n39] 3. delivery: block {}, outpoint {}, {} sompi", d.pay_block, delivery.outpoint(), delivery.amount());
     // NEGATIVE: a stale witness — the state anchored one chain block earlier (two back from the paying block's post-state) — is
     // refused even though it holds the same immutable credit: the witness must be exactly the paying block's selected-parent state.
@@ -456,7 +487,8 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     // The credit output, located on the node's real coinbase (the auditor witness of it is the split test above).
     assert_eq!(d.candidates.len(), 1, "one output of the credit's amount to its payout in the paying coinbase");
     let credit_outpoint = TransactionOutpoint::new(d.cb_proof.coinbase.id(), d.candidates[0]);
-    let credit_entry = net.chain.ctx.consensus.get_virtual_utxo_entry(credit_outpoint).expect("the paid credit is an unspent coinbase output");
+    let credit_entry =
+        net.chain.ctx.consensus.get_virtual_utxo_entry(credit_outpoint).expect("the paid credit is an unspent coinbase output");
     assert_eq!(credit_entry.amount, d.credit.amount);
     let _ = &d.fx;
     eprintln!("[n39] 3. credit paid by {pay_block}: outpoint {credit_outpoint}, {} sompi", credit_entry.amount);
@@ -466,14 +498,27 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     let before = ids(&net, MINING_MODEL_KIND_V39);
     act(&mut net, 1, REGISTER_MODEL_ACTION_V39, borsh::to_vec(&wire).unwrap()).await;
     let model = new_id(&net, MINING_MODEL_KIND_V39, &before);
-    act(&mut net, producer, MODEL_SEAT_ACTION_V39, borsh::to_vec(&NativeMiningSeatWireV39 { version: 39, model, kind: 0 }).unwrap()).await;
+    act(&mut net, producer, MODEL_SEAT_ACTION_V39, borsh::to_vec(&NativeMiningSeatWireV39 { version: 39, model, kind: 0 }).unwrap())
+        .await;
     assert!(row(&net, MINING_SEAT_KIND_V39, &(model, net.bond(producer))).is_some(), "the producer holds a possession seat");
     let cert = net.chain.vp().palw_state_params_v2.clone().unwrap().rfc0018_v1().unwrap().certification;
     net.beat_to(cert.verifier_maturity_daa + 2).await;
     let before = ids(&net, MINING_CLAIM_KIND_V39);
-    act(&mut net, producer, MINING_COMMIT_ACTION_V39, borsh::to_vec(&NativeMiningCommitWireV39 { version: 39, model, master: c.master, sequence: 0 }).unwrap()).await;
+    act(
+        &mut net,
+        producer,
+        MINING_COMMIT_ACTION_V39,
+        borsh::to_vec(&NativeMiningCommitWireV39 { version: 39, model, master: c.master, sequence: 0 }).unwrap(),
+    )
+    .await;
     let claim = mining_claim(&net, &new_id(&net, MINING_CLAIM_KIND_V39, &before));
-    eprintln!("[n39] 4. model {}, mining claim {} at DAA {} price {:?}", Hash64::from_bytes(model), Hash64::from_bytes(claim.id), net.daa(), claim.price);
+    eprintln!(
+        "[n39] 4. model {}, mining claim {} at DAA {} price {:?}",
+        Hash64::from_bytes(model),
+        Hash64::from_bytes(claim.id),
+        net.daa(),
+        claim.price
+    );
     let ttpb = net.ttpb();
     for round in 0..64 {
         if cert_row(&net, &claim).is_some_and(|r| r.anchor.is_some()) {
@@ -484,14 +529,25 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
         net.beat_to(to).await;
     }
     let drawn = cert_row(&net, &claim).expect("the certification row");
-    assert!(drawn.anchor.is_some() && drawn.draws.len() == cert.m as usize, "Gate C drew m = {} positions: {:?}", cert.m, drawn.outcome);
+    assert!(
+        drawn.anchor.is_some() && drawn.draws.len() == cert.m as usize,
+        "Gate C drew m = {} positions: {:?}",
+        cert.m,
+        drawn.outcome
+    );
     let attestors = attest_all(&mut net, &claim, &[]).await;
     let row_now = cert_row(&net, &claim).unwrap();
     assert!(row_now.positive_positions() >= cert.k as u32, "k = {} of m positive: {}", cert.k, row_now.positive_positions());
     net.beat_to(drawn.final_daa + cert.prosecution_window_daa + 2).await;
     let r = cert_row(&net, &claim).unwrap();
     assert!(r.outcome.is_some_and(|(o, _)| o.certifies()), "SecurityCertified after the prosecution window: {:?}", r.outcome);
-    act(&mut net, outsider, ISSUE_RECEIPT_ACTION_V39, borsh::to_vec(&NativeMiningSubjectWireV39 { version: 39, kind: 0, id: claim.id }).unwrap()).await;
+    act(
+        &mut net,
+        outsider,
+        ISSUE_RECEIPT_ACTION_V39,
+        borsh::to_vec(&NativeMiningSubjectWireV39 { version: 39, kind: 0, id: claim.id }).unwrap(),
+    )
+    .await;
     let receipt = Hash64::from_bytes(native_mining_receipt_id_v39(claim.id));
     let rc = receipt_record(&net.chain.tip_state().1, &receipt).expect("the receipt (77) is live");
     eprintln!(
@@ -525,7 +581,12 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     );
     let (_, after_m) = net.chain.tip_state();
     assert!(receipt_record(&after_m, &receipt).unwrap().is_spent(0), "the chain folds the PNR9 spend of quantum 0");
-    assert!(after_m.safe_weight() > at_fork.safe_weight(), "the PNR9 spend credits safe weight ({} -> {})", at_fork.safe_weight(), after_m.safe_weight());
+    assert!(
+        after_m.safe_weight() > at_fork.safe_weight(),
+        "the PNR9 spend credits safe weight ({} -> {})",
+        at_fork.safe_weight(),
+        after_m.safe_weight()
+    );
     let leg = paid(&m, &leg_spk);
     let leg_index = m.transactions[0].outputs.iter().position(|o| o.script_public_key == leg_spk);
     eprintln!("[n39] 5. PNR9 {} (algo 7) merged by {}: producer payout leg {leg} sompi", r1.header.hash, m.header.hash);
@@ -572,7 +633,10 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     }
     assert!(net.chain.ctx.consensus.get_virtual_utxo_entry(leg_outpoint).is_none(), "A's PNR9 coinbase leg is gone after the reorg");
     let rc_after = receipt_record(&net.chain.tip_state().1, &receipt).unwrap();
-    assert!(rc_after.is_spent(0) && rc_after.is_spent(1) && rc_after.spent_quanta == 2, "the new tip: quanta 0 and 1, each spent once");
+    assert!(
+        rc_after.is_spent(0) && rc_after.is_spent(1) && rc_after.spent_quanta == 2,
+        "the new tip: quanta 0 and 1, each spent once"
+    );
     let merger = b_mergers[0].clone();
     let b_leg = paid(&merger, &leg_spk);
     assert!(b_leg > 0, "B's merging coinbase pays the producer's leg for B's PNR9 spend of quantum 0");
@@ -585,15 +649,24 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
 
     // ---- 7. the real UTXO spends after the coinbase spend maturity, on the winning branch ----
     net.beat_to(merger.header.daa_score + params.coinbase_spend_maturity() + 2).await;
-    let leg_entry = net.chain.ctx.consensus.get_virtual_utxo_entry(b_leg_outpoint).expect("B's PNR9 leg is an unspent coinbase output on A");
+    let leg_entry =
+        net.chain.ctx.consensus.get_virtual_utxo_entry(b_leg_outpoint).expect("B's PNR9 leg is an unspent coinbase output on A");
     let spend_leg = spend_tx(&net, &[(b_leg_outpoint, leg_entry.clone(), producer)], tagged_spk(0x5E1));
     net.mempool(&spend_leg).unwrap_or_else(|e| panic!("the mempool takes the PNR9 leg spend: {e}"));
     let funding = net.funding[producer].clone();
-    let spend_credit = spend_tx(&net, &[(credit_outpoint, credit_entry.clone(), producer), (funding.0, funding.1.clone(), producer)], tagged_spk(0x5E2));
+    let spend_credit = spend_tx(
+        &net,
+        &[(credit_outpoint, credit_entry.clone(), producer), (funding.0, funding.1.clone(), producer)],
+        tagged_spk(0x5E2),
+    );
     net.mempool(&spend_credit).unwrap_or_else(|e| panic!("the mempool takes the credit spend: {e}"));
-    net.funding[producer] = (TransactionOutpoint::new(spend_credit.id(), 0), UtxoEntry::new(spend_credit.outputs[0].value, tagged_spk(0x5E2), 0, false));
+    net.funding[producer] =
+        (TransactionOutpoint::new(spend_credit.id(), 0), UtxoEntry::new(spend_credit.outputs[0].value, tagged_spk(0x5E2), 0, false));
     let carrying = net.chain.heartbeat(ttpb, vec![spend_leg.clone(), spend_credit.clone()]).await;
-    assert!(carrying.transactions.iter().any(|t| t.id() == spend_leg.id()) && carrying.transactions.iter().any(|t| t.id() == spend_credit.id()));
+    assert!(
+        carrying.transactions.iter().any(|t| t.id() == spend_leg.id())
+            && carrying.transactions.iter().any(|t| t.id() == spend_credit.id())
+    );
     net.chain.heartbeat(ttpb, Vec::new()).await;
     for (what, o) in [("PNR9 leg", b_leg_outpoint), ("job credit", credit_outpoint)] {
         assert!(net.chain.ctx.consensus.get_virtual_utxo_entry(o).is_none(), "the {what} output is spent");

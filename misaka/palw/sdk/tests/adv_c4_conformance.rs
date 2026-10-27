@@ -207,7 +207,16 @@ fn a_scope_that_switches_off_the_independent_and_backend_implementations_cannot_
     let evp = dir.join("evidence.borsh");
     let src = MemoryFactSource(facts.clone());
     let mirror = verify_conformance(
-        &VerifyInput { pack_dir: &s.pack, artifact: &s.class_file, state_dir: &state, commitment: &root, evidence: &evp, source: &src, rerun: true, impls: weak },
+        &VerifyInput {
+            pack_dir: &s.pack,
+            artifact: &s.class_file,
+            state_dir: &state,
+            commitment: &root,
+            evidence: &evp,
+            source: &src,
+            rerun: true,
+            impls: weak,
+        },
         &quiet,
     );
     let honest = verify_with(&state, s, &root, &evp, &facts, true);
@@ -235,7 +244,10 @@ fn gap_a_tiny_scope_with_a_declared_total_fault_density_buys_forty_bits() {
     let p = CommitParamsV1::new("testnet-12", named_id("test-genesis"), named_id("test-ruleset"), policy, scope);
     let (b, _) = commit_conformance(&s.pack, &s.class_file, &state, &p, &quiet).expect("accepted");
     let bits = p.scope.derived_epsilon_bits(30);
-    eprintln!("GAP-C4-D: 30 x (1 vector of 1 token + 1 leaf) is accepted as >= {bits} bits; commitment {}", hex(&b.commitment.statement_root())[..16].to_string());
+    eprintln!(
+        "GAP-C4-D: 30 x (1 vector of 1 token + 1 leaf) is accepted as >= {bits} bits; commitment {}",
+        hex(&b.commitment.statement_root())[..16].to_string()
+    );
     assert!(bits >= 40);
 }
 

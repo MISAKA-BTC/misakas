@@ -254,9 +254,20 @@ pub(super) fn apply_shared_court_wire_op_v1(
 /// One shared-court operation of the owner-independent lifecycle (RFC-0029). Carried on the wire by tag 178
 /// ([`apply_shared_court_wire_op_v1`]); this is the single entry every carriage reaches.
 pub(super) enum SharedCourtOpV1<'a> {
-    Request { claim: Hash64, intent: &'a crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1 },
-    Body { claim: Hash64, ordinal: u64, bytes: &'a [u8] },
-    Ids { claim: Hash64, rows_root: Hash64, ids: &'a [u32] },
+    Request {
+        claim: Hash64,
+        intent: &'a crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1,
+    },
+    Body {
+        claim: Hash64,
+        ordinal: u64,
+        bytes: &'a [u8],
+    },
+    Ids {
+        claim: Hash64,
+        rows_root: Hash64,
+        ids: &'a [u32],
+    },
     Numerical {
         manifest: &'a crate::palw_court_numerical_transport_v1::NumericalManifestV1,
         parts: &'a [crate::palw_court_numerical_transport_v1::NumericalPartV1],
@@ -264,7 +275,9 @@ pub(super) enum SharedCourtOpV1<'a> {
     /// RFC-0024 A (lane r6-p2-shared): a single-position shared bottom, judged against the position round (writer row) on
     /// chain. Dormant below `palw_tir_bounded_door_v1` (refused by its fold). No wire carriage yet: the tag-178 numerical
     /// transport has no position-bottom kind (see the lane notes).
-    PositionBottom { control: &'a crate::palw_court_shared_tir_bottom_v1::SignedSharedTirPositionBottomV2 },
+    PositionBottom {
+        control: &'a crate::palw_court_shared_tir_bottom_v1::SignedSharedTirPositionBottomV2,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -292,18 +305,26 @@ pub(super) fn apply_shared_court_op_v1(
     let saved = b.try_checkpoint()?;
     let result = (|| match op {
         SharedCourtOpV1::Request { claim, intent } => fold::request(b, ctx, claim, intent).map(SharedCourtOpEffectV1::Request),
-        SharedCourtOpV1::Body { claim, ordinal, bytes } => fold::share_body(b, ctx, claim, ordinal, bytes).map(SharedCourtOpEffectV1::Stored),
-        SharedCourtOpV1::Ids { claim, rows_root, ids } => fold::share_ids(b, ctx, claim, rows_root, ids).map(SharedCourtOpEffectV1::Stored),
+        SharedCourtOpV1::Body { claim, ordinal, bytes } => {
+            fold::share_body(b, ctx, claim, ordinal, bytes).map(SharedCourtOpEffectV1::Stored)
+        }
+        SharedCourtOpV1::Ids { claim, rows_root, ids } => {
+            fold::share_ids(b, ctx, claim, rows_root, ids).map(SharedCourtOpEffectV1::Stored)
+        }
         SharedCourtOpV1::Numerical { manifest, parts } => {
             let effect = fold::numerical_transport(b, ctx, manifest, parts)?;
-            if let fold::NumericalTransportEffectV1::Bottom(true, crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1::NativeFault(_)) =
-                &effect
+            if let fold::NumericalTransportEffectV1::Bottom(
+                true,
+                crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1::NativeFault(_),
+            ) = &effect
             {
                 // The row the bottom just stored names its claim and filer (signed, verified by `fold::bottom`).
                 let (claim, filer) = match b.entries.last() {
-                    Some(PalwDeltaEntryV2::StagedCourtSeed { key: Key::CourtSharedBottom(_), new: Some(Row::CourtSharedBottom(r)), .. }) => {
-                        (r.control.claim, r.control.filer)
-                    }
+                    Some(PalwDeltaEntryV2::StagedCourtSeed {
+                        key: Key::CourtSharedBottom(_),
+                        new: Some(Row::CourtSharedBottom(r)),
+                        ..
+                    }) => (r.control.claim, r.control.filer),
                     _ => return Err(refused("shared bottom effect lost its stored row")),
                 };
                 // G14 lane r5-f02-wire (item 5): the court end archive this conviction may build records the ACTUAL bottom
