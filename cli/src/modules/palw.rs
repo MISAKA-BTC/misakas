@@ -70,7 +70,7 @@ impl Palw {
                 (r.available, r.found, r.now_daa, r.view_json)
             }
             PalwRead::Fences => {
-                let r = rpc.get_palw_fence_schedule(GetPalwFenceScheduleRequest {}).await?;
+                let r = rpc.get_palw_fence_schedule(GetPalwFenceScheduleRequest::default()).await?;
                 (r.available, r.found, r.now_daa, r.view_json)
             }
         };
