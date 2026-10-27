@@ -1711,6 +1711,15 @@ impl PalwBondBudgetStateV1 {
         self.bonds.get(bond).map(|row| row.open_final_weight).unwrap_or(0)
     }
 
+    /// **Allocation bootstrap (lane GC-DUTY option (b), pending the user's choice):** no allocation epoch yet, or `Σ_j A_j = 0`
+    /// (no model holds any seasoned miner or claim-bound verifier capital). While it holds, `P_m` limits neither a claim's block
+    /// opportunity nor its reward (the pre-fence rule: the bond's own Q/B/R/F still bind), so REAL is never stopped by an empty
+    /// allocation (ADR-0176 2026-10-15); the claims admitted meanwhile record their model and seed `S_m` at the next roll, from
+    /// which `P_m` applies as ADR-0177 decides.
+    pub fn allocation_bootstrapping_v1(&self) -> bool {
+        self.header.allocation.is_none_or(|epoch| epoch.sum_a.is_zero())
+    }
+
     /// The model `m`'s available reward budget in the current epoch (0 with no allocation, no row, or an old row).
     pub fn model_available(&self, model: &Hash64) -> u64 {
         let Some(epoch) = self.header.allocation else { return 0 };
@@ -3007,6 +3016,7 @@ impl PalwBondBudgetStateV1 {
         };
         if let Some((m, _)) = model
             && reservation.reward_sompi > 0
+            && !self.allocation_bootstrapping_v1()
         {
             let granted = self.reserve_model_reward(&m, reservation.reward_sompi, j);
             debug_assert_eq!(granted, reservation.reward_sompi, "availability was read above in the same state");
@@ -3053,7 +3063,9 @@ impl PalwBondBudgetStateV1 {
         mode: PalwHoldModeV1,
     ) -> Result<PalwBudgetVectorV1, PalwBudgetRefusalV1> {
         let mut reservation = palw_bond_budget_reservation_v1(policy, ask);
-        if let (Some(m), Some(_)) = (model, self.header.allocation) {
+        if let (Some(m), Some(_)) = (model, self.header.allocation)
+            && !self.allocation_bootstrapping_v1()
+        {
             reservation.reward_sompi = reservation.reward_sompi.min(self.model_available(&m));
         }
         if reservation.reward_sompi > 0 && self.has_unattributed_income_v1() {
@@ -4659,6 +4671,46 @@ mod tests {
         );
         s.shrink_same_block(&h(1), smaller, 9, &mut j).unwrap();
         assert_eq!(s.bond_row(&bond(1)).unwrap().window, smaller);
+    }
+
+    /// **Allocation bootstrap (option (b))**: an epoch with `ΣA = 0` limits no reward (the pre-fence rule, the bond's own caps still
+    /// bind) and records the claim's model; once some model holds capital, `P_m` applies — a model with `S̄ = 0` gets nothing, one with
+    /// capital gets its share.
+    #[test]
+    fn gc_duty_an_empty_allocation_bootstraps_and_then_p_m_applies() {
+        let p = policy(1, true);
+        let ap = PalwModelAllocationPolicyV1 {
+            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
+            epoch_daa: 10,
+            seasoning_epochs: 1,
+            curve: PalwAllocationCurveV1 { alpha_halves: 4 },
+            max_models_per_bond: 4,
+            average: None,
+        };
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        assert!(s.allocation_bootstrapping_v1(), "no epoch yet");
+        s.roll_epoch(&ap, 1, 10, |_| (1_000 * BILI, true), &mut j);
+        assert!(s.allocation_bootstrapping_v1(), "an epoch with no capital anywhere: ΣA = 0");
+        let ask = PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 7 * BILI, final_weight: 9, liability_sompi: 0 };
+        // The pre-fence rule: exactly what the same ask reserves with no model (the bond's own caps and slicing still bind).
+        let unmodelled = s.preview_claim_v1(&p, 1_000 * BILI, bond(1), None, ask).unwrap();
+        let r = s.reserve_claim_v1(&p, 1_000 * BILI, h(5), bond(1), Some(h(1)), 11, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        assert!(r.reward_sompi > 0);
+        assert_eq!(r, unmodelled, "the empty allocation clips nothing (pre-fence rule)");
+        assert_eq!(s.claim_row(&h(5)).unwrap().model, Some((h(1), 1)), "and the claim's model is recorded (it seeds S_m)");
+        // Capital lands on h(2) and seasons; the allocation is no longer empty.
+        s.assign(&ap, bond(2), &[(h(2), 300 * BILI)], 1, 1_000 * BILI, 1, |_| true, &mut j).unwrap();
+        s.roll_epoch(&ap, 3, 30, |_| (1_000 * BILI, true), &mut j);
+        assert!(!s.allocation_bootstrapping_v1(), "some model holds capital: P_m applies");
+        s.accrue(50 * BILI, &mut j);
+        assert_eq!(s.model_available(&h(1)), 0, "a model with S̄ = 0 gets nothing");
+        assert!(s.model_available(&h(2)) > 0, "a model with capital gets its share");
+        // The block opportunity the fold refuses on (`ModelBlockOpportunity`): none for the S̄ = 0 model, some for the funded one.
+        assert_eq!(s.model_blocks_available_v1(&h(1), 31), 0, "S̄ = 0: refused block opportunity");
+        assert!(s.model_blocks_available_v1(&h(2), 31) >= PALW_BUDGET_BLOCK_UNIT_V1, "capital: a block admitted");
+        let r = s.reserve_claim_v1(&p, 1_000 * BILI, h(6), bond(3), Some(h(1)), 31, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        assert_eq!(r.reward_sompi, 0, "past the bootstrap the S̄ = 0 model's reward is clipped to its (empty) share");
     }
 
     #[test]
