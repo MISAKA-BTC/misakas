@@ -318,8 +318,12 @@ pub fn palw_arming_json_v1(params: &PalwStateParamsV2, now: u64) -> Value {
         let e = by_fence.entry(w.fence).or_insert((w.activation_daa, 0, 0, 0));
         e.1 += 1;
         match w.kind {
-            crate::palw_arming_waiver_v1::PalwArmingWaiverKindV1::NotRun => e.2 += 1,
+            // F1 kinds (ACT2): skipped drills and unrun node E2Es count as "not run"; estimates / agent review only in the total.
+            crate::palw_arming_waiver_v1::PalwArmingWaiverKindV1::DrillSkipped
+            | crate::palw_arming_waiver_v1::PalwArmingWaiverKindV1::E2ENotRun => e.2 += 1,
             crate::palw_arming_waiver_v1::PalwArmingWaiverKindV1::UserDecision => e.3 += 1,
+            crate::palw_arming_waiver_v1::PalwArmingWaiverKindV1::ProvisionalEstimate
+            | crate::palw_arming_waiver_v1::PalwArmingWaiverKindV1::AgentReview => {}
         }
     }
     let waivers: Vec<Value> = by_fence
