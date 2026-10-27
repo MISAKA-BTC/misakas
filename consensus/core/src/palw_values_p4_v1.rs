@@ -88,6 +88,17 @@ pub const PALW_BOND_BUDGET_EXPORT_CAP_PROVISIONAL_PERMILLE_V1: u16 = 250;
 /// 目安: `H_L`, the liability hold after a claim is terminal — 10,000 DAA, the longest court-clock v2 extension horizon
 /// (`a + 10,000`, F07 / V9). Revise: X3's measured `Δ` (`hard = accepted + 5,520 + Δ`) — `H_L` must cover the hard deadline.
 pub const PALW_BOND_BUDGET_LIABILITY_HOLD_PROVISIONAL_DAA_V1: u64 = 10_000;
+/// 目安 (lane GC-DUTY, Lead 2026-10-28; ADR-0176 2026-10-15「枠不足で REAL が止まらない」): `F` per capital unit on the claims' OWN
+/// weight scale. Was 1,000 — a mechanics-scale placeholder 10^8 below the live scale, under which every own attempt was skipped
+/// (`UnsettledWeight`) and no seed anchor, Panel=1 seat or Final followed. Live measurement (testnet-12, DAA 16,693, read-only
+/// `getPalwCapacityShadow`): heavy class Final weight 1.389e11 per claim (median = p99 = max; light class 4.33e6), peak 45 open
+/// claims on one bond. Value = 4 (margin) × 72 (a unit's daily claims) × 1.39e11 ≈ 4.0e13. A forged claim still cannot raise F (the
+/// cap is capital-linear and the claim's weight is the chain's). Revise: the heaviest Final weight per claim × 72 × 4 moves (a new
+/// genesis/annual class, a weight-scale change), or ADR-0176 Stage 1's measured honest load.
+pub const PALW_BOND_BUDGET_FINAL_WEIGHT_PER_UNIT_PROVISIONAL_V1: u64 = 40_000_000_000_000;
+/// 目安 (lane GC-DUTY, Lead 2026-10-28): open (unsettled) claims per bond. Was one day's claims (72). Live: peak 45 open on one bond,
+/// accept → Final median 236 DAA / max 292 while Final is slow. Value = 4 × 72 = 288. Revise: when the measured peak × 4 passes it.
+pub const PALW_BOND_BUDGET_MAX_OPEN_CLAIMS_PROVISIONAL_V1: u32 = 288;
 
 /// **V12-b 目安: `palw_bond_budget_v1`'s V3 policy.** Per-day rates per minimum bond: 72 claims, 72 reward blocks, 72 Round rights;
 /// reward 0.25 of the unit per day (a day of issuance-bound reward never exceeds the export cap of the capital, so a whole day of
@@ -103,8 +114,8 @@ pub fn palw_bond_budget_policy_provisional_v1() -> crate::palw_bond_budget_v1::P
     p.block_units_per_unit = PALW_BOND_BUDGET_DAILY_CLAIMS_PROVISIONAL_V1 * PALW_BUDGET_BLOCK_UNIT_V1;
     p.reward_per_unit_sompi =
         PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1 / 1_000 * PALW_BOND_BUDGET_EXPORT_CAP_PROVISIONAL_PERMILLE_V1 as u64;
-    p.final_weight_per_unit = 1_000;
-    p.max_open_claims_per_bond = PALW_BOND_BUDGET_DAILY_CLAIMS_PROVISIONAL_V1 as u32;
+    p.final_weight_per_unit = PALW_BOND_BUDGET_FINAL_WEIGHT_PER_UNIT_PROVISIONAL_V1;
+    p.max_open_claims_per_bond = PALW_BOND_BUDGET_MAX_OPEN_CLAIMS_PROVISIONAL_V1;
     p.slice_rights_by_rho = false;
     p.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: PALW_BOND_BUDGET_DAILY_CLAIMS_PROVISIONAL_V1 };
     p.liability_hold_daa = PALW_BOND_BUDGET_LIABILITY_HOLD_PROVISIONAL_DAA_V1;

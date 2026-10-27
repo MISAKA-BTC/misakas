@@ -378,6 +378,42 @@ async fn gc_duty_option_c_kernel_claim_commits_and_pays_with_the_model_allocatio
     assert_eq!(w.net.owed(0), producer_before + Rules::final_reward(&policy), "the certified Final pays the producer");
 }
 
+/// Diagnostic (seating under the bond budget): each card's collateral, its budget caps under the 17,400 list's provisional policy,
+/// and whether an attempt block admits; and testnet-12's own minimum producer collateral against the same capital unit.
+#[tokio::test]
+async fn gc_duty_diag_budget_caps_of_the_harness_and_t12() {
+    kaspa_core::log::try_init_logger("warn");
+    use kaspa_consensus_core::palw_bond_budget_v1::palw_bond_budget_caps_v1;
+    let policy = kaspa_consensus_core::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
+    let mut w = World::on(Net::over_cfg(budget_config(false), TestConsensus::new)).await;
+    for card in 0..8usize {
+        let c = w.net.collateral(card);
+        eprintln!("GC-DIAG card {card}: collateral {c} sompi, unit {} → caps {:?}", policy.capital_unit_sompi, palw_bond_budget_caps_v1(&policy, c));
+    }
+    let anchor_before = w.net.chain.tip_state().1.round_seed_anchor().copied();
+    let ttpb = w.net.ttpb();
+    let (_, claim) = w.net.chain.attempt(5, ttpb, Vec::new(), &|_| true).await;
+    let state = w.net.chain.tip_state().1;
+    eprintln!("GC-DIAG attempt by card 5: claim recorded {} anchor {:?} -> {:?}", state.claim(&claim).is_some(), anchor_before, state.round_seed_anchor().copied());
+    // The same step without the budget (where seating works), and a few more attempts under the budget.
+    for round in 0..6usize {
+        let (_, c) = w.net.chain.attempt(5 + round % 3, ttpb, Vec::new(), &|_| true).await;
+        let s = w.net.chain.tip_state().1;
+        eprintln!("GC-DIAG budget round {round}: claim {} anchor {:?}", s.claim(&c).is_some(), s.round_seed_anchor().copied());
+    }
+    let mut v = World::on(Net::over_cfg(cert_panel_one_config(), TestConsensus::new)).await;
+    for round in 0..3usize {
+        let (_, c) = v.net.chain.attempt(5 + round % 3, ttpb, Vec::new(), &|_| true).await;
+        let s = v.net.chain.tip_state().1;
+        eprintln!("GC-DIAG no-budget round {round}: claim {} anchor {:?}", s.claim(&c).is_some(), s.round_seed_anchor().copied());
+    }
+    let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &t12.palw_consensus_mode {
+        let m = b.state.min_collateral_sompi();
+        eprintln!("GC-DIAG t12 min collateral {m} sompi → caps {:?}", palw_bond_budget_caps_v1(&policy, m));
+    }
+}
+
 /// Diagnostic split of the seating step: the budget-only world alone (no allocation) reaches Final.
 #[tokio::test]
 async fn gc_duty_option_c_budget_only_world_reaches_final() {
