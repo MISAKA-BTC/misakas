@@ -62,7 +62,7 @@ async fn evm_round_gas_actual_permitted_merge_with_market_inactive_matches_produ
     let (candidate, _) = at.chain.build_attempt(2, 1_000, vec![], &|_| true);
     let candidate = candidate.to_immutable();
     let hash = candidate.header.hash;
-    assert!(candidate.evm_payload.transactions.is_empty(), "even an empty EVM user list commits its gas limit");
+    assert!(candidate.evm_payload.transactions.is_empty(), "the candidate carries no EVM user tx");
     let actual_parent = at.chain.vp().ghostdag_store.get_selected_parent(parent).unwrap();
     eprintln!(
         "[evm-round-gas] parent={parent} parent-parent={actual_parent} round={} permitted={} expected_gas={} candidate={} daa={} timestamp={} market=None",
@@ -74,6 +74,8 @@ async fn evm_round_gas_actual_permitted_merge_with_market_inactive_matches_produ
     assert_eq!(at.chain.ctx.consensus.block_status(hash), BlockStatus::StatusUTXOValid);
     assert_eq!(at.chain.sink(), hash);
     let execution = at.chain.ctx.consensus.get_evm_header_of(hash).unwrap().expect("actual accepted EVM execution");
-    assert_eq!(execution.gas_limit, expected_gas, "accepted round gas is independent of market activation");
+    // EVMFIX: an EMPTY acceptance commits the historical base limit (testnet-12 history),
+    // not the round cap; producer and validator agree on it.
+    assert_eq!(execution.gas_limit, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, "empty acceptance commits the base gas limit");
     assert_eq!(execution.commitment_root(), candidate.header.evm_commitment_root);
 }
