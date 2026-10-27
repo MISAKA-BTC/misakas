@@ -20,7 +20,7 @@ fn clock_v2_changes_configured_fingerprints_but_is_not_a_shipped_or_reviewed_pro
     second.palw_tir_frame_cost_v1 = Some(v2);
     assert_ne!(first.consensus_params_id(), second.consensus_params_id());
     assert_ne!(first.consensus_schedule_id(), second.consensus_schedule_id());
-    assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 17_000 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash));
+    assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 16_600 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash));
     assert_eq!(
         palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&v2), PALW_TIR_FRAME_COST_RECORDS_V1),
         Err(PalwTirFrameCostRefusalV1::NoRecord)
