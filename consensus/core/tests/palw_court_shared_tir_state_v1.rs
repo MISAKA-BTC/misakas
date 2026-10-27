@@ -44,6 +44,8 @@ fn shared_context_query_ids_append_tags_and_have_complete_native_codec_coverage(
                     digest: shared_body_digest_v1(&body),
                     bytes: body,
                 }),
+                // F03b2: a version 1 row carries no service slot.
+                service: None,
             })),
         ),
         (
