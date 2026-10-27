@@ -62,14 +62,19 @@ RUNS = [
 COUNT = re.compile(r'test result: \w+\. (\d+) passed; (\d+) failed')
 
 
-def _part(env, part, test_threads):
-    """One cargo test invocation through buildslot; returns (rc, log)."""
+def _part(env, part, test_threads, part_log=None):
+    """One cargo test invocation through buildslot; returns (rc, log). The part's log is written as soon as it finishes."""
     cmd = [BUILDSLOT, 'cargo', 'test', '--offline', '--manifest-path', str(ROOT / 'Cargo.toml')] + part
     penv = dict(env)
     if test_threads:
         penv['RUST_TEST_THREADS'] = str(test_threads)
     p = subprocess.run(cmd, capture_output=True, text=True, env=penv, cwd=str(ROOT))
-    return p.returncode, '$ cargo test --offline ' + ' '.join(part) + '\n' + p.stdout + p.stderr
+    log = '$ cargo test --offline ' + ' '.join(part) + '\n' + p.stdout + p.stderr
+    if part_log is not None:
+        part_log.write_text(log)
+        failed = p.returncode != 0 or 'FAILED' in log
+        print('part %s rc=%d%s' % (part_log.name, p.returncode, ' FAILED' if failed else ''), flush=True)
+    return p.returncode, log
 
 
 def _warm(env, runs):
@@ -99,7 +104,7 @@ def main():
     ap.add_argument('--only', action='append', default=[])
     ap.add_argument('--jobs', type=int, default=1, help='runs AND the parts of a multi-part run execute concurrently (via buildslot)')
     ap.add_argument('--no-warm', action='store_true', help='skip the up-front cargo test --no-run')
-    ap.add_argument('--tir-test-threads', type=int, default=8, help='RUST_TEST_THREADS for the tir_public_fold parts')
+    ap.add_argument('--tir-test-threads', type=int, default=3, help='RUST_TEST_THREADS for the tir_public_fold parts')
     a = ap.parse_args()
     out = pathlib.Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -115,11 +120,27 @@ def main():
         _warm(env, runs)
     started_at = {rid: time.time() for rid, _ in runs}
     with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as pool:
-        futures = {}
+        # Submission order (longest first): the tir_public_fold parts (part 3, the >1h45m one, first), then the other lib runs,
+        # then the integration-test and kernel runs. The JSONs are still written in list order below.
+        tasks = []
         for rid, args in runs:
             parts = args if isinstance(args[0], list) else [args]
             threads = a.tir_test_threads if rid == 'core-lib-tir_public_fold' else None
-            futures[rid] = (parts, [pool.submit(_part, env, part, threads) for part in parts])
+            for n, part in enumerate(parts):
+                if rid == 'core-lib-tir_public_fold':
+                    rank = (0, 0 if n == 2 else 1)
+                elif '--lib' in part:
+                    rank = (1, 0)
+                else:
+                    rank = (2, 0)
+                tasks.append((rank, rid, n, part, threads))
+        handles = {}
+        for rank, rid, n, part, threads in sorted(tasks, key=lambda t: t[0]):
+            handles[(rid, n)] = pool.submit(_part, env, part, threads, out / ('%s.part%d.log' % (rid, n)))
+        futures = {}
+        for rid, args in runs:
+            parts = args if isinstance(args[0], list) else [args]
+            futures[rid] = (parts, [handles[(rid, n)] for n in range(len(parts))])
         for rid, (parts, futs) in futures.items():
             results = [f.result() for f in futs]
             rc = next((r for r, _ in results if r), 0)
