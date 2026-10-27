@@ -327,14 +327,14 @@ mod tests {
             "version": 1, "kind": "palwClaimLifecycle", "route": "chain", "nowDaa": 16_700, "claimId": "c", "classId": "k",
             "bond": "b:0", "phase": "final", "phaseDaa": 16_650, "final": true, "voided": false, "gateCGoverns": true,
             "securityCertified": false, "certificationCode": "pending", "held": true,
-            "certification": { "drawn": true, "drawnDaa": 16_660, "deadlineDaa": 17_000, "draws": 75, "approvals": 12, "negatives": 0,
+            "certification": { "drawn": true, "drawnDaa": 17_460, "deadlineDaa": 17_800, "draws": 75, "approvals": 12, "negatives": 0,
                                "k": 41, "m": 75, "veto": 0, "heldRewardSompi": 5, "outcome": null, "outcomeDaa": null },
             "newAttemptOfClassNow": { "admitted": false, "code": "G14_ROUTE_ABSENT", "why": "no route" },
             "reasons": [{ "code": "pending", "text": null }],
         });
         let s = render_lifecycle(&doc);
         assert!(s.contains("approvals 12 of k=41 (m=75"), "{s}");
-        assert!(s.contains("held true") && s.contains("deadline DAA 17000"));
+        assert!(s.contains("held true") && s.contains("deadline DAA 17800"));
         assert!(s.contains("refused G14_ROUTE_ABSENT"));
         assert!(s.contains("pending: Final reached"), "the CLI's own table fills a missing reason: {s}");
     }

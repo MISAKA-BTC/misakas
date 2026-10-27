@@ -1349,7 +1349,7 @@ mod tests {
             .unwrap_or(false)
         );
         kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&decoded).expect("tag 154 may ride");
-        // The shipped t12 ruleset arms the fence (the DAA 16,600 flag day): in force from its height, not before.
+        // The shipped t12 ruleset arms the fence (the DAA 17,400 flag day): in force from its height, not before.
         let at = params.palw_legacy_public_filer_v1.expect("shipped t12 arms palw_legacy_public_filer_v1").daa_score();
         let fences = params.palw_lifecycle_kind_fences_v1();
         assert!(fences.kind_in_force_at(&decoded, at));
