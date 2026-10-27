@@ -842,6 +842,17 @@ impl VirtualStateProcessor {
                 // the kind rides unjudged, as every build without it reads it. Past it: the submitter's registered Active bond and
                 // its ML-DSA-87 signature over the network-bound step. The material itself (exact native width, input cover,
                 // checksum, per-submitter budget) and the typed-missing storage schedule are judged by the typed fold.
+                // ADR-0206 PanelDa disclosure (tag 233). It was routed here with no arm, so the gate hit `unreachable!` on any tag-233
+                // object (lane J1's node E2E found it). A-2: below `palw_panel_da_disclosure_v1` it rides unjudged. Past it, no signature
+                // (the hash commitment fixes which ids, so anyone may file) — the row's own admission: a governed claim, the ids bind,
+                // inside `a..=deadline`, once. The fold repeats the same check.
+                Obj::PanelDaPromptDisclosedV1 { claim, prompt_token_ids } => {
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        return Ok(());
+                    }
+                    let row = state.panel_da_disclosure_v1(claim).ok_or_else(|| format!("claim {claim}: no PanelDa disclosure row"))?;
+                    row.admit_v1(prompt_token_ids, point.daa_score).map_err(|why| format!("claim {claim}: disclosure refused: {why:?}"))?;
+                }
                 Obj::MaterialIntakeV1 { intake } => {
                     if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
                         return Ok(());

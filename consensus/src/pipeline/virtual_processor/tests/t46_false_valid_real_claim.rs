@@ -406,7 +406,6 @@ fn harness_rcore_off() -> H {
 }
 
 fn harness_with(offence_attribution: bool, rcore_plus: bool) -> H {
-    use misaka_palw_base0::classes::resolve_class_v1;
     kaspa_core::log::try_init_logger("warn");
     let (config, bundle, _premine, floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
     assert!(config.params.palw_offence_attribution.is_some_and(|f| f.is_active(0)), "testnet-12 arms the fence from genesis");
@@ -436,6 +435,12 @@ fn harness_with(offence_attribution: bool, rcore_plus: bool) -> H {
         (config, twin)
     };
     config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
+    harness_over(config, bundle, floats)
+}
+
+/// The harness over an already-built ruleset (lane J1's PanelDa variant arms `palw_panel_da_disclosure_v1` on it).
+fn harness_over(config: Config, bundle: PalwConsensusParamsV2, floats: Vec<(TransactionOutpoint, UtxoEntry)>) -> H {
+    use misaka_palw_base0::classes::resolve_class_v1;
     let ctx = TestContext::new(TestConsensus::new(&config));
     let (_, genesis) =
         ctx.consensus.virtual_processor().palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the genesis tip loads");
@@ -5369,3 +5374,6 @@ mod t28_a_retired_claims_row_burns;
 /// record, the liability record and the vesting row's copies (N8), a retired claim included; a child, like T47.
 #[path = "t62_the_unique_path.rs"]
 mod t62_the_unique_path;
+
+/// lane J1 (2026-10-27): the PanelDa mandatory disclosure through the node's gate, walk and fold (ADR-0206).
+mod panel_da;
