@@ -9,10 +9,9 @@
 
 ## 0. 高さと、その高さで変わること
 
-**G14 flag day は DAA 17,000**(`PALW_T12_G14_17000_DAA_V1`、2026-10-27 ユーザー決定で 19,000 から変更)。
-依頼文の「16,600」は現行 preset と一致しない。この手引きは preset の値に従う。
+**G14 flag day は DAA 16,600**(`PALW_T12_G14_17000_DAA_V1` = 16,600。2026-10-27 のユーザー決定で 19,000 → 17,000 → 16,600 と移った。定数名は 17000 のまま)。
 
-DAA 17,000 で、次の一覧(`PALW_T12_G14_17000_FENCES_V1`)が一緒に武装される。
+DAA 16,600 で、次の一覧(`PALW_T12_G14_17000_FENCES_V1`)が一緒に武装される。
 
 | 区分 | fence | 参加者への影響 |
 |---|---|---|
@@ -28,7 +27,7 @@ int-13 の 4 本は 15,500 のまま変わらない。
 
 ```sh
 misaka palw fences --armed-only
-misaka palw fences --list g14At17000     # G14 flag day の一覧(この版で view に追加)
+misaka palw fences --list g14At16600     # G14 flag day の一覧(この版で view に追加)
 misaka palw status                       # 武装状況・full activation・未採択の値
 misaka palw not-adopted                  # 合意が typed-missing で持つ値
 ```
@@ -121,7 +120,7 @@ misaka palw claim <claim>            # 旧い読み取り(op 225 が無い node 
 | court の close | `misaka palw court-close …` |
 | 自動の公開 filer | full node の席 duty。優先 claim は `--palw-public-claim` |
 
-- 未採択の値に依存する builder(`funded-original`、`court-ingress`、`material-intake`、`d2-demand`、`position-close`)は、値が採択されるまで exit 10 で拒否する。採択されると `misaka palw not-adopted` の行が `adopted` に変わる。
+- `misaka palw build` の値依存 builder は exit 10 で止まる。`funded-original` は値が未採択(typed-missing)のため。`court-ingress`・`material-intake`・`d2-demand`・`position-close` は値が採択済み(目安)だが CLI の builder が未実装のため(SDK を使う)。詳細は [palw-cli.md §2.2](palw-cli.md)。
 - PanelDa の claim は、開示後に公開 FP 経路で告発できる。
 - **追加中(UX-B):** 6 family それぞれの告発 object を作る CLI と、ingress 手数料の見積り。
 
@@ -136,7 +135,7 @@ palw-evidence status|fetch|repair --claim <claim> --providers <a,b> --min-copies
 ```
 
 - node 側は `--palw-evidence-provider-dir` で読む。manifest は claim の on-chain root と照合され、全 chunk が検査される。producer からの取得は fallback として残る。
-- provider court は `palw_provider_court_v1`(DAA 17,000)で有効になる。
+- provider court は `palw_provider_court_v1`(DAA 16,600)で有効になる。
 
 ## 7. wallet の保有者
 
@@ -151,6 +150,11 @@ palw-evidence status|fetch|repair --claim <claim> --providers <a,b> --min-copies
 
 - **追加中(UX-B):** wallet 側の PALW 操作の整理。**追加中(UX-A):** 状態とエラーの表示の統一。
 
-## 8. 終了コード
+## 8. RPC
+
+- 新しい op 番号は追加しない(統括の方針、2026-10-27)。UX-A と PANELDA が追加する状態(PanelDa の開示期限など)は、op 227 `getPalwFenceSchedule` の view を拡張して返す。
+- 現在の PALW 読み取り op は 225〜228([palw-cli.md §5](palw-cli.md))。
+
+## 9. 終了コード
 
 [palw-cli.md §4](palw-cli.md) と同じ。exit 10 は安全のための拒否(未採択の値、休眠中の fence)。
