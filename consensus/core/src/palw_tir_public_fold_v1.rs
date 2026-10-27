@@ -7100,21 +7100,39 @@ mod conviction_e2e_tests {
         assert_eq!((open, eligible), (false, true), "B-04: the silent bound session never ends, so its binding is never released");
     }
 
-    /// **audit(verify-1) B-05 (money side)**: any removal of a bound-claim session that is not an object (a sweep or tick; here the
-    /// writer the void/sweep paths call) archives it `Uncaptured`, whose `pending_nominal` keeps the challenger's court stake forever:
-    /// the archive is never `fully_resolved` (never pruned), so the challenger's whole bond stays exit-held and the binding (whose
-    /// release waits on every dependent row) never releases the producer. Expected: resolvable after the material horizon.
+    /// **audit(verify-1) B-05 (money side)**: a removal of a bound-claim session that is not an object (the deadline sweep) used to
+    /// archive it `Uncaptured`, whose `pending_nominal` keeps the challenger's court stake forever (never `fully_resolved`, the
+    /// challenger's bond exit-held and the binding never released). Expected: resolvable after the material horizon.
+    ///
+    /// Lane T (2026-10-27): this reproducer called the bare writer `write_court(id, None)` with no captured cause and so kept
+    /// asserting the pre-fix premise after fix-b (ce574d49b) — the sweep now records `DeadlineSweep` first
+    /// (`prepare_sweep_court_end_cause_v1`, `deadlines.rs`) and the void path closes neutrally (fix-a). The bare cause-less writer
+    /// archiving `Uncaptured` and holding the stake is the documented conservative contract (`court_archive_fully_resolved_v1`:
+    /// "never prunable"), not the sweep path. The test now drives the sweep's own cause and keeps the bare writer as a control.
     #[test]
     fn audit_verify1_b05_an_uncaptured_court_end_archive_is_never_prunable() {
         let fx = palw_tir_public_frame_fixture_v1(None, 4);
         let frame = fx.frame.clone();
         let (state, params, extras) = world(&fx, &frame);
+        // Control: the bare writer with no captured cause stays `Uncaptured` and conservatively held.
+        {
+            let mut raw = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            let id = verify1_bound_silent_session(&mut raw, &frame);
+            raw.write_court(id, None).unwrap();
+            let a = raw.state.court_end_archive_v1(id).unwrap().clone();
+            assert_eq!(a.adjudication(), crate::palw_court_end_archive_v1::CourtEndDispositionV1::Uncaptured);
+            let far = a.material_until_daa.saturating_add(1_000_000);
+            assert!(!raw.state.court_archive_fully_resolved_v1(id, far), "a cause-less ending is never silently freed");
+        }
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         let id = verify1_bound_silent_session(&mut b, &frame);
+        b.prepare_sweep_court_end_cause_v1(&at(&frame, 5)).unwrap();
         b.write_court(id, None).unwrap();
+        b.court_end_evidence = None;
         let archive = b.state.court_end_archive_v1(id).unwrap().clone();
-        assert_eq!(archive.adjudication(), crate::palw_court_end_archive_v1::CourtEndDispositionV1::Uncaptured);
+        assert_eq!(archive.adjudication(), crate::palw_court_end_archive_v1::CourtEndDispositionV1::DeadlineSwept);
         assert!(archive.groups.is_empty(), "no close declaration: nothing but the court stake is pending");
+        assert_eq!(archive.pending_nominal(&outsider()), 0, "the swept ending holds no nominal on the challenger");
         let far = archive.material_until_daa.saturating_add(1_000_000);
         b.sweep_resolved_court_archives_v1(far).unwrap();
         let still = b.state.court_end_archive_v1(id).is_some();

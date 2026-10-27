@@ -59,6 +59,27 @@ fn a_swapped_expert_choice_is_caught_at_the_router() {
     caught(&c, at, FaultKindV1::Recompute, |t| t.data.reverse());
 }
 
+/// **Rounding / carry fault (RFC-0011 §15.7, lane T 2026-10-27)**: a quotient rounded the other way (one unit up or down at a
+/// `Div { rule }` node, the value a wrong rounding rule or a dropped carry yields) is recomputed and convicted by the public court,
+/// at either neighbour; the honest twin of the same claim passes with no fault.
+#[test]
+fn a_quotient_rounded_the_other_way_is_convicted_and_its_honest_twin_passes() {
+    let c = Claim::honest();
+    let (v, _) = c.verify_with(&c.trace, &honest_material(&c));
+    assert!(matches!(v, ClaimVerdictV1::Pass { .. }), "the honest twin passes: {v:?}");
+    let at = c.find(1, |p| matches!(p, Prim::Div { .. }));
+    let honest = c.trace.values[at.0 as usize][at.1 as usize][at.2 as usize].clone();
+    let mut neighbours = 0;
+    for delta in [1i128, -1] {
+        if !honest.dtype.contains(honest.data[0] + delta) {
+            continue;
+        }
+        neighbours += 1;
+        caught(&c, at, FaultKindV1::Recompute, |t| t.data[0] += delta);
+    }
+    assert!(neighbours > 0, "at least one rounding neighbour is representable");
+}
+
 #[test]
 fn a_weight_that_is_not_the_committed_one_is_unavailable_never_a_pass() {
     struct SwapWeights<'a>(TraceMaterialV1<'a>);
