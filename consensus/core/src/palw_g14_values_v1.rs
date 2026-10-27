@@ -499,7 +499,7 @@ mod tests {
         );
         assert!(cost.clock.maximum_door_daa <= 120 + 3_000, "inside the liability horizon the candidate read");
         assert_eq!(cost.clock.inclusion_daa_v1(1, 0).expect("no overflow"), 1, "one control fits one DAA's inclusion capacity");
-        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 16_600 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
+        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
         assert_eq!(
             palw_tir_frame_cost_record_admits_v1(h(9), 17_000, Some(&cost), PALW_TIR_FRAME_COST_RECORDS_V1),
             Err(PalwTirFrameCostRefusalV1::NoRecord),

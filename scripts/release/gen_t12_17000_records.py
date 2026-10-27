@@ -17,7 +17,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import pin_arming_record as P  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-AT = 16_600  # the G14 flag day (moved from 17,000 by the user 2026-10-27)
+AT = 17_400  # the G14 flag day (user: 17,000 -> 16,600 -> 17,400, 2026-10-27)
 SOURCE = 'd181e815ea6b662b84ae409f696e92eb9a5e057d'  # the integration tip the lanes' runs were reported against
 D = 'user decision 2026-10-27'
 NR = 'not run as pinned evidence; ' + D + ' (armed at DAA 17,000 without it)'

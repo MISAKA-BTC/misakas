@@ -19,7 +19,7 @@ fn the_17000_list_covers_the_slice_six_families_and_panel_da() {
     }
     let shipped = palw_t12_shipped_params();
     let live: Vec<&str> =
-        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 16_600)).map(|(n, _)| *n).collect();
+        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 17_400)).map(|(n, _)| *n).collect();
     // Each family fence is either on the list or already in force on testnet-12 below 17,000 (`palw_fp_tokenizer_match` @5,300,
     // `palw_panel_da` @0) — never both (re-arming a live fence would fork below 17,000).
     for fam in FAMILIES.into_iter().chain([F::FpPanelDaDisclosure]) {
@@ -168,4 +168,62 @@ fn a_waiver_admits_its_record_but_lifts_no_safety_refusal() {
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(at));
     let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
     assert!(e.contains("open blocker") && e.contains("RFC08-2"), "{e}");
+}
+
+/// **Every pinned waiver is bound to the flag day (17,400)**: each waiver and record names exactly that height, every slot is
+/// classified as a waiver, and the same waiver presented at any other height is refused — never classified as a run.
+#[test]
+fn waiver_height_binds_flag_day() {
+    use kaspa_consensus_core::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1;
+    let at = PALW_T12_G14_17000_DAA_V1;
+    assert_eq!(at, 17_400);
+    assert!(!PALW_ARMING_WAIVERS_V1.is_empty());
+    for w in PALW_ARMING_WAIVERS_V1 {
+        assert_eq!(w.activation_daa, at, "{} slot {} is pinned at another height", w.fence, w.requirement);
+        let d = w.digest();
+        let here = palw_arming_evidence_kind_v1(w.fence, w.genesis, at, w.requirement, &d, PALW_ARMING_WAIVERS_V1);
+        assert!(matches!(here, Ok(PalwArmingEvidenceV1::Waived(_))), "{} slot {}", w.fence, w.requirement);
+        for other in [16_600, 17_000, at - 1, at + 1] {
+            let there = palw_arming_evidence_kind_v1(w.fence, w.genesis, other, w.requirement, &d, PALW_ARMING_WAIVERS_V1);
+            assert!(there.is_err(), "{} slot {} at {other} must be refused, got {there:?}", w.fence, w.requirement);
+        }
+    }
+    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == at));
+}
+
+/// **A waiver never satisfies a requirement that must hold**: with every record slot waived, the ordering, placeholder-value and
+/// open-blocker refusals still refuse; the ONE exception is court capacity's user-approved V11 estimate (a `UserDecision` waiver in
+/// its measured slot, for exactly that policy).
+#[test]
+fn waiver_cannot_satisfy_requirement_passed() {
+    use kaspa_consensus_core::config::params::{PALW_T12_FULL_COURT_CAPACITY_ENTRY, PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY, Params};
+    let at = PALW_T12_G14_17000_DAA_V1;
+    let base = kaspa_consensus_core::config::params::palw_t12_release_v7_params();
+    let named = |p: &mut Params, name: &str| {
+        let f = PALW_T12_G14_17000_FENCES_V1.iter().find(|f| f.name == name).expect("on the list");
+        (f.set)(p, Some(ForkActivation::new(at)));
+    };
+    // Ordering: held DA v2 without the filer.
+    let mut p = base.clone();
+    named(&mut p, "palw_legacy_held_da_v2");
+    assert!(format!("{:?}", p.validate_palw_v2()).contains("needs palw_legacy_public_filer_v1"));
+    // Placeholder value: court capacity's placeholder policy (not the approved estimate) with the waived record.
+    let mut p = base.clone();
+    named(&mut p, "palw_legacy_public_filer_v1");
+    named(&mut p, "palw_court_outsider_lane_v1");
+    (PALW_T12_FULL_COURT_CAPACITY_ENTRY.set)(&mut p, Some(ForkActivation::new(at)));
+    let e = format!("{:?}", p.validate_palw_v2());
+    assert!(e.contains("palw_court_capacity_v1") && !e.contains("no arm-readiness record"), "{e}");
+    // Open blocker: settlement once on the whole list (every record waived) is still refused by RFC08-2.
+    let mut p = palw_t12_shipped_params();
+    (PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY.set)(&mut p, Some(ForkActivation::new(at)));
+    let e = format!("{:?}", p.validate_palw_v2());
+    assert!(e.contains("open blocker") && e.contains("RFC08-2"), "{e}");
+    // The one exception: the approved V11 estimate (the list's own court-capacity entry) validates with its UserDecision waiver.
+    let mut p = base.clone();
+    for name in ["palw_legacy_public_filer_v1", "palw_court_outsider_lane_v1", "palw_court_capacity_v1"] {
+        named(&mut p, name);
+    }
+    let e = format!("{:?}", p.validate_palw_v2());
+    assert!(!e.contains("palw_court_capacity_v1"), "the approved estimate is accepted: {e}");
 }

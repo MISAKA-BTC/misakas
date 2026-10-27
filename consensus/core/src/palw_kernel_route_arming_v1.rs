@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn kernel_route_fences_are_dormant_and_refused_without_a_record() {
-        assert!(PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 16_600 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
+        assert!(PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
         for p in [MAINNET_PARAMS, TESTNET_PARAMS] {
             for fence in PalwKernelRouteGatedFenceV1::ALL {
                 assert_eq!(fence.armed(&p), None);

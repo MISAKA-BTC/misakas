@@ -264,5 +264,5 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
     let g14 = shell_value(FLEET, &fleet, "G14_FLAG_DAY_DAA");
     let core_g14 = kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.map(|at| at.to_string()).unwrap_or_default();
     assert_eq!(g14, core_g14, "{FLEET}: G14_FLAG_DAY_DAA is the preset's");
-    assert!(p.fence_schedule_v1().contains(&16_600), "the G14 list is scheduled at 16,600");
+    assert!(p.fence_schedule_v1().contains(&17_400), "the G14 list is scheduled at 17,400");
 }

@@ -7,7 +7,7 @@
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::fork_id_v1::fork_id_v1;
 
-const FORK_ID_DAAS: [u64; 7] = [0, 5_300, 15_000, 15_499, 15_500, 15_870, 16_599];
+const FORK_ID_DAAS: [u64; 7] = [0, 5_300, 15_000, 15_499, 15_500, 15_870, 17_399];
 
 fn lines() -> Vec<String> {
     let p = palw_t12_shipped_params();
@@ -15,7 +15,7 @@ fn lines() -> Vec<String> {
         format!("params={}", p.consensus_params_id()),
         format!("identity={}", p.consensus_identity_id()),
         format!("schedule={}", p.consensus_schedule_id()),
-        format!("schedule_below_17000={:?}", p.fence_schedule_v1().into_iter().filter(|h| *h < 16_600).collect::<Vec<u64>>()),
+        format!("schedule_below_17000={:?}", p.fence_schedule_v1().into_iter().filter(|h| *h < 17_400).collect::<Vec<u64>>()),
     ];
     for daa in FORK_ID_DAAS {
         out.push(format!("fork_id@{daa}={:?}", fork_id_v1(&p, daa)));
@@ -24,7 +24,7 @@ fn lines() -> Vec<String> {
         .palw_fences_v1()
         .iter()
         .filter_map(|(n, f)| f.map(|f| (*n, f.daa_score())))
-        .filter(|(_, h)| *h < 16_600)
+        .filter(|(_, h)| *h < 17_400)
         .map(|(n, h)| format!("{n}@{h}"))
         .collect();
     fences.sort();
@@ -75,14 +75,14 @@ fn slice_at_17000_keeps_the_handshake_identity() {
     let mut moved = vec![];
     for f in PALW_T12_KERNEL_SLICE_FENCES_V1 {
         let mut p = base.clone();
-        (f.set)(&mut p, Some(ForkActivation::new(16_600)));
+        (f.set)(&mut p, Some(ForkActivation::new(17_400)));
         if p.consensus_identity_id() != id {
             moved.push(f.name);
         }
     }
     println!("FLEETDIAG slice entries that move the identity alone: {moved:?}");
     let mut p = base.clone();
-    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(16_600));
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_400));
     assert_eq!(p.consensus_identity_id(), id, "the slice at 17,000 moves the handshake identity: {moved:?}");
 }
 
@@ -103,13 +103,13 @@ fn g14_17000_list_keeps_everything_below_17000() {
             .palw_fences_v1()
             .iter()
             .filter_map(|(n, f)| f.map(|f| (*n, f.daa_score())))
-            .filter(|(_, h)| *h < 16_600)
+            .filter(|(_, h)| *h < 17_400)
             .map(|(n, h)| format!("{n}@{h}"))
             .collect();
         f.sort();
         f
     };
-    let sched = |q: &Params| q.fence_schedule_v1().into_iter().filter(|h| *h < 16_600).collect::<Vec<u64>>();
+    let sched = |q: &Params| q.fence_schedule_v1().into_iter().filter(|h| *h < 17_400).collect::<Vec<u64>>();
     assert_eq!(p.consensus_identity_id(), base.consensus_identity_id(), "handshake identity moved");
     for daa in FORK_ID_DAAS {
         // `next` announces the upcoming fence (17,000 vs none) by design (ADR-0072 SA-2): a peer may differ there. `fired` may not.
@@ -117,12 +117,12 @@ fn g14_17000_list_keeps_everything_below_17000() {
     }
     assert_eq!(sched(&p), sched(&base), "schedule below 17,000 moved");
     assert_eq!(below(&p), below(&base), "a fence below 17,000 moved");
-    assert!(p.fence_schedule_v1().contains(&16_600), "the list is not at 17,000");
+    assert!(p.fence_schedule_v1().contains(&17_400), "the list is not at 17,000");
     println!(
         "FLEETDIAG g14-17000 armed: schedule_id armed={} shipped={}; fork_id@17000 armed={:?} shipped={:?}",
         p.consensus_schedule_id(),
         base.consensus_schedule_id(),
-        fork_id_v1(&p, 16_600),
-        fork_id_v1(&base, 16_600)
+        fork_id_v1(&p, 17_400),
+        fork_id_v1(&base, 17_400)
     );
 }

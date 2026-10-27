@@ -333,7 +333,7 @@ fn set(p: &mut Params, fence: PalwG14GatedFenceV1, at: Option<ForkActivation>) {
 /// real network until a record for exactly that network and height is pinned; this binary pins none. `None` and `never()` pass.
 #[test]
 fn armable_g14_fences_refuse_without_a_measured_record() {
-    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 16_600 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
+    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_g14_gates_v1().expect("testnet-12 as shipped arms none of them");
     for fence in PalwG14GatedFenceV1::ALL {
