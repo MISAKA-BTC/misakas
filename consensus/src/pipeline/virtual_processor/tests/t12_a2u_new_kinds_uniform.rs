@@ -690,6 +690,14 @@ fn zeros<T: borsh::BorshDeserialize>() -> T {
 fn zero_filled_kind(tag: u8) -> Obj {
     let object: Obj = match tag {
         170 | 171 => tir_public_sample(tag),
+        // Tag 178 (G14 RFC-0029 shared court operation): hand-built — an `Ids` operation as `r5_f02_wire_v1` builds it.
+        178 => Obj::SharedCourtOpV1 {
+            op: Box::new(kaspa_consensus_core::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1::Ids {
+                claim: kaspa_hashes::Hash64::from_bytes([1; 64]),
+                rows_root: kaspa_hashes::Hash64::from_bytes([2; 64]),
+                ids: vec![1],
+            }),
+        },
         _ => minimal_decode(&[tag])
             .unwrap_or_else(|| panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample instead")),
     };
