@@ -2093,7 +2093,7 @@ pub fn cli() -> Command {
                 .action(clap::ArgAction::Append)
                 .value_delimiter(',')
                 .value_parser(clap::value_parser!(String))
-                .help("PALW: exact 128-hex public claim IDs this ordinary bonded verifier prioritizes. At most16; repeat or comma-separate. Avoids network-wide discovery under unrelated claim spam; authenticated public material, existing reservations, funding and court limits still apply. Empty: automatic discovery."),
+                .help("PALW: exact 128-hex public claim IDs this ordinary bonded verifier prioritizes. At most 16; repeat or comma-separate. Avoids network-wide discovery under unrelated claim spam; authenticated public material, existing reservations, funding and court limits still apply. Empty: automatic discovery."),
         )
         .arg(
             Arg::new("palw-producer-bond")
@@ -3117,7 +3117,9 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help(
-                    "MISAKA PALW (RFC-0009 stage B): comma-separated evidence provider directories. A panel seat's material pull is also answered                      from these: a manifest any directory holds for the claim that agrees with the claim's on-chain roots, every chunk checked against                      it, then handed to the same verification and re-execution a peer's copy goes through. The producer pull stays the fallback.",
+                    "MISAKA PALW (RFC-0009 stage B): comma-separated evidence provider directories. A panel seat's material pull is also answered \
+                     from these: a manifest any directory holds for the claim that agrees with the claim's on-chain roots, every chunk checked against \
+                     it, then handed to the same verification and re-execution a peer's copy goes through. The producer pull stays the fallback.",
                 ),
         )
         .arg(

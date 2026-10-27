@@ -255,7 +255,7 @@ enum Command {
     /// Node operations.
     #[command(subcommand)]
     Node(NodeCmd),
-    /// EVM-lane operations (read-only in this slice).
+    /// EVM-lane operations: reads, the deposit lock / claim / refund, and sends (`--yes` to broadcast).
     #[command(subcommand)]
     Evm(EvmCmd),
     /// PQ wallet operations (UTXO list / consolidate / send).

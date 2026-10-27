@@ -72,12 +72,14 @@ fn palw_named_fence_lists_v1() -> Vec<(&'static str, Option<u64>, &'static [Palw
         ("fullActivation", PALW_T12_FULL_ACTIVATION_DAA, PALW_T12_FULL_ACTIVATION_FENCES_V1),
         ("int13", PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1),
         ("postLaunchV1", Some(PALW_T12_POST_LAUNCH_FENCE_DAA), PALW_T12_POST_LAUNCH_FENCES_V1),
-        ("postLaunchV2", None, PALW_T12_POST_LAUNCH_FENCES_V2),
-        ("postLaunchV3", None, PALW_T12_POST_LAUNCH_FENCES_V3),
-        ("postLaunchV4", None, PALW_T12_POST_LAUNCH_FENCES_V4),
+        ("postLaunchV2", PALW_T12_POST_LAUNCH_FENCE_V2_DAA, PALW_T12_POST_LAUNCH_FENCES_V2),
+        ("postLaunchV3", PALW_T12_POST_LAUNCH_FENCE_V3_DAA, PALW_T12_POST_LAUNCH_FENCES_V3),
+        ("postLaunchV4", PALW_T12_POST_LAUNCH_FENCE_V4_DAA, PALW_T12_POST_LAUNCH_FENCES_V4),
         ("int11", None, PALW_T12_INT11_FENCES_V1),
         ("tirFlagDay", PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1),
         ("modelCourtWindow", PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1),
+        // The G14 flag day (Panel=1 kernel slice, the six families, PanelDa disclosure): the list a participant asks about after DAA 16,600 (the constant keeps its 17000 name).
+        ("g14At16600", PALW_T12_G14_17000_FLAG_DAY_DAA, PALW_T12_G14_17000_FENCES_V1),
     ]
 }
 
