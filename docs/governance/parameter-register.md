@@ -236,3 +236,15 @@ ADR-0206(proposed)。値は `consensus/core/src/palw_g14_values_v1.rs` 末尾。
 
 - 公開 default の deposit は `burn_registration_fee` で burn され、bond の `slashed` を増やす（`palw_panel_da_disclosure_fold_v1.rs` の `settle_panel_da_at_final_v1`）。**これは有罪ではない**（`PalwVoidReasonV2::PanelDaDisclosureDefault`、strike なし、計算 bond は slash しない）。
 - state に field を足さないため、表示は変えずに文書化する: RPC・台帳の `slashed` は「burn の総額」であり、有罪の合計として読まない。有罪の数は conviction の記録（court の verdict）から数える。
+
+### 2026-10-27 ユーザー決定「担保を上げる」— kernel route の claim collateral 1,000 → **1,080 MSK**（目安）
+
+- 定数: `PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_ESTIMATE_V1` = 1,080 MSK、本番 `PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_V1` がそれを指す（500 MSK pin と同じ形）。`palw_kernel_route_policy_v1` の `claim_collateral` が読む。
+- 根拠: 自己告発の正味損失 0.51·C + 5 + 0.816 ≥ 500 / 0.90 = 555.6 MSK → C ≥ 1,078.0 MSK。指示の +60（1,060）では正味 546.4 MSK で不足するため、+80 の 1,080（正味 556.6 MSK）とした。99% では 505.1 MSK 以上で満たす。試験 `palw_kernel_route_detection_loss_covers_gain_at_90_percent`。
+- 影響: kernel route の policy にだけ入る。fleet identity は fence の高さだけを hash し（`config/params/identity.rs` の `palw_kernel_route_panel_one_v1`）、policy 値は入らないので t12 の指紋は変わらない。ADR-0176 の到達上限（capital unit 13,000 MSK）は読まない。M-1 検閲費用の比は 20,160 / 1,585 = 12.7 倍（13.4 倍から低下、不等式は成立）。
+- 見直し条件: 外部利得上限・報告者取り分・検出率の目安の変更、conviction 時の seat bond slash の確定（確定すれば下げられる）。
+
+### 今後の修正（17,000 では行わない）— kernel route の FileProof 枠
+
+- 現状: block あたり 64 run のうち FileProof だけが使える予約 32 run があり、block ごとに戻る。block の中では先着順で、外部者の FileProof に席は保証されない。junk の却下料は 0.1 MSK（作業量に比例）で filer 負担。全枠を責任期間 3,150 DAA 埋める費用は約 20,160 MSK で、賭け金の 12.7 倍。経済的な抑止は成立するので、構造的な修正は 17,000 では行わない（統括判断 2026-10-27）。
+- 今後の修正案: `misaka/palw/kernel/src/ledger.rs` の `charged_v1`（:710）で、`liability_until` まで N DAA 以内の claim への FileProof に予約の一部を割り当てる。または :1719〜1721 で期限の早い順に予約を使う。

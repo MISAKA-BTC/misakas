@@ -107,7 +107,8 @@ mod clock_tests {
         let cost = panel_one_censorship_cost_clocked_v1(&p, 1);
         assert_eq!(cost, 64 * (MSK / 10) * 3_150, "64 runs x 0.1 MSK x (3,120 + 20 + 10) DAA");
         assert!(panel_one_censorship_check_clocked_v1(&p, 1, gain, true).is_ok());
-        assert!(cost > 13 * (p.claim_collateral as u128 + p.claim_reward as u128 + gain.unwrap() as u128));
+        // 20,160 MSK vs 1,080 + 5 + 500 = 1,585 MSK: 12.7x (13.4x before the AUDIT-3 m3 collateral raise).
+        assert!(cost > 12 * (p.claim_collateral as u128 + p.claim_reward as u128 + gain.unwrap() as u128));
         assert_eq!(panel_one_censorship_check_clocked_v1(&p, 1, gain, false), panel_one_censorship_check_v1(&p, 1, gain));
         assert_eq!(
             panel_one_censorship_check_clocked_v1(&p, 1, None, true),
