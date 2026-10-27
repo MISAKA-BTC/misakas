@@ -33,6 +33,7 @@ pub mod mute;
 pub mod network;
 pub mod node;
 pub mod open;
+pub mod palw;
 pub mod ping;
 // kaspa-pq PQ-only (ADR-0019 §14): PSKB/PSKT (partially-signed P2SH bundles) is an
 // entirely classical secp256k1 feature; the whole `kaspa-wallet-pskt` crate is
@@ -70,7 +71,7 @@ pub fn register_handlers(cli: &Arc<KaspaCli>) -> Result<()> {
         cli.handlers(),
         [
             account, address, close, connect, details, disconnect, estimate, exit, guide, help, history, rpc, list, miner, monitor,
-            mute, network, node, open, ping, reload, select, send, server, settings, sweep, track, transfer,
+            mute, network, node, open, palw, ping, reload, select, send, server, settings, sweep, track, transfer,
             wallet,
             // halt,
             // theme,  start, stop

@@ -85,13 +85,69 @@ pub(crate) enum BuildCmd {
         #[arg(long)]
         out: std::path::PathBuf,
     },
-    /// Funded original (TFO1 envelope with payer consent). Refused: the funded-original schedule is not adopted.
+    /// **Open a court against a claim (`CourtOpened`)** — an outside prosecutor's move after its own replay disagrees. The claim's
+    /// trace root and producer bond are read from the node (`getPalwLegacyDispute`, op 204); the space is the ruleset's
+    /// `StepLeaves × max_step_leaf_count` (acceptance refuses any other); the session id is signed with the challenger bond's key
+    /// under the court's open context. Past `palw_court_outsider_lane_v1` the fold burns the V4 paid-ingress fee (estimate
+    /// 1,100,000 sompi per session, inside openers too) from the opener — the build prints what is due. `--dry-run` prints the
+    /// session and fee and writes nothing.
+    CourtOpen {
+        #[command(flatten)]
+        key: crate::KeyArgs,
+        /// 128-hex claim id.
+        #[arg(long)]
+        claim: String,
+        /// The challenger's bond outpoint, `<txid>:<index>`.
+        #[arg(long)]
+        bond: String,
+        /// Print the session id and the fee due; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Where to write the signed object (required unless --dry-run).
+        #[arg(long, required_unless_present = "dry_run")]
+        out: Option<std::path::PathBuf>,
+    },
+    /// **Post a kernel-route job (`KernelRouteV1 / PostJob`)** with a price quote. The escrow is not a choice: the route reserves
+    /// `claim_reward` (+ the verifier check-fee escrow once `palw_verifier_pay_v1` is in force) from the POSTER's bond free
+    /// collateral and burns `job_fee` (GAP-5, user-pays escrow); the poster's bond must have joined the kernel route. Refused below
+    /// `palw_probabilistic_constraints_v1` unless `--allow-dormant`. `--dry-run` prints the job id and quote and writes nothing.
+    KernelPostJob {
+        #[command(flatten)]
+        key: crate::KeyArgs,
+        /// The poster's bond outpoint, `<txid>:<index>`.
+        #[arg(long)]
+        bond: String,
+        /// 128-hex kernel class binding id (the class the job runs on).
+        #[arg(long)]
+        class: String,
+        /// Prompt token ids, comma separated (`3,17,9`).
+        #[arg(long)]
+        prompt: String,
+        /// Exactly this many generated tokens (greedy decode).
+        #[arg(long)]
+        max_new: u32,
+        /// 128-hex nonce (two identical requests are two jobs); default: derived from the bond and the virtual DAA.
+        #[arg(long)]
+        nonce: Option<String>,
+        /// Write the object even though the kernel route is not armed at the node's DAA.
+        #[arg(long)]
+        allow_dormant: bool,
+        /// Print the job id and the quote; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Where to write the signed object (required unless --dry-run).
+        #[arg(long, required_unless_present = "dry_run")]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Funded original (TFO1 envelope with payer consent). Refused: consensus holds the funded-original schedule typed-missing in
+    /// this build (`palw_funded_original_schedule_v1` always answers `Schedule` missing); lane SETTLE's estimate is not in the release.
     FundedOriginal {
         /// 128-hex claim id.
         #[arg(long)]
         claim: String,
     },
-    /// Court paid ingress (outsider lane session fee). Refused: the ingress schedule is not adopted.
+    /// Court paid ingress (V4). There is no separate ingress object: the fee is burned from the opener of `CourtOpened` —
+    /// this prints the adopted schedule and points to `palw build court-open`.
     CourtIngress {
         #[arg(long)]
         claim: String,
@@ -582,6 +638,95 @@ pub(crate) fn dispute_released_object(
     })
 }
 
+use misaka_palw_kernel::route::KernelRouteObjectV1 as KernelObj;
+
+/// `CourtOpened` over the ruleset's step-leaf space, the session id signed under the court's open context — the bytes the
+/// node's own challenger builds (`palw_panel`).
+pub(crate) fn court_opened_object_v1(
+    claim: Hash64,
+    trace_root: Hash64,
+    executor: PalwBondKeyV2,
+    challenger: PalwBondKeyV2,
+    space_size: u64,
+    key: &kaspa_pq_validator_core::ValidatorKey,
+) -> PalwConsensusObjectV2 {
+    use kaspa_consensus_core::palw_court_v2::{PALW_COURT_V2_MLDSA87_OPEN_CONTEXT, court_session_id_v2};
+    let space = kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves;
+    let session_id = court_session_id_v2(&claim, &trace_root, &executor, &challenger, space, space_size);
+    let signature = key.sign_with_context(session_id.as_byte_slice(), PALW_COURT_V2_MLDSA87_OPEN_CONTEXT).to_vec();
+    PalwConsensusObjectV2::CourtOpened { session_id, claim, challenger_bond: challenger, space, space_size, signature }
+}
+
+/// What the fold charges the opener of a court at this DAA (V4).
+pub(crate) fn court_ingress_fee_line_v1(outsider_lane_in_force: bool) -> String {
+    match kaspa_consensus_core::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1() {
+        Ok(s) if outsider_lane_in_force => {
+            format!("paid ingress due: {} sompi, burned from the opener by the fold (V4 estimate)", s.fee_sompi_per_session)
+        }
+        Ok(s) => format!(
+            "paid ingress: none due yet (palw_court_outsider_lane_v1 not in force); {} sompi per session once it is",
+            s.fee_sompi_per_session
+        ),
+        Err(_) => "paid ingress: schedule typed-missing in this build, no fee".to_string(),
+    }
+}
+
+/// A kernel route object signed by `signer`'s key under the route's object context.
+pub(crate) fn kernel_route_object_v1(
+    domain: Hash64,
+    signer: PalwBondKeyV2,
+    object: &KernelObj,
+    key: &kaspa_pq_validator_core::ValidatorKey,
+) -> PalwConsensusObjectV2 {
+    use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, palw_kernel_route_message_v1};
+    let bytes = object.encode();
+    let message = palw_kernel_route_message_v1(domain, &signer, &bytes);
+    let signature = key.sign_with_context(message.as_byte_slice(), PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1).to_vec();
+    PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, signature }
+}
+
+use kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1;
+
+/// The poster's cost of one `PostJob`, from the route's interim policy (the amounts the fold debits).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct KernelJobQuoteV1 {
+    pub reward_escrow: u64,
+    pub check_fee_escrow: u64,
+    pub job_fee_burned: u64,
+}
+
+impl KernelJobQuoteV1 {
+    pub fn free_collateral_needed(&self) -> u64 {
+        self.reward_escrow.saturating_add(self.check_fee_escrow).saturating_add(self.job_fee_burned)
+    }
+    pub fn render(&self) -> String {
+        format!(
+            "quote: escrow {} sompi (Final reward, paid once to the first Final producer; returned after the escrow TTL if unused) \
+             + check-fee escrow {} + job fee {} burned = {} sompi of the poster bond's free collateral",
+            self.reward_escrow,
+            self.check_fee_escrow,
+            self.job_fee_burned,
+            self.free_collateral_needed()
+        )
+    }
+}
+
+pub(crate) fn kernel_job_quote_v1(verifier_pay_activation: Option<u64>) -> KernelJobQuoteV1 {
+    let p = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default());
+    let check_fee_escrow = verifier_pay_activation
+        .map(kaspa_consensus_core::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1)
+        .map_or(0, |v| v.check_fee.saturating_mul(u64::from(v.slots)));
+    KernelJobQuoteV1 { reward_escrow: p.claim_reward, check_fee_escrow, job_fee_burned: p.job_fee }
+}
+
+fn parse_token_list_v1(s: &str) -> Result<Vec<u32>, CliError> {
+    let tokens: Result<Vec<u32>, _> = s.split(',').map(|t| t.trim().parse::<u32>()).collect();
+    match tokens {
+        Ok(t) if !t.is_empty() => Ok(t),
+        _ => Err(CliError::new(exit::GENERIC, format!("--prompt '{s}' is not a comma-separated list of token ids"))),
+    }
+}
+
 fn parse_hash(what: &str, s: &str) -> Result<Hash64, CliError> {
     s.trim().parse::<Hash64>().map_err(|_| CliError::new(exit::GENERIC, format!("{what} '{s}' is not 128 hex digits")))
 }
@@ -592,6 +737,39 @@ async fn signer_preflight(
     ks: &crate::keys::KeySource,
     bond: &str,
     allow_dormant: bool,
+) -> Result<(crate::wallet::NodeView, kaspa_pq_validator_core::ValidatorKey, PalwBondKeyV2), CliError> {
+    let (nv, key, reserver) = bond_signer_v1(ctx, ks, bond).await?;
+    let armed = nv.params.palw_legacy_public_filer_v1.is_some_and(|a| a.is_active(nv.virtual_daa));
+    refuse_unless_armed(&nv, "palw_legacy_public_filer_v1", armed, allow_dormant, "a dispute object")?;
+    Ok((nv, key, reserver))
+}
+
+/// Refuse (exit 10) when `fence` is not in force at the node's DAA, unless `--allow-dormant`.
+fn refuse_unless_armed(
+    nv: &crate::wallet::NodeView,
+    fence: &str,
+    armed: bool,
+    allow_dormant: bool,
+    what: &str,
+) -> Result<(), CliError> {
+    if !armed && !allow_dormant {
+        return Err(CliError::new(
+            exit::UNSAFE_REFUSED,
+            format!(
+                "refused: {fence} is not armed on {} at DAA {} — the chain drops {what} below it \
+                 (`misaka palw fences` shows the schedule; --allow-dormant writes it anyway for a drill)",
+                nv.params.net, nv.virtual_daa
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The node, and the bond's key check (a signature under another key is refused on chain and the fee is gone) — no fence check.
+async fn bond_signer_v1(
+    ctx: &Ctx,
+    ks: &crate::keys::KeySource,
+    bond: &str,
 ) -> Result<(crate::wallet::NodeView, kaspa_pq_validator_core::ValidatorKey, PalwBondKeyV2), CliError> {
     let reserver = PalwBondKeyV2(crate::bond::parse_outpoint(bond)?);
     let key = ks.load_key()?;
@@ -611,17 +789,6 @@ async fn signer_preflight(
         return Err(CliError::new(
             exit::GENERIC,
             format!("the bond at {bond} registered a different key than the one loaded — the chain refuses this signature"),
-        ));
-    }
-    let armed = nv.params.palw_legacy_public_filer_v1.is_some_and(|a| a.is_active(nv.virtual_daa));
-    if !armed && !allow_dormant {
-        return Err(CliError::new(
-            exit::UNSAFE_REFUSED,
-            format!(
-                "refused: palw_legacy_public_filer_v1 is not armed on {} at DAA {} — the chain drops a dispute object below it \
-                 (`misaka palw fences` shows the schedule; --allow-dormant writes it anyway for a drill)",
-                nv.params.net, nv.virtual_daa
-            ),
         ));
     }
     Ok((nv, key, reserver))
@@ -675,13 +842,106 @@ pub(crate) async fn build(ctx: &Ctx, cmd: BuildCmd) -> CliResult {
             println!("DisputeReleasedV1 (tag 155): claim {claim}, reserver {bond}");
             write_object(&out, &object)
         }
+        BuildCmd::CourtOpen { key, claim, bond, dry_run, out } => {
+            let claim = parse_hash("--claim", &claim)?;
+            let (nv, signer, challenger) = bond_signer_v1(ctx, &key.source(), &bond).await?;
+            let view = nv
+                .client
+                .get_palw_legacy_dispute(GetPalwLegacyDisputeRequest { claim_id: claim.to_string() })
+                .await
+                .map_err(|e| read_error("getPalwLegacyDispute", 204, "the claim's trace root and producer are needed", &e))?;
+            if !view.available || view.json.is_empty() {
+                return Err(CliError::new(exit::GENERIC, format!("the chain holds no claim {claim} to open a court against")));
+            }
+            let doc: Value = serde_json::from_str(&view.json)
+                .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwLegacyDispute: bad document: {e}")))?;
+            let trace_root = parse_hash("traceRoot", &text(&doc["traceRoot"]))?;
+            let executor = PalwBondKeyV2(crate::bond::parse_outpoint(&text(&doc["producer"]))?);
+            let space_size = match &nv.params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.court.max_step_leaf_count(),
+                _ => return Err(CliError::new(exit::GENERIC, "this network has no PALW V2 court".to_string())),
+            };
+            let object = court_opened_object_v1(claim, trace_root, executor, challenger, space_size, &signer);
+            let PalwConsensusObjectV2::CourtOpened { session_id, .. } = &object else { unreachable!() };
+            let outsider_lane = nv.params.palw_court_outsider_lane_v1.is_some_and(|a| a.is_active(nv.virtual_daa));
+            println!("CourtOpened: claim {claim}, challenger {bond}, session {session_id}, space StepLeaves × {space_size}");
+            println!("{}", court_ingress_fee_line_v1(outsider_lane));
+            match (dry_run, out) {
+                (true, _) => {
+                    println!("dry run: nothing written");
+                    Ok(())
+                }
+                (false, Some(out)) => write_object(&out, &object),
+                (false, None) => unreachable!("clap requires --out without --dry-run"),
+            }
+        }
+        BuildCmd::KernelPostJob { key, bond, class, prompt, max_new, nonce, allow_dormant, dry_run, out } => {
+            let class = parse_hash("--class", &class)?;
+            let prompt = parse_token_list_v1(&prompt)?;
+            if max_new == 0 {
+                return Err(CliError::new(exit::GENERIC, "--max-new must be at least 1".to_string()));
+            }
+            let nonce = nonce.map(|n| parse_hash("--nonce", &n)).transpose()?;
+            let (nv, signer, poster) = bond_signer_v1(ctx, &key.source(), &bond).await?;
+            let armed = nv.params.palw_probabilistic_constraints_v1.is_some_and(|a| a.is_active(nv.virtual_daa));
+            refuse_unless_armed(&nv, "palw_probabilistic_constraints_v1 (the kernel route)", armed, allow_dormant, "a kernel route object")?;
+            let nonce = nonce.unwrap_or_else(|| {
+                let mut seed = palw_kernel_bond_id_v1(&poster).to_vec();
+                seed.extend_from_slice(&nv.virtual_daa.to_le_bytes());
+                Hash64::from_bytes(misaka_palw_kernel::hash::id(b"misaka-palw/cli/kernel-post-job/nonce/v1", &seed))
+            });
+            let job = misaka_palw_kernel::job::KernelJobV1 {
+                class_binding_id: class.as_bytes(),
+                prompt,
+                max_new_tokens: max_new,
+                decode: misaka_palw_kernel::job::DecodeRuleV1::Greedy,
+                nonce: nonce.as_bytes(),
+            };
+            let verifier_pay = nv.params.palw_verifier_pay_v1.filter(|a| a.is_active(nv.virtual_daa)).map(|a| a.daa_score());
+            let quote = kernel_job_quote_v1(verifier_pay);
+            println!(
+                "PostJob: job {}, class {class}, {} prompt tokens, {max_new} new tokens, poster {bond}",
+                Hash64::from_bytes(job.id()),
+                job.prompt.len()
+            );
+            println!("{}", quote.render());
+            let object = kernel_route_object_v1(crate::bond::network_domain(&nv), poster, &KernelObj::PostJob { job }, &signer);
+            match (dry_run, out) {
+                (true, _) => {
+                    println!("dry run: nothing written");
+                    Ok(())
+                }
+                (false, Some(out)) => write_object(&out, &object),
+                (false, None) => unreachable!("clap requires --out without --dry-run"),
+            }
+        }
         BuildCmd::FundedOriginal { claim } => {
             parse_hash("--claim", &claim)?;
-            refuse_unless_adopted("funded original schedule")
+            refuse_unless_adopted("funded original schedule").map_err(|e| {
+                CliError::new(
+                    e.code,
+                    format!(
+                        "{} The schedule estimate exists only on lane SETTLE's branch (claude/rfc-settle) and is not in this \
+                         release, so no funded original can be accepted on this chain yet.",
+                        e.msg
+                    ),
+                )
+            })
         }
         BuildCmd::CourtIngress { claim } => {
             parse_hash("--claim", &claim)?;
-            refuse_unless_adopted("court paid-ingress schedule")
+            match kaspa_consensus_core::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1() {
+                Ok(s) => {
+                    println!(
+                        "court paid ingress (V4, adopted estimate): {} sompi per session, burned from the opener of CourtOpened \
+                         (inside openers too) once palw_court_outsider_lane_v1 is in force — there is no separate ingress object.",
+                        s.fee_sompi_per_session
+                    );
+                    println!("open the court: misaka palw build court-open --claim {claim} --bond <txid:index> --key-file <key> --out <file>");
+                    Ok(())
+                }
+                Err(_) => refuse_unless_adopted("court paid-ingress schedule"),
+            }
         }
         BuildCmd::MaterialIntake { claim } => {
             parse_hash("--claim", &claim)?;
@@ -748,13 +1008,81 @@ mod tests {
 
     #[test]
     fn builders_that_need_a_typed_missing_value_refuse_with_its_name() {
-        for name in
-            ["funded original schedule", "court paid-ingress schedule", "material intake schedule", "D2 disclosure fee schedule"]
-        {
-            let e = refuse_unless_adopted(name).unwrap_err();
+        // Read from the register, not a fixed list: a value pinned since (V4 ingress, V5 intake, P3's D2) refuses differently.
+        for v in palw_typed_missing_values_v1() {
+            let e = refuse_unless_adopted(v.name).unwrap_err();
             assert_eq!(e.code, exit::UNSAFE_REFUSED);
-            assert!(e.msg.contains("not adopted") && e.msg.contains(name), "{}", e.msg);
+            if v.adopted {
+                assert!(e.msg.contains("is adopted"), "{}", e.msg);
+            } else {
+                assert!(e.msg.contains("not adopted") && e.msg.contains(v.name), "{}", e.msg);
+            }
         }
+        assert!(!palw_typed_missing_values_v1().iter().find(|v| v.name == "funded original schedule").unwrap().adopted);
+        assert!(palw_typed_missing_values_v1().iter().find(|v| v.name == "court paid-ingress schedule").unwrap().adopted);
+    }
+
+    /// `court-open`: the built object borsh-round-trips, its session id is the consensus derivation over the declared space, and
+    /// the signature verifies under the challenger's key and the court's open context (the acceptance layer's checks without state).
+    #[test]
+    fn a_built_court_opening_round_trips_and_its_signature_verifies() {
+        use kaspa_consensus_core::palw_court_v2::{PALW_COURT_V2_MLDSA87_OPEN_CONTEXT, court_session_id_v2};
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([5u8; 32]);
+        let bond = |b: u8| PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0));
+        let object = court_opened_object_v1(claim(), Hash64::from_bytes([3u8; 64]), bond(1), bond(2), 4096, &key);
+        let back: PalwConsensusObjectV2 = borsh::from_slice(&borsh::to_vec(&object).unwrap()).unwrap();
+        assert_eq!(back, object);
+        let PalwConsensusObjectV2::CourtOpened { session_id, claim: c, challenger_bond, space, space_size, signature } = back else {
+            panic!("not a CourtOpened")
+        };
+        assert_eq!((c, challenger_bond, space_size), (claim(), bond(2), 4096));
+        assert_eq!(session_id, court_session_id_v2(&claim(), &Hash64::from_bytes([3u8; 64]), &bond(1), &bond(2), space, 4096));
+        assert!(
+            kaspa_txscript::verify_mldsa87_with_context(
+                key.public_key(),
+                session_id.as_byte_slice(),
+                &signature,
+                PALW_COURT_V2_MLDSA87_OPEN_CONTEXT
+            )
+            .unwrap_or(false)
+        );
+        assert!(court_ingress_fee_line_v1(true).contains("1100000"));
+        assert!(court_ingress_fee_line_v1(false).contains("none due yet"));
+    }
+
+    /// `kernel-post-job`: the route object decodes back to the same `PostJob` (the fold's decoder), and the quote is the policy's.
+    #[test]
+    fn a_built_kernel_job_decodes_on_the_route_and_is_quoted_from_the_policy() {
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([6u8; 32]);
+        let poster = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([4; 64]), 1));
+        let job = misaka_palw_kernel::job::KernelJobV1 {
+            class_binding_id: [8u8; 64],
+            prompt: parse_token_list_v1("3, 17,9").unwrap(),
+            max_new_tokens: 3,
+            decode: misaka_palw_kernel::job::DecodeRuleV1::Greedy,
+            nonce: [1u8; 64],
+        };
+        let object = kernel_route_object_v1(Hash64::from_bytes([2u8; 64]), poster, &KernelObj::PostJob { job: job.clone() }, &key);
+        let back: PalwConsensusObjectV2 = borsh::from_slice(&borsh::to_vec(&object).unwrap()).unwrap();
+        let PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, .. } = back else { panic!("not a kernel route object") };
+        assert_eq!(signer, poster);
+        assert_eq!(KernelObj::decode(&bytes).unwrap(), KernelObj::PostJob { job });
+        assert!(parse_token_list_v1("3,x").is_err() && parse_token_list_v1("").is_err());
+        let q = kernel_job_quote_v1(None);
+        let p = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default());
+        assert_eq!(q, KernelJobQuoteV1 { reward_escrow: p.claim_reward, check_fee_escrow: 0, job_fee_burned: p.job_fee });
+        assert!(kernel_job_quote_v1(Some(0)).check_fee_escrow > 0);
+    }
+
+    #[test]
+    fn the_new_builders_parse_with_dry_run_and_require_out_otherwise() {
+        let id = "ab".repeat(64);
+        let bond = format!("{}:0", "cd".repeat(32));
+        let ok = |a: &[&str]| crate::Cli::try_parse_from([&["misaka", "palw", "build"], a].concat()).is_ok();
+        assert!(ok(&["court-open", "--claim", &id, "--bond", &bond, "--key-file", "k", "--dry-run"]));
+        assert!(!ok(&["court-open", "--claim", &id, "--bond", &bond, "--key-file", "k"]));
+        assert!(ok(&["kernel-post-job", "--bond", &bond, "--class", &id, "--prompt", "1,2", "--max-new", "2", "--key-file", "k", "--out", "x"]));
+        assert!(ok(&["court-ingress", "--claim", &id]));
     }
 
     /// Build → borsh → decode → the consensus acceptance pieces a validating node runs on tag 154 without state: the kind's owning

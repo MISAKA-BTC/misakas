@@ -5979,6 +5979,7 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-derive",
  "misaka-palw-extension",
+ "misaka-palw-kernel",
  "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir-lower",
