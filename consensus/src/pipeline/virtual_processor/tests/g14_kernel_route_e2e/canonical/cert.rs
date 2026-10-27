@@ -377,3 +377,10 @@ async fn gc_duty_option_c_kernel_claim_commits_and_pays_with_the_model_allocatio
     assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::Certified), "SecurityCertified");
     assert_eq!(w.net.owed(0), producer_before + Rules::final_reward(&policy), "the certified Final pays the producer");
 }
+
+/// Diagnostic split of the seating step: the budget-only world alone (no allocation) reaches Final.
+#[tokio::test]
+async fn gc_duty_option_c_budget_only_world_reaches_final() {
+    let (w, claim, _) = honest_final_uncertified_seated(budget_config(false)).await;
+    let _ = budget_rows(&w, &claim);
+}
