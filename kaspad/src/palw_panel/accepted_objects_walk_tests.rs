@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `accepted_objects_walk_tests` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 use kaspa_consensus_core::BlockHash;

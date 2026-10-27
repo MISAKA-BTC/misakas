@@ -339,11 +339,7 @@ mod tests {
         let one = eight_k_full_seat(1, true);
         // 0.07 GiB under d3ff09371's host bound (the fixed output material in the trace scratch and the eight-hash fold); it was
         // under 0.06 GiB before that bound.
-        assert!(
-            (0.06..0.08).contains(&gib(&one)),
-            "one position at a time the 8k replay is its K/V and a trace: {}",
-            one.describe()
-        );
+        assert!((0.06..0.08).contains(&gib(&one)), "one position at a time the 8k replay is its K/V and a trace: {}", one.describe());
         for width in palw_prefill_run_candidates_v1(64) {
             eprintln!(
                 "8k full seat at a prefill run of {width:>2}: unpinned {:.3} GiB, pinned {:.3} GiB",

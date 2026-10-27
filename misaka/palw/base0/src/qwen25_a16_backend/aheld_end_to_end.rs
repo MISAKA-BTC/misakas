@@ -1,5 +1,4 @@
 //! **`qwen25_a16_backend`'s `aheld_end_to_end` module**, moved out of `qwen25_a16_backend.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::aheld_windowed_builder::{PAST_THE_CAP, backend, binding_of, held_fixture, job_for};
 use super::*;

@@ -376,7 +376,8 @@ impl PalwBondBudgetStateV1 {
         let Some(hold) = policy.hold.as_ref() else { return Ok(()) };
         let row = self.bonds.get(bond).copied().unwrap_or_default();
         // The terminal claims whose liability has not ended (the formula's liability view; empty below `palw_bond_formula_v2`).
-        let kept = self.bonds.get(&palw_bond_hold_shadow_bond_v1(PalwHoldViewV1::Liability, bond)).map_or(0, |r| r.open_liability_sompi);
+        let kept =
+            self.bonds.get(&palw_bond_hold_shadow_bond_v1(PalwHoldViewV1::Liability, bond)).map_or(0, |r| r.open_liability_sompi);
         let open = row
             .open_liability_sompi
             .checked_add(kept)

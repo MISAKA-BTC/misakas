@@ -241,7 +241,16 @@ impl<'p> WiringV1<'p> {
                 }
             }
         }
-        Ok(Self { program, info, occurrences, writers, appenders, first_input: u16::MAX, derived: derived_nodes_v1(program),global_state_lookup_v32:false })
+        Ok(Self {
+            program,
+            info,
+            occurrences,
+            writers,
+            appenders,
+            first_input: u16::MAX,
+            derived: derived_nodes_v1(program),
+            global_state_lookup_v32: false,
+        })
     }
 
     /// The wiring of a pipeline stage's version-1 view: its input params resolve to the stage's committed inputs, and its `post`
@@ -259,8 +268,10 @@ impl<'p> WiringV1<'p> {
         Ok(w)
     }
 
-    pub(crate) fn for_stage_v32(program:&'p TirProgramV1,stage:&StageBindingV1)->TirResult<Self>{
-        let mut w=Self::for_stage(program,Some(stage))?;w.global_state_lookup_v32=true;Ok(w)
+    pub(crate) fn for_stage_v32(program: &'p TirProgramV1, stage: &StageBindingV1) -> TirResult<Self> {
+        let mut w = Self::for_stage(program, Some(stage))?;
+        w.global_state_lookup_v32 = true;
+        Ok(w)
     }
 
     /// Is node `n` of occurrence `s` derived (rebuilt from committed rows, never served)?
@@ -299,7 +310,11 @@ impl<'p> WiringV1<'p> {
                 SourceV1::Param { index: j, layer: if per_layer { layer } else { None } }
             }
             Ref::Const(j) => SourceV1::Const(j),
-            Ref::State(j) => match (p, self.writers.get(&(j,if self.global_state_lookup_v32&&!self.program.states[j as usize].per_layer{None}else{layer}))) {
+            Ref::State(j) => match (
+                p,
+                self.writers
+                    .get(&(j, if self.global_state_lookup_v32 && !self.program.states[j as usize].per_layer { None } else { layer })),
+            ) {
                 (p, Some((ws, wn))) if p > 0 => SourceV1::Node { position: p - 1, occurrence: *ws, node: *wn },
                 _ => {
                     let st = &self.program.states[j as usize];

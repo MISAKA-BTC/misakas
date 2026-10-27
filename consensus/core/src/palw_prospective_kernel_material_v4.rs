@@ -540,7 +540,7 @@ mod tests {
         .unwrap();
         let root = RetrievalRootV1 {
             extension: misaka_palw_kernel::spec::k2_tr_v1_descriptor().digest(),
-            snapshot: data.snapshot.clone(),
+            snapshot: data.snapshot,
             index: IndexV1::Flat,
             rule: RetrievalRuleV1::TopKCountingV1 { k: 1, score_bits: 16 },
         };

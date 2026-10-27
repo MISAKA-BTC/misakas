@@ -2699,7 +2699,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             return Err(E::Substitution);
         }
         let heap = retained.native_heap_v1("V2 dense material actual capture");
-        let source_heap = heap.bytes().ok_or_else(|| E::LocalResource(heap))?;
+        let source_heap = heap.bytes().ok_or(E::LocalResource(heap))?;
         let mut q = PalwMaterialConstructionRequestsV2::new();
         q.add_v1(source_heap).map_err(E::LocalResource)?;
         q.vec_v1::<Hash64>(binding.step_leaf_count).map_err(E::LocalResource)?;
@@ -2751,7 +2751,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                         other => E::Authentication(other.to_string()),
                     })?;
                     let h = routed.native_heap_v1("V2 routed unit handoff");
-                    q.add_v1(h.bytes().ok_or_else(|| E::LocalResource(h))?).map_err(E::LocalResource)?;
+                    q.add_v1(h.bytes().ok_or(E::LocalResource(h))?).map_err(E::LocalResource)?;
                     q.vec_v1::<PalwHeldMaterialUnitV2>(1).map_err(E::LocalResource)?;
                     return construct_material_unit_v2(q, || {
                         let (routed, owner) = routed.into_parts_v1();

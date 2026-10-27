@@ -327,7 +327,9 @@ impl std::fmt::Display for PalwBudgetRefusalV1 {
             Self::BadShrink => write!(f, "a reservation may only shrink, in the block that took it, and never below its consumption"),
             Self::Assignment(why) => write!(f, "capital assignment refused: {why} (ADR-0177 D3)"),
             Self::Overflow => write!(f, "budget arithmetic overflow"),
-            Self::Burst { dim } => write!(f, "the bond's short-period burst cap has no room in {dim:?} (ADR-0176, ユーザー方針 2026-10-15)"),
+            Self::Burst { dim } => {
+                write!(f, "the bond's short-period burst cap has no room in {dim:?} (ADR-0176, ユーザー方針 2026-10-15)")
+            }
             Self::ModelBlockOpportunity => {
                 write!(f, "the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5)")
             }
@@ -496,7 +498,9 @@ impl PalwBondBudgetPolicyV1 {
         match (self.version, self.hold.as_ref()) {
             (PALW_BOND_BUDGET_POLICY_VERSION_V2, None) => {
                 if !(PALW_BOND_BUDGET_W_MIN_DAA_V1..=PALW_BOND_BUDGET_W_MAX_DAA_V1).contains(&self.window_daa) {
-                    return Err("a single-window (V2) W must be in ECON's derived range 280..=436 DAA (PESG §6; V2 is mechanics-only)");
+                    return Err(
+                        "a single-window (V2) W must be in ECON's derived range 280..=436 DAA (PESG §6; V2 is mechanics-only)",
+                    );
                 }
             }
             (PALW_BOND_BUDGET_POLICY_VERSION_V3, Some(hold)) => {
@@ -880,7 +884,8 @@ impl Params {
         // deviation, recorded in docs/design/palw/integration/rfc-0015-implementation-status-2026-10-15.md): `palw_audit_2026_09_23` is
         // genesis-only and `palw_economic_safety` brings the windowed mint, neither of which the calibration devnet base carries.
         if self.has_isolated_native_calibration_v34() {
-            return if fence.activation == ForkActivation::always() && fence.policy == PalwBondBudgetPolicyV1::opv_mechanics_probe_v1() {
+            return if fence.activation == ForkActivation::always() && fence.policy == PalwBondBudgetPolicyV1::opv_mechanics_probe_v1()
+            {
                 Ok(())
             } else {
                 Err(PalwModeV2Error::Invalid("an isolated calibration carries exactly the always-on OPV mechanics budget"))
@@ -988,7 +993,8 @@ impl Params {
         if self.palw_bond_budget_v1.is_some() {
             return false;
         }
-        self.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: at, policy: PalwBondBudgetPolicyV1::opv_mechanics_probe_v1() });
+        self.palw_bond_budget_v1 =
+            Some(PalwBondBudgetFenceV1 { activation: at, policy: PalwBondBudgetPolicyV1::opv_mechanics_probe_v1() });
         self.sync_palw_bond_budget_v1();
         true
     }
@@ -1020,10 +1026,22 @@ impl Params {
                 .with_material_income_from(
                     self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()),
                 )
-                .with_material_release_recovery_v2(self.palw_material_release_recovery_v2.as_ref().filter(|f| f.activation != ForkActivation::never())
-                    .map(|f| crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryMirrorV2 { from_daa: f.activation.daa_score(), policy: f.policy.clone() }))
-                .with_monetary_material(self.palw_monetary_material_v1.as_ref().filter(|f| f.activation != ForkActivation::never())
-                    .map(|f| crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1 { from_daa: f.activation.daa_score(), policy: f.policy.clone() }))
+                .with_material_release_recovery_v2(
+                    self.palw_material_release_recovery_v2.as_ref().filter(|f| f.activation != ForkActivation::never()).map(|f| {
+                        crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryMirrorV2 {
+                            from_daa: f.activation.daa_score(),
+                            policy: f.policy.clone(),
+                        }
+                    }),
+                )
+                .with_monetary_material(
+                    self.palw_monetary_material_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).map(|f| {
+                        crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1 {
+                            from_daa: f.activation.daa_score(),
+                            policy: f.policy.clone(),
+                        }
+                    }),
+                )
                 .with_paid_consumer_lifecycle(
                     self.palw_paid_consumer_lifecycle_v1
                         .as_ref()

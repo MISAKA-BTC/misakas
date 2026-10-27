@@ -242,7 +242,12 @@ jobs:
           }
 
   test:
-    name: Test Suite
+    # **Sharded: one job could not finish the suite.** The whole workspace in one debug-build job ran
+    # past GitHub's 6-hour job limit (run 40363861860: cancelled at test 11,647 of 12,981, with
+    # `k2s_v5_the_worst_geometry_the_ceilings_admit` alone past 58 minutes). nextest's `--partition`
+    # gives each shard a disjoint quarter, chosen by test-name hash, and the four together are the
+    # whole suite: nothing is skipped. The one-off gates after it run on shard 1 only.
+    name: Test Suite (${{ matrix.shard }})
     # runs-on: ${{ matrix.os }}
     runs-on: ubuntu-latest
     # **The runner's disk is the limit, not the code.** `cargo build --features devnet-prealloc
@@ -255,8 +260,15 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      # **Test threads get 64 MiB of stack.** libtest/nextest run each test on a 2 MiB thread; the
+      # unoptimised clap tree (misaka-cli's surface tests) and the G14 end-to-end folds recurse past
+      # that and died with "has overflowed its stack" / SIGABRT (46 tests, run 40363861860), while
+      # the node runs them on threads it sizes itself. Same value the local build guidance uses.
+      RUST_MIN_STACK: "67108864"
     strategy:
       fail-fast: false
+      matrix:
+        shard: ["1/4", "2/4", "3/4", "4/4"]
       # matrix:
       #   os: [ ubuntu-latest, macos-latest, windows-latest ]
     steps:
@@ -343,20 +355,25 @@ jobs:
           tool: cargo-nextest
 
       - name: Run cargo build with devnet-prealloc feature
+        if: ${{ matrix.shard == '1/4' }}
         run: cargo build --features devnet-prealloc --tests --benches
 
       - name: Build misaka CLI smoke
+        if: ${{ matrix.shard == '1/4' }}
         run: |
           cargo build --locked --release -p misaka-cli --bin misaka
           test -x target/release/misaka
           target/release/misaka --help
 
       - name: Check misaka CLI evm-send feature
+        if: ${{ matrix.shard == '1/4' }}
         run: cargo check --locked -p misaka-cli --bin misaka --features evm-send
 
       - name: Run cargo test regular features
-        run: cargo nextest run
+        run: cargo nextest run --partition "hash:${NEXTEST_SHARD:-1/1}"
         env:
+          # This job's quarter of the suite (`scripts/ci-gates.sh` leaves it unset: the whole suite).
+          NEXTEST_SHARD: ${{ matrix.shard }}
           # The `ci` profile (.config/nextest.toml) adds a JUnit report for the summary below.
           NEXTEST_PROFILE: ci
           # This step runs the WHOLE workspace, `misaka-palw-derive` included, so it needs the
@@ -385,7 +402,7 @@ jobs:
       # and the red means the opposite of what it looks like: the gate working, not the tree
       # broken. The whole package is the unit the genesis card's §6 table cites.
       - name: Run the misaka-palw-derive suite with its binaries
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == '1/4' }}
         run: cargo test -p misaka-palw-derive
         env:
           # CI holds no checkpoint. `tests/corpus_width.rs` FAILS by name when the dense tokenizer
@@ -395,22 +412,22 @@ jobs:
           MISAKA_PALW_WIDTH_NO_TOKENIZER: "1"
 
       - name: Run cargo doc tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == '1/4' }}
         run: cargo test --doc
 
       - name: Run cargo test on kaspa-hashes without asm
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == '1/4' }}
         run: cargo nextest run -p kaspa-hashes --features=no-asm --benches
 
       - name: Run cargo doc tests with features=no-asm on kaspa-hashes
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == '1/4' }}
         run: cargo test --doc -p kaspa-hashes --features=no-asm
 
       - name: Run cargo doc
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == '1/4' }}
         run: cargo doc --no-deps
       - name: Run kip-10 example
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == '1/4' }}
         # kaspa-pq PQ-only: the kip-10 example is built on legacy secp256k1
         # P2PKH/P2SH scripts, so it requires the `legacy-secp256k1` feature
         # (ADR-0019 §14).
@@ -651,6 +668,7 @@ jobs:
         continue-on-error: true
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get update
           sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
           # Make Clang 15 default
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100
@@ -739,6 +757,7 @@ jobs:
         continue-on-error: true
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get update
           sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
           # Make Clang 15 default
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100
@@ -829,6 +848,7 @@ jobs:
         continue-on-error: true
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get update
           sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
           # Make Clang 15 default
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100

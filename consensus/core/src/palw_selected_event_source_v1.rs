@@ -250,7 +250,11 @@ impl PalwSelectedTiledEventV1 {
         maximum_leaves: u64,
     ) -> Result<(), String> {
         crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| e.to_string())?;
-        self.authenticate_view_v1(&crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding), coordinate, maximum_leaves)
+        self.authenticate_view_v1(
+            &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding),
+            coordinate,
+            maximum_leaves,
+        )
     }
 
     /// The same authentication over a decode view (legacy binding or native TIR header).

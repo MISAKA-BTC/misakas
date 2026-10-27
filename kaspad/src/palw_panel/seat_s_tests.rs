@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `seat_s_tests` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 //! **The audit's SEAT-S review, fixed past SEAT-R and pinned by finding** (C1, H1–H3, M1–M3,
 //! L1, L2), with the deadline design's N-5 (the material wait) and R2 (retention to `R_eff`), and

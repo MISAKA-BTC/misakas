@@ -97,7 +97,7 @@ pub(super) fn select_authorization(
         .ok_or_else(|| PalwStateV2Error::KernelRouteRefused("Panel consent route missing".into()))?;
     let engine =
         builder.params.panel_v3().ok_or_else(|| PalwStateV2Error::KernelRouteRefused("Panel consent engine policy missing".into()))?;
-    for ((table, key), _) in &route.aux {
+    for (table, key) in route.aux.keys() {
         if *table != PALW_PANEL_LIFETIME_TABLE_V2 || key.len() != 65 || key.first() != Some(&PANEL_AUTHORIZATION_PREFIX_V2) {
             continue;
         }

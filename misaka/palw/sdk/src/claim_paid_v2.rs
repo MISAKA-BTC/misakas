@@ -3,7 +3,7 @@
 //! These APIs do not infer full128 approval or native free collateral from RPC.
 use crate::runtime_pack::commit::Refusal;
 use kaspa_consensus_core::palw_claim_challenge_v2::{
-    PAID_CLAIM_CLASSES_V2, PAID_CLAIM_JOBS_V2, PAID_CLAIM_LOCKS_V2, PalwPaidClaimAuthorityV2, PalwPaidClaimLockV2,
+    PAID_CLAIM_CLASSES_V2, PAID_CLAIM_JOBS_V2, PalwPaidClaimAuthorityV2, PalwPaidClaimLockV2,
 };
 use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use kaspa_hashes::Hash64;

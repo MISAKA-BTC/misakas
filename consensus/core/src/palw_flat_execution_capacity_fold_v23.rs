@@ -116,6 +116,7 @@ pub(super) struct NativeCapacityAdmissionV23 {
     consent: NativeExecutionConsentV23,
     queue: Option<(crate::palw_native_queue_v30::NativeQueueGlobalV30, crate::palw_native_queue_v30::NativeQueueLeaseV30)>,
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) fn plan_fund(
     builder: &TransitionBuilder<'_>,
     p: &NativeExecutionPoliciesV11,

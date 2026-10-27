@@ -4075,7 +4075,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // Bounded before any decode: the commitment is at most the original FP payload cap and the
         // header its fixed 2 KiB envelope (each hex digit is half a byte).
         let decode = |label: &str, hex: &str, maximum: usize| -> RpcResult<Vec<u8>> {
-            if hex.len() % 2 != 0 || hex.len() / 2 > maximum {
+            if !hex.len().is_multiple_of(2) || hex.len() / 2 > maximum {
                 return Err(RpcError::General(format!("{label} hex is malformed or exceeds its bound")));
             }
             let mut bytes = vec![0u8; hex.len() / 2];

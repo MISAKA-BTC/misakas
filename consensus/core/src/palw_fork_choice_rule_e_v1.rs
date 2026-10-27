@@ -277,7 +277,12 @@ pub struct PalwRuleEBudgetEngineV1<'a> {
 }
 
 impl PalwRuleEBondBudgetV1 for PalwRuleEBudgetEngineV1<'_> {
-    fn allocation(&self, state: &PalwChainStateV2, claim_id: &Hash64, claim: &PalwClaimStateV2) -> Option<PalwRuleEBudgetAllocationV1> {
+    fn allocation(
+        &self,
+        state: &PalwChainStateV2,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+    ) -> Option<PalwRuleEBudgetAllocationV1> {
         use crate::palw_bond_budget_v1::PalwBudgetOriginV1 as O;
         let mirror = self.mirror?;
         let row = state

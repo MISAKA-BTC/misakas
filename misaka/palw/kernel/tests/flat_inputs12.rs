@@ -489,8 +489,8 @@ fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_ca
         caller_source.required_horizon(),
         caller_source.requests() as u64 * execution.horizons.da_answer + execution.horizons.proof_grace
     );
-    for (held,unit) in caller_source.guarantee().0.iter().zip(&caller_source.request_cost().0) {
-        assert_eq!(*held,*unit*caller_source.attempts() as u128);
+    for (held, unit) in caller_source.guarantee().0.iter().zip(&caller_source.request_cost().0) {
+        assert_eq!(*held, *unit * caller_source.attempts() as u128);
     }
     assert!(
         caller_source.request_cost().get(misaka_palw_kernel::flat_resources10::ResourceAxisV10::StoredEvidenceBytes)

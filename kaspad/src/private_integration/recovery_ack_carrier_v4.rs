@@ -365,7 +365,10 @@ mod tests {
 /// Exact single-input/single-change carrier grammar BEFORE Borsh allocates.
 /// The payload is then compared to the already bounded signed outbox object;
 /// no arbitrary consensus-object enum is decoded from a local corrupt frame.
-pub(super) fn decode_carrier(bytes: &[u8], object: &PalwConsensusObjectV2) -> Result<(Transaction, Option<NativeDemandLeaseV1>), String> {
+pub(super) fn decode_carrier(
+    bytes: &[u8],
+    object: &PalwConsensusObjectV2,
+) -> Result<(Transaction, Option<NativeDemandLeaseV1>), String> {
     struct Cursor<'a>(&'a [u8]);
     impl<'a> Cursor<'a> {
         fn take(&mut self, n: usize) -> Result<(), String> {

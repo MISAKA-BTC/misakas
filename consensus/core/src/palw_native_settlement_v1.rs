@@ -203,7 +203,8 @@ pub fn native_delta_evidence_v1(delta: &PalwStateDeltaV2) -> NativeDeltaEvidence
                     Some(PalwClaimSourceV2::FreePrompt { spent, .. }) => Some(spent),
                     _ => None,
                 };
-                let fresh: Vec<u32> = after.iter().filter(|index| before.is_none_or(|spent| !spent.contains(*index))).copied().collect();
+                let fresh: Vec<u32> =
+                    after.iter().filter(|index| before.is_none_or(|spent| !spent.contains(*index))).copied().collect();
                 if !fresh.is_empty() {
                     out.fp_spends.push((*key, new.clone(), fresh));
                 }

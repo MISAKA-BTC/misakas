@@ -105,8 +105,7 @@ impl PalwChainStateV2 {
         let semantics =
             self.class_semantics.get(&geometry.class_id).ok_or("preclaim quote has no immutable admitted class semantics")?;
         if matches!(header, crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(_)) {
-            let record =
-                self.tir_classes.get(&geometry.class_id).ok_or("TIR preclaim quote has no native registered class record")?;
+            let record = self.tir_classes.get(&geometry.class_id).ok_or("TIR preclaim quote has no native registered class record")?;
             let quote = crate::palw_staged_preclaim_v1::staged_preclaim_tir_quote_v1(
                 &geometry,
                 original,
@@ -124,10 +123,8 @@ impl PalwChainStateV2 {
             }
             return Ok(quote);
         }
-        let profile = self
-            .fp_work_profiles
-            .get(&geometry.class_id)
-            .ok_or("legacy preclaim quote has no native registered shape profile")?;
+        let profile =
+            self.fp_work_profiles.get(&geometry.class_id).ok_or("legacy preclaim quote has no native registered shape profile")?;
         crate::palw_staged_preclaim_v1::staged_preclaim_quote_with_gates_v1(
             &geometry,
             original,
@@ -481,11 +478,9 @@ impl PalwChainStateV2 {
     pub fn staged_public_prefix_rows_v1(
         &self,
     ) -> impl Iterator<Item = &crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1> {
-        self.staged_courts.values().filter_map(|row| match row {
-            row => match row.active_row_v1() {
-                Some(PalwStagedCourtRowV1::PublicPrefix(row)) => Some(row.as_ref()),
-                _ => None,
-            },
+        self.staged_courts.values().filter_map(|row| match row.active_row_v1() {
+            Some(PalwStagedCourtRowV1::PublicPrefix(row)) => Some(row.as_ref()),
+            _ => None,
         })
     }
     pub fn staged_public_prefix_duties_after_v1(
@@ -619,7 +614,9 @@ impl PalwChainStateV2 {
                 return Err("Flat response index has no paid frame".into());
             };
             // The streamed-source index is shared by Flat, greedy Float32 and TIR prefix-state duties.
-            if !flat_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone())).contains(&(signer, *at, *claim, *owner)) {
+            if !flat_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone()))
+                .contains(&(signer, *at, *claim, *owner))
+            {
                 return Err("Flat response index changes literal phase or original deadline".into());
             }
             page.push((*claim, *owner));
@@ -931,7 +928,10 @@ impl TransitionBuilder<'_> {
                     || !delegation.covers_v1(claim.accepted_daa, pledge.material_until_daa)
                     || !matches!(custodian.status, crate::palw_state_v2::PalwBondStatusV2::Active)
                 {
-                    return Err(stage_refused(claim_id, "producer custody delegation is foreign, out of window or names an inactive custodian"));
+                    return Err(stage_refused(
+                        claim_id,
+                        "producer custody delegation is foreign, out of window or names an inactive custodian",
+                    ));
                 }
                 delegation
                     .validate_signatures_v1(
@@ -1874,8 +1874,9 @@ pub(super) fn open(
         if !b.extras.staged_float_constraint_active {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
-        let frame =
-            bundle.as_ref().ok_or_else(|| stage_refused(seed.claim, "Float32 semantic seed requires original prepaid source frame"))?;
+        let frame = bundle
+            .as_ref()
+            .ok_or_else(|| stage_refused(seed.claim, "Float32 semantic seed requires original prepaid source frame"))?;
         let source = frame
             .float
             .as_ref()
@@ -1994,11 +1995,12 @@ fn write_admitted_family_v1(
     job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
 ) -> Result<(), PalwStateV2Error> {
     let row = if let Some(mut bundle) = bundle {
-        let context = crate::palw_staged_bundle_v1::PalwStagedStageContextV1::Legacy(crate::palw_staged_bundle_v1::PalwStagedSeedContextV1 {
-            seed: Box::new(seed.clone()),
-            binding: Box::new(binding.clone()),
-            job: Box::new(job.clone()),
-        });
+        let context =
+            crate::palw_staged_bundle_v1::PalwStagedStageContextV1::Legacy(crate::palw_staged_bundle_v1::PalwStagedSeedContextV1 {
+                seed: Box::new(seed.clone()),
+                binding: Box::new(binding.clone()),
+                job: Box::new(job.clone()),
+            });
         bundle.opened.push(crate::palw_staged_bundle_v1::PalwStagedOpenedFamilyV1 {
             row: crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1(row),
             context: Box::new(context).into(),
@@ -2058,7 +2060,10 @@ pub(super) fn movement(
     }
     if matches!(
         movement.action,
-        Action::FloatSourceOpen { .. } | Action::FloatSourceAnswer(_) | Action::FloatSourceNominate { .. } | Action::FloatSourceCollect
+        Action::FloatSourceOpen { .. }
+            | Action::FloatSourceAnswer(_)
+            | Action::FloatSourceNominate { .. }
+            | Action::FloatSourceCollect
     ) {
         return float_control_v1(b, ctx, movement);
     }
@@ -2621,12 +2626,17 @@ fn native_selected_control_v1(
             || bundle.active.is_some_and(|n| !bundle.opened[n as usize].row.honest_complete_v1().unwrap_or(false))
             || bundle.inventory.as_ref().is_some_and(|i| !i.sealed || i.length_fault_v1())
         {
-            return Err(stage_refused(movement.claim, "native selected acquisition cannot bypass honest predecessor or initial EOF intake"));
+            return Err(stage_refused(
+                movement.claim,
+                "native selected acquisition cannot bypass honest predecessor or initial EOF intake",
+            ));
         }
         let progress =
             crate::palw_staged_court_state_v1::palw_staged_selected_events_v1(&b.state, (movement.claim, movement.reserver))
                 .map_err(|e| stage_refused(movement.claim, e))?
-                .ok_or_else(|| stage_refused(movement.claim, "native selected source is not the next required native-priced family"))?;
+                .ok_or_else(|| {
+                    stage_refused(movement.claim, "native selected source is not the next required native-priced family")
+                })?;
         let original = b
             .state
             .staged_original_job_v1(movement.claim)
@@ -2638,9 +2648,8 @@ fn native_selected_control_v1(
             return Err(stage_refused(movement.claim, "native selected source serves a constrained job only"));
         }
         bundle.selected = Some(progress.session);
-        bundle.selected_native = Some(
-            Box::new(crate::palw_staged_bundle_v1::PalwNativeSourceContextV1 { header, job: Box::new(original.job) }).into(),
-        );
+        bundle.selected_native =
+            Some(Box::new(crate::palw_staged_bundle_v1::PalwNativeSourceContextV1 { header, job: Box::new(original.job) }).into());
     } else if bundle.selected_native.as_ref().is_none_or(|context| *context.header != *header) {
         return Err(stage_refused(movement.claim, "native selected movement substitutes the claim's admitted header"));
     }
@@ -2835,7 +2844,10 @@ pub(super) fn open_native(
         || bundle.active.is_some_and(|n| !bundle.opened[n as usize].row.honest_complete_v1().unwrap_or(false))
         || bundle.inventory.as_ref().is_some_and(|intake| !intake.sealed || intake.length_fault_v1())
     {
-        return Err(stage_refused(seed.claim, "native seed requires an honest completed predecessor, intake and the paid frame clock"));
+        return Err(stage_refused(
+            seed.claim,
+            "native seed requires an honest completed predecessor, intake and the paid frame clock",
+        ));
     }
     let family = match &seed.family {
         NativeFamily::Constraint { .. } => Family::Constraint,
@@ -2925,10 +2937,11 @@ pub(super) fn open_native(
                 .ok_or_else(|| stage_refused(seed.claim, "TIR prefix stage has no registered class record"))?;
             let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, target.class_id)
                 .ok_or_else(|| stage_refused(seed.claim, "TIR prefix stage needs the class's published layout"))?;
-            let context = crate::palw_staged_court_state_v1::palw_tir_prefix_context_v1(record, layout, &header, &original.job, ladder)
-                .map_err(|e| stage_refused(seed.claim, e))?;
-            let named =
-                crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
+            let context =
+                crate::palw_staged_court_state_v1::palw_tir_prefix_context_v1(record, layout, &header, &original.job, ladder)
+                    .map_err(|e| stage_refused(seed.claim, e))?;
+            let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job)
+                .map_err(|e| stage_refused(seed.claim, e.to_string()))?;
             if named.prefix_tokens != *prefix_tokens {
                 return Err(stage_refused(seed.claim, "TIR prefix seed names another boundary than the job's declared state"));
             }

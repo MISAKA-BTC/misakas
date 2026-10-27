@@ -329,10 +329,12 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap()).ok_or("paid claim authority missing")?;
         a.validate(&*self.ledger()?)?;
         let v6 = self.paid_bootstrap_binding_v6(&a.enrollment.id()).map_err(|why| why.to_string())?;
-        if a.context.id() != *context || match v6 {
-            Some(binding) => binding.original_context != *context || binding.enrollment != a.enrollment.id(),
-            None => self.beacon_source_target_v4(context)? != a.source_target,
-        } {
+        if a.context.id() != *context
+            || match v6 {
+                Some(binding) => binding.original_context != *context || binding.enrollment != a.enrollment.id(),
+                None => self.beacon_source_target_v4(context)? != a.source_target,
+            }
+        {
             return Err("paid claim context/target mismatch".into());
         }
         Ok(a)
@@ -426,8 +428,10 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     pub fn apply_paid_claim_consumer_inputs_v2(&self, ledger: &mut misaka_palw_kernel::ledger::KernelLedgerV1) -> Result<(), String> {
         self.apply_paid_claim_consumer_inputs_checked_v6(ledger).map_err(|why| why.to_string())
     }
-    pub fn apply_paid_claim_consumer_inputs_checked_v6(&self, ledger: &mut misaka_palw_kernel::ledger::KernelLedgerV1)
-        -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    pub fn apply_paid_claim_consumer_inputs_checked_v6(
+        &self,
+        ledger: &mut misaka_palw_kernel::ledger::KernelLedgerV1,
+    ) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
         let mut inputs = std::collections::BTreeMap::new();
         for ((table, key), _bytes) in
@@ -451,8 +455,7 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             }
             let complete = if a.class.interactive_plan.is_some() {
                 self.paid_claim_interactive_complete_v3(&a, ledger).map_err(E::Decode)?
-            } else if let Some(lock) = self.paid_claim_effective_lock_checked_v6(&a)?
-            {
+            } else if let Some(lock) = self.paid_claim_effective_lock_checked_v6(&a)? {
                 let mut signers = std::collections::BTreeSet::new();
                 for seat in &lock.seats {
                     let signer = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(seat);
@@ -572,7 +575,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
         let refuse = |s: String| PalwStateV2Error::CarriageInconsistent(format!("paid claim: {s}"));
-        let native = |why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse);
+        let native = |why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse);
         self.assert_paid_bootstrap_source_consistency_v6(params)?;
         self.assert_paid_compact_consistency_v4(params)?;
         let Some(route) = self.kernel_route() else { return Ok(()) };
@@ -788,8 +791,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     {
                         return Err(refuse("receipt key/time/interactive routing substituted".into()));
                     }
-                    let lock = route.paid_claim_effective_lock_checked_v6(&a)
-                        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse))?
+                    let lock = route
+                        .paid_claim_effective_lock_checked_v6(&a)
+                        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?
                         .ok_or_else(|| refuse("receipt has no initial lock".into()))?;
                     if receipt.version != 2
                         || !receipt.complete
@@ -892,13 +896,19 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                             )
                             .ok_or_else(|| refuse("last Final round absent".into()))?;
                         route.validate_paid_round_v4(&last, &a, &l).map_err(&refuse)?;
-                        (crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(
-                            last.lock.as_ref().ok_or_else(|| refuse("Final round lock absent".into()))?)
-                            .map_err(PalwStateV2Error::NativeResource)?, plan.rounds, last.transcript_root)
+                        (
+                            crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(
+                                last.lock.as_ref().ok_or_else(|| refuse("Final round lock absent".into()))?,
+                            )
+                            .map_err(PalwStateV2Error::NativeResource)?,
+                            plan.rounds,
+                            last.transcript_root,
+                        )
                     } else {
                         (
-                            route.paid_claim_effective_lock_checked_v6(&a)
-                                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse))?
+                            route
+                                .paid_claim_effective_lock_checked_v6(&a)
+                                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?
                                 .ok_or_else(|| refuse("Final initial lock absent".into()))?,
                             1,
                             [0; 64],

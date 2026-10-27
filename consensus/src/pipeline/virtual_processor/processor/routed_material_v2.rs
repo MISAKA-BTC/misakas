@@ -202,10 +202,8 @@ mod routing_execution_context_tests {
     fn candidate_must_use_actual_own_selected_parent_context() {
         let checkpoint = Hash64::from_u64_word(1);
         let other = Hash64::from_u64_word(2);
-        let mut own = VirtualState::default();
-        own.parents = vec![checkpoint, other];
+        let mut own = VirtualState { parents: vec![checkpoint, other], daa_score: 7, ..Default::default() };
         own.ghostdag_data.selected_parent = checkpoint;
-        own.daa_score = 7;
         let mut candidate = Header::from_precomputed_hash(Hash64::from_u64_word(3), vec![other, checkpoint]);
         candidate.daa_score = own.daa_score;
         require_routing_template_context_v2(&own, checkpoint, &candidate).unwrap();

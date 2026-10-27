@@ -22,48 +22,6 @@ pub fn decode_native_tir_program_v1(canonical: &[u8]) -> Result<NativeRetainedV1
     Ok(NativeRetainedV1::from_owner_reserved_v1(program, lease))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::super::ledger_expansion::standalone_tir_program_requests_v1;
-    #[test]
-    fn structural_tir_array_and_cardinality_overflow_refuses() {
-        let mut q = super::TirNativeRequestsV1::new();
-        assert!(q.exact_v1::<u128>(u64::MAX).is_err());
-        assert!(q.vec_v1::<u8>(u64::MAX).is_err());
-        assert!(super::TirNativeRequestsV1::product_v1(u64::MAX, 2).is_err());
-        assert_eq!(q.bytes_v1(), 0);
-    }
-    #[test]
-    fn retained_tir_decode_preserves_the_exact_canonical_program() {
-        use misaka_palw_tir::{DType, Ref, TensorType, builder::ProgramBuilder, program::HISTORY_BOUND_V1_HELD};
-        let mut b = ProgramBuilder::new(256, HISTORY_BOUND_V1_HELD);
-        let scores = b.param("scores", DType::I32, &[16], false);
-        let mut pre = b.block("topk", vec![]);
-        let x = pre.topk(scores, 0, 2);
-        let x = pre.cast(x, DType::I32);
-        let pre = pre.finish(&[x]);
-        let mut post = b.block("post", vec![TensorType::fixed(DType::I32, &[2])]);
-        let y = post.cast(Ref::CarryIn(0), DType::I32);
-        post.commit(y);
-        let post = post.finish(&[]);
-        let original = b.finish(pre, vec![], post, 0);
-        let bytes = original.encode();
-        let retained = super::decode_native_tir_program_v1(&bytes).unwrap();
-        assert_eq!(retained.encode(), bytes);
-        assert_eq!(*retained, original);
-        assert!(standalone_tir_program_requests_v1(&bytes).unwrap() > bytes.len() as u64);
-    }
-    #[test]
-    fn retained_tir_program_shape_refuses_truncation_and_hostile_lengths() {
-        assert!(standalone_tir_program_requests_v1(&[]).is_err());
-        // Program version/prim-set/token/history prefix, then an impossible
-        // params vector. The borrowed preflight cannot allocate this count.
-        let mut bytes = vec![0u8; 2 + 64 + 4 + 4];
-        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        assert!(standalone_tir_program_requests_v1(&bytes).is_err());
-    }
-}
-
 /// Checked typed allocation requests for owner-local analyses. Capacity follows
 /// the pinned Vec geometric/minimum-capacity rule; this is neither codec bytes
 /// multiplied by a guessed factor nor a physical allocator/RSS estimate.
@@ -179,4 +137,46 @@ pub(crate) fn reserve_native_tir_shard_workspace_v1(
     // pinned Borsh's serializer requests its 1024-byte initial buffer.
     q.exact_v1::<u8>(1024)?;
     Ok(NativeTirShardWorkspaceV1 { _lease: reserve_native_requests_v1(q.bytes_v1())? })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::ledger_expansion::standalone_tir_program_requests_v1;
+    #[test]
+    fn structural_tir_array_and_cardinality_overflow_refuses() {
+        let mut q = super::TirNativeRequestsV1::new();
+        assert!(q.exact_v1::<u128>(u64::MAX).is_err());
+        assert!(q.vec_v1::<u8>(u64::MAX).is_err());
+        assert!(super::TirNativeRequestsV1::product_v1(u64::MAX, 2).is_err());
+        assert_eq!(q.bytes_v1(), 0);
+    }
+    #[test]
+    fn retained_tir_decode_preserves_the_exact_canonical_program() {
+        use misaka_palw_tir::{DType, Ref, TensorType, builder::ProgramBuilder, program::HISTORY_BOUND_V1_HELD};
+        let mut b = ProgramBuilder::new(256, HISTORY_BOUND_V1_HELD);
+        let scores = b.param("scores", DType::I32, &[16], false);
+        let mut pre = b.block("topk", vec![]);
+        let x = pre.topk(scores, 0, 2);
+        let x = pre.cast(x, DType::I32);
+        let pre = pre.finish(&[x]);
+        let mut post = b.block("post", vec![TensorType::fixed(DType::I32, &[2])]);
+        let y = post.cast(Ref::CarryIn(0), DType::I32);
+        post.commit(y);
+        let post = post.finish(&[]);
+        let original = b.finish(pre, vec![], post, 0);
+        let bytes = original.encode();
+        let retained = super::decode_native_tir_program_v1(&bytes).unwrap();
+        assert_eq!(retained.encode(), bytes);
+        assert_eq!(*retained, original);
+        assert!(standalone_tir_program_requests_v1(&bytes).unwrap() > bytes.len() as u64);
+    }
+    #[test]
+    fn retained_tir_program_shape_refuses_truncation_and_hostile_lengths() {
+        assert!(standalone_tir_program_requests_v1(&[]).is_err());
+        // Program version/prim-set/token/history prefix, then an impossible
+        // params vector. The borrowed preflight cannot allocate this count.
+        let mut bytes = vec![0u8; 2 + 64 + 4 + 4];
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(standalone_tir_program_requests_v1(&bytes).is_err());
+    }
 }

@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `q7_sampled_and_collector_tests` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 //! **ADR-0152 Q-7 on kaspad (F4 part 2), pinned where it lives.** `Sampled` is the answer of a
 //! partial seat whose replay or resume is not coming, past SEAT-R, R-core+ and S3, in the last

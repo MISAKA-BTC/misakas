@@ -382,15 +382,15 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, ProviderReaderErrorV
             // class, never a provider's self-asserted snapshot root.
             let mut found = None;
             for component in 0..64u8 {
-                if let Ok((root, _)) = super::provider_handoff_v4::retrieval(self.ledger, row, component) {
-                    if root.snapshot.root() == *snapshot && id < root.snapshot.items {
-                        if root.snapshot.slice_items == 0 {
-                            return Err(bad("native snapshot has zero slice size"));
-                        }
-                        found =
-                            Some((component, id / u64::from(root.snapshot.slice_items), id % u64::from(root.snapshot.slice_items)));
-                        break;
+                if let Ok((root, _)) = super::provider_handoff_v4::retrieval(self.ledger, row, component)
+                    && root.snapshot.root() == *snapshot
+                    && id < root.snapshot.items
+                {
+                    if root.snapshot.slice_items == 0 {
+                        return Err(bad("native snapshot has zero slice size"));
                     }
+                    found = Some((component, id / u64::from(root.snapshot.slice_items), id % u64::from(root.snapshot.slice_items)));
+                    break;
                 }
             }
             let (component, slice, index) = found.ok_or_else(|| bad("snapshot item is outside authenticated claim"))?;

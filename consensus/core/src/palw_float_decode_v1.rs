@@ -323,7 +323,8 @@ mod tests {
             stop_reason: PalwStopReasonV2::ExactBudgetReached,
         };
         let root = crate::palw_v2::full_logits_trace_root_v2(&context, &summary, &ordered);
-        let pin = crate::palw_step_refute::PalwDecodeTokensV1 { summary, ordered_event_commitment: ordered, generated_token_ids: generated };
+        let pin =
+            crate::palw_step_refute::PalwDecodeTokensV1 { summary, ordered_event_commitment: ordered, generated_token_ids: generated };
         let greedy = crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY;
         let stream_row = |index: u32, nominated: &[u32]| {
             let mut stream = PalwFloatRowStreamV1::new_v1(&context, index, 4, nominated).unwrap();
@@ -340,8 +341,14 @@ mod tests {
             PalwFloatDecodeVerdictV1::DecodeTokenMismatch { position: 0, committed: 3, expected: 1 }
         );
         assert!(palw_float32_lane_beats_v1(&first, 1, 3).unwrap(), "an equal key at a lower index wins");
-        assert_eq!(check_float32_greedy_decode_v1(&pin, greedy, &context, &root, 1, &stream_row(1, &[])).unwrap(), PalwFloatDecodeVerdictV1::Honest);
-        assert_eq!(check_float32_greedy_decode_v1(&pin, greedy, &context, &root, 2, &stream_row(2, &[])).unwrap(), PalwFloatDecodeVerdictV1::Honest);
+        assert_eq!(
+            check_float32_greedy_decode_v1(&pin, greedy, &context, &root, 1, &stream_row(1, &[])).unwrap(),
+            PalwFloatDecodeVerdictV1::Honest
+        );
+        assert_eq!(
+            check_float32_greedy_decode_v1(&pin, greedy, &context, &root, 2, &stream_row(2, &[])).unwrap(),
+            PalwFloatDecodeVerdictV1::Honest
+        );
         // A row from another event, a tampered byte, or a seeded job is never a verdict.
         assert!(check_float32_greedy_decode_v1(&pin, greedy, &context, &root, 1, &first).is_err());
         let mut tampered = PalwFloatRowStreamV1::new_v1(&context, 0, 4, &[]).unwrap();

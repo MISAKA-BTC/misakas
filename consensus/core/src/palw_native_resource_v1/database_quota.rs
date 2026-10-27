@@ -32,10 +32,7 @@ pub fn actual_hard_database_quota_v1(path: &Path) -> Result<NativeHardDatabaseQu
         ffi::CString,
         fs::{self, File},
         io::Read,
-        os::{
-            fd::AsRawFd,
-            unix::{ffi::OsStrExt, fs::MetadataExt},
-        },
+        os::{fd::AsRawFd, unix::fs::MetadataExt},
     };
     let refusal =
         |why: &str| NativeCoverageV1::unsupported::<NativeHardDatabaseQuotaV1>("RocksDB history/WAL/compaction project quota", why);

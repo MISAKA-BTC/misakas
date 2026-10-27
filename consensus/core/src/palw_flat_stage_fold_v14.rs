@@ -21,10 +21,10 @@ pub(super) fn apply_chunk(
         other => other,
     }
 }
+#[path = "palw_flat_stage_fold_v28.rs"]
+mod next28;
 #[path = "palw_flat_stage_source_fold_v14.rs"]
 mod source;
-#[path="palw_flat_stage_fold_v28.rs"]
-mod next28;
 /// Stage28 component Final audit extraction (see `next28::audit_record_from_rows_v28`).
 pub(super) fn audit_record_from_rows_v28(
     rows: &std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>,
@@ -121,10 +121,21 @@ fn prepay_restore(
 }
 impl PalwChainStateV2 {
     pub fn native_stage_reserved_v14(&self, bond: &PalwBondKeyV2, daa: u64) -> u128 {
-        self.kernel_route.as_ref().map(|r| r.stage_source_reserved_v14(bond, daa) + r.stage_producer_reserved_v14(bond)+next28::reserved(r,bond,daa)).unwrap_or(0)
+        self.kernel_route
+            .as_ref()
+            .map(|r| r.stage_source_reserved_v14(bond, daa) + r.stage_producer_reserved_v14(bond) + next28::reserved(r, bond, daa))
+            .unwrap_or(0)
     }
 }
-pub(super) fn reveal_paged_v28(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,seal:&crate::palw_native_paged_proof_v29::NativePagedSealV29,file:&[u8])->Result<(),PalwStateV2Error>{next28::reveal_paged_v28(builder,ctx,signer,seal,file)}
+pub(super) fn reveal_paged_v28(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    seal: &crate::palw_native_paged_proof_v29::NativePagedSealV29,
+    file: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    next28::reveal_paged_v28(builder, ctx, signer, seal, file)
+}
 
 fn checked_class(
     builder: &TransitionBuilder<'_>,
@@ -922,7 +933,7 @@ fn close_unclaimed(
     if book.original_funded_root() != h.original_book_root
         || book.requester_operator() != h.requester_operator
         || counter.next_nonce <= misaka_palw_kernel::flat_execution11::canonical_nonce_v11(&book.job().nonce).map_err(refused)?
-        || row.trace_bytes.len() != 0
+        || !row.trace_bytes.is_empty()
     {
         return Err(refused("stage Close lacks original escrow/shared nonce/claim lineage"));
     }
@@ -1394,8 +1405,8 @@ pub(super) fn apply(
     action: u8,
     body: &[u8],
 ) -> Result<(), PalwStateV2Error> {
-    if action>=crate::palw_flat_stage_v28::STAGE_ACTION_FIRST_V28 {
-        return next28::apply(builder,ctx,signer,action,body);
+    if action >= crate::palw_flat_stage_v28::STAGE_ACTION_FIRST_V28 {
+        return next28::apply(builder, ctx, signer, action, body);
     }
     let p = policies(builder, ctx)?;
     let result = match action {

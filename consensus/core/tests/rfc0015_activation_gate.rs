@@ -14,8 +14,8 @@ use kaspa_consensus_core::palw_bond_budget_v1::{PalwBondBudgetFenceV1, PalwModel
 use kaspa_consensus_core::palw_mode_v2::PalwModeV2Error;
 use kaspa_consensus_core::palw_panel_free_gate_v1::{
     PALW_PANEL_FREE_GATE_PINNED_RECORDS_V1, PALW_PANEL_FREE_GATE_RECORD_VERSION_V1, PalwGateVerdictV1, PalwPanelFreeConjunctV1 as C,
-    PalwPanelFreeGateEntryV1, PalwPanelFreeGateRecordV1, PalwPanelFreeRewardedProfilesV1, PalwPanelFreeGateRefusalV1 as R, palw_panel_free_allocation_policy_digest_v1,
-    palw_panel_free_terms_digest_v1,
+    PalwPanelFreeGateEntryV1, PalwPanelFreeGateRecordV1, PalwPanelFreeGateRefusalV1 as R, PalwPanelFreeRewardedProfilesV1,
+    palw_panel_free_allocation_policy_digest_v1, palw_panel_free_terms_digest_v1,
 };
 use kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1;
 use kaspa_hashes::Hash64;
@@ -89,7 +89,9 @@ fn rfc0015_gate_this_binary_pins_no_record_and_refuses_even_a_complete_one() {
     // And without a record the refusal says so (no operator flag reaches the fence's value).
     let mut bare = p.clone();
     bare.palw_panel_free_v1 = Some(fence());
-    assert!(matches!(bare.validate_palw_panel_free_v1(), Err(PalwModeV2Error::Invalid(m)) if m.contains("no authenticated activation gate record")));
+    assert!(
+        matches!(bare.validate_palw_panel_free_v1(), Err(PalwModeV2Error::Invalid(m)) if m.contains("no authenticated activation gate record"))
+    );
 }
 
 /// §13.1, one bullet a case: the deliberately broken build is refused.
@@ -100,9 +102,15 @@ fn rfc0015_gate_each_section_13_1_defect_is_refused_by_name() {
     let fail = |c: C, v: PalwGateVerdictV1| with_entry(full(), c, |e| e.verdict = v);
 
     // * operator-only proofs / insufficient public bond qualification or API → G14 is not PASS.
-    assert_eq!(verdict(&p, &f, &fail(C::G14PublicFraudProsecutionComplete, PalwGateVerdictV1::Fail)), Err(R::NotPass(C::G14PublicFraudProsecutionComplete)));
+    assert_eq!(
+        verdict(&p, &f, &fail(C::G14PublicFraudProsecutionComplete, PalwGateVerdictV1::Fail)),
+        Err(R::NotPass(C::G14PublicFraudProsecutionComplete))
+    );
     // * a producer heap / drill instance / private endpoint is needed → G14 UNKNOWN is never PASS.
-    assert_eq!(verdict(&p, &f, &fail(C::G14PublicFraudProsecutionComplete, PalwGateVerdictV1::Unknown)), Err(R::NotPass(C::G14PublicFraudProsecutionComplete)));
+    assert_eq!(
+        verdict(&p, &f, &fail(C::G14PublicFraudProsecutionComplete, PalwGateVerdictV1::Unknown)),
+        Err(R::NotPass(C::G14PublicFraudProsecutionComplete))
+    );
     // * the canonical held/fused cap / prefix / committed-tile gaps remain → a rewarded profile's dispute gate fails.
     assert_eq!(
         verdict(&p, &f, &fail(C::RewardedProfileDisputeResourceGates, PalwGateVerdictV1::Fail)),
@@ -171,7 +179,11 @@ fn rfc0015_gate_every_conjunct_and_every_coupled_fence_is_required() {
     }
     // N5: a record that has everything but the user's ruling lifting the 2026-10-12 deferral is refused.
     assert_eq!(
-        verdict(&p, &f, &with_entry(complete_record(&p, &f), C::PanelZeroDeferralLiftedByRuling, |e| e.verdict = PalwGateVerdictV1::Unknown)),
+        verdict(
+            &p,
+            &f,
+            &with_entry(complete_record(&p, &f), C::PanelZeroDeferralLiftedByRuling, |e| e.verdict = PalwGateVerdictV1::Unknown)
+        ),
         Err(R::NotPass(C::PanelZeroDeferralLiftedByRuling))
     );
     type Unset = fn(&mut Params);

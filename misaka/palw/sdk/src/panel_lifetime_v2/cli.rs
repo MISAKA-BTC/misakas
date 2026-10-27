@@ -42,7 +42,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         println!("{USAGE}");
         return Ok(());
     }
-    if (args.len() - 1) % 2 != 0 {
+    if !(args.len() - 1).is_multiple_of(2) {
         return Err(USAGE.into());
     }
     let mut f = BTreeMap::new();

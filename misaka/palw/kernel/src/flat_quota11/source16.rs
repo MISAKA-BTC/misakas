@@ -30,70 +30,196 @@ pub struct SourcePlanV16 {
 }
 // The only stage28 entry carries a private constructor derived from original
 // checked book/class25, signed source quote and native shared89 epoch/nonce.
-pub(super) fn from_checked_stage_admission_v28(checked:stage14::bounded28::CheckedStageSourceAdmissionV28,plan:&SourcePlanV16)->Result<CheckedSourceAdmissionV16,String>{
-    let (binding,consent,source,operator,epoch)=checked.into_parts();
-    if source!=plan.root()||binding.class_id!=plan.class||binding.quota_plan_root!=plan.job_plan||binding.policy_root!=plan.quota||binding.admitted_interval!=epoch.network_interval||consent==[0;64]||operator==[0;64]{return Err("stage28 source bridge lacks original checked consent/real-PC/quote/epoch".into());}
-    Ok(CheckedSourceAdmissionV16{binding,consent,producer_operator:operator,epoch})
+pub(super) fn from_checked_stage_admission_v28(
+    checked: stage14::bounded28::CheckedStageSourceAdmissionV28,
+    plan: &SourcePlanV16,
+) -> Result<CheckedSourceAdmissionV16, String> {
+    let (binding, consent, source, operator, epoch) = checked.into_parts();
+    if source != plan.root()
+        || binding.class_id != plan.class
+        || binding.quota_plan_root != plan.job_plan
+        || binding.policy_root != plan.quota
+        || binding.admitted_interval != epoch.network_interval
+        || consent == [0; 64]
+        || operator == [0; 64]
+    {
+        return Err("stage28 source bridge lacks original checked consent/real-PC/quote/epoch".into());
+    }
+    Ok(CheckedSourceAdmissionV16 { binding, consent, producer_operator: operator, epoch })
 }
 // New28 exact bytes/work distinction. Original16 quote factories retain their
 // bytes and conservative accounting; only checked stage28 geometry reaches here.
-pub(super) fn derive_source_plan_from_stage_v28(class:&crate::flat_inputs12::bounded28::CheckedStageClassV28,stage:&stage14::bounded28::CheckedStageQuotaV28,quota:&QuotaPolicyV11,requests:u32)->Result<SourcePlanV16,String>{
+pub(super) fn derive_source_plan_from_stage_v28(
+    class: &crate::flat_inputs12::bounded28::CheckedStageClassV28,
+    stage: &stage14::bounded28::CheckedStageQuotaV28,
+    quota: &QuotaPolicyV11,
+    requests: u32,
+) -> Result<SourcePlanV16, String> {
     quota.check()?;
-    if requests==0||requests>1<<20||stage.plan().class_scope_root()!=class.maximum_scope().root(){return Err("source28 checked original maximum/count differs".into());}
-    let r=stage.plan().record();
-    let admission=action_envelope(SOURCE_JOURNAL_BYTES_V16 as u128*64,SOURCE_JOURNAL_BYTES_V16,None)?;
-    let bytes=stage.restore_bytes().checked_add(SOURCE_ANSWER_MAX_BYTES_V16).and_then(|n|n.checked_add(SOURCE_JOURNAL_BYTES_V16)).ok_or("source28 complete restore extent overflow")?;
-    let work=native_action_metadata_v11(r.native_restore_work,r.native_post_carrier_cap,SOURCE_ANSWER_MAX_BYTES_V16,false)?;
-    let mut answer=action_envelope(work,bytes,None)?.checked_add(&admission)?;
-    include_native_post_io_v11(&mut answer,r.native_post_carrier_cap)?;
-    include_source_court_io_v11(&mut answer,class.source().parameters())?;
-    let guarantee=answer.checked_mul(requests.checked_mul(2).ok_or("source28 original attempt overflow")?)?;
+    if requests == 0 || requests > 1 << 20 || stage.plan().class_scope_root() != class.maximum_scope().root() {
+        return Err("source28 checked original maximum/count differs".into());
+    }
+    let r = stage.plan().record();
+    let admission = action_envelope(SOURCE_JOURNAL_BYTES_V16 as u128 * 64, SOURCE_JOURNAL_BYTES_V16, None)?;
+    let bytes = stage
+        .restore_bytes()
+        .checked_add(SOURCE_ANSWER_MAX_BYTES_V16)
+        .and_then(|n| n.checked_add(SOURCE_JOURNAL_BYTES_V16))
+        .ok_or("source28 complete restore extent overflow")?;
+    let work = native_action_metadata_v11(r.native_restore_work, r.native_post_carrier_cap, SOURCE_ANSWER_MAX_BYTES_V16, false)?;
+    let mut answer = action_envelope(work, bytes, None)?.checked_add(&admission)?;
+    include_native_post_io_v11(&mut answer, r.native_post_carrier_cap)?;
+    include_source_court_io_v11(&mut answer, class.source().parameters())?;
+    let guarantee = answer.checked_mul(requests.checked_mul(2).ok_or("source28 original attempt overflow")?)?;
     admission.checked_add(&guarantee)?.within(&quota.plan)?;
-    Ok(SourcePlanV16{class:class.root(),parameter:class.source().parameters().root(),inventory:class.source().inventory_root(),quota:quota.root(),job_plan:r.root(),requests,admission,answer,guarantee})
+    Ok(SourcePlanV16 {
+        class: class.root(),
+        parameter: class.source().parameters().root(),
+        inventory: class.source().inventory_root(),
+        quota: quota.root(),
+        job_plan: r.root(),
+        requests,
+        admission,
+        answer,
+        guarantee,
+    })
 }
-pub(super) fn derive_source_plan_from_text_v29(plan:&text29::CheckedTextQuotaV29,pc:&ParamCommitmentsV1,quota:&QuotaPolicyV11,requests:u32)->Result<SourcePlanV16,String>{
-    quota.check()?;let r=plan.plan().record();if requests==0||requests>1<<20||pc.root()!=r.parameter_root{return Err("text29 source quote original real-PC/count differs".into());}
-    let admission=action_envelope(SOURCE_JOURNAL_BYTES_V16 as u128*64,SOURCE_JOURNAL_BYTES_V16,None)?;
-    let bytes=plan.restore_bytes().checked_add(SOURCE_ANSWER_MAX_BYTES_V16).and_then(|n|n.checked_add(SOURCE_JOURNAL_BYTES_V16)).ok_or("text29 original source restore extent overflow")?;
-    let mut answer=action_envelope(native_action_metadata_v11(r.native_restore_work,r.native_post_carrier_cap,SOURCE_ANSWER_MAX_BYTES_V16,false)?,bytes,None)?.checked_add(&admission)?;include_native_post_io_v11(&mut answer,r.native_post_carrier_cap)?;include_source_court_io_v11(&mut answer,pc)?;
-    let guarantee=answer.checked_mul(requests.checked_mul(2).ok_or("text29 original source attempt overflow")?)?;admission.checked_add(&guarantee)?.within(&quota.plan)?;
-    Ok(SourcePlanV16{class:plan.class(),parameter:pc.root(),inventory:plan.source(),quota:quota.root(),job_plan:r.root(),requests,admission,answer,guarantee})
+pub(super) fn derive_source_plan_from_text_v29(
+    plan: &text29::CheckedTextQuotaV29,
+    pc: &ParamCommitmentsV1,
+    quota: &QuotaPolicyV11,
+    requests: u32,
+) -> Result<SourcePlanV16, String> {
+    quota.check()?;
+    let r = plan.plan().record();
+    if requests == 0 || requests > 1 << 20 || pc.root() != r.parameter_root {
+        return Err("text29 source quote original real-PC/count differs".into());
+    }
+    let admission = action_envelope(SOURCE_JOURNAL_BYTES_V16 as u128 * 64, SOURCE_JOURNAL_BYTES_V16, None)?;
+    let bytes = plan
+        .restore_bytes()
+        .checked_add(SOURCE_ANSWER_MAX_BYTES_V16)
+        .and_then(|n| n.checked_add(SOURCE_JOURNAL_BYTES_V16))
+        .ok_or("text29 original source restore extent overflow")?;
+    let mut answer = action_envelope(
+        native_action_metadata_v11(r.native_restore_work, r.native_post_carrier_cap, SOURCE_ANSWER_MAX_BYTES_V16, false)?,
+        bytes,
+        None,
+    )?
+    .checked_add(&admission)?;
+    include_native_post_io_v11(&mut answer, r.native_post_carrier_cap)?;
+    include_source_court_io_v11(&mut answer, pc)?;
+    let guarantee = answer.checked_mul(requests.checked_mul(2).ok_or("text29 original source attempt overflow")?)?;
+    admission.checked_add(&guarantee)?.within(&quota.plan)?;
+    Ok(SourcePlanV16 {
+        class: plan.class(),
+        parameter: pc.root(),
+        inventory: plan.source(),
+        quota: quota.root(),
+        job_plan: r.root(),
+        requests,
+        admission,
+        answer,
+        guarantee,
+    })
 }
-pub(super) fn from_checked_text_admission_v29(checked:text29::CheckedTextSourceAdmissionV29,plan:&SourcePlanV16)->Result<CheckedSourceAdmissionV16,String>{let(binding,consent,source,operator,epoch)=checked.into_parts();if source!=plan.root()||binding.class_id!=plan.class||binding.quota_plan_root!=plan.job_plan||binding.policy_root!=plan.quota||consent==[0;64]||operator==[0;64]||epoch.network_interval!=binding.admitted_interval{return Err("text29 source bridge lacks original private source/consent/operator/epoch".into());}Ok(CheckedSourceAdmissionV16{binding,consent,producer_operator:operator,epoch})}
+pub(super) fn from_checked_text_admission_v29(
+    checked: text29::CheckedTextSourceAdmissionV29,
+    plan: &SourcePlanV16,
+) -> Result<CheckedSourceAdmissionV16, String> {
+    let (binding, consent, source, operator, epoch) = checked.into_parts();
+    if source != plan.root()
+        || binding.class_id != plan.class
+        || binding.quota_plan_root != plan.job_plan
+        || binding.policy_root != plan.quota
+        || consent == [0; 64]
+        || operator == [0; 64]
+        || epoch.network_interval != binding.admitted_interval
+    {
+        return Err("text29 source bridge lacks original private source/consent/operator/epoch".into());
+    }
+    Ok(CheckedSourceAdmissionV16 { binding, consent, producer_operator: operator, epoch })
+}
 /// Raw fixed documentary record. It grants no capacity; its expected root must
 /// come from original native consent18/obligation membership, never a carrier.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SourcePlanRecordV16 {
-    pub version:u16, pub class:Digest, pub parameter:Digest, pub inventory:Digest,
-    pub quota:Digest, pub job_plan:Digest, pub requests:u32,
-    pub admission:QuotaQuantitiesV11, pub answer:QuotaQuantitiesV11, pub guarantee:QuotaQuantitiesV11,
+    pub version: u16,
+    pub class: Digest,
+    pub parameter: Digest,
+    pub inventory: Digest,
+    pub quota: Digest,
+    pub job_plan: Digest,
+    pub requests: u32,
+    pub admission: QuotaQuantitiesV11,
+    pub answer: QuotaQuantitiesV11,
+    pub guarantee: QuotaQuantitiesV11,
 }
-pub const SOURCE_PLAN_RECORD_BYTES_V16:u64 = 2+5*64+4+3*21*16;
+pub const SOURCE_PLAN_RECORD_BYTES_V16: u64 = 2 + 5 * 64 + 4 + 3 * 21 * 16;
 impl SourcePlanRecordV16 {
-    pub fn root(&self)->Digest { object_id(b"misaka-palw/kernel/bound-pc-source-plan/v16",self) }
-    pub fn from_rooted_bytes(bytes:&[u8],expected:&Digest)->Result<Self,String>{
-        let r:Self=sharded::read_fixed_row(bytes,SOURCE_PLAN_RECORD_BYTES_V16)?;
-        if r.root()!=*expected{return Err("source quote differs from native original consent root".into());}
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/kernel/bound-pc-source-plan/v16", self)
+    }
+    pub fn from_rooted_bytes(bytes: &[u8], expected: &Digest) -> Result<Self, String> {
+        let r: Self = sharded::read_fixed_row(bytes, SOURCE_PLAN_RECORD_BYTES_V16)?;
+        if r.root() != *expected {
+            return Err("source quote differs from native original consent root".into());
+        }
         Ok(r)
     }
 }
 impl SourcePlanV16 {
-    pub fn record(&self)->SourcePlanRecordV16 {
-        SourcePlanRecordV16 {version:SOURCE_VERSION_V16,class:self.class,parameter:self.parameter,inventory:self.inventory,
-            quota:self.quota,job_plan:self.job_plan,requests:self.requests,admission:self.admission.clone(),answer:self.answer.clone(),guarantee:self.guarantee.clone()}
+    pub fn record(&self) -> SourcePlanRecordV16 {
+        SourcePlanRecordV16 {
+            version: SOURCE_VERSION_V16,
+            class: self.class,
+            parameter: self.parameter,
+            inventory: self.inventory,
+            quota: self.quota,
+            job_plan: self.job_plan,
+            requests: self.requests,
+            admission: self.admission.clone(),
+            answer: self.answer.clone(),
+            guarantee: self.guarantee.clone(),
+        }
     }
     /// Fixed native cache restore only. Admission independently derives and
     /// compares this root before producer signs consent18 and any coins move.
-    pub fn restore(record:&SourcePlanRecordV16,expected:&Digest,quota:&QuotaPolicyV11,job_plan:&Digest)->Result<Self,String>{
+    pub fn restore(
+        record: &SourcePlanRecordV16,
+        expected: &Digest,
+        quota: &QuotaPolicyV11,
+        job_plan: &Digest,
+    ) -> Result<Self, String> {
         quota.check()?;
-        if record.version!=SOURCE_VERSION_V16 || record.root()!=*expected || record.quota!=quota.root()
-            || record.job_plan!=*job_plan || record.requests==0 || record.requests>1<<20
-            || record.class==[0;64] || record.parameter==[0;64] || record.inventory==[0;64]
-            || record.guarantee!=record.answer.checked_mul(record.requests.checked_mul(ANSWER_ATTEMPTS_PER_UNIT_V16).ok_or("source cached attempt overflow")?)?
-        {return Err("source cached quote differs from authenticated original contract".into());}
+        if record.version != SOURCE_VERSION_V16
+            || record.root() != *expected
+            || record.quota != quota.root()
+            || record.job_plan != *job_plan
+            || record.requests == 0
+            || record.requests > 1 << 20
+            || record.class == [0; 64]
+            || record.parameter == [0; 64]
+            || record.inventory == [0; 64]
+            || record.guarantee
+                != record
+                    .answer
+                    .checked_mul(record.requests.checked_mul(ANSWER_ATTEMPTS_PER_UNIT_V16).ok_or("source cached attempt overflow")?)?
+        {
+            return Err("source cached quote differs from authenticated original contract".into());
+        }
         record.admission.checked_add(&record.guarantee)?.within(&quota.plan)?;
-        Ok(Self {class:record.class,parameter:record.parameter,inventory:record.inventory,quota:record.quota,job_plan:record.job_plan,
-            requests:record.requests,admission:record.admission.clone(),answer:record.answer.clone(),guarantee:record.guarantee.clone()})
+        Ok(Self {
+            class: record.class,
+            parameter: record.parameter,
+            inventory: record.inventory,
+            quota: record.quota,
+            job_plan: record.job_plan,
+            requests: record.requests,
+            admission: record.admission.clone(),
+            answer: record.answer.clone(),
+            guarantee: record.guarantee.clone(),
+        })
     }
     pub fn root(&self) -> Digest {
         object_id(
@@ -194,16 +320,18 @@ pub(super) fn derive_source_plan_base_v16(
     // derivation work. A work-only MetadataWork entry is not a RAM allowance.
     // Conservatively one owned byte per original checked restore work unit,
     // plus four bounded post images; this intentionally may refuse capacity.
-    let restore_bytes = record.native_restore_work
+    let restore_bytes = record
+        .native_restore_work
         .checked_add(record.native_post_carrier_cap.checked_mul(4).ok_or("source restore post overflow")?)
-        .and_then(|n| n.checked_add(SOURCE_JOURNAL_BYTES_V16)).ok_or("source restore bytes overflow")?;
+        .and_then(|n| n.checked_add(SOURCE_JOURNAL_BYTES_V16))
+        .ok_or("source restore bytes overflow")?;
     answer = answer.checked_add(&action_envelope(restore_bytes as u128 * 64, restore_bytes, None)?)?;
     include_native_post_io_v11(&mut answer, record.native_post_carrier_cap)?;
     include_source_court_io_v11(&mut answer, pc)?;
     // A complete 128-KiB answer can use four original 32-KiB fragments.
     // Charge ALL bounded fragment codecs/copies/journals in addition to final
     // whole assembly, even when the native sender uses fewer or is invalid.
-    let fragment_bytes = PROTECTED_FRAGMENT_BYTES_V11 + (1<<10) + SOURCE_JOURNAL_BYTES_V16;
+    let fragment_bytes = PROTECTED_FRAGMENT_BYTES_V11 + (1 << 10) + SOURCE_JOURNAL_BYTES_V16;
     let fragment = action_envelope(fragment_bytes as u128 * 64, fragment_bytes, None)?;
     answer = answer.checked_add(&fragment.checked_mul(4)?)?;
     let attempts = requests.checked_mul(ANSWER_ATTEMPTS_PER_UNIT_V16).ok_or("source answer attempts overflow")?;
@@ -258,8 +386,12 @@ pub(super) fn from_checked_stage_admission_v16(
     {
         return Err("stage source bridge lacks original checked plan/consent/epoch".into());
     }
-    Ok(CheckedSourceAdmissionV16 { binding: checked.binding, consent: checked.consent,
-        producer_operator: checked.producer_operator, epoch: checked.epoch })
+    Ok(CheckedSourceAdmissionV16 {
+        binding: checked.binding,
+        consent: checked.consent,
+        producer_operator: checked.producer_operator,
+        epoch: checked.epoch,
+    })
 }
 pub fn check_native_source_admission_v16(
     class: &CheckedNativeExecutionClassV11,
@@ -284,7 +416,7 @@ pub fn check_native_source_admission_v16(
         || native.producer_operator == [0; 64]
         || native.original_consent_root == [0; 64]
         || native.original_source_plan_root != plan.root()
-        || native.original_trace_plan_root == [0;64]
+        || native.original_trace_plan_root == [0; 64]
         || native.accepted_daa > epoch.block_daa
         || native.expires_daa < epoch.block_daa
         || epoch.block_daa != j.admitted_daa
@@ -618,34 +750,62 @@ impl SourceShardV16 {
 /// new current ordinary fixed-row collection is charged to the actual caller.
 /// Native persists the returned tombstone before allowing original job GC.
 pub fn retire_expired_source_v16(
-    caller:&mut CheckedQuotaShardV11, quota:&QuotaPolicyV11, epoch:&TrustedEpochV11,
-    plan:&SourcePlanV16, row:&SourceObligationV16, expected_row:&Digest,
-    terminal:&CheckedQuotaTerminalV11,
-)->Result<SourceObligationV16,String>{
-    quota.check()?;epoch.check(quota)?;
-    let subject=caller.subject_row().ok_or("expired source collection lost original subject")?;
-    if row.root()!=*expected_row || row.version!=SOURCE_VERSION_V16 || row.retired
-        || !subject.closed || terminal.binding!=subject.binding || row.subject_root!=subject.binding.root()
-        || row.job_id!=subject.binding.job_id || row.producer!=subject.binding.producer
-        || row.plan_root!=plan.root() || row.class!=plan.class || row.parameter!=plan.parameter || row.inventory!=plan.inventory
-        || row.quota_plan_root!=subject.binding.quota_plan_root || plan.job_plan!=subject.binding.quota_plan_root
-        || plan.quota!=quota.root() || row.admitted_interval!=subject.binding.admitted_interval
-        || row.deadline_daa!=subject.binding.deadline_daa || epoch.network_interval<=row.admitted_interval
-        || epoch.block_daa<=row.deadline_daa || row.original_consent_root==[0;64] || row.producer_operator==[0;64]
-        || row.requests_cap!=plan.requests || row.requests_admitted>row.requests_cap
-        || row.answers_used>row.requests_admitted.checked_mul(ANSWER_ATTEMPTS_PER_UNIT_V16).ok_or("expired source attempts overflow")?
-        || row.committed!=plan.admission.checked_add(&plan.guarantee)?
-        || row.consumed!=plan.admission.checked_add(&plan.answer.checked_mul(row.answers_used)?)?
-        || row.guarantee_remaining!=plan.guarantee.checked_sub(&plan.answer.checked_mul(row.answers_used)?)?
-    {return Err("expired source collection lacks exact original consent/subject/terminal/attempts".into());}
-    let bytes=QUOTA_GLOBAL_ROW_BYTES_V11+QUOTA_SELECTED_ACTOR_ROW_BYTES_V11+QUOTA_SELECTED_SUBJECT_ROW_BYTES_V11
-        +SOURCE_ROW_BYTES_V16+SOURCE_PLAN_RECORD_BYTES_V16+SOURCE_JOURNAL_BYTES_V16;
-    let action=DerivedOrdinaryMetadataV11{quantities:action_envelope(bytes as u128*64,bytes,None)?};
-    caller.debit_ordinary(quota,epoch,&action)?;
-    let mut retired=row.clone();
+    caller: &mut CheckedQuotaShardV11,
+    quota: &QuotaPolicyV11,
+    epoch: &TrustedEpochV11,
+    plan: &SourcePlanV16,
+    row: &SourceObligationV16,
+    expected_row: &Digest,
+    terminal: &CheckedQuotaTerminalV11,
+) -> Result<SourceObligationV16, String> {
+    quota.check()?;
+    epoch.check(quota)?;
+    let subject = caller.subject_row().ok_or("expired source collection lost original subject")?;
+    if row.root() != *expected_row
+        || row.version != SOURCE_VERSION_V16
+        || row.retired
+        || !subject.closed
+        || terminal.binding != subject.binding
+        || row.subject_root != subject.binding.root()
+        || row.job_id != subject.binding.job_id
+        || row.producer != subject.binding.producer
+        || row.plan_root != plan.root()
+        || row.class != plan.class
+        || row.parameter != plan.parameter
+        || row.inventory != plan.inventory
+        || row.quota_plan_root != subject.binding.quota_plan_root
+        || plan.job_plan != subject.binding.quota_plan_root
+        || plan.quota != quota.root()
+        || row.admitted_interval != subject.binding.admitted_interval
+        || row.deadline_daa != subject.binding.deadline_daa
+        || epoch.network_interval <= row.admitted_interval
+        || epoch.block_daa <= row.deadline_daa
+        || row.original_consent_root == [0; 64]
+        || row.producer_operator == [0; 64]
+        || row.requests_cap != plan.requests
+        || row.requests_admitted > row.requests_cap
+        || row.answers_used
+            > row.requests_admitted.checked_mul(ANSWER_ATTEMPTS_PER_UNIT_V16).ok_or("expired source attempts overflow")?
+        || row.committed != plan.admission.checked_add(&plan.guarantee)?
+        || row.consumed != plan.admission.checked_add(&plan.answer.checked_mul(row.answers_used)?)?
+        || row.guarantee_remaining != plan.guarantee.checked_sub(&plan.answer.checked_mul(row.answers_used)?)?
+    {
+        return Err("expired source collection lacks exact original consent/subject/terminal/attempts".into());
+    }
+    let bytes = QUOTA_GLOBAL_ROW_BYTES_V11
+        + QUOTA_SELECTED_ACTOR_ROW_BYTES_V11
+        + QUOTA_SELECTED_SUBJECT_ROW_BYTES_V11
+        + SOURCE_ROW_BYTES_V16
+        + SOURCE_PLAN_RECORD_BYTES_V16
+        + SOURCE_JOURNAL_BYTES_V16;
+    let action = DerivedOrdinaryMetadataV11 { quantities: action_envelope(bytes as u128 * 64, bytes, None)? };
+    caller.debit_ordinary(quota, epoch, &action)?;
+    let mut retired = row.clone();
     // Closing the documentary allowance does not add the old quantity to this
     // interval's physical consumption or subtract it from current reservations.
-    retired.retired=true;retired.consumed=retired.committed.clone();retired.guarantee_remaining=QuotaQuantitiesV11::default();
+    retired.retired = true;
+    retired.consumed = retired.committed.clone();
+    retired.guarantee_remaining = QuotaQuantitiesV11::default();
     Ok(retired)
 }
 

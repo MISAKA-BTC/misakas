@@ -229,6 +229,53 @@ pub fn admit_native_receive_v1(point: BlockHash) -> Result<(), NativeCoverageV1>
     ))
 }
 
+pub fn reserve_native_wire_v1(
+    point: BlockHash,
+    preflight: &super::wire::NativeWirePreflightV1,
+) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
+        return Ok(None);
+    }
+    let memory = preflight.memory_requests_v1().map_err(|why| {
+        NativeCoverageV1::unsupported::<super::wire::NativeWirePreflightV1>("actual incoming Borsh shape", &why.to_string())
+    })?;
+    if native_resource_admission_enabled_v1() {
+        let quota = actual_hard_memory_quota_v1()?;
+        if memory > quota.headroom_bytes() {
+            return Err(NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>(
+                "actual incoming physical quota",
+                "requested allocations exceed observed enforced quota headroom",
+            ));
+        }
+        admit_native_snapshot_v1(
+            point,
+            Some(NativeSnapshotResourceBoundV1 {
+                version: 1,
+                point,
+                memory_upper_bytes: quota.limit_bytes(),
+                database_upper_bytes: 0,
+            }),
+        )
+        .map_err(|why| NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>("actual incoming physical quota", &why))?;
+    }
+    LOGICAL.get().and_then(Option::as_ref).map(|checker| checker.reserve_requests_v1(memory, 0)).transpose()
+}
+
+/// Logical request reservation for owner-audited native consumers. The caller
+/// must derive requests from actual typed objects or an actual codec preflight.
+/// Allocation request admission for owner-audited typed callers. A caller must
+/// establish its actual schema bound before construction and retain the lease
+/// through every owning cache/consumer; raw encoded lengths are not that bound.
+pub fn reserve_native_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
+        return Ok(None);
+    }
+    let checker = LOGICAL.get().and_then(Option::as_ref).ok_or_else(|| {
+        NativeCoverageV1::unsupported::<NativeDemandCheckerV1>("native consumer reservation", "capacity checker is not armed")
+    })?;
+    checker.reserve_requests_v1(memory, 0).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -285,51 +332,4 @@ mod tests {
         assert!(matches!(install.database_v1(), NativeCoverageV1::Unsupported { .. }));
         assert!(checker.reserve(&install).is_err());
     }
-}
-
-pub fn reserve_native_wire_v1(
-    point: BlockHash,
-    preflight: &super::wire::NativeWirePreflightV1,
-) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
-    if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
-        return Ok(None);
-    }
-    let memory = preflight.memory_requests_v1().map_err(|why| {
-        NativeCoverageV1::unsupported::<super::wire::NativeWirePreflightV1>("actual incoming Borsh shape", &why.to_string())
-    })?;
-    if native_resource_admission_enabled_v1() {
-        let quota = actual_hard_memory_quota_v1()?;
-        if memory > quota.headroom_bytes() {
-            return Err(NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>(
-                "actual incoming physical quota",
-                "requested allocations exceed observed enforced quota headroom",
-            ));
-        }
-        admit_native_snapshot_v1(
-            point,
-            Some(NativeSnapshotResourceBoundV1 {
-                version: 1,
-                point,
-                memory_upper_bytes: quota.limit_bytes(),
-                database_upper_bytes: 0,
-            }),
-        )
-        .map_err(|why| NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>("actual incoming physical quota", &why))?;
-    }
-    LOGICAL.get().and_then(Option::as_ref).map(|checker| checker.reserve_requests_v1(memory, 0)).transpose()
-}
-
-/// Logical request reservation for owner-audited native consumers. The caller
-/// must derive requests from actual typed objects or an actual codec preflight.
-/// Allocation request admission for owner-audited typed callers. A caller must
-/// establish its actual schema bound before construction and retain the lease
-/// through every owning cache/consumer; raw encoded lengths are not that bound.
-pub fn reserve_native_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
-    if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
-        return Ok(None);
-    }
-    let checker = LOGICAL.get().and_then(Option::as_ref).ok_or_else(|| {
-        NativeCoverageV1::unsupported::<NativeDemandCheckerV1>("native consumer reservation", "capacity checker is not armed")
-    })?;
-    checker.reserve_requests_v1(memory, 0).map(Some)
 }

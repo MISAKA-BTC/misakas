@@ -5902,7 +5902,7 @@ impl VirtualStateProcessor {
                     &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
                     state_params,
                     &point,
-                    &objects,
+                    objects,
                     None,
                     self.palw_unavailable_abstains_at(self.genesis.daa_score),
                     self.palw_capability_bound_at(self.genesis.daa_score),

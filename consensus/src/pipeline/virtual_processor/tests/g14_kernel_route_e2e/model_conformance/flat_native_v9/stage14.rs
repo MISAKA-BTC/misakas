@@ -226,7 +226,7 @@ async fn stage14_native_consent18_prevents_victim_reservation_and_original_refun
 
 fn stage_claim(f: &StageFixture, class: &CheckedStageClassV14, book: &StageJobBookV14) -> StageTraceV14 {
     let actual = class.check_job(book.job()).unwrap();
-    let plan = derive_stage_quota_v14(&class, &actual).unwrap();
+    let plan = derive_stage_quota_v14(class, &actual).unwrap();
     struct Combined<'a>(&'a MapParams, &'a Tensor);
     impl misaka_palw_tir::ParamSource for Combined<'_> {
         fn param(&self, id: u16, layer: Option<u16>) -> Option<Tensor> {
@@ -399,7 +399,7 @@ async fn stage14_original_paid_header_court_and_public_proof_retirement_replay_o
     let pursuit: NativeStagePursuitV14 = net.api().unwrap().aux_row(STAGE_TABLE_V14, &stage_key_v14(16, &id)).unwrap();
     let seal = *pursuit.seal_keys.iter().find(|k| **k != [0; 64]).unwrap();
     let own = net.api().unwrap().stage_seal_v14(&seal).unwrap();
-    assert_eq!(own.original_debit > 0, true);
+    assert!(own.original_debit > 0);
     net.beat_to(own.matures_daa).await;
     let producer = net.collateral(0);
     let mut reveal = seal.to_vec();

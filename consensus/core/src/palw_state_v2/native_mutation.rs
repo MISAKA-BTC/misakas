@@ -5,7 +5,7 @@ use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1, TirNativeRe
 
 fn copy<T: NativeHeapV1 + ?Sized>(q: &mut TirNativeRequestsV1, value: &T, purpose: &str) -> Result<(), PalwStateV2Error> {
     let heap = value.native_heap_v1(purpose);
-    q.add_v1(heap.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(heap))?).map_err(PalwStateV2Error::NativeResource)
+    q.add_v1(heap.bytes().ok_or(PalwStateV2Error::NativeResource(heap))?).map_err(PalwStateV2Error::NativeResource)
 }
 fn tree<K, V>(q: &mut TirNativeRequestsV1, n: u64) -> Result<(), PalwStateV2Error> {
     q.exact_v1::<BTreeNodeEnvelopeV1<K, V>>(n).map_err(PalwStateV2Error::NativeResource)
@@ -92,14 +92,15 @@ impl<'a> TransitionBuilder<'a> {
                 tree::<Hash64, PalwInflightTallyV1>(&mut q, 1)?;
                 tree::<PalwBondKeyV2, u32>(&mut q, 1)?;
             }
-            if self.extras.class_semantics_active && !self.state.claims.contains_key(&key) {
-                if let Some(identity) = self.state.class_semantics.get(&row.class_id) {
-                    // Stamp's caller clone occurs before its map writer.
-                    copy(&mut q, identity, "new claim's immutable identity input clone")?;
-                    slots = slots.checked_add(1).ok_or_else(|| {
-                        PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("claim cascade journal slots"))
-                    })?;
-                }
+            if self.extras.class_semantics_active
+                && !self.state.claims.contains_key(&key)
+                && let Some(identity) = self.state.class_semantics.get(&row.class_id)
+            {
+                // Stamp's caller clone occurs before its map writer.
+                copy(&mut q, identity, "new claim's immutable identity input clone")?;
+                slots = slots.checked_add(1).ok_or_else(|| {
+                    PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("claim cascade journal slots"))
+                })?;
             }
         }
         // Removal writers transfer their actual old payload into the journal.

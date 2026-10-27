@@ -19,9 +19,9 @@
 //! [`composition`] is not part of the contract: a pure calculator of the composed false-accept bound for the external soundness
 //! review dossier (`docs/design/palw/soundness-review-dossier/`), called by no consensus or policy code.
 
+pub mod approved_source_v1;
 pub mod beacon;
 pub mod bootstrap_epoch_v1;
-pub mod approved_source_v1;
 pub mod composition;
 pub mod conformance;
 pub mod hash;

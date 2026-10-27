@@ -13,7 +13,7 @@ fn scalar_columns_cover_every_flat_line_and_merged_tail_without_covering_wide_co
             for g in 0..groups {
                 let a = flat.leaf_of((g * k) as u64).unwrap();
                 let b = flat.leaf_of(((g + 1) * k - 1) as u64).unwrap();
-                assert!(b - a + 1 <= bound);
+                assert!(b - a < bound);
             }
             assert!(scalar_column_leaf_bound_v20(&[groups, k, 2]).is_none());
         }

@@ -81,12 +81,20 @@ pub fn parse_calibrations_json_v34(
         return Err("1..=128 calibration records required".into());
     }
     let digest = |v: &serde_json::Value, k: &str| -> Result<Digest, String> {
-        let h: kaspa_hashes::Hash64 =
-            v.get(k).and_then(|x| x.as_str()).ok_or_else(|| format!("{k} 128-hex required"))?.parse().map_err(|e| format!("{k}: {e}"))?;
+        let h: kaspa_hashes::Hash64 = v
+            .get(k)
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| format!("{k} 128-hex required"))?
+            .parse()
+            .map_err(|e| format!("{k}: {e}"))?;
         Ok(h.as_bytes())
     };
-    let num = |v: &serde_json::Value, k: &str| -> Result<u64, String> { v.get(k).and_then(|x| x.as_u64()).ok_or_else(|| format!("{k} u64 required")) };
-    let flag = |v: &serde_json::Value, k: &str| -> Result<bool, String> { v.get(k).and_then(|x| x.as_bool()).ok_or_else(|| format!("{k} bool required")) };
+    let num = |v: &serde_json::Value, k: &str| -> Result<u64, String> {
+        v.get(k).and_then(|x| x.as_u64()).ok_or_else(|| format!("{k} u64 required"))
+    };
+    let flag = |v: &serde_json::Value, k: &str| -> Result<bool, String> {
+        v.get(k).and_then(|x| x.as_bool()).ok_or_else(|| format!("{k} bool required"))
+    };
     items
         .iter()
         .map(|v| {

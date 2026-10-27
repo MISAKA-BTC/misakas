@@ -1,5 +1,4 @@
 //! **`params`'s `post_launch_fence_arming_tests` module**, moved out of `params.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 

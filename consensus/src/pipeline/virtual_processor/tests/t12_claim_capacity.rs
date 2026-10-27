@@ -927,7 +927,7 @@ fn policy_from_env() -> LicencePolicy {
         "none" => LicencePolicy::None,
         "s2" => LicencePolicy::S2,
         other if other.starts_with("mix:") => {
-            let v: Vec<u16> = other[4..].split(',').map(|x| x.parse().expect("permille")).collect();
+            let v: Vec<u16> = other[4..].split(',').map(|x| x.parse::<u16>().expect("permille")).collect();
             LicencePolicy::Mix(v[0], v[1], v[2])
         }
         other => panic!("unknown policy {other}"),

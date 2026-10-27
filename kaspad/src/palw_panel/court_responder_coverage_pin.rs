@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `court_responder_coverage_pin` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 /// **PIN THE LIMITATION, NOT THE BEHAVIOUR: no shipped binary files a `CourtAttnRootClaimed`**
 /// (ADR-0082 Decision 2; mainnet audit 2026-09-06, C-2/H-5).

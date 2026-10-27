@@ -133,7 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let shape = d.shape.iter().map(|n| *n as usize).collect::<Vec<_>>();
         let width = d.dtype.width();
         let (root, _) = tensor_commitment_streamed_v3(d.dtype, &shape, 32 << 20, &mut |offset, out| {
-            if offset as usize % width != 0 || out.len() % width != 0 {
+            if !(offset as usize).is_multiple_of(width) || !out.len().is_multiple_of(width) {
                 return Err("parameter alignment".into());
             }
             let start = offset as usize / width;

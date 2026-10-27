@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `p2_6_da_accusation_policy` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 //! **ADR-0152 §3.8 (Phase 2, P2-6): the automatic data-availability accusation, its funding and
 //! its place in the carrier order.** The accusation's gate and its object are consensus-core's

@@ -99,10 +99,9 @@ fn real_capture_selects_its_own_router_and_reaches_direct_arithmetic() {
         assert!(check_routed_step_refutation_v2(&owner, binding.committed_execution_root, &foreign, &NoWeights, 1 << 26).is_err());
         let mut altered = (*owner).clone();
         altered.step.inputs[0].preimages[0].values_le[0] ^= 1;
-        assert!(matches!(
-            check_routed_step_refutation_v2(&altered, binding.committed_execution_root, &declaration, &NoWeights, 1 << 26),
-            Err(_)
-        ));
+        assert!(
+            check_routed_step_refutation_v2(&altered, binding.committed_execution_root, &declaration, &NoWeights, 1 << 26).is_err()
+        );
         let gathered = routed_leaf_evidence_from_capture_v2(&binding, target, &declaration, &hashes, &tiles, &[], 1 << 26).unwrap();
         assert!(gathered.artifact_openings.is_empty(), "Kimi combine requests no model parameter rows");
     }

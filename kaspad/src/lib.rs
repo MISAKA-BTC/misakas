@@ -27,7 +27,6 @@ pub mod palw_filer_false_valid;
 pub mod palw_gdn_held_filer;
 pub mod palw_gdn_step_filer;
 mod palw_flat_public_source;
-mod palw_public_token_table;
 /// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;
@@ -45,7 +44,6 @@ pub mod palw_licence_order;
 pub mod palw_memory_ledger;
 /// RFC-0008 PAV3: the in-node producer's native custody exchange (the transport trait and the producer-side checks).
 pub mod palw_native_custody_v3;
-pub mod palw_resource_admission_v2;
 pub mod palw_panel;
 /// int-10.2 A2: the prefill run width a replay runs at, chosen from the memory the ledger can grant
 /// (node policy).
@@ -57,9 +55,11 @@ mod palw_native_routing_work_v2;
 pub mod palw_producer_backpressure;
 #[cfg(test)]
 mod palw_producer_t12_tests;
+mod palw_public_token_table;
 /// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
 pub mod palw_readiness_escalation;
 pub mod palw_receipt_pool;
+pub mod palw_resource_admission_v2;
 pub mod palw_retention;
 pub mod storage_capacity;
 pub mod palw_rider_outbox;

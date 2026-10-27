@@ -69,7 +69,7 @@ impl PrefixCacheGcV1 {
             return Ok(());
         }
         let directory = directory.to_path_buf();
-        let worker_lease = lease.clone();
+        let worker_lease = lease;
         let irreversible = self.irreversible_daa;
         let done = tokio::task::spawn_blocking(move || {
             gc_prefix_cache_v1(&directory, worker_lease.seed_id, worker_lease.material_until_daa, irreversible)
