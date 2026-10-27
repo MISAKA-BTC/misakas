@@ -226,7 +226,13 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     }
     let schedule = p.fence_schedule_v1();
     assert!(!schedule.contains(&9_000), "the cancelled 9,000 is not on the public schedule: {schedule:?}");
-    assert_eq!(schedule.last().copied(), PALW_T12_INT13_DAA, "the schedule ends at the int-13 flag day: {schedule:?}");
+    // The int-13 flag day, then the G14 17,000 flag day (lane ACT2, user decision 2026-10-27) as the last height.
+    assert!(schedule.contains(&PALW_T12_INT13_DAA.unwrap()), "{schedule:?}");
+    assert_eq!(
+        schedule.last().copied(),
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA,
+        "the schedule ends at the G14 flag day: {schedule:?}"
+    );
 }
 
 /// **The kit's copy of the full-activation list's height is the core's** (lane g14p/r7-fence-16000): `None` today — target 17,000, set
@@ -244,8 +250,19 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
     for fence in PALW_T12_FULL_ACTIVATION_FENCES_V1 {
         let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
         // The int-13 entries keep the int-13 list's height (15,500, the fleet's); the rest are the full list's.
-        let want = if PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == fence.name) { PALW_T12_INT13_DAA } else { PALW_T12_FULL_ACTIVATION_DAA };
+        // Entries the G14 17,000 list also carries are at its height (lane ACT2, user decision 2026-10-27).
+        let g14 = kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1.iter().any(|f| f.name == fence.name);
+        let want = if PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == fence.name) {
+            PALW_T12_INT13_DAA
+        } else if g14 {
+            kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA
+        } else {
+            PALW_T12_FULL_ACTIVATION_DAA
+        };
         assert_eq!(armed, want, "{}: on the preset", fence.name);
     }
-    assert!(!p.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1), "17,000 is on no schedule yet");
+    let g14 = shell_value(FLEET, &fleet, "G14_FLAG_DAY_DAA");
+    let core_g14 = kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.map(|at| at.to_string()).unwrap_or_default();
+    assert_eq!(g14, core_g14, "{FLEET}: G14_FLAG_DAY_DAA is the preset's");
+    assert!(p.fence_schedule_v1().contains(&17_000), "the G14 list is scheduled at 17,000");
 }

@@ -436,7 +436,9 @@ pub struct PalwModelTierArmingRecordV1 {
 }
 
 /// **The pinned records — EMPTY.** No `κ` is approved and no edition has a release record: every armed height is refused.
-pub const PALW_MODEL_TIER_ARMING_RECORDS_V1: &[PalwModelTierArmingRecordV1] = &[];
+// Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only (c 300, κ 1000 = user decision), every slot a typed waiver.
+pub const PALW_MODEL_TIER_ARMING_RECORDS_V1: &[PalwModelTierArmingRecordV1] =
+    crate::palw_t12_17000_records_v1::PALW_T12_17000_MODEL_TIER_RECORDS_V1;
 
 /// Does `records` authorize `fence` on the network `genesis`? The first record naming exactly this (network, height) decides; it must
 /// name the fence's own `c`, `κ` and catalog tip, and its form must hold. `Err` carries the refusal text.
@@ -479,6 +481,16 @@ pub fn palw_model_tier_arming_record_admits_v1(
             return Err("a model-tier arm-readiness evidence digest is zero, repeated, or equal to the review");
         }
     }
+    // Lane ACT2: a slot that is a pinned waiver must be that waiver's own slot (`crate::palw_arming_waiver_v1`).
+    crate::palw_arming_waiver_v1::palw_arming_record_waivers_hold_v1(
+        "palw_model_tier_v1",
+        r.genesis,
+        r.activation_daa,
+        r.evidence,
+        &r.review,
+        crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,
+    )
+    .map_err(|(_, e)| e)?;
     Ok(())
 }
 

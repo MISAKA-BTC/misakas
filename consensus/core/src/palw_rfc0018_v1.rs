@@ -838,7 +838,8 @@ pub struct PalwRfc0018ArmingRecordV1 {
 }
 
 /// **The pinned records — EMPTY.** Every RFC-0018 fence armed at a real height is refused (the old `ARMABLE = false`).
-pub const PALW_RFC0018_ARMING_RECORDS_V1: &[PalwRfc0018ArmingRecordV1] = &[];
+// Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
+pub const PALW_RFC0018_ARMING_RECORDS_V1: &[PalwRfc0018ArmingRecordV1] = crate::palw_t12_17000_records_v1::PALW_T12_17000_RFC0018_RECORDS_V1;
 
 /// Does `records` authorize arming `fence` at `activation_daa` on the network `genesis`? The first record naming exactly this
 /// (fence, network, height) decides; its form must hold. `Err` carries the refusal text.
@@ -868,6 +869,16 @@ pub fn palw_rfc0018_arming_record_admits_v1(
             return Err("an RFC-0018 arm-readiness evidence digest is zero, repeated, or equal to the review");
         }
     }
+    // Lane ACT2: a slot that is a pinned waiver must be that waiver's own slot (`crate::palw_arming_waiver_v1`).
+    crate::palw_arming_waiver_v1::palw_arming_record_waivers_hold_v1(
+        fence.name(),
+        r.genesis,
+        r.activation_daa,
+        r.evidence,
+        &r.review,
+        crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,
+    )
+    .map_err(|(_, e)| e)?;
     Ok(())
 }
 

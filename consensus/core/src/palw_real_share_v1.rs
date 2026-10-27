@@ -291,6 +291,14 @@ pub fn palw_floor_state_change_v1(entries: &[crate::palw_state_v2::PalwDeltaEntr
 /// the operators do not all fire in one slot. A node policy: it is no consensus rule and moves no fingerprint.
 pub const PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1: u64 = 30;
 
+/// **The wait when no REAL attempt is coming** (live testnet-12, 2026-10-26): every model class refuses a new attempt at the class
+/// gate (`PalwProducerFactsV2::real_attempts_refused` — on the live chain the 8k class's panel room full at 29 of 29 owed claims),
+/// so the operator REAL attempt the thirty-slot wait leaves room for cannot be mined, and the wait only delays the bind that would
+/// free that room: the claims' bind took a median 78 DAA past acceptance (130 claims, DAA 15,150–15,830), the binder firing at
+/// 30 + 6 slots. Four slots is one more than the 3-slot gap at which operators' REAL attempts anchor on their own, so a class that
+/// starts admitting again between two slots still anchors first. A node policy, like the thirty: no rule, no fingerprint.
+pub const PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1: u64 = 4;
+
 /// The stagger's width: operators fire 0..8 slots apart.
 pub const PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1: u64 = 8;
 
@@ -348,6 +356,9 @@ pub struct PalwFloorAnchorDutyInputV1<'a> {
     pub due_slots: u64,
     /// The wait: [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`] unless a salted drill shortened it.
     pub after_slots: u64,
+    /// `PalwProducerFactsV2::real_attempts_refused`: every REAL class refuses a new attempt, so the wait is at most
+    /// [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1`].
+    pub real_attempts_refused: bool,
     /// This bond's stagger ([`palw_floor_anchor_duty_stagger_v1`]).
     pub stagger: u64,
 }
@@ -356,14 +367,22 @@ pub struct PalwFloorAnchorDutyInputV1<'a> {
 /// an OPERATOR's attempt at or past its slot; while the chain is Normal the operators' floor producers hold, and where the REAL work
 /// comes from non-operators no operator attempt exists — the claim waits for the bind window's backstop. A floor attempt the fold
 /// refuses (`FloorNotIdle`) is still an operator attempt by its header, so it anchors: the producer mines it, once, when a claim has
-/// waited `after_slots` slots plus its stagger for one. True only for the floor class, only where the hold is the idle-only refusal
-/// and nothing else, and only with `binder_due`. Pure, so the rule is tested without a node.
+/// waited `after_slots` slots plus its stagger for one — or, while every REAL class refuses a new attempt, at most
+/// [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1`] plus its stagger ([`palw_floor_anchor_duty_after_slots_v1`]). True only for the floor
+/// class, only where the hold is the idle-only refusal and nothing else, and only with `binder_due`. Pure, so the rule is tested without
+/// a node.
 pub fn palw_floor_anchor_duty_v1(input: &PalwFloorAnchorDutyInputV1<'_>) -> bool {
     input.binder_due
         && input.is_base_class
         && input.hold_is_class_not_admitting
         && input.class_refusal.is_some_and(palw_is_floor_not_idle_refusal_v1)
-        && input.due_slots >= input.after_slots.saturating_add(input.stagger)
+        && input.due_slots >= palw_floor_anchor_duty_after_slots_v1(input).saturating_add(input.stagger)
+}
+
+/// The wait the duty reads, before the stagger: `after_slots`, cut to [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1`] while every
+/// REAL class refuses a new attempt (a drill's shorter wait stays the shorter).
+pub fn palw_floor_anchor_duty_after_slots_v1(input: &PalwFloorAnchorDutyInputV1<'_>) -> u64 {
+    if input.real_attempts_refused { input.after_slots.min(PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1) } else { input.after_slots }
 }
 
 /// **The entries a testnet-12 flag-day list takes to arm the Useful Work Transition's two consensus
@@ -903,6 +922,7 @@ mod tests {
             class_refusal: Some(&refusal),
             due_slots: PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1,
             after_slots: PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1,
+            real_attempts_refused: false,
             stagger: 0,
         };
         assert!(palw_floor_anchor_duty_v1(&base), "the wait is over: one binder");
@@ -913,6 +933,33 @@ mod tests {
             palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { after_slots: 5, due_slots: 5, ..base }),
             "a drill's shorter wait is the wait"
         );
+        // No REAL attempt is coming: the wait is the short one, the stagger still spreads the operators, a drill's shorter wait stays.
+        let no_real = PalwFloorAnchorDutyInputV1 {
+            real_attempts_refused: true,
+            due_slots: PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_NO_REAL_V1,
+            ..base
+        };
+        assert!(palw_floor_anchor_duty_v1(&no_real), "every REAL class refuses: the short wait is over");
+        assert!(!palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { due_slots: no_real.due_slots - 1, ..no_real }), "not yet");
+        assert!(
+            !palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { real_attempts_refused: false, ..no_real }),
+            "a REAL class admits"
+        );
+        assert!(
+            !palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { stagger: 6, ..no_real }),
+            "the stagger is added to the short wait"
+        );
+        assert!(palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { stagger: 6, due_slots: no_real.due_slots + 6, ..no_real }));
+        assert_eq!(
+            palw_floor_anchor_duty_after_slots_v1(&PalwFloorAnchorDutyInputV1 { after_slots: 2, ..no_real }),
+            2,
+            "a drill's shorter wait"
+        );
+        assert!(
+            !palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { binder_due: false, ..no_real }),
+            "the short wait needs a due claim"
+        );
+        assert!(!palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { is_base_class: false, ..no_real }), "…and the floor class");
         for (what, input) in [
             ("no claim due", PalwFloorAnchorDutyInputV1 { binder_due: false, ..base }),
             ("a REAL class", PalwFloorAnchorDutyInputV1 { is_base_class: false, ..base }),

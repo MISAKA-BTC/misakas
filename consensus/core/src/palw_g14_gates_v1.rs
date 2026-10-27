@@ -331,7 +331,8 @@ pub struct PalwG14ArmingRecordV1 {
 }
 
 /// **The pinned records — EMPTY.** Every gated fence armed at a real height on a real network is refused.
-pub const PALW_G14_ARMING_RECORDS_V1: &[PalwG14ArmingRecordV1] = &[];
+// Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
+pub const PALW_G14_ARMING_RECORDS_V1: &[PalwG14ArmingRecordV1] = crate::palw_t12_17000_records_v1::PALW_T12_17000_G14_RECORDS_V1;
 
 /// Why a record does not authorize an arming.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -382,6 +383,17 @@ pub fn palw_g14_arming_record_form_v1(record: &PalwG14ArmingRecordV1) -> Result<
         if *digest == [0; 32] || *digest == record.review || record.evidence[..i].contains(digest) {
             return Err(PalwG14ArmingRefusalV1::Evidence(i));
         }
+    }
+    // Lane ACT2: a slot that is a pinned waiver must be that waiver's own slot (`crate::palw_arming_waiver_v1`).
+    if let Err((i, _)) = crate::palw_arming_waiver_v1::palw_arming_record_waivers_hold_v1(
+        record.fence.name(),
+        record.genesis,
+        record.activation_daa,
+        record.evidence,
+        &record.review,
+        crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,
+    ) {
+        return Err(PalwG14ArmingRefusalV1::Evidence(i));
     }
     Ok(())
 }

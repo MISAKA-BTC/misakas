@@ -277,9 +277,19 @@ pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 17_000;
 /// flag day; a no-op while the height is `None` (it leaves the list exactly as the earlier lists set it — in particular it does not clear
 /// the int-13 entries this list shares, should the int-13 list ever take a height of its own).
 pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
+    // **The G14 17,000 flag day (user decision 2026-10-27, drill skipped):** `PALW_T12_G14_17000_FENCES_V1` at
+    // `PALW_T12_G14_17000_FLAG_DAY_DAA`, the int-13 entries left at 15,500. The FULL list (which carries fences this release does not
+    // arm, e.g. monetary material, settlement once) keeps `PALW_T12_FULL_ACTIVATION_DAA = None`.
+    if let Some(at) = PALW_T12_G14_17000_FLAG_DAY_DAA {
+        palw_t12_arm_after_int13_at_v1(params, PALW_T12_G14_17000_FENCES_V1, Some(at));
+    }
     let Some(at) = PALW_T12_FULL_ACTIVATION_DAA else { return };
     palw_t12_arm_after_int13_at_v1(params, PALW_T12_FULL_ACTIVATION_FENCES_V1, Some(at));
 }
+
+/// **The G14 17,000 flag day's height on the shipped testnet-12 preset — ARMED** (user decision 2026-10-27). One constant the preset
+/// and the kit (`G14_FLAG_DAY_DAA` in `contrib/t12-deploy-kit/fleet.env.example`, pinned by `t12_deploy_kit_constants`) share.
+pub const PALW_T12_G14_17000_FLAG_DAY_DAA: Option<u64> = Some(PALW_T12_G14_17000_DAA_V1);
 
 /// Is `fence` one of the int-13 list's entries while that list has its own height ([`PALW_T12_INT13_DAA`], DAA 15,500 on the public
 /// fleet)? Those entries keep that height: a later list must neither re-arm them at its own height nor set them dormant.
@@ -362,6 +372,117 @@ pub const PALW_T12_FP_CONSTRAINT_PREFIX_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
 ];
 
+/// **The DAA 17,000 testnet-12 arming list (lane ACT2, user decision 2026-10-27: arm the Panel=1 kernel slice and all six G14 route
+/// families — LegacyPanelAttempt, LegacyFusedLeaf, FpSelection, FpConstraint, FpPrefix, FpTokenizer — together; the drill is waived by
+/// the user, never recorded as run).** The union of [`PALW_T12_KERNEL_SLICE_FENCES_V1`], every name
+/// [`crate::palw_g14_gates_v1::palw_g14_route_family_fences_v1`] returns for those families, and the fences their validation requires
+/// at or below them, in [`PALW_T12_FULL_ACTIVATION_FENCES_V1`]'s order (prerequisites first) so one height satisfies every "at or below".
+/// `palw_panel_da_disclosure_v1` (not on the full list) sits right before route-required (PanelDa added
+/// to scope by the user 2026-10-27). RFC07 `palw_claim_challenge_v2` is NOT here. The preset does NOT read this list: arming it is [`PALW_T12_G14_17000_DAA_V1`] through [`palw_t12_arm_after_int13_at_v1`]
+/// after review, and every entry's own validation (records, measured values) still applies.
+pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    crate::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY,
+    crate::palw_gen_range_twin_v1::PALW_DRILL_GEN_RANGE_TWIN_ENTRY,
+    PALW_T12_MODEL_COURT_WINDOW_ENTRY,
+    crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
+    PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,
+    PALW_T12_FULL_KERNEL_ROUTE_PANEL_ONE_ENTRY,
+    PALW_T12_FULL_PROVIDER_COURT_ENTRY,
+    PALW_T12_FULL_LEGACY_PUBLIC_FILER_ENTRY,
+    PALW_T12_FULL_LEGACY_HELD_DA_V2_ENTRY,
+    PALW_T12_FULL_STAGED_PUBLIC_COURT_ENTRY,
+    PALW_T12_FULL_STAGED_TIR_ROUTE_ENTRY,
+    PALW_T12_FULL_TIR_CONTAINER_IDENTITY_ENTRY,
+    // The frame cost value (lane VAL estimate). The handshake identity drops it while neither frame fence is active at genesis
+    // (`normalize_values_a_scheduled_fence_drags_with_it`, ACT2 2026-10-27), so scheduling it keeps the fleet's identity.
+    PALW_T12_G14_TIR_FRAME_COST_ESTIMATE_ENTRY,
+    PALW_T12_FULL_TIR_PUBLIC_CONVICTION_ENTRY,
+    PALW_T12_FULL_COURT_OUTSIDER_LANE_ENTRY,
+    PALW_T12_FULL_COURT_CLOCK_V2_ENTRY,
+    // Court capacity with the user-approved V11 estimate (2026-10-26) as the production policy (no measurement record).
+    PALW_T12_G14_COURT_CAPACITY_ESTIMATE_ENTRY,
+    PALW_T12_FULL_BOND_BUDGET_ENTRY,
+    PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
+    // Model tier, user decision 2026-10-27: c = 300 permille, κ = 1000 permille from 17,000, catalog edition 0 empty (classes
+    // the genesis assembly registered are 1.0 as a chain fact). Gate C needs it at or below.
+    // ADR-0177 model allocation with the lane ACT2 estimate policy (derived from user decisions; needs the bond budget at or below),
+    // at or below the model tier (c_m is applied once, in the allocation weight).
+    PALW_T12_G14_MODEL_BOND_ALLOCATION_ENTRY,
+    PALW_T12_G14_MODEL_TIER_ENTRY,
+    // `palw_settlement_once_v1` (RFC08-2) is NOT here (lane ACT2 recommendation (ii), 2026-10-27): its open blocker
+    // (`PALW_RFC0608_OPEN_BLOCKERS_V1`, unsourced liability terms) is a safety refusal no waiver lifts, and armed it would refuse
+    // native mining receipts and other legs with no signed deadline. No entry of this list needs it at or below; each pay point keeps
+    // its own once-guard (escrow row removal / phase / paid flag), as testnet-12 runs today.
+    PALW_T12_FULL_GATE_C_ENTRY,
+    // Slot for lane ROLES: the wide128 test-class root pinned as "public attest" (a constant ROLES adds here, before route-required).
+    // `palw_fp_tokenizer_match` (FpTokenizer) is NOT here: testnet-12 already runs it from DAA 5,300; re-arming it at 17,000
+    // would move a live fence below 17,000. The FpTokenizer family's other fences are above.
+    // PanelDa (user 2026-10-27, added to scope): `palw_panel_da` is already in force on testnet-12 (RC DA court fence); the
+    // disclosure needs it and `palw_court_clock_v2` at or below.
+    PALW_T12_G14_PANEL_DA_DISCLOSURE_ENTRY,
+    PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
+];
+
+palw_full_activation_bare_entry_v1!(PALW_T12_G14_PANEL_DA_DISCLOSURE_ENTRY, palw_panel_da_disclosure_v1);
+
+/// The TIR public frame's cost model (not a fence: a value the frame reads) — the lane VAL estimate, user-approved as a value
+/// 2026-10-26; its record (`PALW_TIR_FRAME_COST_RECORDS_V1`) waives the measurement. `None` clears it.
+pub const PALW_T12_G14_TIR_FRAME_COST_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_tir_frame_cost_v1",
+    set: |params, at| {
+        params.palw_tir_frame_cost_v1 = at.map(|_| crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1);
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
+
+/// `palw_model_bond_allocation_v1` with the lane ACT2 estimate policy (`palw_model_bond_allocation_estimate_v1`). `None` clears it.
+pub const PALW_T12_G14_MODEL_BOND_ALLOCATION_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_model_bond_allocation_v1",
+    set: |params, at| {
+        params.palw_model_bond_allocation_v1 = at.map(|activation| crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1 {
+            activation,
+            policy: crate::palw_bond_budget_v1::palw_model_bond_allocation_estimate_v1(),
+        });
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
+
+/// The user-decided registered-tier cap κ (permille) from DAA 17,000 on testnet-12 (user 2026-10-27).
+pub const PALW_T12_G14_MODEL_TIER_CAP_PERMILLE_V1: u32 = 1_000;
+/// The registered coefficient c (permille), frozen premise (PRINCIPLES §9).
+pub const PALW_T12_G14_MODEL_TIER_REGISTERED_PERMILLE_V1: u32 = 300;
+
+/// `palw_model_tier_v1` with the user-decided values: c 300‰, κ 1000‰, catalog edition 0 empty. `None` sets it dormant.
+pub const PALW_T12_G14_MODEL_TIER_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_model_tier_v1",
+    set: |params, at| {
+        params.palw_model_tier_v1 = at.map(|at| crate::palw_model_tier_v1::PalwModelTierFenceV1 {
+            activation: at,
+            catalogs: crate::palw_annual_catalog_v1::PalwAnnualCatalogChainV1::genesis_only(Vec::new()),
+            registered_permille: PALW_T12_G14_MODEL_TIER_REGISTERED_PERMILLE_V1,
+            registered_cap_permille: PALW_T12_G14_MODEL_TIER_CAP_PERMILLE_V1,
+        });
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
+
+/// `palw_court_capacity_v1` with the user-approved V11 estimate policy (`PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1`, approved
+/// 2026-10-26) and no measurement record; validation accepts it only with a `UserDecision` waiver in the record's measured slot.
+pub const PALW_T12_G14_COURT_CAPACITY_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_court_capacity_v1",
+    set: |params, at| {
+        params.palw_court_capacity_v1 = at.map(|activation| crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1 {
+            activation,
+            policy: crate::palw_g14_values_v1::PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1,
+            measurement: None,
+        });
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
+
+/// The height [`PALW_T12_G14_17000_FENCES_V1`] is meant for — read by tests and the arming report only, NEVER by the preset.
+pub const PALW_T12_G14_17000_DAA_V1: u64 = 17_000;
+
 /// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.
 pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {
     match at {
@@ -377,5 +498,7 @@ pub fn palw_t12_release_v7_params() -> Params {
     let mut params = palw_t12_shipped_params();
     // The int-13 entries stay at PALW_T12_INT13_DAA (15,500): this baseline is the public fleet's ruleset.
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
+    // The G14 17,000 list too (its value entries — allocation, frame cost — are not on the full list).
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     params
 }

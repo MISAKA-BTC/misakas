@@ -12,9 +12,9 @@ say() { printf '\n[%s] ===== %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 #   CHECK_G14=1 ./check-fleet.sh        + the DAA 17,000 G14 slice counters per node (t12check.py --g14; fields the RPC does
 #                                         not carry print "unavailable") and fp/tip agreement across all three hosts
 OUT=$(mktemp); trap 'rm -f "$OUT"' EXIT
-say "ibm (b0 b1)";   ssh -o ConnectTimeout=15 misaka-ibm "cd $REL_ROOT/kit && CHECK_REGISTRY=${CHECK_REGISTRY:-} CHECK_G14=${CHECK_G14:-} ./install-ibm.sh check" | tee -a "$OUT"
-say ".113 (b6)";     $K root@169.58.232.113 "cd $REL_ROOT/kit && CHECK_REGISTRY=${CHECK_REGISTRY:-} CHECK_G14=${CHECK_G14:-} ./install-113.sh check" | tee -a "$OUT"
-say "5.104 (b2 b3 b4 b5 b7)"; $K root@5.104.81.23 "cd $REL_ROOT/kit && CHECK_G14=${CHECK_G14:-} ./install-5104.sh check" | tee -a "$OUT"
+say "ibm (b0 b1 b3)";   ssh -o ConnectTimeout=15 misaka-ibm "cd $REL_ROOT/kit && CHECK_REGISTRY=${CHECK_REGISTRY:-} CHECK_G14=${CHECK_G14:-} ./install-ibm.sh check" | tee -a "$OUT"
+say ".113 (b6 b7)";  $K root@169.58.232.113 "cd $REL_ROOT/kit && CHECK_REGISTRY=${CHECK_REGISTRY:-} CHECK_G14=${CHECK_G14:-} ./install-113.sh check" | tee -a "$OUT"
+say "5.104 (b2 b4)"; $K root@5.104.81.23 "cd $REL_ROOT/kit && CHECK_G14=${CHECK_G14:-} ./install-5104.sh check" | tee -a "$OUT"
 if [ -n "${CHECK_G14:-}" ]; then
     say "G14: fp / tip agreement across the three hosts (tips can differ by a block in flight: rerun before calling it a split)"
     grep '^G14TIP' "$OUT" | sort | uniq -c

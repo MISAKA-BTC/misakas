@@ -49,12 +49,20 @@ const FLEET_247ADE1F9: [(&str, &str); 3] = [
     ("schedule", concat!("9ef2b1a795c74d6faced545752f2d17c", "7e731e8e94155d078bc00cbee6c878f5")),
 ];
 
+/// With the G14 17,000 flag day ARMED on the preset (user decision 2026-10-27): the handshake identity is the fleet's; the release's
+/// own params fingerprint and schedule id move (a new height is scheduled), and the baseline without the flag day
+/// (`palw_t12_release_v7_params`) is the fleet's byte for byte. Prints the new fingerprint (the kit's EXPECT_FP).
 #[test]
 fn fleet_ids_match_247ade1f9() {
-    let got = lines();
-    for (name, want) in FLEET_247ADE1F9 {
-        assert!(got.contains(&format!("{name}={want}")), "{name}: {got:?}");
-    }
+    let shipped = palw_t12_shipped_params();
+    let base = kaspa_consensus_core::config::params::palw_t12_release_v7_params();
+    let [(_, params), (_, identity), (_, schedule)] = FLEET_247ADE1F9;
+    assert_eq!(base.consensus_params_id().to_string(), params, "baseline params = the fleet's");
+    assert_eq!(base.consensus_schedule_id().to_string(), schedule, "baseline schedule = the fleet's");
+    assert_eq!(base.consensus_identity_id().to_string(), identity);
+    assert_eq!(shipped.consensus_identity_id().to_string(), identity, "the release keeps the fleet's handshake identity");
+    assert_ne!(shipped.consensus_params_id().to_string(), params, "the release's fingerprint moves (17,000 scheduled)");
+    println!("FLEETDIAG EXPECT_FP={} UPGRADE_FROM_FP={params} schedule={}", shipped.consensus_params_id(), shipped.consensus_schedule_id());
 }
 
 /// **The DAA-17,000 slice, armed, keeps the handshake identity** (a future height collapses to `never`). Diagnostic: prints every
@@ -76,4 +84,45 @@ fn slice_at_17000_keeps_the_handshake_identity() {
     let mut p = base.clone();
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(17_000));
     assert_eq!(p.consensus_identity_id(), id, "the slice at 17,000 moves the handshake identity: {moved:?}");
+}
+
+/// **Lane ACT2: the DAA-17,000 G14 list (slice + six route families), armed, leaves everything below 17,000 as the fleet runs it** —
+/// handshake identity, fork id at every probed DAA below 17,000, the schedule below 17,000 and every fence armed below 17,000.
+#[test]
+fn g14_17000_list_keeps_everything_below_17000() {
+    use kaspa_consensus_core::config::params::{
+        PALW_T12_G14_17000_DAA_V1, PALW_T12_G14_17000_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1,
+    };
+    // The fleet's ruleset (the release without its 17,000 flag day) against the release as shipped (the flag day armed).
+    let base = kaspa_consensus_core::config::params::palw_t12_release_v7_params();
+    let mut p = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, Some(PALW_T12_G14_17000_DAA_V1));
+    assert_eq!(p.consensus_params_id(), palw_t12_shipped_params().consensus_params_id(), "the preset arms exactly this list");
+    let below = |q: &Params| {
+        let mut f: Vec<String> = q
+            .palw_fences_v1()
+            .iter()
+            .filter_map(|(n, f)| f.map(|f| (*n, f.daa_score())))
+            .filter(|(_, h)| *h < 17_000)
+            .map(|(n, h)| format!("{n}@{h}"))
+            .collect();
+        f.sort();
+        f
+    };
+    let sched = |q: &Params| q.fence_schedule_v1().into_iter().filter(|h| *h < 17_000).collect::<Vec<u64>>();
+    assert_eq!(p.consensus_identity_id(), base.consensus_identity_id(), "handshake identity moved");
+    for daa in FORK_ID_DAAS {
+        // `next` announces the upcoming fence (17,000 vs none) by design (ADR-0072 SA-2): a peer may differ there. `fired` may not.
+        assert_eq!(fork_id_v1(&p, daa).fired, fork_id_v1(&base, daa).fired, "fired fork id at {daa} moved");
+    }
+    assert_eq!(sched(&p), sched(&base), "schedule below 17,000 moved");
+    assert_eq!(below(&p), below(&base), "a fence below 17,000 moved");
+    assert!(p.fence_schedule_v1().contains(&17_000), "the list is not at 17,000");
+    println!(
+        "FLEETDIAG g14-17000 armed: schedule_id armed={} shipped={}; fork_id@17000 armed={:?} shipped={:?}",
+        p.consensus_schedule_id(),
+        base.consensus_schedule_id(),
+        fork_id_v1(&p, 17_000),
+        fork_id_v1(&base, 17_000)
+    );
 }

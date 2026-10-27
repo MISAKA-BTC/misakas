@@ -164,7 +164,8 @@ pub struct PalwTirFrameCostRecordV1 {
 }
 
 /// **The pinned frame cost records — EMPTY.** No real network's frame is priced or clocked until a reviewed change pins one.
-pub const PALW_TIR_FRAME_COST_RECORDS_V1: &[PalwTirFrameCostRecordV1] = &[];
+// Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
+pub const PALW_TIR_FRAME_COST_RECORDS_V1: &[PalwTirFrameCostRecordV1] = crate::palw_t12_17000_records_v1::PALW_T12_17000_FRAME_COST_RECORDS_V1;
 
 /// Why a frame cost record does not price a network.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -716,7 +717,7 @@ mod tests {
 
     #[test]
     fn the_cost_record_list_is_empty_and_refuses_every_network() {
-        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.is_empty());
+        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 17_000 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
         let cost = palw_tir_frame_test_only_cost_v1();
         cost.check_v1().expect("the test-only config is well formed");
         assert_eq!(

@@ -41,17 +41,17 @@ mkdir -p "$OUT"
 say "building $REV12 ($(git -C "$SRC" log -1 --format=%s | cut -c1-90)) with -j$JOBS → $OUT"
 set +e
 ( cd "$SRC" && CARGO_TARGET_DIR="$TARGET" nice -n 10 cargo build --release --locked -j "$JOBS" \
-      --bin kaspad --bin misaka --bin palw-class --bin misaka-dnsseeder ) > "$OUT/build.log" 2>&1
+      --bin kaspad --bin misaka --bin palw-class --bin misaka-dnsseeder --bin palw-evidence ) > "$OUT/build.log" 2>&1
 rc=$?
 set -e
 grep -E '^error|Finished' "$OUT/build.log" | tail -5 || true
 [ "$rc" -eq 0 ] || die "cargo build failed (rc=$rc) — see $OUT/build.log; nothing copied"
-for b in kaspad misaka palw-class misaka-dnsseeder; do
+for b in kaspad misaka palw-class misaka-dnsseeder palw-evidence; do
     [ -x "$TARGET/release/$b" ] || die "$b was not built — see $OUT/build.log"
     install -m 0755 "$TARGET/release/$b" "$OUT/$b"
 done
 echo "$COMMIT" > "$OUT/REV"
-(cd "$OUT" && sha256sum kaspad misaka palw-class misaka-dnsseeder > SHA256SUMS)
+(cd "$OUT" && sha256sum kaspad misaka palw-class misaka-dnsseeder palw-evidence > SHA256SUMS)
 cat "$OUT/SHA256SUMS"
 
 # ---- identity probe: the release's own fingerprint and genesis, read from a node that can reach

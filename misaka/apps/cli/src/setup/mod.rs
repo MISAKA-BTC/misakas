@@ -1197,7 +1197,7 @@ fn apply_node_plan(plan: &NodePlan, args: &NodeSetupArgs) -> CliResult {
 
 async fn connect_node(ctx: &Ctx) -> Result<KaspaRpcClient, CliError> {
     let hostport = wrpc_borsh_endpoint(&ctx.network, &ctx.rpc)?;
-    let url = format!("ws://{hostport}");
+    let url = misaka_endpoints::wrpc_url(&hostport);
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
         .map_err(|e| CliError::new(exit::CONNECTION, format!("build wRPC client: {e}")))?;
     let options = ConnectOptions {

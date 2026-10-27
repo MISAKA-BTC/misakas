@@ -11,6 +11,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+misaka-endpoints.workspace = true
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true

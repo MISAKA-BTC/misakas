@@ -137,11 +137,40 @@ build_args() { # fills ARGS from the parsed node
     # fleet.env, or the install-<host>.sh; empty = off, the release's default): each grant of the node's memory
     # ledger then also needs the host's free memory less EVERY node's reservations (t12-replay-memory-1001.md §5).
     if [ -n "${HOST_LEDGER_DIR:-}" ]; then ARGS+=("--palw-host-ledger-dir=$HOST_LEDGER_DIR"); fi
+    # RFC-0009 stage B (10-26): evidence providers a panel seat's material pull is also answered from (EVIDENCE_PROVIDER_DIR —
+    # fleet.env; empty = off, ARGS unchanged): comma-separated, each a directory, dir:<path>, or an http:// / https:// URL.
+    if [ -n "${EVIDENCE_PROVIDER_DIR:-}" ]; then
+        local _ep
+        IFS=',' read -r -a _eps <<<"$EVIDENCE_PROVIDER_DIR"
+        for _ep in "${_eps[@]}"; do
+            case "$_ep" in
+                http://?*|https://?*|dir:/?*|/?*) ;;
+                *) die "EVIDENCE_PROVIDER_DIR entry '$_ep' is not an absolute directory, dir:<path>, or http(s):// URL" ;;
+            esac
+            case "$_ep" in *[[:space:]]*) die "EVIDENCE_PROVIDER_DIR entry '$_ep' contains whitespace" ;; esac
+        done
+        ARGS+=("--palw-evidence-provider-dir=$EVIDENCE_PROVIDER_DIR")
+    fi
     # int-10.2 A2: the widest prefill run a replay starts at, where a host caps it (PREFILL_RUN_MAX in its install-<host>.sh;
     # empty = the binary's 64). 32 costs 4-11 % of an 8k replay's time (measured) and halves its trace scratch: on a
     # host whose ledger is the limit, more replays at once (t12-replay-memory-1001.md §4-§5).
     if [ -n "${PREFILL_RUN_MAX:-}" ]; then ARGS+=("--palw-prefill-run-max=$PREFILL_RUN_MAX"); fi
-    if [ "$N_SEAT8K" = 1 ]; then ARGS+=("--palw-class-artifact=$ART_8K" --palw-verify-class-manifest); fi
+    # Phase H (fleet.env ART_PH / PH_MANIFEST_MODE, carried since the int-8 Phase H kit): every 8k seat also holds the declared IR
+    # class's artifact, and under PH_MANIFEST_MODE=drop the startup manifest check is NOT passed (the int-8+ build reads an IR sidecar
+    # as the legacy manifest and exits 1 with or without one). Empty ART_PH: the 8k artifact and the check, as before Phase H. The
+    # live launch scripts of 247ade1f90b6 have exactly this shape; this restores it in the kit that stages the next release.
+    if [ "$N_SEAT8K" = 1 ]; then
+        ARGS+=("--palw-class-artifact=$ART_8K")
+        if [ -n "${ART_PH:-}" ]; then
+            ARGS+=("--palw-class-artifact=$ART_PH")
+            case "${PH_MANIFEST_MODE:-drop}" in
+                drop) ;;
+                *) die "PH_MANIFEST_MODE=${PH_MANIFEST_MODE} — this kit stages drop only (verify needs the IR sidecar staged too)" ;;
+            esac
+        else
+            ARGS+=(--palw-verify-class-manifest)
+        fi
+    fi
     # Lane ROLES (G14 slice, fence 17,000): the kernel-route verifier and Panel=1 seat are duties that need the registered
     # kernel model (PALWKM01). The binary also loads every *.palwkm in <appdir>/misaka-testnet-12/palw-kernel-models/ with no
     # flag; KERNEL_MODEL (fleet.env, comma-separated paths; empty = none) names extra files. Adding it changes ARGS, so the
@@ -158,6 +187,8 @@ build_args() { # fills ARGS from the parsed node
         *) die "b$N_ID: produce must be none|floor|8k (2M is closed at launch), got $N_PRODUCE" ;;
     esac
     if [ "$N_HB" = 1 ]; then ARGS+=("--palw-heartbeat-miner-address=$HB_ADDR"); fi
+    # A host's own node flags (install-<host>.sh HOST_EXTRA_ARGS, e.g. 5.104's --palw-seat-replay-slots=1), last, on every node here.
+    if [ -n "${HOST_EXTRA_ARGS+set}" ]; then ARGS+=("${HOST_EXTRA_ARGS[@]}"); fi
     local a
     for a in "${ARGS[@]}"; do
         case "$a" in
@@ -398,6 +429,13 @@ stage_artifact() {
             say "  verifying $ART_8K (~10 s)"; verify_sha "$ART_8K" "$ART_8K_SHA256"; fi
         [ -f "$ART_8K.palwmanifest" ] || die "$ART_8K.palwmanifest missing (copy it with distribute-from-mac.sh)"
         verify_sha "$ART_8K.palwmanifest" "$MANIFEST_8K_SHA256"
+    fi
+    # Phase H's IR artifact, where fleet.env names one: present, its size, and (unless SKIP_ART_SHA=1) its sha256.
+    if [ -n "${ART_PH:-}" ]; then
+        [ -f "$ART_PH" ] || die "$ART_PH missing (fleet.env ART_PH) — every 8k seat carries it"
+        [ -z "${ART_PH_BYTES:-}" ] || [ "$(stat -c %s "$ART_PH")" = "$ART_PH_BYTES" ] || die "$ART_PH is not $ART_PH_BYTES bytes"
+        if [ "${SKIP_ART_SHA:-0}" = 1 ] || [ -z "${ART_PH_SHA256:-}" ]; then say "  IR artifact present (sha check skipped)"; else
+            say "  verifying $ART_PH (~10 s)"; verify_sha "$ART_PH" "$ART_PH_SHA256"; fi
     fi
 }
 

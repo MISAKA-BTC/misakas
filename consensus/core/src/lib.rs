@@ -670,6 +670,8 @@ pub mod palw_ruling_fences_v1;
 /// The cross-lane G14 gates (2026-10-16 audit G-10, G-18, N4 readiness, G-01 option (b), G-08 / G-15): arming records, the
 /// route-required claim gate and the reward liability horizon. Every fence is dormant on every preset.
 pub mod palw_g14_gates_v1;
+pub mod palw_arming_waiver_v1;
+pub mod palw_t12_17000_records_v1;
 /// Court capacity (audit G-07, user direction 2026-10-16): court admission through the LG14-A reservation, a deterministic per-block
 /// court budget, time-priced occupancy and a deadline-aware queue. Dormant behind `palw_court_capacity_v1` on every preset.
 pub mod palw_court_capacity_v1;

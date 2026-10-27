@@ -95,7 +95,7 @@ pub(crate) async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
         .map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{}': {e}", ctx.network)))?;
     let registry = misaka_endpoints::EndpointRegistry::load(&ctx.network);
     let hostport = misaka_endpoints::resolve(&net, EndpointKind::NodeWrpcBorsh, ctx.rpc.as_deref(), registry.as_ref());
-    let url = format!("ws://{hostport}");
+    let url = misaka_endpoints::wrpc_url(&hostport);
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
         .map_err(|e| CliError::new(exit::CONNECTION, format!("build wRPC client: {e}")))?;
     let options = ConnectOptions {
