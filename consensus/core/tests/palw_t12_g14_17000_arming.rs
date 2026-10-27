@@ -39,7 +39,7 @@ fn the_17000_list_covers_the_slice_six_families_and_panel_da() {
 #[test]
 fn list_every_refusal_at_17000() {
     let at = PALW_T12_G14_17000_DAA_V1;
-    let base = palw_t12_shipped_params();
+    let base = kaspa_consensus_core::config::params::palw_t12_release_v7_params();
     base.validate_palw_v2().expect("the shipped ruleset validates");
     let mut whole = base.clone();
     palw_t12_arm_after_int13_at_v1(&mut whole, PALW_T12_G14_17000_FENCES_V1, Some(at));
@@ -134,7 +134,7 @@ fn a_waiver_admits_its_record_but_lifts_no_safety_refusal() {
         palw_g14_arming_record_form_v1,
     };
     let at = PALW_T12_G14_17000_DAA_V1;
-    let base = palw_t12_shipped_params();
+    let base = kaspa_consensus_core::config::params::palw_t12_release_v7_params();
     let g = base.genesis.hash;
     let set = |p: &mut kaspa_consensus_core::config::params::Params, name: &str| {
         let f = PALW_T12_G14_17000_FENCES_V1.iter().find(|f| f.name == name).expect("on the list");

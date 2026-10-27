@@ -49,12 +49,20 @@ const FLEET_247ADE1F9: [(&str, &str); 3] = [
     ("schedule", concat!("9ef2b1a795c74d6faced545752f2d17c", "7e731e8e94155d078bc00cbee6c878f5")),
 ];
 
+/// With the G14 17,000 flag day ARMED on the preset (user decision 2026-10-27): the handshake identity is the fleet's; the release's
+/// own params fingerprint and schedule id move (a new height is scheduled), and the baseline without the flag day
+/// (`palw_t12_release_v7_params`) is the fleet's byte for byte. Prints the new fingerprint (the kit's EXPECT_FP).
 #[test]
 fn fleet_ids_match_247ade1f9() {
-    let got = lines();
-    for (name, want) in FLEET_247ADE1F9 {
-        assert!(got.contains(&format!("{name}={want}")), "{name}: {got:?}");
-    }
+    let shipped = palw_t12_shipped_params();
+    let base = kaspa_consensus_core::config::params::palw_t12_release_v7_params();
+    let [(_, params), (_, identity), (_, schedule)] = FLEET_247ADE1F9;
+    assert_eq!(base.consensus_params_id().to_string(), params, "baseline params = the fleet's");
+    assert_eq!(base.consensus_schedule_id().to_string(), schedule, "baseline schedule = the fleet's");
+    assert_eq!(base.consensus_identity_id().to_string(), identity);
+    assert_eq!(shipped.consensus_identity_id().to_string(), identity, "the release keeps the fleet's handshake identity");
+    assert_ne!(shipped.consensus_params_id().to_string(), params, "the release's fingerprint moves (17,000 scheduled)");
+    println!("FLEETDIAG EXPECT_FP={} UPGRADE_FROM_FP={params} schedule={}", shipped.consensus_params_id(), shipped.consensus_schedule_id());
 }
 
 /// **The DAA-17,000 slice, armed, keeps the handshake identity** (a future height collapses to `never`). Diagnostic: prints every
@@ -85,9 +93,11 @@ fn g14_17000_list_keeps_everything_below_17000() {
     use kaspa_consensus_core::config::params::{
         PALW_T12_G14_17000_DAA_V1, PALW_T12_G14_17000_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1,
     };
-    let base = palw_t12_shipped_params();
-    let mut p = base.clone();
+    // The fleet's ruleset (the release without its 17,000 flag day) against the release as shipped (the flag day armed).
+    let base = kaspa_consensus_core::config::params::palw_t12_release_v7_params();
+    let mut p = palw_t12_shipped_params();
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, Some(PALW_T12_G14_17000_DAA_V1));
+    assert_eq!(p.consensus_params_id(), palw_t12_shipped_params().consensus_params_id(), "the preset arms exactly this list");
     let below = |q: &Params| {
         let mut f: Vec<String> = q
             .palw_fences_v1()

@@ -277,9 +277,19 @@ pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 17_000;
 /// flag day; a no-op while the height is `None` (it leaves the list exactly as the earlier lists set it — in particular it does not clear
 /// the int-13 entries this list shares, should the int-13 list ever take a height of its own).
 pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
+    // **The G14 17,000 flag day (user decision 2026-10-27, drill skipped):** `PALW_T12_G14_17000_FENCES_V1` at
+    // `PALW_T12_G14_17000_FLAG_DAY_DAA`, the int-13 entries left at 15,500. The FULL list (which carries fences this release does not
+    // arm, e.g. monetary material, settlement once) keeps `PALW_T12_FULL_ACTIVATION_DAA = None`.
+    if let Some(at) = PALW_T12_G14_17000_FLAG_DAY_DAA {
+        palw_t12_arm_after_int13_at_v1(params, PALW_T12_G14_17000_FENCES_V1, Some(at));
+    }
     let Some(at) = PALW_T12_FULL_ACTIVATION_DAA else { return };
     palw_t12_arm_after_int13_at_v1(params, PALW_T12_FULL_ACTIVATION_FENCES_V1, Some(at));
 }
+
+/// **The G14 17,000 flag day's height on the shipped testnet-12 preset — ARMED** (user decision 2026-10-27). One constant the preset
+/// and the kit (`G14_FLAG_DAY_DAA` in `contrib/t12-deploy-kit/fleet.env.example`, pinned by `t12_deploy_kit_constants`) share.
+pub const PALW_T12_G14_17000_FLAG_DAY_DAA: Option<u64> = Some(PALW_T12_G14_17000_DAA_V1);
 
 /// Is `fence` one of the int-13 list's entries while that list has its own height ([`PALW_T12_INT13_DAA`], DAA 15,500 on the public
 /// fleet)? Those entries keep that height: a later list must neither re-arm them at its own height nor set them dormant.
@@ -488,5 +498,7 @@ pub fn palw_t12_release_v7_params() -> Params {
     let mut params = palw_t12_shipped_params();
     // The int-13 entries stay at PALW_T12_INT13_DAA (15,500): this baseline is the public fleet's ruleset.
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
+    // The G14 17,000 list too (its value entries — allocation, frame cost — are not on the full list).
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     params
 }
