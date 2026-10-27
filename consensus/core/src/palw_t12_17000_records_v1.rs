@@ -752,18 +752,9 @@ pub const PALW_T12_17000_KERNEL_ROUTE_RECORDS_V1: &[crate::palw_kernel_route_arm
 pub const PALW_T12_17000_RFC0018_RECORDS_V1: &[crate::palw_rfc0018_v1::PalwRfc0018ArmingRecordV1] = &[
 ];
 
-/// The frame cost record for FpSelection: the lane VAL estimate (ProvisionalEstimate) and the agent review.
-pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[
-    crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {
-        version: crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
-        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
-        activation_daa: 17400,
-        source_commit: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-        measurement: [0xc5, 0xaa, 0x33, 0xae, 0x41, 0x09, 0x2f, 0xc6, 0x18, 0x98, 0xfb, 0xef, 0x53, 0x02, 0xf2, 0x29, 0x4f, 0x5b, 0xc8, 0x9c, 0x37, 0x4b, 0x82, 0x50, 0x4b, 0xb6, 0xfd, 0x92, 0xc1, 0x6d, 0x5c, 0x5a],
-        review: [0xc4, 0x27, 0x54, 0xa2, 0x0c, 0x28, 0x97, 0xef, 0x06, 0x64, 0xf6, 0x05, 0x2a, 0x42, 0x20, 0x2a, 0x15, 0x0b, 0x49, 0x7f, 0xef, 0x7a, 0x48, 0xae, 0x52, 0x0e, 0x7f, 0xeb, 0x79, 0x97, 0x30, 0xda],
-        cost: crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1,
-    },
-];
+/// The frame cost record for FpSelection: the lane VAL estimate (ProvisionalEstimate) and the agent review. Emitted only
+/// with the final evidence run's candidate commit as its source (a zero commit is refused, never pinned).
+pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[];
 
 /// The model-tier record: not emitted while slots [(1, 'R pending: core-lib-model_tier'), (2, 'R pending: core-rfc0019_s11')] are leftover.
 pub const PALW_T12_17000_MODEL_TIER_RECORDS_V1: &[crate::palw_model_tier_v1::PalwModelTierArmingRecordV1] = &[];

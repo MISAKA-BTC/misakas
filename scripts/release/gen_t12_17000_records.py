@@ -207,8 +207,12 @@ def main():
                        '        review: %s,\n    },\n' % (mod, struct, mod, ver, mod, fty, rec['fence'], ge, AT,
                                                          P._bytes(rec['sourceCommit']), ev, P._bytes(rec['review'])))
         out.append('];\n\n')
-    out.append('/// The frame cost record for FpSelection: the lane VAL estimate (ProvisionalEstimate) and the agent review.\n')
-    out.append('pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[\n'
+    out.append('/// The frame cost record for FpSelection: the lane VAL estimate (ProvisionalEstimate) and the agent review. Emitted only\n'
+               '/// with the final evidence run\'s candidate commit as its source (a zero commit is refused, never pinned).\n')
+    if source == '0' * 40:
+        out.append('pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[];\n')
+    else:
+      out.append('pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[\n'
                '    crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {\n'
                '        version: crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,\n'
                '        genesis: %s,\n        activation_daa: %d,\n        source_commit: %s,\n        measurement: %s,\n'
