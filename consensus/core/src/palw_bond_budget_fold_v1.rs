@@ -997,6 +997,8 @@ impl TransitionBuilder<'_> {
         if let (Some(m), Some(alloc)) = (model, mirror.allocation_at(ctx.daa_score))
             && alloc.average.is_some_and(|a| a.block_opportunity)
             && origin != PalwBudgetOriginV1::Rider
+            // Allocation bootstrap (option (b)): an empty allocation limits no block opportunity.
+            && !budget.allocation_bootstrapping_v1()
             && reservation.block_units > budget.model_blocks_available_v1(&m, ctx.daa_score)
         {
             return Err(budget_refused(bond, PalwBudgetRefusalV1::ModelBlockOpportunity));
@@ -1041,6 +1043,8 @@ impl TransitionBuilder<'_> {
             .is_some_and(|a| a.block_opportunity);
         let out = self
             .bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| {
+                // Allocation bootstrap (option (b)): an empty allocation reserves no block opportunity either.
+                let bootstrapping = budget.allocation_bootstrapping_v1();
                 let reserved = budget.reserve_claim_moded_v1(
                     &plan.policy,
                     plan.capital,
@@ -1058,6 +1062,7 @@ impl TransitionBuilder<'_> {
                 if let Some(m) = plan.model
                     && plan.origin != PalwBudgetOriginV1::Rider
                     && block_opportunity
+                    && !bootstrapping
                 {
                     budget.reserve_model_blocks_v1(&m, reserved.block_units, j);
                 }
@@ -1861,7 +1866,15 @@ impl TransitionBuilder<'_> {
                 let id = kernel_budget_claim_id_v1(claim);
                 // PESG §6: the liability hold starts at this block (the ledger's DAA).
                 self.bond_budget_close_v1(&id, ledger.daa)?;
-                if let Some(bond) = self.state.kernel_route.as_ref().and_then(|route| route.bond_key_of(&row.producer)) {
+                // Gate C (lane GC-DUTY, R-SEAT): a Final whose reward is HELD for SecurityCertified keeps its income row until the
+                // certification decides — `settle_kernel_reward_hold_v1` pays it then, or cancels it on an uncertified outcome.
+                // Cancelling it here at Final left the certified payout with no open row ("the claim holds no open budget
+                // reservation"), refusing every block that carried the decision.
+                let held_for_certification = !row.convicted
+                    && crate::palw_security_certification_v1::palw_kernel_claim_reward_hold_v1(&self.state, claim).is_some();
+                if !held_for_certification
+                    && let Some(bond) = self.state.kernel_route.as_ref().and_then(|route| route.bond_key_of(&row.producer))
+                {
                     self.cancel_native_recipient_v1(Hash64::from_bytes(*claim), bond, 3)?;
                 }
                 // The claim row remains public. Financial quota is forgotten

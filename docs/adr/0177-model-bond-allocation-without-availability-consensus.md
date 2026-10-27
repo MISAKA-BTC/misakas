@@ -243,6 +243,7 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
 2026-10-12改定の提案のうち、**Miner＋検証者の元本合算**と**ブロック生成機会への接続**を採用し、配分曲線は**`α = 1.5`**に確定する。`S_m · μ(S_m)`（1.3〜2倍）は採用せず、比較試験用に保持する。正式式・表・試験は[RFC-0015 §8.5.5](../rfc/0015-panel-free-permissionless-verification.md)に置く。
 
 - **式:** `S_m = C_miner_claim(m) + C_verifier_claim(m)`（資金単位で重複なし）、`S̄_m`は30日相当DAAの平均、`P_m = S̄_m^1.5 / Σ_j S̄_j^1.5`（分母0なら0）。
+  - **立ち上げ規則（ユーザー決定 2026-10-28、option (b)「b)(推奨」）:** 配分 epoch がまだ無い間、または `Σ_j S̄_j = 0` の間は、`P_m` はブロック生成機会もclaimの報酬も制限せず、モデル別報酬の予約もしない（fence 前の規則。bond 自身の Q/B/R/F は効く）。有効化の時点では全モデルの `P_m = 0` になり REAL が止まる（ADR-0176 2026-10-15「枠不足で REAL が止まらない」に反する）ため。この間に受理された claim は自分のモデルを記録し、その席の担保が次の roll で `S_m` になる。以後 `P_m` は本 ADR のとおり適用する。実装 `PalwBondBudgetStateV1::allocation_bootstrapping_v1`。
 - **適用先:** `P_m`をモデル別のブロック生成機会とcoinbase予算の共通目標にする。1 block当たりの報酬に再び掛けない。network全体のblock頻度・DAA・難易度・fork-choice・Final weightは変えない。上の「範囲」の「block発行数へ掛けない」は、モデル間のblock機会の配分についてこの決定で改める。
 - **検証者の元本:** 2026-10-12改定の「Panelのclaim bond」を、Panel=0に合わせて「claimに実際に紐付いて拘束され、検証上の責任を負うpermissionless verifierの元本」へ一般化する。固定seatは要らない。待機bondは数えず、MinerとVerifierで二重計上しない。Verifier元本はMiner個人のQ/B/R/F capを増やさない。参加手順・責任・拘束期間・報酬条件と「預けるだけで検査しない」対策はrelease前に定義する。
 - **個別上限:** 共通拘束期間`W`は7日相当DAA。各bondのQ/B/R/F capはモデル配分で増えない。

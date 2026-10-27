@@ -111,29 +111,6 @@ async fn gc_duty_full_17400_list_real_attempts_anchor_and_a_panel_one_claim_is_s
     kaspa_core::log::try_init_logger("error");
     let n = PALW_T12_G14_17000_FENCES_V1.len();
     let mut w = World::on(Net::over_cfg(prefix_config(n, 0), TestConsensus::new)).await;
-    // (i)+(iii): attempts by cards 5..7, one per block.
-    let ttpb = w.net.ttpb();
-    let (mut admitted, mut skipped, mut anchors) = (0u32, 0u32, Vec::new());
-    for round in 0..12usize {
-        let sink_before = w.net.chain.sink();
-        let daa_before = w.net.daa();
-        let (_, c) = w.net.chain.attempt(5 + round % 3, ttpb, Vec::new(), &|_| true).await;
-        let s = w.net.chain.tip_state().1;
-        // (iii) the attempt block is accepted and becomes the sink whether or not its claim is admitted (a refused attempt is a
-        // skip, not an invalid block). The DAA score is not the right witness: a harness attempt block can share its parent's DAA.
-        assert_ne!(w.net.chain.sink(), sink_before, "the attempt block is accepted (the chain advances) whether or not its claim is admitted");
-        eprintln!("GC-DUTY 17400 attempt round {round}: sink DAA {daa_before} -> {}", w.net.daa());
-        if s.claim(&c).is_some() { admitted += 1 } else { skipped += 1 }
-        if let Some(a) = s.round_seed_anchor().copied() {
-            if anchors.last().is_none_or(|(_, b)| *b != a.block) {
-                anchors.push((w.net.daa(), a.block));
-            }
-        }
-    }
-    let gaps: Vec<u64> = anchors.windows(2).map(|p| p[1].0 - p[0].0).collect();
-    eprintln!("GC-DUTY 17400 attempts: admitted {admitted}, skipped {skipped}; anchors at {:?} (gaps {gaps:?})", anchors.iter().map(|a| a.0).collect::<Vec<_>>());
-    assert!(admitted > 0, "REAL attempts are admitted under the full list");
-    assert!(!anchors.is_empty(), "admitted attempts record seed anchors");
     // (ii): a Panel=1 claim seated from a post-commit anchor → Final → Gate C → payout.
     let commit_daa = w.net.daa();
     let (claim, _seats) = claimed(&mut w, Mode::Panel, 0, false).await;
@@ -158,6 +135,86 @@ async fn gc_duty_full_17400_list_real_attempts_anchor_and_a_panel_one_claim_is_s
     );
     assert_eq!(w.net.owed(0), producer_before + Rules::final_reward(&policy), "the certified Final pays");
     eprintln!("GC-DUTY 17400 Gate C certified at DAA {}; paid", w.net.daa());
+
+    // (i)+(iii), after the Panel=1 claim is paid (its producer helpers 5..7 need the class to admit them): attempts by cards 1..3, 12 rounds.
+    // Before each, the chain's readiness verdict for the card (`palw_producer_facts_v2`) is read: a card the registry does not admit
+    // now is recorded with its reason and skipped (the harness's `attempt` panics on a not-ready card), never mistaken for P_m or a cap.
+    let ttpb = w.net.ttpb();
+    let (mut admitted, mut skipped, mut anchors) = (0u32, 0u32, Vec::new());
+    let mut not_ready: Vec<(usize, usize, String)> = Vec::new();
+    let mut attempt_claims = Vec::new();
+    for round in 0..12usize {
+        let card = 1 + round % 3;
+        let base = w.net.chain.bundle.base_class_id;
+        let facts = w.net.chain.ctx.consensus.palw_producer_facts_v2(base, Some(w.net.chain.bonds[card].0)).expect("facts");
+        if let Err(why) = facts.ready_to_produce(&TestConsensus::palw_v2_registry_keypair(card as u64).verification_key.as_ref().to_vec()) {
+            not_ready.push((round, card, format!("{why}: {:?}", facts.class_admission_refusal)));
+            continue;
+        }
+        let sink_before = w.net.chain.sink();
+        let daa_before = w.net.daa();
+        let (_, c) = w.net.chain.attempt(card, ttpb, Vec::new(), &|_| true).await;
+        attempt_claims.push(c);
+        let s = w.net.chain.tip_state().1;
+        // (iii) the attempt block is accepted and becomes the sink whether or not its claim is admitted (a refused attempt is a
+        // skip, not an invalid block). The DAA score is not the right witness: a harness attempt block can share its parent's DAA.
+        assert_ne!(w.net.chain.sink(), sink_before, "the attempt block is accepted (the chain advances) whether or not its claim is admitted");
+        eprintln!("GC-DUTY 17400 attempt round {round}: sink DAA {daa_before} -> {}", w.net.daa());
+        if s.claim(&c).is_some() { admitted += 1 } else { skipped += 1 }
+        if let Some(a) = s.round_seed_anchor().copied() {
+            if anchors.last().is_none_or(|(_, b)| *b != a.block) {
+                anchors.push((w.net.daa(), a.block));
+            }
+        }
+    }
+    let gaps: Vec<u64> = anchors.windows(2).map(|p| p[1].0 - p[0].0).collect();
+    eprintln!("GC-DUTY 17400 attempts: admitted {admitted}, skipped {skipped}; anchors at {:?} (gaps {gaps:?})", anchors.iter().map(|a| a.0).collect::<Vec<_>>());
+    eprintln!("GC-DUTY 17400 not ready (registry): {not_ready:?}");
+    assert!(
+        not_ready.iter().all(|(_, _, why)| why.starts_with(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2)),
+        "a card is held only by the registry's admission (not P_m, not a Q/B/R/F cap): {not_ready:?}"
+    );
+    assert!(admitted > 0, "REAL attempts are admitted under the full list");
+    assert!(!anchors.is_empty(), "admitted attempts record seed anchors");
+
+    // ---- across the first roll where ΣA becomes non-zero (the bootstrap ends) ----
+    // Card 1 assigns capital to the model its attempt recorded (tag 140); after the seasoning the roll gives that model S̄ > 0, so the
+    // allocation is no longer empty and P_m applies. An attempt of the funded model is then still admitted and anchors.
+    let state = w.net.chain.tip_state().1;
+    let budget = state.bond_budget().expect("the budget engine");
+    assert!(budget.allocation_bootstrapping_v1(), "until capital is assigned the allocation is empty (bootstrap)");
+    let model = attempt_claims
+        .iter()
+        .find_map(|c| budget.claim_row(c).and_then(|row| row.model))
+        .map(|(m, _)| m)
+        .expect("an admitted attempt recorded its model (it seeds S_m)");
+    let bond = w.net.chain.bonds[1];
+    let amount = state.bond(&bond).expect("card 1's bond").collateral / 2;
+    let assignments = vec![(model, amount)];
+    let message = kaspa_consensus_core::palw_bond_budget_v1::palw_capital_assignment_message_v1(w.net.domain, &bond, &assignments, 1);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &TestConsensus::palw_v2_registry_keypair(1).signing_key,
+        message.as_byte_slice(),
+        kaspa_consensus_core::palw_bond_budget_v1::PALW_CAPITAL_ASSIGNMENT_MLDSA87_CONTEXT_V1,
+        [0x21u8; 32],
+    )
+    .expect("sign")
+    .as_ref()
+    .to_vec();
+    w.net.send(vec![(1, Obj::BondCapitalAssignedV1 { bond, assignments, sequence: 1, signature })]).await;
+    let epoch = kaspa_consensus_core::palw_bond_budget_v1::palw_model_bond_allocation_estimate_v1().epoch_daa;
+    let target = (w.net.daa() / epoch + 3) * epoch + 1;
+    w.net.beat_to(target).await;
+    let state = w.net.chain.tip_state().1;
+    let budget = state.bond_budget().expect("the budget engine");
+    assert!(!budget.allocation_bootstrapping_v1(), "past the seasoned roll ΣA > 0: the bootstrap has ended (DAA {})", w.net.daa());
+    assert!(budget.model_blocks_available_v1(&model, w.net.daa()) > 0, "the funded model has block opportunity");
+    let anchor_before = state.round_seed_anchor().copied();
+    let (_, c) = w.net.chain.attempt(2, ttpb, Vec::new(), &|_| true).await;
+    let state = w.net.chain.tip_state().1;
+    assert!(state.claim(&c).is_some(), "after the bootstrap an attempt of the funded model is still admitted");
+    assert_ne!(state.round_seed_anchor().copied(), anchor_before, "and it records a seed anchor");
+    eprintln!("GC-DUTY 17400 post-bootstrap (DAA {}): attempt admitted under P_m, anchor recorded", w.net.daa());
 }
 
 /// **lane GC-DUTY option (C)**: every prefix of the 17,400 list (0..=n, armed at DAA 0) lets the honest Panel=1 claim commit.

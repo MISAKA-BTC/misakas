@@ -243,7 +243,15 @@ fn settle_kernel_reward_hold_v1(
         }
         // PROVISIONAL (coordinator, 2026-10-26, value delegation): the V3 burn share is never named (burned; the poster's debit
         // stands), the rest returns to the poster. Neither goes to the producer.
-        _ => builder.add_kernel_payout(Hash64::from_bytes(hold.poster_payload), palw_kernel_uncertified_split_v1(hold.amount).1),
+        _ => {
+            // R-SEAT: the producer's held income row (kept open past Final for this decision) ends unpaid.
+            if let Some(bond) = producer_key
+                && builder.bond_budget_mirror_at(now).is_some()
+            {
+                builder.cancel_native_recipient_v1(Hash64::from_bytes(*kernel_claim), bond, 3)?;
+            }
+            builder.add_kernel_payout(Hash64::from_bytes(hold.poster_payload), palw_kernel_uncertified_split_v1(hold.amount).1)
+        }
     }
 }
 
