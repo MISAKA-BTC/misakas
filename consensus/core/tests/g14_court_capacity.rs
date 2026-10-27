@@ -852,6 +852,106 @@ fn g07_restart_and_reorg_mid_queue_are_identical() {
     assert_eq!(forward, tip, "and re-applies to the same tip");
 }
 
+// ---- V7 (lane T, 2026-10-27): restart, reorg, IBD and pruned import mid-queue --------------------------------------------------
+
+/// A node rebuilt from `c`'s carriage under `c`'s committed root (a restart, or a pruned import of a pruning-point snapshot).
+fn reloaded(c: &Held) -> Held {
+    let mut n = c.clone();
+    n.s = PalwStateCarriageV2::from_state(&c.s).into_state(&c.sp, Some(c.s.state_root())).expect("the carriage reloads under its root");
+    n
+}
+
+/// **V7: with sessions queued, four nodes agree block by block.** The running node; an **IBD** node that folded every block from the
+/// post-registration state itself; a **pruned-import** node that imported the pruning-point snapshot taken after the reservations and
+/// before the court filled; and a node **restarted** with the prosecution queued. Through the grant, the opening and the conviction they
+/// hold the same state root, the same reservation and court row (stage and deadline), the same collateral on every party (the occupancy
+/// fees and the escrow releases), and end in the same state. A reorg back across the whole queue restores every parent and re-applies
+/// to the same tip.
+#[test]
+fn v7_restart_reorg_ibd_and_pruned_import_mid_queue_agree() {
+    let (mut c, row, seats) = held_chain_at(Some(test_measurement()), 42, SPARE_ONLY_COURT_AT);
+    let mut ibd = c.clone();
+    let outsider = bond_key(OUTSIDER);
+    let parties: Vec<PalwBondKeyV2> =
+        [outsider, bond_key(EXECUTOR), bond_key(COALITION_PRODUCER)].into_iter().chain((0..42).map(sybil)).collect();
+    // Phase 1 (the running and the IBD node each fold it): the two claims and every reservation.
+    let phase1 = |n: &mut Held| {
+        let (target, _) = licensed(n, &row, &seats, EXECUTOR, 1);
+        let (d1, _) = licensed(n, &row, &seats, COALITION_PRODUCER, 11);
+        n.step(&[reservation(&n.s, target, outsider)], Rule::T12).expect("reserved");
+        n.step(&(0..42).map(|k| reservation(&n.s, d1, sybil(k))).collect::<Vec<_>>(), Rule::T12).expect("reservations");
+        (target, d1)
+    };
+    let (target, d1) = phase1(&mut c);
+    assert_eq!(phase1(&mut ibd), (target, d1), "the IBD node derives the same claims");
+    assert_eq!(ibd.s, c.s, "the IBD node agrees at the pruning point");
+    // Pruning point: a node that imports this snapshot instead of the history.
+    let mut pruned = reloaded(&c);
+    // Phase 2 (every node so far): the coalition fills the court, the honest prosecution queues.
+    let phase2 = |n: &mut Held| {
+        n.beat_to(SPARE_ONLY_COURT_AT);
+        n.step(&(0..42).map(|k| accusation_by(n, &row, d1, sybil(k))).collect::<Vec<_>>(), Rule::Opening).expect("filled");
+        n.step(&[accusation_by(n, &row, target, outsider)], Rule::Opening).expect("queued");
+    };
+    phase2(&mut c);
+    phase2(&mut ibd);
+    phase2(&mut pruned);
+    assert!(
+        matches!(c.court_row(&target, &outsider).map(|r| r.stage), Some(PalwCourtStageV1::Queued { .. })),
+        "the honest prosecution is queued: {:?}",
+        c.court_row(&target, &outsider)
+    );
+    let restarted = reloaded(&c);
+    let queued_root = c.s.state_root();
+    let mut nodes = [ibd, pruned, restarted];
+    let names = ["IBD", "pruned import", "restart"];
+    let mut tape: Vec<(PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2)> = Vec::new();
+    let (mut granted, mut done) = (false, false);
+    for _ in 0..20_000 {
+        let opening = matches!(c.court_row(&target, &outsider).map(|r| r.stage), Some(PalwCourtStageV1::Ticket { .. }));
+        granted |= opening;
+        let objects = if opening { vec![accusation_by(&c, &row, target, outsider)] } else { Vec::new() };
+        let rule = if opening { Rule::Opening } else { Rule::T12 };
+        let daa = c.daa + 1;
+        let (next, delta) = c.try_fold(daa, &objects, PalwBlockWorkV3::None, Hash64::default(), rule).expect("the running node");
+        for (n, name) in nodes.iter_mut().zip(names) {
+            let (twin, _) = n.try_fold(daa, &objects, PalwBlockWorkV3::None, Hash64::default(), rule).expect("the twin node");
+            assert_eq!(twin.state_root(), next.state_root(), "DAA {daa}: the {name} node agrees on the root");
+            assert_eq!(twin.legacy_dispute_v1(&target), next.legacy_dispute_v1(&target), "DAA {daa} ({name}): reservation, stage, deadline");
+            assert_eq!(twin.legacy_dispute_v1(&d1), next.legacy_dispute_v1(&d1), "DAA {daa} ({name}): the coalition's rows");
+            for p in &parties {
+                assert_eq!(twin.bond(p).map(|b| b.collateral), next.bond(p).map(|b| b.collateral), "DAA {daa} ({name}): fees and releases");
+            }
+            n.s = twin;
+            n.daa = daa;
+        }
+        tape.push((c.s.clone(), delta));
+        c.s = next;
+        c.daa = daa;
+        if matches!(c.s.claim(&target).unwrap().phase, PalwClaimPhaseV2::Voided { .. }) {
+            done = true;
+            break;
+        }
+    }
+    assert!(granted, "the queued prosecution is granted a slot");
+    assert!(done, "the conviction lands");
+    for (n, name) in nodes.iter().zip(names) {
+        assert_eq!(n.s, c.s, "the {name} node ends in the same state (the same releases)");
+    }
+    let tip = c.s.clone();
+    let mut back = tip.clone();
+    for (parent, delta) in tape.iter().rev() {
+        back = revert_delta_v2(&back, delta, &c.sp).expect("reverts");
+        assert_eq!(back, *parent, "a reorg back across the queue restores each parent exactly");
+    }
+    assert_eq!(back.state_root(), queued_root);
+    let mut forward = back;
+    for (_, delta) in &tape {
+        forward = apply_delta_v2(&forward, delta, &c.sp).expect("re-applies");
+    }
+    assert_eq!(forward, tip, "and re-applies to the same tip");
+}
+
 // ---- option (b): the fused-leaf route --------------------------------------------------------------------------------------------
 
 /// **Option (b) does not count the fused-leaf route until the court-capacity fence is in force** (user direction 2026-10-16 §1): with
