@@ -312,7 +312,9 @@ fn req_x3_3_no_extension_or_regrant_for_a_new_claim_and_the_old_rules_stay_for_o
         (
             "palw_state_v2.rs (DL-1 min)",
             include_str!("../palw_state_v2.rs"),
-            &["crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(params, claim)"],
+            // DL-1 reads X3's cap through the X3 × clock-v2 combined rule (G14 r6 item 3), which calls
+            // `palw_claim_hard_deadline_of_v1` itself; the pin follows the call site (it was a stale string).
+            &["crate::palw_court_clock_v2::palw_claim_x3_cap_hard_v2(params, claim)"],
         ),
     ];
     for (site, src, needles) in pins {

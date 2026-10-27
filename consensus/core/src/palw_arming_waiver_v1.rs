@@ -80,6 +80,59 @@ pub fn palw_arming_slot_class_v1(slot: u16, requirement: &str) -> PalwArmingSlot
     }
 }
 
+/// The reason every slot-class override carries.
+pub const PALW_ARMING_OVERRIDE_REASON_V1: &str = "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run";
+
+/// **Pinned slot-class overrides (Lead decision 2026-10-27).** Slots whose requirement text reads as a suite / run but whose content
+/// is a real-network / shipped-binary / restart run (→ `NodeE2E`, so only `E2ENotRun` fits) or a measured value (→ `Measured`, so only
+/// a `ProvisionalEstimate` with its value fits). Any slot NOT listed keeps the class its text gives.
+pub const PALW_ARMING_SLOT_CLASS_OVERRIDES_V1: &[(&str, u16, PalwArmingSlotClassV1)] = {
+    use PalwArmingSlotClassV1::{Measured as M, NodeE2E as E};
+    &[
+        // PALW_G14_VALIDATION_STEPS_V1: V2, V3, V4, V6, V7 are node-level runs; V5 is the maximum-profile measurement.
+        ("palw_staged_public_court_v1", 1, E),
+        ("palw_staged_public_court_v1", 2, E),
+        ("palw_staged_public_court_v1", 3, E),
+        ("palw_staged_public_court_v1", 4, M),
+        ("palw_staged_public_court_v1", 5, E),
+        ("palw_staged_public_court_v1", 6, E),
+        ("palw_staged_tir_route_v1", 1, E),
+        ("palw_staged_tir_route_v1", 2, E),
+        ("palw_staged_tir_route_v1", 3, E),
+        ("palw_staged_tir_route_v1", 4, M),
+        ("palw_staged_tir_route_v1", 5, E),
+        ("palw_staged_tir_route_v1", 6, E),
+        ("palw_tir_public_conviction_v1", 1, E),
+        ("palw_tir_public_conviction_v1", 2, E),
+        ("palw_tir_public_conviction_v1", 3, E),
+        ("palw_tir_public_conviction_v1", 4, M),
+        ("palw_tir_public_conviction_v1", 5, E),
+        ("palw_tir_public_conviction_v1", 6, E),
+        // LG14-A / LG14-B V6: real network and economic accounting with the shipped binary.
+        ("palw_legacy_public_filer_v1", 4, E),
+        ("palw_legacy_held_da_v2", 4, E),
+        // Kernel route #4: the shadow comparison against the Panel route on the same claims (a real-network run).
+        ("palw_probabilistic_constraints_v1", 4, E),
+        // Model tier: R-1..R-3, R-5, R-6 with the shipped binary; the editions' signed release manifests.
+        ("palw_model_tier_v1", 3, E),
+        ("palw_model_tier_v1", 6, E),
+        // Model tier R-4 / R-7–R-8: "or the record states none does" — closed by the V-REVIEW agent review (edition 0 only).
+        ("palw_model_tier_v1", 4, PalwArmingSlotClassV1::Review),
+        ("palw_model_tier_v1", 5, PalwArmingSlotClassV1::Review),
+        // Model tier readiness M1–M5 "reported to the user": the user's ruling 2026-10-27.
+        ("palw_model_tier_v1", 7, PalwArmingSlotClassV1::Decision),
+    ]
+};
+
+/// **The class of `fence`'s slot `slot`**: a pinned override, else the class its requirement text gives.
+pub fn palw_arming_slot_class_for_v1(fence: &str, slot: u16, requirement: &str) -> PalwArmingSlotClassV1 {
+    PALW_ARMING_SLOT_CLASS_OVERRIDES_V1
+        .iter()
+        .find(|(f, s, _)| *f == fence && *s == slot)
+        .map(|(_, _, c)| *c)
+        .unwrap_or_else(|| palw_arming_slot_class_v1(slot, requirement))
+}
+
 /// **One waiver** — for exactly one (fence, network, height, slot).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwArmingWaiverV1 {
@@ -171,7 +224,7 @@ pub fn palw_arming_evidence_kind_v1(
     if w.fence != fence || w.genesis != genesis || w.activation_daa != activation_daa || w.requirement != slot {
         return Err("an arming waiver is used outside its own fence, network, height and requirement");
     }
-    w.form(palw_arming_slot_class_v1(slot, requirement))?;
+    w.form(palw_arming_slot_class_for_v1(fence, slot, requirement))?;
     Ok(PalwArmingEvidenceV1::Waived(*w))
 }
 
