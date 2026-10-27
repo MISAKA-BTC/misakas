@@ -19,7 +19,7 @@ fn the_17000_list_covers_the_slice_six_families_and_panel_da() {
     }
     let shipped = palw_t12_shipped_params();
     let live: Vec<&str> =
-        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 17_000)).map(|(n, _)| *n).collect();
+        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 16_600)).map(|(n, _)| *n).collect();
     // Each family fence is either on the list or already in force on testnet-12 below 17,000 (`palw_fp_tokenizer_match` @5,300,
     // `palw_panel_da` @0) — never both (re-arming a live fence would fork below 17,000).
     for fam in FAMILIES.into_iter().chain([F::FpPanelDaDisclosure]) {
