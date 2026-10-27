@@ -2932,11 +2932,26 @@ enum EvmTxCmd {
     },
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> std::process::ExitCode {
-    // The command dispatcher contains large branch futures. Keep it on the heap so its
-    // storage is not duplicated on the process stack by the runtime's main wrapper.
-    Box::pin(run_cli()).await
+/// Stack for the thread that parses and dispatches. clap renders `--help` for the full command
+/// tree by recursive descent; an unoptimised build needs more than the 8 MiB a main thread gets
+/// (measured 2026-10-27: `--help` aborts at 8 MiB and passes at 12 MiB), and Windows gives its
+/// main thread only what `/STACK` reserves. Running on a thread of our own makes the requirement
+/// the same on every platform instead of depending on the OS default.
+const CLI_STACK_BYTES: usize = 64 << 20;
+
+fn main() -> std::process::ExitCode {
+    std::thread::Builder::new()
+        .name("misaka-cli".into())
+        .stack_size(CLI_STACK_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("the CLI's tokio runtime starts");
+            // The command dispatcher contains large branch futures. Keep it on the heap so its
+            // storage is not duplicated on the stack by the runtime's block_on.
+            runtime.block_on(Box::pin(run_cli()))
+        })
+        .expect("the CLI thread starts")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 async fn run_cli() -> std::process::ExitCode {
