@@ -139,6 +139,30 @@ pub(crate) enum BuildCmd {
         #[arg(long, required_unless_present = "dry_run")]
         out: Option<std::path::PathBuf>,
     },
+    /// **File a FileProof against a kernel route claim (outside prosecutor)** — the node verifier's own pursuit, as a library
+    /// (`misaka_palw_remote::pursuit`): the route's rooted rows are read (op 211), the claim is replayed from its public commitments
+    /// with `--model` (a `PALWKM01` file whose commitments the class registered), and the planner says the next step — `SealProof`
+    /// first, then (once the seal is folded, run again) the `FileProof`, whole or in chunks — each dry-run against the next block's
+    /// ledger. Nothing is written when the claim checks clean. No cryptographic proof of computation: the court re-executes.
+    FileProof {
+        #[command(flatten)]
+        key: crate::KeyArgs,
+        /// 128-hex kernel claim id.
+        #[arg(long)]
+        claim: String,
+        /// The accuser's bond outpoint, `<txid>:<index>`.
+        #[arg(long)]
+        bond: String,
+        /// The kernel model file (`PALWKM01`) the claim's class registered.
+        #[arg(long)]
+        model: std::path::PathBuf,
+        /// Print the planned step; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Directory the signed objects are written to (`<n>-<kind>.bin`), in carriage order (required unless --dry-run).
+        #[arg(long, required_unless_present = "dry_run")]
+        out_dir: Option<std::path::PathBuf>,
+    },
     /// Funded original (TFO1 envelope with payer consent). Refused: consensus holds the funded-original schedule typed-missing in
     /// this build (`palw_funded_original_schedule_v1` always answers `Schedule` missing); lane SETTLE's estimate is not in the release.
     FundedOriginal {
@@ -719,6 +743,86 @@ pub(crate) fn kernel_job_quote_v1(verifier_pay_activation: Option<u64>) -> Kerne
     KernelJobQuoteV1 { reward_escrow: p.claim_reward, check_fee_escrow, job_fee_burned: p.job_fee }
 }
 
+/// The kernel route as the next block's fold will judge it: the rooted rows (op 211), rebuilt and checked against the served
+/// roots, with the fences the fold injects (provider court, verifier pay) in force at `virtual DAA + 1`.
+async fn kernel_route_view_v1(
+    nv: &crate::wallet::NodeView,
+) -> Result<
+    (
+        kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1,
+        kaspa_consensus_core::palw_native_resource_v1::ReservedKernelLedgerV1,
+    ),
+    CliError,
+> {
+    let (snapshot, rows) = crate::operator::model_complete::kernel_snapshot(nv).await?;
+    let route = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(
+        &snapshot.header,
+        rows,
+        &snapshot.ledger_root,
+        &snapshot.aux_root,
+    )
+    .map_err(|e| CliError::new(exit::GENERIC, format!("the served kernel rows do not rebuild: {e}")))?;
+    let next = nv.virtual_daa.saturating_add(1);
+    let in_force = |f: Option<kaspa_consensus_core::config::params::ForkActivation>| {
+        f.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(next)).map(|f| f.daa_score())
+    };
+    let verifier_pay = nv
+        .params
+        .palw_verifier_pay_v1
+        .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
+        .map(|f| f.daa_score());
+    let ledger = misaka_palw_remote::pursuit::kernel_consumer_ledger_v1(&route, in_force(nv.params.palw_provider_court_v1), verifier_pay)
+        .map_err(|e| CliError::new(exit::GENERIC, e))?;
+    Ok((route, ledger))
+}
+
+/// The prosecution standing of one kernel claim, from its rooted row and the route's policy (`palw prosecution-status`).
+pub(crate) fn prosecution_status_json_v1(ledger: &misaka_palw_kernel::ledger::KernelLedgerV1, claim: Hash64) -> Value {
+    let Some(row) = ledger.claims.get(&claim.as_bytes()) else {
+        return serde_json::json!({ "claim": claim.to_string(), "found": false });
+    };
+    let share = ledger.policy.accuser_reward_permille;
+    serde_json::json!({
+        "claim": claim.to_string(),
+        "found": true,
+        "state": format!("{:?}", row.life.state),
+        "convicted": row.convicted,
+        // Before a conviction: what a conviction would slash (the claim's live reservation, capped by the bond at that time).
+        // After it: the reservation is zeroed; the slashed amount is in the block's `Convicted` event, not retained in the rows.
+        "reservedSompi": row.reserved,
+        "reporterSharePermille": share,
+        "reporterBountyIfConvictedNowSompi": (row.reserved as u128 * share as u128 / 1000) as u64,
+        // The bounty is credited to the accuser's route bond in the same fold as the conviction: convicted ⇒ paid.
+        "bountyPaid": row.convicted,
+        "liabilityUntilDaa": row.liability_until,
+        "ledgerDaa": ledger.daa,
+    })
+}
+
+pub(crate) async fn prosecution_status(ctx: &Ctx, claim: &str, json: bool) -> CliResult {
+    let claim = parse_hash("CLAIM_ID", claim)?;
+    let nv = crate::wallet::connect(ctx).await?;
+    let (_route, ledger) = kernel_route_view_v1(&nv).await?;
+    let doc = prosecution_status_json_v1(&ledger, claim);
+    emit(ctx, json, doc, |d| {
+        if d["found"] == false {
+            return format!("the kernel route holds no claim {}\n", text(&d["claim"]));
+        }
+        format!(
+            "claim {}: {} — convicted {}, bounty paid {}\n  reservation {} sompi, reporter share {}‰ (bounty now {} sompi), ledger DAA {}\n",
+            text(&d["claim"]),
+            text(&d["state"]),
+            text(&d["convicted"]),
+            text(&d["bountyPaid"]),
+            text(&d["reservedSompi"]),
+            text(&d["reporterSharePermille"]),
+            text(&d["reporterBountyIfConvictedNowSompi"]),
+            text(&d["ledgerDaa"])
+        )
+    });
+    Ok(())
+}
+
 fn parse_token_list_v1(s: &str) -> Result<Vec<u32>, CliError> {
     let tokens: Result<Vec<u32>, _> = s.split(',').map(|t| t.trim().parse::<u32>()).collect();
     match tokens {
@@ -915,6 +1019,83 @@ pub(crate) async fn build(ctx: &Ctx, cmd: BuildCmd) -> CliResult {
                 (false, None) => unreachable!("clap requires --out without --dry-run"),
             }
         }
+        BuildCmd::FileProof { key, claim, bond, model, dry_run, out_dir } => {
+            use misaka_palw_remote::pursuit::{
+                KERNEL_SERVICE_CHUNK_CAP_V1, KernelFilingV1, KernelGoalV1, KernelPursuitV1, KernelSendV1, kernel_check_program_v1,
+                kernel_class_model_root_v1, kernel_model_read_v1, kernel_model_roots_v1, kernel_step_sends_v1, plan_kernel_pursuit_on_v1,
+            };
+            let claim = parse_hash("--claim", &claim)?;
+            let params = kernel_model_read_v1(&model).map_err(|e| CliError::new(exit::GENERIC, e))?;
+            let (nv, signer, accuser) = bond_signer_v1(ctx, &key.source(), &bond).await?;
+            let (route, ledger) = kernel_route_view_v1(&nv).await?;
+            let id = claim.as_bytes();
+            let row = ledger.claims.get(&id).ok_or_else(|| CliError::new(exit::GENERIC, format!("the kernel route holds no claim {claim}")))?;
+            let root = kernel_class_model_root_v1(&ledger, &row.class_binding_id)
+                .ok_or_else(|| CliError::new(exit::GENERIC, "this claim's class is not checkable with one model (pipeline/composite)"))?;
+            if !kernel_model_roots_v1(&params).contains(&root) {
+                return Err(CliError::new(exit::GENERIC, "--model does not open to the class's registered parameter commitments"));
+            }
+            let me = palw_kernel_bond_id_v1(&accuser);
+            let salt = misaka_palw_kernel::hash::id(b"misaka-palw/cli/kernel-filer/salt/v1", &me);
+            let goal = kernel_check_program_v1(&ledger, &id, &params, salt).map_err(|e| CliError::new(exit::GENERIC, e))?;
+            let Some(goal) = goal else {
+                println!("claim {claim}: the replay checks clean — nothing to file");
+                return Ok(());
+            };
+            let collateral = nv
+                .client
+                .get_palw_producer_facts(
+                    crate::bond::bond_lookup_class(&nv)?,
+                    accuser.0.transaction_id.to_string(),
+                    accuser.0.index,
+                    true,
+                )
+                .await
+                .map_err(|e| CliError::connection(format!("cannot read the bond's facts: {e}")))?
+                .bond_collateral;
+            let synced = collateral.saturating_sub(route.chunk_deposits_of_v1(&accuser));
+            let domain = crate::bond::network_domain(&nv);
+            let pursuit = KernelPursuitV1 { claim: id, bond: accuser, goal, synced_collateral: Some(synced) };
+            let filing = match &pursuit.goal {
+                KernelGoalV1::Prove(proof) => {
+                    Some(kernel_route_object_v1(domain, accuser, &KernelObj::FileProof { accuser: me, claim: id, proof: proof.clone() }, &signer))
+                }
+                KernelGoalV1::Demand(_) => None,
+            };
+            let f = filing.as_ref().map(|signed| KernelFilingV1 { signed, chunk_cap: KERNEL_SERVICE_CHUNK_CAP_V1 });
+            let step = plan_kernel_pursuit_on_v1(&route, &ledger, &pursuit, f.as_ref()).map_err(|e| CliError::new(exit::GENERIC, e))?;
+            let shown: String = format!("{step:?}").chars().take(400).collect();
+            println!("claim {claim}: next step {shown}");
+            let sends = kernel_step_sends_v1(&step, &pursuit, f.as_ref()).map_err(|e| CliError::new(exit::GENERIC, e))?;
+            let objects: Vec<(String, PalwConsensusObjectV2)> = sends
+                .into_iter()
+                .map(|send| match send {
+                    KernelSendV1::Route(KernelObj::FileProof { .. }) => ("FileProof".to_string(), filing.clone().expect("a Prove goal")),
+                    KernelSendV1::Route(k) => (format!("{:?}", k).split([' ', '{', '(']).next().unwrap_or("Route").to_string(), kernel_route_object_v1(domain, accuser, &k, &signer)),
+                    KernelSendV1::Chunk(chunk) => {
+                        use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1, palw_kernel_chunk_message_v1};
+                        let m = palw_kernel_chunk_message_v1(domain, &chunk);
+                        let signature = signer.sign_with_context(m.as_byte_slice(), PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1).to_vec();
+                        ("Chunk".to_string(), PalwConsensusObjectV2::KernelRouteChunkV1 { chunk: Box::new(chunk), signature })
+                    }
+                })
+                .collect();
+            if objects.is_empty() {
+                println!("nothing to send at this step (wait or re-run later)");
+                return Ok(());
+            }
+            println!("{} object(s) to carry, in order", objects.len());
+            if dry_run {
+                println!("dry run: nothing written");
+                return Ok(());
+            }
+            let dir = out_dir.expect("clap requires --out-dir without --dry-run");
+            std::fs::create_dir_all(&dir).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dir.display())))?;
+            for (i, (kind, object)) in objects.iter().enumerate() {
+                write_object(&dir.join(format!("{i:03}-{kind}.bin")), object)?;
+            }
+            Ok(())
+        }
         BuildCmd::FundedOriginal { claim } => {
             parse_hash("--claim", &claim)?;
             refuse_unless_adopted("funded original schedule").map_err(|e| {
@@ -1083,6 +1264,18 @@ mod tests {
         assert!(!ok(&["court-open", "--claim", &id, "--bond", &bond, "--key-file", "k"]));
         assert!(ok(&["kernel-post-job", "--bond", &bond, "--class", &id, "--prompt", "1,2", "--max-new", "2", "--key-file", "k", "--out", "x"]));
         assert!(ok(&["court-ingress", "--claim", &id]));
+        assert!(ok(&["file-proof", "--claim", &id, "--bond", &bond, "--model", "m.palwkm", "--key-file", "k", "--dry-run"]));
+        assert!(!ok(&["file-proof", "--claim", &id, "--bond", &bond, "--model", "m.palwkm", "--key-file", "k"]));
+        assert!(crate::Cli::try_parse_from(["misaka", "palw", "prosecution-status", &id, "--json"]).is_ok());
+    }
+
+    #[test]
+    fn prosecution_status_reports_an_unknown_claim_and_the_policy_share() {
+        let policy = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default());
+        let ledger = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_template_opv_v1(policy, None);
+        let doc = prosecution_status_json_v1(&ledger, claim());
+        assert_eq!(doc["found"], false);
+        assert_eq!(policy.accuser_reward_permille, 490);
     }
 
     /// Build → borsh → decode → the consensus acceptance pieces a validating node runs on tag 154 without state: the kind's owning
@@ -1093,7 +1286,7 @@ mod tests {
     fn a_built_reservation_round_trips_and_passes_the_consensus_checks_where_the_fence_is_armed() {
         let key = kaspa_pq_validator_core::ValidatorKey::from_seed([9u8; 32]);
         let reserver = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([3u8; 64]), 2));
-        let mut params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             params.net.to_string().as_bytes(),
             Some(params.genesis.hash),
@@ -1145,15 +1338,14 @@ mod tests {
             .unwrap_or(false)
         );
         kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&decoded).expect("tag 154 may ride");
-        // The shipped ruleset holds the fence dormant: the kind is not read as a statement there.
-        assert!(!params.palw_lifecycle_kind_fences_v1().kind_in_force_at(&decoded, 1_000_000));
-        // Armed in test params (the full-activation list at DAA 100): in force from 100, not before.
-        kaspa_consensus_core::config::params::palw_t12_arm_full_activation_at_v1(&mut params, Some(100));
+        // The shipped t12 ruleset arms the fence (the DAA 16,600 flag day): in force from its height, not before.
+        let at = params.palw_legacy_public_filer_v1.expect("shipped t12 arms palw_legacy_public_filer_v1").daa_score();
         let fences = params.palw_lifecycle_kind_fences_v1();
-        assert!(fences.kind_in_force_at(&decoded, 100));
-        assert!(!fences.kind_in_force_at(&decoded, 99));
+        assert!(fences.kind_in_force_at(&decoded, at));
+        assert!(fences.kind_in_force_at(&decoded, 1_000_000));
+        assert!(!fences.kind_in_force_at(&decoded, at - 1));
         // object-show reports the same.
-        let summary = object_summary(&bytes, Some(&params), 100).unwrap();
+        let summary = object_summary(&bytes, Some(&params), at).unwrap();
         assert_eq!(summary["tag"], 154);
         assert_eq!(summary["variant"], "DisputeReservedV1");
         assert_eq!(summary["kindInForce"], true);

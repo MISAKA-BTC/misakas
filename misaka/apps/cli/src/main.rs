@@ -1421,6 +1421,16 @@ enum PalwCmd {
     /// claims, seat capacity, licence queue, attribution). Node-only, no rule reads it. Read-only
     /// (`getPalwCapacityShadow`, op 201: a node built before it drops the connection).
     CapacityShadow(palw_capacity_shadow::CapacityShadowArgs),
+    /// **A kernel route claim's prosecution, for an outside filer's reward check** (lane UX-B): whether the claim is convicted, the
+    /// reservation a conviction slashes, the reporter share and whether the bounty was credited. Read from the route's rooted rows
+    /// (`getPalwKernelRows`, op 211; no new op). Read-only.
+    ProsecutionStatus {
+        /// 128-hex kernel claim id.
+        #[arg(value_name = "CLAIM_ID")]
+        claim: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// **One claim, everything a user follows it by** (`getPalwClaimDetail`, op 225): phase and the DAA it ends by itself, Gate C
     /// certification (Final is not SecurityCertified), accusation pending, receipt pause, court clocks (notice 3,120 / hard 10,000 /
     /// per-turn), dispute record, DA and court sessions. Read-only; a node built before op 225 drops the connection (exit 36).
@@ -3545,6 +3555,9 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move { palw_vesting::run(ctx, bond, address, claim, limit, after, exec_after, json).await })
         }
         Command::Palw(PalwCmd::CapacityShadow(args)) => Box::pin(async move { palw_capacity_shadow::run(ctx, args).await }),
+        Command::Palw(PalwCmd::ProsecutionStatus { claim, json }) => {
+            Box::pin(async move { palw_user::prosecution_status(ctx, &claim, json).await })
+        }
         Command::Palw(PalwCmd::ClaimDetail { claim, json }) => {
             Box::pin(async move { palw_user::claim_detail(ctx, &claim, json).await })
         }

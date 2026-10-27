@@ -200,6 +200,9 @@ fn main() {
     // standing custody delegation its node custodian co-signed. Both hex files of borsh bytes.
     let mut public_binding_path: Option<PathBuf> = None;
     let mut custody_delegation_path: Option<PathBuf> = None;
+    // Lane UX-B: whether a TIR original attaches its TFP1 frame (op 248). `auto` (default) as before; `require` refuses to sign
+    // without a quoted frame; `off` skips the frame (only for a claim below `palw_tir_public_conviction_v1`: G-03 refuses it past).
+    let mut tfp1 = Tfp1ModeV1::Auto;
     // ADR-0077 SA-1(b). The gateway's own sweep uses the same number; it is spelled once here
     // because the two halves must retire the same artifacts, and a rail with a longer TTL would
     // submit exactly what the gateway retired.
@@ -271,6 +274,7 @@ fn main() {
             "--capture" => capture_path = Some(PathBuf::from(value("--capture"))),
             "--dsl" => dsl_path = Some(PathBuf::from(value("--dsl"))),
             "--public-binding" => public_binding_path = Some(PathBuf::from(value("--public-binding"))),
+            "--tfp1" => tfp1 = Tfp1ModeV1::parse(&value("--tfp1")).unwrap_or_else(|e| die(e)),
             "--custody-delegation" => custody_delegation_path = Some(PathBuf::from(value("--custody-delegation"))),
             "--anchor-ttl-daa" => anchor_ttl_daa = value("--anchor-ttl-daa").parse().unwrap_or_else(|e| die(format!("{e}"))),
             // The public key a `--bond-key-seed` file yields, so an operator can put the SAME key
@@ -650,10 +654,18 @@ fn main() {
     // shared assembly (`palw_tir_public_original_pledges_v1`), and the plan's rent declared and paid on top of relay. No quote (below
     // the fence, a legacy header, an original the frame does not admit) keeps the routes below; consensus refuses a frameless TIR
     // original past the fence (G-03), so nothing here can make one rewardable.
-    let tir_frame = public_binding_path.as_ref().and_then(|path| {
+    let tir_frame = public_binding_path.as_ref().filter(|_| tfp1 != Tfp1ModeV1::Off).and_then(|path| {
         let header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
             read_borsh_hex_v1(path, 2048).unwrap_or_else(|e| die(format!("--public-binding {}: {e}", path.display())));
-        let kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(tir) = &header else { return None };
+        let kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(tir) = &header else {
+            if tfp1 == Tfp1ModeV1::Require {
+                die("--tfp1 require: the public binding is not a TIR header, so it has no TFP1 frame".into());
+            }
+            return None;
+        };
+        if tfp1 == Tfp1ModeV1::Require && rpc_endpoint.is_none() {
+            die("--tfp1 require needs --rpc: the frame is the node's quote (op 248)".into());
+        }
         let Some(endpoint) = rpc_endpoint.as_deref() else {
             eprintln!(
                 "[misaka-palw-fp-rail] WARNING: a TIR original without --rpc cannot be quoted for its TFP1 frame; past \
@@ -667,6 +679,9 @@ fn main() {
             die(format!("the chain would refuse this TIR original frame: {}", quote.refusal));
         }
         if !quote.quoted {
+            if tfp1 == Tfp1ModeV1::Require {
+                die(format!("--tfp1 require: the node quoted no TFP1 frame at DAA {} (below the fence or not admitted)", quote.quote_daa));
+            }
             return None;
         }
         let plan = read_hex_borsh_v1::<kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>(
@@ -1701,6 +1716,25 @@ fn chain_preclaim_quote_v1(
     let quote = runtime.block_on(client.get_palw_staged_preclaim_quote(request)).map_err(|e| e.to_string());
     let _ = runtime.block_on(client.disconnect());
     quote
+}
+
+/// `--tfp1 auto|require|off` (lane UX-B): whether a TIR original attaches its TFP1 frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tfp1ModeV1 {
+    Auto,
+    Require,
+    Off,
+}
+
+impl Tfp1ModeV1 {
+    fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "auto" => Ok(Self::Auto),
+            "require" => Ok(Self::Require),
+            "off" => Ok(Self::Off),
+            other => Err(format!("--tfp1 '{other}': expected auto, require or off")),
+        }
+    }
 }
 
 /// G14 op 248 (lane FPSEL): the ORIGINAL TIR frame quote from the node the rail names. Advisory like op 244: the accepting block
