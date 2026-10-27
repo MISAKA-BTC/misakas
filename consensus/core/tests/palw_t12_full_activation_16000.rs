@@ -178,7 +178,7 @@ fn with_the_height_none_the_shipped_ruleset_is_the_fleets_int13_release() {
 #[test]
 fn sixteen_thousand_is_used_by_no_other_list_or_schedule() {
     let target = PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1;
-    assert_eq!(target, 16_600);
+    assert_eq!(target, 17_400);
     assert!(!OTHER_HEIGHTS.contains(&target));
     for other in [
         PALW_T12_INT11_FLAG_DAY_DAA,

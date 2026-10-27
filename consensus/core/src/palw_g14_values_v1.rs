@@ -100,12 +100,13 @@ pub const PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1: u64 = 4;
 /// Integration (2026-10-26): the user approved this value the same day; the production bound above takes it.
 pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1: u64 = 500 * SOMPI_PER_MSK_V1;
 
-/// **ESTIMATE (AUDIT-3 m3, user decision 2026-10-27 "raise the collateral"): the kernel route's per-claim collateral, 1,080 MSK.**
-/// Detection-loss check: a convicted producer that files its own accusation recovers the 49 % reporter share (ADR-0032), so its net
-/// loss is `0.51 × C + claim_reward 5 + V2 fee 0.816`; that must be ≥ external gain bound 500 / detection 0.90 = 555.6 MSK, i.e.
-/// C ≥ 1,078.0 MSK. 1,000 + 60 = 1,060 (546.4 MSK net) would still fall short, so the estimate is 1,080 (556.6 MSK net). Review: the
-/// gain bound, the reporter share, the detection-rate estimate, a confirmed seat-bond slash on conviction.
-pub const PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_ESTIMATE_V1: u64 = 1_080 * SOMPI_PER_MSK_V1;
+/// **ESTIMATE (AUDIT-3 m3, user decision 2026-10-27 "raise the collateral"; E1 2026-10-27): the kernel route's per-claim collateral,
+/// 1,100 MSK.** Detection-loss check for a producer that is also the poster and files its own accusation after Final: it recovers the
+/// 49 % reporter share (ADR-0032) and, on a post-Final conviction, 90 % of the held reward and of the V2 fee return to it as poster
+/// (`palw_kernel_uncertified_split_v1`: only the 10 % burn share is lost). Net loss = `0.51 × C + 0.10 × claim_reward 5 + 0.10 ×
+/// V2 fee 0.816`, which must be ≥ external gain bound 500 / detection 0.90 = 555.56 MSK, i.e. C ≥ 1,089.1 MSK. 1,080 gave 551.38
+/// (short 4.18, E1); 1,100 gives 561.58. Review: the gain bound, the reporter share, the burn share, the detection-rate estimate.
+pub const PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_ESTIMATE_V1: u64 = 1_100 * SOMPI_PER_MSK_V1;
 /// The production per-claim collateral the kernel route policy reads (`palw_kernel_route_policy_v1`). Read only once the kernel route
 /// is armed; no fence height or identity input changes.
 pub const PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_V1: u64 = PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_ESTIMATE_V1;
@@ -499,7 +500,7 @@ mod tests {
         );
         assert!(cost.clock.maximum_door_daa <= 120 + 3_000, "inside the liability horizon the candidate read");
         assert_eq!(cost.clock.inclusion_daa_v1(1, 0).expect("no overflow"), 1, "one control fits one DAA's inclusion capacity");
-        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 16_600 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
+        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
         assert_eq!(
             palw_tir_frame_cost_record_admits_v1(h(9), 17_000, Some(&cost), PALW_TIR_FRAME_COST_RECORDS_V1),
             Err(PalwTirFrameCostRefusalV1::NoRecord),

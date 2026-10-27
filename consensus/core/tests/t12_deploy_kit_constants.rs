@@ -230,8 +230,8 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     assert!(schedule.contains(&PALW_T12_INT13_DAA.unwrap()), "{schedule:?}");
     assert_eq!(
         schedule.last().copied(),
-        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA,
-        "the schedule ends at the G14 flag day: {schedule:?}"
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.or(PALW_T12_INT13_DAA),
+        "the schedule ends at the G14 flag day (or int-13 while it is dormant): {schedule:?}"
     );
 }
 
@@ -264,5 +264,9 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
     let g14 = shell_value(FLEET, &fleet, "G14_FLAG_DAY_DAA");
     let core_g14 = kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.map(|at| at.to_string()).unwrap_or_default();
     assert_eq!(g14, core_g14, "{FLEET}: G14_FLAG_DAY_DAA is the preset's");
-    assert!(p.fence_schedule_v1().contains(&16_600), "the G14 list is scheduled at 16,600");
+    assert_eq!(
+        p.fence_schedule_v1().contains(&17_400),
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.is_some(),
+        "17,400 is scheduled exactly when the G14 flag day is armed"
+    );
 }

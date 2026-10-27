@@ -19,7 +19,7 @@ fn the_17000_list_covers_the_slice_six_families_and_panel_da() {
     }
     let shipped = palw_t12_shipped_params();
     let live: Vec<&str> =
-        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 16_600)).map(|(n, _)| *n).collect();
+        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 17_400)).map(|(n, _)| *n).collect();
     // Each family fence is either on the list or already in force on testnet-12 below 17,000 (`palw_fp_tokenizer_match` @5,300,
     // `palw_panel_da` @0) — never both (re-arming a live fence would fork below 17,000).
     for fam in FAMILIES.into_iter().chain([F::FpPanelDaDisclosure]) {
@@ -94,78 +94,177 @@ fn peel_the_whole_list_at_17000() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// Typed waivers (lane ACT2, user decision 2026-10-27)
+// Typed waivers (lane ACT2, user decisions 2026-10-27; F1: only the user-permitted kinds, each bound to its slot class)
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 use kaspa_consensus_core::palw_arming_waiver_v1::{
-    PALW_ARMING_WAIVER_REVIEW_V1, PALW_ARMING_WAIVERS_V1, PalwArmingEvidenceV1, palw_arming_evidence_kind_v1,
+    PALW_ARMING_WAIVER_REVIEW_V1, PALW_ARMING_WAIVERS_V1, PalwArmingEvidenceV1, PalwArmingSlotClassV1, PalwArmingWaiverKindV1,
+    PalwArmingWaiverV1, palw_arming_evidence_kind_v1, palw_arming_slot_class_v1,
 };
 
-/// Every slot of every pinned 17,000 record is a waiver (the Python digests match the Rust ones); none is reported as a run.
-#[test]
-fn every_pinned_17000_slot_is_a_typed_waiver_never_a_run() {
-    use kaspa_consensus_core::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1;
-    use kaspa_consensus_core::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORDS_V1;
-    use kaspa_consensus_core::palw_rfc0018_v1::PALW_RFC0018_ARMING_RECORDS_V1;
-    type Slots = (&'static str, kaspa_consensus_core::Hash64, u64, Vec<[u8; 32]>, [u8; 32]);
-    let mut slots: Vec<Slots> = vec![];
-    slots.extend(PALW_G14_ARMING_RECORDS_V1.iter().map(|r| (r.fence.name(), r.genesis, r.activation_daa, r.evidence.to_vec(), r.review)));
-    slots.extend(
-        PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().map(|r| (r.fence.name(), r.genesis, r.activation_daa, r.evidence.to_vec(), r.review)),
-    );
-    slots.extend(PALW_RFC0018_ARMING_RECORDS_V1.iter().map(|r| (r.fence.name(), r.genesis, r.activation_daa, r.evidence.to_vec(), r.review)));
-    assert_eq!(slots.len(), 11);
-    for (fence, g, h, ev, review) in slots {
-        for (i, d) in ev.iter().enumerate() {
-            let kind = palw_arming_evidence_kind_v1(fence, g, h, i as u16, d, PALW_ARMING_WAIVERS_V1).expect("well-formed");
-            assert!(matches!(kind, PalwArmingEvidenceV1::Waived(_)), "{fence} slot {i} is not a pinned waiver");
-        }
-        let kind = palw_arming_evidence_kind_v1(fence, g, h, PALW_ARMING_WAIVER_REVIEW_V1, &review, PALW_ARMING_WAIVERS_V1).unwrap();
-        assert!(matches!(kind, PalwArmingEvidenceV1::Waived(_)), "{fence} review is not a pinned waiver");
+/// The requirement text of `fence`'s slot `slot` ("" for the review slot; the frame cost record's one slot is a measured value).
+fn requirement_text(fence: &str, slot: u16) -> &'static str {
+    use kaspa_consensus_core::palw_g14_gates_v1::PalwG14GatedFenceV1;
+    use kaspa_consensus_core::palw_kernel_route_arming_v1::PalwKernelRouteGatedFenceV1;
+    use kaspa_consensus_core::palw_rfc0018_v1::PalwRfc0018GatedFenceV1;
+    if slot == PALW_ARMING_WAIVER_REVIEW_V1 {
+        return "";
     }
-    assert!(PALW_ARMING_WAIVERS_V1.iter().all(|w| w.decided_by == "user 2026-10-27" && w.form().is_ok()));
+    let i = slot as usize;
+    if fence == "palw_tir_frame_cost_v1" {
+        return "measured: the TIR frame cost model";
+    }
+    if fence == "palw_model_tier_v1" {
+        return kaspa_consensus_core::palw_model_tier_v1::PALW_MODEL_TIER_ARMING_REQUIREMENTS_V1[i];
+    }
+    if let Some(f) = PalwG14GatedFenceV1::ALL.iter().find(|f| f.name() == fence) {
+        return f.requirements()[i];
+    }
+    if let Some(f) = PalwKernelRouteGatedFenceV1::ALL.iter().find(|f| f.name() == fence) {
+        return f.requirements()[i];
+    }
+    if let Some(f) = PalwRfc0018GatedFenceV1::ALL.iter().find(|f| f.name() == fence) {
+        return f.requirements()[i];
+    }
+    panic!("no requirement list for {fence}")
 }
 
-/// **A waiver admits its record AND lifts no safety refusal — at the same time.**
+/// Every pinned waiver is of a permitted kind for its slot (F1), carries its value where its kind needs one, and is classified as a
+/// waiver — never as a run. (Python and Rust digests agree: each is found by its own digest.)
 #[test]
-fn a_waiver_admits_its_record_but_lifts_no_safety_refusal() {
-    use kaspa_consensus_core::palw_g14_gates_v1::{
-        PALW_G14_ARMING_RECORDS_V1, PalwG14ArmingRecordV1, PalwG14GatedFenceV1, palw_g14_arming_record_admits_v1,
-        palw_g14_arming_record_form_v1,
-    };
+fn every_pinned_waiver_fits_its_slot_and_is_never_a_run() {
+    assert!(!PALW_ARMING_WAIVERS_V1.is_empty());
+    for w in PALW_ARMING_WAIVERS_V1 {
+        let text = requirement_text(w.fence, w.requirement);
+        let class = palw_arming_slot_class_v1(w.requirement, text);
+        assert_eq!(w.form(class), Ok(()), "{} slot {}: {:?} in {class:?}", w.fence, w.requirement, w.kind);
+        let got = palw_arming_evidence_kind_v1(w.fence, w.genesis, w.activation_daa, w.requirement, text, &w.digest(), PALW_ARMING_WAIVERS_V1);
+        assert!(matches!(got, Ok(PalwArmingEvidenceV1::Waived(_))), "{} slot {}: {got:?}", w.fence, w.requirement);
+    }
+}
+
+/// **Every pinned waiver is bound to the flag day (17,400)**: the same waiver at any other height is refused, never a run.
+#[test]
+fn waiver_height_binds_flag_day() {
+    use kaspa_consensus_core::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1;
+    let at = PALW_T12_G14_17000_DAA_V1;
+    assert_eq!(at, 17_400);
+    for w in PALW_ARMING_WAIVERS_V1 {
+        assert_eq!(w.activation_daa, at, "{} slot {} is pinned at another height", w.fence, w.requirement);
+        let text = requirement_text(w.fence, w.requirement);
+        let d = w.digest();
+        for other in [16_600, 17_000, at - 1, at + 1] {
+            let there = palw_arming_evidence_kind_v1(w.fence, w.genesis, other, w.requirement, text, &d, PALW_ARMING_WAIVERS_V1);
+            assert!(there.is_err(), "{} slot {} at {other} must be refused, got {there:?}", w.fence, w.requirement);
+        }
+    }
+    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == at));
+}
+
+fn waiver(kind: PalwArmingWaiverKindV1, value: &'static str) -> PalwArmingWaiverV1 {
+    PalwArmingWaiverV1 {
+        fence: "palw_court_capacity_v1",
+        genesis: palw_t12_shipped_params().genesis.hash,
+        activation_daa: 17_400,
+        requirement: 1,
+        kind,
+        value,
+        reason: "test",
+        decided_by: "user 2026-10-27",
+    }
+}
+
+/// F1: a measured-value slot with an estimate waiver that carries no value is refused.
+#[test]
+fn f1_a_measured_slot_waiver_without_a_value_is_refused() {
+    let class = palw_arming_slot_class_v1(1, requirement_text("palw_court_capacity_v1", 1));
+    assert_eq!(class, PalwArmingSlotClassV1::Measured);
+    assert!(waiver(PalwArmingWaiverKindV1::ProvisionalEstimate, "").form(class).is_err());
+    assert!(waiver(PalwArmingWaiverKindV1::ProvisionalEstimate, "cap 42").form(class).is_ok());
+}
+
+/// F1: the review slot with a DrillSkipped waiver is refused (only AgentReview with a report fits it).
+#[test]
+fn f1_a_review_slot_with_drill_skipped_is_refused() {
+    let class = palw_arming_slot_class_v1(PALW_ARMING_WAIVER_REVIEW_V1, "");
+    assert_eq!(class, PalwArmingSlotClassV1::Review);
+    assert!(waiver(PalwArmingWaiverKindV1::DrillSkipped, "").form(class).is_err());
+    assert!(waiver(PalwArmingWaiverKindV1::AgentReview, "").form(class).is_err(), "a review waiver names its report");
+    assert!(waiver(PalwArmingWaiverKindV1::AgentReview, "report.md").form(class).is_ok());
+}
+
+/// F1: a kind in a slot of another class is refused, and a suite / regression slot takes no waiver at all.
+#[test]
+fn f1_a_mismatched_kind_is_refused() {
+    use PalwArmingWaiverKindV1 as K;
+    let drill = palw_arming_slot_class_v1(3, requirement_text("palw_court_capacity_v1", 3));
+    let suite = palw_arming_slot_class_v1(0, requirement_text("palw_court_capacity_v1", 0));
+    assert_eq!((drill, suite), (PalwArmingSlotClassV1::Drill, PalwArmingSlotClassV1::Run));
+    assert!(waiver(K::E2ENotRun, "").form(drill).is_err());
+    assert!(waiver(K::ProvisionalEstimate, "x").form(drill).is_err());
+    assert!(waiver(K::DrillSkipped, "").form(drill).is_ok());
+    for kind in [K::DrillSkipped, K::E2ENotRun, K::ProvisionalEstimate, K::AgentReview, K::UserDecision] {
+        assert!(waiver(kind, "x").form(suite).is_err(), "{kind:?} filled a suite slot");
+    }
+}
+
+/// **A waiver never satisfies a requirement that must hold**: ordering, placeholder-value and open-blocker refusals stand with every
+/// record present; the ONE exception is court capacity's user-approved V11 estimate (its measured slot is a pinned
+/// `ProvisionalEstimate` for exactly that policy). Records here are TEST records (non-waiver digests) for the other slots.
+#[test]
+fn waiver_cannot_satisfy_requirement_passed() {
+    use kaspa_consensus_core::config::params::{PALW_T12_FULL_COURT_CAPACITY_ENTRY, PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY, Params};
+    use kaspa_consensus_core::palw_court_capacity_v1::PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1;
+    use kaspa_consensus_core::palw_g14_gates_v1::{PALW_G14_ARMING_RECORD_VERSION_V1, PalwG14ArmingRecordV1, PalwG14GatedFenceV1};
     let at = PALW_T12_G14_17000_DAA_V1;
     let base = kaspa_consensus_core::config::params::palw_t12_release_v7_params();
     let g = base.genesis.hash;
-    let set = |p: &mut kaspa_consensus_core::config::params::Params, name: &str| {
+    let record = |fence: PalwG14GatedFenceV1, seed: u8| {
+        let mut ev: Vec<[u8; 32]> = (0..fence.requirements().len()).map(|i| [seed.wrapping_add(i as u8); 32]).collect();
+        if fence == PalwG14GatedFenceV1::CourtCapacityV1 {
+            let w = PALW_ARMING_WAIVERS_V1
+                .iter()
+                .find(|w| w.fence == "palw_court_capacity_v1" && w.requirement == PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1 as u16)
+                .expect("the pinned V11 estimate waiver");
+            ev[PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1] = w.digest();
+        }
+        PalwG14ArmingRecordV1 {
+            version: PALW_G14_ARMING_RECORD_VERSION_V1,
+            fence,
+            genesis: g,
+            activation_daa: at,
+            source_commit: [7; 20],
+            evidence: Box::leak(ev.into_boxed_slice()),
+            review: [seed.wrapping_add(100); 32],
+        }
+    };
+    let records = [record(PalwG14GatedFenceV1::LegacyPublicFilerV1, 10), record(PalwG14GatedFenceV1::CourtCapacityV1, 40)];
+    let named = |p: &mut Params, name: &str| {
         let f = PALW_T12_G14_17000_FENCES_V1.iter().find(|f| f.name == name).expect("on the list");
         (f.set)(p, Some(ForkActivation::new(at)));
     };
-    // 1. The waived record admits exactly its own (fence, network, height).
-    for fence in [PalwG14GatedFenceV1::LegacyPublicFilerV1, PalwG14GatedFenceV1::LegacyHeldDaV2, PalwG14GatedFenceV1::G14RouteRequiredV1] {
-        assert_eq!(palw_g14_arming_record_admits_v1(fence, g, at, PALW_G14_ARMING_RECORDS_V1), Ok(()), "{fence:?}");
-        assert!(palw_g14_arming_record_admits_v1(fence, g, at + 1, PALW_G14_ARMING_RECORDS_V1).is_err());
-    }
-    // 2. A waiver moved to another slot is refused.
-    let r = PALW_G14_ARMING_RECORDS_V1.iter().find(|r| r.fence == PalwG14GatedFenceV1::G14RouteRequiredV1).unwrap();
-    let swapped: &'static [[u8; 32]] = Box::leak(vec![r.evidence[1], r.evidence[0], r.evidence[2], r.evidence[3]].into_boxed_slice());
-    assert!(palw_g14_arming_record_form_v1(&PalwG14ArmingRecordV1 { evidence: swapped, ..*r }).is_err());
-    // 3. Ordering: held DA v2 has its waived record, but without the filer at or below it the refusal stands.
+    // Ordering: held DA v2 without the filer.
     let mut p = base.clone();
-    set(&mut p, "palw_legacy_held_da_v2");
-    let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
-    assert!(e.contains("needs palw_legacy_public_filer_v1"), "{e}");
-    // 4. Missing value: court capacity has its waived record (and a UserDecision for the approved estimate), but the PLACEHOLDER
-    //    policy (the full list's entry, not the estimate) is still refused.
+    named(&mut p, "palw_legacy_held_da_v2");
+    assert!(format!("{:?}", p.validate_palw_v2_with_arming_records_v1(&records)).contains("needs palw_legacy_public_filer_v1"));
+    // Placeholder value: court capacity's placeholder policy (not the approved estimate), with its record.
     let mut p = base.clone();
-    for name in ["palw_legacy_public_filer_v1", "palw_court_outsider_lane_v1"] {
-        set(&mut p, name);
-    }
-    (kaspa_consensus_core::config::params::PALW_T12_FULL_COURT_CAPACITY_ENTRY.set)(&mut p, Some(ForkActivation::new(at)));
-    let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
+    named(&mut p, "palw_legacy_public_filer_v1");
+    named(&mut p, "palw_court_outsider_lane_v1");
+    (PALW_T12_FULL_COURT_CAPACITY_ENTRY.set)(&mut p, Some(ForkActivation::new(at)));
+    let e = format!("{:?}", p.validate_palw_v2_with_arming_records_v1(&records));
     assert!(e.contains("palw_court_capacity_v1") && !e.contains("no arm-readiness record"), "{e}");
-    // 5. Open blocker: settlement once with its prerequisites and records is still refused by RFC08-2.
+    // Open blocker: settlement once (with its prerequisites) is refused by RFC08-2 whatever records exist.
     let mut p = base.clone();
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_KERNEL_SLICE_FENCES_V1, Some(at));
-    let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
+    (PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY.set)(&mut p, Some(ForkActivation::new(at)));
+    // Asked of the fence's own check (the record gates of the slice refuse earlier in the whole validation while no record is pinned).
+    let e = format!("{:?}", p.validate_palw_settlement_once_v1());
     assert!(e.contains("open blocker") && e.contains("RFC08-2"), "{e}");
+    // The one exception: the approved V11 estimate (the list's own court-capacity entry) with its ProvisionalEstimate waiver.
+    let mut p = base.clone();
+    for name in ["palw_legacy_public_filer_v1", "palw_court_outsider_lane_v1", "palw_court_capacity_v1"] {
+        named(&mut p, name);
+    }
+    assert_eq!(p.validate_palw_v2_with_arming_records_v1(&records), Ok(()), "the approved estimate is accepted");
 }

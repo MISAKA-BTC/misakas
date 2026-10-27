@@ -272,7 +272,7 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = None;
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.
-pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 16_600; // the value is 16,600 (user moved the flag day from 17,000, 2026-10-27); the name is kept
+pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 17_400; // the value is 17,400 (user moved the flag day 17,000 -> 16,600 -> 17,400, 2026-10-27; Gate C S/V duty); the name is kept
 
 /// **The full-activation flag day, armed** — the list at [`PALW_T12_FULL_ACTIVATION_DAA`] on the ASSEMBLED ruleset, after the int-13
 /// flag day; a no-op while the height is `None` (it leaves the list exactly as the earlier lists set it — in particular it does not clear
@@ -290,7 +290,10 @@ pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
 
 /// **The G14 17,000 flag day's height on the shipped testnet-12 preset — ARMED** (user decision 2026-10-27). One constant the preset
 /// and the kit (`G14_FLAG_DAY_DAA` in `contrib/t12-deploy-kit/fleet.env.example`, pinned by `t12_deploy_kit_constants`) share.
-pub const PALW_T12_G14_17000_FLAG_DAY_DAA: Option<u64> = Some(PALW_T12_G14_17000_DAA_V1);
+// F1 (2026-10-27): DORMANT. With waivers narrowed to the user-permitted kinds, every record has leftover slots (suite / regression
+// / restart / unestimated measurements; see `palw_t12_17000_records_v1`), so no record is pinned and the list cannot validate. Set
+// back to `Some(PALW_T12_G14_17000_DAA_V1)` (17,400) once those slots are run (release build) or decided by the user.
+pub const PALW_T12_G14_17000_FLAG_DAY_DAA: Option<u64> = None;
 
 /// Is `fence` one of the int-13 list's entries while that list has its own height ([`PALW_T12_INT13_DAA`], DAA 15,500 on the public
 /// fleet)? Those entries keep that height: a later list must neither re-arm them at its own height nor set them dormant.
@@ -417,7 +420,8 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_GATE_C_ENTRY,
     // lane GC-DUTY (user 2026-10-27): positive 'S'/'K' attestors' liability, at Gate C's height (validation: at or below it).
     PALW_T12_G14_GATE_C_ATTESTOR_LIABILITY_ENTRY,
-    // Slot for lane ROLES: the wide128 test-class root pinned as "public attest" (a constant ROLES adds here, before route-required).
+    // Lane ROLES' wide128 attestation needs no entry (it rides palw_kernel_route_panel_one_v1).
+    // `palw_lifecycle_operational_v1` (RFC02-LIFECYCLE) is NOT added: awaiting the user.
     // `palw_fp_tokenizer_match` (FpTokenizer) is NOT here: testnet-12 already runs it from DAA 5,300; re-arming it at 17,000
     // would move a live fence below 17,000. The FpTokenizer family's other fences are above.
     // PanelDa (user 2026-10-27, added to scope): `palw_panel_da` is already in force on testnet-12 (RC DA court fence); the
@@ -484,7 +488,7 @@ pub const PALW_T12_G14_COURT_CAPACITY_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = Pa
 };
 
 /// The height [`PALW_T12_G14_17000_FENCES_V1`] is meant for — read by tests and the arming report only, NEVER by the preset.
-pub const PALW_T12_G14_17000_DAA_V1: u64 = 16_600; // the value is 16,600 (user moved the flag day from 17,000, 2026-10-27); the name is kept
+pub const PALW_T12_G14_17000_DAA_V1: u64 = 17_400; // the value is 17,400 (user moved the flag day 17,000 -> 16,600 -> 17,400, 2026-10-27; Gate C S/V duty); the name is kept
 
 /// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.
 pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {

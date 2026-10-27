@@ -389,6 +389,7 @@ pub fn palw_g14_arming_record_form_v1(record: &PalwG14ArmingRecordV1) -> Result<
         record.fence.name(),
         record.genesis,
         record.activation_daa,
+        record.fence.requirements(),
         record.evidence,
         &record.review,
         crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,

@@ -1113,7 +1113,7 @@ fn gatec_decouple_rfc18_record_gate_is_exact_and_well_formed() {
     const DUP: [[u8; 32]; 6] = [[1; 32], [1; 32], [3; 32], [4; 32], [5; 32], [6; 32]];
     assert!(refused(PalwRfc0018ArmingRecordV1 { evidence: &DUP, ..good }));
     // The binary's list is empty: nothing is armable by this lane.
-    assert!(PALW_RFC0018_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 16_600 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
+    assert!(PALW_RFC0018_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
     for f in PalwRfc0018GatedFenceV1::ALL {
         assert!(NAMES.contains(&f.name()));
         assert!(f.requirements().len() >= 2);

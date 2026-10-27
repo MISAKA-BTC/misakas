@@ -880,6 +880,7 @@ pub fn palw_rfc0018_arming_record_admits_v1(
         fence.name(),
         r.genesis,
         r.activation_daa,
+        fence.requirements(),
         r.evidence,
         &r.review,
         crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,

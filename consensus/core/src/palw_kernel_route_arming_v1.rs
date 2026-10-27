@@ -193,6 +193,7 @@ pub fn palw_kernel_route_arming_record_form_v1(record: &PalwKernelRouteArmingRec
         record.fence.name(),
         record.genesis,
         record.activation_daa,
+        record.fence.requirements(),
         record.evidence,
         &record.review,
         crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,
@@ -306,7 +307,7 @@ mod tests {
 
     #[test]
     fn kernel_route_fences_are_dormant_and_refused_without_a_record() {
-        assert!(PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 16_600 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
+        assert!(PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
         for p in [MAINNET_PARAMS, TESTNET_PARAMS] {
             for fence in PalwKernelRouteGatedFenceV1::ALL {
                 assert_eq!(fence.armed(&p), None);
