@@ -501,6 +501,87 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_panel_da_disclosure_v1 = Some(at);
                 params.sync_palw_g14_gates_v1();
             }
+            // Bare heights (lane GC-DUTY 2026-10-27, Lead-approved allocations 175/201-204/245): far above the chain, they judge nothing here.
+            "palw_tir_bounded_door_v1" => params.palw_tir_bounded_door_v1 = Some(at),
+            "palw_tir_designated_answers_v1" => params.palw_tir_designated_answers_v1 = Some(at),
+            "palw_tir_container_identity_v1" => params.palw_tir_container_identity_v1 = Some(at),
+            // Landed state-encoding rows (lane GC-DUTY 2026-10-27): bare heights / fixture policies far above the chain.
+            // Inner 76 is armed through its enum above; the row names the same fence.
+            "palw_elastic_final_capacity_v1" => {
+                params.palw_elastic_final_capacity_v1.get_or_insert(at);
+            }
+            "palw_claim_local_settlement_v1" => {
+                params.palw_claim_local_settlement_v1.get_or_insert(at);
+            }
+            "palw_reporter_share_v2" => {
+                params.palw_reporter_share_v2.get_or_insert(at);
+            }
+            "palw_bond_formula_v2" => {
+                if params.palw_bond_formula_v2.is_none() {
+                    params.palw_bond_formula_v2 = Some(kaspa_consensus_core::palw_bond_formula_v2::PalwBondFormulaFenceV2::at(at));
+                    params.sync_palw_bond_formula_v2();
+                }
+            }
+            "palw_bond_budget_v1" => {
+                if params.palw_bond_budget_v1.is_none() {
+                    params.palw_bond_budget_v1 = Some(kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetFenceV1::at(at));
+                    params.sync_palw_bond_budget_v1();
+                }
+            }
+            "palw_paid_bootstrap_source_v6" => {
+                params.palw_paid_bootstrap_source_v6 = Some(kaspa_consensus_core::palw_paid_bootstrap_source_v6::PalwPaidBootstrapSourceFenceV6 {
+                    activation: at,
+                    policy: misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6 {
+                        version: 6,
+                        network: [9; 64],
+                        bootstrap_policy: [10; 64],
+                        required_sources: 1,
+                        maximum_events: 1,
+                        anchor_delay: 1,
+                        window: 1,
+                        settlement_depth: 1,
+                        maximum_consumers: 1,
+                        source_liability_slack: 1,
+                    },
+                });
+                params.sync_palw_paid_bootstrap_source_v6();
+            }
+            // RFC07 (tag 246): a fixture policy (never release terms), mirrored; far above the chain it judges nothing here.
+            "palw_selected_source_bootstrap_v1" => {
+                let h = |n: u8| kaspa_hashes::Hash64::from_bytes([n; 64]);
+                params.palw_selected_source_bootstrap_v1 =
+                    Some(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1 {
+                        at,
+                        policy: kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1 {
+                            version: 1,
+                            chain_genesis: h(3),
+                            network: h(4),
+                            ruleset: h(5),
+                            epoch: 1,
+                            freeze_cutoff_daa: 10,
+                            anchor_cutoff_daa: 20,
+                            starts_at_daa: 30,
+                            ends_at_daa: 40,
+                            stake_release_daa: 60,
+                            selection: misaka_palw_challenge::bootstrap_epoch_v1::BootstrapPolicyV1 {
+                                version: 1,
+                                seats: 2,
+                                quorum: 2,
+                                maximum_population: 2,
+                                maximum_draw_attempts: 2,
+                                maximum_source_works: 2,
+                            },
+                            source_profile: h(6),
+                            checker_scope: h(7),
+                            maximum_claim_bytes: 1,
+                            maximum_check_work: 1,
+                            maximum_history_headers: 1,
+                            security_review: h(8),
+                            economic_review: h(9),
+                        },
+                    });
+                params.sync_palw_selected_source_bootstrap_v1();
+            }
             other => panic!("a landed A-2 row's fence {other} is not armed by this harness: arm it here ({row:?})"),
         }
     }
