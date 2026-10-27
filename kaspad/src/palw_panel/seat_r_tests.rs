@@ -1526,7 +1526,8 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
     );
     let fp = &source[source.find_code("async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
     let fp = &fp[..fp.find("\n    }\n").expect("its end")];
-    assert!(fp.contains_code("b.execute_free_prompt(&job, &prompt)"), "the whole served job");
+    // The whole served job now runs through the routed FP start (`start_fp_routed_v2` → `bound.execute(&job,&prompt)`).
+    assert!(fp.contains_code("replays.start_fp_routed_v2("), "the whole served job");
     for (name, body) in [("attempt", attempt), ("free prompt", fp)] {
         let squeezed: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(squeezed.contains_code("palw_seat_replay_step_v1(&"), "{name}: the one replay rule");

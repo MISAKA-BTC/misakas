@@ -2488,6 +2488,8 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0024 position terminal and lookahead moves (dormant; witness and frontier bounds unadopted)",
         true,
     ),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 245, hi: 245 }, "palw_tir_designated_answers_v1", "ADR-0191 designated-custodian event", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 255, hi: 255 }, "palw_staged_tir_route_v1", "staged TIR shared material intake", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 246, hi: 246 }, "palw_selected_source_bootstrap_v1", "RFC07 selected source approval", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 247, hi: 247 }, "palw_memory_routing_court_v2", "RFC06 routed material retrieval V2", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 248, hi: 248 }, "palw_memory_routing_court_v2", "RFC06 reader/router declaration", true),
@@ -3234,6 +3236,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (247, 247, "RFC06 explicit routed material response", &["palw_memory_routing_court_v2"]),
     (248, 248, "RFC06 reader/router declaration", &["palw_memory_routing_court_v2"]),
     (249, 249, "RFC06 routing-court accusation", &["palw_memory_routing_court_v2"]),
+    // Lead approval 2026-10-27 (coordinator, lane GC-DUTY): two kinds the base landed without an allocation.
+    (245, 245, "ADR-0191 designated-custodian event (PALW_TIR_DESIGNATED_EVENT_TAG_V1)", &["palw_tir_designated_answers_v1"]),
+    (255, 255, "staged TIR shared material intake (PALW_KERNEL_PARAMETER_STAGE_V4)", &["palw_staged_tir_route_v1"]),
 ];
 
 #[cfg(test)]
