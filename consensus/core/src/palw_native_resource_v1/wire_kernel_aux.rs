@@ -469,6 +469,7 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 142 if key_bytes==65 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1::scan_native_wire_v1(frame)?,
 142=>return Err(wire::wire_bad("unallocated paid-claim trap row namespace")),
 143 if key_bytes==129 && prefix==crate::palw_g14_lane_closure_v1::PALW_KERNEL_SIGNER_LOCK_PREFIX_V1=>crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1::scan_native_wire_v1(frame)?,
+143 if key_bytes==129 && prefix==crate::palw_g14_lane_closure_v1::PALW_NATIVE_ATTESTOR_LOCK_PREFIX_V1=>crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1::scan_native_wire_v1(frame)?,
 143 if key_bytes==65 && prefix==crate::palw_g14_lane_closure_v1::PALW_SERVED_MATERIAL_PREFIX_V1=>crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1::scan_native_wire_v1(frame)?,
 143=>return Err(wire::wire_bad("unallocated G14 lane-closure row namespace")),
 144 if key_bytes==66 && prefix==crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_PREFIX_V1=>crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1::scan_native_wire_v1(frame)?,

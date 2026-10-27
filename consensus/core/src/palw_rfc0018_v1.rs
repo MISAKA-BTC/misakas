@@ -82,6 +82,8 @@ pub struct PalwRfc0018MirrorV1 {
     /// **The free-prompt receipt lane's tail** past certification (`receipt_maturity + receipt_use_window` of the network's FP bundle):
     /// a governed FP claim must still exist that long after its certification can be decided (RFC-0018 18-A; user decision 10-17).
     pub fp_receipt_tail_daa: u64,
+    /// lane GC-DUTY: `palw_gate_c_attestor_liability_v1` — a positive `'S'` / `'K'` attestation locks and a conviction slashes it.
+    pub attestor_liability_from_daa: Option<u64>,
 }
 
 impl PalwRfc0018MirrorV1 {
@@ -104,6 +106,10 @@ impl PalwRfc0018MirrorV1 {
     /// Gate C is in force at a block (the certification sweep and the pruning rule read this).
     pub fn gate_c_at(&self, daa: u64) -> bool {
         Self::at(self.gate_c_from_daa, daa)
+    }
+    /// lane GC-DUTY: a positive `'S'` / `'K'` certification attestation at `daa` carries an attestor liability lock.
+    pub fn attestor_liability_at(&self, daa: u64) -> bool {
+        Self::at(self.attestor_liability_from_daa, daa)
     }
     pub fn is_empty(&self) -> bool {
         self.sibling_attribution_from_daa.is_none()
@@ -934,6 +940,7 @@ impl Params {
                 }
                 _ => 0,
             },
+            attestor_liability_from_daa: Self::rfc0018_from(self.palw_gate_c_attestor_liability_v1),
         };
         (!mirror.is_empty()).then_some(mirror)
     }
@@ -975,6 +982,14 @@ impl Params {
         // (`palw_model_tier_v1`, genesis/annual-fork 1.0, registered 0.3, applied once in A_m's c_m), so that fence is required at or
         // below Gate C instead. Its rows live in the kernel route (aux 136, `palw_probabilistic_constraints_v1`): also at or below.
         // A configuration that still sets `palw_model_eligibility_v1` keeps the old ordering check (that fence can never be armed).
+        // lane GC-DUTY: the attestor liability needs Gate C and sits at or below it (Gate C never runs without it once both are set).
+        if let Some(l) = Self::rfc0018_from(self.palw_gate_c_attestor_liability_v1)
+            && Self::rfc0018_from(self.palw_independently_work_certified_v1).is_none_or(|c| l > c)
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_gate_c_attestor_liability_v1 needs palw_independently_work_certified_v1 armed, at or above it",
+            ));
+        }
         if let Some(c) = Self::rfc0018_from(self.palw_independently_work_certified_v1) {
             let below = |f: Option<ForkActivation>| Self::rfc0018_from(f).is_some_and(|at| at <= c);
             if !below(self.palw_probabilistic_constraints_v1) {

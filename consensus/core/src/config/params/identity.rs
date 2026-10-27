@@ -771,6 +771,9 @@ impl Params {
         if self.palw_independently_work_certified_v1 == Some(ForkActivation::never()) {
             self.palw_independently_work_certified_v1 = None;
         }
+        if self.palw_gate_c_attestor_liability_v1 == Some(ForkActivation::never()) {
+            self.palw_gate_c_attestor_liability_v1 = None;
+        }
         if self.palw_dag_width_schedule_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_dag_width_schedule_v1 = None;
         }
@@ -1276,6 +1279,7 @@ impl Params {
             palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2,
             palw_independently_work_certified_v1,
+            palw_gate_c_attestor_liability_v1,
             palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
@@ -1622,6 +1626,7 @@ impl Params {
             ("palw_court_completion_attempt_v1", *palw_court_completion_attempt_v1),
             ("palw_rule_e_participation_v2", *palw_rule_e_participation_v2),
             ("palw_independently_work_certified_v1", *palw_independently_work_certified_v1),
+            ("palw_gate_c_attestor_liability_v1", *palw_gate_c_attestor_liability_v1),
             ("palw_dag_width_schedule_v1", palw_dag_width_schedule_v1.as_ref().map(|f| f.activation)),
             // lane g14p/r7-fence-16000: five hashed G14 fences that were missing from this list (so from the fork-id schedule): a
             // height they took would have been invisible to the fork id. With every preset at `None` nothing moves.
@@ -2276,6 +2281,10 @@ impl Params {
         }
         if let Some(at) = self.palw_independently_work_certified_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_independently_work_certified_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_gate_c_attestor_liability_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_gate_c_attestor_liability_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(f) = self.palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()) {
@@ -3053,6 +3062,7 @@ impl Params {
             palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2,
             palw_independently_work_certified_v1,
+            palw_gate_c_attestor_liability_v1,
             palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
@@ -4078,6 +4088,9 @@ impl Params {
         if let Some(activation) = palw_independently_work_certified_v1.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_gate_c_attestor_liability_v1.as_mut() {
+            fork(activation, visit);
+        }
         if let Some(f) = palw_dag_width_schedule_v1.as_mut() {
             fork(&mut f.activation, visit);
         }
@@ -4652,6 +4665,7 @@ impl Params {
             palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2,
             palw_independently_work_certified_v1,
+            palw_gate_c_attestor_liability_v1,
             palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
@@ -5840,6 +5854,10 @@ impl Params {
         }
         if let Some(activation) = palw_independently_work_certified_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_independently_work_certified_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_gate_c_attestor_liability_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_gate_c_attestor_liability_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(f) = palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()) {

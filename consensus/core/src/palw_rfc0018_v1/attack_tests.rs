@@ -67,6 +67,7 @@ fn armed_params() -> PalwStateParamsV2 {
         gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
         certification: PalwSecurityCertificationPolicyV1::design_unapproved_v1(720),
         fp_receipt_tail_daa: 0,
+        attestor_liability_from_daa: None,
     }))
 }
 

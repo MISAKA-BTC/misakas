@@ -272,6 +272,7 @@ fn policy_rules() -> PalwStateParamsV2 {
             gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
             certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720),
             fp_receipt_tail_daa: 0,
+            attestor_liability_from_daa: None,
         }))
         .with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 {
             from_daa: 150,

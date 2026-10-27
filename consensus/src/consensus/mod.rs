@@ -4281,6 +4281,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_capacity_audit_candidates_v1_impl(&me)
     }
 
+    fn palw_certification_duties_v1(
+        &self,
+        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        daa: u64,
+    ) -> Vec<kaspa_consensus_core::palw_security_certification_v1::PalwCertificationDutyV1> {
+        self.virtual_processor.palw_certification_duties_v1_impl(&me, daa)
+    }
+
     fn palw_reporter_filing_read_v1(
         &self,
         offence_key: kaspa_consensus_core::Hash64,

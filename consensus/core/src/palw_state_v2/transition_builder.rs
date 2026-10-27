@@ -5839,6 +5839,9 @@ impl<'a> TransitionBuilder<'a> {
         // RFC-0018 Gate C: take back exactly what the Final (or the spends) added — nothing where Gate C withheld it.
         let weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, &claim, weight);
         self.bond_budget_close_v1(&id, ctx.daa_score)?;
+        // lane GC-DUTY: the conviction contradicts every positive Gate C attestation of the claim — their liability locks are
+        // slashed (none exist below `palw_gate_c_attestor_liability_v1`: no lock is written there).
+        super::palw_security_certification_fold_v1::charge_chain_claim_attestors_v1(self, &id)?;
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score)?;
         self.unnote_activation_probe_credits_v1(&id, &claim)?;
@@ -10304,9 +10307,11 @@ impl<'a> TransitionBuilder<'a> {
             terminal_daa.checked_add(self.params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?;
         let at = palw_exec_v2_rewards_v1::retirement(&self.state, self.params, &id, Some(ordinary), claim)?
             .expect("retirement is configured");
-        let at = if self.params.claim_local_settlement_active_at(claim.accepted_daa) {
-            crate::palw_rfc0018_v1::palw_gate_c_retirement_floor_v1(self.params, claim, at)
-        } else { at };
+        // lane GC-E2E (2026-10-27): Gate C's retirement floor applies wherever Gate C governs the claim — the same floor DL-1 and the
+        // deadline sweep derive (`terminal_deadline_at_v1`). It was applied only under claim-local settlement, so a governed Final
+        // without it was armed to retire before its certification could decide (DL-1 drift). The identity where Gate C does not
+        // govern (every shipped network), so byte-identical below the fence.
+        let at = crate::palw_rfc0018_v1::palw_gate_c_retirement_floor_v1(self.params, claim, at);
         self.arm_deadline(at, id)?;
         Ok(())
     }

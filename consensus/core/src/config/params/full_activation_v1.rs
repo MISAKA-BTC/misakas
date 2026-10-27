@@ -83,6 +83,7 @@ palw_full_activation_bare_entry_v1!(PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY, palw_reward_liability_horizon_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_UNRESOLVED_BOUND_ENTRY, palw_unresolved_bound_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_GATE_C_ENTRY, palw_independently_work_certified_v1);
+palw_full_activation_bare_entry_v1!(PALW_T12_G14_GATE_C_ATTESTOR_LIABILITY_ENTRY, palw_gate_c_attestor_liability_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_DAG_SIBLING_ATTRIBUTION_ENTRY, palw_dag_sibling_attribution_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_PANEL_ANCHOR_PERMISSIONLESS_ENTRY, palw_panel_anchor_permissionless_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_MEMORY_ROUTING_COURT_V2_ENTRY, palw_memory_routing_court_v2);
@@ -417,9 +418,10 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     // native mining receipts and other legs with no signed deadline. No entry of this list needs it at or below; each pay point keeps
     // its own once-guard (escrow row removal / phase / paid flag), as testnet-12 runs today.
     PALW_T12_FULL_GATE_C_ENTRY,
+    // lane GC-DUTY (user 2026-10-27): positive 'S'/'K' attestors' liability, at Gate C's height (validation: at or below it).
+    PALW_T12_G14_GATE_C_ATTESTOR_LIABILITY_ENTRY,
     // Lane ROLES' wide128 attestation needs no entry (it rides palw_kernel_route_panel_one_v1).
-    // SLOT for lane GC-DUTY (user 2026-10-27): the Gate C 'S'/'V' row node duty and the attestor slash fence goes HERE, after Gate C
-    // and before route-required, once it lands. `palw_lifecycle_operational_v1` (RFC02-LIFECYCLE) is NOT added: awaiting the user.
+    // `palw_lifecycle_operational_v1` (RFC02-LIFECYCLE) is NOT added: awaiting the user.
     // `palw_fp_tokenizer_match` (FpTokenizer) is NOT here: testnet-12 already runs it from DAA 5,300; re-arming it at 17,000
     // would move a live fence below 17,000. The FpTokenizer family's other fences are above.
     // PanelDa (user 2026-10-27, added to scope): `palw_panel_da` is already in force on testnet-12 (RC DA court fence); the

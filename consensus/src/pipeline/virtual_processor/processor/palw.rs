@@ -2547,6 +2547,17 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_audit_door_v1::palw_capacity_audit_candidates_v1(&state, state_params, me)
     }
 
+    /// **lane GC-DUTY: `me`'s owed `'S'` / `'V'` Gate C attestations** at the tip (`palw_certification_duties_v1`). A read: node policy.
+    pub fn palw_certification_duties_v1_impl(
+        &self,
+        me: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        daa: u64,
+    ) -> Vec<kaspa_consensus_core::palw_security_certification_v1::PalwCertificationDutyV1> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_v2_reader_state(state_params) else { return Vec::new() };
+        kaspa_consensus_core::palw_security_certification_v1::palw_certification_duties_v1(&state, state_params, me, daa)
+    }
+
     /// **Lane B: one operator bond's standing**, at the tip, for the DAA the virtual's next block folds
     /// at, over the second clock's raw depth there (`palw_operator_da_v1::palw_operator_da_standing_v1`).
     /// `None` with no tip state. A read: node policy, never a block rule.

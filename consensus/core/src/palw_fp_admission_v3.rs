@@ -1347,6 +1347,7 @@ mod tests {
             gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
             certification: policy,
             fp_receipt_tail_daa: tail,
+            attestor_liability_from_daa: None,
             ..Default::default()
         }));
         let state = certified_state(u128::MAX);
@@ -1378,6 +1379,7 @@ mod tests {
             gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
             certification: policy,
             fp_receipt_tail_daa: tail,
+            attestor_liability_from_daa: None,
             ..Default::default()
         }));
         let state = certified_state(u128::MAX);
