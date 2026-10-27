@@ -201,36 +201,62 @@ pub fn palw_seat_schedule_order_v1(items: &[PalwSeatScheduleInV1], quorum: usize
 /// window, the same horizon a slow class's claim stops being deferred at.
 pub const PALW_SEAT_SHARED_URGENT_DAA_V1: u64 = PALW_SEAT_BIG_URGENT_DAA_V1;
 
+/// A claim this seat is one of the last this many panel seats without a checked `Valid` for is
+/// answered first (O-LIVE-1 follow-up): the Coverage door needs `basis_k ≥ 2`, which the shipped
+/// geometry (one full seat, four one-partition seats) reaches only with all five seats' `Valid`, so
+/// the last missing seat is what every licence waits on.
+pub const PALW_SEAT_LAST_MISSING_V1: usize = 2;
+
+/// **Whether this seat's own `Valid` for the claim is already checked in the pool** — after a restart
+/// the in-memory `answered` set is empty, but the receipt the seat filed comes back from its peers
+/// (signed by this seat's key, so nobody else can put it there). Such a duty is answered: it is not
+/// replayed again.
+pub fn palw_seat_answered_in_pool_v1(item: &PalwSeatScheduleInV1) -> bool {
+    item.valid.contains(&item.me)
+}
+
+/// **How many seats of the claim's panel have no checked `Valid` yet** (this seat included), or
+/// `None` before the tip has seen the bind.
+pub fn palw_seat_missing_v1(item: &PalwSeatScheduleInV1) -> Option<usize> {
+    item.panel.as_ref().map(|panel| panel.iter().filter(|seat| !item.valid.contains(seat)).count())
+}
+
 /// **The order a seat answers its duties in — one order shared by every seat** (O-LIVE-1, 2026-10-27).
 ///
-/// F2's order ([`palw_seat_schedule_order_v1`]) made each seat pick by what its own pool held and by a
-/// per-seat backup rank, so on testnet-12 the five seats of a panel seldom replayed the same claim at
-/// the same time: every seat held ~20 duties, each a 10–20 minute replay, and a 3-of-5 quorum formed
-/// about twice in four hours. Here every seat sorts by the same chain data, so the panels' replays line
-/// up on the same claim:
+/// F2's order ([`palw_seat_schedule_order_v1`]) read a 3-of-5 quorum and a per-seat backup rank; the
+/// Coverage door in force needs all five seats (see [`PALW_SEAT_LAST_MISSING_V1`]), so a claim three
+/// seats had answered looked "satisfied" to F2 while it waited on the other two. This order:
 ///
-/// 1. due claims within [`PALW_SEAT_SHARED_URGENT_DAA_V1`] of their receipt deadline, soonest deadline
-///    first (then bind DAA, then claim id) — the deadline guarantee;
-/// 2. the other due claims short of their quorum, **oldest bind first, then claim id** (shared FIFO);
-/// 3. due claims whose quorum is already pooled ([`palw_seat_tier_v1`]'s `Satisfied`, which ages back
-///    after [`PALW_SEAT_SATISFIED_AFTER_DAA_V1`]) — they need a carrier, not this seat's replay; the
-///    pool only ever moves a claim this seat is not needed for, so the seats that ARE needed keep the
-///    shared order;
-/// 4. duties that are not due.
+/// 1. due claims this seat is among the last [`PALW_SEAT_LAST_MISSING_V1`] missing seats of — fewest
+///    missing first, then deadline, bind DAA, claim id;
+/// 2. due claims within [`PALW_SEAT_SHARED_URGENT_DAA_V1`] of their receipt deadline, soonest first;
+/// 3. the other due claims, **oldest bind first, then claim id** (the same FIFO on every seat);
+/// 4. duties that are not due, or whose own `Valid` is already in the pool ([`palw_seat_answered_in_pool_v1`]).
 ///
-/// Node policy only: no consensus state, identity or fingerprint reads it.
-pub fn palw_seat_shared_order_v1(items: &[PalwSeatScheduleInV1], quorum: usize, now_daa: u64) -> Vec<usize> {
-    let mut keyed: Vec<(u8, u64, u64, Hash64, usize)> = items
+/// Keys 2–3 are chain data (deadline, bind DAA, claim id). Key 1 reads the checked receipt pool — the
+/// chain holds no per-claim `Valid` tally the node can read before a licence — and a pooled receipt
+/// cannot be forged, only withheld, which falls back to keys 2–3. Node policy only: no consensus
+/// state, identity or fingerprint reads it.
+pub fn palw_seat_shared_order_v1(items: &[PalwSeatScheduleInV1], _quorum: usize, now_daa: u64) -> Vec<usize> {
+    palw_seat_shared_order_with_v1(items, now_daa, true)
+}
+
+/// [`palw_seat_shared_order_v1`], with key 1 switchable (the simulation's "shared FIFO only" arm).
+pub fn palw_seat_shared_order_with_v1(items: &[PalwSeatScheduleInV1], now_daa: u64, last_missing: bool) -> Vec<usize> {
+    let mut keyed: Vec<(u8, usize, u64, u64, Hash64, usize)> = items
         .iter()
         .enumerate()
         .map(|(index, item)| {
-            let satisfied = item.due && palw_seat_tier_v1(item, quorum, now_daa).0 == PalwSeatTierV1::Satisfied;
+            let missing = palw_seat_missing_v1(item).unwrap_or(usize::MAX);
             let urgent = item.deadline <= now_daa.saturating_add(PALW_SEAT_SHARED_URGENT_DAA_V1);
-            match (item.due, satisfied, urgent) {
-                (false, ..) => (3, item.bound_daa, 0, item.claim_id, index),
-                (true, true, _) => (2, item.bound_daa, 0, item.claim_id, index),
-                (true, false, true) => (0, item.deadline, item.bound_daa, item.claim_id, index),
-                (true, false, false) => (1, item.bound_daa, 0, item.claim_id, index),
+            if !item.due || palw_seat_answered_in_pool_v1(item) {
+                (3, 0, item.bound_daa, 0, item.claim_id, index)
+            } else if last_missing && missing <= PALW_SEAT_LAST_MISSING_V1 {
+                (0, missing, item.deadline, item.bound_daa, item.claim_id, index)
+            } else if urgent {
+                (1, 0, item.deadline, item.bound_daa, item.claim_id, index)
+            } else {
+                (2, 0, item.bound_daa, 0, item.claim_id, index)
             }
         })
         .collect();
@@ -489,8 +515,7 @@ mod tests {
     }
 
     /// **The deadline guarantee holds**: a younger claim within the urgent horizon of its deadline goes
-    /// before every older claim that is not; urgent claims go soonest-deadline first; a claim whose
-    /// quorum is pooled goes after the work still short of it, and a duty that is not due is last.
+    /// before every older claim that is not, soonest deadline first; a duty that is not due is last.
     #[test]
     fn a_claim_near_its_deadline_goes_first_in_the_shared_order() {
         let now = 1_000;
@@ -500,18 +525,47 @@ mod tests {
         young_urgent.deadline = now + 40;
         let mut younger_more_urgent = item(3, 5, &[], 950);
         younger_more_urgent.deadline = now + 10;
-        let pooled = item(4, 5, &[1, 2, 3], 990);
         let mut answered = item(5, 5, &[], 100);
         answered.due = false;
-        let items = [old, young_urgent, younger_more_urgent, pooled, answered];
-        assert_eq!(palw_seat_shared_order_v1(&items, 3, now), vec![2, 1, 0, 3, 4]);
+        let items = [old, young_urgent, younger_more_urgent, answered];
+        assert_eq!(palw_seat_shared_order_v1(&items, 3, now), vec![2, 1, 0, 3]);
     }
 
-    /// **Simulation**: panels of 5 drawn from `seats` seats, a 3-of-5 quorum, a claim every `every_min`
-    /// minutes, 2 slots a seat, replays of 10–20 minutes, receipts visible to the other seats
-    /// `gossip_min` later, a DAA every 2.6 minutes, a 600-DAA receipt window. Returns
-    /// `(quorums formed, claims arrived, receipts spent, unlicensed claims still open at the end)`.
-    fn simulate(shared: bool, seats: u8, every_min: u64, hours: u64, gossip_min: u64) -> (usize, usize, usize, usize) {
+    /// **The last missing seat goes first**: a claim four seats have answered leads one three have,
+    /// which leads an urgent or older claim nobody has; one where this seat is not among the last two
+    /// keeps its FIFO place.
+    #[test]
+    fn the_last_missing_seat_answers_that_claim_first() {
+        let now = 1_000;
+        let mut oldest_fresh = item(1, 5, &[], 100);
+        oldest_fresh.deadline = now + 10; // urgent too
+        let three_answered = item(2, 5, &[1, 2, 3], 900); // this seat one of the last 2
+        let four_answered = item(3, 5, &[1, 2, 3, 4], 950); // this seat the last
+        let mut two_answered = item(4, 5, &[1, 2], 50); // 3 missing: FIFO (oldest of all)
+        two_answered.deadline = now + 500;
+        let items = [oldest_fresh, three_answered, four_answered, two_answered];
+        assert_eq!(palw_seat_shared_order_v1(&items, 3, now), vec![2, 1, 0, 3]);
+        assert_eq!(palw_seat_missing_v1(&items[2]), Some(1));
+    }
+
+    /// **A duty whose own `Valid` is already pooled is not replayed again** (b6 after its restart at
+    /// 12:36): listed last, as a duty that is not due.
+    #[test]
+    fn a_duty_answered_before_a_restart_is_skipped() {
+        let mine = item(1, 5, &[5], 10); // own Valid heard back from the peers
+        let fresh = item(2, 5, &[], 900);
+        assert!(palw_seat_answered_in_pool_v1(&mine));
+        assert_eq!(palw_seat_shared_order_v1(&[mine, fresh], 3, 1_000), vec![1, 0]);
+    }
+
+    /// **Simulation (O-DIAG2's model)**: panels of 5 drawn from the seats, a licence only when ALL FIVE
+    /// seats' `Valid` are in (Coverage door, `basis_k ≥ 2`), a claim every `every_min` minutes, 2 slots a
+    /// seat, each seat's replays taking `120 / rate` minutes (±15%), receipts visible to the other seats
+    /// 3 minutes later, a DAA every 2.6 minutes, a 600-DAA receipt window. `mode`: 0 = F2 (as live, read
+    /// at quorum 3), 1 = shared FIFO, 2 = last-missing-first. Returns `(licences, claims, replays, open)`.
+    fn simulate(mode: u8, rates: &[u64], every_min: u64, hours: u64) -> (usize, usize, usize, usize) {
+        let gossip_min = 3;
+        let seats = rates.len() as u8;
         let mix = |a: u64, b: u64| -> u64 {
             let mut z = a.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ b.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
             z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -522,14 +576,14 @@ mod tests {
             id: Hash64,
             bound: u64,
             panel: Vec<u8>,
-            receipts: Vec<(u8, u64)>, // (seat, visible from minute)
+            receipts: Vec<(u8, u64)>,
             answered: HashSet<u8>,
             licensed: bool,
         }
         let daa = |minute: u64| minute * 10 / 26;
         let mut claims: Vec<Claim> = Vec::new();
-        let mut running: Vec<Vec<(usize, u64)>> = vec![Vec::new(); usize::from(seats)]; // (claim, ends at)
-        let (mut quorums, mut spent) = (0usize, 0usize);
+        let mut running: Vec<Vec<(usize, u64)>> = vec![Vec::new(); usize::from(seats)];
+        let (mut licences, mut spent) = (0usize, 0usize);
         for minute in 0..hours * 60 {
             let now = daa(minute);
             if minute % every_min == 0 {
@@ -549,7 +603,6 @@ mod tests {
                     licensed: false,
                 });
             }
-            // Replays that finish now file their receipt (a receipt past the deadline counts for nothing).
             for seat in 1..=seats {
                 let slots = &mut running[usize::from(seat - 1)];
                 for (c, _) in slots.iter().filter(|(_, end)| *end == minute) {
@@ -558,15 +611,14 @@ mod tests {
                     spent += 1;
                     if now <= claim.bound + 600 {
                         claim.receipts.push((seat, minute + gossip_min));
-                        if !claim.licensed && claim.receipts.len() >= 3 {
+                        if !claim.licensed && claim.receipts.len() >= 5 {
                             claim.licensed = true;
-                            quorums += 1;
+                            licences += 1;
                         }
                     }
                 }
                 slots.retain(|(_, end)| *end > minute);
             }
-            // Each seat fills its free slots from its own order over its own view.
             for seat in 1..=seats {
                 let busy: Vec<usize> = running[usize::from(seat - 1)].iter().map(|(c, _)| *c).collect();
                 if busy.len() >= 2 {
@@ -575,7 +627,11 @@ mod tests {
                 let index: Vec<usize> = (0..claims.len())
                     .filter(|c| {
                         let claim = &claims[*c];
-                        claim.panel.contains(&seat) && !claim.answered.contains(&seat) && !busy.contains(c) && now <= claim.bound + 600
+                        claim.panel.contains(&seat)
+                            && !claim.licensed
+                            && !claim.answered.contains(&seat)
+                            && !busy.contains(c)
+                            && now <= claim.bound + 600
                     })
                     .collect();
                 let items: Vec<PalwSeatScheduleInV1> = index
@@ -594,32 +650,41 @@ mod tests {
                         }
                     })
                     .collect();
-                let order =
-                    if shared { palw_seat_shared_order_v1(&items, 3, now) } else { palw_seat_schedule_order_v1(&items, 3, now) };
+                let order = match mode {
+                    0 => palw_seat_schedule_order_v1(&items, 3, now),
+                    1 => palw_seat_shared_order_with_v1(&items, now, false),
+                    _ => palw_seat_shared_order_v1(&items, 3, now),
+                };
+                let base = 120 / rates[usize::from(seat - 1)];
                 for pick in order.into_iter().take(2 - busy.len()) {
                     let c = index[pick];
-                    let took = 10 + mix(c as u64, u64::from(seat) + 99) % 11;
-                    running[usize::from(seat - 1)].push((c, minute + took));
+                    let took = base * 85 / 100 + mix(c as u64, u64::from(seat) + 99) % (base * 30 / 100 + 1);
+                    running[usize::from(seat - 1)].push((c, minute + took.max(1)));
                 }
             }
         }
         let now = daa(hours * 60);
         let open = claims.iter().filter(|c| !c.licensed && now <= c.bound + 600).count();
-        (quorums, claims.len(), spent, open)
+        (licences, claims.len(), spent, open)
     }
 
-    /// **The shared order forms as many quorums as F2's (within 1%)** at the live inflow (a priced claim
-    /// every 4 minutes) over several fleet sizes; run with `--nocapture` for the numbers.
+    /// **The three orders under 5-of-5 coverage** at the live inflow (15 claims an hour) over 48 hours,
+    /// 8 seats (5 fast at 8–10 replays an hour, 3 slow at 3–6) and 7 (the slowest retired); run with
+    /// `--nocapture` for the numbers. Last-missing-first must form no fewer licences than either.
     #[test]
-    fn the_shared_order_forms_quorums_under_the_live_inflow() {
-        for seats in [5u8, 8, 10, 15, 20] {
-            let before = simulate(false, seats, 4, 48, 3);
-            let after = simulate(true, seats, 4, 48, 3);
+    fn last_missing_first_forms_coverage_licences_under_the_live_inflow() {
+        for (name, rates, every) in [
+            ("8 seats 15/h", &[10u64, 9, 9, 8, 8, 6, 4, 3][..], 4u64),
+            ("7 seats 15/h", &[10u64, 9, 9, 8, 8, 6, 4][..], 4),
+            ("8 seats 10/h", &[10u64, 9, 9, 8, 8, 6, 4, 3][..], 6),
+            ("7 seats 10/h", &[10u64, 9, 9, 8, 8, 6, 4][..], 6),
+        ] {
+            let r: Vec<_> = (0..3u8).map(|mode| simulate(mode, rates, every, 48)).collect();
             eprintln!(
-                "O-LIVE-1 sim seats={seats} 48h inflow=15/h claims={}: F2 quorums={} replays={} open={} | shared quorums={} replays={} open={}",
-                after.1, before.0, before.2, before.3, after.0, after.2, after.3
+                "O-LIVE-1 sim {name} 48h claims={}: F2 lic={} open={} rep={} | FIFO lic={} open={} rep={} | last-missing lic={} open={} rep={}",
+                r[0].1, r[0].0, r[0].3, r[0].2, r[1].0, r[1].3, r[1].2, r[2].0, r[2].3, r[2].2
             );
-            assert!(after.0 * 100 >= before.0 * 99, "seats={seats}: the shared order forms as many quorums (within 1%)");
+            assert!(r[2].0 * 100 >= r[0].0 * 99 && r[2].0 * 100 >= r[1].0 * 99, "{name}: last-missing-first forms no fewer licences");
         }
     }
 }

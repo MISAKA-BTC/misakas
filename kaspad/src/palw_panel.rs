@@ -9832,8 +9832,31 @@ impl PalwPanelService {
                 }
                 seat_schedule_tiers = tiers;
                 seat_replays.set_big_gate(crate::palw_seat_schedule::palw_seat_light_pending_v1(&items, quorum, current_daa));
-                // O-LIVE-1: one order every seat computes alike (oldest bind first, deadline-urgent ahead).
+                // O-LIVE-1: one order every seat computes alike — the claims this seat is among the last
+                // missing seats of first, then deadline-urgent, then oldest bind — and a duty whose own
+                // `Valid` is already pooled (a restart forgot `answered`) is dropped, not replayed again.
+                let mut waits: Vec<String> = items
+                    .iter()
+                    .filter_map(|item| {
+                        let panel = item.panel.as_ref()?;
+                        let missing: Vec<usize> =
+                            panel.iter().enumerate().filter(|(_, seat)| !item.valid.contains(seat)).map(|(at, _)| at).collect();
+                        (!missing.is_empty()).then(|| format!("{} valid={}/{} missing_seats={missing:?}", item.claim_id, panel.len() - missing.len(), panel.len()))
+                    })
+                    .collect();
+                if !waits.is_empty() {
+                    waits.truncate(8);
+                    crate::palw_backends::note_throttled_v1("coverage-waits", || {
+                        format!(
+                            "[{PALW_PANEL}] coverage not formed (pool view; the door needs basis_k >= 2, i.e. every seat's Valid): {}",
+                            waits.join("; ")
+                        )
+                    });
+                }
                 crate::palw_seat_schedule::palw_seat_shared_order_v1(&items, quorum, current_daa)
+                    .into_iter()
+                    .filter(|index| !crate::palw_seat_schedule::palw_seat_answered_in_pool_v1(&items[*index]))
+                    .collect()
             } else {
                 palw_seat_duty_order_v1(
                     &duties.iter().zip(&seat_r_duties).map(|(duty, view)| (view.deadline, duty.claim_id)).collect::<Vec<_>>(),
