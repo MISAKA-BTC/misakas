@@ -31,7 +31,12 @@ RUNS = [
                                            'legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_armed']),
     ('core-lib-staged_court', CORE + ['--lib', '--', 'palw_staged_court_fold_v1', 'palw_staged_court_state_v1',
                                       'palw_staged_route_forms_v1']),
-    ('core-lib-tir_public_fold', CORE + ['--lib', '--', 'palw_tir_public_fold_v1']),
+    # Split so each part fits inside 60 minutes (lane T, 2026-10-27); one JSON for the four parts.
+    ('core-lib-tir_public_fold', [CORE + ['--lib', '--', 'palw_tir_public_fold_v1::conviction_e2e_tests::g14'],
+                                  CORE + ['--lib', '--', 'palw_tir_public_fold_v1::conviction_e2e_tests::rooted_'],
+                                  CORE + ['--lib', '--', 'palw_tir_public_fold_v1::conviction_e2e_tests::', '--skip', 'g14',
+                                          '--skip', 'rooted_'],
+                                  CORE + ['--lib', '--', 'palw_tir_public_fold_v1', '--skip', 'conviction_e2e_tests']]),
     ('core-lib-tir_public_claim_state', CORE + ['--lib', '--', 'palw_tir_public_claim_v1', 'palw_tir_public_state_v1',
                                                 'palw_tir_public_source_v1']),
     ('core-lib-ruling_fences', CORE + ['--lib', '--', 'palw_ruling_fences_v1']),
@@ -40,6 +45,14 @@ RUNS = [
     ('core-lib-rfc0018', CORE + ['--lib', '--', 'palw_rfc0018_v1']),
     ('core-lib-model_tier', CORE + ['--lib', '--', 'palw_model_tier_v1']),
     ('core-adr0177_allocation_v3', CORE + ['--test', 'adr0177_allocation_v3']),
+    ('core-court_capacity_v7', CORE + ['--test', 'g14_court_capacity', '--', '--exact', 'v7_restart_reorg_ibd_and_pruned_import_mid_queue_agree']),
+    ('core-rfc0019_s11', [CORE + ['--lib', '--', 'palw_annual_catalog_v1'], CORE + ['--lib', '--', 'palw_model_tier_v1::tests']]),
+    ('kernel-adversarial', [['-p', 'misaka-palw-kernel', '--test', 'k2_adversarial'],
+                            ['-p', 'misaka-palw-kernel', '--test', 'k2_ledger_route', '--', 'a_proof_resubmitted_after_a_restart_or_an_ibd_replay_is_a_duplicate'],
+                            ['-p', 'misaka-palw-kernel', '--test', 'econ_seal_veto', '--', 'one_withheld_seal_vetoes_every_attempt_whose_window_contains_it'],
+                            ['-p', 'misaka-palw-kernel', '--test', 'k2_opv', '--', 'past_the_fence_a_withheld_seal'],
+                            ['-p', 'misaka-palw-kernel', '--test', 'adv_c4_route', '--', 'a_producer_and_every_panel_seat_colluding_lose'],
+                            ['-p', 'misaka-palw-kernel', '--test', 'k2_e2e', '--', 'a_challenge_drawn_before_the_evidence_was_bound_is_refused']]),
     ('consensus-lg14a_restart', ['-p', 'kaspa-consensus', '--lib', '--', 'lg14a_the_pursuit_survives_a_node_restart']),
     ('kaspad-lg14b_suite', ['-p', 'kaspad', '--lib', '--', 'lg14b_']),
     ('kaspad-lg14b_restart', ['-p', 'kaspad', '--lib', '--', '--exact',
@@ -65,22 +78,27 @@ def main():
     for rid, args in RUNS:
         if a.only and rid not in a.only:
             continue
-        cmd = [BUILDSLOT, 'cargo', 'test', '--offline', '--manifest-path', str(ROOT / 'Cargo.toml')] + args
+        parts = args if isinstance(args[0], list) else [args]
         started = time.time()
-        p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(ROOT))
-        log = p.stdout + p.stderr
+        log, rc = '', 0
+        for part in parts:
+            cmd = [BUILDSLOT, 'cargo', 'test', '--offline', '--manifest-path', str(ROOT / 'Cargo.toml')] + part
+            p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(ROOT))
+            log += '$ cargo test --offline ' + ' '.join(part) + '\n' + p.stdout + p.stderr
+            rc = rc or p.returncode
         (out / (rid + '.log')).write_text(log)
         counts = [(int(x), int(y)) for x, y in COUNT.findall(log)]
         passed_n, failed_n = sum(c[0] for c in counts), sum(c[1] for c in counts)
         body = {
-            'kind': 'misaka-arming-run/v1', 'run': rid, 'command': ' '.join(['cargo', 'test', '--offline'] + args),
-            'exitCode': p.returncode, 'testsPassed': passed_n, 'testsFailed': failed_n,
-            'passed': p.returncode == 0 and passed_n > 0 and failed_n == 0, 'estimate': False,
+            'kind': 'misaka-arming-run/v1', 'run': rid,
+            'command': ' && '.join(' '.join(['cargo', 'test', '--offline'] + part) for part in parts),
+            'exitCode': rc, 'testsPassed': passed_n, 'testsFailed': failed_n,
+            'passed': rc == 0 and passed_n > 0 and failed_n == 0 and 'FAILED' not in log, 'estimate': False,
             'sourceCommit': head, 'treeDirty': False, 'startedAt': started, 'seconds': round(time.time() - started),
             'logSha256': hashlib.sha256(log.encode()).hexdigest(),
         }
         (out / (rid + '.json')).write_text(json.dumps(body, indent=2) + '\n')
-        print('%s exit=%d passed=%d failed=%d -> %s' % (rid, p.returncode, passed_n, failed_n, body['passed']), flush=True)
+        print('%s exit=%d passed=%d failed=%d -> %s' % (rid, rc, passed_n, failed_n, body['passed']), flush=True)
 
 
 if __name__ == '__main__':

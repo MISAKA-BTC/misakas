@@ -174,8 +174,13 @@ def render_waiver_rust(w, genesis_expr):
     slot = 'PALW_ARMING_WAIVER_REVIEW_V1' if w['slot'] == WAIVER_REVIEW else str(w['slot'])
     return ('    PalwArmingWaiverV1 {\n        fence: %s,\n        genesis: %s,\n        activation_daa: %d,\n        requirement: %s,\n'
             '        kind: PalwArmingWaiverKindV1::%s,\n        value: %s,\n        reason: %s,\n        decided_by: %s,\n    },\n') % (
-        json.dumps(w['fence']), genesis_expr, w['at'], slot, WAIVER_RUST[w['kind']], json.dumps(w['value']),
-        json.dumps(w['reason']), json.dumps(w['decidedBy']))
+        _lit(w['fence']), genesis_expr, w['at'], slot, WAIVER_RUST[w['kind']], _lit(w['value']), _lit(w['reason']),
+        _lit(w['decidedBy']))
+
+
+def _lit(text):
+    """A Rust string literal with the same UTF-8 bytes as `text` (json's \\uXXXX escapes are not Rust escapes)."""
+    return json.dumps(text, ensure_ascii=False)
 
 
 def _bytes(h):

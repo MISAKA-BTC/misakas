@@ -5,58 +5,25 @@
 //! ordering, value, measurement, wiring or open-blocker refusal.
 //!
 //! Leftover slots:
-//! - g14 palw_legacy_public_filer_v1 slot 0
-//! - g14 palw_legacy_public_filer_v1 slot 3
-//! - g14 palw_legacy_public_filer_v1 slot 4
-//! - g14 palw_legacy_public_filer_v1 slot 5
-//! - g14 palw_legacy_held_da_v2 slot 0
-//! - g14 palw_legacy_held_da_v2 slot 2
-//! - g14 palw_legacy_held_da_v2 slot 3
-//! - g14 palw_legacy_held_da_v2 slot 4
-//! - g14 palw_legacy_held_da_v2 slot 5
-//! - g14 palw_staged_public_court_v1 slot 0
-//! - g14 palw_staged_public_court_v1 slot 1
-//! - g14 palw_staged_public_court_v1 slot 2
-//! - g14 palw_staged_public_court_v1 slot 3
-//! - g14 palw_staged_public_court_v1 slot 4
-//! - g14 palw_staged_public_court_v1 slot 5
-//! - g14 palw_staged_public_court_v1 slot 6
-//! - g14 palw_staged_tir_route_v1 slot 0
-//! - g14 palw_staged_tir_route_v1 slot 1
-//! - g14 palw_staged_tir_route_v1 slot 2
-//! - g14 palw_staged_tir_route_v1 slot 3
-//! - g14 palw_staged_tir_route_v1 slot 4
-//! - g14 palw_staged_tir_route_v1 slot 5
-//! - g14 palw_staged_tir_route_v1 slot 6
-//! - g14 palw_tir_public_conviction_v1 slot 0
-//! - g14 palw_tir_public_conviction_v1 slot 1
-//! - g14 palw_tir_public_conviction_v1 slot 2
-//! - g14 palw_tir_public_conviction_v1 slot 3
-//! - g14 palw_tir_public_conviction_v1 slot 4
-//! - g14 palw_tir_public_conviction_v1 slot 5
-//! - g14 palw_tir_public_conviction_v1 slot 6
-//! - g14 palw_court_capacity_v1 slot 0
-//! - g14 palw_court_capacity_v1 slot 6
-//! - g14 palw_claim_hard_deadline_v1 slot 0
-//! - g14 palw_g14_route_required_v1 slot 0
-//! - g14 palw_g14_route_required_v1 slot 1
-//! - kernel-route palw_probabilistic_constraints_v1 slot 0
-//! - kernel-route palw_probabilistic_constraints_v1 slot 2
-//! - kernel-route palw_probabilistic_constraints_v1 slot 4
-//! - kernel-route palw_probabilistic_constraints_v1 slot 5
-//! - kernel-route palw_probabilistic_constraints_v1 slot 6
-//! - kernel-route palw_provider_court_v1 slot 0
-//! - kernel-route palw_provider_court_v1 slot 2
-//! - rfc0018 palw_independently_work_certified_v1 slot 1
-//! - rfc0018 palw_independently_work_certified_v1 slot 3
-//! - rfc0018 palw_independently_work_certified_v1 slot 4
-//! - model-tier palw_model_tier_v1 slot 1
-//! - model-tier palw_model_tier_v1 slot 2
-//! - model-tier palw_model_tier_v1 slot 3
-//! - model-tier palw_model_tier_v1 slot 4
-//! - model-tier palw_model_tier_v1 slot 5
-//! - model-tier palw_model_tier_v1 slot 6
-//! - model-tier palw_model_tier_v1 slot 7
+//! - g14 palw_legacy_public_filer_v1 slot 0 (R pending: core-g14_close_legacy)
+//! - g14 palw_legacy_public_filer_v1 slot 5 (R pending: consensus-lg14a_restart)
+//! - g14 palw_legacy_held_da_v2 slot 0 (R pending: core-g14_close_legacy)
+//! - g14 palw_legacy_held_da_v2 slot 2 (R pending: kaspad-lg14b_suite)
+//! - g14 palw_legacy_held_da_v2 slot 5 (R pending: kaspad-lg14b_restart)
+//! - g14 palw_staged_public_court_v1 slot 0 (R pending: core-lib-staged_court)
+//! - g14 palw_staged_tir_route_v1 slot 0 (R pending: core-lib-tir_public_fold)
+//! - g14 palw_tir_public_conviction_v1 slot 0 (R pending: core-lib-tir_public_claim_state)
+//! - g14 palw_court_capacity_v1 slot 0 (R pending: core-g14_court_capacity)
+//! - g14 palw_court_capacity_v1 slot 6 (R pending: core-court_capacity_v7)
+//! - g14 palw_claim_hard_deadline_v1 slot 0 (R pending: core-lib-ruling_fences)
+//! - g14 palw_g14_route_required_v1 slot 0 (R pending: core-g14_close_gates-T-N8)
+//! - g14 palw_g14_route_required_v1 slot 1 (R pending: core-g14_close_gates-T-N10)
+//! - kernel-route palw_probabilistic_constraints_v1 slot 0 (R pending: core-lib-kernel_route_onboarding_fold)
+//! - kernel-route palw_probabilistic_constraints_v1 slot 2 (R pending: kernel-adversarial)
+//! - kernel-route palw_provider_court_v1 slot 0 (R pending: core-lib-provider_court)
+//! - rfc0018 palw_independently_work_certified_v1 slot 1 (R pending: core-lib-rfc0018)
+//! - model-tier palw_model_tier_v1 slot 1 (R pending: core-lib-model_tier)
+//! - model-tier palw_model_tier_v1 slot 2 (R pending: core-rfc0019_s11)
 use crate::palw_arming_waiver_v1::{PALW_ARMING_WAIVER_REVIEW_V1, PalwArmingWaiverKindV1, PalwArmingWaiverV1};
 
 /// Every pinned waiver.
@@ -85,6 +52,26 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         fence: "palw_legacy_public_filer_v1",
         genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
         activation_daa: 17400,
+        requirement: 3,
+        kind: PalwArmingWaiverKindV1::ProvisionalEstimate,
+        value: "hard-deadline envelope = the X3 decided policy (Delta 2,016 DAA, inside trace retention minus the disclosure window); Panel capacity under the Valid lock = the lane VAL Panel=1 schedule (2 packets per 833-DAA interval)",
+        reason: "estimate from the pinned X3 terms and the lane VAL V1 schedule (user 2026-10-22 estimates); not measured",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_legacy_public_filer_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 4,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_legacy_public_filer_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
         requirement: 6,
         kind: PalwArmingWaiverKindV1::DrillSkipped,
         value: "",
@@ -115,6 +102,26 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         fence: "palw_legacy_held_da_v2",
         genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
         activation_daa: 17400,
+        requirement: 3,
+        kind: PalwArmingWaiverKindV1::ProvisionalEstimate,
+        value: "reservation budget 34 sessions (design constant), court session cap 42 (V11), answer bytes within the 34,000 B one-move budget; descent rounds bounded by the same budget",
+        reason: "estimate from design constants and the user-approved V11 estimate (2026-10-26); not measured",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_legacy_held_da_v2",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 4,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_legacy_held_da_v2",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
         requirement: 6,
         kind: PalwArmingWaiverKindV1::DrillSkipped,
         value: "",
@@ -135,6 +142,66 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         fence: "palw_staged_public_court_v1",
         genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
         activation_daa: 17400,
+        requirement: 1,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_public_court_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 2,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_public_court_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 3,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_public_court_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 4,
+        kind: PalwArmingWaiverKindV1::ProvisionalEstimate,
+        value: "maximum legal delay = the X3 hard deadline (Delta 2,016 DAA); capacity under contention = V11 cap 42 sessions with the 42-DAA turn deadline",
+        reason: "estimate from the pinned X3 decided terms and the user-approved V11 estimate (user 2026-10-22 / 2026-10-26); not measured",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_public_court_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 5,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_public_court_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 6,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_public_court_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
         requirement: PALW_ARMING_WAIVER_REVIEW_V1,
         kind: PalwArmingWaiverKindV1::AgentReview,
         value: "docs/design/palw/integration/g14-17000/independent-review-2026-10-26.md, independent-review-part2-2026-10-26.md (Claude-agent independent review, user-approved reviewer)",
@@ -145,10 +212,130 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         fence: "palw_staged_tir_route_v1",
         genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
         activation_daa: 17400,
+        requirement: 1,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_tir_route_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 2,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_tir_route_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 3,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_tir_route_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 4,
+        kind: PalwArmingWaiverKindV1::ProvisionalEstimate,
+        value: "maximum legal delay = the X3 hard deadline (Delta 2,016 DAA); capacity under contention = V11 cap 42 sessions with the 42-DAA turn deadline",
+        reason: "estimate from the pinned X3 decided terms and the user-approved V11 estimate (user 2026-10-22 / 2026-10-26); not measured",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_tir_route_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 5,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_tir_route_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 6,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_staged_tir_route_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
         requirement: PALW_ARMING_WAIVER_REVIEW_V1,
         kind: PalwArmingWaiverKindV1::AgentReview,
         value: "docs/design/palw/integration/g14-17000/independent-review-2026-10-26.md, independent-review-part2-2026-10-26.md (Claude-agent independent review, user-approved reviewer)",
         reason: "independent review by a Claude agent (user-approved 2026-10-26)",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_tir_public_conviction_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 1,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_tir_public_conviction_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 2,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_tir_public_conviction_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 3,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_tir_public_conviction_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 4,
+        kind: PalwArmingWaiverKindV1::ProvisionalEstimate,
+        value: "maximum legal delay = the X3 hard deadline (Delta 2,016 DAA); capacity under contention = V11 cap 42 sessions with the 42-DAA turn deadline",
+        reason: "estimate from the pinned X3 decided terms and the user-approved V11 estimate (user 2026-10-22 / 2026-10-26); not measured",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_tir_public_conviction_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 5,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_tir_public_conviction_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 6,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
         decided_by: "user 2026-10-27",
     },
     PalwArmingWaiverV1 {
@@ -315,6 +502,36 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         fence: "palw_probabilistic_constraints_v1",
         genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
         activation_daa: 17400,
+        requirement: 4,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_probabilistic_constraints_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 5,
+        kind: PalwArmingWaiverKindV1::ProvisionalEstimate,
+        value: "9B-8k: producer exec ~440 s / ~56 GB, verifier ~41 GB, court ~710 s / ~19 GB (x4.5 of the Qwen3.5-2B measurement); 2M: not estimated - in this release only the wide128 class is attested, so no 9B class can be registered",
+        reason: "provisional value derived from KCONV measurements on OTHER models (claude/kconv 0d98e8e6c, kconv-report.md): Dolphin 8k exec 115 s / 6.47 GB, verifier 4.24 GB, court 132 s / 2.22 GB; Qwen3.5-2B exec 97.6 s / 12.4 GB, verifier 9.19 GB, court 158 s / 4.22 GB; scaled linearly to parameter count",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_probabilistic_constraints_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 6,
+        kind: PalwArmingWaiverKindV1::ProvisionalEstimate,
+        value: "a late single fault is localized within the V11 court budgets (cap 42, 34,000 B one-move) and the X3 hard deadline (Delta 2,016 DAA); concurrent disputes bounded by cap 42",
+        reason: "estimate from the user-approved V11 estimate and the pinned X3 terms; not measured",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_probabilistic_constraints_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
         requirement: 7,
         kind: PalwArmingWaiverKindV1::DrillSkipped,
         value: "",
@@ -339,6 +556,16 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         kind: PalwArmingWaiverKindV1::E2ENotRun,
         value: "",
         reason: "the user decided to arm without this node E2E; user decision 2026-10-27",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_provider_court_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 2,
+        kind: PalwArmingWaiverKindV1::ProvisionalEstimate,
+        value: "lease reservation >= 100 MSK, challenge bond 10 MSK, challenge fee 1 MSK, response window 20 DAA, >= 2 providers, <= 8 open challenges (palw_provider_court_v1 interim constants)",
+        reason: "the interim constants in palw_provider_court_v1, pinned as estimates (user 2026-10-22); not measured",
         decided_by: "user 2026-10-27",
     },
     PalwArmingWaiverV1 {
@@ -385,6 +612,26 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         fence: "palw_independently_work_certified_v1",
         genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
         activation_daa: 17400,
+        requirement: 3,
+        kind: PalwArmingWaiverKindV1::UserDecision,
+        value: "U-6: no veto (m/k 75/41, veto 0)",
+        reason: "user ruling 2026-10-27 (\"推奨どおり\", relayed by the coordinator)",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_independently_work_certified_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 4,
+        kind: PalwArmingWaiverKindV1::UserDecision,
+        value: "U-2/U-3: the issuance-leg hold is paid only after SecurityCertified; free-prompt gets no coinbase carve before certification (code: hold_issuance_reward_at_final_v1, palw_rfc0018_v1 free-prompt refusal)",
+        reason: "user ruling 2026-10-27 (\"推奨どおり\", relayed by the coordinator)",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_independently_work_certified_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
         requirement: 5,
         kind: PalwArmingWaiverKindV1::DrillSkipped,
         value: "",
@@ -409,6 +656,56 @@ pub const PALW_T12_17000_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
         kind: PalwArmingWaiverKindV1::UserDecision,
         value: "c = 300 permille, kappa = 1000 permille from DAA 17,400; catalog edition 0 empty",
         reason: "user decision 2026-10-27; c is the frozen premise (PRINCIPLES 9)",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_model_tier_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 3,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_model_tier_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 4,
+        kind: PalwArmingWaiverKindV1::AgentReview,
+        value: "lane V-REVIEW (read-only Claude agent) at fbd1998dd6e495562cbcf79500872e5bd334d7f2: PASS - the preset is genesis_only(Vec::new()) (full_activation_v1.rs:464-466), catalog-tip refusal palw_model_tier_v1.rs:465-470, KCAT 1792ea6aa not in the release",
+        reason: "review: edition 0 only, none adds a model at 1.0 / new local LLM after the fence (independent review, user-approved reviewer)",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_model_tier_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 5,
+        kind: PalwArmingWaiverKindV1::AgentReview,
+        value: "lane V-REVIEW (read-only Claude agent) at fbd1998dd6e495562cbcf79500872e5bd334d7f2: PASS - the preset is genesis_only(Vec::new()) (full_activation_v1.rs:464-466), catalog-tip refusal palw_model_tier_v1.rs:465-470, KCAT 1792ea6aa not in the release",
+        reason: "review: edition 0 only, none adds a model at 1.0 / new local LLM after the fence (independent review, user-approved reviewer)",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_model_tier_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 6,
+        kind: PalwArmingWaiverKindV1::E2ENotRun,
+        value: "",
+        reason: "Lead decision 2026-10-27 + user 10-26 drill skip; not recorded as run",
+        decided_by: "user 2026-10-27",
+    },
+    PalwArmingWaiverV1 {
+        fence: "palw_model_tier_v1",
+        genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
+        activation_daa: 17400,
+        requirement: 7,
+        kind: PalwArmingWaiverKindV1::UserDecision,
+        value: "readiness M1-M5: satisfied by the ACT2 report (edition 0 only, nothing added after the fence)",
+        reason: "user ruling 2026-10-27 (\"推奨どおり\", relayed by the coordinator)",
         decided_by: "user 2026-10-27",
     },
     PalwArmingWaiverV1 {
@@ -461,12 +758,12 @@ pub const PALW_T12_17000_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1:
         version: crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
         genesis: crate::config::genesis::PALW_T12_GENESIS.hash,
         activation_daa: 17400,
-        source_commit: [0xd1, 0x81, 0xe8, 0x15, 0xea, 0x6b, 0x66, 0x2b, 0x84, 0xae, 0x40, 0x9f, 0x69, 0x6e, 0x92, 0xeb, 0x9a, 0x5e, 0x05, 0x7d],
+        source_commit: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
         measurement: [0xc5, 0xaa, 0x33, 0xae, 0x41, 0x09, 0x2f, 0xc6, 0x18, 0x98, 0xfb, 0xef, 0x53, 0x02, 0xf2, 0x29, 0x4f, 0x5b, 0xc8, 0x9c, 0x37, 0x4b, 0x82, 0x50, 0x4b, 0xb6, 0xfd, 0x92, 0xc1, 0x6d, 0x5c, 0x5a],
         review: [0xc4, 0x27, 0x54, 0xa2, 0x0c, 0x28, 0x97, 0xef, 0x06, 0x64, 0xf6, 0x05, 0x2a, 0x42, 0x20, 0x2a, 0x15, 0x0b, 0x49, 0x7f, 0xef, 0x7a, 0x48, 0xae, 0x52, 0x0e, 0x7f, 0xeb, 0x79, 0x97, 0x30, 0xda],
         cost: crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1,
     },
 ];
 
-/// The model-tier record: not emitted while slots [1, 2, 3, 4, 5, 6, 7] are leftover.
+/// The model-tier record: not emitted while slots [(1, 'R pending: core-lib-model_tier'), (2, 'R pending: core-rfc0019_s11')] are leftover.
 pub const PALW_T12_17000_MODEL_TIER_RECORDS_V1: &[crate::palw_model_tier_v1::PalwModelTierArmingRecordV1] = &[];

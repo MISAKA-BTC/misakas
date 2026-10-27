@@ -99,7 +99,7 @@ fn peel_the_whole_list_at_17000() {
 
 use kaspa_consensus_core::palw_arming_waiver_v1::{
     PALW_ARMING_WAIVER_REVIEW_V1, PALW_ARMING_WAIVERS_V1, PalwArmingEvidenceV1, PalwArmingSlotClassV1, PalwArmingWaiverKindV1,
-    PalwArmingWaiverV1, palw_arming_evidence_kind_v1, palw_arming_slot_class_v1,
+    PalwArmingWaiverV1, palw_arming_evidence_kind_v1, palw_arming_slot_class_v1, palw_arming_slot_class_for_v1, PALW_ARMING_SLOT_CLASS_OVERRIDES_V1,
 };
 
 /// The requirement text of `fence`'s slot `slot` ("" for the review slot; the frame cost record's one slot is a measured value).
@@ -136,7 +136,7 @@ fn every_pinned_waiver_fits_its_slot_and_is_never_a_run() {
     assert!(!PALW_ARMING_WAIVERS_V1.is_empty());
     for w in PALW_ARMING_WAIVERS_V1 {
         let text = requirement_text(w.fence, w.requirement);
-        let class = palw_arming_slot_class_v1(w.requirement, text);
+        let class = palw_arming_slot_class_for_v1(w.fence, w.requirement, text);
         assert_eq!(w.form(class), Ok(()), "{} slot {}: {:?} in {class:?}", w.fence, w.requirement, w.kind);
         let got = palw_arming_evidence_kind_v1(w.fence, w.genesis, w.activation_daa, w.requirement, text, &w.digest(), PALW_ARMING_WAIVERS_V1);
         assert!(matches!(got, Ok(PalwArmingEvidenceV1::Waived(_))), "{} slot {}: {got:?}", w.fence, w.requirement);
@@ -194,6 +194,32 @@ fn f1_a_review_slot_with_drill_skipped_is_refused() {
 }
 
 /// F1: a kind in a slot of another class is refused, and a suite / regression slot takes no waiver at all.
+#[test]
+fn x_d_drill_skipped_and_e2e_waivers_are_refused_outside_the_override_table() {
+    use PalwArmingWaiverKindV1 as K;
+    use kaspa_consensus_core::palw_g14_gates_v1::PalwG14GatedFenceV1;
+    // Every G14 gated fence's every slot: a DrillSkipped / E2ENotRun waiver fits ONLY where the slot is a drill / node-E2E slot by its
+    // text, or is pinned in the Lead's override table (2026-10-27). A V1 suite slot never takes one.
+    for f in PalwG14GatedFenceV1::ALL {
+        for (i, text) in f.requirements().iter().enumerate() {
+            let class = palw_arming_slot_class_for_v1(f.name(), i as u16, text);
+            let listed = PALW_ARMING_SLOT_CLASS_OVERRIDES_V1.iter().any(|(n, s, _)| *n == f.name() && *s == i as u16);
+            let by_text = palw_arming_slot_class_v1(i as u16, text);
+            let mut w = waiver(K::E2ENotRun, "");
+            w.fence = f.name();
+            w.requirement = i as u16;
+            let e2e_ok = w.form(class).is_ok();
+            assert_eq!(e2e_ok, by_text == PalwArmingSlotClassV1::NodeE2E || (listed && class == PalwArmingSlotClassV1::NodeE2E));
+            w.kind = K::DrillSkipped;
+            assert_eq!(w.form(class).is_ok(), class == PalwArmingSlotClassV1::Drill, "{} slot {i}", f.name());
+        }
+    }
+    // The staged court's V1 suite slot is in no table entry: neither kind fits.
+    let class = palw_arming_slot_class_for_v1("palw_staged_public_court_v1", 0, requirement_text("palw_staged_public_court_v1", 0));
+    assert_eq!(class, PalwArmingSlotClassV1::Run);
+    assert!(waiver(K::DrillSkipped, "").form(class).is_err() && waiver(K::E2ENotRun, "").form(class).is_err());
+}
+
 #[test]
 fn f1_a_mismatched_kind_is_refused() {
     use PalwArmingWaiverKindV1 as K;

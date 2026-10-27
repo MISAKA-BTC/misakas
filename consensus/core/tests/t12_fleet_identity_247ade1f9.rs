@@ -129,4 +129,6 @@ fn g14_17000_list_keeps_everything_below_17000() {
         fork_id_v1(&p, 17_400),
         fork_id_v1(&base, 17_400)
     );
+    // The fingerprint the preset will print once PALW_T12_G14_17000_FLAG_DAY_DAA = Some(17_400) (the kit's EXPECT_FP then).
+    println!("FLEETDIAG armed EXPECT_FP={}", p.consensus_params_id());
 }
