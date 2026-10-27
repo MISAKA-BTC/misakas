@@ -356,7 +356,7 @@ mod tests {
     use super::*;
 
     fn spec() -> MaterialSessionSpecV1 {
-        let txid = "ab".repeat(32);
+        let txid = "ab".repeat(64);
         MaterialSessionSpecV1 {
             network_domain: Hash64::from_u64_word(1).to_string(),
             sponsor: format!("{txid}:0"),

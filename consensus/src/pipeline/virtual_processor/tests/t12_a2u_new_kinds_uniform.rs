@@ -402,6 +402,13 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 }
                 params.palw_model_immutable_v1 = Some(at);
             }
+            // The routed-memory court is in force only under the shard court too; arm that alongside if it is not.
+            "palw_memory_routing_court_v2" => {
+                params.palw_memory_routing_court_v2 = Some(at);
+                if params.palw_shard_court.is_none_or(|f| f.daa_score() > at.daa_score()) {
+                    params.palw_shard_court = Some(at);
+                }
+            }
             // RFC08's release recovery: a probe policy at the height (it rides on the monetary-material fence, armed in this sweep too).
             "palw_material_release_recovery_v2" => {
                 params.palw_material_release_recovery_v2 = Some(

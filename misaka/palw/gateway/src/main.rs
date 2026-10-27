@@ -93,14 +93,6 @@ mod preprocess;
 mod vlm;
 // RFC-0003 §II.1: an image-generation request as canonical generative jobs, run and committed (library; no route runs it yet).
 mod imagegen;
-// Test support: an in-process worker over the floor engine, and the e2e suites that drive the whole chat path against it.
-#[cfg(test)]
-mod e2e;
-#[cfg(test)]
-mod testkit;
-// A gateway request all the way into a consensus fold, on testnet-12's shipped ruleset and on a copy with the decode rules test-armed.
-#[cfg(test)]
-mod e2e_chain;
 
 use surface::{AdmittedRequest, ChatRequest};
 use wire::{AnswerStream, PromptPlan};
@@ -4011,3 +4003,14 @@ mod tests {
         assert_eq!(in_flight_cap(4), 4 + 7);
     }
 }
+
+// Declared at the end: the shipped-path guards (`host_security_tree_guard`) read a file up to its
+// first `#[cfg(test)]`, so test modules declared at the top would hide the whole binary from them.
+// Test support: an in-process worker over the floor engine, and the e2e suites that drive the whole chat path against it.
+#[cfg(test)]
+mod e2e;
+#[cfg(test)]
+mod testkit;
+// A gateway request all the way into a consensus fold, on testnet-12's shipped ruleset and on a copy with the decode rules test-armed.
+#[cfg(test)]
+mod e2e_chain;

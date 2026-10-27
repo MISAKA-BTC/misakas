@@ -1860,7 +1860,8 @@ fn corpus_v2_full() {
 /// the IR, the evaluators or the court names an architecture.
 #[test]
 fn no_court_or_ir_source_names_a_model() {
-    let root = crate_dir().join("..");
+    // The repository root (the crate moved under misaka/palw/tir/ in the 2026-10-12 reorganisation).
+    let root = crate_dir().join("../../../..");
     let banned = [
         "llama",
         "qwen",

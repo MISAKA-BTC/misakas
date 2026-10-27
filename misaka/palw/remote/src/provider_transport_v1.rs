@@ -393,11 +393,12 @@ mod tests {
             (ProviderTransportPurposeV1::RecoveryEnrollmentV4, 1),
             (ProviderTransportPurposeV1::KernelMaterialIngressV4, 2),
             (ProviderTransportPurposeV1::KernelMaterialQueryV4, 3),
+            (ProviderTransportPurposeV1::KernelMaterialReplacementV4, 4),
         ] {
             assert_eq!(borsh::to_vec(&value).unwrap(), [tag]);
             assert_eq!(borsh::from_slice::<ProviderTransportPurposeV1>(&[tag]).unwrap(), value);
         }
-        assert!(borsh::from_slice::<ProviderTransportPurposeV1>(&[4]).is_err());
+        assert!(borsh::from_slice::<ProviderTransportPurposeV1>(&[5]).is_err());
     }
     #[test]
     fn a_signed_request_verifies_once_and_every_tamper_or_replay_is_refused() {
