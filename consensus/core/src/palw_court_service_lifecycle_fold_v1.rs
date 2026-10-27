@@ -173,23 +173,19 @@ pub(super) fn release_resolved_court_service_bindings_v1(
     if service.book.last_observed_daa != Some(ctx.daa_score) {
         return Ok(());
     }
-    let mut candidates: std::collections::BTreeSet<Hash64> = service
-        .claims
-        .keys()
-        .filter(|claim| b.state.court_service_release_eligible_v1(claim))
-        .take(crate::palw_court_service_release_v1::COURT_SERVICE_RELEASES_PER_BLOCK_V1)
-        .copied()
-        .collect();
+    // G14-FIX S2 (audit, 2026-10-27): below the gate the cap is applied BEFORE the dependent-row filter (the original order, kept
+    // byte-identical for live testnet-12), so N dependent-held claims at the front of the book starve every releasable claim behind
+    // them forever. At/after the gate the dependent filter runs first and the cap is applied to the releasable claims.
+    let filter_first = release_filter_first_v1(b.params, ctx.daa_score);
+    let state = &b.state;
+    let candidates = court_service_release_candidates_v1(
+        service.claims.keys().filter(|claim| state.court_service_release_eligible_v1(claim)).copied(),
+        || state.staged_courts.keys().filter_map(|key| state.court_service_dependent_claim_v1(key)),
+        crate::palw_court_service_release_v1::COURT_SERVICE_RELEASES_PER_BLOCK_V1,
+        filter_first,
+    );
     if candidates.is_empty() {
         return Ok(());
-    }
-    for key in b.state.staged_courts.keys() {
-        if let Some(claim) = b.state.court_service_dependent_claim_v1(key) {
-            candidates.remove(&claim);
-            if candidates.is_empty() {
-                return Ok(());
-            }
-        }
     }
     let mut next = b.state.court_service_as_v3_v1().ok_or_else(|| refused("service book vanished before its release"))?;
     next.release_v1(&candidates, ctx.daa_score).map_err(refused)?;
@@ -198,6 +194,37 @@ pub(super) fn release_resolved_court_service_bindings_v1(
         b.rearm_claim_deadline_dl1_v1(claim, ctx.daa_score)?;
     }
     Ok(())
+}
+
+/// **The resolved-binding release selection (pure).** `eligible` in claim order; `dependents` yields the claim of every dependent
+/// staged row (scanned only when a candidate exists). `filter_first = false` is the original order (take `limit`, then drop the
+/// dependent-held ones); `true` (G14-FIX S2) drops the dependent-held ones first, then takes `limit` in claim order.
+pub(super) fn court_service_release_candidates_v1<D: Iterator<Item = Hash64>>(
+    eligible: impl Iterator<Item = Hash64>,
+    dependents: impl FnOnce() -> D,
+    limit: usize,
+    filter_first: bool,
+) -> std::collections::BTreeSet<Hash64> {
+    let mut candidates: std::collections::BTreeSet<Hash64> = eligible.take(if filter_first { usize::MAX } else { limit }).collect();
+    if candidates.is_empty() {
+        return candidates;
+    }
+    for claim in dependents() {
+        candidates.remove(&claim);
+        if candidates.is_empty() {
+            return candidates;
+        }
+    }
+    if filter_first {
+        candidates = candidates.into_iter().take(limit).collect();
+    }
+    candidates
+}
+
+/// **G14-FIX S2: the release step filters dependents BEFORE the per-block cap** at/after `palw_court_clock_v2` (a fence of the G14
+/// list at testnet-12 DAA 17,400, mirrored as `court_clock_v2_from_daa`). Below it, or unarmed: the original take-then-filter order.
+pub(super) fn release_filter_first_v1(params: &PalwStateParamsV2, daa: u64) -> bool {
+    params.court_clock_v2_from_daa().is_some_and(|from| daa >= from)
 }
 
 /// **G14 lane r5-f02-wire: the wire entry (tag 178, `PalwConsensusObjectV2::SharedCourtOpV1`)** — maps the carried operation onto
@@ -396,4 +423,66 @@ pub(super) fn apply_shared_bottom_conviction_v1(
         b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
     }
     b.convict_by_court_verdict_as_v1(ctx, claim_id, &claim, filer, None, PalwVoidReasonV2::CourtHeldVerdict)
+}
+
+#[cfg(test)]
+mod g14_fix_s2_tests {
+    use super::*;
+
+    fn id(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n)
+    }
+
+    /// The book: `limit` dependent-held eligible claims first (claim order), then one releasable claim behind them.
+    fn book(limit: usize) -> (Vec<Hash64>, Vec<Hash64>, Hash64) {
+        let mut all: Vec<Hash64> = (1..=limit as u64 + 1).map(id).collect();
+        all.sort();
+        let releasable = *all.last().unwrap();
+        let dependent = all[..limit].to_vec();
+        (all, dependent, releasable)
+    }
+
+    /// Below the gate (and unarmed): the original take-then-filter order — the first `limit` are all dependent, so NOTHING is
+    /// released this block and the claim behind them waits (the audited starvation, kept byte-identical for live testnet-12).
+    #[test]
+    fn below_the_gate_the_original_order_is_kept() {
+        let limit = crate::palw_court_service_release_v1::COURT_SERVICE_RELEASES_PER_BLOCK_V1;
+        let (all, dependent, _) = book(limit);
+        let got = court_service_release_candidates_v1(all.iter().copied(), || dependent.iter().copied(), limit, false);
+        assert!(got.is_empty(), "old order: the cap is spent on dependent-held claims");
+        // The original order verbatim, as a reference implementation.
+        let mut reference: std::collections::BTreeSet<Hash64> = all.iter().take(limit).copied().collect();
+        for c in &dependent {
+            reference.remove(c);
+        }
+        assert_eq!(got, reference);
+        // With no dependents the old order releases exactly the first `limit`.
+        let got = court_service_release_candidates_v1(all.iter().copied(), std::iter::empty, limit, false);
+        assert_eq!(got, all.iter().take(limit).copied().collect());
+    }
+
+    /// At/after the gate: with the first `limit` all dependent, the releasable claim behind them is selected in the same block,
+    /// and the cap still bounds the release.
+    #[test]
+    fn past_the_gate_a_releasable_claim_behind_dependents_is_released() {
+        let limit = crate::palw_court_service_release_v1::COURT_SERVICE_RELEASES_PER_BLOCK_V1;
+        let (all, dependent, releasable) = book(limit);
+        let got = court_service_release_candidates_v1(all.iter().copied(), || dependent.iter().copied(), limit, true);
+        assert_eq!(got, std::collections::BTreeSet::from([releasable]));
+        // The cap still holds: 2·limit releasable claims → exactly the first `limit` in claim order.
+        let mut many: Vec<Hash64> = (1..=2 * limit as u64).map(id).collect();
+        many.sort();
+        let got = court_service_release_candidates_v1(many.iter().copied(), std::iter::empty, limit, true);
+        assert_eq!(got, many.iter().take(limit).copied().collect());
+    }
+
+    /// The gate is `palw_court_clock_v2` (G14 list, 17,400 on testnet-12) through its state-params mirror.
+    #[test]
+    fn the_gate_is_the_court_clock_v2_mirror() {
+        let unarmed = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
+        let armed = unarmed.clone().with_court_clock_v2_from_daa(Some(17_400));
+        assert!(!release_filter_first_v1(&armed, 17_399));
+        assert!(release_filter_first_v1(&armed, 17_400));
+        assert!(!release_filter_first_v1(&unarmed, u64::MAX));
+    }
 }

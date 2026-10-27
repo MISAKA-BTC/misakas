@@ -41,7 +41,7 @@ enum CertCase {
 const STAGES: &[Stage] = &[
     Stage::Native(
         "S1+S2 original admission reserves court capital + service book atomically in the accepting block; duties derived from the \
-         original; every accepting block records its supply (TEST-ONLY admission schedule; production None)",
+         original; every accepting block records its supply (production schedule, no test override)",
         NativeCase::AdmissionAndSupply,
     ),
     Stage::Run(
@@ -361,21 +361,27 @@ async fn g14_spine_panel1_kernel_route_stage_table() {
     assert_eq!(open, 0, "the Panel=1 kernel slice is not closed: {open} stage(s) open");
 }
 
-// ---- lane LEGACY 2026-10-27: S1 / S2 / S3c''' on the native processor with a TEST-ONLY kernel court admission schedule ---------
+// ---- lane LEGACY 2026-10-27: S1 / S2 / S3c''' on the native processor, PRODUCTION admission schedule (G14-FIX SPEC-1)
 
-/// The Panel=1 world with the F02b kernel court admission schedule in force from genesis — **TEST ONLY**
-/// (`KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1`, lane VAL's estimates; production stays `None`).
+/// The Panel=1 world with the **production** kernel court admission schedule (lane G14-FIX SPEC-1, 2026-10-27): no schedule
+/// override; the harness moves `palw_kernel_route_panel_one_v1` (a fence of the G14 list at 17,400) to genesis and the processor
+/// copies `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1` into the fold because the fence is in force, exactly as on testnet-12.
+///
+/// One harness value remains TEST-ONLY: the Panel=1 external gain bound. Under `cfg(test)` the processor caps every chain at 4
+/// adjudications per block (`PalwKernelRouteExtrasV1::max_adjudications_per_block` seam; shipped 64), and the harness runs below
+/// X3, so the censorship relation's cost is `4 × 0.1 × 350 = 140 MSK` < the production gain `5 + 500 MSK` and the class would not
+/// register. With the shipped 64 runs and X3's clocked exposure the relation holds (20,160 > 1,585 MSK,
+/// `clock_m1_saturation_cost_beats_reservation_reward_and_external_gain`).
 async fn admitted_world() -> World {
-    let (config, mut bundle, premine, floats) =
+    let (config, bundle, premine, floats) =
         super::f03k::panel_one_config(Some(0), Some(super::f03k::TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI));
-    let mut params = config.params.clone();
-    bundle.state = bundle.state.clone().with_test_only_kernel_court_admission_v1(Some(
-        kaspa_consensus_core::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1(),
-    ));
-    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode {
-        *b = bundle.clone();
-    }
-    World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await
+    assert!(kaspa_consensus_core::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_some(), "pinned");
+    assert_eq!(
+        bundle.state.kernel_court_admission_schedule_v1(0),
+        kaspa_consensus_core::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1,
+        "the production schedule, no fixture override"
+    );
+    World::on(Net::over_cfg((config, bundle, premine, floats), TestConsensus::new)).await
 }
 
 /// **S1 + S2 (native):** the original's admission reserves the court capital and the service book in the claim's own accepting

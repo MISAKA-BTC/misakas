@@ -12,22 +12,29 @@ test `g14_spine_panel1_kernel_route_stage_table`. It FAILS while any stage is st
 - **Why this slice:** `canonical.rs` already pushes the most branches of one claim through the real virtual processor, fold, mempool/template and a cold node (IBD and pruned import): honest + wrong challenge, a lie before and after Final, withheld material leading to demand and default, plus non-interference. `recovery.rs` adds restart, reorg and IBD for the pursuit. No other route has all three outcomes on a cold node.
 - The OPV variant stays out of the slice (Panel=0 is not armed).
 
-## 2. Stage table (in the harness's order)
+## 2. Stage table (in the harness's order; rewritten 2026-10-27, lane G14-FIX, to the current harness output)
 
-| stage | status | owner / missing |
-|---|---|---|
-| S1 original admission: atomic funding/resources | UNIMPLEMENTED | F02: `palw_funded_original_coordinator_v1` is not wired into the kernel route's admission fold. Today only `Rules::admission_cost` is debited |
-| S2 duties derived from the original + actual supply | UNIMPLEMENTED | F02: kernel-route duties via `palw_court_service_v1`, with the accepting block's supply recorded |
-| S3a honest, wrong challenge dismissed → Final → paid once (IBD) | run by the harness (existing `canonical` driver) | — |
-| S3a' per-claim lottery approval `SecurityCertified` gates Final/settlement | **UNIMPLEMENTED, no lane owns it** | `misaka_palw_kernel::ledger` reaches `ClaimStateV1::Final` from the Panel pass + window alone. No `palw_claim_security_certified_v1` / Gate C draw exists for kernel-route claims (only native39 `owning39/master/node_e2e.rs` has it) |
-| S3b lie, all seats colluding, outsider convicts before Final, slash (pruned import) | run | — |
-| S3b lie after Final, conviction, liability stands (IBD) | run | — |
-| S3b' conviction through the public paid ingress under refilling collusion (T05) | UNIMPLEMENTED | F03: kernel `file_proof` via `palw_court_paid_ingress_v1`. The schedule is typed-missing until injected |
-| S3c silence: demand → default, fixed penalty, no fraud slash (IBD) | run | — |
-| S3c' no supply → no slash, held | UNIMPLEMENTED | F02: a supply-absent branch in the default fold (today the default is deadline-only) |
-| S4 reorg across the deciding DAA of S3a–c | UNIMPLEMENTED | SPINE (next): reorg + `agree()` on the canonical slice. Restart/IBD/pruned import are already covered per outcome by `start_node` and by `recovery.rs` |
+Run: `cargo test -p kaspa-consensus --lib g14_spine` on `claude/g14-spec1-s2` (base 13a745fed + G14-FIX). S1/S2/S3c''' use the
+PRODUCTION kernel court admission schedule (`PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1`, pinned by G14-FIX SPEC-1, in force past
+`palw_kernel_route_panel_one_v1`); no schedule override. The one remaining TEST-ONLY harness value is the Panel=1 external gain
+bound (`f03k::TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI`): the processor's `cfg(test)` cap of 4 adjudications per block and the
+unclocked (below X3) exposure make the censorship relation 140 MSK < 505 MSK, so the class would not register with the production
+500 MSK bound. With the shipped 64 runs and X3 it holds (20,160 > 1,585 MSK).
 
-The PASS/FAIL of the "run" rows is in the build result recorded in §5.
+| stage | status |
+|---|---|
+| S1+S2 admission reserves court capital + service book atomically; duties derived; supply recorded (production schedule) | PASS |
+| S3a honest, wrong challenge dismissed, Final, paid once (IBD) | PASS |
+| S3a' lottery approval: paid once, reorg takes it back, IBD agrees (TEST-ONLY cert policy) | PASS |
+| S3a' approval shortfall: NotCertified, never paid, poster refunded less V3 burn (TEST-ONLY cert policy) | PASS |
+| S3b lie, all seats colluding, outsider convicts before Final (pruned import) | PASS |
+| S3b lie after Final, liability stands (IBD) | PASS |
+| S3b' T05 before / after Final, Panel=1 (f03k::t05) | PASS / PASS |
+| S3c silence → demand → deadline default (IBD) | PASS |
+| S3c' kernel supply never missing under a full court | **FAIL** (see §5) |
+| S3c'' premise None (TEST-ONLY) → no-slash hold; pinned premise → decided | PASS / PASS |
+| S3c''' native bound claim: typed-missing → held; pinned premise → default | PASS / PASS |
+| S4 honest / silence decided once across a reorg | PASS / PASS |
 
 ## 3. T01–T15 mapped onto the spine
 
@@ -47,21 +54,16 @@ The PASS/FAIL of the "run" rows is in the build result recorded in §5.
 | T14 | S4 + existing IBD/pruned import | partial |
 | T15 | fence boundary old/new | ACT; open |
 
-## 4. Requests
+## 4. Requests (2026-10-27)
 
-- **F02:** close S1, S2 and S3c' on the kernel route (call sites: the kernel route's admission and default fold). Expose a callable entry that the spine can invoke from `canonical`.
-- **F03:** a kernel-route `Rules::file_proof_paid(...)` through the paid ingress, plus a refilling-coalition fixture.
-- **ACT:** the 17,000 record must name exactly this slice's family. `route_armed` has no kernel-route family today (`PalwG14RouteFamilyV1` lists only Legacy*/Fp*/NonPublicEvidence), so it needs either a new family or an explicit mapping.
-- **VAL:** provisional values for `default_penalty`, the dismissal fee and the window on this slice.
-- **統括 (central):** decide who adds per-claim `SecurityCertified` to the kernel ledger (S3a'). Until that exists, the slice can reach Final without a lottery approval, which violates CLAUDE.md, so the slice must not be armed. The missing kernel route family in `route_armed` also needs a central decision.
+- **S3c' owner:** the stage fails inside the harness's block insertion (`t12_round_lane_e2e.rs:381`: a heartbeat carrying the crowd filings is refused, "block persistent storage mass 666668 exceeds limit of 500000" — the fixture packs too many filings per block);
+  see §5. It is not caused by the schedule values: the production schedule equals the earlier test-only estimate field for field.
+- **Harness:** a world with the shipped 64-run cap would let S1/S2/S3c''' also drop the TEST-ONLY gain bound.
 
-## 5. Build result (2026-10-26, `cargo test -p kaspa-consensus --lib g14_spine_panel1`, base 3c5f4c24b)
+## 5. Build result (2026-10-27, lane G14-FIX, `cargo test -p kaspa-consensus --lib g14_spine`)
 
-- PASS: S3a (honest), S3c (default)
-- **FAIL: both S3b runs** at `canonical.rs:676`: "the colluding seats are not charged by the producer's conviction". Each seat's slashed amount went from 100000000 to 283333333 (and to 783333333). On this base, a conviction also charges the colluding seats (seat-covered liability). The existing `canonical` assert expects the opposite.
-  - Either the seat charge is the intended new rule (RFC08 lifecycle / Codex `f4054fe39`), and the assert must be updated deliberately by its owner, or it is a regression.
-  - SPINE did not change the assert. **統括 decides which.**
-- UNIMPLEMENTED: S1, S2, S3a', S3b', S3c', S4 (see §2). The table test is red, as intended.
+- 7 of 9 `g14_spine_*` tests pass; the table: 15 PASS, 1 FAIL (S3c'). `g14_spine_s3c_prime_*` fails on its own as well.
+- Earlier results (2026-10-26, base 3c5f4c24b) are in §6 and §7 as history.
 
 ## 6. Second round (2026-10-26): origin of the S3b seat charge, S4, F02 premise, F03b
 

@@ -165,13 +165,26 @@ fn f02b_kernel_admission_refusal_changes_nothing() {
     assert!(!admit(&mut b), "insufficient free collateral refuses");
     assert_eq!(b.state.state_root(), root, "nothing changed");
     assert!(b.state.court_service_state_v1().is_none() && b.state.kernel_court_capital_rows_v1().is_empty(), "no book, no row");
-    // Positive control on the same fixture with ample collateral is the test above. Production: no schedule, no admission.
+    // Positive control on the same fixture with ample collateral is the test above. No schedule in the extras (the processor's
+    // value below `palw_kernel_route_panel_one_v1`), no admission.
     let state = parent(1_000_000_000_000);
     let e = PalwTransitionExtrasV1 { kernel_route: Some(route_extras()), ..Default::default() };
-    assert!(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_none());
+    assert!(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_some(), "G14-FIX SPEC-1: the production schedule is pinned");
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
     assert!(admit(&mut b));
     assert!(b.state.court_service_state_v1().is_none() && b.state.kernel_court_capital_rows_v1().is_empty(), "typed-missing schedule writes nothing");
+}
+
+/// G14-FIX SPEC-1: the processor's schedule is the pinned production one only at/after `palw_kernel_route_panel_one_v1`; below it
+/// (and with the fence unarmed) the extras get `None`, exactly as before the schedule was pinned.
+#[test]
+fn spec1_production_schedule_is_gated_on_the_slice_fence() {
+    let k = PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.expect("pinned");
+    let p = params().with_kernel_route_panel_one_from_daa(Some(17_400));
+    assert_eq!(p.kernel_court_admission_schedule_v1(0), None);
+    assert_eq!(p.kernel_court_admission_schedule_v1(17_399), None);
+    assert_eq!(p.kernel_court_admission_schedule_v1(17_400), Some(k));
+    assert_eq!(params().kernel_court_admission_schedule_v1(u64::MAX), None, "unarmed: never");
 }
 
 /// Below the slice's fence nothing is admitted or written, even with a schedule.
