@@ -524,19 +524,25 @@ async fn g14_spine_s3c_prime_kernel_supply_is_never_missing_under_a_full_court()
     s3c_prime_supply_never_missing_on_the_kernel_route().await;
 }
 
-/// **T-adversarial (B), user-approved 2026-10-27: the colluders refuse to disclose.** Panel=1, the producer and its seat collude on a
-/// lie and withhold the demanded material from an outsider. The demand reaches its deadline with a supplied opportunity under the
-/// pinned premise: a DA default (never a computation verdict), and the producer forfeits its claim reservation, which is at least the
-/// user-approved 500 MSK external gain bound (`PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1`): refusing gains the colluders
-/// nothing. Scope: the kernel ledger demands trace material; a court demand of WEIGHT openings is not a kernel-route demand today.
-async fn adversarial_b_refusal_to_disclose_is_a_da_default_costing_more_than_the_gain() {
+/// **T-adversarial (B), user-approved 2026-10-27: the colluders refuse to disclose -> DA default; forfeiture >= the gain obtainable
+/// at that point** (coordinator 2026-10-27). Kernel ledger (`misaka/palw/kernel/src/ledger.rs`, the default tick): BEFORE Final a
+/// default costs the fixed `default_penalty` and the claim is `Unavailable` (never Final, so no result carries a guarantee and the
+/// external gain is 0, AUDIT-3 m2); AFTER Final it forfeits the WHOLE remaining reservation (`r.reserved`), which must cover the
+/// approved 500 MSK external gain at the 0.9 detection floor (500 / 0.9 MSK). Scope: trace material (kernel classes have public
+/// weights by construction, see T16).
+async fn adversarial_b_refusal(after_final: bool) {
     kaspa_core::log::try_init_logger("warn");
     let _production = crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::production_guard_v1();
     let mut w = admitted_world().await;
     let funding = newcomer_funding(&w.net);
-    let reservation = w.policy().claim_collateral;
+    let policy = w.policy();
     let gain = kaspa_consensus_core::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.expect("approved 500 MSK");
     let (claim, _seats) = claimed(&mut w, Mode::Panel, 0, true).await;
+    if after_final {
+        let floor = final_floor(&w, Mode::Panel, &claim.id);
+        w.net.beat_to(floor).await;
+        assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&claim.id));
+    }
     let before = w.net.collateral(0);
     let mut node = start_node(&mut w.net, Start::Ibd).await;
     let bond = register_newcomer(&mut node, funding).await;
@@ -547,15 +553,27 @@ async fn adversarial_b_refusal_to_disclose_is_a_da_default_costing_more_than_the
     let read = Rpc::of(&w.net.chain).claim(&claim.id);
     assert_eq!(read.demands.len(), 1, "the demand is open");
     w.net.beat_to(read.demands[0].deadline_daa + 2).await;
-    let st = w.net.claim_state(&claim.id);
-    assert!(matches!(st, ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "refusal: a DA default: {st:?}");
     assert!(!w.net.ledger().claims[&claim.id].convicted, "a DA default, not a computation conviction");
     let forfeited = before.saturating_sub(w.net.collateral(0));
-    assert!(forfeited >= reservation.min(before), "the reservation is forfeited ({forfeited} of {reservation})");
-    assert!(forfeited >= gain, "forfeited {forfeited} >= the 500 MSK external gain bound {gain}");
+    if after_final {
+        // Gain obtainable after Final: the external gain bound at the 0.9 detection floor.
+        let obtainable = (gain as u128 * 10).div_ceil(9) as u64;
+        assert!(forfeited >= policy.claim_collateral.min(before), "post-Final: the whole reservation is forfeited ({forfeited})");
+        assert!(forfeited >= obtainable, "post-Final: forfeited {forfeited} >= 500/0.9 MSK {obtainable}");
+    } else {
+        let st = w.net.claim_state(&claim.id);
+        assert!(matches!(st, ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "pre-Final: a DA default, never Final: {st:?}");
+        // Gain obtainable before Final: 0 (the claim never reaches Final).
+        assert!(forfeited >= policy.default_penalty.min(policy.claim_collateral) && forfeited > 0, "pre-Final: the fixed penalty ({forfeited})");
+    }
 }
 
 #[tokio::test]
-async fn g14_adversarial_b_colluders_refusing_disclosure_default_and_forfeit_at_least_the_gain() {
-    adversarial_b_refusal_to_disclose_is_a_da_default_costing_more_than_the_gain().await;
+async fn g14_adversarial_b_pre_final_refusal_defaults_and_forfeits_the_fixed_penalty() {
+    adversarial_b_refusal(false).await;
+}
+
+#[tokio::test]
+async fn g14_adversarial_b_post_final_refusal_forfeits_at_least_the_obtainable_gain() {
+    adversarial_b_refusal(true).await;
 }
