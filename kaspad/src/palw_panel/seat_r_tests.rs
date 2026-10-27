@@ -1532,21 +1532,21 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
         let squeezed: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(squeezed.contains_code("palw_seat_replay_step_v1(&"), "{name}: the one replay rule");
         assert!(squeezed.contains_code("duty.work_leaves,duty.output_root"), "{name}: and the claim's answer (SEAT-S2)");
-        assert!(
-            body.contains_code("self.reserve_replay_at_widest_run_v1(\"full-seat\", backend.as_mut(),"),
-            "{name}: reserved for its life"
-        );
+        // The FP pass reserves through the routed replay's own backend (`bound.backend_and_context_mut_v2()`), the attempt's
+        // through `backend.as_mut()` — both under the full seat's role, for the replay's life.
+        assert!(body.contains_code("self.reserve_replay_at_widest_run_v1(\"full-seat\", "), "{name}: reserved for its life");
         assert!(body.contains_code("replays.retry_refused(&key, current_daa, seat_r_duty.deadline)"), "{name}: retried once, in time");
         assert!(body.contains_code("replays.has_room(seat_r_duty.heavy)"), "{name}: a C7 replay takes the heavy slot");
         assert!(body.contains_code("replays.fits(&duty.class_id, current_daa, seat_r_duty.deadline)"), "{name}: never started late");
         let fits = body.find_code("replays.fits(").unwrap();
-        assert!(fits < body.find_code("replays.start(").unwrap() && fits < body.find_code("self.reserve_replay_at_widest_run_v1(").unwrap());
+        let start = body.find_code("replays.start(").or_else(|| body.find_code("replays.start_fp_routed_v2(")).unwrap();
+        assert!(fits < start && fits < body.find_code("self.reserve_replay_at_widest_run_v1(").unwrap());
     }
     // The free-prompt pass: the claim's own job first, and a stranger's never started beside it.
     assert!(fp.contains_code("order.sort_by_key(|i| !own[*i]);"));
     assert!(fp.contains_code("let decides = is_own || !holds_own;"));
     assert!(fp.contains_code("PalwSeatReplayPollV1::Absent if !decides => {}"));
-    assert!(fp.find_code("PalwSeatReplayPollV1::Absent if !decides => {}").unwrap() < fp.find_code("replays.start(").unwrap());
+    assert!(fp.find_code("PalwSeatReplayPollV1::Absent if !decides => {}").unwrap() < fp.find_code("replays.start_fp_routed_v2(").unwrap());
     let step = &source[source.find_code("pub(crate) fn palw_seat_replay_step_v1(").expect("the one replay rule")..];
     let step = &step[..step.find("\n}\n").expect("its end")];
     assert!(
