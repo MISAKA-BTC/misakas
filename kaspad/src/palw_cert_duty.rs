@@ -394,7 +394,7 @@ impl PalwPanelService {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn duty(deadline_daa: u64) -> PalwCertificationDutyV1 {
@@ -512,6 +512,134 @@ mod tests {
         assert_eq!(step(honest.clone()), PalwSeatReplayStepV1::Licensed);
         assert_eq!(step(PalwReplayRootsV1 { output_root: Some(Hash64::from_bytes([0xEE; 64])), ..honest.clone() }), PalwSeatReplayStepV1::Refuted);
         assert_eq!(step(PalwReplayRootsV1 { work_leaves: Some(j.work_leaves + 1), ..honest }), PalwSeatReplayStepV1::Refuted, "a mispriced FP");
+    }
+
+    /// **The drawn verifiers' verdicts through the chain's decision** (`palw_certification_verdict_v1`, the fold's rule): five drawn
+    /// bonds, each attesting what its duty decided, the attestation shaped as `cert_duty_tick_v1` signs it. `now` is past the
+    /// prosecution window and the attestation deadline.
+    pub(in crate::palw_panel) fn decide_with_duty_verdicts_v1(
+        verdict: PalwCertDutyVerdictV1,
+    ) -> Option<kaspa_consensus_core::palw_security_certification_v1::PalwCertificationOutcomeV1> {
+        use kaspa_consensus_core::palw_model_eligibility_v1::{PalwEligibilityAttestationRowV1, PalwEligibilityVerdictV1 as V};
+        use kaspa_consensus_core::palw_security_certification_v1::*;
+        let policy = PalwSecurityCertificationPolicyV1 { m: 5, k: 3, ..PalwSecurityCertificationPolicyV1::approved_v1(720) };
+        let draws: Vec<[u8; 64]> = (1..=5u8).map(|n| [n; 64]).collect();
+        let attestations = draws
+            .iter()
+            .map(|me| {
+                let (verdict, transcript) = match verdict {
+                    PalwCertDutyVerdictV1::Reproduced { execution_root } => {
+                        (V::Reproduced, palw_cert_duty_transcript_v1(&[9; 64], me, &execution_root))
+                    }
+                    PalwCertDutyVerdictV1::NotReproducible => (V::NotReproducible, [0; 64]),
+                    _ => (V::Unavailable, [0; 64]),
+                };
+                PalwEligibilityAttestationRowV1 { verifier: *me, verdict, transcript, attested_daa: 20 }
+            })
+            .collect();
+        let row = PalwClaimCertificationRowV1 {
+            claim: [7; 64],
+            class_id: [8; 64],
+            producer_bond: [0xAA; 64],
+            producer_principal: [0xAB; 64],
+            attempt: true,
+            final_daa: 5,
+            committed_daa: 5,
+            committed_span: 0,
+            anchor: Some((1, [0; 64])),
+            draws,
+            drawn_daa: 10,
+            deadline_daa: 10 + policy.attest_window_daa,
+            attestations,
+            held_reward: 0,
+            payout_payload: [0; 64],
+            outcome: None,
+        };
+        let now = (5 + policy.prosecution_window_daa).max(row.deadline_daa) + 1;
+        palw_certification_verdict_v1(&policy, &row, PalwCertificationClaimFactsV1 { still_final: true, accusation_pending: false }, now)
+    }
+
+    /// **FP family (FpSelection; the same seam serves FpConstraint/FpPrefix/FpTokenizer) on a REAL backend** — the shipped floor
+    /// class (`PALW-BASE-0/rc`). The producer runs a user job; the drawn bond's own backend replays the job decoded from its material
+    /// (`palw_fp_job_material_decode_v1`, what `fp_seat_replay_pass_v1` reads) with `execute_free_prompt`, mapped exactly as
+    /// `BoundFpReplayV2::execute` does, and SEAT-R's rule decides: honest → Reproduced → Certified; a producer that committed an
+    /// injected fault → Refuted → NotReproducible → not certified.
+    #[test]
+    fn gc_duty_real_backend_fp_selection_reproduces_and_certifies_and_a_lie_is_refuted() {
+        use kaspa_consensus_core::palw_backend::{PalwExecutionBackendV1, PalwReplayRootsV1};
+        use kaspa_consensus_core::palw_freeprompt_v3::*;
+        use kaspa_consensus_core::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
+        fn floor() -> misaka_palw_base0::backend::Base0Backend {
+            use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+            let court =
+                kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                    .expect("the shipped court");
+            let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is registered");
+            let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+            misaka_palw_base0::backend::Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("resolves"))
+        }
+        let producer = floor();
+        let prompt: Vec<u32> = vec![7, 11, 13, 17];
+        let ids: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: producer.profile().shape_profile_id(),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt),
+            prompt_tokens: prompt.len() as u32,
+            decode_token_limit: 6,
+            max_context_tokens: producer.profile().n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+            tail: None,
+        };
+        let roots = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1| PalwReplayRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.facts.full_logits_trace_root,
+            work_leaves: Some(run.facts.step_leaf_count),
+            output_root: Some(run.outcome.output_root),
+        };
+        let material = palw_fp_job_material_decode_v1(
+            &palw_fp_material_encode_v1(&job, &prompt),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("the material decodes");
+        assert_eq!(material.job, job);
+        // The drawn verifier's own backend and replay.
+        let verifier = floor();
+        let replay = roots(&verifier.execute_free_prompt(&material.job, &ids).expect("the verifier's replay"));
+        let judge = |claimed: &PalwReplayRootsV1| {
+            match palw_seat_replay_step_v1(
+                &Ok(replay.clone()),
+                claimed.execution_root,
+                claimed.trace_root,
+                claimed.work_leaves.unwrap(),
+                claimed.output_root.unwrap(),
+            ) {
+                PalwSeatReplayStepV1::Licensed => PalwCertDutyVerdictV1::Reproduced { execution_root: claimed.execution_root },
+                PalwSeatReplayStepV1::Refuted => PalwCertDutyVerdictV1::NotReproducible,
+                other => panic!("no verdict: {other:?}"),
+            }
+        };
+        let honest = roots(&producer.execute_free_prompt(&job, &ids).expect("the honest run"));
+        let v = judge(&honest);
+        assert!(matches!(v, PalwCertDutyVerdictV1::Reproduced { .. }), "honest FP → Reproduced");
+        assert_eq!(decide_with_duty_verdicts_v1(v), Some(O::Certified));
+        let lie = roots(&producer.execute_free_prompt_with_injected_fault(&job, &ids, 0).expect("the lie commits"));
+        assert_ne!(lie.execution_root, honest.execution_root, "the injected fault moves the committed roots");
+        let v = judge(&lie);
+        assert_eq!(v, PalwCertDutyVerdictV1::NotReproducible, "lying FP → Refuted");
+        assert_eq!(decide_with_duty_verdicts_v1(v), Some(O::NotCertified));
     }
 
     #[test]

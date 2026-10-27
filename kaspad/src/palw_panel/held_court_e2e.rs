@@ -2771,3 +2771,83 @@ fn rfc06_held_gdn_filer_e2e_a_silent_forger_is_defaulted() {
     assert!(matches!(phase_of(&s, &claim), PalwClaimPhaseV2::Voided { .. }), "the silent forger is voided by the DA default");
     assert!(lost > 0, "the producer's collateral is actually reduced");
 }
+
+/// **lane GC-DUTY: LegacyFusedLeaf held to `Final`, on a REAL backend** — the held graph-v7 fixture (`Qwen25A16Backend`, a fused
+/// attention site, the held regime). The duty routes the row to the attempt seam's heavy slot; the drawn bond's OWN backend replays the
+/// anchor's job (`execute_for_verdict`, what `cert_duty_start_replay_v1` runs) and lane B's rule (`palw_operator_da_verdict_v1`)
+/// decides: an honest claim → Reproduced → Certified; a lie in the committed fused tile → Refuted → NotReproducible → not certified.
+#[test]
+fn gc_duty_real_backend_fused_leaf_held_to_final_reproduces_and_certifies_and_a_lie_is_refuted() {
+    use super::palw_cert_duty::tests::decide_with_duty_verdicts_v1;
+    use super::palw_cert_duty::{PalwCertDutyRouteV1, PalwCertDutyVerdictV1, palw_cert_duty_route_v1};
+    use super::palw_operator_da::{PalwOperatorDaVerdictV1 as V, palw_operator_da_verdict_v1};
+    use kaspa_consensus_core::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
+    let (artifact, profile) = held_fixture(128);
+    assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile), "the fixture class is held to Final");
+    assert!(profile.attn_nodes.iter().any(|n| n.op_kind == PalwStepOpKindV1::AttnFused), "and has a fused-attention leaf");
+    let verifier = backend(&artifact, &profile);
+    let judge = |d: &Produced, committed_output: Hash64| {
+        let job = kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
+            accepted_block: h64(1),
+            class_id: h64(2),
+            artifact_root: Some(h64(3)),
+            execution_root: d.execution_root,
+            trace_root: d.trace_root,
+            output_root: committed_output,
+            work_leaves: 0,
+            free_prompt: false,
+            held_to_final: true,
+        };
+        let owed = kaspa_consensus_core::palw_security_certification_v1::PalwCertificationDutyV1 {
+            claim_id: h64(7),
+            certification_id: [9; 64],
+            native: false,
+            drawn_daa: 10,
+            deadline_daa: 1_000,
+            positions: 1,
+            job: Some(job.clone()),
+            producer: Some(bond_key(1)),
+            seat_duty: Some(kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2 {
+                accepted_block: h64(1),
+                claim_id: h64(7),
+                class_id: h64(2),
+                artifact_root: h64(3),
+                seat_bond: bond_key(5),
+                executor_bond: bond_key(1),
+                execution_root: d.execution_root,
+                trace_root: d.trace_root,
+                output_root: committed_output,
+                bound_daa: 0,
+                receipt_deadline: 1_000,
+                panel_anchor: Hash64::default(),
+                seat_index: 0,
+                panel_seat_count: 1,
+                pwu: 1,
+                quanta: 0,
+                free_prompt: false,
+                work_leaves: 0,
+                job_identity: Hash64::default(),
+                tir_shard: None,
+            }),
+        };
+        assert_eq!(palw_cert_duty_route_v1(&owed), PalwCertDutyRouteV1::Attempt { heavy: true }, "held fused → heavy attempt seam");
+        let replay = verifier.execute_for_verdict(&d.job, &d.prompt);
+        match palw_operator_da_verdict_v1(&replay, &job) {
+            Some(V::Reproduces) => PalwCertDutyVerdictV1::Reproduced { execution_root: job.execution_root },
+            Some(V::Refuted) => PalwCertDutyVerdictV1::NotReproducible,
+            other => panic!("no verdict: {other:?}"),
+        }
+    };
+    let honest = produce(&artifact, &profile, false);
+    let honest_output = honest.backend.execute(&honest.job, &honest.prompt).expect("the producer's run").output_root;
+    let v = judge(&honest, honest_output);
+    assert!(matches!(v, PalwCertDutyVerdictV1::Reproduced { .. }), "honest fused/held → Reproduced");
+    assert_eq!(decide_with_duty_verdicts_v1(v), Some(O::Certified));
+    let lie = produce(&artifact, &profile, true);
+    assert_ne!(lie.execution_root, honest.execution_root, "the lie moves the committed roots");
+    let lie_output =
+        lie.backend.execute_with_injected_fault(&lie.job, &lie.prompt, lie.leaf).expect("the lie's run").output_root;
+    let v = judge(&lie, lie_output);
+    assert_eq!(v, PalwCertDutyVerdictV1::NotReproducible, "lying fused/held → Refuted");
+    assert_eq!(decide_with_duty_verdicts_v1(v), Some(O::NotCertified));
+}

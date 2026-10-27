@@ -1204,6 +1204,41 @@ mod tests {
                 });
                 params.sync_palw_selected_source_bootstrap_v1();
             }
+            // Stale probe (lane GC-DUTY 2026-10-27): fixture policies, never release terms.
+            "palw_source_verifier_economics_v2" => {
+                params.palw_source_verifier_economics_v2 =
+                    Some(crate::palw_source_verifier_economics_v2::PalwSourceVerifierEconomicsFenceV2 {
+                        activation: at,
+                        policy: crate::palw_source_verifier_economics_v2::PalwSourceVerifierEconomicsPolicyV2 {
+                            version: 2,
+                            network: crate::Hash64::from_bytes([9; 64]),
+                            bootstrap_policy: crate::Hash64::from_bytes([10; 64]),
+                            exposure_per_work_sompi: 7,
+                            minimum_fee_per_checker_sompi: 5,
+                            maximum_funded_works: 2,
+                            maximum_liabilities: 4,
+                        },
+                    });
+                params.sync_palw_source_verifier_economics_v2();
+            }
+            "palw_paid_bootstrap_source_v6" => {
+                params.palw_paid_bootstrap_source_v6 = Some(crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapSourceFenceV6 {
+                    activation: at,
+                    policy: misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6 {
+                        version: 6,
+                        network: [9; 64],
+                        bootstrap_policy: [10; 64],
+                        required_sources: 1,
+                        maximum_events: 1,
+                        anchor_delay: 1,
+                        window: 1,
+                        settlement_depth: 1,
+                        maximum_consumers: 1,
+                        source_liability_slack: 1,
+                    },
+                });
+                params.sync_palw_paid_bootstrap_source_v6();
+            }
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
             // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.
