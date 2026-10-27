@@ -109,25 +109,54 @@ impl Deserializer for GetPalwCourtStateRequest {
     }
 }
 
-/// No arguments: every top-level PALW fence of the node's ruleset.
+/// **Op 227's view multiplexer.** `view` empty (or `fence-schedule`): every top-level PALW fence of the node's ruleset — the original
+/// answer, and on the wire the original version-1 request byte for byte. Lane UX-A (2026-10-27, coordinator: no new op numbers) adds
+/// view kinds, sent as a version-2 request with `view` and `key`:
+///
+/// | `view` | `key` |
+/// |---|---|
+/// | `claim-lifecycle` | a chain or kernel-route claim id (128 hex): Final / SecurityCertified / held / void, typed codes, Gate C k/m |
+/// | `model-tier` | a class id, or empty for every class: tier, source, `c`, `κ` |
+/// | `arming` | empty: G14 route families armed now, Gate C, pinned records and waivers |
+/// | `bond-budget` | `<txid>:<index>`: caps, window, open claims (design op 250's reader) |
+/// | `claim-budget` | a claim id: reservation, consumption, `reuse_not_before` (design 251) |
+/// | `model-allocation` | a model id, or empty for every row: `S_m`, `A_m`, `ΣA`, available, reserved, tier (design 252) |
+/// | `capital-assignment` | `<txid>:<index>`: effective / pending assignments (design 253) |
+///
+/// A node built before the view kinds refuses a version-2 request (an error, never a fence schedule mistaken for the view).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GetPalwFenceScheduleRequest {}
+pub struct GetPalwFenceScheduleRequest {
+    #[serde(default)]
+    pub view: String,
+    #[serde(default)]
+    pub key: String,
+}
 
 impl Serializer for GetPalwFenceScheduleRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        if self.view.is_empty() && self.key.is_empty() {
+            store!(u16, &1, writer)?;
+            return Ok(());
+        }
+        store!(u16, &2, writer)?;
+        store!(String, &self.view, writer)?;
+        store!(String, &self.key, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwFenceScheduleRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let version = load!(u16, reader)?;
-        if version != 1 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown getPalwFenceSchedule request version"));
+        match load!(u16, reader)? {
+            1 => Ok(Self::default()),
+            2 => {
+                let view = load!(String, reader)?;
+                let key = load!(String, reader)?;
+                Ok(Self { view, key })
+            }
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown getPalwFenceSchedule request version")),
         }
-        Ok(Self {})
     }
 }
 
@@ -173,7 +202,15 @@ mod tests {
         assert!(req.session_hex.is_empty());
         let bond = round_trip(&GetPalwBondDetailRequest { bond: "00:1".into() });
         assert_eq!(bond.bond, "00:1");
-        let _ = round_trip(&GetPalwFenceScheduleRequest {});
+        let plain = round_trip(&GetPalwFenceScheduleRequest::default());
+        assert!(plain.view.is_empty() && plain.key.is_empty());
+        let mut v1 = Vec::new();
+        Serializer::serialize(&GetPalwFenceScheduleRequest::default(), &mut v1).unwrap();
+        assert_eq!(v1, 1u16.to_le_bytes().to_vec(), "the plain fence-schedule request stays the version-1 bytes");
+        let view = round_trip(&GetPalwFenceScheduleRequest { view: "claim-lifecycle".into(), key: "ef".repeat(64) });
+        assert_eq!((view.view.as_str(), view.key.len()), ("claim-lifecycle", 128));
+        let all = round_trip(&GetPalwFenceScheduleRequest { view: "model-allocation".into(), key: String::new() });
+        assert_eq!(all.view, "model-allocation");
         let claim = round_trip(&GetPalwClaimDetailRequest { claim_hex: "cd".repeat(64) });
         assert_eq!(claim.claim_hex.len(), 128);
         let resp = round_trip(&GetPalwClaimDetailResponse { available: true, found: true, now_daa: 7, view_json: "{}".into() });

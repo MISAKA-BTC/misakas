@@ -62,6 +62,7 @@ mod palw_service;
 mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
+mod palw_status;
 mod palw_user;
 mod palw_verify_context;
 /// ADR-0152 P2-11: `palw vesting` — where a vested reward stands (op 199).
@@ -1431,6 +1432,58 @@ enum PalwCmd {
         /// JSON output (`--output json` does the same).
         #[arg(long)]
         json: bool,
+    },
+    /// **A claim's lifecycle** (op 227 `getPalwFenceSchedule`, view kind `claim-lifecycle`): Final, SecurityCertified, held or voided, each
+    /// with its typed code AND a plain reason; the Gate C draw (approvals of k, m drawn, negatives, veto), its deadline and the held
+    /// reward; whether a new attempt of the claim's class would be refused now (e.g. `G14_ROUTE_ABSENT`). Takes a chain claim id or
+    /// a kernel-route claim id. Read-only; a node built before the view kinds refuses the request.
+    Lifecycle {
+        /// 128-hex claim id (chain or kernel route).
+        #[arg(value_name = "CLAIM_ID")]
+        claim: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// **The model tier** (op 227 view `model-tier`): genesis / annual-fork models 1.0, registered models 0.3 — each class's tier,
+    /// where it comes from, its coefficient c, and the registered tier's aggregate cap κ. Read-only.
+    ModelTier {
+        /// One class (128 hex); every class when omitted.
+        #[arg(long)]
+        class: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// **What is armed** (op 227 view `arming`): each G14 route family armed for a claim accepted now (unframed / framed with TFP1),
+    /// Gate C's height and m/k, and the pinned arming records and typed waivers (a waiver is never a pass). Read-only.
+    Arming {
+        #[arg(long)]
+        json: bool,
+    },
+    /// **The bond budget** (op 227 views; the readers design ops 250–253 named): `--bond` a bond's caps, window and open claims;
+    /// `--claim` a claim's reservation and consumption; `--model [ID]` the model allocation with each model's tier and c (every model
+    /// when no id); `--assignment` a bond's capital assignment. Shows "fence dormant" until the budget fence is armed. Read-only.
+    #[command(group(clap::ArgGroup::new("budget_target").required(true).args(["bond", "claim", "model", "assignment"])))]
+    Budget {
+        /// Bond outpoint `<txid>:<index>` (view `bond-budget`).
+        #[arg(long)]
+        bond: Option<String>,
+        /// 128-hex claim id (view `claim-budget`).
+        #[arg(long)]
+        claim: Option<String>,
+        /// 128-hex model id, or nothing for every model row (view `model-allocation`).
+        #[arg(long, num_args = 0..=1, value_name = "MODEL_ID")]
+        model: Option<Option<String>>,
+        /// Bond outpoint `<txid>:<index>` (view `capital-assignment`).
+        #[arg(long, value_name = "TXID:INDEX")]
+        assignment: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// **Explain a refusal or outcome code** (offline): `G14_ROUTE_ABSENT`, `G14_JOB_VERSION_UNJUDGEABLE`, a Gate C state such as
+    /// `pending` / `not-certified`, a void reason such as `panel_da_disclosure_default`. Every code when none is named.
+    Explain {
+        #[arg(value_name = "CODE")]
+        code: Option<String>,
     },
     /// **The court around a claim or one session** (`getPalwCourtState`, op 226): each session's ladder turn, per-turn deadline and
     /// backstop, the DA sessions, the dispute record and the claim's court clocks. Read-only.
@@ -3548,6 +3601,16 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::ClaimDetail { claim, json }) => {
             Box::pin(async move { palw_user::claim_detail(ctx, &claim, json).await })
         }
+        Command::Palw(PalwCmd::Lifecycle { claim, json }) => Box::pin(async move { palw_status::lifecycle(ctx, &claim, json).await }),
+        Command::Palw(PalwCmd::ModelTier { class, json }) => {
+            Box::pin(async move { palw_status::model_tier(ctx, class.as_deref(), json).await })
+        }
+        Command::Palw(PalwCmd::Arming { json }) => Box::pin(async move { palw_status::arming(ctx, json).await }),
+        Command::Palw(PalwCmd::Budget { bond, claim, model, assignment, json }) => Box::pin(async move {
+            let target = palw_status::budget_target(bond, claim, model, assignment)?;
+            palw_status::budget(ctx, target, json).await
+        }),
+        Command::Palw(PalwCmd::Explain { code }) => Box::pin(async move { palw_status::explain(code.as_deref()) }),
         Command::Palw(PalwCmd::CourtState { claim, session, json }) => {
             Box::pin(async move { palw_user::court_state(ctx, claim.as_deref(), session.as_deref(), json).await })
         }
