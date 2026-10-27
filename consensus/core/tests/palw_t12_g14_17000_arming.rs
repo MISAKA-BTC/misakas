@@ -105,6 +105,8 @@ fn t12_preset_rearmed_at_17400_validates_like_startup() {
     if !PALW_TIR_FRAME_COST_RECORDS_V1.iter().any(|r| r.activation_daa == at && r.source_commit != [0; 20]) {
         missing.push("palw_tir_frame_cost_v1");
     }
+    // The re-armed preset's fingerprint (the kit's EXPECT_FP), printed before any assertion so a red gate still reports it.
+    println!("DEPLOYGATE EXPECT_FP={}", p.consensus_params_id());
     assert!(missing.is_empty(), "no pinned record (or a zero source commit) for: {missing:?}");
     assert_eq!(p.validate_palw_v2(), Ok(()), "the re-armed preset must pass startup validation");
 }
