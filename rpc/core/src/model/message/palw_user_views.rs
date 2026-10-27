@@ -205,7 +205,7 @@ mod tests {
         let plain = round_trip(&GetPalwFenceScheduleRequest::default());
         assert!(plain.view.is_empty() && plain.key.is_empty());
         let mut v1 = Vec::new();
-        GetPalwFenceScheduleRequest::default().serialize(&mut v1).unwrap();
+        Serializer::serialize(&GetPalwFenceScheduleRequest::default(), &mut v1).unwrap();
         assert_eq!(v1, 1u16.to_le_bytes().to_vec(), "the plain fence-schedule request stays the version-1 bytes");
         let view = round_trip(&GetPalwFenceScheduleRequest { view: "claim-lifecycle".into(), key: "ef".repeat(64) });
         assert_eq!((view.view.as_str(), view.key.len()), ("claim-lifecycle", 128));
