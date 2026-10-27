@@ -4,10 +4,7 @@
 //! authorize the short-history cases.
 use crate::{DType, Dim, Prim, TensorType, program::*, program_v2::*, program_v39::*};
 use borsh::BorshDeserialize;
-use std::{
-    collections::BTreeSet,
-    io::{Cursor, Read},
-};
+use std::{collections::BTreeSet, io::Cursor};
 fn get<T: BorshDeserialize>(r: &mut Cursor<&[u8]>) -> Result<T, String> {
     T::deserialize_reader(r).map_err(|_| "program39 truncated or unknown canonical field".into())
 }
@@ -197,10 +194,10 @@ fn check_frozen(p: &Prim, ins: &[TensorTypeV39], out: &TensorTypeV39, states: &[
     let mut starts = BTreeSet::from([1]);
     for t in ins.iter().chain(std::iter::once(out)) {
         for d in &t.shape {
-            if let DimV39::SelectedH(c) = d {
-                if *c < window {
-                    starts.insert(c + 1);
-                }
+            if let DimV39::SelectedH(c) = d
+                && *c < window
+            {
+                starts.insert(c + 1);
             }
         }
     }

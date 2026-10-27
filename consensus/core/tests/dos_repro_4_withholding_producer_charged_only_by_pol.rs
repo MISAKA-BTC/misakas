@@ -737,7 +737,10 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
                 if line.contains("DefaultAccused {") && !line.contains("DefaultAccusedHeld") {
                     // A rest pattern (`{ .. }` or `{ claim, .. }`, e.g. palw_court_object_claim_v1's match arm) builds nothing.
                     if line.contains("{ .. }") || line.contains(", .. }") { patterns.push(at) } else { constructs.push(at) }
-                } else if line.contains("DefaultAccusedHeld {") && !line.contains("{ .. }") && !line.trim_start().starts_with("if let ") {
+                } else if line.contains("DefaultAccusedHeld {")
+                    && !line.contains("{ .. }")
+                    && !line.trim_start().starts_with("if let ")
+                {
                     held.push(at);
                 }
             }

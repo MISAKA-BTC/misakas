@@ -175,6 +175,11 @@ jobs:
       - name: Fix CRLF
         run: git config --global core.autocrlf false
 
+      # The evidence tree (docs/evidence/palw/g14-completion-2026-10-22/...) nests copied source trees past Windows' 260-char
+      # MAX_PATH; without long paths the checkout itself fails ("unable to create file").
+      - name: Allow long paths
+        run: git config --global core.longpaths true
+
       - name: Checkout sources
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
