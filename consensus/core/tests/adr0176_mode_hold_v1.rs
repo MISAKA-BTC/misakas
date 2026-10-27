@@ -107,20 +107,21 @@ impl World {
 
 #[test]
 fn per_day_issuance_is_equal_for_both_modes_over_seven_days() {
-    // 1,000 BILI → daily caps (3 claims, 3 blocks, 30 BILI, 3,000 weight); Panel=1 over 1 day, Panel=0 7× that over 7 days.
+    // 1,000 BILI → daily caps (3 claims, 3 blocks, 30 BILI, 3,000 weight); since the user decision of 2026-10-16 both modes hold
+    // for 1 day (Panel=0 was 7 days), so both have the same per-day caps over the same window.
     let p = policy(1);
     let hold = p.hold.unwrap();
     let capital = 1_000 * KAS;
     let daily = palw_bond_hold_daily_caps_v1(&p, capital);
     assert_eq!(daily.claims, 3);
     assert_eq!(palw_bond_hold_period_caps_v1(&p, &hold, capital, PalwHoldModeV1::PanelOne).claims, 3);
-    assert_eq!(palw_bond_hold_period_caps_v1(&p, &hold, capital, PalwHoldModeV1::PanelZero).claims, 21);
+    assert_eq!(palw_bond_hold_period_caps_v1(&p, &hold, capital, PalwHoldModeV1::PanelZero).claims, 3);
     assert_eq!(hold.window_daa(PalwHoldModeV1::PanelOne), DAY);
-    assert_eq!(hold.window_daa(PalwHoldModeV1::PanelZero), 7 * DAY);
-    assert_eq!(p.window_daa, 7 * DAY, "the long window is Panel=0's span");
+    assert_eq!(hold.window_daa(PalwHoldModeV1::PanelZero), DAY);
+    assert_eq!(p.window_daa, DAY, "the long window is Panel=0's span (1 day since 2026-10-16)");
 
-    // Each mode, one claim offered every 10 DAA for 7 days: both admit exactly 21 (3 per day for Panel=1; up to the 7-day total for
-    // Panel=0, the burst view spreading it), never 21 per day.
+    // Each mode, one claim offered every 10 DAA for 7 days: both admit exactly 21 (3 per day), never 21 per day. Each admitted claim
+    // settles at once (an honest Final), since an OPEN claim keeps its Final weight in the unsettled weight (PESG §6).
     for mode in [PalwHoldModeV1::PanelOne, PalwHoldModeV1::PanelZero] {
         let mut w = World::new(p.clone());
         let mut admitted = 0;
@@ -128,6 +129,7 @@ fn per_day_issuance_is_equal_for_both_modes_over_seven_days() {
             w.tick(now);
             if w.try_claim(1, capital, now, mode, 0).is_ok() {
                 admitted += 1;
+                w.close_all_open(now);
             }
         }
         assert_eq!(admitted, 21, "{mode:?}: the same per-day maximum issuance over the 7 days");
@@ -148,11 +150,16 @@ fn honest_and_fast_forger_reach_the_same_counts() {
         for now in 1..7 * DAY {
             honest.tick(now);
             forger.tick(now);
+            // Each admitted claim settles at once (PESG §6: an open claim keeps its weight in the unsettled weight).
             if now % 240 == 0 && honest.try_claim(1, capital, now, mode, 0).is_ok() {
                 h += 1;
+                honest.close_all_open(now);
             }
             match forger.try_claim(2, capital, now, mode, 0) {
-                Ok(()) => f += 1,
+                Ok(()) => {
+                    f += 1;
+                    forger.close_all_open(now);
+                }
                 Err(_) => f_refused += 1,
             }
         }
@@ -216,8 +223,8 @@ fn panel_zero_then_panel_one_gets_no_fresh_day() {
 
 #[test]
 fn panel_one_then_panel_zero_gets_no_fresh_week() {
-    // Three Panel=1 claims a day for 3 days, then Panel=0: the Panel=1 reservations stay in the long view for 7 days, so the Panel=0
-    // claims get only the remainder of 7·daily, never a fresh week.
+    // Three Panel=1 claims a day for 3 days, then Panel=0: both modes hold 1 day (2026-10-16), so the switch buys nothing — the bond
+    // issues exactly 3 a day over the 7 days, never a fresh allowance.
     let p = policy(1);
     let capital = 1_000 * KAS;
     let mut w = World::new(p);
@@ -227,6 +234,7 @@ fn panel_one_then_panel_zero_gets_no_fresh_week() {
         let mode = if now < 3 * DAY { PalwHoldModeV1::PanelOne } else { PalwHoldModeV1::PanelZero };
         if w.try_claim(1, capital, now, mode, 0).is_ok() {
             total += 1;
+            w.close_all_open(now);
         }
     }
     assert_eq!(total, 21, "Panel=1 then Panel=0: exactly 7·daily in the 7 days, not 9 + 21");
@@ -432,7 +440,7 @@ fn the_v3_policy_pins_the_users_spans() {
         p.validate().is_err()
     };
     assert!(bad(&|p| p.hold.as_mut().unwrap().panel_one_days = 2));
-    assert!(bad(&|p| p.hold.as_mut().unwrap().panel_zero_days = 1));
+    assert!(bad(&|p| p.hold.as_mut().unwrap().panel_zero_days = 7), "Panel=0's 7 days were replaced by 1 day (2026-10-16)");
     assert!(bad(&|p| p.hold.as_mut().unwrap().daa_per_day = 576));
     assert!(bad(&|p| p.window_daa = 400), "the drill-interim W = 400 is not a V3 window");
     assert!(bad(&|p| p.hold.as_mut().unwrap().burst_factor_permille = 999));
@@ -483,19 +491,22 @@ fn after_a_halt_and_heartbeat_only_spans_the_budget_releases_and_real_resumes() 
 #[test]
 fn exit_and_re_registration_wait_for_the_long_view_and_the_liability() {
     // RFC-0015 §8.3.4 / ADR-0176 D4: the capital that consumed capacity cannot leave (and come back as a fresh bond with a fresh
-    // ledger) while any reservation sits in its long view — 7 days even for a Panel=1-only bond (decision doc C2, lead default) — nor
+    // ledger) while any reservation sits in its long view — PALW_BOND_EXIT_HOLD_DAYS_V1 (1 day since 2026-10-16, was 7) — nor
     // while its liability holds it. A slash lowers the caps of the next claims; the old consumption stays counted beside them.
     let p = policy(1);
     let mut w = World::new(p.clone());
     w.tick(10);
     w.try_claim(1, 2_000 * KAS, 10, PalwHoldModeV1::PanelOne, 100 * KAS).unwrap();
     w.close_all_open(20);
-    for now in [21, DAY + 10, 6 * DAY] {
+    let exit = 10 + PALW_BOND_EXIT_HOLD_DAYS_V1 as u64 * DAY;
+    let liability_end = 20 + w.p.liability_hold_daa;
+    for now in [21, exit - 1] {
         assert!(w.s.withdrawal_holds(&bond(1), now), "the capital is held at {now}");
     }
-    assert!(!w.s.window_holds(&bond(1), 10 + 7 * DAY), "the long view ends at d + 7 days");
-    w.tick(10 + 7 * DAY);
-    assert!(!w.s.withdrawal_holds(&bond(1), 10 + 7 * DAY), "and the liability (20 + H_L) ended long before");
+    assert!(!w.s.window_holds(&bond(1), exit), "the long view ends at d + the exit hold");
+    let free = exit.max(liability_end + 1);
+    w.tick(free);
+    assert!(!w.s.withdrawal_holds(&bond(1), free), "free once both the long view and the liability (20 + H_L) ended");
     // A slash: the same bond at half its capital — its daily caps halve, the consumption still in its views stays counted.
     let mut v = World::new(p);
     v.tick(1);
@@ -525,14 +536,14 @@ fn c2_panel_one_only_bond_recovers_issuance_in_a_day_but_exits_after_seven() {
     w.tick(83);
     w.try_claim(1, capital, 83, PalwHoldModeV1::PanelOne, 0).unwrap();
     assert!(w.try_claim(1, capital, 83, PalwHoldModeV1::PanelOne, 0).is_err(), "the day's three are used");
+    // The day's claims settle (PESG §6: an open claim keeps its weight in the unsettled weight), then the day view frees.
+    w.close_all_open(84);
     w.tick(10 + DAY);
     w.try_claim(1, capital, 10 + DAY, PalwHoldModeV1::PanelOne, 0).expect("Panel=1 issuance recovers after one day");
-    // Every claim terminal at once (a colluding immediate Final): the liability hold ends after H_L; the long view does not.
     w.close_all_open(10 + DAY);
-    for now in [10 + DAY + w.p.liability_hold_daa + 1, 10 + 3 * DAY, 10 + 7 * DAY - 1] {
-        assert!(w.s.withdrawal_holds(&bond(1), now), "exit held at {now}: the long view is 7 days for a Panel=1-only bond");
-    }
-    assert_eq!(PALW_BOND_EXIT_HOLD_DAYS_V1, 7);
+    // Since 2026-10-16 the exit hold is the common 1-day hold (was 7): the capital is held until the last reservation's day ends.
+    assert_eq!(PALW_BOND_EXIT_HOLD_DAYS_V1, 1);
+    assert!(w.s.withdrawal_holds(&bond(1), 10 + 2 * DAY - 1), "exit held through the last reservation's day");
 }
 
 #[test]

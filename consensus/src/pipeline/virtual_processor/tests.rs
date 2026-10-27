@@ -13400,14 +13400,33 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     // because nothing made the boundary visible.
     const OWNED_STATE_CALLERS: &[&str] = &[
         "calculate_utxo_state_relatively",
-        "evm_template_fields",
         "calculate_virtual_state",
         "palw_candidate_state_v2_checked",
         "palw_weighing_point_v2_checked",
         "palw_pruning_point_allowed_v2",
-        "capture_pruning_point_palw_state",
+        // The 10-13 split moved the template's and the pruning capture's owned reads into their own files (RFC-0008 retained
+        // ownership): the template's exact-parent state, the EVM as-of post state, the checked pruning-point capture.
+        "evm_template_parent_owned_v2",
+        "palw_evm_post_state_owned_v2",
+        "capture_pruning_point_palw_state_checked_v1",
     ];
-    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
+    // Every file of the processor, not only the guard list's: the 10-13 split put callers in files the list does not name
+    // (`processor/palw_evm_asof_v2.rs`, `processor/evm_market_owned_v2.rs`, `processor/palw_pruning_capture_v1.rs`, ...).
+    fn processor_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                processor_sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/pipeline/virtual_processor");
+    let mut files = vec![root.join("processor.rs")];
+    processor_sources(&root.join("processor"), &mut files);
+    files.sort();
+    let source = files.iter().map(|f| std::fs::read_to_string(f).unwrap()).collect::<Vec<_>>().join("\n");
     let mut enclosing = String::new();
     let mut found: Vec<String> = Vec::new();
     for line in source.lines() {
@@ -13417,6 +13436,8 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
             .or_else(|| trimmed.strip_prefix("pub(super) fn "))
             .or_else(|| trimmed.strip_prefix("pub fn "))
             .or_else(|| trimmed.strip_prefix("fn "))
+            // `pub(in crate::…) fn name(`
+            .or_else(|| trimmed.strip_prefix("pub(in ").and_then(|r| r.split_once(") fn ")).map(|(_, rest)| rest))
         {
             enclosing = rest.split(['(', '<']).next().unwrap_or_default().to_string();
         }
@@ -13432,7 +13453,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     allowed.sort();
     assert_eq!(
         found, allowed,
-        "a `load_tip` caller in virtual_processor/processor.rs is not one of the fold/restart paths. A READ path \
+        "a `load_tip` caller in virtual_processor/processor{.rs,/**} is not one of the fold/restart paths. A READ path \
          must take `load_tip_cached`; a new walk-or-write path belongs in OWNED_STATE_CALLERS."
     );
 }
