@@ -531,8 +531,12 @@ mod tests {
         );
         assert_eq!(crate::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1(), Ok(PALW_G14_COURT_INGRESS_ESTIMATE_V1));
         assert_eq!(crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1(), Ok(PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1));
-        // Not approved / no estimate: stays typed-missing.
-        assert!(crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_none());
+        // G14-FIX SPEC-1 (2026-10-27): the kernel-route admission schedule is derived from the approved estimates only.
+        let k = crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.expect("pinned");
+        assert_eq!(k.profile, PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1);
+        assert_eq!(k.follow_up_branches_per_turn, PALW_G14_FOLLOW_UP_BRANCHES_PER_TURN_ESTIMATE_V1);
+        assert_eq!(k.capital_per_packet_sompi, PALW_G14_CAPITAL_PER_TURN_SOMPI_V1);
+        // The fence gate (below `palw_kernel_route_panel_one_v1`: no schedule) is tested in `f02b_kernel_court_admission_v1`.
     }
 }
 

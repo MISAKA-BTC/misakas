@@ -22,7 +22,8 @@
 //! slice's fence `palw_kernel_route_panel_one_v1`. No conviction or default path reads that table: the row is released (removed,
 //! returning the collateral) exactly when the claim's binding leaves the live book (resolved-book release) or at its hard deadline.
 //!
-//! Values: production is typed-missing ([`PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1`] = `None`): no admission happens on any build.
+//! Values: production is [`PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1`] (estimate, lane G14-FIX SPEC-1), in force only past
+//! `palw_kernel_route_panel_one_v1`; on every build where that fence is unarmed no admission happens.
 //! [`KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1`] is built from lane VAL's PROVISIONAL ESTIMATES
 //! (`palw_g14_values_v1`) for tests; `follow_up_branches_per_turn` has no VAL value and is a test-only 2 there.
 //!
@@ -48,8 +49,30 @@ pub struct KernelCourtAdmissionScheduleV1 {
     pub capital_per_packet_sompi: u64,
 }
 
-/// **Typed-missing.** The integrator pins this into the 17,000 list; until then no kernel-route court admission exists.
-pub const PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1: Option<KernelCourtAdmissionScheduleV1> = None;
+/// **The production schedule (lane G14-FIX SPEC-1, 2026-10-27): PROVISIONAL ESTIMATE (目安, user decision 2026-10-22), not measured.**
+/// In force only past `palw_kernel_route_panel_one_v1` (testnet-12: the G14 list at DAA 17,400): the processor copies it into the
+/// fold's extras only at or above that fence ([`crate::palw_state_v2::PalwStateParamsV2::kernel_court_admission_schedule_v1`]), and
+/// the admission fold re-checks the same fence, so below it every block is byte-identical to before.
+///
+/// Basis — every field is an existing user-approved `palw_g14_values_v1` value; nothing new is decided here:
+/// * `profile` = V1 [`crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1`] (12 turns/signer, span 833 DAA, 1
+///   packet/DAA budget; already the production F02 profile `PALW_COURT_SERVICE_PROFILE_V1`);
+/// * `follow_up_branches_per_turn` = [`crate::palw_g14_values_v1::PALW_G14_FOLLOW_UP_BRANCHES_PER_TURN_ESTIMATE_V1`] = 2 (approved
+///   2026-10-26; Panel=1 reserves `2 × (1 + 11 × 2) = 46` packets, under `c·W = 9,999`);
+/// * `capital_per_packet_sompi` = [`crate::palw_g14_values_v1::PALW_G14_CAPITAL_PER_TURN_SOMPI_V1`] = 3.4 M sompi (2 × one packet's
+///   carriage), so one Panel=1 original reserves `46 × 0.034 = 1.564` MSK from the producer's FREE collateral — about 0.14 % of the
+///   kernel per-claim collateral (1,080 → 1,100 MSK, lane ACT2), paid by the producer, separate from the claim's B = F = 0 and the
+///   poster-paid escrow (no subsidy, no escrow clip).
+///
+/// Revisit when: the court's measured branching factor per turn differs from 2; the packet size / carriage rate / V1 profile
+/// changes; or measured producer free collateral shows admissions refused for capital. Register: `docs/governance/parameter-register.md`
+/// "2026-10-27 lane G14-FIX SPEC-1".
+pub const PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1: Option<KernelCourtAdmissionScheduleV1> = Some(KernelCourtAdmissionScheduleV1 {
+    version: 1,
+    profile: crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1,
+    follow_up_branches_per_turn: crate::palw_g14_values_v1::PALW_G14_FOLLOW_UP_BRANCHES_PER_TURN_ESTIMATE_V1,
+    capital_per_packet_sompi: crate::palw_g14_values_v1::PALW_G14_CAPITAL_PER_TURN_SOMPI_V1,
+});
 
 /// TEST-ONLY follow-up fan-out (no value lane number exists): two adaptive branches per follow-up turn.
 pub const TEST_ONLY_FOLLOW_UP_BRANCHES_PER_TURN_V1: u64 = 2;
@@ -336,7 +359,7 @@ mod tests {
         assert_eq!(e, KernelCourtAdmissionRefusalV1::Reservation(ServiceRefusal::NoCapacity));
         assert!(!book.claims.contains_key(&h(n)), "the refused original reserved nothing");
         book.check().unwrap();
-        assert!(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_none(), "production is typed-missing");
+        assert!(PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.is_some(), "G14-FIX SPEC-1: production is pinned (fence-gated)");
     }
 
     #[test]

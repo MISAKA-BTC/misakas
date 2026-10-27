@@ -248,3 +248,12 @@ ADR-0206(proposed)。値は `consensus/core/src/palw_g14_values_v1.rs` 末尾。
 
 - 現状: block あたり 64 run のうち FileProof だけが使える予約 32 run があり、block ごとに戻る。block の中では先着順で、外部者の FileProof に席は保証されない。junk の却下料は 0.1 MSK（作業量に比例）で filer 負担。全枠を責任期間 3,150 DAA 埋める費用は約 20,160 MSK で、賭け金の 12.7 倍。経済的な抑止は成立するので、構造的な修正は 17,000 では行わない（統括判断 2026-10-27）。
 - 今後の修正案: `misaka/palw/kernel/src/ledger.rs` の `charged_v1`（:710）で、`liability_until` まで N DAA 以内の claim への FileProof に予約の一部を割り当てる。または :1719〜1721 で期限の早い順に予約を使う。
+
+## 2026-10-27 lane G14-FIX SPEC-1 — kernel route の court admission schedule を本番に pin（**目安**、未実測）
+
+- 定数: `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1`（`consensus/core/src/palw_kernel_court_admission_v1.rs`）を `None` から `Some` に。version 1、profile = `PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1`（12 turn/signer、span 833 DAA、予算 1 packet/DAA）、`follow_up_branches_per_turn` = `PALW_G14_FOLLOW_UP_BRANCHES_PER_TURN_ESTIMATE_V1` = 2、`capital_per_packet_sompi` = `PALW_G14_CAPITAL_PER_TURN_SOMPI_V1` = 3,400,000（1 packet の carriage の 2 倍）。
+- 根拠: すべて `palw_g14_values_v1` の承認済み目安（2026-10-26）から導出。新しい値は決めていない。Panel=1 の original は 2 signer × (1 + 11 × 2) = 46 packet を予約し、`c·W` = 9,999 の内側。court capital は 46 × 0.034 = 1.564 MSK を producer の空き collateral から引く（kernel claim collateral 1,080 → 1,100 MSK の約 0.14 %）。claim の B = F = 0、escrow は poster 払いのまま（補助金なし、escrow clip なし）。
+- 武装: `palw_kernel_route_panel_one_v1`（G14 list、t12 では 17,400）より下では processor が extras に `None` を渡す（`PalwStateParamsV2::kernel_court_admission_schedule_v1(daa)`）。admission fold も同じ fence を再確認する。fence の下では block は以前と byte 単位で同一。fleet identity は fence の高さだけを hash するので、t12 の指紋は変わらない。
+- 影響: producer の空き collateral が 1.564 MSK に満たない場合、その kernel-route original は admission で拒否される（全か無か）。
+- 見直し条件: court の実測の分岐数が 2 と異なる場合、packet サイズ・carriage 単価・V1 profile が変わる場合、capital 不足による admission 拒否が実測で現れた場合。
+- 試験: `spec1_production_schedule_is_gated_on_the_slice_fence`、`val_production_sites_take_the_user_approved_estimates`、spine の S1/S2/S3c''' を test override なしで実行。

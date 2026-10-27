@@ -2171,11 +2171,9 @@ impl VirtualStateProcessor {
             tir_public_conviction_active: self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa_score)),
             // Lane F02: the pinned inclusion premise (typed-missing `None`: no F02 default is attributed).
             court_service_inclusion_premise_v1: test_only_inclusion_premise::effective_v1(),
-            // Lane F02b: the kernel-route court admission schedule (typed-missing `None`).
-            kernel_court_admission_v1: self.palw_state_params_v2.as_ref().map_or(
-                kaspa_consensus_core::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1,
-                |p| p.kernel_court_admission_schedule_v1(),
-            ),
+            // Lane F02b / G14-FIX SPEC-1: the kernel-route court admission schedule, in force only past
+            // `palw_kernel_route_panel_one_v1` (`None` below it and without V2 state params: byte-identical to before).
+            kernel_court_admission_v1: self.palw_state_params_v2.as_ref().and_then(|p| p.kernel_court_admission_schedule_v1(daa_score)),
             // RFC-0002 02-A: the TIR container identity's own fence.
             tir_container_identity_active: self.palw_tir_container_identity_v1.is_some_and(|f| f.is_active(daa_score)),
             // Compute-claim audit CX-01/CX-02: the answer accounting's own fence. Its answers (`fp_claim_answers`) are filled by native

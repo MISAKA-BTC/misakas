@@ -801,10 +801,17 @@ impl PalwStateParamsV2 {
         self
     }
 
-    /// The kernel-route court admission schedule the processor folds with: a fixture's test-only schedule, else the production
-    /// `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1` (typed-missing `None`).
-    pub fn kernel_court_admission_schedule_v1(&self) -> Option<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1> {
-        self.kernel_court_admission_test_only_v1.or(crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1)
+    /// The kernel-route court admission schedule the processor folds with at `daa_score`: a fixture's test-only schedule, else the
+    /// production `PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1` — the latter ONLY past `palw_kernel_route_panel_one_v1` (lane G14-FIX
+    /// SPEC-1), so below that fence the extras stay `None` exactly as before the schedule was pinned.
+    pub fn kernel_court_admission_schedule_v1(
+        &self,
+        daa_score: u64,
+    ) -> Option<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1> {
+        self.kernel_court_admission_test_only_v1.or_else(|| {
+            crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1
+                .filter(|_| self.kernel_route_panel_one_governs_v1(daa_score))
+        })
     }
 
     /// The external gain bound the Panel=1 class relation uses: a fixture's test-only value, else `palw_g14_values_v1`'s (`None`).
