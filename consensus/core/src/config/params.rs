@@ -3340,6 +3340,11 @@ pub struct Params {
     /// USER decision (PRINCIPLES §0 / ADR-0173/0176/0177/0178 amendment pending); until then it is fail-closed and the fence is refused
     /// when armed. **Dormant** as above.
     pub palw_independently_work_certified_v1: Option<ForkActivation>,
+    /// **palw_gate_c_attestor_liability_v1** — lane GC-DUTY: past it (the attestation's block DAA) a drawn verifier's positive Gate C
+    /// attestation of a chain claim (`'S'`) or a kernel claim (`'K'`) locks its free collateral (aux 143, `0x03`, the owning39 G-N2
+    /// relation), and a court conviction of the attested claim slashes the lock; a negative or withheld attestation locks nothing.
+    /// Must sit at or below Gate C where both are set. **Dormant**: `None` on every preset until the coordinator arms it.
+    pub palw_gate_c_attestor_liability_v1: Option<ForkActivation>,
     /// **palw_dag_width_schedule_v1** — RFC-0018 §8: dormant per-block k, parents, mergeset and merge-depth readers,
     /// keyed on the selected parent's DAA. Block time remains fixed. All presets are None; validation refuses arming.
     pub palw_dag_width_schedule_v1: Option<crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1>,
@@ -6318,6 +6323,7 @@ impl Params {
             palw_court_completion_attempt_v1: self.palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
             palw_independently_work_certified_v1: self.palw_independently_work_certified_v1,
+            palw_gate_c_attestor_liability_v1: self.palw_gate_c_attestor_liability_v1,
             palw_dag_width_schedule_v1: self.palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
@@ -7496,6 +7502,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
+    palw_gate_c_attestor_liability_v1: None,
     palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
@@ -7870,6 +7877,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
+    palw_gate_c_attestor_liability_v1: None,
     palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
@@ -8226,6 +8234,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
+    palw_gate_c_attestor_liability_v1: None,
     palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
@@ -13783,6 +13792,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
+    palw_gate_c_attestor_liability_v1: None,
     palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,

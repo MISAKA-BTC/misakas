@@ -679,6 +679,81 @@ pub fn palw_certification_grief_f64(f: f64, m: u32, k: u32, veto: u32) -> f64 {
     total
 }
 
+/// **lane GC-DUTY: one `'S'` / `'V'` certification a drawn bond still owes** (node policy read, never a block rule).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwCertificationDutyV1 {
+    /// The chain claim (`'S'`) or the owning39 mining claim (`'V'`).
+    pub claim_id: Hash64,
+    /// The certification id the attestation names (inner 75's `exam`).
+    pub certification_id: EligDigestV1,
+    pub native: bool,
+    pub drawn_daa: u64,
+    pub deadline_daa: u64,
+    /// Draw positions this bond holds (with-replacement multiplicity).
+    pub positions: u32,
+    /// What a chain claim's re-execution replays (lane B's descriptor); `None` for `'V'` and for a claim whose facts are gone.
+    pub job: Option<crate::palw_operator_da_v1::PalwOperatorDaJobV1>,
+    pub producer: Option<crate::palw_state_v2::PalwBondKeyV2>,
+}
+
+/// **lane GC-DUTY: the `'S'` / `'V'` certifications `me` was drawn for and has not attested** at `daa` — drawn (anchored), undecided,
+/// strictly before the attestation deadline, `me`'s kernel bond id among the draws, no attestation of `me` yet. Earliest deadline
+/// first. Empty below Gate C (`gate_c_at(daa)` of the RFC-0018 mirror) and with no kernel route. The `'K'` rows are the kernel
+/// roles' (`palw_kernel_cert_duties_v1` in kaspad). A read for node policy: the fold decides every attestation itself.
+pub fn palw_certification_duties_v1(
+    state: &PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    me: &crate::palw_state_v2::PalwBondKeyV2,
+    daa: u64,
+) -> Vec<PalwCertificationDutyV1> {
+    if !params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(daa)) {
+        return Vec::new();
+    }
+    let Some(route) = state.kernel_route_state_v1() else { return Vec::new() };
+    let mine = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(me);
+    let table = PALW_SECURITY_CERTIFICATION_TABLE_V1;
+    let mut out: Vec<PalwCertificationDutyV1> = route
+        .aux
+        .range((table, Vec::new())..(table + 1, Vec::new()))
+        .filter_map(|((_, key), bytes): (&(u8, Vec<u8>), &Vec<u8>)| {
+            let native = match key.first().copied() {
+                Some(CERTIFICATION_CLAIM_PREFIX_V1) => false,
+                Some(CERTIFICATION_NATIVE_MINING_PREFIX_V39) => true,
+                _ => return None,
+            };
+            if key.len() != 65 {
+                return None;
+            }
+            let row: PalwClaimCertificationRowV1 = borsh::from_slice(bytes).ok()?;
+            let positions = row.draws.iter().filter(|d| **d == mine).count() as u32;
+            if row.anchor.is_none()
+                || row.outcome.is_some()
+                || daa >= row.deadline_daa
+                || positions == 0
+                || row.attestations.iter().any(|a| a.verifier == mine)
+            {
+                return None;
+            }
+            let claim_id = Hash64::from_bytes(row.claim);
+            let facts = (!native).then(|| crate::palw_operator_da_v1::palw_operator_da_claim_facts_v1(state, &claim_id)).flatten();
+            let mut certification_id = [0u8; 64];
+            certification_id.copy_from_slice(&key[1..]);
+            Some(PalwCertificationDutyV1 {
+                claim_id,
+                certification_id,
+                native,
+                drawn_daa: row.drawn_daa,
+                deadline_daa: row.deadline_daa,
+                positions,
+                producer: facts.as_ref().map(|f| f.producer),
+                job: facts.map(|f| f.job),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| (a.deadline_daa, a.claim_id).cmp(&(b.deadline_daa, b.claim_id)));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

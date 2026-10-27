@@ -331,6 +331,29 @@ pub(super) fn try_attest_claim_certification_v1(
         if positive && key.first().copied() == Some(CERTIFICATION_NATIVE_MINING_PREFIX_V39) {
             native_attestor_lock_v39(builder, ctx, signer, &Hash64::from_bytes(row.claim))?;
         }
+        // lane GC-DUTY (`palw_gate_c_attestor_liability_v1`): a positive attestor of a chain (`'S'`) or kernel (`'K'`) claim answers
+        // for it the same way — a lock over the claim's gain; a court conviction of the claim charges it. Negative or withheld
+        // attestations lock nothing (withholding is no computation fault).
+        if positive && mirror.attestor_liability_at(now) {
+            let gain = match key.first().copied() {
+                Some(CERTIFICATION_CLAIM_PREFIX_V1) => {
+                    let reserved = builder.state.claims.get(&Hash64::from_bytes(row.claim)).map(|c| c.reserved).unwrap_or(0);
+                    Some(u64::try_from(reserved).unwrap_or(u64::MAX).max(row.held_reward))
+                }
+                Some(CERTIFICATION_KERNEL_CLAIM_PREFIX_V1) => Some(
+                    row_of::<PalwKernelCertifiedRewardHoldV1>(
+                        &builder.state,
+                        &certification_kernel_hold_key_v1(&palw_kernel_claim_certification_id_v1(&row.claim)),
+                    )
+                    .map(|h| h.amount)
+                    .unwrap_or(0),
+                ),
+                _ => None,
+            };
+            if let Some(gain) = gain {
+                attestor_lock_v1(builder, ctx, signer, &row.claim, gain)?;
+            }
+        }
         row.attestations.push(PalwEligibilityAttestationRowV1 {
             verifier: attestation.verifier,
             verdict: attestation.verdict,
@@ -372,6 +395,78 @@ fn native_attestor_lock_v39(
     builder.note_kernel_bond(signer)?;
     Ok(())
 }
+/// **lane GC-DUTY: the lock a positive `'S'` / `'K'` attestor holds** — the G-N2 relation and key (aux 143, `0x03 ‖ attestor ‖
+/// claim`, counted in the committed ledger by `signer_locks_of_v1`) over `gain`. An attestor that cannot back it is not counted.
+fn attestor_lock_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    claim: &[u8; 64],
+    gain: u64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_g14_lane_closure_v1::*;
+    let mirror = builder.params.rfc0018_v1().copied().ok_or_else(|| refuse("attestor liability requires RFC-0018"))?;
+    let amount = palw_kernel_signer_lock_amount_v1(gain, mirror.certification.k.min(255) as u8);
+    if amount == 0 {
+        return Ok(());
+    }
+    let record = builder.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
+    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < amount as u128 {
+        return Err(refuse("the attestor cannot back its Gate C liability lock (GC-DUTY)"));
+    }
+    let key = palw_native_attestor_lock_key_v1(&palw_kernel_bond_id_v1(signer), claim);
+    let row =
+        PalwKernelSignerLockRowV1 { version: PALW_G14_LANE_CLOSURE_ROW_VERSION_V1, claim: *claim, seat: *signer, amount, locked_daa: ctx.daa_score };
+    builder.write_kernel_row(PALW_G14_LANE_CLOSURE_TABLE_V1, key, Some(borsh::to_vec(&row).expect("fixed lock row")))?;
+    builder.note_kernel_bond(signer)?;
+    Ok(())
+}
+
+/// lane GC-DUTY: the attestor locks held on the claim of certification row `row_key` (any prefix).
+fn attestor_locks_of_row_v1(
+    builder: &TransitionBuilder<'_>,
+    row_key: &[u8],
+) -> Vec<(Vec<u8>, crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1)> {
+    use crate::palw_g14_lane_closure_v1::*;
+    let Some(route) = builder.state.kernel_route.as_ref() else { return Vec::new() };
+    let Some(row) = row_of::<PalwClaimCertificationRowV1>(&builder.state, row_key) else { return Vec::new() };
+    row.attestations
+        .iter()
+        .filter_map(|a| {
+            let key = palw_native_attestor_lock_key_v1(&a.verifier, &row.claim);
+            let lock: PalwKernelSignerLockRowV1 =
+                borsh::from_slice(route.aux.get(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key.clone()))?).ok()?;
+            Some((key, lock))
+        })
+        .collect()
+}
+
+/// **lane GC-DUTY: a conviction charges every positive attestor's lock** on the claim of `row_key` (burned). Returns the total.
+pub(super) fn charge_attestor_locks_of_row_v1(builder: &mut TransitionBuilder<'_>, row_key: &[u8]) -> Result<u64, PalwStateV2Error> {
+    let mut total = 0u64;
+    for (key, lock) in attestor_locks_of_row_v1(builder, row_key) {
+        builder.write_kernel_row(crate::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1, key, None)?;
+        let held = builder.state.bonds.get(&lock.seat).map(|b| b.collateral).unwrap_or(0).min(lock.amount);
+        if held > 0 {
+            total = total.saturating_add(builder.slash_bond(lock.seat, held as u128)?);
+        }
+    }
+    Ok(total)
+}
+
+/// lane GC-DUTY: the claim of `row_key` left its liability unconvicted — its attestors' locks are released.
+pub(super) fn release_attestor_locks_of_row_v1(builder: &mut TransitionBuilder<'_>, row_key: &[u8]) -> Result<(), PalwStateV2Error> {
+    for (key, _) in attestor_locks_of_row_v1(builder, row_key) {
+        builder.write_kernel_row(crate::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1, key, None)?;
+    }
+    Ok(())
+}
+
+/// **lane GC-DUTY: a convicted `Final` chain claim's positive attestors are charged** (from `reverse_convicted_final`).
+pub(super) fn charge_chain_claim_attestors_v1(builder: &mut TransitionBuilder<'_>, claim_id: &Hash64) -> Result<u64, PalwStateV2Error> {
+    charge_attestor_locks_of_row_v1(builder, &certification_claim_key_v1(&palw_certification_id_v1(claim_id)))
+}
+
 fn native_attestor_locks_v39(
     builder: &TransitionBuilder<'_>,
     claim: &Hash64,
@@ -787,6 +882,8 @@ pub(super) fn sweep_security_certification_v1(
         if row.outcome.is_some() {
             // A decided native row is retired by the native fold's own collection (its receipt reads it), never here.
             if claim.is_none() && !native {
+                // lane GC-DUTY: the claim is gone unconvicted (a conviction charged the locks already): release them.
+                release_attestor_locks_of_row_v1(builder, &key)?;
                 write_row::<PalwClaimCertificationRowV1>(builder, key, None)?;
             }
             continue;
@@ -905,6 +1002,25 @@ fn sweep_kernel_claim_certification_v1(
     mut row: PalwClaimCertificationRowV1,
     kernel_ledger: &mut Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>,
 ) -> Result<(), PalwStateV2Error> {
+    // lane GC-DUTY: the positive attestors' locks end exactly when the kernel claim's own liability does (G-K1's fate rule): a
+    // conviction charges them; a timeout, a gone row or a passed horizon releases them. The ledger is read only while a lock exists.
+    if !attestor_locks_of_row_v1(builder, &key).is_empty() {
+        if kernel_ledger.is_none() {
+            let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("kernel certification: no kernel route"))?;
+            *kernel_ledger = Some(
+                route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?,
+            );
+        }
+        let ledger = kernel_ledger.as_ref().expect("loaded above");
+        use crate::palw_g14_lane_closure_v1::{PalwKernelSignerLockFateV1 as F, palw_kernel_signer_lock_fate_v1};
+        match palw_kernel_signer_lock_fate_v1(ledger.claims.get(&row.claim), now) {
+            F::Charge => {
+                charge_attestor_locks_of_row_v1(builder, &key)?;
+            }
+            F::Release => release_attestor_locks_of_row_v1(builder, &key)?,
+            F::Hold => {}
+        }
+    }
     if row.outcome.is_some() {
         return Ok(());
     }
@@ -963,4 +1079,138 @@ fn sweep_kernel_claim_certification_v1(
         settle_kernel_reward_hold_v1(builder, now, &row.claim, outcome.certifies())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod gc_duty_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn h(n: u8) -> Hash64 {
+        Hash64::from_bytes([n; 64])
+    }
+    fn bond(n: u64) -> PalwBondKeyV2 {
+        PalwBondKeyV2(crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_u64_word(n), index: 0 })
+    }
+    fn state() -> PalwChainStateV2 {
+        let mut state = PalwChainStateV2::genesis();
+        for n in 1..=4u64 {
+            state.bonds.insert(
+                bond(n),
+                PalwBondStateV2 {
+                    pubkey: vec![n as u8],
+                    operator_id: h(n as u8),
+                    collateral: 10_000,
+                    slashed: 0,
+                    status: PalwBondStatusV2::Active,
+                    registered_daa: 0,
+                    payout_payload: h(n as u8 + 100),
+                    capable_classes: BTreeSet::new(),
+                },
+            );
+        }
+        state
+    }
+    fn extras() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 {
+            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+                network_domain: h(1),
+                ruleset_digest: h(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// An `'S'` row with Reproduced attestors 3 and 4 (each locked 600) and a negative attestor 2 (no lock).
+    fn world(tb: &mut TransitionBuilder<'_>, claim: &Hash64) -> Vec<u8> {
+        use crate::palw_g14_lane_closure_v1::*;
+        let at = PalwBlockContextV2 { block: h(200), daa_score: 1, blue_score: 1, subsidy: 0 };
+        super::super::palw_kernel_route_fold_v1::ensure_route_header(tb, &at).unwrap();
+        let attest = |n: u64, verdict| PalwEligibilityAttestationRowV1 {
+            verifier: palw_kernel_bond_id_v1(&bond(n)),
+            verdict,
+            transcript: if matches!(verdict, PalwEligibilityVerdictV1::Reproduced) { [n as u8; 64] } else { [0; 64] },
+            attested_daa: 15,
+        };
+        let row = PalwClaimCertificationRowV1 {
+            claim: claim.as_bytes(),
+            class_id: [8; 64],
+            producer_bond: palw_kernel_bond_id_v1(&bond(1)),
+            producer_principal: h(1).as_bytes(),
+            attempt: true,
+            final_daa: 5,
+            committed_daa: 5,
+            committed_span: 0,
+            anchor: Some((1, [0; 64])),
+            draws: [2u64, 3, 4].iter().map(|n| palw_kernel_bond_id_v1(&bond(*n))).collect(),
+            drawn_daa: 12,
+            deadline_daa: 30,
+            attestations: vec![
+                attest(2, PalwEligibilityVerdictV1::Unavailable),
+                attest(3, PalwEligibilityVerdictV1::Reproduced),
+                attest(4, PalwEligibilityVerdictV1::Reproduced),
+            ],
+            held_reward: 0,
+            payout_payload: [0; 64],
+            outcome: Some((PalwCertificationOutcomeV1::Certified, 18)),
+        };
+        let key = certification_claim_key_v1(&palw_certification_id_v1(claim));
+        write_row(tb, key.clone(), Some(&row)).unwrap();
+        for n in [3u64, 4] {
+            let lock = PalwKernelSignerLockRowV1 { version: 1, claim: claim.as_bytes(), seat: bond(n), amount: 600, locked_daa: 15 };
+            tb.write_kernel_row(
+                PALW_G14_LANE_CLOSURE_TABLE_V1,
+                palw_native_attestor_lock_key_v1(&palw_kernel_bond_id_v1(&bond(n)), &claim.as_bytes()),
+                Some(borsh::to_vec(&lock).unwrap()),
+            )
+            .unwrap();
+        }
+        key
+    }
+
+    #[test]
+    fn gc_duty_a_conviction_slashes_only_the_positive_attestors_and_a_retirement_releases() {
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 0).unwrap();
+        let (state, extras) = (state(), extras());
+        let claim = h(77);
+
+        let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        world(&mut tb, &claim);
+        assert_eq!(tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(3)), 600, "in the committed ledger");
+        assert_eq!(charge_chain_claim_attestors_v1(&mut tb, &claim).unwrap(), 1_200);
+        assert_eq!([2u64, 3, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [10_000, 9_400, 9_400], "the withholder/negative is untouched");
+        assert_eq!(tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(3)), 0);
+        assert_eq!(charge_chain_claim_attestors_v1(&mut tb, &claim).unwrap(), 0, "once");
+
+        let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let key = world(&mut tb, &claim);
+        release_attestor_locks_of_row_v1(&mut tb, &key).unwrap();
+        assert_eq!([3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [10_000, 10_000]);
+        assert_eq!(tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(4)), 0, "released");
+    }
+
+    #[test]
+    fn gc_duty_the_node_read_names_drawn_unattested_open_rows_only_past_gate_c() {
+        use crate::palw_rfc0018_v1::PalwRfc0018MirrorV1;
+        let base = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 0).unwrap();
+        let (state, extras) = (state(), extras());
+        let claim = h(77);
+        let mut tb = TransitionBuilder::new(&state, &base, false, false, false, false, &extras);
+        let key = world(&mut tb, &claim);
+        let mut row: PalwClaimCertificationRowV1 = row_of(&tb.state, &key).unwrap();
+        row.outcome = None;
+        row.attestations.retain(|a| a.verifier != palw_kernel_bond_id_v1(&bond(4)));
+        write_row(&mut tb, key, Some(&row)).unwrap();
+        let s = tb.state.clone();
+        let armed = base.clone().with_rfc0018_v1(Some(PalwRfc0018MirrorV1 { gate_c_from_daa: Some(10), ..Default::default() }));
+        assert!(palw_certification_duties_v1(&s, &base, &bond(4), 20).is_empty(), "no Gate C, no duty");
+        assert!(palw_certification_duties_v1(&s, &armed, &bond(4), 9).is_empty(), "below the fence");
+        let owed = palw_certification_duties_v1(&s, &armed, &bond(4), 20);
+        assert_eq!(owed.len(), 1);
+        assert_eq!((owed[0].claim_id, owed[0].positions, owed[0].native, owed[0].deadline_daa), (claim, 1, false, 30));
+        assert!(palw_certification_duties_v1(&s, &armed, &bond(3), 20).is_empty(), "already attested");
+        assert!(palw_certification_duties_v1(&s, &armed, &bond(1), 20).is_empty(), "not drawn");
+        assert!(palw_certification_duties_v1(&s, &armed, &bond(4), 30).is_empty(), "the deadline passed");
+    }
 }

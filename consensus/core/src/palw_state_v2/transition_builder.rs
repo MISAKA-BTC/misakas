@@ -5839,6 +5839,9 @@ impl<'a> TransitionBuilder<'a> {
         // RFC-0018 Gate C: take back exactly what the Final (or the spends) added — nothing where Gate C withheld it.
         let weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, &claim, weight);
         self.bond_budget_close_v1(&id, ctx.daa_score)?;
+        // lane GC-DUTY: the conviction contradicts every positive Gate C attestation of the claim — their liability locks are
+        // slashed (none exist below `palw_gate_c_attestor_liability_v1`: no lock is written there).
+        super::palw_security_certification_fold_v1::charge_chain_claim_attestors_v1(self, &id)?;
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score)?;
         self.unnote_activation_probe_credits_v1(&id, &claim)?;

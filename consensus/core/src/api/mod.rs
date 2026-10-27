@@ -2073,6 +2073,17 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **lane GC-DUTY: the `'S'` / `'V'` Gate C certifications `me` was drawn for and still owes** at `daa`
+    /// ([`crate::palw_security_certification_v1::palw_certification_duties_v1`]). A read for node policy, never a block rule; empty
+    /// off `ConsensusV2`, with no tip state, and below Gate C.
+    fn palw_certification_duties_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+        _daa: u64,
+    ) -> Vec<crate::palw_security_certification_v1::PalwCertificationDutyV1> {
+        Vec::new()
+    }
+
     /// **Lane B: one operator bond's standing** at the tip, for the DAA the virtual's next block folds
     /// at ([`crate::palw_operator_da_v1::palw_operator_da_standing_v1`]: its collateral net of slashes,
     /// A-6's room on its free half, the DA exposure it holds) — what the node's seat reserve and its

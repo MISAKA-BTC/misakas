@@ -1013,6 +1013,7 @@ mod tests {
             "palw_court_completion_attempt_v1" => params.palw_court_completion_attempt_v1 = Some(at),
             "palw_rule_e_participation_v2" => params.palw_rule_e_participation_v2 = Some(at),
             "palw_independently_work_certified_v1" => params.palw_independently_work_certified_v1 = Some(at),
+            "palw_gate_c_attestor_liability_v1" => params.palw_gate_c_attestor_liability_v1 = Some(at),
             "palw_dag_width_schedule_v1" => {
                 params.palw_dag_width_schedule_v1 = Some(crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1::unapproved_probe_at(at))
             }

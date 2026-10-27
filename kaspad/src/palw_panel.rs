@@ -197,6 +197,9 @@ mod native_routing_replay_v2;
 /// reads the replay runner and the court queue's seams).
 #[path = "palw_audit_duty.rs"]
 mod palw_audit_duty;
+/// lane GC-DUTY: the Gate C drawn verifier's duty for chain (`'S'`) and owning39 mining (`'V'`) certifications.
+#[path = "palw_cert_duty.rs"]
+mod palw_cert_duty;
 
 /// ADR-0160 lane verify V1: a seat's one window root a DAA, the collector's window pool and its batch
 /// licence (node policy; dormant below `palw_capacity_batch_licence`).
@@ -9126,6 +9129,8 @@ impl PalwPanelService {
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
         let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
         audit_duty.replays.configure_slots(self.config.seat_replay_slots);
+        // lane GC-DUTY: the Gate C drawn verifier's book ('S'/'V'); armed by identity (a draw), its own replay slot.
+        let mut cert_duty = palw_cert_duty::PalwCertDutyV1::new();
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -9805,6 +9810,8 @@ impl PalwPanelService {
             seat_replays.mark_overdue(current_daa);
             audit_duty.replays.note_host_load(host_load);
             audit_duty.replays.mark_overdue(current_daa);
+            cert_duty.replays.note_host_load(host_load);
+            cert_duty.replays.mark_overdue(current_daa);
             let mut seat_schedule_tiers = [0usize; 3];
             let order = if seat_r {
                 let items: Vec<crate::palw_seat_schedule::PalwSeatScheduleInV1> = duties
@@ -10261,6 +10268,11 @@ impl PalwPanelService {
                 &mut court_outbox,
             )
             .await;
+            // --- lane GC-DUTY: the Gate C drawn verifier ('S' chain claims, 'V' owning39 mining; `palw_cert_duty`) ---
+            //
+            // Past Gate C a drawn bond re-executes the claim in its own replay slot and signs inner 75 before the deadline. Identity arms
+            // it (the chain's read is empty for any undrawn bond and below the fence); no flag does.
+            self.cert_duty_tick_v1(&session, &mut cert_duty, current_daa, network_domain, bond_key, &mut court_outbox).await;
 
             // --- ADR-0164 F-M1: the riders this node's producer built, onto the carrier queue (`palw_rider_outbox`) ---
             crate::palw_rider_outbox::palw_rider_outbox_import_v2(|batch|court_outbox.try_push_rider_batch(batch,current_daa));
