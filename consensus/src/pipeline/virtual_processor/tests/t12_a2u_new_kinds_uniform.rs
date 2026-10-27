@@ -402,6 +402,14 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 }
                 params.palw_model_immutable_v1 = Some(at);
             }
+            // RFC08's release recovery: a probe policy at the height (it rides on the monetary-material fence, armed in this sweep too).
+            "palw_material_release_recovery_v2" => {
+                params.palw_material_release_recovery_v2 = Some(
+                    kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(
+                        at,
+                    ),
+                )
+            }
             other => panic!("a landed A-2 row's fence {other} is not armed by this harness: arm it here ({row:?})"),
         }
     }

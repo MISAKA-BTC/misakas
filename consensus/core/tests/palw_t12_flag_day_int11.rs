@@ -228,11 +228,13 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
         ids(&palw_t12_shipped_params()),
         "the node's door is testnet-12 as shipped"
     );
-    assert_eq!(
-        ids(&palw_t12_shipped_params()),
-        ids(&shipped),
-        "testnet-12 as shipped IS the int-12 release (no int-13 flag day is scheduled: user, 2026-10-08)"
+    // Since 2026-10-25 testnet-12 as shipped is the int-12 release plus the int-13 list at DAA 15,500.
+    let mut int13 = shipped.clone();
+    kaspa_consensus_core::config::params::palw_t12_arm_int13_flag_day_at_v1(
+        &mut int13,
+        kaspa_consensus_core::config::params::PALW_T12_INT13_DAA,
     );
+    assert_eq!(ids(&palw_t12_shipped_params()), ids(&int13), "testnet-12 as shipped IS the int-12 release with the int-13 list armed");
     let (bp, bi, bs) = ids(&baseline);
     let (sp, si, ss) = ids(&shipped);
     assert_ne!(sp, bp, "the ruleset names the fences");

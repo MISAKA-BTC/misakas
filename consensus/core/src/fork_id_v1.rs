@@ -812,6 +812,87 @@ mod tests {
             "palw_panel_lifetime_v2" => {
                 params.palw_panel_lifetime_v2 = Some(crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at))
             }
+            // Probe fixtures only (the probe never runs `validate_palw_v2`): a height and a fixed, unapproved policy each.
+            "palw_memory_routing_court_v2" => params.palw_memory_routing_court_v2 = Some(at),
+            "palw_claim_compact_v4" => {
+                params.palw_claim_compact_v4 = Some(crate::palw_claim_compact_v4::PalwClaimCompactFenceV4 {
+                    activation: at,
+                    policy: crate::palw_claim_compact_v4::PalwClaimCompactPolicyV4 {
+                        max_contracts: 1,
+                        maximum_opening_bytes: 1,
+                        maximum_proof_bytes: 1,
+                        maximum_verifier_work: 1,
+                        maximum_stream_words: 1,
+                        require_independent_review: true,
+                    },
+                });
+            }
+            "palw_paid_bootstrap_source_v6" => {
+                params.palw_paid_bootstrap_source_v6 = Some(crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapSourceFenceV6 {
+                    activation: at,
+                    policy: misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6 {
+                        version: 6,
+                        network: [1; 64],
+                        bootstrap_policy: [2; 64],
+                        required_sources: 1,
+                        maximum_events: 1,
+                        anchor_delay: 1,
+                        window: 1,
+                        settlement_depth: 1,
+                        maximum_consumers: 1,
+                        source_liability_slack: 1,
+                    },
+                });
+            }
+            "palw_source_economics_v1" => {
+                params.palw_source_economics_v1 = Some(crate::palw_paid_bootstrap_economics_v1::PalwSourceEconomicsFenceV1 {
+                    activation: at,
+                    policy: crate::palw_paid_bootstrap_economics_v1::PalwSourceEconomicsPolicyV1 {
+                        version: 1,
+                        enrollment: [1; 64],
+                        actor: [2; 64],
+                        payer: [3; 64],
+                        prepaid_sompi: 1,
+                        reserved_sompi: 1,
+                        r_cap_sompi: 1,
+                        budget_reservation_sompi: 1,
+                        inclusive_until_daa: 1,
+                    },
+                });
+            }
+            "palw_selected_source_bootstrap_v1" => {
+                let h = |n| crate::Hash64::from_bytes([n; 64]);
+                params.palw_selected_source_bootstrap_v1 = Some(crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1 {
+                    at,
+                    policy: crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1 {
+                        version: 1,
+                        chain_genesis: h(3),
+                        network: h(4),
+                        ruleset: h(5),
+                        epoch: 1,
+                        freeze_cutoff_daa: 10,
+                        anchor_cutoff_daa: 20,
+                        starts_at_daa: 30,
+                        ends_at_daa: 40,
+                        stake_release_daa: 60,
+                        selection: misaka_palw_challenge::bootstrap_epoch_v1::BootstrapPolicyV1 {
+                            version: 1,
+                            seats: 2,
+                            quorum: 2,
+                            maximum_population: 2,
+                            maximum_draw_attempts: 2,
+                            maximum_source_works: 2,
+                        },
+                        source_profile: h(6),
+                        checker_scope: h(7),
+                        maximum_claim_bytes: 100,
+                        maximum_check_work: 100,
+                        maximum_history_headers: 100,
+                        security_review: h(8),
+                        economic_review: h(9),
+                    },
+                });
+            }
             "palw_material_release_recovery_v2" => {
                 params.palw_material_release_recovery_v2 =
                     Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));

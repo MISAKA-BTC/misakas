@@ -2047,9 +2047,13 @@ mod tests {
             parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
         };
         let release = config_of(&parsed(&[]));
-        // The int-13 list (the window's carrier) has no height — the user cancelled the DAA-9,000 flag day on 2026-10-08 — so the window is
-        // dormant on every testnet-12 ruleset, a drill's included, until a flag arms it.
-        assert_eq!(release.params.palw_model_court_window, None, "dormant on the release drill: the int-13 list is unscheduled");
+        // The int-13 list (the window's carrier) is armed at DAA 15,500 (the user's decision of 2026-10-25), so the release drill carries
+        // the window at that height until a flag moves it.
+        assert_eq!(
+            release.params.palw_model_court_window,
+            kaspa_consensus_core::config::params::PALW_T12_INT13_DAA.map(ForkActivation::new),
+            "the release drill carries the int-13 list's height"
+        );
         assert_eq!(release.params.palw_tir_fence2, Some(ForkActivation::new(3_600)), "and fence2 alone is the DAA-3,600 flag day");
         // The DAA-3,600 flag day's drill flag moves fence2 alone and leaves the window dormant.
         let crossing = config_of(&parsed(&["--palw-drill-tir2-at=30"]));
@@ -2615,7 +2619,11 @@ mod tests {
         let list = ["palw_audit_1004_v1", "palw_gen_range_twin_v1", "palw_model_court_window", "palw_receipt_spend_v4"];
         let height = |c: &Config, name: &str| c.params.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, f)| f);
         for name in list {
-            assert_eq!(height(&without, name), None, "{name}: dormant on the release drill (the int-13 list is unscheduled)");
+            assert_eq!(
+                height(&without, name),
+                kaspa_consensus_core::config::params::PALW_T12_INT13_DAA.map(ForkActivation::new),
+                "{name}: at the int-13 list's height on the release drill"
+            );
             assert_eq!(height(&with, name), Some(ForkActivation::new(60)), "{name}: moved to the drill's height");
         }
         assert!(!with.params.palw_audit_1004_active_at(59) && with.params.palw_audit_1004_active_at(60));

@@ -255,6 +255,11 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      # **Test threads get 64 MiB of stack.** libtest/nextest run each test on a 2 MiB thread; the
+      # unoptimised clap tree (misaka-cli's surface tests) and the G14 end-to-end folds recurse past
+      # that and died with "has overflowed its stack" / SIGABRT (46 tests, run 40363861860), while
+      # the node runs them on threads it sizes itself. Same value the local build guidance uses.
+      RUST_MIN_STACK: "67108864"
     strategy:
       fail-fast: false
       # matrix:
