@@ -90,7 +90,7 @@ fn real_capture_selects_its_own_router_and_reaches_direct_arithmetic() {
         if wrong {
             assert!(verdict.is_ok());
         } else {
-            assert!(matches!(verdict, Err(PalwRoutingCourtErrorV2::Evidence(PalwStepRefuteError::NoFaultFound))));
+            assert!(matches!(verdict, Err(PalwRoutingCourtErrorV2::Evidence(PalwStepRefuteError::NoFaultFound))), "{verdict:?}");
         }
         // A different router does not become a second interpretation of the
         // authenticated explicit combine ref, even with identical row bytes.

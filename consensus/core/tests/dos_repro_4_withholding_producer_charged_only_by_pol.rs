@@ -734,7 +734,8 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
                 cfg_test = line == "#[cfg(test)]";
                 let at = format!("{}:{}", path.file_name().unwrap().to_string_lossy(), n + 1);
                 if line.contains("DefaultAccused {") && !line.contains("DefaultAccusedHeld") {
-                    if line.contains("{ .. }") { patterns.push(at) } else { constructs.push(at) }
+                    // A rest pattern (`{ .. }` or `{ claim, .. }`, e.g. palw_court_object_claim_v1's match arm) builds nothing.
+                    if line.contains("{ .. }") || line.contains(", .. }") { patterns.push(at) } else { constructs.push(at) }
                 } else if line.contains("DefaultAccusedHeld {") && !line.contains("{ .. }") {
                     held.push(at);
                 }

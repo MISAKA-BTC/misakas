@@ -292,6 +292,12 @@ pub(crate) mod tests {
             node(combine, 8, if kimi { &[4, 0, 1] } else { &[4, 1] }, "combine_a"),
             node(combine, 8, if kimi { &[5, 0, 3] } else { &[5, 3] }, "combine_b"),
         ];
+        // A named weight declares one GGML dtype per covered layer (`validate_shape`, palw_step.rs:767); 24 as in
+        // palw_step_refute's fixtures.
+        let span = p.table_layer_span(crate::palw_step::PalwStepTableV1::Gdn);
+        for n in &mut p.gdn_nodes {
+            n.weight_dtypes = vec![24; span];
+        }
         let base = p.pre_nodes.len() as u32;
         let d = PalwReaderRouterDeclarationV2 {
             version: 2,

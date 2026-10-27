@@ -459,6 +459,9 @@ fn after_a_halt_and_heartbeat_only_spans_the_budget_releases_and_real_resumes() 
     w.tick(90);
     w.try_claim(1, capital, 90, PalwHoldModeV1::PanelOne, 0).unwrap();
     assert!(w.try_claim(1, capital, 91, PalwHoldModeV1::PanelOne, 0).is_err(), "the day is full");
+    // The three claims reach their fate before the halt (PESG §6, 16cbef7ae: an OPEN claim keeps its Final-weight reservation in the
+    // unsettled weight however old it is — a halt releases clocks, not open claims).
+    w.close_all_open(100);
     // Heartbeat-only, then a halt: the next block arrives at DAA 10 + 9 days (a sparse jump).
     let mut floor = PalwFloorStateV1::default();
     for daa in (100..9 * DAY).step_by(50) {

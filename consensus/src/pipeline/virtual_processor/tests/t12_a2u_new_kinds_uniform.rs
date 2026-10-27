@@ -428,7 +428,9 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_model_verification_gate_v1"
             | "palw_horizon_extension_v1"
             | "palw_minimum_price_v1"
-            | "palw_beacon_bootstrap_v1" => {} // armed above, through their enums
+            | "palw_beacon_bootstrap_v1"
+            | "palw_tir_bounded_door_v1"
+            | "palw_selected_source_bootstrap_v1" => {} // armed above, through their enums
             // Armed at or below `at` with the monetary material kinds above; never moved later.
             "palw_reporter_income_v2" | "palw_material_income_v3" => {
                 params.palw_reporter_income_v2.get_or_insert(at);
