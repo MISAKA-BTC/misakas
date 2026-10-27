@@ -9794,10 +9794,9 @@ impl PalwPanelService {
                     }
                 })
                 .collect();
-            // **F2 (the 2026-10-01 backlog): past SEAT-R the seat answers the duties its panel still needs
-            // from it first** — closest to quorum, then by deadline — and the claims whose quorum is already
-            // pooled last (`palw_seat_schedule`). Every seat of a panel used to walk the same list oldest-first,
-            // so the slow seats replayed claims the fast ones had already licensed.
+            // **Past SEAT-R every seat answers its duties in one shared order** (O-LIVE-1, 2026-10-27,
+            // superseding F2's per-seat order): deadline-urgent claims first, then oldest bind first, and
+            // claims whose quorum is already pooled last (`palw_seat_schedule`), so a panel's replays line up.
             // The host's load and the replays that have outlived their class's timing, read once a tick
             // before any slot is handed out (F2: a thrashing host must not hold every slot).
             let host_load = crate::palw_backends::host_load_per_cpu_milli_v1();
@@ -9833,7 +9832,8 @@ impl PalwPanelService {
                 }
                 seat_schedule_tiers = tiers;
                 seat_replays.set_big_gate(crate::palw_seat_schedule::palw_seat_light_pending_v1(&items, quorum, current_daa));
-                crate::palw_seat_schedule::palw_seat_schedule_order_v1(&items, quorum, current_daa)
+                // O-LIVE-1: one order every seat computes alike (oldest bind first, deadline-urgent ahead).
+                crate::palw_seat_schedule::palw_seat_shared_order_v1(&items, quorum, current_daa)
             } else {
                 palw_seat_duty_order_v1(
                     &duties.iter().zip(&seat_r_duties).map(|(duty, view)| (view.deadline, duty.claim_id)).collect::<Vec<_>>(),
