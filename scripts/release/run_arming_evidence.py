@@ -5,7 +5,8 @@ Each run is a `cargo test` command (through buildslot). The JSON carries `exitCo
 empty filter never passes), the test counts, the source commit (the tree must be clean), the command and the log's sha256 — the form
 `scripts/release/pin_arming_record.py` accepts. Output goes to `--out` (not under docs/). Nothing is pinned here.
 
-Run: python3 scripts/release/run_arming_evidence.py --out scripts/release/arming-runs-17400
+Run (release window): BUILDSLOT_PRIORITY=release BUILDSLOT_SINCE=1760000000 PER_BUILD_GB=2 MAX_SLOTS=6 CARGO_BUILD_JOBS=8 \\
+  python3 scripts/release/run_arming_evidence.py --jobs 6 --out scripts/release/arming-runs-17400
 """
 import argparse
 import hashlib
@@ -61,10 +62,49 @@ RUNS = [
 COUNT = re.compile(r'test result: \w+\. (\d+) passed; (\d+) failed')
 
 
+def _part(env, part, test_threads, part_log=None):
+    """One cargo test invocation through buildslot; returns (rc, log). The part's log is written as soon as it finishes."""
+    cmd = [BUILDSLOT, 'cargo', 'test', '--offline', '--manifest-path', str(ROOT / 'Cargo.toml')] + part
+    penv = dict(env)
+    if test_threads:
+        penv['RUST_TEST_THREADS'] = str(test_threads)
+    p = subprocess.run(cmd, capture_output=True, text=True, env=penv, cwd=str(ROOT))
+    log = '$ cargo test --offline ' + ' '.join(part) + '\n' + p.stdout + p.stderr
+    if part_log is not None:
+        part_log.write_text(log)
+        failed = p.returncode != 0 or 'FAILED' in log
+        print('part %s rc=%d%s' % (part_log.name, p.returncode, ' FAILED' if failed else ''), flush=True)
+    return p.returncode, log
+
+
+def _warm(env, runs):
+    """One `cargo test --no-run` per package over every target the selected runs need (builds them once, up front)."""
+    by_pkg = {}
+    for _, args in runs:
+        for part in (args if isinstance(args[0], list) else [args]):
+            pkg = part[part.index('-p') + 1]
+            head = part[:part.index('--')] if '--' in part else part
+            targets = by_pkg.setdefault(pkg, set())
+            if '--lib' in head:
+                targets.add(('--lib',))
+            if '--test' in head:
+                targets.add(('--test', head[head.index('--test') + 1]))
+    for pkg, targets in by_pkg.items():
+        cmd = [BUILDSLOT, 'cargo', 'test', '--offline', '--no-run', '--manifest-path', str(ROOT / 'Cargo.toml'), '-p', pkg]
+        for t in sorted(targets):
+            cmd += list(t)
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(ROOT))
+        print('warm %s rc=%d' % (pkg, p.returncode), flush=True)
+
+
 def main():
+    from concurrent.futures import ThreadPoolExecutor
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
     ap.add_argument('--only', action='append', default=[])
+    ap.add_argument('--jobs', type=int, default=1, help='runs AND the parts of a multi-part run execute concurrently (via buildslot)')
+    ap.add_argument('--no-warm', action='store_true', help='skip the up-front cargo test --no-run')
+    ap.add_argument('--tir-test-threads', type=int, default=3, help='RUST_TEST_THREADS for the tir_public_fold parts')
     a = ap.parse_args()
     out = pathlib.Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -75,30 +115,49 @@ def main():
         sys.exit('the tree is not clean: a run must name the commit it ran')
     env = dict(os.environ, CARGO_INCREMENTAL='0', TMPDIR='/private/tmp', RUST_MIN_STACK='67108864',
                CARGO_PROFILE_DEV_DEBUG='0', CARGO_PROFILE_TEST_DEBUG='0')
-    for rid, args in RUNS:
-        if a.only and rid not in a.only:
-            continue
-        parts = args if isinstance(args[0], list) else [args]
-        started = time.time()
-        log, rc = '', 0
-        for part in parts:
-            cmd = [BUILDSLOT, 'cargo', 'test', '--offline', '--manifest-path', str(ROOT / 'Cargo.toml')] + part
-            p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(ROOT))
-            log += '$ cargo test --offline ' + ' '.join(part) + '\n' + p.stdout + p.stderr
-            rc = rc or p.returncode
-        (out / (rid + '.log')).write_text(log)
-        counts = [(int(x), int(y)) for x, y in COUNT.findall(log)]
-        passed_n, failed_n = sum(c[0] for c in counts), sum(c[1] for c in counts)
-        body = {
-            'kind': 'misaka-arming-run/v1', 'run': rid,
-            'command': ' && '.join(' '.join(['cargo', 'test', '--offline'] + part) for part in parts),
-            'exitCode': rc, 'testsPassed': passed_n, 'testsFailed': failed_n,
-            'passed': rc == 0 and passed_n > 0 and failed_n == 0 and 'FAILED' not in log, 'estimate': False,
-            'sourceCommit': head, 'treeDirty': False, 'startedAt': started, 'seconds': round(time.time() - started),
-            'logSha256': hashlib.sha256(log.encode()).hexdigest(),
-        }
-        (out / (rid + '.json')).write_text(json.dumps(body, indent=2) + '\n')
-        print('%s exit=%d passed=%d failed=%d -> %s' % (rid, rc, passed_n, failed_n, body['passed']), flush=True)
+    runs = [(rid, args) for rid, args in RUNS if not a.only or rid in a.only]
+    if not a.no_warm:
+        _warm(env, runs)
+    started_at = {rid: time.time() for rid, _ in runs}
+    with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as pool:
+        # Submission order (longest first): the tir_public_fold parts (part 3, the >1h45m one, first), then the other lib runs,
+        # then the integration-test and kernel runs. The JSONs are still written in list order below.
+        tasks = []
+        for rid, args in runs:
+            parts = args if isinstance(args[0], list) else [args]
+            threads = a.tir_test_threads if rid == 'core-lib-tir_public_fold' else None
+            for n, part in enumerate(parts):
+                if rid == 'core-lib-tir_public_fold':
+                    rank = (0, 0 if n == 2 else 1)
+                elif '--lib' in part:
+                    rank = (1, 0)
+                else:
+                    rank = (2, 0)
+                tasks.append((rank, rid, n, part, threads))
+        handles = {}
+        for rank, rid, n, part, threads in sorted(tasks, key=lambda t: t[0]):
+            handles[(rid, n)] = pool.submit(_part, env, part, threads, out / ('%s.part%d.log' % (rid, n)))
+        futures = {}
+        for rid, args in runs:
+            parts = args if isinstance(args[0], list) else [args]
+            futures[rid] = (parts, [handles[(rid, n)] for n in range(len(parts))])
+        for rid, (parts, futs) in futures.items():
+            results = [f.result() for f in futs]
+            rc = next((r for r, _ in results if r), 0)
+            log = ''.join(l for _, l in results)
+            (out / (rid + '.log')).write_text(log)
+            counts = [(int(x), int(y)) for x, y in COUNT.findall(log)]
+            passed_n, failed_n = sum(c[0] for c in counts), sum(c[1] for c in counts)
+            body = {
+                'kind': 'misaka-arming-run/v1', 'run': rid,
+                'command': ' && '.join(' '.join(['cargo', 'test', '--offline'] + part) for part in parts),
+                'exitCode': rc, 'testsPassed': passed_n, 'testsFailed': failed_n,
+                'passed': rc == 0 and passed_n > 0 and failed_n == 0 and 'FAILED' not in log, 'estimate': False,
+                'sourceCommit': head, 'treeDirty': False, 'startedAt': started_at[rid],
+                'seconds': round(time.time() - started_at[rid]), 'logSha256': hashlib.sha256(log.encode()).hexdigest(),
+            }
+            (out / (rid + '.json')).write_text(json.dumps(body, indent=2) + '\n')
+            print('%s exit=%d passed=%d failed=%d -> %s' % (rid, rc, passed_n, failed_n, body['passed']), flush=True)
 
 
 if __name__ == '__main__':
