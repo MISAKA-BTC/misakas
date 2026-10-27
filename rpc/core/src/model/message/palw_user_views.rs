@@ -124,6 +124,9 @@ impl Deserializer for GetPalwCourtStateRequest {
 /// | `capital-assignment` | `<txid>:<index>`: effective / pending assignments (design 253) |
 ///
 /// A node built before the view kinds refuses a version-2 request (an error, never a fence schedule mistaken for the view).
+/// | `kernel-classes` | empty: every kernel class — id, artifact root, tier, attested (lane J1) |
+/// | `kernel-job` | a kernel job id: pending / claimed / final / security-certified / settled / defaulted, escrow (lane J1) |
+/// | `kernel-result` | a kernel job id: the claim's generated token ids, provisional or certified (lane J1) |
 /// | `panelDaDisclosure/v1` | a 128-hex PanelDa claim id: disclosure duty (ADR-0206, lane panelda-ux) |
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

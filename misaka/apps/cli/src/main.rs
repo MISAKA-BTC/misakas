@@ -63,6 +63,7 @@ mod palw_service;
 mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
+mod palw_job;
 mod palw_status;
 mod palw_user;
 mod palw_verify_context;
@@ -1380,6 +1381,14 @@ enum PalwCmd {
     /// **PanelDa disclosure duty (ADR-0206)**: `status <CLAIM>` (op 227 view) and `disclose` (tag 233, dry-run unless --submit).
     #[command(subcommand, name = "panel-da")]
     PanelDa(palw_panel_da::PanelDaCmd),
+    /// **A kernel job, text in and text out (lane J1)**: `post` (dry run unless --yes), `status <JOB>`, `result <JOB>`.
+    #[command(subcommand)]
+    Job(palw_job::JobCmd),
+    /// **The kernel classes** (op 227 view `kernel-classes`): class id, root, tier, attested, token bound.
+    Classes {
+        #[arg(long)]
+        json: bool,
+    },
     Settlement {
         /// The DAA score of the block that accepted the transaction (an output's block DAA score, as
         /// `misaka wallet utxo list` prints it).
@@ -3642,6 +3651,8 @@ async fn run_cli() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Build(cmd)) => Box::pin(async move { palw_user::build(ctx, cmd).await }),
         Command::Palw(PalwCmd::PanelDa(cmd)) => Box::pin(async move { palw_panel_da::run(ctx, cmd).await }),
+        Command::Palw(PalwCmd::Job(cmd)) => Box::pin(async move { palw_job::run(ctx, cmd).await }),
+        Command::Palw(PalwCmd::Classes { json }) => Box::pin(async move { palw_job::classes(ctx, json).await }),
         Command::Palw(PalwCmd::PanelV3(args)) => Box::pin(async move { palw_panel_v3::run(ctx, args).await }),
         Command::Palw(PalwCmd::Economics {}) => Box::pin(async move { palw_economics::run(ctx).await }),
         Command::Palw(PalwCmd::Registry {}) => Box::pin(async move { palw_registry::run(ctx).await }),

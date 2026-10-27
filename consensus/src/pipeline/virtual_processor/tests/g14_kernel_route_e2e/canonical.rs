@@ -1369,3 +1369,6 @@ mod spine;
 
 /// lane T0308 (2026-10-26): T03 forged/fake objects and T08 offline miner, distinct signer, relay, no replay — on the same slice.
 mod t0308;
+
+/// lane J1 (2026-10-27): the user journey — text prompt to certified text result, through the op 227 job views.
+mod j1;

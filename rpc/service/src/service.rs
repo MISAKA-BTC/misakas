@@ -3989,10 +3989,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             "model-allocation" if key.is_empty() => Some(V::ModelAllocation(None)),
             "model-allocation" => Some(V::ModelAllocation(Some(palw_user_view_hash64("model", key)?))),
             "capital-assignment" => Some(V::CapitalAssignment(palw_user_view_bond(key)?)),
+            // Lane J1 (user journey): the kernel-route job views.
+            "kernel-classes" => Some(no_key(V::KernelClasses)?),
+            "kernel-job" => Some(V::KernelJob(palw_user_view_hash64("job", key)?)),
+            "kernel-result" => Some(V::KernelResult(palw_user_view_hash64("job", key)?)),
             other => {
                 return Err(RpcError::General(format!(
                     "unknown view '{other}' (fence-schedule, claim-lifecycle, model-tier, arming, bond-budget, claim-budget, \
-                     model-allocation, capital-assignment)"
+                     model-allocation, capital-assignment, kernel-classes, kernel-job, kernel-result, panelDaDisclosure/v1)"
                 )));
             }
         };

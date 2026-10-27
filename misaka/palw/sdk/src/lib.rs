@@ -86,6 +86,8 @@ pub mod kernel_execution;
 pub mod kernel_params;
 /// Bounded, ordered collection of the public kernel-route inventory.
 pub mod kernel_rows;
+/// Lane J1: a kernel job from text, and its result back to text, with the user's tokenizer.
+pub mod kernel_job_v1;
 pub mod native_audit_io_v32;
 pub mod native_audit_v32;
 pub mod native_invocation_replay_v32;

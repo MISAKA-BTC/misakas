@@ -46,7 +46,7 @@ pub(crate) fn budget_target(
 }
 
 /// One view kind of op 227 (`getPalwFenceSchedule`'s multiplexer, version-2 request).
-async fn status_view(ctx: &Ctx, view: &str, key: String) -> Result<(bool, bool, String), CliError> {
+pub(crate) async fn status_view(ctx: &Ctx, view: &str, key: String) -> Result<(bool, bool, String), CliError> {
     let reader = crate::palw_derived::connect(ctx).await?;
     let answer = reader.client.get_palw_fence_schedule(GetPalwFenceScheduleRequest { view: view.into(), key }).await;
     let _ = reader.client.disconnect().await;

@@ -842,7 +842,7 @@ fn parse_token_list_v1(s: &str) -> Result<Vec<u32>, CliError> {
     }
 }
 
-fn parse_hash(what: &str, s: &str) -> Result<Hash64, CliError> {
+pub(crate) fn parse_hash(what: &str, s: &str) -> Result<Hash64, CliError> {
     s.trim().parse::<Hash64>().map_err(|_| CliError::new(exit::GENERIC, format!("{what} '{s}' is not 128 hex digits")))
 }
 
@@ -860,7 +860,7 @@ async fn signer_preflight(
 }
 
 /// Refuse (exit 10) when `fence` is not in force at the node's DAA, unless `--allow-dormant`.
-fn refuse_unless_armed(
+pub(crate) fn refuse_unless_armed(
     nv: &crate::wallet::NodeView,
     fence: &str,
     armed: bool,
@@ -881,7 +881,7 @@ fn refuse_unless_armed(
 }
 
 /// The node, and the bond's key check (a signature under another key is refused on chain and the fee is gone) — no fence check.
-async fn bond_signer_v1(
+pub(crate) async fn bond_signer_v1(
     ctx: &Ctx,
     ks: &crate::keys::KeySource,
     bond: &str,
@@ -909,7 +909,7 @@ async fn bond_signer_v1(
     Ok((nv, key, reserver))
 }
 
-fn write_object(out: &std::path::Path, object: &PalwConsensusObjectV2) -> Result<(), CliError> {
+pub(crate) fn write_object(out: &std::path::Path, object: &PalwConsensusObjectV2) -> Result<(), CliError> {
     kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(object)
         .map_err(|why| CliError::new(exit::GENERIC, format!("the object cannot ride a carrier: {why}")))?;
     let bytes = borsh::to_vec(object).map_err(|e| CliError::new(exit::GENERIC, format!("cannot serialize the object: {e}")))?;

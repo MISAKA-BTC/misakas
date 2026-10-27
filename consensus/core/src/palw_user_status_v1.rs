@@ -38,6 +38,12 @@ pub enum PalwStatusViewV1 {
     ModelAllocation(Option<Hash64>),
     /// View `capital-assignment` (design 253).
     CapitalAssignment(PalwBondKeyV2),
+    /// Lane J1: view `kernel-classes` — every kernel class (id, root, tier, attested).
+    KernelClasses,
+    /// Lane J1: view `kernel-job` — one kernel job's status and escrow.
+    KernelJob(Hash64),
+    /// Lane J1: view `kernel-result` — one kernel job's result tokens, provisional or certified.
+    KernelResult(Hash64),
 }
 
 /// **Every typed refusal / outcome code a participant can meet, with the plain reason the CLI prints.** Codes are the strings the
@@ -532,6 +538,9 @@ pub fn palw_status_view_json_v1(
         PalwStatusViewV1::ClaimBudget(c) => palw_claim_budget_json_v1(state, params, &c, now),
         PalwStatusViewV1::ModelAllocation(m) => palw_model_allocation_json_v1(state, params, m.as_ref(), now),
         PalwStatusViewV1::CapitalAssignment(b) => palw_capital_assignment_json_v1(state, params, &b, now),
+        PalwStatusViewV1::KernelClasses => crate::palw_user_job_views_v1::palw_kernel_classes_json_v1(state, params, clock),
+        PalwStatusViewV1::KernelJob(j) => crate::palw_user_job_views_v1::palw_kernel_job_json_v1(state, &j, clock),
+        PalwStatusViewV1::KernelResult(j) => crate::palw_user_job_views_v1::palw_kernel_result_json_v1(state, &j, clock),
     }
 }
 
