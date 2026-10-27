@@ -4153,6 +4153,13 @@ impl ConsensusApi for Consensus {
         })
     }
 
+    fn palw_panel_da_disclosure_view_v1(&self, claim: kaspa_consensus_core::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
+        self.virtual_processor.palw_user_view_v1_impl(|state, _params, clock, _| {
+            kaspa_consensus_core::palw_panel_da_disclosure_v1::palw_panel_da_disclosure_view_json_v1(state, &claim, clock)
+                .map(|doc| doc.to_string())
+        })
+    }
+
     fn palw_router_binding_v2(
         &self,
         class: kaspa_consensus_core::Hash64,

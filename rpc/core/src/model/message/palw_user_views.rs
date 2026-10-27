@@ -124,6 +124,7 @@ impl Deserializer for GetPalwCourtStateRequest {
 /// | `capital-assignment` | `<txid>:<index>`: effective / pending assignments (design 253) |
 ///
 /// A node built before the view kinds refuses a version-2 request (an error, never a fence schedule mistaken for the view).
+/// | `panelDaDisclosure/v1` | a 128-hex PanelDa claim id: disclosure duty (ADR-0206, lane panelda-ux) |
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwFenceScheduleRequest {
@@ -132,6 +133,9 @@ pub struct GetPalwFenceScheduleRequest {
     #[serde(default)]
     pub key: String,
 }
+
+/// View kind `panelDaDisclosure/v1` (lane panelda-ux, ADR-0206): `key` is a 128-hex claim id.
+pub const PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1: &str = "panelDaDisclosure/v1";
 
 impl Serializer for GetPalwFenceScheduleRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {

@@ -3958,6 +3958,22 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwFenceScheduleRequest,
     ) -> RpcResult<GetPalwFenceScheduleResponse> {
+        // Lane panelda-ux (ADR-0206): a versioned view kind on op 227 (no new op).
+        if request.view == kaspa_rpc_core::PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1 {
+            let claim = request
+                .key
+                .trim()
+                .parse::<kaspa_consensus_core::Hash64>()
+                .map_err(|_| RpcError::General(format!("subject '{}' is not a 128-hex claim id", request.key)))?;
+            if palw_v2_bundle(&self.config.params).is_none() {
+                return Ok(GetPalwFenceScheduleResponse::default());
+            }
+            let session = self.consensus_manager.consensus().unguarded_session();
+            let answer =
+                session.spawn_blocking(move |c| c.palw_panel_da_disclosure_view_v1(claim)).await.map_err(RpcError::General)?;
+            let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
+            return Ok(GetPalwFenceScheduleResponse { available, found, now_daa, view_json });
+        }
         use kaspa_consensus_core::palw_user_status_v1::PalwStatusViewV1 as V;
         let key = request.key.as_str();
         let no_key = |view: V| if key.is_empty() { Ok(view) } else { Err(RpcError::General(format!("view '{}' takes no key", request.view))) };
