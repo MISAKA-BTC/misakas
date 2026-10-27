@@ -862,8 +862,14 @@ impl VirtualStateProcessor {
                 let collectible =
                     self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
                 block_fee += collectible;
-                // Finality classifies collectible fees, never destroyed bond/rent funds.
-                finality_fee += palw_finality_collectible_fee_v1(validated_tx.tx, collectible, finality_fee_active);
+                // Finality classifies collectible fees, never destroyed bond/rent funds — past `palw_tir_public_conviction_v1` only
+                // (AUDIT-8b, 2026-10-27): below it the finality share reads the raw fee, exactly as the live chain does.
+                let finality_base = if self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score)) {
+                    collectible
+                } else {
+                    validated_tx.calculated_fee
+                };
+                finality_fee += palw_finality_collectible_fee_v1(validated_tx.tx, finality_base, finality_fee_active);
             }
 
             if let Some(income) = round_income {
