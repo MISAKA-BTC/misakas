@@ -290,7 +290,7 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         network_domain: network_domain.as_bytes(),
         ruleset_digest: ruleset_digest.as_bytes(),
         challenge_policy_id: policy_id,
-        // AUDIT-3 m3 (2026-10-27): 1,080 MSK, the estimate pinned in `palw_g14_values_v1` (was 1,000).
+        // AUDIT-3 m3 (2026-10-27): 1,100 MSK since E1 (was 1,080, before that 1,000), the estimate pinned in `palw_g14_values_v1`.
         claim_collateral: crate::palw_g14_values_v1::PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_V1,
         demand_bond: SOMPI_PER_KASPA,
         check_window_daa: 100,
@@ -1745,16 +1745,35 @@ mod tests {
         assert!(kept * 100 >= p.claim_collateral * 51, "net loss {kept} of {}", p.claim_collateral);
     }
 
-    /// **AUDIT-3 m3**: a self-accusing convicted producer's net loss (collateral kept after the 49 % share + reward 5 MSK + V2 fee
-    /// 0.816 MSK) is at least the external gain bound / 0.90 detection.
+    /// **AUDIT-3 m3 / E1**: a convicted producer that is also the poster and the accuser loses, net, only the collateral kept after
+    /// the 49 % share plus the BURNED parts of the reward and the V2 fee (on a post-Final conviction 90 % of each returns to the
+    /// poster, `palw_kernel_uncertified_split_v1`); that is at least the external gain bound / 0.90 detection.
     #[test]
     fn palw_kernel_route_detection_loss_covers_gain_at_90_percent() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
         let kept = p.claim_collateral as u128 - p.claim_collateral as u128 * u128::from(p.accuser_reward_permille) / 1000;
-        let net = kept + p.claim_reward as u128 + crate::palw_g14_values_v1::PALW_G14_FUNDED_FEE_SOMPI_V1 as u128;
+        let burned = |x: u64| crate::palw_security_certification_v1::palw_kernel_uncertified_split_v1(x).0 as u128;
+        let net = kept + burned(p.claim_reward) + burned(crate::palw_g14_values_v1::PALW_G14_FUNDED_FEE_SOMPI_V1);
         let gain = crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.unwrap() as u128;
         assert!(net * 90 >= gain * 100, "net loss {net} < gain {gain} / 0.90");
         assert!(net * 99 >= gain * 100);
+    }
+
+    /// **E1**: producer = poster = accuser, conviction after Final. That one party's balance, summed over every leg the rules move
+    /// (collateral slashed; the reporter share paid back to it as accuser; the escrowed reward and the V2 fee it paid, split as an
+    /// uncertified hold with the refund back to it as poster), falls by at least gain / 0.9. Arithmetic over the route's own policy
+    /// and split function (not a node run).
+    #[test]
+    fn e1_self_posting_self_accusing_producer_loses_at_least_gain_over_detection() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let c = p.claim_collateral as i128;
+        let share = c * i128::from(p.accuser_reward_permille) / 1000;
+        let fee = crate::palw_g14_values_v1::PALW_G14_FUNDED_FEE_SOMPI_V1;
+        let split = crate::palw_security_certification_v1::palw_kernel_uncertified_split_v1;
+        let (reward_refund, fee_refund) = (split(p.claim_reward).1 as i128, split(fee).1 as i128);
+        let delta = -c + share - p.claim_reward as i128 + reward_refund - fee as i128 + fee_refund;
+        let gain = crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.unwrap() as i128;
+        assert!(-delta * 90 >= gain * 100, "balance falls by {} < gain {gain} / 0.9", -delta);
     }
 
     #[test]

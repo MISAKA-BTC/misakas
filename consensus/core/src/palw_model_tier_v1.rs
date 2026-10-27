@@ -486,6 +486,7 @@ pub fn palw_model_tier_arming_record_admits_v1(
         "palw_model_tier_v1",
         r.genesis,
         r.activation_daa,
+        PALW_MODEL_TIER_ARMING_REQUIREMENTS_V1,
         r.evidence,
         &r.review,
         crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,

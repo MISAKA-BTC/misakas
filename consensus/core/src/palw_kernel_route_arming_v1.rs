@@ -193,6 +193,7 @@ pub fn palw_kernel_route_arming_record_form_v1(record: &PalwKernelRouteArmingRec
         record.fence.name(),
         record.genesis,
         record.activation_daa,
+        record.fence.requirements(),
         record.evidence,
         &record.review,
         crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,

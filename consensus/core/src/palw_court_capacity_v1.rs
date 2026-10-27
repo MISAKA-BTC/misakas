@@ -534,11 +534,12 @@ impl Params {
                             self.genesis.hash,
                             at,
                             PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1 as u16,
+                            crate::palw_g14_gates_v1::PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1[PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1],
                             d,
                             crate::palw_arming_waiver_v1::PALW_ARMING_WAIVERS_V1,
                         ),
                         Ok(crate::palw_arming_waiver_v1::PalwArmingEvidenceV1::Waived(w))
-                            if w.kind == crate::palw_arming_waiver_v1::PalwArmingWaiverKindV1::UserDecision
+                            if w.kind == crate::palw_arming_waiver_v1::PalwArmingWaiverKindV1::ProvisionalEstimate
                     )
                 });
                 if approved {

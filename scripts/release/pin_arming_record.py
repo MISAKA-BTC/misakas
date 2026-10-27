@@ -28,9 +28,13 @@ FAMILIES = {
 }
 HEX40 = re.compile(r'^[0-9a-f]{40}$')
 HEX64 = re.compile(r'^([0-9a-f]{64}|[0-9a-f]{128})$')  # a 64-byte Hash64 genesis is 128 hex
-WAIVER_KEY = b'misaka-palw/arming-waiver/v1'  # consensus/core/src/palw_arming_waiver_v1.rs PALW_ARMING_WAIVER_KEY_V1
+WAIVER_KEY = b'misaka-palw/arming-waiver/v2'  # consensus/core/src/palw_arming_waiver_v1.rs PALW_ARMING_WAIVER_KEY_V1
 WAIVER_REVIEW = 0xFFFF
-WAIVER_KINDS = {'not-run': 1, 'user-decision': 2}
+# F1 (2026-10-27): the only kinds; the Rust form check also binds each to its slot class.
+WAIVER_KINDS = {'drill-skipped': 1, 'e2e-not-run': 2, 'provisional-estimate': 3, 'agent-review': 4, 'user-decision': 5}
+WAIVER_RUST = {'drill-skipped': 'DrillSkipped', 'e2e-not-run': 'E2ENotRun', 'provisional-estimate': 'ProvisionalEstimate',
+               'agent-review': 'AgentReview', 'user-decision': 'UserDecision'}
+WAIVER_NEEDS_VALUE = {'provisional-estimate', 'agent-review', 'user-decision'}
 
 
 class PinError(Exception):
@@ -95,7 +99,7 @@ def _put(h, b):
     h.update(b)
 
 
-def waiver_digest(fence_name, genesis, at, slot, kind, reason, decided_by):
+def waiver_digest(fence_name, genesis, at, slot, kind, value, reason, decided_by):
     """The same bytes as `PalwArmingWaiverV1::digest` (keyed blake2b-256)."""
     h = hashlib.blake2b(digest_size=32, key=WAIVER_KEY)
     _put(h, fence_name.encode())
@@ -103,27 +107,34 @@ def waiver_digest(fence_name, genesis, at, slot, kind, reason, decided_by):
     h.update(at.to_bytes(8, 'little'))
     h.update(slot.to_bytes(2, 'little'))
     h.update(bytes([WAIVER_KINDS[kind]]))
+    _put(h, value.encode())
     _put(h, reason.encode())
     _put(h, decided_by.encode())
     return h.hexdigest()
 
 
-def make_waiver(fence_name, genesis, at, slot, kind, reason, decided_by):
-    """A typed waiver: this requirement was NOT run (or is a user decision). It is never evidence that something passed."""
+def make_waiver(fence_name, genesis, at, slot, kind, value, reason, decided_by):
+    """A typed waiver (F1 kinds only). It is never evidence that something ran or passed."""
     if not decided_by.startswith('user '):
         raise PinError('a waiver must be decided by the user (--decided-by "user <date>")')
     if not reason.strip():
-        raise PinError('a waiver needs a reason')
+        raise PinError('a waiver needs a reason (for an estimate: its basis)')
     if kind not in WAIVER_KINDS:
         raise PinError('waiver kind: one of %s' % ', '.join(WAIVER_KINDS))
-    return {'fence': fence_name, 'genesis': genesis, 'at': at, 'slot': slot, 'kind': kind, 'reason': reason,
-            'decidedBy': decided_by, 'digest': waiver_digest(fence_name, genesis, at, slot, kind, reason, decided_by)}
+    if kind in WAIVER_NEEDS_VALUE and not value.strip():
+        raise PinError('a %s waiver carries its value / report / decision' % kind)
+    if kind == 'agent-review' and slot != WAIVER_REVIEW and 'review' not in reason.lower() + value.lower():
+        raise PinError('an agent-review waiver names a review')
+    return {'fence': fence_name, 'genesis': genesis, 'at': at, 'slot': slot, 'kind': kind, 'value': value, 'reason': reason,
+            'decidedBy': decided_by,
+            'digest': waiver_digest(fence_name, genesis, at, slot, kind, value, reason, decided_by)}
 
 
 def build_record_with_waivers(family, fence, fence_name, genesis, at, source_commit, requirements, evidence, waivers,
                               review=None, review_waiver=None):
     """One record whose every requirement index 0..requirements-1 is EITHER a passing run (`evidence`: [(index, path)]) OR a
-    waiver (`waivers`: [(index, kind, reason)]) — never both, never neither. The review is a file or a waiver (index 0xFFFF)."""
+    waiver (`waivers`: [(index, kind, value, reason)]) — never both, never neither. The review is a file or a waiver
+    (`review_waiver`: (kind, value, reason), index 0xFFFF)."""
     decided_by = 'user 2026-10-27'
     if family not in FAMILIES:
         raise PinError('family: one of %s' % ', '.join(FAMILIES))
@@ -135,8 +146,8 @@ def build_record_with_waivers(family, fence, fence_name, genesis, at, source_com
     for idx, path in evidence:
         slots.setdefault(idx, []).append(('run', check_evidence(str(idx), path, source_commit)))
     out_waivers = []
-    for idx, kind, reason in waivers:
-        w = make_waiver(fence_name, genesis, at, idx, kind, reason, decided_by)
+    for idx, kind, value, reason in waivers:
+        w = make_waiver(fence_name, genesis, at, idx, kind, value, reason, decided_by)
         out_waivers.append(w)
         slots.setdefault(idx, []).append(('waiver', w['digest']))
     if sorted(slots) != list(range(requirements)) or any(len(v) != 1 for v in slots.values()):
@@ -148,7 +159,8 @@ def build_record_with_waivers(family, fence, fence_name, genesis, at, source_com
         _refuse_doc(review)
         rd = _digest(review)
     else:
-        w = make_waiver(fence_name, genesis, at, WAIVER_REVIEW, 'not-run', review_waiver, decided_by)
+        kind, value, reason = review_waiver
+        w = make_waiver(fence_name, genesis, at, WAIVER_REVIEW, kind, value, reason, decided_by)
         out_waivers.append(w)
         rd = w['digest']
     digests = [(('%d %s' % (i, slots[i][0][0])), slots[i][0][1]) for i in range(requirements)]
@@ -159,11 +171,11 @@ def build_record_with_waivers(family, fence, fence_name, genesis, at, source_com
 
 
 def render_waiver_rust(w, genesis_expr):
-    kind = {'not-run': 'NotRun', 'user-decision': 'UserDecision'}[w['kind']]
     slot = 'PALW_ARMING_WAIVER_REVIEW_V1' if w['slot'] == WAIVER_REVIEW else str(w['slot'])
     return ('    PalwArmingWaiverV1 {\n        fence: %s,\n        genesis: %s,\n        activation_daa: %d,\n        requirement: %s,\n'
-            '        kind: PalwArmingWaiverKindV1::%s,\n        reason: %s,\n        decided_by: %s,\n    },\n') % (
-        json.dumps(w['fence']), genesis_expr, w['at'], slot, kind, json.dumps(w['reason']), json.dumps(w['decidedBy']))
+            '        kind: PalwArmingWaiverKindV1::%s,\n        value: %s,\n        reason: %s,\n        decided_by: %s,\n    },\n') % (
+        json.dumps(w['fence']), genesis_expr, w['at'], slot, WAIVER_RUST[w['kind']], json.dumps(w['value']),
+        json.dumps(w['reason']), json.dumps(w['decidedBy']))
 
 
 def _bytes(h):
@@ -194,9 +206,8 @@ def main(argv=None):
     ap.add_argument('--review', help='the review output (or --waive-review)')
     ap.add_argument('--fence-name', help='the Params field name (needed with waivers)')
     ap.add_argument('--requirements', type=int, help='the fence\'s requirement count (needed with waivers)')
-    ap.add_argument('--waive', action='append', default=[], metavar='IDX=REASON', help='requirement IDX was NOT run (user decision)')
-    ap.add_argument('--decision', action='append', default=[], metavar='IDX=REASON', help='requirement IDX is a user decision')
-    ap.add_argument('--waive-review', metavar='REASON')
+    ap.add_argument('--waiver', action='append', default=[], metavar='IDX|REVIEW:KIND:VALUE:REASON',
+                    help='a typed waiver (F1 kinds: %s)' % ', '.join(WAIVER_KINDS))
     ap.add_argument('--repo', default=str(pathlib.Path(__file__).resolve().parents[2]))
     ap.add_argument('--json', action='store_true')
     a = ap.parse_args(argv)
@@ -209,23 +220,28 @@ def main(argv=None):
             ev.append((req, path))
         if not _commit_exists(a.repo, a.source_commit):
             raise PinError('--source-commit %s is not in %s' % (a.source_commit, a.repo))
-        if a.waive or a.decision or a.waive_review:
+        if a.waiver:
             if not a.fence_name or not a.requirements:
                 raise PinError('waivers need --fence-name and --requirements')
-            ws = []
-            for kind, items in (('not-run', a.waive), ('user-decision', a.decision)):
-                for item in items:
-                    idx, sep, reason = item.partition('=')
-                    if not sep or not idx.isdigit():
-                        raise PinError('--waive/--decision: IDX=REASON')
-                    ws.append((int(idx), kind, reason))
+            ws, review_waiver = [], None
+            for item in a.waiver:
+                parts = item.split(':', 3)
+                if len(parts) != 4:
+                    raise PinError('--waiver IDX|REVIEW:KIND:VALUE:REASON')
+                idx, kind, value, reason = parts
+                if idx == 'REVIEW':
+                    review_waiver = (kind, value, reason)
+                elif idx.isdigit():
+                    ws.append((int(idx), kind, value, reason))
+                else:
+                    raise PinError('--waiver IDX|REVIEW:KIND:VALUE:REASON')
             ev_idx = []
             for req, path in ev:
                 if not req.isdigit():
                     raise PinError('with waivers, --evidence takes IDX=PATH')
                 ev_idx.append((int(req), path))
             rec = build_record_with_waivers(a.family, a.fence, a.fence_name, a.genesis.lower(), a.at, a.source_commit,
-                                            a.requirements, ev_idx, ws, a.review, a.waive_review)
+                                            a.requirements, ev_idx, ws, a.review, review_waiver)
             print(''.join(render_waiver_rust(w, 'GENESIS') for w in rec['waivers']))
         else:
             if not a.review:

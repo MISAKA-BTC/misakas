@@ -289,7 +289,10 @@ pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
 
 /// **The G14 17,000 flag day's height on the shipped testnet-12 preset — ARMED** (user decision 2026-10-27). One constant the preset
 /// and the kit (`G14_FLAG_DAY_DAA` in `contrib/t12-deploy-kit/fleet.env.example`, pinned by `t12_deploy_kit_constants`) share.
-pub const PALW_T12_G14_17000_FLAG_DAY_DAA: Option<u64> = Some(PALW_T12_G14_17000_DAA_V1);
+// F1 (2026-10-27): DORMANT. With waivers narrowed to the user-permitted kinds, every record has leftover slots (suite / regression
+// / restart / unestimated measurements; see `palw_t12_17000_records_v1`), so no record is pinned and the list cannot validate. Set
+// back to `Some(PALW_T12_G14_17000_DAA_V1)` (17,400) once those slots are run (release build) or decided by the user.
+pub const PALW_T12_G14_17000_FLAG_DAY_DAA: Option<u64> = None;
 
 /// Is `fence` one of the int-13 list's entries while that list has its own height ([`PALW_T12_INT13_DAA`], DAA 15,500 on the public
 /// fleet)? Those entries keep that height: a later list must neither re-arm them at its own height nor set them dormant.
