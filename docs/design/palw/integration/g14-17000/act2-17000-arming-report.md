@@ -178,3 +178,17 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
    - `PalwCourtMeasurementV1::policy()` は全 class の測定(時間・bytes・working set)を要求する。さらに `session_weight` を 0 に固定する。そのため、one-move class だけの M-CAP 実測からは V11 目安(weight 13)を導けない。
    - 安全検査なので waiver では解けない。LegacyFusedLeaf はここで止まる。
 3. 一覧全体に対する validation の、model tier より後ろの拒否は、まだ列挙していない(validation は最初の拒否しか返さないため)。
+
+## 9. 第 3 段(統括の決定を反映、tip `d466fcd40` 以降)
+
+- model tier を一覧に追加した(`PALW_T12_G14_MODEL_TIER_ENTRY`)。値は c 300‰、κ 1000‰、catalog edition 0 は空で、すべてユーザー決定。
+  - tier record も pin した。U-6 は `UserDecision`。「Gate C の非共有モデル試験(legacy/FP)」は `NotRun`。
+  - catalog の root は Python で計算した。Rust 側の照合は通っている。
+- court capacity: V11 の目安 policy を本番 policy として install する entry にした。
+  - validation が測定 record 無しで受け付けるのは、**その目安の policy と完全に一致し、かつ record の測定 slot が pin 済みの `UserDecision` waiver** である場合だけ。
+  - placeholder や他の policy は引き続き拒否する(試験あり)。
+- peel(拒否された fence を外して再検証、を繰り返す)の結果:
+  1. `palw_model_tier_v1 needs palw_model_bond_allocation_v1 at or below it` → **(c)**。ADR-0177 allocation の承認済み policy(曲線 f、allocation epoch、seasoning)が空。加えて、ACT が先に報告した rights epoch 720 と bundle 1,000 の不整合がある。値の決定が要る。
+  2. Gate C は model tier に依存するので、ここで止まる。
+  3. `palw_tir_public_conviction_v1` には frame cost の値(`palw_tir_frame_cost_v1`)が要る。目安値を install すると、**handshake identity が 17,000 未満で変わる**(高さで区切られずに Some-only で hash されるため)。fleet と peer できなくなるので、一覧から外した → **(c)**。identity 側で高さ区切りの hash にする central 変更が要る。
+- それ以外の fence は全部通る(peel の残り = Ok)。fleet identity の 4 試験は、frame cost を外した状態で通ることを確認する必要がある(未実行)。

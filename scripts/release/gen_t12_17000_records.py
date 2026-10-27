@@ -73,9 +73,11 @@ TABLE = [
     ('g14', 'TirPublicConvictionV1', 'palw_tir_public_conviction_v1', [('not-run', r) for r in V17]),
     ('g14', 'CourtCapacityV1', 'palw_court_capacity_v1', [
         ('not-run', REPORTED.format('arm-legacy-report.md (g14_court_capacity 15/15)') + ' (V1)'),
-        # Slot 1 must be a PalwCourtMeasurementV1 digest the armed policy derives from: a waiver here leaves the fence refused.
-        ('not-run', 'under-load measurement only (M-CAP arm-legacy-2026-10-27, load ~11, one-move class); the other classes, bytes '
-                    'and working set and the no-load re-measurement were not run; ' + D),
+        # Slot 1 (measured values): a UserDecision here lets ONLY the exact approved estimate policy stand without a measurement.
+        ('user-decision', 'V11 court capacity uses the user-approved estimate PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1 (cap 42, '
+                          'session weight 13, rho 3,125; user approval 2026-10-26 of the V1-V5/V11 estimates as values). Not a '
+                          'measurement: only the one-move class was measured, under load ~11 (M-CAP arm-legacy-2026-10-27); the match '
+                          'against all-op-class measurements and the no-load re-measurement are waived; ' + D),
         ('not-run', MEAS + ' (rho_court; the V11 estimate 3,125 is pinned)'),
         ('not-run', DRILL + ' (V3 saturating coalition)'),
         ('not-run', DRILL + ' (V3 refilling coalition)'),
@@ -135,6 +137,21 @@ def main():
                         'PALW_G14_TIR_FRAME_COST_ESTIMATE_V1 is pinned; ' + D, 'user 2026-10-27'),
           P.make_waiver('palw_tir_frame_cost_v1', g, AT, P.WAIVER_REVIEW, 'not-run', REVIEW, 'user 2026-10-27')]
     waivers += fc
+    # Model tier (user decision 2026-10-27): c 300, κ 1000, catalog edition 0 empty. Its own record shape (names c, κ, catalog tip).
+    tier_slots = [
+        ('user-decision', 'c = 300 permille (frozen premise, PRINCIPLES 9) and kappa = 1000 permille from DAA 17,000 (user decision '
+                          '2026-10-27); genesis-registered classes are 1.0 as a chain fact, catalog edition 0 is empty'),
+        ('not-run', 'Gate C non-shared-model test in the legacy/FP families not run; ' + D),
+        ('not-run', NR + ' (RFC-0019 section 11 unit tests A-E)'),
+        ('not-run', DRILL + ' (RFC-0019 R-1..R-3, R-5, R-6 with the shipped binary)'),
+        ('user-decision', 'R-4: no edition lists a model at 1.0 after the fence (catalog edition 0 only); ' + D),
+        ('user-decision', 'R-7 / R-8: no edition adds a local LLM after the fence (catalog edition 0 only); ' + D),
+        ('not-run', 'no annual catalog edition release manifest (edition 0 only, empty); ' + D),
+        ('not-run', 'RFC-0019 readiness M1-M5 not reported as a run; ' + D),
+    ]
+    tier_w = [P.make_waiver('palw_model_tier_v1', g, AT, i, k, r, 'user 2026-10-27') for i, (k, r) in enumerate(tier_slots)]
+    tier_w.append(P.make_waiver('palw_model_tier_v1', g, AT, P.WAIVER_REVIEW, 'not-run', REVIEW, 'user 2026-10-27'))
+    waivers += tier_w
     ge = 'crate::config::genesis::PALW_T12_GENESIS.hash'
     out = ['//! **GENERATED** by `scripts/release/gen_t12_17000_records.py` (lane ACT2) — do not edit by hand.\n',
            '//! testnet-12 DAA 17,000 arm-readiness records. EVERY slot is a typed waiver (`crate::palw_arming_waiver_v1`): no\n',
@@ -168,7 +185,25 @@ def main():
                '        genesis: %s,\n        activation_daa: %d,\n        source_commit: %s,\n        measurement: %s,\n'
                '        review: %s,\n        cost: crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1,\n    },\n];\n'
                % (ge, AT, P._bytes(SOURCE), P._bytes(fc[0]['digest']), P._bytes(fc[1]['digest'])))
+    tip = empty_genesis_catalog_root()
+    ev = ''.join('            %s, // slot %d\n' % (P._bytes(w['digest']), w['slot']) for w in tier_w[:-1])
+    out.append('\n/// The model-tier record: c 300, κ 1000 (user decision 2026-10-27), catalog edition 0 (empty) as the tip.\n'
+               'pub const PALW_T12_17000_MODEL_TIER_RECORDS_V1: &[crate::palw_model_tier_v1::PalwModelTierArmingRecordV1] = &[\n'
+               '    crate::palw_model_tier_v1::PalwModelTierArmingRecordV1 {\n'
+               '        version: crate::palw_model_tier_v1::PALW_MODEL_TIER_ARMING_RECORD_VERSION_V1,\n'
+               '        genesis: %s,\n        activation_daa: %d,\n        registered_permille: 300,\n'
+               '        registered_cap_permille: 1000,\n        catalog_tip_edition: 0,\n'
+               '        catalog_tip_root: crate::Hash64::from_bytes(%s),\n        source_commit: %s,\n        evidence: &[\n%s        ],\n'
+               '        review: %s,\n    },\n];\n' % (ge, AT, P._bytes(tip), P._bytes(SOURCE), ev, P._bytes(tier_w[-1]['digest'])))
     sys.stdout.write(''.join(out))
+
+
+def empty_genesis_catalog_root():
+    """`AnnualModelCatalogV1::genesis(vec![]).root()` — blake2b-512 keyed `misaka-palw/annual-model-catalog/v1` over
+    catalog_bytes_v1: u16 version 1, u32 edition 0, u64 activation 0, 64 zero bytes of previous root, u32 model count 0."""
+    import hashlib
+    body = (1).to_bytes(2, 'little') + (0).to_bytes(4, 'little') + (0).to_bytes(8, 'little') + bytes(64) + (0).to_bytes(4, 'little')
+    return hashlib.blake2b(body, digest_size=64, key=b'misaka-palw/annual-model-catalog/v1').hexdigest()
 
 
 if __name__ == '__main__':

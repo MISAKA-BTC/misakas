@@ -383,12 +383,19 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_STAGED_PUBLIC_COURT_ENTRY,
     PALW_T12_FULL_STAGED_TIR_ROUTE_ENTRY,
     PALW_T12_FULL_TIR_CONTAINER_IDENTITY_ENTRY,
+    // NOT armed with the list: `PALW_T12_G14_TIR_FRAME_COST_ESTIMATE_ENTRY` (the frame cost value) is hashed Some-only into the
+    // HANDSHAKE identity with no height, so installing it moves the identity below 17,000 and the release could not peer with the
+    // fleet before the fence (ACT2 identity test, 2026-10-27). Until the identity hashes it height-gated, FpSelection stays refused.
     PALW_T12_FULL_TIR_PUBLIC_CONVICTION_ENTRY,
     PALW_T12_FULL_COURT_OUTSIDER_LANE_ENTRY,
     PALW_T12_FULL_COURT_CLOCK_V2_ENTRY,
-    PALW_T12_FULL_COURT_CAPACITY_ENTRY,
+    // Court capacity with the user-approved V11 estimate (2026-10-26) as the production policy (no measurement record).
+    PALW_T12_G14_COURT_CAPACITY_ESTIMATE_ENTRY,
     PALW_T12_FULL_BOND_BUDGET_ENTRY,
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
+    // Model tier, user decision 2026-10-27: c = 300 permille, κ = 1000 permille from 17,000, catalog edition 0 empty (classes
+    // the genesis assembly registered are 1.0 as a chain fact). Gate C needs it at or below.
+    PALW_T12_G14_MODEL_TIER_ENTRY,
     // `palw_settlement_once_v1` (RFC08-2) is NOT here (lane ACT2 recommendation (ii), 2026-10-27): its open blocker
     // (`PALW_RFC0608_OPEN_BLOCKERS_V1`, unsourced liability terms) is a safety refusal no waiver lifts, and armed it would refuse
     // native mining receipts and other legs with no signed deadline. No entry of this list needs it at or below; each pay point keeps
@@ -404,6 +411,49 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 ];
 
 palw_full_activation_bare_entry_v1!(PALW_T12_G14_PANEL_DA_DISCLOSURE_ENTRY, palw_panel_da_disclosure_v1);
+
+/// The TIR public frame's cost model (not a fence: a value the frame reads) — the lane VAL estimate, user-approved as a value
+/// 2026-10-26; its record (`PALW_TIR_FRAME_COST_RECORDS_V1`) waives the measurement. `None` clears it.
+pub const PALW_T12_G14_TIR_FRAME_COST_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_tir_frame_cost_v1",
+    set: |params, at| {
+        params.palw_tir_frame_cost_v1 = at.map(|_| crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1);
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
+
+/// The user-decided registered-tier cap κ (permille) from DAA 17,000 on testnet-12 (user 2026-10-27).
+pub const PALW_T12_G14_MODEL_TIER_CAP_PERMILLE_V1: u32 = 1_000;
+/// The registered coefficient c (permille), frozen premise (PRINCIPLES §9).
+pub const PALW_T12_G14_MODEL_TIER_REGISTERED_PERMILLE_V1: u32 = 300;
+
+/// `palw_model_tier_v1` with the user-decided values: c 300‰, κ 1000‰, catalog edition 0 empty. `None` sets it dormant.
+pub const PALW_T12_G14_MODEL_TIER_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_model_tier_v1",
+    set: |params, at| {
+        params.palw_model_tier_v1 = at.map(|at| crate::palw_model_tier_v1::PalwModelTierFenceV1 {
+            activation: at,
+            catalogs: crate::palw_annual_catalog_v1::PalwAnnualCatalogChainV1::genesis_only(Vec::new()),
+            registered_permille: PALW_T12_G14_MODEL_TIER_REGISTERED_PERMILLE_V1,
+            registered_cap_permille: PALW_T12_G14_MODEL_TIER_CAP_PERMILLE_V1,
+        });
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
+
+/// `palw_court_capacity_v1` with the user-approved V11 estimate policy (`PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1`, approved
+/// 2026-10-26) and no measurement record; validation accepts it only with a `UserDecision` waiver in the record's measured slot.
+pub const PALW_T12_G14_COURT_CAPACITY_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_court_capacity_v1",
+    set: |params, at| {
+        params.palw_court_capacity_v1 = at.map(|activation| crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1 {
+            activation,
+            policy: crate::palw_g14_values_v1::PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1,
+            measurement: None,
+        });
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
 
 /// The height [`PALW_T12_G14_17000_FENCES_V1`] is meant for — read by tests and the arming report only, NEVER by the preset.
 pub const PALW_T12_G14_17000_DAA_V1: u64 = 17_000;

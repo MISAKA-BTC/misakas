@@ -67,6 +67,32 @@ fn list_every_refusal_at_17000() {
     println!("ACT2COUNT refused={refused} of {}", PALW_T12_G14_17000_FENCES_V1.len());
 }
 
+/// The whole list at 17,000, peeled: validate; on a refusal, print it, set the first list fence the message names dormant, repeat.
+/// The final line says whether the WHOLE list validates (`ACT2PEEL whole=Ok`).
+#[test]
+fn peel_the_whole_list_at_17000() {
+    let at = PALW_T12_G14_17000_DAA_V1;
+    let mut p = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, Some(at));
+    println!("ACT2PEEL whole={:?}", p.validate_palw_v2());
+    for _ in 0..PALW_T12_G14_17000_FENCES_V1.len() {
+        let Err(e) = p.validate_palw_v2() else { break };
+        let msg = format!("{e:?}");
+        let named = PALW_T12_G14_17000_FENCES_V1
+            .iter()
+            .filter(|f| !palw_t12_fence_held_by_int13_v1(f))
+            .filter_map(|f| msg.find(f.name).map(|i| (i, f)))
+            .min_by_key(|(i, _)| *i);
+        let Some((_, f)) = named else {
+            println!("ACT2PEEL unattributed :: {msg}");
+            break;
+        };
+        println!("ACT2PEEL drop {} :: {msg}", f.name);
+        (f.set)(&mut p, None);
+    }
+    println!("ACT2PEEL rest={:?}", p.validate_palw_v2());
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Typed waivers (lane ACT2, user decision 2026-10-27)
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -128,11 +154,13 @@ fn a_waiver_admits_its_record_but_lifts_no_safety_refusal() {
     set(&mut p, "palw_legacy_held_da_v2");
     let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
     assert!(e.contains("needs palw_legacy_public_filer_v1"), "{e}");
-    // 4. Missing value: court capacity has its waived record, the placeholder policy is still refused.
+    // 4. Missing value: court capacity has its waived record (and a UserDecision for the approved estimate), but the PLACEHOLDER
+    //    policy (the full list's entry, not the estimate) is still refused.
     let mut p = base.clone();
-    for name in ["palw_legacy_public_filer_v1", "palw_court_outsider_lane_v1", "palw_court_capacity_v1"] {
+    for name in ["palw_legacy_public_filer_v1", "palw_court_outsider_lane_v1"] {
         set(&mut p, name);
     }
+    (kaspa_consensus_core::config::params::PALW_T12_FULL_COURT_CAPACITY_ENTRY.set)(&mut p, Some(ForkActivation::new(at)));
     let e = format!("{:?}", p.validate_palw_v2().unwrap_err());
     assert!(e.contains("palw_court_capacity_v1") && !e.contains("no arm-readiness record"), "{e}");
     // 5. Open blocker: settlement once with its prerequisites and records is still refused by RFC08-2.
