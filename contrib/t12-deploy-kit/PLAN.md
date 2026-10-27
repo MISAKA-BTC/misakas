@@ -632,3 +632,8 @@ host に進むのは、前の host の `upgrade` が最後まで通り、`check`
 - 配備手順: (1) 登録 class の PALWKM01 を各 host の各 node の上記 directory に置く(ARGS 変更なし、UPGRADE_ARGS_CHANGE_OK 不要)。または (2) fleet.env の `KERNEL_MODEL=<path>[,<path>]` に書く — ARGS が変わるので `UPGRADE_ARGS_CHANGE_OK=1 ./… upgrade`。
 - 確認: 起動 log に `kernel verifier: holds the model …` が fence 17,000 以降に出ること。出なければ model 未配置で検証 duty が空回り。
 - (10-27 追記 R4)Panel=1 slice の model:Mac で `cargo run --release -p misaka-palw-kernel --example gen-wide128-palwkm -- <dir>` を実行(sha256 は fleet.env の `KERNEL_MODEL_SHA256` = d071d3e2…3173 と一致すること)→ `./distribute-from-mac.sh kernel-model <dir>/wide128-v1-7.palwkm` → 各 host で `./install-<host>.sh stage`(`stage_kernel_model` が sha を照合し、各 node の palw-kernel-models/ に置く。ARGS は変わらない)。class の登録には consensus 側の未解決点が残っている(`docs/design/palw/integration/g14-17000/roles-always-on-report.md` R4 BLOCKER)。
+
+### §15 追記 — G14 17,400 release(lane DEPLOY-PREP、2026-10-28)
+- 配備順・中止条件・戻し・95.111・dnsseeder・fence 後 runbook・容量と storage の判断材料は `G14-17400-ROLLOUT.md`。
+- kit: b5 を 5.104 の NODES に戻す(DEC-B5)、.113 b7 の MemoryMax 12G(DEC-RAM。b6 は 17G 据え置き、同文書 §1)、`STORAGE_CAP_BYTES` /
+  `KERNEL_REGISTER_CLASS_*` / `NODE_EXTRA_ARGS_B<id>`(既定は空 = ARGS 不変)、`upgrade-95111.sh`、`distribute-from-mac.sh register-class|95111`。
