@@ -1886,6 +1886,11 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// **ADR-0206 (op 249): one PanelDa claim's disclosure duty**, as [`Self::palw_claim_detail_v1`] answers (read-only view).
+    fn palw_panel_da_disclosure_view_v1(&self, _claim: crate::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
+        Ok(None)
+    }
+
     /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
     /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
     /// off ConsensusV2 or with no PALW tip.

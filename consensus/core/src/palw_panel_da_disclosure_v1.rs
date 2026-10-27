@@ -207,6 +207,125 @@ impl PalwPanelDaDisclosureRowV1 {
     }
 }
 
+// ---- read-only user view (lane panelda-ux, op 249): no rule reads it --------------------------------------------------------------
+
+/// The disclosure object a duty holder submits (tag 233). The fold decodes exactly this borsh value.
+pub fn palw_panel_da_disclosure_object_v1(claim: crate::Hash64, ids: Vec<u32>) -> crate::palw_state_v2::PalwConsensusObjectV2 {
+    crate::palw_state_v2::PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim, prompt_token_ids: ids }
+}
+
+/// The deposit's state as a user reads it.
+pub fn palw_panel_da_deposit_state_v1(row: Option<&PalwPanelDaDisclosureRowV1>, defaulted: bool) -> &'static str {
+    match (row, defaulted) {
+        (_, true) => "burned",
+        (Some(r), false) if r.disclosed_daa.is_some() => "returned",
+        (Some(_), false) => "locked",
+        (None, false) => "none",
+    }
+}
+
+/// **`getPalwPanelDaDisclosure` (op 249) document, version 1**: `None` when the chain holds neither a disclosure row nor a claim.
+/// Never prints a prompt id (only their count once disclosed).
+pub fn palw_panel_da_disclosure_view_json_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: &crate::Hash64,
+    clock: &crate::palw_user_views_v1::PalwUserViewClockV1,
+) -> Option<serde_json::Value> {
+    use crate::palw_state_v2::{PalwClaimPhaseV2, PalwVoidReasonV2};
+    let row = state.panel_da_disclosure_v1(claim);
+    let record = state.claim(claim);
+    if row.is_none() && record.is_none() {
+        return None;
+    }
+    let void_reason = record.and_then(|c| match &c.phase {
+        PalwClaimPhaseV2::Voided { reason, voided_daa } => Some((*reason, *voided_daa)),
+        _ => None,
+    });
+    let defaulted = matches!(void_reason, Some((PalwVoidReasonV2::PanelDaDisclosureDefault, _)));
+    let now = clock.next_daa;
+    Some(serde_json::json!({
+        "version": 1,
+        "claim": claim.to_string(),
+        "governed": row.is_some() || defaulted,
+        "acceptedDaa": row.map(|r| r.accepted_daa).or(record.map(|c| c.accepted_daa)),
+        "deadlineDaa": row.map(|r| r.deadline_daa),
+        "nowDaa": now,
+        "remainingDaa": row.filter(|r| r.disclosed_daa.is_none()).map(|r| r.deadline_daa.saturating_sub(now.saturating_sub(1))),
+        "disclosed": row.is_some_and(|r| r.disclosed_daa.is_some()),
+        "disclosedDaa": row.and_then(|r| r.disclosed_daa),
+        "disclosedIds": row.filter(|r| r.disclosed_daa.is_some()).map(|r| r.prompt_token_ids.len()),
+        "promptTokens": row.map(|r| r.prompt_tokens),
+        "promptTokenIdsHash": row.map(|r| r.prompt_token_ids_hash.to_string()),
+        "producerBond": row.map(|r| format!("{}:{}", r.bond.0.transaction_id, r.bond.0.index)),
+        "depositSompi": row.map(|r| r.deposit_sompi).unwrap_or(if defaulted { PALW_G14_PANEL_DA_DISCLOSURE_DEPOSIT_SOMPI_V1 } else { 0 }),
+        "deposit": palw_panel_da_deposit_state_v1(row, defaulted),
+        "claimPhase": record.map(|c| format!("{:?}", c.phase).split([' ', '{', '(']).next().unwrap_or_default().to_string()),
+        "voidReason": void_reason.map(|(r, _)| format!("{r:?}")),
+        "voidedDaa": void_reason.map(|(_, d)| d),
+    }))
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+
+    fn row(disclosed: Option<u64>) -> PalwPanelDaDisclosureRowV1 {
+        PalwPanelDaDisclosureRowV1 {
+            version: 1,
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
+                transaction_id: crate::tx::TransactionId::from_u64_word(1),
+                index: 0,
+            }),
+            accepted_daa: 100,
+            deadline_daa: 1_140,
+            deposit_sompi: 7,
+            prompt_token_ids_hash: crate::Hash64::default(),
+            prompt_tokens: 3,
+            disclosed_daa: disclosed,
+            prompt_token_ids: disclosed.map(|_| vec![1, 2, 3]).unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn the_built_object_is_tag_233_and_decodes_as_the_fold_reads_it() {
+        let claim = crate::Hash64::from_u64_word(9);
+        let object = palw_panel_da_disclosure_object_v1(claim, vec![5, 6]);
+        let bytes = borsh::to_vec(&object).unwrap();
+        assert_eq!(bytes[0], PALW_PANEL_DA_DISCLOSURE_TAG_V1);
+        let back: crate::palw_state_v2::PalwConsensusObjectV2 = borsh::from_slice(&bytes).unwrap();
+        assert!(matches!(back, crate::palw_state_v2::PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: c, ref prompt_token_ids }
+            if c == claim && *prompt_token_ids == vec![5, 6]));
+        crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&back).expect("it may ride a carrier");
+    }
+
+    #[test]
+    fn the_deposit_state_reads_locked_returned_burned() {
+        assert_eq!(palw_panel_da_deposit_state_v1(Some(&row(None)), false), "locked");
+        assert_eq!(palw_panel_da_deposit_state_v1(Some(&row(Some(200))), false), "returned");
+        assert_eq!(palw_panel_da_deposit_state_v1(None, true), "burned");
+        assert_eq!(palw_panel_da_deposit_state_v1(None, false), "none");
+    }
+
+    #[test]
+    fn the_view_names_the_deadline_and_never_a_prompt_id() {
+        let mut state = crate::palw_state_v2::PalwChainStateV2::genesis();
+        let claim = crate::Hash64::from_u64_word(9);
+        let clock = crate::palw_user_views_v1::PalwUserViewClockV1 { next_daa: 141, raw_depth: None, objective_offence: false };
+        assert!(palw_panel_da_disclosure_view_json_v1(&state, &claim, &clock).is_none(), "unknown claim");
+        state.panel_da_disclosures_insert_for_tests_v1(claim, row(None));
+        let doc = palw_panel_da_disclosure_view_json_v1(&state, &claim, &clock).unwrap();
+        assert_eq!(doc["version"], 1);
+        assert_eq!(doc["deadlineDaa"], 1_140);
+        assert_eq!(doc["remainingDaa"], 1_000);
+        assert_eq!(doc["deposit"], "locked");
+        assert_eq!(doc["disclosed"], false);
+        state.panel_da_disclosures_insert_for_tests_v1(claim, row(Some(150)));
+        let doc = palw_panel_da_disclosure_view_json_v1(&state, &claim, &clock).unwrap();
+        assert_eq!((doc["deposit"].as_str(), doc["disclosedIds"].as_u64()), (Some("returned"), Some(3)));
+        assert!(!doc.to_string().contains("[1,2,3]"), "no prompt id is printed");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

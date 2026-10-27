@@ -41,6 +41,7 @@ mod palw_capacity_shadow;
 mod palw_claim;
 mod palw_court;
 mod palw_da;
+mod palw_panel_da;
 mod palw_derived;
 /// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
 mod palw_economics;
@@ -1375,6 +1376,9 @@ enum PalwCmd {
     /// Seat counts stay distinct — bonded / ready / selected / valid receipts.
     #[command(subcommand)]
     Panel(PalwPanelCmd),
+    /// **PanelDa disclosure duty (ADR-0206)**: `status <CLAIM>` (op 249) and `disclose` (tag 233, dry-run unless --submit).
+    #[command(subcommand, name = "panel-da")]
+    PanelDa(palw_panel_da::PanelDaCmd),
     Settlement {
         /// The DAA score of the block that accepted the transaction (an output's block DAA score, as
         /// `misaka wallet utxo list` prints it).
@@ -3561,6 +3565,7 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move { palw_user::object_show(ctx, &object, at_daa, json) })
         }
         Command::Palw(PalwCmd::Build(cmd)) => Box::pin(async move { palw_user::build(ctx, cmd).await }),
+        Command::Palw(PalwCmd::PanelDa(cmd)) => Box::pin(async move { palw_panel_da::run(ctx, cmd).await }),
         Command::Palw(PalwCmd::PanelV3(args)) => Box::pin(async move { palw_panel_v3::run(ctx, args).await }),
         Command::Palw(PalwCmd::Economics {}) => Box::pin(async move { palw_economics::run(ctx).await }),
         Command::Palw(PalwCmd::Registry {}) => Box::pin(async move { palw_registry::run(ctx).await }),
