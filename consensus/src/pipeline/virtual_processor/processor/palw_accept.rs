@@ -2549,6 +2549,7 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
         block_daa: u64,
+        raw_carrier_fees: &std::collections::HashMap<TransactionId, u64>,
         rent_available_fees: &std::collections::HashMap<TransactionId, u64>,
     ) -> Result<Vec<PalwCarriedObjectV1>, PalwLocalTransitionFaultV1> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
@@ -2557,6 +2558,9 @@ impl VirtualStateProcessor {
         let mut txs = self.accepted_txs_from_acceptance_data(acceptance);
         let history_armed = self.palw_staged_public_court_v1.is_some_and(|fence| fence.is_active(block_daa));
         let tir_public_armed = self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(block_daa));
+        // AUDIT-8 (2026-10-27): the carrier's rent net of its bond burn (ab0d57199) is read only past
+        // `palw_tir_public_conviction_v1`; below it every carrier reads its raw accepted fee, exactly as the live chain does.
+        let rent_available_fees = if tir_public_armed { rent_available_fees } else { raw_carrier_fees };
         let answer_armed = self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(block_daa));
         // New answer-map membership is separately admitted before construction. The owner lives through extraction.
         let _answer_workspace = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_extraction_workspace_v1(&txs, answer_armed)?;
