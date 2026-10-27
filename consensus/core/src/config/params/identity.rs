@@ -28,6 +28,15 @@ impl Params {
     /// The same shape applies to `TokenParams`: its fences cannot be armed without also freezing
     /// the emission constants that are `TBD` while it is inert, and those are not fences either.
     pub(super) fn normalize_values_a_scheduled_fence_drags_with_it(&mut self) {
+        // **The TIR frame cost model is a value its fences drag with them** (lane ACT2, 2026-10-27). It has no height of its own;
+        // only `palw_tir_public_conviction_v1` and `palw_tir_bounded_door_v1` read it. Where neither is active at genesis, a build
+        // that carries the value for a SCHEDULED fence must keep the identity of a build without it, or a release scheduling the
+        // frame at a future height would split from the fleet at deploy. Past the fence the value is in force and hashed in the
+        // params / schedule ids as before.
+        let at_genesis = |f: Option<ForkActivation>| f.is_some_and(|f| f.is_active(0));
+        if !at_genesis(self.palw_tir_public_conviction_v1) && !at_genesis(self.palw_tir_bounded_door_v1) {
+            self.palw_tir_frame_cost_v1 = None;
+        }
         // **ADR-0064's fence must collapse to absent, not to a present `never()`.**
         //
         // `for_each_fence` has already run, so an armed height H has been rewritten to

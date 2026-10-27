@@ -566,9 +566,34 @@ pub fn palw_bond_budget_approved_policy_digests_v1() -> Vec<Hash64> {
     vec![crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1().digest()]
 }
 
-/// **The approved model-allocation policies — EMPTY** (lane ACT 2026-10-26), for the same reason.
+/// **The model-allocation policy — ESTIMATE (目安), derived from existing user decisions** (lane ACT2 2026-10-27, under the user's
+/// 2026-10-22 permission to decide values as estimates). Not a measurement.
+/// * curve `A_m = c_m · S̄_m^1.5`: α = 1.5 (user decision 2026-10-14, RFC-0015 §8.5.5 / ADR-0179);
+/// * average: 7 day-equivalents (user decision 2026-10-16) of miner + claim-bound verifier capital, `P_m` on block opportunity
+///   (`block_opportunity = true` because RFC-0016 V+ is not armed with it). A day-equivalent is `PALW_BOND_HOLD_DAA_PER_DAY_V1` = 720
+///   DAA (the nominal 120 s DAA the hold rule already uses; `validate_v3` requires exactly it), so the span is 5,040 DAA (≈ 10.7 real
+///   days at the measured ≈ 184 s/DAA);
+/// * epoch 720 DAA: it must divide the 5,040-DAA span (`validate_v3`); 1,000 (the bundle's epoch, which V+ would tie the rights
+///   epoch to) does not, and V+ is not armed, so 720 — one day-equivalent, 7 epochs per average — is the value consistent with the
+///   7-day decision and the existing tests;
+/// * seasoning 1 epoch = 720 DAA = the 1-day hold of both modes (user decision 2026-10-16);
+/// * at most 8 models per assignment (the 8 genesis models, user decision 2026-10-15).
+///
+/// Revise on a measured allocation run (new models not starved under α = 1.5) or when V+ is armed (rights epoch).
+pub fn palw_model_bond_allocation_estimate_v1() -> PalwModelAllocationPolicyV1 {
+    PalwModelAllocationPolicyV1 {
+        version: allocation_v3::PALW_MODEL_ALLOCATION_POLICY_VERSION_V3,
+        epoch_daa: PALW_BOND_HOLD_DAA_PER_DAY_V1,
+        seasoning_epochs: 1,
+        curve: PalwAllocationCurveV1 { alpha_halves: allocation_v3::PALW_ALLOCATION_ALPHA_HALVES_DECIDED_V1 },
+        max_models_per_bond: 8,
+        average: Some(allocation_v3::PalwAllocationAverageV1::decided_v1()),
+    }
+}
+
+/// **The approved model-allocation policies**: the lane ACT2 estimate above (pinned as an ESTIMATE under the 2026-10-22 delegation).
 pub fn palw_model_bond_allocation_approved_policies_v1() -> Vec<PalwModelAllocationPolicyV1> {
-    Vec::new()
+    vec![palw_model_bond_allocation_estimate_v1()]
 }
 
 /// **`Params::palw_bond_budget_v1`'s value**: the activation and the policy. Some-only everywhere: `None` on every preset, hashed into both

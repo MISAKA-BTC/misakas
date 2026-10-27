@@ -192,3 +192,17 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
   2. Gate C は model tier に依存するので、ここで止まる。
   3. `palw_tir_public_conviction_v1` には frame cost の値(`palw_tir_frame_cost_v1`)が要る。目安値を install すると、**handshake identity が 17,000 未満で変わる**(高さで区切られずに Some-only で hash されるため)。fleet と peer できなくなるので、一覧から外した → **(c)**。identity 側で高さ区切りの hash にする central 変更が要る。
 - それ以外の fence は全部通る(peel の残り = Ok)。fleet identity の 4 試験は、frame cost を外した状態で通ることを確認する必要がある(未実行)。
+
+## 10. 第 4 段 — 一覧全体の validation が通った
+
+- **`palw_model_bond_allocation_v1`**: 一覧に入れた。policy は `palw_model_bond_allocation_estimate_v1` で、**目安(既存のユーザー決定から導出、測定ではない)**。承認済み policy の一覧に pin した。
+  - α = 1.5(ユーザー決定 10-14)。
+  - 7 日平均(10-16)。1 日 = `PALW_BOND_HOLD_DAA_PER_DAY_V1` = 720 DAA とした。これは名目 120 s の値で、`validate_v3` がこの値を要求する。平均の窓は 5,040 DAA で、実測の 184 s/DAA では約 10.7 日になる。
+  - epoch は 720 にした。5,040 を割り切る必要があるからで、1,000 は割り切れない。V+ は武装しないので、rights epoch との結合は生じない。
+  - seasoning は 1 epoch = 1 日の拘束(10-16)。1 assignment あたり最大 8 モデル(genesis の 8 モデル)。
+  - 見直す条件: 配分の実測(α = 1.5 で新しいモデルが飢えないか)、または V+ を武装するとき。
+- **frame cost**(central、`identity.rs`): handshake identity は、`palw_tir_public_conviction_v1` も `palw_tir_bounded_door_v1` も genesis 時点で有効でない間、`palw_tir_frame_cost_v1` の値を落として hash する。params id と schedule id には従来どおり入る。これで `tir_public_conviction` を一覧に戻した。
+- 結果:
+  - `peel_the_whole_list_at_17000`: **whole=Ok**
+  - `g14_17000_list_keeps_everything_below_17000`: pass。17,000 未満の handshake identity、fired fork id、schedule、fence は同一。
+  - `fleet_ids_match_247ade1f9`: pass

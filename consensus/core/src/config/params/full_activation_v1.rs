@@ -383,9 +383,9 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_STAGED_PUBLIC_COURT_ENTRY,
     PALW_T12_FULL_STAGED_TIR_ROUTE_ENTRY,
     PALW_T12_FULL_TIR_CONTAINER_IDENTITY_ENTRY,
-    // NOT armed with the list: `PALW_T12_G14_TIR_FRAME_COST_ESTIMATE_ENTRY` (the frame cost value) is hashed Some-only into the
-    // HANDSHAKE identity with no height, so installing it moves the identity below 17,000 and the release could not peer with the
-    // fleet before the fence (ACT2 identity test, 2026-10-27). Until the identity hashes it height-gated, FpSelection stays refused.
+    // The frame cost value (lane VAL estimate). The handshake identity drops it while neither frame fence is active at genesis
+    // (`normalize_values_a_scheduled_fence_drags_with_it`, ACT2 2026-10-27), so scheduling it keeps the fleet's identity.
+    PALW_T12_G14_TIR_FRAME_COST_ESTIMATE_ENTRY,
     PALW_T12_FULL_TIR_PUBLIC_CONVICTION_ENTRY,
     PALW_T12_FULL_COURT_OUTSIDER_LANE_ENTRY,
     PALW_T12_FULL_COURT_CLOCK_V2_ENTRY,
@@ -395,6 +395,9 @@ pub const PALW_T12_G14_17000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
     // Model tier, user decision 2026-10-27: c = 300 permille, κ = 1000 permille from 17,000, catalog edition 0 empty (classes
     // the genesis assembly registered are 1.0 as a chain fact). Gate C needs it at or below.
+    // ADR-0177 model allocation with the lane ACT2 estimate policy (derived from user decisions; needs the bond budget at or below),
+    // at or below the model tier (c_m is applied once, in the allocation weight).
+    PALW_T12_G14_MODEL_BOND_ALLOCATION_ENTRY,
     PALW_T12_G14_MODEL_TIER_ENTRY,
     // `palw_settlement_once_v1` (RFC08-2) is NOT here (lane ACT2 recommendation (ii), 2026-10-27): its open blocker
     // (`PALW_RFC0608_OPEN_BLOCKERS_V1`, unsourced liability terms) is a safety refusal no waiver lifts, and armed it would refuse
@@ -418,6 +421,18 @@ pub const PALW_T12_G14_TIR_FRAME_COST_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = Pa
     name: "palw_tir_frame_cost_v1",
     set: |params, at| {
         params.palw_tir_frame_cost_v1 = at.map(|_| crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1);
+        palw_full_activation_sync_mirrors_v1(params);
+    },
+};
+
+/// `palw_model_bond_allocation_v1` with the lane ACT2 estimate policy (`palw_model_bond_allocation_estimate_v1`). `None` clears it.
+pub const PALW_T12_G14_MODEL_BOND_ALLOCATION_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_model_bond_allocation_v1",
+    set: |params, at| {
+        params.palw_model_bond_allocation_v1 = at.map(|activation| crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1 {
+            activation,
+            policy: crate::palw_bond_budget_v1::palw_model_bond_allocation_estimate_v1(),
+        });
         palw_full_activation_sync_mirrors_v1(params);
     },
 };
