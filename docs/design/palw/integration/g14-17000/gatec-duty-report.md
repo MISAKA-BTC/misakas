@@ -47,3 +47,24 @@ Not done.
   - three kaspad unit tests in `palw_cert_duty`
 - Failures seen on this branch in consensus-core `rfc18_*`, `gatec_decouple_*`, `a2u::*` (tag 245) and `r5_f02_wire_*`. These assert Gate C `None` on presets, while the base already has 16600, or they concern code this lane did not touch. I believe they come from the base branch, but I have not checked them against the base.
 - Not done: the real-node E2E (≥8 bonds → REAL → Final → 41 attestations → SecurityCertified → payout; failure modes; reorg/restart). It is left to lane GC-E2E, which should drive this duty.
+
+## Round 2 (2026-10-27, user: 17,400 only after replay for the three types)
+
+Seams (kaspad `palw_cert_duty`, own slot, host ledger; core read now carries the claim as a `PalwSeatDutyV2`):
+- (a) LegacyFusedLeaf / held-to-Final Attempt: lane B's attempt replay (`execute_for_verdict`), now admitted for `held_to_final` in the heavy slot.
+- (b) FpSelection/FpConstraint/FpPrefix/FpTokenizer (+ held): SEAT-R's `fp_seat_replay_pass_v1` over the pooled/retained job material.
+  Without the material on this host the row stays Unjudged and becomes Unavailable at the 60 DAA margin (material availability, not a replay gap).
+- (c) 'V' owning39: **Unavailable kept.** kaspad has no native39 executor (params/material/trace archive); `palw_native_mining_v39` is not in the
+  17,400 list, so no 'V' row can exist on the release. Wiring the SDK's `execute_independent_replay_v39` into kaspad is open.
+
+Tests: route per type + honest→Reproduced / lie→Refuted on each seam's verdict rule (unit, not a real backend replay); consensus E2E
+`gatec_duty_e2e_drawn_bonds_find_their_duty_and_the_honest_claim_certifies` (Attempt only; the replay is stood in by root equality).
+NOT run: a real-node replay per type; FP/fused/'V' E2E.
+
+Fence: `palw_gate_c_attestor_liability_v1` in `PALW_T12_G14_17000_FENCES_V1` right after Gate C (same height), in ACT2's slot (ACT2 0c63ddf72 merged).
+
+Base-stale fixes: ACT2 merge fixes `rfc18_*`/`gatec_decouple_*`; fork-id probe arm for `palw_selected_source_bootstrap_v1` added.
+Still failing (base, need owners): fork-id probe next missing `palw_source_verifier_economics_v2`; a2u tag 245 and 255 have no allocated
+A-2 row ("ask the Lead"); `r5_f02_wire_*` (court supply hold, post-final default no longer dormant); kaspad
+`seat_r_tests::past_seat_r_only_the_replays_can_end_a_verdict_with_valid` (source scan expects `execute_free_prompt`); native wire
+generator fails its handwritten-codec shape review for `PalwStateCarriageV2` (idempotence check could not complete).

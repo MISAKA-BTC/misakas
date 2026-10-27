@@ -1169,6 +1169,41 @@ mod tests {
                 params.palw_class_registration_origin_v1 = Some(at);
                 params.sync_palw_class_registration_origin_v1();
             }
+            // The base added this fence without a probe arm (stale probe, fixed by lane GC-DUTY 2026-10-27); the policy is a fixture.
+            "palw_selected_source_bootstrap_v1" => {
+                let h = |n: u8| crate::Hash64::from_bytes([n; 64]);
+                params.palw_selected_source_bootstrap_v1 = Some(crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1 {
+                    at,
+                    policy: crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1 {
+                        version: 1,
+                        chain_genesis: h(3),
+                        network: h(4),
+                        ruleset: h(5),
+                        epoch: 1,
+                        freeze_cutoff_daa: 10,
+                        anchor_cutoff_daa: 20,
+                        starts_at_daa: 30,
+                        ends_at_daa: 40,
+                        stake_release_daa: 60,
+                        selection: misaka_palw_challenge::bootstrap_epoch_v1::BootstrapPolicyV1 {
+                            version: 1,
+                            seats: 2,
+                            quorum: 2,
+                            maximum_population: 2,
+                            maximum_draw_attempts: 2,
+                            maximum_source_works: 2,
+                        },
+                        source_profile: h(6),
+                        checker_scope: h(7),
+                        maximum_claim_bytes: 1,
+                        maximum_check_work: 1,
+                        maximum_history_headers: 1,
+                        security_review: h(8),
+                        economic_review: h(9),
+                    },
+                });
+                params.sync_palw_selected_source_bootstrap_v1();
+            }
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
             // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.
