@@ -86,7 +86,7 @@ gate_desc() {
         check)                echo "cargo check --tests --benches" ;;
         build-devnet-prealloc) echo "the devnet-prealloc feature compiles, tests and benches included" ;;
         check-evm-send)       echo "misaka-cli's evm-send feature compiles" ;;
-        nextest)              echo "cargo nextest run" ;;
+        nextest)              echo "cargo nextest run (NEXTEST_SHARD=k/n runs one hash partition; unset: all)" ;;
         derive-suite)         echo "misaka-palw-derive WITH its binaries — the confinement gate needs palw-evm-runner" ;;
         doctest)              echo "cargo test --doc" ;;
         hashes-no-asm)        echo "kaspa-hashes without asm, lib + benches" ;;
@@ -438,7 +438,7 @@ gate_fmt()           { cargo fmt --all -- --check; }
 gate_clippy()        { cargo clippy --tests --benches --examples -- -D warnings; }
 gate_pq_guard()      { bash scripts/ci/pq-ci-guard.sh; }
 gate_check()         { cargo check --tests --benches; }
-gate_nextest()       { cargo nextest run; }
+gate_nextest()       { cargo nextest run --partition "hash:${NEXTEST_SHARD:-1/1}"; }
 # **No `--lib`, deliberately, and do not "optimise" it back in.**
 # `--lib` builds no binaries, so `palw-evm-runner` is not on disk, and ADR-0079's confinement gate
 # REFUSES rather than falling back in-process — seven reds that a `--lib` run hides and that mean
