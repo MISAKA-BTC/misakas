@@ -290,7 +290,8 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         network_domain: network_domain.as_bytes(),
         ruleset_digest: ruleset_digest.as_bytes(),
         challenge_policy_id: policy_id,
-        claim_collateral: 1_000 * SOMPI_PER_KASPA,
+        // AUDIT-3 m3 (2026-10-27): 1,080 MSK, the estimate pinned in `palw_g14_values_v1` (was 1,000).
+        claim_collateral: crate::palw_g14_values_v1::PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_V1,
         demand_bond: SOMPI_PER_KASPA,
         check_window_daa: 100,
         challenge_window_daa: 50,
@@ -1742,6 +1743,18 @@ mod tests {
         assert_eq!(crate::palw_onboarding_v1::PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1, 490);
         let kept = p.claim_collateral - p.claim_collateral * u64::from(p.accuser_reward_permille) / 1000;
         assert!(kept * 100 >= p.claim_collateral * 51, "net loss {kept} of {}", p.claim_collateral);
+    }
+
+    /// **AUDIT-3 m3**: a self-accusing convicted producer's net loss (collateral kept after the 49 % share + reward 5 MSK + V2 fee
+    /// 0.816 MSK) is at least the external gain bound / 0.90 detection.
+    #[test]
+    fn palw_kernel_route_detection_loss_covers_gain_at_90_percent() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let kept = p.claim_collateral as u128 - p.claim_collateral as u128 * u128::from(p.accuser_reward_permille) / 1000;
+        let net = kept + p.claim_reward as u128 + crate::palw_g14_values_v1::PALW_G14_FUNDED_FEE_SOMPI_V1 as u128;
+        let gain = crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.unwrap() as u128;
+        assert!(net * 90 >= gain * 100, "net loss {net} < gain {gain} / 0.90");
+        assert!(net * 99 >= gain * 100);
     }
 
     #[test]

@@ -100,6 +100,16 @@ pub const PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1: u64 = 4;
 /// Integration (2026-10-26): the user approved this value the same day; the production bound above takes it.
 pub const PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_ESTIMATE_V1: u64 = 500 * SOMPI_PER_MSK_V1;
 
+/// **ESTIMATE (AUDIT-3 m3, user decision 2026-10-27 "raise the collateral"): the kernel route's per-claim collateral, 1,080 MSK.**
+/// Detection-loss check: a convicted producer that files its own accusation recovers the 49 % reporter share (ADR-0032), so its net
+/// loss is `0.51 × C + claim_reward 5 + V2 fee 0.816`; that must be ≥ external gain bound 500 / detection 0.90 = 555.6 MSK, i.e.
+/// C ≥ 1,078.0 MSK. 1,000 + 60 = 1,060 (546.4 MSK net) would still fall short, so the estimate is 1,080 (556.6 MSK net). Review: the
+/// gain bound, the reporter share, the detection-rate estimate, a confirmed seat-bond slash on conviction.
+pub const PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_ESTIMATE_V1: u64 = 1_080 * SOMPI_PER_MSK_V1;
+/// The production per-claim collateral the kernel route policy reads (`palw_kernel_route_policy_v1`). Read only once the kernel route
+/// is armed; no fence height or identity input changes.
+pub const PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_V1: u64 = PALW_G14_KERNEL_CLAIM_COLLATERAL_SOMPI_ESTIMATE_V1;
+
 // ---------------------------------------------------------------- V2 funded original / admission
 
 /// Carriage of one packet, sompi (34,000 × 50 = 1,700,000).
