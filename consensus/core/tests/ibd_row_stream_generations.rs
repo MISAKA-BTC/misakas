@@ -3,6 +3,9 @@
 //! atomic switch journal. Scaled-down caps: the logic, not the bytes, is tested.
 //!
 //! Design: docs/design/palw/storage/ibd-generations.md. RFC-0037 / ADR-0204 (Proposed).
+//!
+//! Native only: the generation store is RocksDB-backed, which has no wasm32 build.
+#![cfg(not(target_arch = "wasm32"))]
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_row_stream_v1::*;
