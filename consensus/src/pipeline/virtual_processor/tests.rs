@@ -13453,7 +13453,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     allowed.sort();
     assert_eq!(
         found, allowed,
-        "a `load_tip` caller in virtual_processor/processor{.rs,/**} is not one of the fold/restart paths. A READ path \
+        "a `load_tip` caller in virtual_processor/processor.rs or processor/ is not one of the fold/restart paths. A READ path \
          must take `load_tip_cached`; a new walk-or-write path belongs in OWNED_STATE_CALLERS."
     );
 }
