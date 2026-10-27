@@ -124,7 +124,15 @@ pub(super) fn t12_with_harness_cards_and_evm(
     // byte what `Params::from(testnet-12)` was at launch. Every suite on this harness was written
     // against it (and each post-launch lane arms its own fence over it); the release's twelve fences
     // together are `t12_post_launch_fences_combined`'s crossing.
-    t12_with_harness_cards_over(kaspa_consensus_core::config::params::palw_t12_launch_params_v1(), keep_evm)
+    // 3e05f6a77 armed the G14 17,000 list on the preset and `palw_t12_launch_params_v1` does not clear it: testnet-12 as LAUNCHED
+    // carried none of it, so it is set back to dormant here (each G14 suite arms its own fences over this base).
+    let mut launch = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut launch,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
+    t12_with_harness_cards_over(launch, keep_evm)
 }
 
 /// [`t12_with_harness_cards_and_evm`] over any testnet-12 ruleset (`shipped`: the launch one, or
