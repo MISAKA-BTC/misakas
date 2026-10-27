@@ -504,7 +504,11 @@ async fn s3c_prime_supply_never_missing_on_the_kernel_route() {
     let paid_before: u64 = filers.iter().map(|c| w.net.collateral(*c)).sum();
     let mut rounds = 0u32;
     while w.net.daa() <= last {
-        super::f03k::crowd(&mut w.net, &filers, claim.id).await;
+        // G14-FIX: one filer per block. Two junk filings in one block carry 666,668 storage mass, over the 500,000 block limit
+        // (a fixture limit, not a consensus change); each filing alone fits.
+        for filer in &filers {
+            super::f03k::crowd(&mut w.net, std::slice::from_ref(filer), claim.id).await;
+        }
         rounds += 1;
         let state = w.net.chain.tip_state().1;
         if let Some(service) = state.court_service_state_v1().filter(|s| s.claims.contains_key(&id)) {

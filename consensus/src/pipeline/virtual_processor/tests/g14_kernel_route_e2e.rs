@@ -3625,3 +3625,5 @@ mod roles_slice_attest;
 
 // lane GC-E2E: Gate C on a chain (LegacyPanelAttempt) claim.
 mod gatec_e2e;
+// G14-FIX: wide128_v1(7) registration economics on the shipped params at 17,400: `g14_kernel_route_e2e/wide128_registration_economics.rs`.
+mod wide128_registration_economics;

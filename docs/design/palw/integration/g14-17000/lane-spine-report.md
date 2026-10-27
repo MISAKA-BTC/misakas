@@ -31,7 +31,7 @@ unclocked (below X3) exposure make the censorship relation 140 MSK < 505 MSK, so
 | S3b lie after Final, liability stands (IBD) | PASS |
 | S3b' T05 before / after Final, Panel=1 (f03k::t05) | PASS / PASS |
 | S3c silence → demand → deadline default (IBD) | PASS |
-| S3c' kernel supply never missing under a full court | **FAIL** (see §5) |
+| S3c' kernel supply never missing under a full court (fixture: one junk filing per block) | PASS |
 | S3c'' premise None (TEST-ONLY) → no-slash hold; pinned premise → decided | PASS / PASS |
 | S3c''' native bound claim: typed-missing → held; pinned premise → default | PASS / PASS |
 | S4 honest / silence decided once across a reorg | PASS / PASS |
@@ -56,13 +56,16 @@ unclocked (below X3) exposure make the censorship relation 140 MSK < 505 MSK, so
 
 ## 4. Requests (2026-10-27)
 
-- **S3c' owner:** the stage fails inside the harness's block insertion (`t12_round_lane_e2e.rs:381`: a heartbeat carrying the crowd filings is refused, "block persistent storage mass 666668 exceeds limit of 500000" — the fixture packs too many filings per block);
-  see §5. It is not caused by the schedule values: the production schedule equals the earlier test-only estimate field for field.
-- **Harness:** a world with the shipped 64-run cap would let S1/S2/S3c''' also drop the TEST-ONLY gain bound.
+- **Harness:** a world with the shipped 64-run cap would let S1/S2/S3c''' also drop the TEST-ONLY gain bound. The production
+  registration economics of the slice class are checked without the harness in
+  `g14_kernel_route_e2e/wide128_registration_economics.rs`: shipped params with the 17,400 list fired, wide128_v1(7) (root
+  44c62870…960e), clocked cost 64 × 0.1 × 3,150 = 20,160 MSK > gain 1,100 + 5 + 500 = 1,605 MSK (12.56×): it registers.
 
-## 5. Build result (2026-10-27, lane G14-FIX, `cargo test -p kaspa-consensus --lib g14_spine`)
+## 5. Build result (2026-10-27, lane G14-FIX, `cargo test -p kaspa-consensus --lib g14_fix_wide128 g14_spine`)
 
-- 7 of 9 `g14_spine_*` tests pass; the table: 15 PASS, 1 FAIL (S3c'). `g14_spine_s3c_prime_*` fails on its own as well.
+- 10 of 10 tests pass; the stage table 16 of 16 PASS.
+- S3c' was failing on the fixture only: two junk filings in one block carry 666,668 storage mass (> 500,000). The stage now sends
+  one filer per block; no consensus change.
 - Earlier results (2026-10-26, base 3c5f4c24b) are in §6 and §7 as history.
 
 ## 6. Second round (2026-10-26): origin of the S3b seat charge, S4, F02 premise, F03b
