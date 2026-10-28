@@ -12,6 +12,7 @@
 //!   must be equal commit point by commit point;
 //! * admission v10 as a node runs it, under the release's rules and under `palw_tir_fence2`.
 
+#![allow(warnings)]
 use std::path::PathBuf;
 use std::time::Instant;
 

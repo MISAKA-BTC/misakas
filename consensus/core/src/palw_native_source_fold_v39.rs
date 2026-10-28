@@ -6,7 +6,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::{
     flat_quota11::{DerivedOrdinaryMetadataV11, TrustedEpochV11},
     flat_resources10::{ResourceAxisV10 as A, ResourceQuantitiesV10},
-    flat_source39::{CheckedSourceV39, FlatSourceWireV39},
+    flat_source39::FlatSourceWireV39,
     hash::{Digest, object_id},
 };
 const TABLE: u8 = 112;
@@ -105,6 +105,7 @@ fn catalog(r: &PalwKernelRouteStateV1, owner: &PalwBondKeyV2) -> Result<CatalogV
     let sources = read_ids(64)?;
     let classes = read_ids(64)?;
     let uploads = read_ids(8)?;
+    #[allow(clippy::drop_non_drop)]
     drop(read_ids);
     let next_upload = u64::deserialize_reader(&mut reader).map_err(|_| refused("source39 catalog original sequence"))?;
     if version != 39 || reader.position() as usize != raw.len() {

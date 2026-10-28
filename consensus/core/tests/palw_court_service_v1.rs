@@ -1,4 +1,5 @@
 //! Scheduler component tests, NOT a proof of T04/T05 node capacity.
+#![allow(warnings)]
 use kaspa_consensus_core::palw_court_service_v1::*;
 
 fn cost() -> ServiceCost {

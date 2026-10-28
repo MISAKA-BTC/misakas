@@ -1,6 +1,7 @@
 //! A separate verifier consumes only the recorded actual-weight public witness. No producer
 //! process, private capture, full weights or ModelSpec is available to this test. This is a
 //! terminal-court replay, not public RPC acquisition, chain registration, G14 or Final.
+#![allow(warnings)]
 use misaka_palw_kernel::element::{SegClaimContextV1, SegConvictionKindV1, SegFaultV1, verify_seg_fault_v1};
 use misaka_palw_kernel::verify::DismissalV1;
 use misaka_palw_sdk::kernel_execution::DecodeCourtBundleV3;

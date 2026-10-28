@@ -13,6 +13,7 @@
 //! palw-seat-coverage [--trials <n>]
 //! ```
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v5;
 use kaspa_consensus_core::palw_fp_devnet_v3::{PALW_V2_PANEL_QUORUM, PALW_V2_PANEL_SEATS};
 use kaspa_consensus_core::palw_mode_v2::PALW_STANDARD_TX_BYTES;

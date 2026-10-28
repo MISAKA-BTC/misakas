@@ -1,5 +1,6 @@
 //! Public, unknown-coordinate localization and honest bounds; these artificial
 //! directories do not establish execution, fidelity, native Final or coverage.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     flat_detect5::{FlatPublicReadsV5, FlatReadV5},
     merkle5::FlatLeafHashV5,

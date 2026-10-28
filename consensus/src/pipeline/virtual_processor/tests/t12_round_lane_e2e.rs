@@ -56,6 +56,7 @@
 //! the harness carriage has always made them. Consensus never re-executes an attempt; the panel's
 //! receipts are what certify it, and here they are real ML-DSA-87 signatures by the seats the chain
 //! drew.
+#![allow(warnings)]
 use super::{OnetimeTxSelector, TestContext, new_miner_data};
 use crate::consensus::test_consensus::TestConsensus;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
@@ -84,7 +85,6 @@ const T12_GENESIS_CARDS: usize = 8;
 
 #[path = "t12_real_attempt.rs"]
 mod real_attempt;
-pub(super) use real_attempt::RealAttemptV1;
 
 /// Card `i`'s harness key — row `i` of the registry fixture (row 0 is the harness identity).
 fn card_key(i: usize) -> &'static MLDSA87KeyPair {

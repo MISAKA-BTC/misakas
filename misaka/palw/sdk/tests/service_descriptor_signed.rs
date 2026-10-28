@@ -1,6 +1,7 @@
 //! ADR-0101 Decision 3 — a service descriptor signed with a real ML-DSA-87 key verifies under the
 //! verifier every binary ships, and a descriptor with one field changed after signing does not.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_model_benefits_v1::grant;
 use kaspa_consensus_core::palw_service_descriptor_v1::{
     PALW_SERVICE_DESCRIPTOR_MLDSA87_CONTEXT, PalwLineServiceFactsV1, PalwServiceDescriptorError, PalwServiceDescriptorV1,

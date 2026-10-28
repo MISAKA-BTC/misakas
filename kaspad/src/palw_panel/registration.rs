@@ -141,7 +141,7 @@ impl ClassRegistrationV1 {
             }
         }
         if service.config.register_class.is_some() && !self.done && self.inflight.is_none() && self.object.is_none() {
-            match service.build_class_registration(&session).await {
+            match service.build_class_registration(session).await {
                 Ok(object) => {
                     info!("[{PALW_PANEL}] built a class registration for this node's worker");
                     self.object = Some(object);
@@ -192,14 +192,14 @@ impl ClassRegistrationV1 {
                     )
                 });
             } else if let Some((funding_outpoint, funding_entry)) =
-                service.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await
+                service.resolve_fee_funding(session, palw_fee_funding_floor_v1()).await
             {
                 if let Some(object) = self.object.clone() {
                     match service.build_class_registration_tx(&object, funding_outpoint, &funding_entry, current_daa) {
                         Ok(tx) => {
                             let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
                             let txid = prepared_carrier.id();
-                            match service.submit_prepared_direct_v1(&session, prepared_carrier).await {
+                            match service.submit_prepared_direct_v1(session, prepared_carrier).await {
                                 Ok(sent_carrier) => {
                                     info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
                                     self.inflight = Some((txid, current_daa));

@@ -104,7 +104,11 @@ fn open_claim(
     Ok((c, policy, until))
 }
 
-fn independent(builder: &TransitionBuilder<'_>, signer: &PalwBondKeyV2, c: &NativeMiningClaimRecordV39) -> Result<Digest, PalwStateV2Error> {
+fn independent(
+    builder: &TransitionBuilder<'_>,
+    signer: &PalwBondKeyV2,
+    c: &NativeMiningClaimRecordV39,
+) -> Result<Digest, PalwStateV2Error> {
     let bond = builder.state.bonds.get(signer).ok_or_else(|| bad("mining39 accuser bond absent"))?;
     let operator = bond.operator_id.as_bytes();
     if !matches!(bond.status, PalwBondStatusV2::Active) || *signer == c.producer || operator == c.operator {
@@ -251,7 +255,8 @@ fn answer(
     let index = u16::from_le_bytes(w.body[68..70].try_into().unwrap());
     let part = &w.body[70..];
     let parts = total.div_ceil(MINING_ACCUSATION_PART_BYTES_V39 as u32);
-    let expected = (total as usize - (index as usize * MINING_ACCUSATION_PART_BYTES_V39).min(total as usize)).min(MINING_ACCUSATION_PART_BYTES_V39);
+    let expected = (total as usize - (index as usize * MINING_ACCUSATION_PART_BYTES_V39).min(total as usize))
+        .min(MINING_ACCUSATION_PART_BYTES_V39);
     let c = super::super::palw_native_mining_fold_v39::claim(r, &d.claim)?;
     if d.settled
         // audit A-3: a convicted claim's open demand is refunded to its accuser (`default`), never paid to the convicted producer.
@@ -341,7 +346,7 @@ fn default(
 pub(super) fn convict(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
-    policy: &NativeMiningPolicyV39,
+    _policy: &NativeMiningPolicyV39,
     c: &NativeMiningClaimRecordV39,
     stage: u16,
     proof: Digest,
@@ -356,8 +361,10 @@ pub(super) fn convict(
     );
     let collected = if collectible == 0 { 0 } else { builder.slash_bond(c.producer, collectible as u128)? };
     let finder_credit = match finder {
-        Some(_) => (u128::from(collected) * u128::from(crate::palw_g14_lane_closure_v1::PALW_NATIVE_FINDER_SHARE_CAP_PERMILLE_V1)
-            / 1000) as u64,
+        Some(_) => {
+            (u128::from(collected) * u128::from(crate::palw_g14_lane_closure_v1::PALW_NATIVE_FINDER_SHARE_CAP_PERMILLE_V1) / 1000)
+                as u64
+        }
         None => 0,
     };
     if let (Some((bond, _)), true) = (finder, finder_credit > 0) {
@@ -372,7 +379,8 @@ pub(super) fn convict(
     let revoked: u128 = mread(r, MINING_RECEIPT_GRANTED_KIND_V39, &receipt_id, 32).unwrap_or(0);
     builder.state.safe_weight = builder.state.safe_weight.saturating_sub(revoked);
     let mut m = super::super::palw_native_mining_fold_v39::model(builder.state.kernel_route.as_ref().unwrap(), &c.model)?;
-    let mut seat = super::super::palw_native_mining_fold_v39::seat(builder.state.kernel_route.as_ref().unwrap(), &c.model, &c.producer);
+    let mut seat =
+        super::super::palw_native_mining_fold_v39::seat(builder.state.kernel_route.as_ref().unwrap(), &c.model, &c.producer);
     let mut closed = c.clone();
     if had_receipt {
         builder.write_kernel_row(MINING, mk(MINING_RECEIPT_KIND_V39, &receipt_id), None)?;
@@ -430,9 +438,8 @@ pub(super) fn release_holds(builder: &mut TransitionBuilder<'_>, c: &NativeMinin
 
 /// **Collection 53's guard:** a component whose material a live, accusable mining claim relies on is not collected.
 pub(super) fn job_held(r: &PalwKernelRouteStateV1, job: &Digest, now: u64) -> bool {
-    mread::<(Digest, u64)>(r, MINING_JOB_HOLD_KIND_V39, job, 128).is_some_and(|(claim, until)| {
-        now <= until && r.aux.contains_key(&(MINING, mk(MINING_CLAIM_KIND_V39, &claim)))
-    })
+    mread::<(Digest, u64)>(r, MINING_JOB_HOLD_KIND_V39, job, 128)
+        .is_some_and(|(claim, until)| now <= until && r.aux.contains_key(&(MINING, mk(MINING_CLAIM_KIND_V39, &claim))))
 }
 
 #[cfg(test)]
@@ -554,8 +561,12 @@ mod tests {
             spent_quanta: 3,
             spent: vec![0b0111],
         };
-        tb.write_kernel_row(MINING, mk(MINING_RECEIPT_KIND_V39, &receipt.id), Some(borsh::to_vec(&(receipt.root(), &receipt)).unwrap()))
-            .unwrap();
+        tb.write_kernel_row(
+            MINING,
+            mk(MINING_RECEIPT_KIND_V39, &receipt.id),
+            Some(borsh::to_vec(&(receipt.root(), &receipt)).unwrap()),
+        )
+        .unwrap();
         tb.write_kernel_row(MINING, mk(MINING_RECEIPT_GRANTED_KIND_V39, &receipt.id), Some(super::b(&300u128))).unwrap();
         tb.state.safe_weight = 1_000;
         let attest = |n: u64| PalwEligibilityAttestationRowV1 {
@@ -625,7 +636,8 @@ mod tests {
         convict(&mut tb, &ctx(40), &policy(), &c, 0, [0x99; 64], Some((bond(2), h(2).as_bytes()))).unwrap();
         // The producer's reserved exposure is collected; the finder is paid 490‰ of it; the rest is burned.
         assert_eq!(tb.state.bonds[&bond(1)].collateral, 6_000);
-        let finder = tb.state.pending_payouts.get(&Hash64::from_bytes(object_id(b"misaka-palw/native/g14-mining-finder/v39", &c.id))).unwrap();
+        let finder =
+            tb.state.pending_payouts.get(&Hash64::from_bytes(object_id(b"misaka-palw/native/g14-mining-finder/v39", &c.id))).unwrap();
         assert_eq!((finder.amount, finder.payload), (1_960, h(102)));
         // Receipt gone, its granted weight taken back, the claim closed without reward, the certification withdrawn.
         let r = tb.state.kernel_route.as_ref().unwrap();
@@ -668,8 +680,12 @@ mod tests {
         world(&mut tb, &c);
         let hash = c.claim_hash();
         assert!(!crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&tb.state, &hash));
-        tb.write_kernel_row(MINING, mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id), Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })))
-            .unwrap();
+        tb.write_kernel_row(
+            MINING,
+            mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id),
+            Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })),
+        )
+        .unwrap();
         assert!(crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&tb.state, &hash));
         // The certification verdict waits on a pending accusation, k positives in hand (RFC-0018's own verdict, veto = 0).
         let policy = PalwSecurityCertificationPolicyV1::design_unapproved_v1(100);
@@ -761,8 +777,12 @@ mod tests {
             settled: false,
         };
         tb.write_kernel_row(MINING, mk(MINING_ACCUSATION_DEMAND_KIND_V39, &id), Some(super::b(&d))).unwrap();
-        tb.write_kernel_row(MINING, mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id), Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })))
-            .unwrap();
+        tb.write_kernel_row(
+            MINING,
+            mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id),
+            Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })),
+        )
+        .unwrap();
         // Another finder's verified filing convicts the claim first (inside the demand's answer window).
         convict(&mut tb, &ctx(28), &policy(), &c, 0, [0x99; 64], Some((bond(2), h(2).as_bytes()))).unwrap();
         // The accuser then files its default once the deadline has passed.
@@ -775,13 +795,18 @@ mod tests {
         let defaulted = default(&mut tb, &ctx(31), &bond(3), &p, &wire);
         let refund_key = Hash64::from_bytes(object_id(b"misaka-palw/native/g14-mining-demand-refund/v39", &id));
         let refunded = tb.state.pending_payouts.get(&refund_key).map(|v| v.amount);
-        let row: NativeMiningDemandV39 = mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_DEMAND_KIND_V39, &id, 1 << 20).unwrap();
-        eprintln!("[verify-1 A-3] default after conviction: {defaulted:?}; demand settled {}; refund payout {refunded:?}", row.settled);
+        let row: NativeMiningDemandV39 =
+            mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_DEMAND_KIND_V39, &id, 1 << 20).unwrap();
+        eprintln!(
+            "[verify-1 A-3] default after conviction: {defaulted:?}; demand settled {}; refund payout {refunded:?}",
+            row.settled
+        );
         assert_eq!(refunded, Some(50), "A-3: the honest accuser's burned demand bond is never refunded after another path convicts");
         // Regression (fix): refunded once — the demand is settled and its open count released; a second default and a late answer
         // of the convicted claim are refused (the producer is never paid the accuser's bond).
         assert!(defaulted.is_ok() && row.settled);
-        let n: NativeMiningAccusationCountsV39 = mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_COUNT_KIND_V39, &c.id, 64).unwrap();
+        let n: NativeMiningAccusationCountsV39 =
+            mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_COUNT_KIND_V39, &c.id, 64).unwrap();
         assert_eq!((n.demands, n.open), (1, 0));
         assert!(default(&mut tb, &ctx(32), &bond(3), &p, &wire).is_err(), "refunded once");
         let mut late = id.to_vec();
@@ -789,6 +814,9 @@ mod tests {
         late.extend_from_slice(&0u16.to_le_bytes());
         late.push(0);
         let answer_wire = NativeMiningAccusationWireV39 { version: 39, kind: 2, claim: c.id, stage: 0, body: late };
-        assert!(answer(&mut tb, &ctx(29), &c.producer, &p, &answer_wire).is_err(), "a convicted claim's demand is never answered for pay");
+        assert!(
+            answer(&mut tb, &ctx(29), &c.producer, &p, &answer_wire).is_err(),
+            "a convicted claim's demand is never answered for pay"
+        );
     }
 }

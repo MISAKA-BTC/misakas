@@ -25,6 +25,7 @@
 //! other function of that file) — in the same commit, so every consensus reader of the formulas is
 //! listed here and reviewed.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 
 /// `(file relative to the repository's `consensus/`, what)`: an enclosing fn name, `"*"` for the whole

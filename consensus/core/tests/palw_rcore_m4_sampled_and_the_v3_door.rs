@@ -12,6 +12,7 @@
 //!   check below it, ahead of every arm.
 //! * An assembler's reading of the new refusals and SR-1b's window, through the public API.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2,
 };

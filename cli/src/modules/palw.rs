@@ -48,8 +48,14 @@ impl Palw {
             Ok(r) => r,
             Err(usage) => {
                 tprintln!(ctx, "{usage}");
-                tprintln!(ctx, "balance: `details`; register a bond: `misaka bond register`; post a kernel job, open a court or reserve");
-                tprintln!(ctx, "a dispute: `misaka palw build --help` (builders write a file; `misaka palw submit-object` dry-runs it)");
+                tprintln!(
+                    ctx,
+                    "balance: `details`; register a bond: `misaka bond register`; post a kernel job, open a court or reserve"
+                );
+                tprintln!(
+                    ctx,
+                    "a dispute: `misaka palw build --help` (builders write a file; `misaka palw submit-object` dry-runs it)"
+                );
                 return Ok(());
             }
         };
@@ -64,7 +70,7 @@ impl Palw {
                 (r.available, r.found, r.now_daa, r.view_json)
             }
             PalwRead::Fences => {
-                let r = rpc.get_palw_fence_schedule(GetPalwFenceScheduleRequest {}).await?;
+                let r = rpc.get_palw_fence_schedule(GetPalwFenceScheduleRequest::default()).await?;
                 (r.available, r.found, r.now_daa, r.view_json)
             }
         };

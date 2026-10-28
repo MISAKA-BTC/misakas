@@ -41,7 +41,9 @@ use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwClaimPhaseV2, PalwC
 use kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnStepRefutationV2;
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::fp_recompute::Base0FpRecomputeKernelsV1;
-use misaka_palw_base0::gdn_evidence_v2::{Base0GdnEvidenceV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_step_evidence_v2};
+use misaka_palw_base0::gdn_evidence_v2::{
+    Base0GdnEvidenceV2, Base0GdnMaterialV2, Base0GdnOwnedMaterialV2, base0_gdn_step_evidence_v2,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -171,7 +173,8 @@ pub fn palw_gdn_step_object_v1(
     }
     let ticket = PalwGdnStepObjectV1::reserve(&refutation, openings).map_err(|e| e.to_string())?;
     let mut accusation = palw_gdn_step_accusation_v1(claim, accuser, leaf, refutation, openings);
-    let actual = PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root: claim.artifact_root };
+    let actual =
+        PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root: claim.artifact_root };
     // The fold's order (`objects.rs`, `GdnStepAccusedV2`): shape at the claim's ladder, then the close ceiling, then the verdict.
     accusation.validate_shape(limits.ladder).map_err(|e| format!("the fold refuses the accusation's shape: {e}"))?;
     match palw_gdn_court_verdict_v2(&accusation, &actual, limits.ladder)
@@ -422,7 +425,8 @@ impl PalwGdnStepBookV1 {
     }
     /// Is the claim already pursued (filed) or done with? Discovery never re-probes it.
     pub fn is_known(&self, claim: &Hash64) -> bool {
-        self.settled.contains_key(claim) || matches!(self.cases.get(claim), Some(c) if matches!(c.stage, PalwGdnStepStageV1::Filed { .. }))
+        self.settled.contains_key(claim)
+            || matches!(self.cases.get(claim), Some(c) if matches!(c.stage, PalwGdnStepStageV1::Filed { .. }))
     }
     pub fn settle(&mut self, claim: &Hash64, why: impl Into<String>) {
         self.cases.remove(claim);
@@ -573,7 +577,10 @@ mod tests {
     #[test]
     fn a_refused_or_honest_verdict_is_never_a_mismatch_and_a_forged_predecessor_is_the_held_filers() {
         let step = || Ok(PalwGdnStepBuiltV1::Step(0xABu8));
-        assert!(matches!(palw_gdn_step_classify_v1(7, step(), |_| Ok(true)), PalwGdnStepProbeV1::Mismatch { leaf: 7, refutation: 0xAB }));
+        assert!(matches!(
+            palw_gdn_step_classify_v1(7, step(), |_| Ok(true)),
+            PalwGdnStepProbeV1::Mismatch { leaf: 7, refutation: 0xAB }
+        ));
         assert!(matches!(palw_gdn_step_classify_v1(7, step(), |_| Ok(false)), PalwGdnStepProbeV1::Honest));
         assert!(matches!(palw_gdn_step_classify_v1(7, step(), |_| Err("ram".into())), PalwGdnStepProbeV1::Unbuildable(_)));
         assert!(matches!(
@@ -599,13 +606,15 @@ mod tests {
     #[test]
     fn the_window_files_inside_reserves_near_the_reward_and_refuses_after_it() {
         // Far from the Final deadline: file, no reservation.
-        assert_eq!(palw_gdn_step_window_v1(&facts(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1 }), 100, 60), PalwGdnStepWindowV1::Open {
-            reserve: false
-        });
+        assert_eq!(
+            palw_gdn_step_window_v1(&facts(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1 }), 100, 60),
+            PalwGdnStepWindowV1::Open { reserve: false }
+        );
         // Within the margin and the reservation fence is in force: reserve first.
-        assert_eq!(palw_gdn_step_window_v1(&facts(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1 }), 950, 60), PalwGdnStepWindowV1::Open {
-            reserve: true
-        });
+        assert_eq!(
+            palw_gdn_step_window_v1(&facts(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1 }), 950, 60),
+            PalwGdnStepWindowV1::Open { reserve: true }
+        );
         // Within the margin, no fence: still before the deadline, file and let the fold decide.
         let mut f = facts(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1 });
         f.reservation_fence = false;
@@ -618,7 +627,10 @@ mod tests {
         f.own_reservation_closed = true;
         assert!(matches!(palw_gdn_step_window_v1(&f, 1_001, 60), PalwGdnStepWindowV1::Closed(_)));
         // Final: only with this bond's live reservation (the fold's rule).
-        assert!(matches!(palw_gdn_step_window_v1(&facts(PalwClaimPhaseV2::Final { final_daa: 1_000 }), 1_100, 60), PalwGdnStepWindowV1::Closed(_)));
+        assert!(matches!(
+            palw_gdn_step_window_v1(&facts(PalwClaimPhaseV2::Final { final_daa: 1_000 }), 1_100, 60),
+            PalwGdnStepWindowV1::Closed(_)
+        ));
         let mut f = facts(PalwClaimPhaseV2::Final { final_daa: 1_000 });
         f.own_reservation_live = true;
         assert_eq!(palw_gdn_step_window_v1(&f, 1_100, 60), PalwGdnStepWindowV1::Open { reserve: false });
@@ -649,7 +661,10 @@ mod tests {
             vec![PalwGdnStepResendV1::Reservation, PalwGdnStepResendV1::Accusation]
         );
         // The reservation is live: only the accusation.
-        assert_eq!(palw_gdn_step_resend_v1(&sent, PalwGdnStepReservationAtTipV1::Live, false, 160), vec![PalwGdnStepResendV1::Accusation]);
+        assert_eq!(
+            palw_gdn_step_resend_v1(&sent, PalwGdnStepReservationAtTipV1::Live, false, 160),
+            vec![PalwGdnStepResendV1::Accusation]
+        );
         // A closed reservation is never re-sent (once per life); a verdict on chain ends the accusation's re-sends.
         assert!(palw_gdn_step_resend_v1(&sent, PalwGdnStepReservationAtTipV1::Closed, true, 160).is_empty());
         // The send budget.
@@ -659,13 +674,18 @@ mod tests {
             [PalwGdnStepResendV1::GiveUp(_)]
         ));
         // Nothing sent, nothing re-sent.
-        assert!(palw_gdn_step_resend_v1(&PalwGdnStepSentV1::default(), PalwGdnStepReservationAtTipV1::Absent, false, 10_000).is_empty());
+        assert!(
+            palw_gdn_step_resend_v1(&PalwGdnStepSentV1::default(), PalwGdnStepReservationAtTipV1::Absent, false, 10_000).is_empty()
+        );
     }
 
     #[test]
     fn a_conviction_is_read_from_court_fraud_only_and_hands_the_rooted_contradiction_to_the_false_valid_filer() {
         let claim = Hash64::from_u64_word(0x77);
-        assert_eq!(palw_gdn_step_convicted_v1(&PalwClaimPhaseV2::Voided { voided_daa: 42, reason: PalwVoidReasonV2::CourtFraud }), Some(42));
+        assert_eq!(
+            palw_gdn_step_convicted_v1(&PalwClaimPhaseV2::Voided { voided_daa: 42, reason: PalwVoidReasonV2::CourtFraud }),
+            Some(42)
+        );
         assert_eq!(palw_gdn_step_convicted_v1(&PalwClaimPhaseV2::Final { final_daa: 42 }), None);
         let proof = palw_gdn_step_false_valid_proof_v1(claim, 42);
         assert_eq!(proof.claim_id, claim);
@@ -676,7 +696,12 @@ mod tests {
         // The false-Valid filer keeps it as the claim's proof; its scan asks EVERY Valid signer of the claim
         // (`palw_false_valid_filings_v1`, pinned by `one_filing_per_seat_never_the_own_bond_and_only_what_the_chain_convicts`).
         let mut filer = crate::palw_filer_false_valid::PalwFalseValidFilerV1::new(1_000, 500, 100);
-        assert!(filer.note_proof_v1(proof.clone(), crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: 9 }, None, 50));
+        assert!(filer.note_proof_v1(
+            proof.clone(),
+            crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: 9 },
+            None,
+            50
+        ));
         assert!(filer.holds(&claim));
         assert!(!filer.note_proof_v1(proof, crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: 9 }, None, 51));
     }
@@ -899,14 +924,22 @@ mod tests {
         book.open(claim.clone(), 1);
         // Construct fixture inputs before enabling the quota: this test measures
         // the signed-object owner's boundary, not earlier material construction.
-        let (leaf, refutation) = material.tiles.tiles.iter().find_map(|(leaf, _)| {
-            let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(
-                &material.binding.shape_profile, &material.binding.job_context, *leaf)?;
-            match base0_gdn_step_evidence_v2(&material, coord, || w.backend.gdn_recompute_kernels_v2().unwrap()).ok()? {
-                Base0GdnEvidenceV2::Step(r) => Some((*leaf, r)),
-                _ => None,
-            }
-        }).expect("a real recurrence step");
+        let (leaf, refutation) = material
+            .tiles
+            .tiles
+            .iter()
+            .find_map(|(leaf, _)| {
+                let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(
+                    &material.binding.shape_profile,
+                    &material.binding.job_context,
+                    *leaf,
+                )?;
+                match base0_gdn_step_evidence_v2(&material, coord, || w.backend.gdn_recompute_kernels_v2().unwrap()).ok()? {
+                    Base0GdnEvidenceV2::Step(r) => Some((*leaf, r)),
+                    _ => None,
+                }
+            })
+            .expect("a real recurrence step");
         let memory = 16 << 20;
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
         let blocker = reserve_native_requests_v1(memory).unwrap();
@@ -937,7 +970,9 @@ mod tests {
         let ticket = PalwGdnStepObjectV1::reserve(&refutation, &w.openings).unwrap();
         let accusation = palw_gdn_step_accusation_v1(&claim, bond(2), leaf, *refutation, &w.openings);
         let owner = Arc::new(PalwGdnStepObjectV1::finish(
-            PalwConsensusObjectV2::GdnStepAccusedV2 { accusation: Box::new(accusation) }, ticket));
+            PalwConsensusObjectV2::GdnStepAccusedV2 { accusation: Box::new(accusation) },
+            ticket,
+        ));
         let shared = Arc::clone(&owner);
         assert!(Arc::ptr_eq(&owner, &shared));
         drop(owner);

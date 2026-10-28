@@ -11,6 +11,7 @@
 //!   (palw_task_heads_v1)` at every height, with the admission the profile would run recorded beside it
 //!   (`HEAD_PROFILE_HYPOTHETICAL: …`), and never `registrable()`.
 
+#![allow(warnings)]
 use misaka_palw_sdk::preflight::{Depth, Options, Report, StageStatus, run};
 use std::path::{Path, PathBuf};
 

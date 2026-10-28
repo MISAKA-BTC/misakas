@@ -28,6 +28,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_held_to_final_is_the_window_rule
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

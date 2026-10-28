@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `tests` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 
@@ -62,7 +61,6 @@ fn a_dropped_class_registration_is_resubmitted_and_a_registrant_keeps_its_duties
     assert_eq!(actor.matches("self.left_pool = None;").count(), 4, "reset on submit (x2), in pool, retry");
     let collector = include_str!("collector.rs");
     assert!(collector.contains("registration.record_submission(txid, current_daa);"));
-
 }
 
 /// The two-output bond carrier this node builds: one collateral output to the payee, one

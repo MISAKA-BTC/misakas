@@ -3,6 +3,7 @@
 //! Every function called here is the production one. Run:
 //!   cargo test -p kaspa-consensus-core --test audit_a3_work_target_pwu -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_admission_v2::palw_attempt_derived_pwu_v1;

@@ -1,5 +1,6 @@
 //! Actual kernel reservations and settlement-book conservation, with private consumer-derived targets.
 //! This is not node activation or a source-only beacon/security approval.
+#![allow(warnings)]
 mod common;
 
 use common::chain::{T, test_salt};

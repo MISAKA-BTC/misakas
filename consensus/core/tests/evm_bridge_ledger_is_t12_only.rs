@@ -12,6 +12,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test evm_bridge_ledger_is_t12_only -- --nocapture`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
 };

@@ -1,5 +1,6 @@
 //! Actual attempt/rider calls and funded-original admission phase. Stored escrow
 //! rows exercise membership, not a new funded-original authorization campaign.
+#![allow(warnings)]
 use super::*;
 use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
 use crate::palw_state_v2::palw_court_capacity_fold_v1 as court;

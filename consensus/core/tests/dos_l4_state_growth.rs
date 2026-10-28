@@ -17,6 +17,7 @@
 //!
 //! Synthetic, deterministic, and bounded: the largest state built here is ~60 MB.
 
+#![allow(warnings)]
 use std::time::Instant;
 
 use kaspa_consensus_core::Hash64;

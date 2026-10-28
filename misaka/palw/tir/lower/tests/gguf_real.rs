@@ -12,6 +12,7 @@
 //! (≈ 100 % and more). Tensors of more than 2^26 values (the embedding) are skipped to stay under
 //! the memory rule.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::gguf::GgufFile;
 use std::collections::BTreeMap;
 use std::path::PathBuf;

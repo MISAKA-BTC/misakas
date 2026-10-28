@@ -23,6 +23,7 @@
 //!
 //! The rule itself is `palw_state_v2::tests::capacity_weight_cap_v1` (W-T1 … W-T9).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
     Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,

@@ -1,5 +1,6 @@
 //! Actual pre-object sweeps over stored auxiliary rows. Initial fixture/state
 //! construction is deliberately outside each target phase's independent quota.
+#![allow(warnings)]
 use super::*;
 use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
 use crate::palw_panel_var_v1::{PalwPanelLiabilityRecordV1, PalwSlashableLockV1};

@@ -165,8 +165,10 @@ impl PrivateRecoveryAckFeeSpecV4 {
                         };
                         let session = manager.consensus().unguarded_session();
                         let object = job.object();
-                        if !matches!(session.palw_object_rehearsal_v1(object),
-                            Some(kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)) {
+                        if !matches!(
+                            session.palw_object_rehearsal_v1(object),
+                            Some(kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)
+                        ) {
                             // A pending WAL is not native authority. Refusal, including
                             // local NativeResource, keeps the same signed obligation.
                             continue;
@@ -264,17 +266,20 @@ impl PrivateRecoveryAckFeeSpecV4 {
                         {
                             continue;
                         }
-                        if transaction.inputs.first().is_some_and(|input|
-                            flow.mining_manager().outpoint_is_spent_in_mempool(&input.previous_outpoint)) {
+                        if transaction
+                            .inputs
+                            .first()
+                            .is_some_and(|input| flow.mining_manager().outpoint_is_spent_in_mempool(&input.previous_outpoint))
+                        {
                             continue;
                         }
                         // Validate after the async pool lookup, including cold
                         // carriers. An already-pooled identical transaction simply
                         // waits above; no stale native/funding authority crosses
                         // the await into this final pre-relay check.
-                        if let Err(error) = session.with_consensus_api_v1(|api| authority::verify_current(
-                            api, &config.params, &transaction, object, &script, self.maximum_fee_sompi,
-                        )) {
+                        if let Err(error) = session.with_consensus_api_v1(|api| {
+                            authority::verify_current(api, &config.params, &transaction, object, &script, self.maximum_fee_sompi)
+                        }) {
                             kaspa_core::warn!("private recovery carrier waits for current authority: {error}");
                             continue;
                         }
@@ -365,7 +370,10 @@ mod tests {
 /// Exact single-input/single-change carrier grammar BEFORE Borsh allocates.
 /// The payload is then compared to the already bounded signed outbox object;
 /// no arbitrary consensus-object enum is decoded from a local corrupt frame.
-pub(super) fn decode_carrier(bytes: &[u8], object: &PalwConsensusObjectV2) -> Result<(Transaction, Option<NativeDemandLeaseV1>), String> {
+pub(super) fn decode_carrier(
+    bytes: &[u8],
+    object: &PalwConsensusObjectV2,
+) -> Result<(Transaction, Option<NativeDemandLeaseV1>), String> {
     struct Cursor<'a>(&'a [u8]);
     impl<'a> Cursor<'a> {
         fn take(&mut self, n: usize) -> Result<(), String> {

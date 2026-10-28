@@ -28,6 +28,7 @@
 //!   per position from the prompt's start), so a tile deep in the job is the court's to try, not
 //!   one carrier's.
 
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_class_admission_v2::{PalwClassAdmissionError, PalwHeldUnanswerableV1};

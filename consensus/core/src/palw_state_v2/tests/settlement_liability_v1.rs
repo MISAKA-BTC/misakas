@@ -3,6 +3,7 @@
 //! The pure predicate's every term is pinned in `palw_settlement_liability_v1`'s own tests; these pin the WIRING: dormancy below
 //! the fence, the old ruleset for a claim accepted before it, an unsourced term refusing (never defaulted) with a zero-amount
 //! marker that closes the obligation, and a leg with no liable claim passing by name.
+#![allow(warnings)]
 use super::super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1;
 use super::super::palw_settlement_once_fold_v1::{PalwSettleOnceV1, palw_settled_once_v1};
 use super::*;
@@ -81,10 +82,7 @@ fn an_unsourced_term_refuses_the_leg_by_name_and_closes_the_obligation_at_zero()
     assert!(matches!(again, PalwSettleOnceV1::AlreadySettled(row) if row.amount == 0));
     // ADR-0184 §1 (user decision 2026-10-18): a native claim is no longer unsourced — its maximum horizon is derived from the
     // producer-signed deadline that bounds its Final floor, plus `window_court`; an unbudgeted one has no reservation to bind.
-    assert_eq!(
-        super::super::palw_settlement_liability_fold_v1::native_claim_hard_deadline_v1(&p, 500),
-        500 + p.window_court()
-    );
+    assert_eq!(super::super::palw_settlement_liability_fold_v1::native_claim_hard_deadline_v1(&p, 500), 500 + p.window_court());
     b.admit_native_claim_liability_v1(100, None, 500).unwrap();
 }
 

@@ -128,7 +128,7 @@ pub(crate) async fn run(ctx: &Ctx, cmd: JobCmd) -> CliResult {
                     );
                 }
                 let e = &d["escrow"];
-                out += &format!("  escrow {}  {}\n", text(&e["state"]), e.to_string());
+                out += &format!("  escrow {}  {}\n", text(&e["state"]), e);
                 out
             });
             Ok(())
@@ -212,7 +212,11 @@ async fn post(
     let verifier_pay = nv.params.palw_verifier_pay_v1.filter(|a| a.is_active(nv.virtual_daa)).map(|a| a.daa_score());
     let quote = crate::palw_user::kernel_job_quote_v1(verifier_pay);
     let job_id = Hash64::from_bytes(job.id());
-    println!("PostJob: job {job_id}, class {class} (tier {}), {} prompt tokens, {max_new} new tokens", text(&row["tier"]), job.prompt.len());
+    println!(
+        "PostJob: job {job_id}, class {class} (tier {}), {} prompt tokens, {max_new} new tokens",
+        text(&row["tier"]),
+        job.prompt.len()
+    );
     println!("tokenizer {} digest {} (the class commits to no tokenizer: used as given)", tokenizer.display(), tok.digest);
     println!("{}", quote.render());
     if quote.free_collateral_needed() > fee {
@@ -221,7 +225,8 @@ async fn post(
             format!("refused: the job needs {} sompi, above --fee {fee}", quote.free_collateral_needed()),
         ));
     }
-    let object = crate::palw_user::kernel_route_object_v1(crate::bond::network_domain(&nv), poster, &KernelObj::PostJob { job }, &signer);
+    let object =
+        crate::palw_user::kernel_route_object_v1(crate::bond::network_domain(&nv), poster, &KernelObj::PostJob { job }, &signer);
     if !yes {
         println!("dry run: nothing signed into a file or submitted (add --yes)");
         return Ok(());

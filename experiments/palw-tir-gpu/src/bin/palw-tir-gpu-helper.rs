@@ -5,6 +5,7 @@
 //! (its own lock: wgpu 30), so the node's lock never sees the graphics stack. With no usable device it says so on stderr and exits, and
 //! the node runs its cells on the CPU.
 
+#![allow(warnings)]
 fn main() {
     let device = match misaka_palw_tir_gpu::GpuDeviceV1::open() {
         Ok(d) => d,

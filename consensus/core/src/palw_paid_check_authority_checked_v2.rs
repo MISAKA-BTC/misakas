@@ -6,7 +6,7 @@
 use crate::palw_claim_challenge_v2::*;
 use crate::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
-use misaka_palw_kernel::claim_paid_v2::{paid_claim_bootstrap_anchor_v2, paid_claim_seal_anchor_v2, PaidClaimCheckAuthorityV2};
+use misaka_palw_kernel::claim_paid_v2::{PaidClaimCheckAuthorityV2, paid_claim_bootstrap_anchor_v2, paid_claim_seal_anchor_v2};
 use misaka_palw_kernel::hash::Digest;
 
 fn invalid(why: impl Into<String>) -> E<String> {
@@ -48,7 +48,8 @@ impl PalwKernelRouteStateV1 {
         }
         // Keep the V5 collector and rooted source ordering, while preserving
         // typed failures and the retained source/promise demand through use.
-        let material = self.rfc07_normal_paid_material_owned_v5(context)?.ok_or_else(|| invalid("paid claim source funding missing"))?;
+        let material =
+            self.rfc07_normal_paid_material_owned_v5(context)?.ok_or_else(|| invalid("paid claim source funding missing"))?;
         let (contract, sources, promises) = &*material;
         let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, contract, sources, promises, now)
             .map_err(|why| invalid(why.to_string()))?;

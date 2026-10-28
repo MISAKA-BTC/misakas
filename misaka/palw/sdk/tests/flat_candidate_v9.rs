@@ -1,4 +1,5 @@
 //! Synthetic metadata/grammar/signature checks, not checkpoint acceptance or Final.
+#![allow(warnings)]
 use kaspa_consensus_core::{
     Hash64,
     palw_kernel_route_v1::*,

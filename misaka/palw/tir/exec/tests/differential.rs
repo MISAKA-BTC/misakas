@@ -12,6 +12,7 @@
 //!
 //! `TIR_EXEC_CASES=k` multiplies the number of programs (default 1: 2,000 programs + 600 mid-run).
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeMap;

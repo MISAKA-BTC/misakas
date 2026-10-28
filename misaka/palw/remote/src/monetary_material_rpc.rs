@@ -23,10 +23,14 @@ pub struct ProvenMonetarySnapshotV2 {
 }
 impl ProvenMonetarySnapshotV2 {
     /// The exact header hash against which every proof page was authenticated.
-    pub fn pinned_block(&self) -> Hash64 { self.pinned }
+    pub fn pinned_block(&self) -> Hash64 {
+        self.pinned
+    }
     /// Parent header used by the proof. A finality consumer must independently
     /// require that this is its selected parent, not merely another DAG parent.
-    pub fn parent_block(&self) -> Hash64 { self.parent }
+    pub fn parent_block(&self) -> Hash64 {
+        self.parent
+    }
     pub fn rows(&self) -> &[PalwMonetaryMaterialRowV1] {
         &self.rows
     }

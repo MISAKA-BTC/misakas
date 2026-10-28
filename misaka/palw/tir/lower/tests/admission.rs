@@ -5,6 +5,7 @@
 //! than `2^40` MACs at a `2^18` window. `tile_len` 64 and `h_chunk` 64 are the inputs (a layout
 //! declares its own; admission's success does not depend on either for these programs).
 
+#![allow(warnings)]
 use misaka_palw_tir::admit::{TirAdmitInputsV1, TirCeilingsV1, tir_admit_program_v1};
 use misaka_palw_tir_lower::lower::{LowerOpts, lower};
 use std::path::Path;

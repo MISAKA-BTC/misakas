@@ -43,7 +43,7 @@ impl IbdFlow {
             receiver = None;
         }
         let nonce = if compressed {
-            receiver.as_ref().and_then(SnapshotReceiver::profile).map_or_else(|| rand::random::<[u8; 32]>(), |p| p.nonce).to_vec()
+            receiver.as_ref().and_then(SnapshotReceiver::profile).map_or_else(rand::random::<[u8; 32]>, |p| p.nonce).to_vec()
         } else {
             Vec::new()
         };

@@ -6,6 +6,7 @@
 //! Each is a bare height, dormant everywhere and refused when armed until its rule is built — so on every ruleset that ships,
 //! the live testnet-12 one included, nothing moves: no fingerprint, no schedule, no rule. These tests pin exactly that.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
     mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,

@@ -51,13 +51,13 @@ impl PalwPanelService {
             attn_evidence,
             attn_root_filings,
             tir_root_filings,
-            mut held_court,
-            mut shard_books,
+            held_court,
+            shard_books,
             requested,
             requested_intervals,
-            mut court_outbox,
+            court_outbox,
             da_flat_sent,
-            mut public_prefix_response_cursor,
+            public_prefix_response_cursor,
             false_valid,
         } = books;
         // --- the court's half: answer the disputes this bond is a party to ---
@@ -118,7 +118,7 @@ impl PalwPanelService {
             // job is past. Below `palw_offence_attribution` no duty takes it.
             let held_host = held_court::PalwPanelHeldHostV1 {
                 panel: self,
-                session: &session,
+                session,
                 network_domain,
                 bond: bond_key,
                 materials: pool_books.material.map(),
@@ -141,14 +141,14 @@ impl PalwPanelService {
             {
                 match self
                     .tir_shard_public_court_move_v1(
-                        &session,
+                        session,
                         network_domain,
                         current_daa,
                         duty,
                         mv,
                         pool_books.material.map(),
                         pool_books.intervals.resume_mut(),
-                        &mut shard_books,
+                        shard_books,
                     )
                     .await
                 {
@@ -171,7 +171,8 @@ impl PalwPanelService {
             // The capture, and the family's backend for it. A party with no material — or a
             // family with no court — cannot answer honestly, and answering dishonestly is what
             // the terminal close exists to punish, so it stays silent and lets the clock decide.
-            let mut backend = match self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) {
+            let mut backend = match self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+            {
                 Ok(backend) => backend,
                 Err(why) => {
                     // Not rate-limited by session: this one is a NODE-level misconfiguration
@@ -236,12 +237,12 @@ impl PalwPanelService {
             };
             // An attempt's material answers the whole job its block asked for (ADR-0117); a
             // free-prompt claim's job is its own.
-            let attempt_draw = if fp_job.is_some() { None } else { self.attempt_draw_for_claim(&session, duty.accepted_block) };
+            let attempt_draw = if fp_job.is_some() { None } else { self.attempt_draw_for_claim(session, duty.accepted_block) };
             let anchor = match &fp_job {
                 Some(job) => kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&job.job),
                 None => self
                     .job_anchor_for_claim(
-                        &session,
+                        session,
                         backend.as_ref(),
                         network_domain,
                         duty.accepted_block,
@@ -302,7 +303,7 @@ impl PalwPanelService {
             if !accused_held && duty.i_am_responder && fp_job.is_none() {
                 let work = self
                     .attempt_job_for_claim(
-                        &session,
+                        session,
                         backend.as_ref(),
                         network_domain,
                         duty.accepted_block,
@@ -370,7 +371,7 @@ impl PalwPanelService {
                     }
                     None => self
                         .attempt_job_for_claim(
-                            &session,
+                            session,
                             backend.as_ref(),
                             network_domain,
                             duty.accepted_block,
@@ -455,7 +456,8 @@ impl PalwPanelService {
             // responder's is the claim's; a challenger's its own execution) and, for the bottom, the
             // ACCUSED capture; signed here, and queued as every court move is.
             if let Some(mv) = tir_dissect::palw_tir_dissect_move_of_duty_v1(duty)
-                && let Some(tir) = self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                && let Some(tir) =
+                    self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
             {
                 let tir = match tir {
                     Ok(tir) => tir,
@@ -986,7 +988,9 @@ impl PalwPanelService {
                     // IR backend from the ACCUSED capture — `TirCone` for either party, and at a
                     // logits tile the challenger's `TirLogits` and decode-token doors
                     // (`palw_panel::tir_court`). A party files only the close that wins its side.
-                    if let Some(tir) = self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) {
+                    if let Some(tir) =
+                        self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                    {
                         let tir = match tir {
                             Ok(tir) => tir,
                             Err(why) => {
@@ -1136,7 +1140,7 @@ impl PalwPanelService {
                                 duty.artifact_root,
                                 None,
                                 FULL_SEAT_V1,
-                                |id| self.chain_carriage_v1(&session, id),
+                                |id| self.chain_carriage_v1(session, id),
                             )
                         }) {
                             Ok((reserved, _)) => reserved,
@@ -1298,7 +1302,7 @@ impl PalwPanelService {
             };
             let held_host = held_court::PalwPanelHeldHostV1 {
                 panel: self,
-                session: &session,
+                session,
                 network_domain,
                 bond: bond_key,
                 materials: pool_books.material.map(),
@@ -1360,7 +1364,7 @@ impl PalwPanelService {
                     || court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key)
                     || court_outbox.submitted_at(key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
             };
-            let tick = held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy);
+            let tick = held_court::palw_held_moves_v1(&held_host, held_court, &held_duties, current_daa, busy);
             for why in tick.stalls {
                 *court_stalls.entry(why).or_default() += 1;
             }
@@ -1368,7 +1372,7 @@ impl PalwPanelService {
                 court_outbox.set_due(queued.key, queued.due);
                 court_outbox.push_pending((queued.key.0, queued.key.1, queued.key.2, queued.object));
             }
-            held_court::palw_held_start_builds_v1(&held_host, &mut held_court, current_daa);
+            held_court::palw_held_start_builds_v1(&held_host, held_court, current_daa);
         }
         // Ask for every accused capture a close needed and this node did not hold. Outside the
         // logging guard below deliberately: a request that only goes out when a summary line
@@ -1442,7 +1446,7 @@ impl PalwPanelService {
                 None if !duty.free_prompt && duty.held_missing.is_none() => {
                     match self
                         .remade_attempt_capture_v1(
-                            &session,
+                            session,
                             network_domain,
                             duty.accepted_block,
                             duty.class_id,
@@ -1477,7 +1481,7 @@ impl PalwPanelService {
             // unit** — a leaf's evidence (which the fold then adjudicates), a prompt tile — and an
             // unanswerable unit is said by name, because silence here is the default's slash.
             if let Some(missing) = duty.held_missing {
-                match self.held_da_answer_v1(&session, network_domain, duty.claim_id, missing) {
+                match self.held_da_answer_v1(session, network_domain, duty.claim_id, missing) {
                     Ok(object) => {
                         info!(
                             "[{PALW_PANEL}] claim {}: answering the held accusation of {missing:?} from the retained capture — \
@@ -1495,7 +1499,7 @@ impl PalwPanelService {
                 continue;
             }
             let (row, tile) = kaspa_consensus_core::palw_state_v2::palw_da_event_index_parts_v1(duty.missing_event_index);
-            let disclosed = self.disclose_retained_event_v1(&session, duty.class_id, duty.artifact_root, &bytes, row, tile);
+            let disclosed = self.disclose_retained_event_v1(session, duty.class_id, duty.artifact_root, &bytes, row, tile);
             let disclosure = match disclosed {
                 Ok(disclosure) => disclosure,
                 Err(why) => {
@@ -1669,7 +1673,7 @@ impl PalwPanelService {
             }
             for (claim, duties) in by_claim {
                 let role = duties[0].role;
-                match self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await {
+                match self.rcore_da_answers_v1(session, network_domain, &duties, flat_queued.contains(&claim)).await {
                     Ok(built) => {
                         for (duty, built) in duties.iter().zip(built) {
                             let key = disclosure_keys[&(duty.claim_id, duty.unit)];
@@ -1738,12 +1742,7 @@ impl PalwPanelService {
         }
 
         if let Err(why) = self
-            .public_prefix_answer_tick_v1(
-                &session,
-                PalwAnswerSlotV1::own(bond_key),
-                &mut public_prefix_response_cursor,
-                &mut court_outbox,
-            )
+            .public_prefix_answer_tick_v1(session, PalwAnswerSlotV1::own(bond_key), public_prefix_response_cursor, court_outbox)
             .await
         {
             debug!("[{PALW_PANEL}] public prefix response remains pending: {why}");

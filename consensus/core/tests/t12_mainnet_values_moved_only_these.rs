@@ -18,6 +18,7 @@
 //! `T12_BEFORE_THE_ATTRIBUTION` as it stood there — so nothing else in this change reached
 //! testnet-12's ruleset, identity or schedule.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PalwPanelExposureFloorV1, Params, palw_t12_shipped_params,
 };

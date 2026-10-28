@@ -10,6 +10,7 @@
 //! `Active` on eight ready cards (room 5, so a share of ⌈5 / 2⌉ = 3) and card 1 holding three
 //! unlicensed claims of it. Card 2 holds none. The fence-off twin (`palw_rcore_plus` unset) plants
 //! the same tip and reads no share.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{stamp_harness_time, t12_with_harness_cards};
 use super::{OnetimeTxSelector, TestContext, new_miner_data};
 use crate::consensus::test_consensus::TestConsensus;

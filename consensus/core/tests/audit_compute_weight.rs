@@ -15,6 +15,7 @@
 //!
 //! Run: cargo test --release -p kaspa-consensus-core --test audit_compute_weight -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
@@ -175,7 +176,6 @@ fn t12_genesis_state(p: &Params, b: &PalwConsensusParamsV2, collateral: u64) -> 
     .expect("the t12 genesis bundle folds");
     state
 }
-
 
 #[test]
 fn audit_l1_a_new_root_on_a_genesis_graph_is_admitted_and_priced_as_the_graph() {

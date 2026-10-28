@@ -13,6 +13,7 @@
 //! tower over the job image, the LM as the text stage — against HF's greedy `generate`
 //! ([`text_stage`]).
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir as tir;

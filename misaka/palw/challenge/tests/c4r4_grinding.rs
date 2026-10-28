@@ -12,6 +12,7 @@
 //! beacon that mixes ALL eligible Finals of its window (or a sealed-source v3 whose seal window closes before any reveal) is what SG-01a
 //! needs; the distinct rules are a cost, to be priced in the effective accounting as such.
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use misaka_palw_challenge::hash::{Digest, object_id};

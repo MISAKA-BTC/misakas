@@ -9,6 +9,7 @@
 //! Convention (rounds 1–4): a defect's test asserts the SAFE property and is `#[ignore = "FAIL F-C4R4-nn …"]`; an `obs_` test pins
 //! by-design behaviour, quantified.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_da_rcore_v1::{
     PALW_DA_REFUTED_COST_BPS_V1, PALW_DA_REFUTED_COST_BPS_V2, PalwDaStageV1, palw_da_session_exposure_v1, palw_da_session_exposure_v2,

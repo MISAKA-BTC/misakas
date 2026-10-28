@@ -2408,10 +2408,7 @@ pub fn palw_held_hybrid_route_covered_v2(profile: &PalwShapeProfileV3) -> bool {
 /// replay path removes only the old blanket recurrent-layer refusal for its
 /// covered map; context, reference cost, replay factor and turn cap are unchanged.
 /// No shipped caller activates this reading until consolidated qualification.
-pub fn palw_held_class_unanswerable_v2(
-    profile: &PalwShapeProfileV3,
-    memory_routing_court: bool,
-) -> Option<PalwHeldUnanswerableV1> {
+pub fn palw_held_class_unanswerable_v2(profile: &PalwShapeProfileV3, memory_routing_court: bool) -> Option<PalwHeldUnanswerableV1> {
     let legacy = palw_held_class_unanswerable_v1(profile);
     if !memory_routing_court
         || !matches!(legacy, Some(PalwHeldUnanswerableV1::Recurrent { .. }))

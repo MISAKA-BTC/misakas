@@ -15,6 +15,7 @@
 //! would pass on the day the defect is reintroduced two crates over, which is exactly how the
 //! original one arrived.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {

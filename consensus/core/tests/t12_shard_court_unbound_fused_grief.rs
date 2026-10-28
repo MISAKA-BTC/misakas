@@ -24,6 +24,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test t12_shard_court_unbound_fused_grief -- --nocapture
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

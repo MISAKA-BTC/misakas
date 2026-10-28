@@ -28,6 +28,7 @@
 //! node's tip store does. kaspad's `held_court_e2e` plays both pause paths through the node and the
 //! fold, reloading after every block.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

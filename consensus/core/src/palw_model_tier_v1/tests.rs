@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::config::params::{MAINNET_PARAMS, TESTNET_PARAMS};
-use crate::palw_annual_catalog_v1::ApprovedModelV1;
 use crate::network::{NetworkId, NetworkType};
+use crate::palw_annual_catalog_v1::ApprovedModelV1;
 use crate::palw_bond_budget_v1::*;
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::tx::TransactionOutpoint;

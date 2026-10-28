@@ -40,6 +40,7 @@
 //! owns its container), funding and signing (key custody is the node's), and fleet distribution.
 //! The SDK is where a model becomes a class; it is not a wallet and not a deployment tool.
 
+#![cfg_attr(test, allow(warnings))]
 /// RFC-0002 Phase F (F10): `palw-class check-architecture` — IR and legacy verdicts for a config.
 pub mod check_architecture;
 pub mod class_manifest;
@@ -82,12 +83,12 @@ pub mod flat_vector_v7;
 pub mod full_component_v28;
 /// Stream the node's native values into the existing segmented commitment grammar.
 pub mod kernel_execution;
+/// Lane J1: a kernel job from text, and its result back to text, with the user's tokenizer.
+pub mod kernel_job_v1;
 /// Generic bounded preparation of segmented-kernel parameter commitments.
 pub mod kernel_params;
 /// Bounded, ordered collection of the public kernel-route inventory.
 pub mod kernel_rows;
-/// Lane J1: a kernel job from text, and its result back to text, with the user's tokenizer.
-pub mod kernel_job_v1;
 pub mod native_audit_io_v32;
 pub mod native_audit_v32;
 pub mod native_invocation_replay_v32;
@@ -107,8 +108,6 @@ pub mod onboarding_snapshot;
 /// `artifact_digest` recomputed by the BASE-0 decoder, the TIR section's inventory root by the
 /// consensus function (pinning the light packer's twin).
 pub mod palwart_deep;
-/// RFC-0002 02-A: a TIR class's `PALWART3` container binding (tag 175, dormant), built from the container's header.
-pub mod tir_container;
 pub mod panel_lifetime_v2;
 pub mod panel_source_fee_v2;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
@@ -120,6 +119,8 @@ pub mod sdk;
 pub mod tir_certification;
 /// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.
 pub mod tir_composite;
+/// RFC-0002 02-A: a TIR class's `PALWART3` container binding (tag 175, dormant), built from the container's header.
+pub mod tir_container;
 /// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
 pub mod tir_equiv;
 pub mod tir_layout;

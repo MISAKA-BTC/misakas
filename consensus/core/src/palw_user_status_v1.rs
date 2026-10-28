@@ -256,7 +256,12 @@ fn tier_row(state: &PalwChainStateV2, params: &PalwStateParamsV2, class_id: &Has
 
 /// **`modelTier`**: whether the tier fence is in force, `c` and `κ`, the catalog editions, and each class's tier (one class, or every
 /// class the state holds, capped).
-pub fn palw_model_tier_json_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, class: Option<&Hash64>, now: u64) -> Option<Value> {
+pub fn palw_model_tier_json_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class: Option<&Hash64>,
+    now: u64,
+) -> Option<Value> {
     let mirror = params.model_tier_v1();
     let (rows, total): (Vec<Value>, usize) = match class {
         Some(c) => {
@@ -413,7 +418,12 @@ fn claim_budget_json(row: &PalwBudgetClaimRowV1) -> Value {
 
 /// **View `bond-budget`**: a bond's capital, caps, window, open claims and next release. `None` for a bond the registry
 /// does not hold; the engine's figures are `null` until the fence's first block.
-pub fn palw_bond_budget_json_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, bond: &PalwBondKeyV2, now: u64) -> Option<Value> {
+pub fn palw_bond_budget_json_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now: u64,
+) -> Option<Value> {
     let reg = state.bond(bond)?;
     let engine = state.bond_budget();
     let caps = params.bond_budget().map(|m| state.bond_budget_caps_v1(&m.policy, bond));
@@ -510,7 +520,8 @@ pub fn palw_capital_assignment_json_v1(
 ) -> Option<Value> {
     state.bond(bond)?;
     let row = state.bond_budget().and_then(|b| b.assignment_row(bond));
-    let pairs = |v: &Vec<(Hash64, u64)>| v.iter().map(|(m, a)| json!({ "model": m.to_string(), "amountSompi": a })).collect::<Vec<_>>();
+    let pairs =
+        |v: &Vec<(Hash64, u64)>| v.iter().map(|(m, a)| json!({ "model": m.to_string(), "amountSompi": a })).collect::<Vec<_>>();
     Some(budget_doc(
         "palwCapitalAssignment",
         params,

@@ -310,6 +310,7 @@ pub(super) fn coordinate_funded_original_v1(
     {
         return Err(Invalid("contract or funding outpoint already escrowed"));
     }
+    #[allow(clippy::drop_non_drop)]
     drop(funding);
     Ok(FundedOriginalPlanV1 { requirements, row, derivation, admission, signers })
 }

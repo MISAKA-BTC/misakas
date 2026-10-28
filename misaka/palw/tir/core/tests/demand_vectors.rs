@@ -14,6 +14,7 @@
 //! `cargo test -p misaka-palw-tir --test demand_vectors` regenerates every file and requires identical
 //! bytes; `TIR_BLESS=1` rewrites them, which is a change of the semantics and is reviewed as one.
 
+#![allow(warnings)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 

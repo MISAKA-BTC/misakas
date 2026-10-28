@@ -5,6 +5,7 @@
 //! operand-inventory root, not the flat `artifact_digest()`. Prints both for a file so the two
 //! spellings can be compared against the pin. Ignored: it needs a 1.7 GiB file named by
 //! `PALW_A16_PATH`.
+#![allow(warnings)]
 #[test]
 #[ignore]
 fn print_a16_root_forms() {

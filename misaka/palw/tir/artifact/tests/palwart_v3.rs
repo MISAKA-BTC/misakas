@@ -8,6 +8,7 @@
 //!
 //! Written, not run here (the validation lane compiles and runs it).
 
+#![allow(warnings)]
 use misaka_palw_tir_artifact::palwart_v3::*;
 use std::path::PathBuf;
 

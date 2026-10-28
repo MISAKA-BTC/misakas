@@ -4,6 +4,7 @@
 //! A `Kernel` fault proof's `scalar` field is read only for a MatMul scalar fault: any other kind convicts identically with any
 //! `scalar`, so one conviction has many byte encodings. GAP-R7 pays the earliest sealer of the EXACT bytes, else the filer.
 
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

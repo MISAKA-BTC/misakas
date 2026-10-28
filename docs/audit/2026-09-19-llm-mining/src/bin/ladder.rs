@@ -1,6 +1,7 @@
 //! AGENT 4 — part 3. What ladder does testnet-11 ACTUALLY admit at, and prosecute at?
 //! Everything here reads the shipped `palw_rc_shipped_params()` — no fixture, no hand-built bundle.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_rc_shipped_params;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1};

@@ -10,6 +10,7 @@
 //! does, at 2,048 and 8,192 positions, with the logits in 512-lane tiles; the work is printed against
 //! the cap, and every close must be carriable.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_improve_composite_v1::palw_tir_composite_rule_v1;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;

@@ -217,7 +217,10 @@ mod tests {
         let tx = crate::tx::Transaction::new(
             0,
             vec![crate::tx::TransactionInput::new(crate::tx::TransactionOutpoint::new(h(77), 0), Vec::new(), 0, 0)],
-            vec![crate::tx::TransactionOutput::new(150, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&public).as_bytes()))],
+            vec![crate::tx::TransactionOutput::new(
+                150,
+                crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&public).as_bytes()),
+            )],
             0,
             crate::subnets::SUBNETWORK_ID_NATIVE,
             0,

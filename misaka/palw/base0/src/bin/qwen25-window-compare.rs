@@ -15,6 +15,7 @@
 //! cannot tell the full-prefix run from that one is not measuring long-context state, so the report states both. The context is
 //! never shortened for the main score. Nothing here is a PASS: the report is a measurement, and the acceptance bar (RFC-0013) is
 //! applied to it by the reader.
+#![allow(warnings)]
 use misaka_palw_base0::artifact::decode_artifact_file_v1;
 use misaka_palw_base0::engine_a16::{A16Cache, A16Engine};
 use misaka_palw_base0::reference::{RefConfigV1, reference_forward_windows_v1, score_fidelity};
@@ -35,24 +36,33 @@ fn logit_kl_v1(reference: &[f32], integer: &[i32], scale: f64) -> Result<f64, &'
     }
     let r: Vec<f64> = reference.iter().map(|v| f64::from(*v)).collect();
     let q: Vec<f64> = integer.iter().map(|v| f64::from(*v) * scale).collect();
-    if r.iter().chain(&q).any(|v| !v.is_finite()) { return Err("non-finite logit"); }
+    if r.iter().chain(&q).any(|v| !v.is_finite()) {
+        return Err("non-finite logit");
+    }
     let rm = r.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let qm = q.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let rz = r.iter().map(|v| (v - rm).exp()).sum::<f64>().ln();
     let qz = q.iter().map(|v| (v - qm).exp()).sum::<f64>().ln();
-    let kl: f64 = r.iter().zip(&q).map(|(r, q)| {
-        let rp = r - rm - rz;
-        rp.exp() * (rp - (q - qm - qz))
-    }).sum();
-    if !kl.is_finite() { return Err("non-finite divergence"); }
+    let kl: f64 = r
+        .iter()
+        .zip(&q)
+        .map(|(r, q)| {
+            let rp = r - rm - rz;
+            rp.exp() * (rp - (q - qm - qz))
+        })
+        .sum();
+    if !kl.is_finite() {
+        return Err("non-finite divergence");
+    }
     Ok(kl.max(0.0))
 }
 
 fn kl_summary_v1(reference: &[Vec<f32>], integer: &[Vec<i32>], scale: f64) -> serde_json::Value {
-    if reference.is_empty() || reference.len() != integer.len() { die("incomplete comparison window".into()); }
-    let values: Vec<f64> = reference.iter().zip(integer).map(|(r, q)| {
-        logit_kl_v1(r, q, scale).unwrap_or_else(|why| die(why.into()))
-    }).collect();
+    if reference.is_empty() || reference.len() != integer.len() {
+        die("incomplete comparison window".into());
+    }
+    let values: Vec<f64> =
+        reference.iter().zip(integer).map(|(r, q)| logit_kl_v1(r, q, scale).unwrap_or_else(|why| die(why.into()))).collect();
     serde_json::json!({"mean": values.iter().sum::<f64>() / values.len() as f64,
         "max": values.iter().copied().fold(0.0, f64::max)})
 }
@@ -62,9 +72,11 @@ fn main() {
     let dir = args.get(1).unwrap_or_else(|| die("usage: qwen25-window-compare <dir> --a16 FILE --tokens FILE [...]".into()));
     let a16 = arg(&args, "--a16").unwrap_or_else(|| die("--a16 FILE is required".into()));
     let tokens_path = arg(&args, "--tokens").unwrap_or_else(|| die("--tokens FILE is required".into()));
-    let window_len: usize = arg(&args, "--window-len").map(|v| v.parse().unwrap_or_else(|_| die(format!("bad --window-len {v}")))).unwrap_or(64);
-    let tokens: Vec<usize> = serde_json::from_slice(&std::fs::read(tokens_path).unwrap_or_else(|e| die(format!("{tokens_path}: {e}"))))
-        .unwrap_or_else(|e| die(format!("{tokens_path}: {e}")));
+    let window_len: usize =
+        arg(&args, "--window-len").map(|v| v.parse().unwrap_or_else(|_| die(format!("bad --window-len {v}")))).unwrap_or(64);
+    let tokens: Vec<usize> =
+        serde_json::from_slice(&std::fs::read(tokens_path).unwrap_or_else(|e| die(format!("{tokens_path}: {e}"))))
+            .unwrap_or_else(|e| die(format!("{tokens_path}: {e}")));
     let n = tokens.len();
     if n == 0 || window_len == 0 {
         die("an empty sequence or window".into());
@@ -97,14 +109,17 @@ fn main() {
         .unwrap_or_else(|e| die(format!("{a16}: {e}")));
     let engine = A16Engine::new(&artifact).unwrap_or_else(|e| die(format!("the A16 engine refused the artifact: {e:?}")));
     let calibration = arg(&args, "--calibration-report").map(|path| {
-        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)
-            .unwrap_or_else(|e| die(format!("{path}: {e}")))).unwrap_or_else(|e| die(format!("{path}: {e}")));
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| die(format!("{path}: {e}"))))
+            .unwrap_or_else(|e| die(format!("{path}: {e}")));
         if value["schema"] != "misaka-palw/a16-source-calibration/v1"
             || value["artifact_digest"] != artifact.artifact_digest().to_string()
-            || value["n_ctx"].as_u64() != Some(artifact.shape.max_position as u64) {
+            || value["n_ctx"].as_u64() != Some(artifact.shape.max_position as u64)
+        {
             die("calibration report does not name this artifact and context".into());
         }
-        let scale = value["logit_scale"].as_f64().filter(|v| v.is_finite() && *v > 0.0)
+        let scale = value["logit_scale"]
+            .as_f64()
+            .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or_else(|| die("calibration report has no finite positive physical logit scale".into()));
         (value, scale)
     });
@@ -182,7 +197,6 @@ fn main() {
         None => println!("{text}"),
     }
 }
-
 
 #[cfg(test)]
 mod tests {

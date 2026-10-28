@@ -33,10 +33,9 @@ pub fn palw_staged_route_form_fence_v1(object: &PalwConsensusObjectV2) -> Option
             A::FloatSourceOpen { .. } | A::FloatSourceAnswer(_) | A::FloatSourceNominate { .. } | A::FloatSourceCollect => {
                 Some(PalwLifecycleKindFenceV1::StagedFloatConstraintV1)
             }
-            A::NativeSelectedDemand { .. }
-            | A::NativeSelectedAnswer(_)
-            | A::NativeTirPrefixAnswer(_)
-            | A::NativeTirPrefixCollect => Some(PalwLifecycleKindFenceV1::StagedTirRouteV1),
+            A::NativeSelectedDemand { .. } | A::NativeSelectedAnswer(_) | A::NativeTirPrefixAnswer(_) | A::NativeTirPrefixCollect => {
+                Some(PalwLifecycleKindFenceV1::StagedTirRouteV1)
+            }
             _ => None,
         },
         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => match &seed.auxiliary {
@@ -77,14 +76,16 @@ mod tests {
         let float = movement(A::FloatSourceCollect);
         assert_eq!(palw_staged_route_form_fence_v1(&plain), None);
         assert_eq!(palw_staged_route_form_fence_v1(&float), Some(PalwLifecycleKindFenceV1::StagedFloatConstraintV1));
-        let court = PalwLifecycleKindFencesV1::default().with(PalwLifecycleKindFenceV1::StagedPublicCourtV1, Some(ForkActivation::new(10)));
+        let court =
+            PalwLifecycleKindFencesV1::default().with(PalwLifecycleKindFenceV1::StagedPublicCourtV1, Some(ForkActivation::new(10)));
         assert!(court.kind_in_force_at(&plain, 10));
         assert!(!court.kind_in_force_at(&float, u64::MAX), "the court's fence never arms a route's form");
         let armed = court.with(PalwLifecycleKindFenceV1::StagedFloatConstraintV1, Some(ForkActivation::new(20)));
         assert!(!armed.kind_in_force_at(&float, 19));
         assert!(armed.kind_in_force_at(&float, 20));
         // `Params` resolves the route's fence only where the staged court is armed too, at the later height.
-        let mut p = crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+        let mut p =
+            crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
         assert_eq!(p.palw_lifecycle_kind_fences_v1().activation(PalwLifecycleKindFenceV1::StagedFloatConstraintV1), None);
         p.palw_staged_float_constraint_v1 = Some(ForkActivation::new(30));
         p.palw_staged_public_court_v1 = None;

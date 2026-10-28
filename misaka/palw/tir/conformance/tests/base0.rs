@@ -1,5 +1,6 @@
 //! **BASE-0** (ADR-0040 D + H): the ten kernels of the int8 tier against their segments.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

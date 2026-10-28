@@ -1,8 +1,10 @@
 //! Synthetic native mechanism fixtures, not signed native campaign evidence.
+#![allow(warnings)]
 use super::*;
 use crate::palw_bond_budget_v1::{PalwBondBudgetMirrorV1, PalwBondBudgetPolicyV1};
 use crate::palw_kernel_route_v1::*;
 use crate::palw_source_bootstrap_v1::*;
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../../../misaka/palw/kernel/tests/common/mod.rs"]
 mod fixture;
 fn h(n: u8) -> Hash64 {

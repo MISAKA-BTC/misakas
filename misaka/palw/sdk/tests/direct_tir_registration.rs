@@ -10,6 +10,7 @@
 //! * the consensus admission and registration sources name no `model_type`, `FeatureId`, adapter, frontend pack or Hub repository;
 //! * the onboarding label is `SOURCE_EQUIVALENCE_UNVERIFIED` when no verified runtime pack names the artifact.
 
+#![allow(warnings)]
 use std::borrow::Cow;
 
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;

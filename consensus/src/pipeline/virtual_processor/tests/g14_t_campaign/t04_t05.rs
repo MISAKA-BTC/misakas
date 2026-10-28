@@ -122,7 +122,9 @@ async fn t04_native_intake_separates_normal_paid_court_and_invalid_codec_floods_
         assert!(w.net.chain.tip_state().1.palw_paid_ingress_v1(&lie.id, &w.net.kid(outsider)).is_some());
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("tag 255 MaterialIntakeV1 is refused on every node (material_intake_schedule_v1 typed-missing, V5); the paid-ingress fee is typed-missing (V4); no calibrated per-op cost table exists (V1 from measurement M-C); intended palw_native_court_intake_v1 / palw_paid_ingress_quote_v1 / palw_paid_ingress_v1 / K::PaidIngressOpen do not exist");
+    blocked_on!(
+        "tag 255 MaterialIntakeV1 is refused on every node (material_intake_schedule_v1 typed-missing, V5); the paid-ingress fee is typed-missing (V4); no calibrated per-op cost table exists (V1 from measurement M-C); intended palw_native_court_intake_v1 / palw_paid_ingress_quote_v1 / palw_paid_ingress_v1 / K::PaidIngressOpen do not exist"
+    );
 }
 
 /// **T05 (route part): every owner slot occupied and refilled by colluders; exactly one external verifier finishes.** The producer and
@@ -206,5 +208,7 @@ async fn t05_all_owners_refilled_by_colluders_one_outsider_finishes_through_fair
         assert_eq!(finishers, vec![w.net.kid(outsider)]);
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("no paid-ingress object exists (the fee rides TIR CourtOpened; palw_court_ingress_schedule_v1 typed-missing, V4); the advance-reserved outside slot needs a TIR claim admitted past palw_court_outsider_lane_v1 with a CourtSharedContext (no production installer); intended palw_paid_ingress_quote_v1 / _owners_v1 / _finishers_v1 / K::PaidIngressOpen do not exist");
+    blocked_on!(
+        "no paid-ingress object exists (the fee rides TIR CourtOpened; palw_court_ingress_schedule_v1 typed-missing, V4); the advance-reserved outside slot needs a TIR claim admitted past palw_court_outsider_lane_v1 with a CourtSharedContext (no production installer); intended palw_paid_ingress_quote_v1 / _owners_v1 / _finishers_v1 / K::PaidIngressOpen do not exist"
+    );
 }

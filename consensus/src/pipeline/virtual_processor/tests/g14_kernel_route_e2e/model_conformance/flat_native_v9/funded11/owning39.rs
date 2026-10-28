@@ -3,8 +3,8 @@
 //! G-N2 mining court and the v39 job court can run on real rows. Structural test values, never measurements.
 use super::*;
 use kaspa_consensus_core::palw_native_execution_v39::*;
-use misaka_palw_kernel::flat_source39::*;
 use misaka_palw_kernel::flat_job39::CheckedJobMaximumV39;
+use misaka_palw_kernel::flat_source39::*;
 use misaka_palw_tir::{ConstDecl, DType, Prim, Ref, Schedule, program_v2::OutputDecl, program_v39::*};
 
 fn source_wire() -> FlatSourceWireV39 {
@@ -28,7 +28,12 @@ fn source_wire_at(context: u32) -> FlatSourceWireV39 {
             BlockV39 {
                 name: "pre".into(),
                 carry_in: vec![],
-                nodes: vec![NodeV39 { prim: NodePrimV39::Frozen(Prim::Cast), inputs: vec![Ref::Const(0)], out: out.clone(), commit: true }],
+                nodes: vec![NodeV39 {
+                    prim: NodePrimV39::Frozen(Prim::Cast),
+                    inputs: vec![Ref::Const(0)],
+                    out: out.clone(),
+                    commit: true,
+                }],
                 carry_out: vec![0],
             },
             BlockV39 {
@@ -60,7 +65,9 @@ fn owning_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
 /// `owning_config`, optionally with a shorter challenge window (a job that must reach Final unaccused in the test).
 fn owning_config_with(challenge: Option<u64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let f = sparse9(false);
-    let (mut cfg, b, p, fl) = super::text29::text_config(misaka_palw_kernel::flat_resources29::derive_flat_resources_v29(&f.p, &f.pc, 3, None).unwrap().court.court_set);
+    let (mut cfg, b, p, fl) = super::text29::text_config(
+        misaka_palw_kernel::flat_resources29::derive_flat_resources_v29(&f.p, &f.pc, 3, None).unwrap().court.court_set,
+    );
     let domain = cfg.params.palw_funded_execution_v11.as_ref().unwrap().policies.execution.network_domain;
     // The same TEST calibration for the v39 ordinary court profile (sorted by profile, as Final27 requires).
     {
@@ -82,9 +89,12 @@ fn owning_config_with(challenge: Option<u64>) -> (Config, PalwConsensusParamsV2,
     fence.policies.execution = cfg.params.palw_funded_execution_v11.as_ref().unwrap().policies.clone();
     fence.policies.final_policy = final_policy.root();
     fence.policies.physical_service =
-        kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(&mass, &final_policy.queue_policy)
-            .unwrap()
-            .root();
+        kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(
+            &mass,
+            &final_policy.queue_policy,
+        )
+        .unwrap()
+        .root();
     // The whole v39 opportunity (commit + challenge + proof/delivery tail) under the widened test horizons.
     fence.policies.maximum_horizon = 99_000;
     cfg.params.palw_native_execution_v39 = Some(fence);
@@ -123,8 +133,14 @@ async fn owning39_fixture_registers_consents_and_funds_a_real_job() {
     net.send(vec![(0, o)]).await;
     let classes = net.api().unwrap().aux.keys().filter(|(t, k)| *t == 112 && k.starts_with(&[39, 2])).count();
     assert_eq!(classes, 1, "the v39 class is registered");
-    let class_id: Digest =
-        net.api().unwrap().aux.keys().find(|(t, k)| *t == 112 && k.starts_with(&[39, 2])).map(|(_, k)| k[2..66].try_into().unwrap()).unwrap();
+    let class_id: Digest = net
+        .api()
+        .unwrap()
+        .aux
+        .keys()
+        .find(|(t, k)| *t == 112 && k.starts_with(&[39, 2]))
+        .map(|(_, k)| k[2..66].try_into().unwrap())
+        .unwrap();
     // ---- the producer's consent (43) over the derived maximum contract, then the requester's Fund (44) ----
     use misaka_palw_kernel::flat_job39::*;
     let manifest = MaterialManifestV39 { version: 39, source, master: [0; 64], bindings: vec![] };
@@ -140,13 +156,24 @@ async fn owning39_fixture_registers_consents_and_funds_a_real_job() {
     let checked_class = class.check(&checked, &policies).unwrap();
     assert_eq!(checked_class.root(), class_id);
     let maximum = CheckedJobMaximumV39::check(&checked, &request, &manifest).unwrap();
-    let quota = misaka_palw_kernel::flat_quota11::owning39::derive_quota_v39(&checked, &maximum, class_id, policies.root(), 2, 32).unwrap();
+    let quota =
+        misaka_palw_kernel::flat_quota11::owning39::derive_quota_v39(&checked, &maximum, class_id, policies.root(), 2, 32).unwrap();
     let final_policy = net.config.params.palw_native_final_v27.as_ref().unwrap().policy.clone();
     let mass = kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(&net.config.params);
-    let service =
-        kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(&mass, &final_policy.queue_policy).unwrap();
+    let service = kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(
+        &mass,
+        &final_policy.queue_policy,
+    )
+    .unwrap();
     let contract = kaspa_consensus_core::palw_native_job_v39::CheckedNativeMaximumV39::derive(
-        &checked_class, &maximum, &quota, &policies, &final_policy, &net.api().unwrap().header.policy, &mass, &service,
+        &checked_class,
+        &maximum,
+        &quota,
+        &policies,
+        &final_policy,
+        &net.api().unwrap().header.policy,
+        &mass,
+        &service,
     );
     let contract = match contract {
         Ok(c) => c,
@@ -169,16 +196,28 @@ async fn owning39_fixture_registers_consents_and_funds_a_real_job() {
     };
     let o = stage(&mut net, 0, 43, borsh::to_vec(&consent).unwrap());
     net.send(vec![(0, o)]).await;
-    let consents: Vec<Digest> =
-        net.api().unwrap().aux.keys().filter(|(t, k)| *t == 112 && k.starts_with(&[39, 18])).map(|(_, k)| k[2..66].try_into().unwrap()).collect();
+    let consents: Vec<Digest> = net
+        .api()
+        .unwrap()
+        .aux
+        .keys()
+        .filter(|(t, k)| *t == 112 && k.starts_with(&[39, 18]))
+        .map(|(_, k)| k[2..66].try_into().unwrap())
+        .collect();
     assert_eq!(consents.len(), 1, "the producer's v39 consent landed");
     let fund = kaspa_consensus_core::palw_native_job_v39::NativeFundWireV39 { version: 39, consent: consents[0] };
     let o = stage(&mut net, 2, 44, borsh::to_vec(&fund).unwrap());
     net.send(vec![(2, o)]).await;
     let jobs = net.api().unwrap().aux.keys().filter(|(t, k)| *t == 112 && k.starts_with(&[39, 16])).count();
     assert_eq!(jobs, 1, "the v39 job is funded");
-    let job: Digest =
-        net.api().unwrap().aux.keys().find(|(t, k)| *t == 112 && k.starts_with(&[39, 16])).map(|(_, k)| k[2..66].try_into().unwrap()).unwrap();
+    let job: Digest = net
+        .api()
+        .unwrap()
+        .aux
+        .keys()
+        .find(|(t, k)| *t == 112 && k.starts_with(&[39, 16]))
+        .map(|(_, k)| k[2..66].try_into().unwrap())
+        .unwrap();
     // ---- the producer commits a LYING claim (carry value 7 for 5), exactly the SDK's dishonest archive ----
     use misaka_palw_kernel::{flat_detect39::*, flat_material39::*, flat_point39::*, flat_trace39::*};
     struct NoPages;
@@ -199,7 +238,8 @@ async fn owning39_fixture_registers_consents_and_funds_a_real_job() {
     let inputs = ActualInputResolverV39::derive(&checked, &maximum, &[], &NoPages).unwrap();
     let dir = std::env::temp_dir().join(format!("g14n2-own39-{}-{}", std::process::id(), net.daa()));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut dishonest = misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&dir.join("producer"), &checked, 1 << 20).unwrap();
+    let mut dishonest =
+        misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&dir.join("producer"), &checked, 1 << 20).unwrap();
     dishonest.begin(checked.root(), maximum.root(), inputs.root()).unwrap();
     let a = misaka_palw_tir::Tensor::new(DType::I16, vec![], vec![5]).unwrap();
     let b7 = misaka_palw_tir::Tensor::new(DType::I16, vec![], vec![7]).unwrap();
@@ -225,21 +265,36 @@ async fn owning39_fixture_registers_consents_and_funds_a_real_job() {
         segment_roots: misaka_palw_kernel::seg::segment_roots_of_position_roots_v1(&roots),
     };
     dishonest.finish(&TraceSummaryV39 { claim: claim.clone(), position_roots: roots, output_roots: vec![cb] }).unwrap();
-    let commit = kaspa_consensus_core::palw_native_job_v39::NativeCommitWireV39 { version: 39, job, generated: vec![], claim: claim.clone() };
+    let commit =
+        kaspa_consensus_core::palw_native_job_v39::NativeCommitWireV39 { version: 39, job, generated: vec![], claim: claim.clone() };
     let o = stage(&mut net, 0, 45, borsh::to_vec(&commit).unwrap());
     net.send(vec![(0, o)]).await;
-    let post = net.api().unwrap().aux.get(&(112, borsh::to_vec(&(39u8, 28u8, job)).unwrap())).cloned().expect("the lying claim is committed");
+    let post =
+        net.api().unwrap().aux.get(&(112, borsh::to_vec(&(39u8, 28u8, job)).unwrap())).cloned().expect("the lying claim is committed");
     // ---- an outsider's independent replay finds the fault; the court's own check accepts it against the NODE's committed post ----
     let on_chain = kaspa_consensus_core::palw_native_job_v39::NativeCommitWireV39::from_bytes(&post, 2).unwrap();
-    let mut own = misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&dir.join("auditor"), &checked, 1 << 20).unwrap();
+    let mut own =
+        misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&dir.join("auditor"), &checked, 1 << 20).unwrap();
     let replay = execute_independent_replay_v39(&checked, &maximum, &inputs, &NoParams, &mut own).unwrap();
     let context = CheckedPointContextV39::check(&checked, &maximum, on_chain.claim.root(), &on_chain.claim, &inputs).unwrap();
-    let mut producer_archive =
-        misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::open_existing(&dir.join("producer"), &checked, &maximum, &inputs, &claim, 1 << 20).unwrap();
-    let FindingV39::Fault { filing, conviction } = detect_first_fault_v39(&context, &quota, &replay, &mut producer_archive).unwrap() else {
+    let mut producer_archive = misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::open_existing(
+        &dir.join("producer"),
+        &checked,
+        &maximum,
+        &inputs,
+        &claim,
+        1 << 20,
+    )
+    .unwrap();
+    let FindingV39::Fault { filing, conviction } = detect_first_fault_v39(&context, &quota, &replay, &mut producer_archive).unwrap()
+    else {
         panic!("the lie yields a filing")
     };
-    assert_eq!(check_flat_filing_v39(&context, &filing).unwrap(), conviction, "the v39 court check convicts on the node's committed post");
+    assert_eq!(
+        check_flat_filing_v39(&context, &filing).unwrap(),
+        conviction,
+        "the v39 court check convicts on the node's committed post"
+    );
     println!("owning39: lying claim committed on the node, filing {} bytes, conviction {conviction:?}", filing.len());
     let _ = std::fs::remove_dir_all(&dir);
     let replay = net.replay().await;

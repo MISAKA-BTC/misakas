@@ -1,5 +1,6 @@
 //! `PalwChainStateV2::kernel_route_offset_of_preimage_v1` (the op-242 client's structural locator) agrees with the writer's own
 //! offset (`state_root_preimage_located_v1`) and is not moved by a label occurring anywhere the grammar does not begin a block.
+#![allow(warnings)]
 use super::*;
 
 fn with_kernel(mut state: PalwChainStateV2) -> PalwChainStateV2 {

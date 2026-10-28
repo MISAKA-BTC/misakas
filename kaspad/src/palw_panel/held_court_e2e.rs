@@ -561,7 +561,13 @@ fn challenger_evidence(
     let duty = duty_of(s, SEAT, sid).expect("the seat's duty");
     let (_, filing) = palw_held_filing_of_duty_v1(std::slice::from_ref(filed), &duty, PALW_HELD_STEP_LADDER_V1)
         .expect("the filing stands for the claim at its leaf");
-    palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(seat), &filing, duty.terminal_index.expect("the leaf"), None).expect("N2")
+    palw_held_challenger_evidence_v1(
+        kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(seat),
+        &filing,
+        duty.terminal_index.expect("the leaf"),
+        None,
+    )
+    .expect("N2")
 }
 
 /// The same real held filing and refused slice-root decoy as the held node tests, for the Consensus API history adapter tests.
@@ -925,7 +931,10 @@ fn t_a10_every_node_registry_answers_held_dissections_through_one_constructor() 
         let at = source.find(head).unwrap_or_else(|| panic!("{head}"));
         &source[at..at + source[at..].find("\n    }\n").expect("its end")]
     };
-    for (name, source) in [("producer", include_str!("../palw_producer.rs")), ("panel", crate::palw_panel::source_support::former_parent_production_source_v1())] {
+    for (name, source) in [
+        ("producer", include_str!("../palw_producer.rs")),
+        ("panel", crate::palw_panel::source_support::former_parent_production_source_v1()),
+    ] {
         let backends = body(source, "    fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {");
         assert!(backends.contains("crate::palw_backends::PalwBackendRegistry::for_node_v1("), "{name}: the one node constructor");
         assert!(!backends.contains("PalwBackendRegistry::new"), "{name}: never a registry built without the node's rules");
@@ -2276,8 +2285,8 @@ async fn step6_a_non_seat_challengers_demand_holds_final_off_until_the_late_disc
 /// deadline alone dated the pursuit at `bound + 540`; it is now due at `bound + 61`.
 #[test]
 fn the_seats_court_filings_are_dated_in_the_priority_lane() {
-    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     use super::{PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1, palw_seat_claim_earliest_final_v1, palw_seat_court_filing_due_v1};
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let margin = PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1;
     assert_eq!(palw_seat_court_filing_due_v1(1_000, None, 900), 1_000 - margin, "the duty's deadline, where no Final is read");
     assert_eq!(palw_seat_court_filing_due_v1(1_000, Some(700), 500), 700 - margin, "the earliest Final, when it comes first");
@@ -2316,7 +2325,8 @@ fn the_seats_court_filings_are_dated_in_the_priority_lane() {
     );
     // The one-move accusation is queued by the capture arm's filer (P2-8, int-3); the panel dates it
     // now, right after, and reads the filer's own dates after the filer's pass.
-    let at = source.find_code("let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));").expect("the court key");
+    let at =
+        source.find_code("let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));").expect("the court key");
     let after = &source[at..];
     let after = &after[..after.find_code("break 'verdict None;").expect("this capture arm ends")];
     assert!(
@@ -2601,16 +2611,25 @@ fn gdn_licensed(w: &crate::palw_gdn_held_filer::tests::World) -> (PalwChainState
     ];
     // The ordinary routing door requires an explicit immutable declaration.
     // This fixture authors it from its known graph; runtime lookup never guesses.
-    use kaspa_consensus_core::palw_reader_router_v2::{PalwReaderRouterBindingV2, PalwReaderRouterDeclarationV2, needs_reader_router_v2};
+    use kaspa_consensus_core::palw_reader_router_v2::{
+        PalwReaderRouterBindingV2, PalwReaderRouterDeclarationV2, needs_reader_router_v2,
+    };
     let mut bindings = Vec::new();
     for reader_slot in 0..w.profile.global_node_count() {
         let (reader, layer) = w.profile.resolve_node_slot(reader_slot).unwrap();
-        if !needs_reader_router_v2(reader) { continue; }
-        let routers: Vec<_> = (0..reader_slot).filter(|slot| {
-            let (node, owner) = w.profile.resolve_node_slot(*slot).unwrap();
-            owner == layer && node.kernel_semantics_id == kaspa_consensus_core::palw_step::kernel_semantics_id_v1(
-                kaspa_consensus_core::palw_step_refute::KDESC_Q36_ROUTER_TOPK)
-        }).collect();
+        if !needs_reader_router_v2(reader) {
+            continue;
+        }
+        let routers: Vec<_> = (0..reader_slot)
+            .filter(|slot| {
+                let (node, owner) = w.profile.resolve_node_slot(*slot).unwrap();
+                owner == layer
+                    && node.kernel_semantics_id
+                        == kaspa_consensus_core::palw_step::kernel_semantics_id_v1(
+                            kaspa_consensus_core::palw_step_refute::KDESC_Q36_ROUTER_TOPK,
+                        )
+            })
+            .collect();
         assert_eq!(routers.len(), 1, "the fixture has one declared router in each layer");
         bindings.push(PalwReaderRouterBindingV2 { reader_slot, router_slot: routers[0] });
     }
@@ -2674,8 +2693,11 @@ impl crate::palw_gdn_held_filer::PalwGdnHeldHostV1 for GdnNode<'_> {
     fn material(
         &self,
         _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
-    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2>, String> {
-        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&self.w.forged).map_err(|e|e.to_string())
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2>,
+        String,
+    > {
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&self.w.forged).map_err(|e| e.to_string())
     }
     fn kernels(
         &self,
@@ -2686,10 +2708,7 @@ impl crate::palw_gdn_held_filer::PalwGdnHeldHostV1 for GdnNode<'_> {
     fn objects(&self, _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1) -> Vec<PalwConsensusObjectV2> {
         self.chain.borrow().clone()
     }
-    fn openings(
-        &self,
-        _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
-    ) -> Result<misaka_palw_base0::GdnInventoryOracleV2, String> {
+    fn openings(&self, _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1) -> Result<misaka_palw_base0::GdnInventoryOracleV2, String> {
         misaka_palw_base0::GdnInventoryOpeningsV2::try_clone_from_v2(&self.w.openings)?.into_oracle_v2(self.w.inventory_root)
     }
     fn disclose_window_daa(&self) -> u64 {
@@ -2845,8 +2864,7 @@ fn gc_duty_real_backend_fused_leaf_held_to_final_reproduces_and_certifies_and_a_
     assert_eq!(decide_with_duty_verdicts_v1(v), Some(O::Certified));
     let lie = produce(&artifact, &profile, true);
     assert_ne!(lie.execution_root, honest.execution_root, "the lie moves the committed roots");
-    let lie_output =
-        lie.backend.execute_with_injected_fault(&lie.job, &lie.prompt, lie.leaf).expect("the lie's run").output_root;
+    let lie_output = lie.backend.execute_with_injected_fault(&lie.job, &lie.prompt, lie.leaf).expect("the lie's run").output_root;
     let v = judge(&lie, lie_output);
     assert_eq!(v, PalwCertDutyVerdictV1::NotReproducible, "lying fused/held → Refuted");
     assert_eq!(decide_with_duty_verdicts_v1(v), Some(O::NotCertified));

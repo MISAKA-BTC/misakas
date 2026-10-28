@@ -26,6 +26,7 @@
 //! * it is an entry of the release's list, so the drill's `--palw-drill-fence-at` moves it with the
 //!   others and the release's arming validates with it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{PalwDrillSaltV1, palw_drill_post_launch_fences_at_v1};
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,

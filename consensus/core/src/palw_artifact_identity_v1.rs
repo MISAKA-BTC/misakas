@@ -76,7 +76,9 @@ pub fn palw_tir_inventory_of_container_v1(
         return Err("the container holds more than one weight section");
     }
     if section.kind != PALWART_SECTION_TIR_INVENTORY_V3 || section.inner_root_scheme != PALWART_INNER_TIR_INVENTORY_ROOT_V3 {
-        return Err("the container's weight section is not a TIR inventory (an A16 digest or a PALWQ361 file is not an inventory root)");
+        return Err(
+            "the container's weight section is not a TIR inventory (an A16 digest or a PALWQ361 file is not an inventory root)",
+        );
     }
     if section.inner_leaf_count == 0 {
         return Err("the container's inventory is empty");
@@ -87,7 +89,10 @@ pub fn palw_tir_inventory_of_container_v1(
 
 /// **A registered class's `artifact_root`, read as an inventory root** — only for a class the chain holds a TIR record for
 /// (`None` otherwise: an A16 or PALWQ361 class's root is not an inventory root and is never handed out as one).
-pub fn palw_registered_inventory_root_v1(state: &crate::palw_state_v2::PalwChainStateV2, class_id: &Hash64) -> Option<PalwInventoryRootV1> {
+pub fn palw_registered_inventory_root_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    class_id: &Hash64,
+) -> Option<PalwInventoryRootV1> {
     state.tir_class_v1(class_id)?;
     PalwInventoryRootV1::named(state.class(class_id)?.artifact_root)
 }
@@ -109,7 +114,7 @@ pub fn palw_catalog_container_root_of_class_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_tir_container_v1::{PalwArtRootOpeningV1, PalwArtSectionOpeningV1, PALWART_VERSION_V3};
+    use crate::palw_tir_container_v1::{PALWART_VERSION_V3, PalwArtRootOpeningV1, PalwArtSectionOpeningV1};
 
     fn binding(sections: Vec<PalwArtSectionOpeningV1>) -> PalwTirContainerBindingV1 {
         let opening = PalwArtRootOpeningV1 {

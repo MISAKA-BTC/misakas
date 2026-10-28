@@ -42,7 +42,9 @@
 //! Every value here is a NAMED, UNAPPROVED design value (RFC-0018 §11); validation refuses the fence armed.
 
 use crate::Hash64;
-use crate::palw_model_eligibility_v1::{EligDigestV1, PalwEligibilityAttestationRowV1, PalwEligibilityVerdictV1, PalwEligibilityVerifierV1};
+use crate::palw_model_eligibility_v1::{
+    EligDigestV1, PalwEligibilityAttestationRowV1, PalwEligibilityVerdictV1, PalwEligibilityVerifierV1,
+};
 use crate::palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -334,9 +336,14 @@ pub fn certification_native_key_v39(id: &EligDigestV1) -> Vec<u8> {
     prefixed(CERTIFICATION_NATIVE_MINING_PREFIX_V39, id)
 }
 /// The decided row of an owning39 mining claim, if any.
-pub fn palw_native_mining_certification_row_v39(state: &PalwChainStateV2, mining_claim: &Hash64) -> Option<PalwClaimCertificationRowV1> {
+pub fn palw_native_mining_certification_row_v39(
+    state: &PalwChainStateV2,
+    mining_claim: &Hash64,
+) -> Option<PalwClaimCertificationRowV1> {
     let key = certification_native_key_v39(&palw_native_certification_id_v39(mining_claim));
-    state.kernel_route_state_v1().and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
+    state
+        .kernel_route_state_v1()
+        .and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
 }
 /// **The native subject's certified read** (the `'V'` row's outcome certifies). Gate C reaches it through
 /// `crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39`, never directly.
@@ -378,9 +385,14 @@ pub fn certification_kernel_hold_key_v1(id: &EligDigestV1) -> Vec<u8> {
     prefixed(CERTIFICATION_KERNEL_HOLD_PREFIX_V1, id)
 }
 /// The certification row of a kernel-route claim, if any.
-pub fn palw_kernel_claim_certification_row_v1(state: &PalwChainStateV2, kernel_claim: &[u8; 64]) -> Option<PalwClaimCertificationRowV1> {
+pub fn palw_kernel_claim_certification_row_v1(
+    state: &PalwChainStateV2,
+    kernel_claim: &[u8; 64],
+) -> Option<PalwClaimCertificationRowV1> {
     let key = certification_kernel_claim_key_v1(&palw_kernel_claim_certification_id_v1(kernel_claim));
-    state.kernel_route_state_v1().and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
+    state
+        .kernel_route_state_v1()
+        .and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
 }
 /// **A kernel-route claim is SecurityCertified** iff its `'K'` row decided a certifying outcome. A kernel `Final` alone never is.
 pub fn palw_kernel_claim_security_certified_v1(state: &PalwChainStateV2, kernel_claim: &[u8; 64]) -> bool {
@@ -389,7 +401,9 @@ pub fn palw_kernel_claim_security_certified_v1(state: &PalwChainStateV2, kernel_
 /// The held Final reward of a kernel-route claim (`None`: nothing held — not Final past Gate C, or already settled).
 pub fn palw_kernel_claim_reward_hold_v1(state: &PalwChainStateV2, kernel_claim: &[u8; 64]) -> Option<PalwKernelCertifiedRewardHoldV1> {
     let key = certification_kernel_hold_key_v1(&palw_kernel_claim_certification_id_v1(kernel_claim));
-    state.kernel_route_state_v1().and_then(|route| route.aux_row::<PalwKernelCertifiedRewardHoldV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
+    state
+        .kernel_route_state_v1()
+        .and_then(|route| route.aux_row::<PalwKernelCertifiedRewardHoldV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
 }
 
 /// The draw seed: `H(domain ‖ certification id ‖ anchor span ‖ anchor execution key)`.
@@ -423,9 +437,9 @@ pub fn certification_frontier_floor_key_v1() -> Vec<u8> {
 
 /// The frontier floor row (`None`: none written — Gate C not yet in force on this chain).
 pub fn palw_certified_frontier_floor_v1(state: &PalwChainStateV2) -> Option<PalwCertifiedFrontierFloorV1> {
-    state
-        .kernel_route_state_v1()
-        .and_then(|route| route.aux_row::<PalwCertifiedFrontierFloorV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &certification_frontier_floor_key_v1()))
+    state.kernel_route_state_v1().and_then(|route| {
+        route.aux_row::<PalwCertifiedFrontierFloorV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &certification_frontier_floor_key_v1())
+    })
 }
 
 /// **The safe frontier past Gate C (RFC-0018 §7.5a), recomputed from the state every block** — the deepest frontier-eligible `Final`

@@ -1,5 +1,6 @@
 //! Original-wide public-source dependency footprints. No producer root, model
 //! bytes, paid admission or execution credit is inferred from these results.
+#![allow(warnings)]
 #[path="palw_tir_fixture_common.rs"] mod fixture;
 #[path="palw_tir_parameter_cover_fixture.rs"] mod cover_fixture;
 use fixture::*;

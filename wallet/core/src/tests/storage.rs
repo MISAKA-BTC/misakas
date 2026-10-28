@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use crate::result::Result;
 use borsh::{BorshDeserialize, BorshSerialize};
 

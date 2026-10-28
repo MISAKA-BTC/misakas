@@ -10,6 +10,7 @@
 //! every other preset's is empty; a disagreeing mirror is a startup refusal; the fence taken away
 //! empties it; and nothing about it moves an id (it is derived, never hashed).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_RCORE_CONSERVATIVE_CLASSES, Params, devnet_shipped_params, mainnet_shipped_params,
     palw_rc_shipped_params, palw_t12_genesis_held_class_ids_v1, palw_t12_shipped_params,
@@ -251,7 +252,6 @@ fn f4_f5_answerability_is_the_classs_compute_turn() {
     assert_eq!(held.iter().filter(|(_, _, why)| why.is_none()).count(), 1, "the 8k row, answerable");
 }
 
-
 /// The new route does not reinterpret old profiles or remove the cost/context bounds.
 /// This test alone is not node/P2P qualification or activation approval.
 #[test]
@@ -303,10 +303,14 @@ fn memory_routing_registration_keeps_canonical_job_check_after_held_gate() {
     let (p, d) = palw_attempt_canonical_v1(&profile, false).unwrap();
     let canonical = rc_job_context(&profile, p, d);
     let form = PalwPromptIdsFormV1::MerkleV1;
-    assert!(matches!(palw_registration_attribution_v2(&profile, &canonical, true, form, false),
-        Err(PalwRegistrationAttributionErrorV1::Held(_))));
+    assert!(matches!(
+        palw_registration_attribution_v2(&profile, &canonical, true, form, false),
+        Err(PalwRegistrationAttributionErrorV1::Held(_))
+    ));
     assert_eq!(palw_registration_attribution_v2(&profile, &canonical, true, form, true), Ok(()));
     let wrong = rc_job_context(&profile, p + 1, d);
-    assert!(matches!(palw_registration_attribution_v2(&profile, &wrong, true, form, true),
-        Err(PalwRegistrationAttributionErrorV1::Class(PalwAttributableClassErrorV1::CanonicalNotTheFormula { .. }))));
+    assert!(matches!(
+        palw_registration_attribution_v2(&profile, &wrong, true, form, true),
+        Err(PalwRegistrationAttributionErrorV1::Class(PalwAttributableClassErrorV1::CanonicalNotTheFormula { .. }))
+    ));
 }

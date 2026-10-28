@@ -11,6 +11,7 @@
 //! build before the field existed: `befb59dfe` (the mainnet-values commit this change was built on),
 //! whose numbers these are.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_shipped_params,

@@ -79,7 +79,10 @@ pub fn material_pending_id_v1(income: Hash64) -> Hash64 {
 /// Canonical exact original-entitlement link; a recipient's aggregate queue ID
 /// alone cannot identify one source fee within a coalesced payment.
 pub fn material_queue_receipt_id_v1(income: Hash64, queued: Hash64, now: u64) -> Hash64 {
-    keyed64(b"misaka-palw/material-income/queue/v1", &[material_pending_id_v1(income).as_byte_slice(),queued.as_byte_slice(),&now.to_le_bytes()])
+    keyed64(
+        b"misaka-palw/material-income/queue/v1",
+        &[material_pending_id_v1(income).as_byte_slice(), queued.as_byte_slice(), &now.to_le_bytes()],
+    )
 }
 
 impl PalwBondBudgetStateV1 {

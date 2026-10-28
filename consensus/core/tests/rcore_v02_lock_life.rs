@@ -40,6 +40,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_v02_lock_life
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

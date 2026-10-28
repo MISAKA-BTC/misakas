@@ -3,6 +3,7 @@
 //! Read-only measurement. Every number is printed so a finding can quote it. Nothing here is a
 //! fixture the chain consumes.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

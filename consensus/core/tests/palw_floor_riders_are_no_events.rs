@@ -18,6 +18,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_floor_riders_are_no_events -- --nocapture`
 
+#![allow(warnings)]
 #[path = "capacity_stage1_common.rs"]
 mod stage1;
 use stage1::*;

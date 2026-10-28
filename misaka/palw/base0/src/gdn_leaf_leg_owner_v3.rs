@@ -146,7 +146,7 @@ impl LeafLegRequestV3 {
             .job_context
             .native_heap_v1(PATH)
             .add::<Base0GdnLeafLegV3>(material.binding.shape_profile.native_heap_v1(PATH), PATH);
-        let clones = clones.bytes().ok_or_else(|| Error::Resource(clones))?;
+        let clones = clones.bytes().ok_or(Error::Resource(clones))?;
         // step_merkle_root_v1 first collects N transformed hashes, then holds
         // both that level and ceil(N/2) while building the next. Smaller levels
         // cannot exceed this first pair. An empty leg hashes without a Vec.

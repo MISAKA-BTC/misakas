@@ -7,6 +7,7 @@
 //!
 //! What is checked here is every one of those that is a property of the RULES. What is not — a real
 //! restart, a real reorg, a real IBD — is the live drill, and this file does not pretend to cover it.
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use kaspa_consensus_core::Hash64;

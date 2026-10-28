@@ -15,6 +15,7 @@
 //! * a node fed the same DAG headers-first then bodies reaches the same sink, UTXO-valid;
 //! * from the fence a round block may not carry an EVM payload;
 //! * testnet-12 with EVERY post-launch fence at one height crosses it with round lanes below and above.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, t12_genesis_chain, t12_with_harness_cards};
 use super::{
     OnetimeTxSelector, TestContext, adr0125_config_funded_for, adr0125_harness_bond, adr0125_round_block, adr0125_schedule_of,

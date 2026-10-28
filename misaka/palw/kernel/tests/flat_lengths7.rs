@@ -1,4 +1,5 @@
 //! Bounded declarative specialization components, not a native media task.
+#![allow(warnings)]
 use misaka_palw_kernel::{flat_lengths7::*, flat_scope7::FlatRelationCourtV7, job::DecodeRuleV1, trace::trace_v1};
 use misaka_palw_tir::{DType, MapParams, Tensor, TensorType, builder::ProgramBuilder, program::HISTORY_BOUND_V1_SMALL};
 

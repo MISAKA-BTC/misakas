@@ -71,8 +71,11 @@ fn run(classes: u64, land: u64, window: u64, storm: bool, class_lanes: bool) -> 
                 _ => None,
             };
             let carried = match queue {
-                Some((kind, q)) => q.pop_front().map(|(c, entered, deadline)| note(&mut stats[c as usize], kind, now, entered, deadline, land)),
-                None => (storm && matches!(site, PalwCarrierSiteV1::PriorityFirst | PalwCarrierSiteV1::PriorityAfterLicences)).then_some(()),
+                Some((kind, q)) => {
+                    q.pop_front().map(|(c, entered, deadline)| note(&mut stats[c as usize], kind, now, entered, deadline, land))
+                }
+                None => (storm && matches!(site, PalwCarrierSiteV1::PriorityFirst | PalwCarrierSiteV1::PriorityAfterLicences))
+                    .then_some(()),
             };
             if carried.is_some() {
                 sent_now += 1;
@@ -130,31 +133,35 @@ fn rfc18_iv_one_inflight_carrier_wait_across_many_classes_against_the_receipt_wi
     };
     let mut first_miss: Vec<(bool, bool, u64, u64)> = Vec::new();
     for class_lanes in [false, true] {
-    for storm in [false, true] {
-        for land in [1u64, 2] {
-            for classes in [1u64, 8, 16, 24, 32, 48, 64, 72, 96, 128, 192, 256] {
-                let stats = run(classes, land, window, storm, class_lanes);
-                let worst = stats.iter().map(|s| s.worst_wait).max().unwrap();
-                let missed: u64 = stats.iter().map(|s| s.missed).sum();
-                let sent: u64 = stats.iter().map(|s| s.sent).sum();
-                let by = stats.iter().fold([0u64; 3], |a, s| [a[0] + s.missed_by[0], a[1] + s.missed_by[1], a[2] + s.missed_by[2]]);
-                println!(
-                    "RFC-0018 (iv) carriers: class lanes {class_lanes}, storm {storm}, land {land} DAA, {classes} classes: worst wait {worst} DAA \
+        for storm in [false, true] {
+            for land in [1u64, 2] {
+                for classes in [1u64, 8, 16, 24, 32, 48, 64, 72, 96, 128, 192, 256] {
+                    let stats = run(classes, land, window, storm, class_lanes);
+                    let worst = stats.iter().map(|s| s.worst_wait).max().unwrap();
+                    let missed: u64 = stats.iter().map(|s| s.missed).sum();
+                    let sent: u64 = stats.iter().map(|s| s.sent).sum();
+                    let by =
+                        stats.iter().fold([0u64; 3], |a, s| [a[0] + s.missed_by[0], a[1] + s.missed_by[1], a[2] + s.missed_by[2]]);
+                    println!(
+                        "RFC-0018 (iv) carriers: class lanes {class_lanes}, storm {storm}, land {land} DAA, {classes} classes: worst wait {worst} DAA \
                      (window_receipt {window}), {missed} missed (proofs {}, licences {}, own receipts {}) of {sent} sent",
-                    by[0], by[1], by[2]
-                );
-                if class_lanes && classes <= super::PALW_RECEIPT_LANES_MAX_V1 as u64 {
-                    assert_eq!(by[2], 0, "with per-class lanes no own receipt misses its window (storm {storm}, land {land}, {classes})");
-                }
-                if missed > 0 && !first_miss.iter().any(|(l, s, n, _)| (*l, *s, *n) == (class_lanes, storm, land)) {
-                    first_miss.push((class_lanes, storm, land, classes));
-                }
-                if classes <= 8 && !storm {
-                    assert_eq!(missed, 0, "the genesis catalogue (8 models) misses no window (land {land})");
+                        by[0], by[1], by[2]
+                    );
+                    if class_lanes && classes <= super::PALW_RECEIPT_LANES_MAX_V1 as u64 {
+                        assert_eq!(
+                            by[2], 0,
+                            "with per-class lanes no own receipt misses its window (storm {storm}, land {land}, {classes})"
+                        );
+                    }
+                    if missed > 0 && !first_miss.iter().any(|(l, s, n, _)| (*l, *s, *n) == (class_lanes, storm, land)) {
+                        first_miss.push((class_lanes, storm, land, classes));
+                    }
+                    if classes <= 8 && !storm {
+                        assert_eq!(missed, 0, "the genesis catalogue (8 models) misses no window (land {land})");
+                    }
                 }
             }
         }
-    }
     }
     println!("RFC-0018 (iv) first window miss per (class lanes, storm, land): {first_miss:?}");
 }

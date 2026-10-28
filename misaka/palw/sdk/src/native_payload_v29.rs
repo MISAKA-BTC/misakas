@@ -848,65 +848,6 @@ pub fn prepare_initial_transport_v31(
     Ok(PreparedNativeInitialV31 { start, id, carriers })
 }
 
-#[cfg(test)]
-mod initial_tests {
-    use super::*;
-    #[test]
-    fn initial_transport_preserves_u16_parts_and_original_body() {
-        let owner = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0));
-        // Test the transport itself; canonical source validation belongs to the
-        // typed registration builder, which owns PreparedNativePayload outside
-        // this module. No arbitrary external caller can create this value.
-        let body = vec![7; (256 << 15) + 1];
-        let payload = PreparedNativePayloadV29 { object: K::StageExecutionV14 { action: 19, body: body.clone() } };
-        let plan = prepare_initial_transport_v31(&payload, &owner, 8, 10, 100, 99).unwrap();
-        assert_eq!(plan.start.count, 257);
-        let mut restored = Vec::new();
-        for (index, carrier) in plan.carriers[1..plan.carriers.len() - 1].iter().enumerate() {
-            let raw = carrier.bytes();
-            K::decode(&raw).unwrap();
-            let K::FundedExecutionV11 { action: 42, body } = carrier.object() else { panic!("wrong initial action") };
-            let part: kaspa_consensus_core::palw_native_initial_v31::NativeInitialPartV31 = borsh::from_slice(body).unwrap();
-            assert_eq!(part.index as usize, index);
-            assert_eq!(part.id, plan.id);
-            restored.extend(part.bytes);
-        }
-        assert_eq!(restored, body);
-        assert_eq!(plan.start.original_object, kaspa_consensus_core::palw_native_initial_v31::initial_object_root_v31(&restored));
-        let K::FundedExecutionV11 { action: 43, body } = plan.carriers.last().unwrap().object() else { panic!("missing assemble") };
-        assert_eq!(body, &plan.id.to_vec());
-        assert!(prepare_initial_transport_v31(&payload, &owner, 8, 10, 100, 100).is_err());
-    }
-    #[test]
-    fn master_invocation_cannot_omit_prior_component_catalogue_or_substitute_raw_body() {
-        use kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32;
-        let mut e = NativeStageInvocationEnvelopeV32 {
-            version: 32,
-            master: [1; 64],
-            stage: 1,
-            generated: vec![],
-            upstream_jobs: vec![],
-            upstream_outputs: vec![],
-            body: vec![],
-        };
-        assert!(prepare_master_acceptance_v32(&e).is_err());
-        e.stage = 0;
-        assert!(prepare_master_acceptance_v32(&e).is_err());
-        assert!(prepare_master_funding_v32(&e).is_err());
-        assert!(master_invocation_v32(36, &e, None).is_err());
-        e.version = 31;
-        assert!(prepare_master_acceptance_v32(&e).is_err());
-    }
-    #[test]
-    fn initial_registration_cannot_transport_money_or_final_actions() {
-        let owner = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0));
-        for action in [28, 29, 30, 31, 34, 35] {
-            let payload = PreparedNativePayloadV29 { object: K::FundedExecutionV11 { action, body: vec![1] } };
-            assert!(prepare_initial_transport_v31(&payload, &owner, 0, 1, 10, 9).is_err());
-        }
-    }
-}
-
 /// Owning39 upload uses its own paid source journal, u16 pages and canonical
 /// Source39 extent. It never routes a multi-MiB source through direct action41
 /// or the frozen object-chunks contract. Native consensus charges every step.
@@ -1175,6 +1116,7 @@ pub fn prepare_material_part_v39(
 ) -> Result<PreparedNativePayloadV29, String> {
     use misaka_palw_kernel::{flat_material_output39::*, flat_material39::*};
     let descriptor = material.descriptor();
+    #[allow(clippy::type_complexity)]
     let (lane, pages, bytes, expected, leaf, hash): (u8, u64, usize, Digest, Digest, fn(&Digest, &Digest) -> Digest) =
         if let Some(c) = certificate {
             let MaterialOriginV39::Upstream { output, .. } = &descriptor.origin else {
@@ -1502,7 +1444,11 @@ pub fn prepare_terminal_v39(job: Digest, refund: bool) -> Result<PreparedNativeP
 // ---- Owning39 mining (stage actions 73–77/79) and the PNR9 receipt-block carriage ----
 // Frames only: the dormant fold re-derives everything (economic class, work, price, budget, Gate C) from original rows.
 // There is no model-level approval action (user decision 2026-10-15, round 5).
-pub fn prepare_mining_register_v39(template_master: Digest, sequence: u64, share_permille: u16) -> Result<PreparedNativePayloadV29, String> {
+pub fn prepare_mining_register_v39(
+    template_master: Digest,
+    sequence: u64,
+    share_permille: u16,
+) -> Result<PreparedNativePayloadV29, String> {
     use kaspa_consensus_core::palw_native_mining_v39::*;
     let w = NativeMiningModelWireV39 { version: 39, template_master, sequence, share_permille };
     let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
@@ -1553,7 +1499,15 @@ pub fn native_receipt_spend_unsigned_v39(
     let spend = PalwNativeReceiptSpendV39 {
         version: 39,
         network_domain,
-        challenge: native_receipt_spend_challenge_v39(network_domain, pre_pow_hash, timestamp, nonce, receipt, quantum_index, &producer_bond),
+        challenge: native_receipt_spend_challenge_v39(
+            network_domain,
+            pre_pow_hash,
+            timestamp,
+            nonce,
+            receipt,
+            quantum_index,
+            &producer_bond,
+        ),
         receipt,
         quantum_index,
         producer_bond,
@@ -1608,10 +1562,10 @@ pub fn native_expired_consent_holds_v39<R: kaspa_consensus_core::palw_native_aud
     let mut out = Vec::new();
     for k in keys {
         let Some(v) = rows.row(112, &k, 256)? else { continue };
-        if let Some((id, until)) = kaspa_consensus_core::palw_state_v2::native_consent_hold_expiry_v39(&k, &v) {
-            if accept_daa > until {
-                out.push(id);
-            }
+        if let Some((id, until)) = kaspa_consensus_core::palw_state_v2::native_consent_hold_expiry_v39(&k, &v)
+            && accept_daa > until
+        {
+            out.push(id);
         }
     }
     Ok(out)
@@ -1666,4 +1620,63 @@ pub fn prepare_commit_parts_v39(raw: &[u8], maximum: u32) -> Result<Vec<Prepared
     }
     objects.push(prepare_commit_assembly_v39(wire.job, group)?);
     Ok(objects)
+}
+
+#[cfg(test)]
+mod initial_tests {
+    use super::*;
+    #[test]
+    fn initial_transport_preserves_u16_parts_and_original_body() {
+        let owner = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0));
+        // Test the transport itself; canonical source validation belongs to the
+        // typed registration builder, which owns PreparedNativePayload outside
+        // this module. No arbitrary external caller can create this value.
+        let body = vec![7; (256 << 15) + 1];
+        let payload = PreparedNativePayloadV29 { object: K::StageExecutionV14 { action: 19, body: body.clone() } };
+        let plan = prepare_initial_transport_v31(&payload, &owner, 8, 10, 100, 99).unwrap();
+        assert_eq!(plan.start.count, 257);
+        let mut restored = Vec::new();
+        for (index, carrier) in plan.carriers[1..plan.carriers.len() - 1].iter().enumerate() {
+            let raw = carrier.bytes();
+            K::decode(&raw).unwrap();
+            let K::FundedExecutionV11 { action: 42, body } = carrier.object() else { panic!("wrong initial action") };
+            let part: kaspa_consensus_core::palw_native_initial_v31::NativeInitialPartV31 = borsh::from_slice(body).unwrap();
+            assert_eq!(part.index as usize, index);
+            assert_eq!(part.id, plan.id);
+            restored.extend(part.bytes);
+        }
+        assert_eq!(restored, body);
+        assert_eq!(plan.start.original_object, kaspa_consensus_core::palw_native_initial_v31::initial_object_root_v31(&restored));
+        let K::FundedExecutionV11 { action: 43, body } = plan.carriers.last().unwrap().object() else { panic!("missing assemble") };
+        assert_eq!(body, &plan.id.to_vec());
+        assert!(prepare_initial_transport_v31(&payload, &owner, 8, 10, 100, 100).is_err());
+    }
+    #[test]
+    fn master_invocation_cannot_omit_prior_component_catalogue_or_substitute_raw_body() {
+        use kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32;
+        let mut e = NativeStageInvocationEnvelopeV32 {
+            version: 32,
+            master: [1; 64],
+            stage: 1,
+            generated: vec![],
+            upstream_jobs: vec![],
+            upstream_outputs: vec![],
+            body: vec![],
+        };
+        assert!(prepare_master_acceptance_v32(&e).is_err());
+        e.stage = 0;
+        assert!(prepare_master_acceptance_v32(&e).is_err());
+        assert!(prepare_master_funding_v32(&e).is_err());
+        assert!(master_invocation_v32(36, &e, None).is_err());
+        e.version = 31;
+        assert!(prepare_master_acceptance_v32(&e).is_err());
+    }
+    #[test]
+    fn initial_registration_cannot_transport_money_or_final_actions() {
+        let owner = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0));
+        for action in [28, 29, 30, 31, 34, 35] {
+            let payload = PreparedNativePayloadV29 { object: K::FundedExecutionV11 { action, body: vec![1] } };
+            assert!(prepare_initial_transport_v31(&payload, &owner, 0, 1, 10, 9).is_err());
+        }
+    }
 }

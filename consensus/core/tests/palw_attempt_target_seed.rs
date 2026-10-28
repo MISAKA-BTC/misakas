@@ -7,6 +7,7 @@
 //! and still shipped one target for all three classes, because nothing asserted the assembled
 //! bundle.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, palw_rc_shipped_params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_class_daa::attempt_target_seed_v1;

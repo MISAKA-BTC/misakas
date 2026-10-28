@@ -6,6 +6,7 @@
 //! weights. The equality with transformers' Hunyuan classes is the corpus harness's job
 //! (`PALW_CORPUS_ONLY=hunyuan_v1_dense`, `hunyuan_v1_moe`); this file pins what is local to the crate.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::fidelity::prepare_spec;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::lower::LowerOpts;

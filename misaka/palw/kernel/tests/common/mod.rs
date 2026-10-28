@@ -2,8 +2,11 @@
 //! object, a verifier, and a court that holds only public material.
 #![allow(dead_code)]
 
+#[allow(clippy::duplicate_mod)]
 pub mod chain;
+#[allow(clippy::duplicate_mod)]
 pub mod ledger_world;
+#[allow(clippy::duplicate_mod)]
 pub mod opv_world;
 
 use misaka_palw_kernel::KernelFaultProofV1;

@@ -20,6 +20,7 @@
 //! (216,000 rounds at 1,200, 345,600 at 120) — so `max_fraud_gain`, every seat lock read from it
 //! and the genesis collateral a seat posts are the same figures at both maturities.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, OverrideParams, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_shipped_params,

@@ -291,9 +291,8 @@ impl PalwExecSliceProducerService {
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         header.palw_commitment = signed_slice_commitment(key, network_domain, bond, slice, anchor, pre_pow, header.timestamp, nonce);
         header.finalize();
-        let block: kaspa_consensus_core::block::Block = adapted
-            .into_immutable_v3()
-            .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
+        let block: kaspa_consensus_core::block::Block =
+            adapted.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
         let hash = block.hash();
         crate::palw_producer::palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
             .await

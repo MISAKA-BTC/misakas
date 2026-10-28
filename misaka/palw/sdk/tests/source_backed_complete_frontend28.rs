@@ -1,4 +1,5 @@
 //! Source-backed producer tests; staged for the later validation phase.
+#![allow(warnings)]
 use misaka_palw_sdk::full_component_v28::frontend::compile_complete_frontend_v28;
 use misaka_palw_tir::program_v2::{InputSource, OutputDecl, TirProgramV2};
 use misaka_palw_tir::{DType, Ref, TensorType, builder::ProgramBuilder};

@@ -282,11 +282,12 @@ impl VirtualStateProcessor {
             None => template.miner_data.clone(),
         };
         let zeroed = kaspa_consensus_core::coinbase::CoinbaseData { blue_score, subsidy: 0, miner_data };
-        coinbase.payload =
-            self.coinbase_manager.serialize_coinbase_payload(&zeroed).map_err(|why| match why {
-                kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => RuleError::LocalNativeCapacityUnavailable(why),
-                why => RuleError::BadCoinbasePayload(why),
-            })?;
+        coinbase.payload = self.coinbase_manager.serialize_coinbase_payload(&zeroed).map_err(|why| match why {
+            kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => {
+                RuleError::LocalNativeCapacityUnavailable(why)
+            }
+            why => RuleError::BadCoinbasePayload(why),
+        })?;
         coinbase.finalize();
         template.block.header.hash_merkle_root = calc_hash_merkle_root(template.block.transactions.iter());
         template.block.header.finalize();
@@ -873,7 +874,9 @@ impl VirtualStateProcessor {
                 &palw_receipt_v4_payouts,
             )
             .map_err(|why| match why {
-                kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => RuleError::LocalNativeCapacityUnavailable(why),
+                kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => {
+                    RuleError::LocalNativeCapacityUnavailable(why)
+                }
                 why => RuleError::BadCoinbasePayload(why),
             })?;
         // **The coinbase is fixed HERE, before `evm_template_fields` commits the lane** (phase2-plan
@@ -985,6 +988,7 @@ impl VirtualStateProcessor {
             calculated_fees,
             stale_evm_claims,
             dropped_attestation_shards,
-        ).with_coinbase_allocation_v2(coinbase.allocation_v2))
+        )
+        .with_coinbase_allocation_v2(coinbase.allocation_v2))
     }
 }

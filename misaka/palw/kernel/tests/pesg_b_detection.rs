@@ -22,6 +22,7 @@
 //! watchers are enumerated over their joint sample spaces. Nothing here is a Monte Carlo estimate of a bound; the one frequency check
 //! (the challenge crate's subset sampler) is a sanity check of support, labelled as such.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

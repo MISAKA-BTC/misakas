@@ -21,6 +21,7 @@
 //! table, every `out_len`, the declared leaf count and the canonical job are untouched — the test
 //! asserts that, so the price move cannot be attributed to anything the executor would notice.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};

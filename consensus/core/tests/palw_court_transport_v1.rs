@@ -1,4 +1,5 @@
 //! Dormant transport activation and identity regression; no production calibration.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params,
 };

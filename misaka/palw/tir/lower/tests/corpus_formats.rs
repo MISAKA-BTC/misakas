@@ -17,6 +17,7 @@
 //! The vectors are a numpy transcription of each library's documented layout (the libraries are not available offline): see
 //! `gen_formats.py` for what that does and does not prove.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::prequant::parse_quant_config_with;
 use misaka_palw_tir_lower::quantfmt::{QuantFormat, QuantRegistry};
 use serde_json::json;

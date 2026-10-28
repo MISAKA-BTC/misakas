@@ -113,7 +113,7 @@ fn cert_key(id: Hash64) -> [u8; 65] {
     key[1..].copy_from_slice(&palw_certification_id_v1(&id));
     key
 }
-pub(super) fn cert_bytes<'a>(route: Option<&'a crate::palw_kernel_route_v1::PalwKernelRouteStateV1>, id: Hash64) -> Option<&'a [u8]> {
+pub(super) fn cert_bytes(route: Option<&crate::palw_kernel_route_v1::PalwKernelRouteStateV1>, id: Hash64) -> Option<&[u8]> {
     let wanted = cert_key(id);
     route?
         .aux
@@ -211,7 +211,11 @@ fn exec_window(state: &PalwChainStateV2, params: &PalwStateParamsV2, id: Hash64)
 /// liability. A finite EXEC horizon alone does not establish that the prefix and
 /// every slice were selected by the native receipt tally, remained Final, and
 /// survived the full challenge window.
-pub(super) fn exec_dependency_readiness_v1(state: &PalwChainStateV2, id: Hash64, now: u64) -> Result<RewardReadinessV1, PalwStateV2Error> {
+pub(super) fn exec_dependency_readiness_v1(
+    state: &PalwChainStateV2,
+    id: Hash64,
+    now: u64,
+) -> Result<RewardReadinessV1, PalwStateV2Error> {
     use crate::palw_exec_v2_verify::PalwSliceVerificationV1 as V;
     use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
     let Some(root) = state.exec_v2.roots.get(&id) else {
@@ -299,10 +303,10 @@ pub(super) fn live_source(
         if now <= until {
             decision = decision.join(RewardReadinessV1::Hold(until));
         }
-        if let RewardReadinessV1::Hold(until) = exec_window(state, params, id)? {
-            if now <= until {
-                decision = decision.join(RewardReadinessV1::Hold(until));
-            }
+        if let RewardReadinessV1::Hold(until) = exec_window(state, params, id)?
+            && now <= until
+        {
+            decision = decision.join(RewardReadinessV1::Hold(until));
         }
     }
     // A native dependency can default or be convicted even on the block that
@@ -406,10 +410,11 @@ fn origin_for(
     for (_, bytes) in frames(state) {
         let point =
             PalwBlockContextV2::deserialize_reader(&mut bytes.as_slice()).map_err(|_| bad("truncated liability frame point"))?;
-        if point.daa_score == c.accepted_daa && point.blue_score == c.accepted_blue_score {
-            if let Some(found) = state.claim_local_admission_context_v1(params, &point, id)? {
-                return Ok(Some(found));
-            }
+        if point.daa_score == c.accepted_daa
+            && point.blue_score == c.accepted_blue_score
+            && let Some(found) = state.claim_local_admission_context_v1(params, &point, id)?
+        {
+            return Ok(Some(found));
         }
     }
     Ok(None)

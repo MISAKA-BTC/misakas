@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `accepted_objects_walk_tests` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 use kaspa_consensus_core::BlockHash;
@@ -434,8 +433,10 @@ fn gdn_disclosure_page_keeps_continuation_and_refuses_an_unavailable_suffix() {
     assert_eq!(next, Some(hash(5)), "a page cannot label the older interval complete");
     assert!(objects.is_empty(), "unrelated lifecycle objects are not disclosures");
     chain.acceptance.remove(&hash(4)).unwrap();
-    assert!(gdn_disclosure_page_v1(&chain, chain.sink, 100, 8, &wanted).is_err(),
-        "an unavailable suffix must not return a successful partial collection");
+    assert!(
+        gdn_disclosure_page_v1(&chain, chain.sink, 100, 8, &wanted).is_err(),
+        "an unavailable suffix must not return a successful partial collection"
+    );
 }
 
 #[test]

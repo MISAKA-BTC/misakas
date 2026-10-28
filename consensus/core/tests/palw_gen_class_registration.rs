@@ -12,6 +12,7 @@
 //! The class is the golden toy image pipeline (`consensus-vectors/tir-v2/pipelines/toy-image.json`:
 //! a causal text encoder, a denoiser over the job's steps, a decoder to `ImageRgb8 [2, 2, 3]`).
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_fp_job_v5::palw_fp_job_version_offered_v1;

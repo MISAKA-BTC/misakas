@@ -20,6 +20,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_m5_restart
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

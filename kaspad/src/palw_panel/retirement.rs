@@ -153,12 +153,8 @@ impl PalwPanelService {
         // the claim's class keeps it `PanelBound`, and otherwise until this node submits for
         // it or the retention age passes. Never because of anything that arrived, and never at
         // the duty's global `receipt_deadline`, which a heavy class outlives (ADR-0133 §11.3).
-        let receipt_sweep = crate::palw_receipt_pool::ReceiptSweepV1 {
-            live: &live,
-            submitted: &submitted,
-            current_daa,
-            retention_daa: PANEL_POOL_RETENTION_DAA,
-        };
+        let receipt_sweep =
+            crate::palw_receipt_pool::ReceiptSweepV1 { live: &live, submitted, current_daa, retention_daa: PANEL_POOL_RETENTION_DAA };
         let carried_nothing = HashMap::new();
         let pools_sweep = palw_receipt_pools_sweep_v1(
             self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
@@ -262,7 +258,7 @@ impl PalwPanelService {
         if seat_r {
             retention_liabilities.retain(|_, horizon| *horizon >= current_daa);
             liabilities_unread.retain(|claim| retention_liabilities.contains_key(claim));
-            *self.foreign_pinned.lock().unwrap() = palw_seat_retention_pins_v1(&live, &retention_liabilities, current_daa);
+            *self.foreign_pinned.lock().unwrap() = palw_seat_retention_pins_v1(&live, retention_liabilities, current_daa);
         } else {
             *self.foreign_pinned.lock().unwrap() = live.clone();
         }

@@ -221,65 +221,6 @@ pub fn round_subject_v3(
     s
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn full_opening_plan_binds_target_mode_budget_and_canonical_message() {
-        let plan =
-            CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::Program, InteractiveModeV1::StagedBeacon, 2, 4096, 100).unwrap();
-        let message = vec![1u64, 2, 3];
-        let root = plan.material_root(&message).unwrap();
-        assert_ne!(root, plan.material_root(&vec![1u64, 2, 4]).unwrap());
-        let mut pipeline = plan.clone();
-        pipeline.target = PaidClaimTargetV2::Pipeline;
-        assert_ne!(root, pipeline.material_root(&message).unwrap());
-        assert!(pipeline.validate(PaidClaimTargetV2::Program, plan.mode, 2, 100).is_err());
-        assert_ne!(round_id_v3([1; 64], 0), round_id_v3([1; 64], 1));
-        assert_ne!(
-            transcript_root_v3(&plan, [1; 64], 0, [0; 64], root, [2; 64], [3; 64]),
-            transcript_root_v3(&plan, [1; 64], 0, [0; 64], root, [2; 64], [4; 64])
-        );
-        assert!(plan.material_root(&vec![0u64; 1024]).is_err());
-        assert!(
-            CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::TypedSpec, InteractiveModeV1::NonInteractive, 2, 4096, 100).is_err()
-        );
-        assert!(
-            CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::Segmented, InteractiveModeV1::StagedBeacon, 65, 4096, 100).is_err()
-        );
-    }
-
-    /// **R7-RELATION (2026-10-15)**: every compact family contract is refused at registration by name, and a plan carrying a compact
-    /// compiler id is refused with the same explicit reason — never silently read as the full-material plan.
-    #[test]
-    fn compact_proof_family_contracts_are_refused_by_name_never_silently_accepted() {
-        let mut ids = std::collections::BTreeSet::new();
-        for family in CompactProofFamilyV1::ALL {
-            let contract = CompactProofFamilyContractV1 {
-                version: 1,
-                family,
-                target: PaidClaimTargetV2::Program,
-                relation_root: [1; 64],
-                soundness_review_root: [2; 64],
-                claimed_soundness_bits: 128,
-                maximum_proof_bytes: 1 << 20,
-                maximum_verifier_work: 1 << 30,
-            };
-            assert_eq!(contract.register(), Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.to_string()));
-            assert_ne!(contract.compiler(), full_material_compiler_v3());
-            assert!(ids.insert(contract.compiler()), "one compiler identity per family");
-            let mut plan =
-                CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::Program, InteractiveModeV1::StagedBeacon, 2, 4096, 100).unwrap();
-            plan.compiler = contract.compiler();
-            assert_eq!(
-                plan.validate(PaidClaimTargetV2::Program, InteractiveModeV1::StagedBeacon, 2, 100),
-                Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.to_string())
-            );
-        }
-        assert!(!is_compact_proof_family_compiler_v1(&full_material_compiler_v3()));
-    }
-}
-
 /// V4 retains the V3 field layout but names a registered whole-native contract.
 /// The native own fence and exact registration row authenticate this constructor.
 pub fn compact_plan_v4(
@@ -337,4 +278,63 @@ pub fn fs_round_seed_v4(
         transcript.absorb(plan.mode, object_id(b"MISAKA/PALW/CLAIM-PROOF-FS-POST-PROOF/V4", proof)).map_err(|e| e.to_string())?;
     }
     transcript.absorb(plan.mode, message).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn full_opening_plan_binds_target_mode_budget_and_canonical_message() {
+        let plan =
+            CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::Program, InteractiveModeV1::StagedBeacon, 2, 4096, 100).unwrap();
+        let message = vec![1u64, 2, 3];
+        let root = plan.material_root(&message).unwrap();
+        assert_ne!(root, plan.material_root(&vec![1u64, 2, 4]).unwrap());
+        let mut pipeline = plan.clone();
+        pipeline.target = PaidClaimTargetV2::Pipeline;
+        assert_ne!(root, pipeline.material_root(&message).unwrap());
+        assert!(pipeline.validate(PaidClaimTargetV2::Program, plan.mode, 2, 100).is_err());
+        assert_ne!(round_id_v3([1; 64], 0), round_id_v3([1; 64], 1));
+        assert_ne!(
+            transcript_root_v3(&plan, [1; 64], 0, [0; 64], root, [2; 64], [3; 64]),
+            transcript_root_v3(&plan, [1; 64], 0, [0; 64], root, [2; 64], [4; 64])
+        );
+        assert!(plan.material_root(&vec![0u64; 1024]).is_err());
+        assert!(
+            CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::TypedSpec, InteractiveModeV1::NonInteractive, 2, 4096, 100).is_err()
+        );
+        assert!(
+            CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::Segmented, InteractiveModeV1::StagedBeacon, 65, 4096, 100).is_err()
+        );
+    }
+
+    /// **R7-RELATION (2026-10-15)**: every compact family contract is refused at registration by name, and a plan carrying a compact
+    /// compiler id is refused with the same explicit reason — never silently read as the full-material plan.
+    #[test]
+    fn compact_proof_family_contracts_are_refused_by_name_never_silently_accepted() {
+        let mut ids = std::collections::BTreeSet::new();
+        for family in CompactProofFamilyV1::ALL {
+            let contract = CompactProofFamilyContractV1 {
+                version: 1,
+                family,
+                target: PaidClaimTargetV2::Program,
+                relation_root: [1; 64],
+                soundness_review_root: [2; 64],
+                claimed_soundness_bits: 128,
+                maximum_proof_bytes: 1 << 20,
+                maximum_verifier_work: 1 << 30,
+            };
+            assert_eq!(contract.register(), Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.to_string()));
+            assert_ne!(contract.compiler(), full_material_compiler_v3());
+            assert!(ids.insert(contract.compiler()), "one compiler identity per family");
+            let mut plan =
+                CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::Program, InteractiveModeV1::StagedBeacon, 2, 4096, 100).unwrap();
+            plan.compiler = contract.compiler();
+            assert_eq!(
+                plan.validate(PaidClaimTargetV2::Program, InteractiveModeV1::StagedBeacon, 2, 100),
+                Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.to_string())
+            );
+        }
+        assert!(!is_compact_proof_family_compiler_v1(&full_material_compiler_v3()));
+    }
 }

@@ -20,7 +20,9 @@
 //!
 //! State: one rooted map ([`PalwD2ReadinessRegistryV1`]) of roots and cases, journaled as delta 230 and carried in tail
 //! [`PALW_CARRIAGE_D2_READINESS_TAIL_V1`] only when non-empty (`crate::palw_state_v2::d2_readiness`).
-use super::readiness_root::{ReadinessDigestPathV1, SeatReadinessRootV1, palw_d2_readiness_root_admit_v1, palw_d2_readiness_root_key_v1};
+use super::readiness_root::{
+    ReadinessDigestPathV1, SeatReadinessRootV1, palw_d2_readiness_root_admit_v1, palw_d2_readiness_root_key_v1,
+};
 use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::{collections::BTreeMap, num::NonZeroU32};
@@ -120,9 +122,15 @@ pub fn palw_d2_disclosure_answer_message_v1(network_domain: Hash64, answer: &Pal
 pub enum PalwD2ReadinessStandingV1 {
     Committed,
     /// The seat signed a path its own root refutes, at this ordinal.
-    PathConvicted { ordinal: u32, at_daa: u64 },
+    PathConvicted {
+        ordinal: u32,
+        at_daa: u64,
+    },
     /// The seat did not answer a supplied demand by the deadline (DA default, no computation fault).
-    DisclosureDefaulted { ordinal: u32, at_daa: u64 },
+    DisclosureDefaulted {
+        ordinal: u32,
+        at_daa: u64,
+    },
 }
 
 /// A recorded tag-230 root.
@@ -138,11 +146,20 @@ pub struct PalwD2ReadinessRowV1 {
 pub enum PalwD2DisclosureOutcomeV1 {
     Open,
     /// The authenticated opening, shared by every later refuter.
-    Disclosed { path: ReadinessDigestPathV1, at_daa: u64 },
-    PathConvicted { at_daa: u64 },
-    DisclosureDefaulted { at_daa: u64 },
+    Disclosed {
+        path: ReadinessDigestPathV1,
+        at_daa: u64,
+    },
+    PathConvicted {
+        at_daa: u64,
+    },
+    DisclosureDefaulted {
+        at_daa: u64,
+    },
     /// Deadline passed without the supply premise: held, no default, no slash.
-    NoSupplyHold { at_daa: u64 },
+    NoSupplyHold {
+        at_daa: u64,
+    },
 }
 
 /// One disclosure case per `(root, ordinal)`.
@@ -174,7 +191,11 @@ pub type PalwD2ReadinessRegistryV1 = BTreeMap<PalwD2ReadinessKeyV1, PalwD2Readin
 
 /// Carriage invariant: a root row sits under its own registry key, a case under its demand's `(root, ordinal)`, and a case's root
 /// is recorded with the ordinal inside its count.
-pub fn palw_d2_readiness_entry_consistent_v1(registry: &PalwD2ReadinessRegistryV1, key: &PalwD2ReadinessKeyV1, entry: &PalwD2ReadinessEntryV1) -> bool {
+pub fn palw_d2_readiness_entry_consistent_v1(
+    registry: &PalwD2ReadinessRegistryV1,
+    key: &PalwD2ReadinessKeyV1,
+    entry: &PalwD2ReadinessEntryV1,
+) -> bool {
     match (key, entry) {
         (PalwD2ReadinessKeyV1::Root(k), PalwD2ReadinessEntryV1::Root(row)) => {
             *k == palw_d2_readiness_root_key_v1(&row.root.context()) && row.root.leaf_count != 0
@@ -245,7 +266,14 @@ pub fn palw_d2_readiness_record_v1(
     if registry.contains_key(&key) {
         return Err(PalwD2DisclosureRefusalV1::RootAlreadyRecorded);
     }
-    Ok((key, PalwD2ReadinessEntryV1::Root(PalwD2ReadinessRowV1 { root: root.clone(), recorded_daa: now_daa, standing: PalwD2ReadinessStandingV1::Committed })))
+    Ok((
+        key,
+        PalwD2ReadinessEntryV1::Root(PalwD2ReadinessRowV1 {
+            root: root.clone(),
+            recorded_daa: now_daa,
+            standing: PalwD2ReadinessStandingV1::Committed,
+        }),
+    ))
 }
 
 fn root_row(registry: &PalwD2ReadinessRegistryV1, root_key: Hash64) -> Result<&PalwD2ReadinessRowV1, PalwD2DisclosureRefusalV1> {
@@ -287,7 +315,15 @@ pub fn palw_d2_disclosure_open_v1(
         return Err(PalwD2DisclosureRefusalV1::CaseExists);
     }
     let deadline_daa = now_daa.checked_add(PALW_D2_DISCLOSURE_TURN_DAA_V1).ok_or(PalwD2DisclosureRefusalV1::DemandExpired)?;
-    Ok((key, PalwD2ReadinessEntryV1::Case(PalwD2DisclosureCaseV1 { demand: *demand, opened_daa: now_daa, deadline_daa, outcome: PalwD2DisclosureOutcomeV1::Open })))
+    Ok((
+        key,
+        PalwD2ReadinessEntryV1::Case(PalwD2DisclosureCaseV1 {
+            demand: *demand,
+            opened_daa: now_daa,
+            deadline_daa,
+            outcome: PalwD2DisclosureOutcomeV1::Open,
+        }),
+    ))
 }
 
 /// **Fold the seat's answer** (signature checked by the validator against the ROOT's seat bond). Returns the new case and, on a
@@ -449,7 +485,10 @@ mod tests {
         let mut d = demand(rk, 3);
         d.fee_sompi = 6;
         assert_eq!(palw_d2_disclosure_open_v1(&reg, &d, cap, FEES, 20), Err(PalwD2DisclosureRefusalV1::FeeMismatch));
-        assert_eq!(palw_d2_disclosure_open_v1(&reg, &demand(rk, 4), cap, FEES, 20), Err(PalwD2DisclosureRefusalV1::OrdinalOutsideDraw));
+        assert_eq!(
+            palw_d2_disclosure_open_v1(&reg, &demand(rk, 4), cap, FEES, 20),
+            Err(PalwD2DisclosureRefusalV1::OrdinalOutsideDraw)
+        );
         assert_eq!(palw_d2_disclosure_open_v1(&reg, &demand(rk, 0), cap, FEES, 1_001), Err(PalwD2DisclosureRefusalV1::DemandExpired));
         assert!(palw_d2_disclosure_open_v1(&reg, &demand(rk, 0), cap, FEES, 1_000).is_ok(), "valid_until is inclusive");
         let mut own = demand(rk, 0);
@@ -494,10 +533,16 @@ mod tests {
                 assert_eq!(case.outcome, PalwD2DisclosureOutcomeV1::PathConvicted { at_daa: 3_140 });
                 assert_eq!(row.standing, PalwD2ReadinessStandingV1::PathConvicted { ordinal: 1, at_daa: 3_140 });
                 // Signed validity is checked before the already-convicted root standing.
-                assert_eq!(palw_d2_disclosure_open_v1(&reg, &demand(rk, 2), cap, FEES, 3_141), Err(PalwD2DisclosureRefusalV1::DemandExpired));
+                assert_eq!(
+                    palw_d2_disclosure_open_v1(&reg, &demand(rk, 2), cap, FEES, 3_141),
+                    Err(PalwD2DisclosureRefusalV1::DemandExpired)
+                );
                 let mut next = demand(rk, 2);
                 next.valid_until_daa = 3_141;
-                assert_eq!(palw_d2_disclosure_open_v1(&reg, &next, cap, FEES, 3_141), Err(PalwD2DisclosureRefusalV1::RootNotCommitted));
+                assert_eq!(
+                    palw_d2_disclosure_open_v1(&reg, &next, cap, FEES, 3_141),
+                    Err(PalwD2DisclosureRefusalV1::RootNotCommitted)
+                );
             } else {
                 assert_eq!(case.outcome, PalwD2DisclosureOutcomeV1::Disclosed { path, at_daa: 3_140 });
                 assert_eq!(row.standing, PalwD2ReadinessStandingV1::Committed);
@@ -518,7 +563,9 @@ mod tests {
         assert!(palw_d2_disclosure_sweep_v1(&reg, 3_140, true).is_empty(), "the deadline DAA is still in time");
         let held = palw_d2_disclosure_sweep_v1(&reg, 3_141, false);
         assert_eq!(held.len(), 1);
-        assert!(matches!(&held[0].1, PalwD2ReadinessEntryV1::Case(c) if c.outcome == PalwD2DisclosureOutcomeV1::NoSupplyHold { at_daa: 3_141 }));
+        assert!(
+            matches!(&held[0].1, PalwD2ReadinessEntryV1::Case(c) if c.outcome == PalwD2DisclosureOutcomeV1::NoSupplyHold { at_daa: 3_141 })
+        );
         let defaulted = palw_d2_disclosure_sweep_v1(&reg, 3_141, true);
         assert_eq!(defaulted.len(), 2);
         assert!(matches!(&defaulted[1].1, PalwD2ReadinessEntryV1::Root(r)

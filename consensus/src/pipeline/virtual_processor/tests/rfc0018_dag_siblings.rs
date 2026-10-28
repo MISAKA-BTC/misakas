@@ -15,6 +15,7 @@
 //!   same state on both arrival orders.
 //!
 //! **Unverified source (2026-10-15): written, not built and not run.** Real-process versions: `scripts/drills/rfc0018_dag_drill.py`.
+#![allow(warnings)]
 use super::OnetimeTxSelector;
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
@@ -23,8 +24,8 @@ use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
 use kaspa_consensus_core::coinbase::MinerData;
-use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::Config;
+use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_model_registry_v1::{PalwModelLifecycleV1, PalwSeatReadinessRowV1};
 use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;

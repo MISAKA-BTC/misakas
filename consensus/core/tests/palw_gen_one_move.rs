@@ -11,6 +11,7 @@
 //! * the refusals by name: another claim's roots, a producer accusing its own claim, an accuser the registry does
 //!   not hold, a terminal claim, a claim that is not a pipeline claim's, and below `palw_gen_v1`.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod rcore;
 use rcore::*;

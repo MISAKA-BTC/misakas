@@ -8,14 +8,14 @@
 use super::kernel_paid_producer_v4::{hash, owned_dir, publish_borsh, read_bounded, regular};
 use crate::palw_native_custody_v3::{PalwNativeCustodyContextV3, PalwNativeExchangeHandleV3};
 use kaspa_consensus_core::{
+    Hash64,
     palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
     palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
     palw_native_resource_v1::{
-        preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1, NativeDemandLeaseV1,
+        NativeDemandLeaseV1, preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1,
     },
     palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
     palw_state_v2::PalwBondKeyV2,
-    Hash64,
 };
 use std::{
     fs::{self, OpenOptions},

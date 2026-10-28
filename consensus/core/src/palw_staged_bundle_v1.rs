@@ -594,7 +594,10 @@ impl PalwOwnedStagedBundleV1 {
     }
     /// The active stage's LEGACY seed (`None` for a native TIR stage: see [`Self::active_native_seed_v1`]).
     pub fn active_seed_v1(&self) -> Option<&crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1> {
-        self.active.and_then(|index| self.opened.get(index as usize)).and_then(|stage| stage.context.legacy_v1()).map(|c| c.seed.as_ref())
+        self.active
+            .and_then(|index| self.opened.get(index as usize))
+            .and_then(|stage| stage.context.legacy_v1())
+            .map(|c| c.seed.as_ref())
     }
     pub fn active_native_seed_v1(&self) -> Option<&PalwStagedNativeSeedContextV1> {
         self.active.and_then(|index| self.opened.get(index as usize)).and_then(|stage| stage.context.native_v1())
@@ -749,10 +752,10 @@ impl PalwOwnedStagedBundleV1 {
         if self.selected_native.is_some() && self.selected_context.is_some() {
             return Err("selected source retains both a legacy and a native original context".into());
         }
-        if let Some(native) = &self.selected_native {
-            if self.selected.is_none() || native.header.committed_execution_root != self.execution_root {
-                return Err("native selected source changes literal paid frame or original execution".into());
-            }
+        if let Some(native) = &self.selected_native
+            && (self.selected.is_none() || native.header.committed_execution_root != self.execution_root)
+        {
+            return Err("native selected source changes literal paid frame or original execution".into());
         }
         match (&self.selected, &self.selected_context) {
             (Some(_), None) if self.selected_native.is_some() => {}
@@ -858,7 +861,8 @@ impl PalwOwnedStagedBundleV1 {
                     seed.check(90_000)?;
                     if (seed.claim, seed.reserver, seed.reserved_daa) != (self.claim, self.owner, self.reserved_daa)
                         || context.header.committed_execution_root != self.execution_root
-                        || seed.view_identity != crate::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(&context.header)
+                        || seed.view_identity
+                            != crate::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(&context.header)
                         || seed.job.as_deref().is_some_and(|j| j != context.job.as_ref())
                     {
                         return Err("opened native family changes signed original header or required stage".into());

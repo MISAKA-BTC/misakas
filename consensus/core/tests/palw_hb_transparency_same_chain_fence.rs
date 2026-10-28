@@ -24,6 +24,7 @@
 //!   refuses it from it — the flag day as a named refusal instead of a silent fork;
 //! * `validate_palw_v2` refuses it where ADR-0105's transparency is not in force at or below it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_BOND_MATURITY_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,

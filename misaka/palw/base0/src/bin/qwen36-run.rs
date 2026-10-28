@@ -14,6 +14,7 @@
 //! Token ids rather than text: a Qwen3.6 tokenizer is a separate piece, and what is being measured
 //! here is the engine.
 
+#![allow(warnings)]
 use misaka_palw_base0::engine::argmax_lowest;
 use misaka_palw_base0::qwen36::{Qwen36Cache, Qwen36Engine, Qwen36ResidencyPolicyV1, open_artifact_with_residency};
 use misaka_palw_base0::qwen36_reference::qwen36_score_fidelity;

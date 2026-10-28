@@ -10,6 +10,7 @@
 //!
 //! Run: `cargo test -p misaka-palw-extension --test ruleset_candidate_rederives_the_depth -- --nocapture`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params, palw_v2_pruning_depth_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use misaka_palw_extension::kinds::ruleset_candidate::{set_fence_by_name, with_derived_depths_v1, would_print_v1};

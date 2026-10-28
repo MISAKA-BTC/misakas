@@ -24,6 +24,7 @@
 //! The chain is `t12_round_lane_e2e`'s harness (testnet-12 as shipped, harness keys on its eight
 //! cards, the premine imported, the EVM lane inert), heartbeats and one attempt block; PoW is skipped
 //! and nothing else is.
+#![allow(warnings)]
 use super::TestContext;
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;

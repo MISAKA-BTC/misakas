@@ -264,10 +264,12 @@ impl NativeWireScanV1 for misaka_palw_panel::PanelCandidatesV1 {
 }
 // Match the existing typed Arc ownership account, including its conservative
 // alignment allowance. This reserves memory, never changes a codec or a cap.
-fn arc_wire_allocation_v1<T>(shape:NativeWireShapeV1)->io::Result<NativeWireShapeV1> {
-    let bytes=size_of::<T>().checked_add(size_of::<[usize;2]>())
-        .and_then(|n|n.checked_add(std::mem::align_of::<T>())).ok_or_else(overflow)?;
-    shape.allocation(1,bytes)
+fn arc_wire_allocation_v1<T>(shape: NativeWireShapeV1) -> io::Result<NativeWireShapeV1> {
+    let bytes = size_of::<T>()
+        .checked_add(size_of::<[usize; 2]>())
+        .and_then(|n| n.checked_add(std::mem::align_of::<T>()))
+        .ok_or_else(overflow)?;
+    shape.allocation(1, bytes)
 }
 /// G14's shared court continuation: Borsh is exactly `T`; restore allocates one `Arc<T>` (two counters plus the payload).
 impl<T: NativeWireScanV1> NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwSharedCourtV1<T> {
@@ -390,19 +392,24 @@ mod carriage_preflight_tests {
     use crate::palw_native_resource_v1::NativeHeapV1;
     #[test]
     fn shared_arc_preflight_covers_typed_heap_without_vector_slack() {
-        fn check<T:NativeWireScanV1+NativeHeapV1+borsh::BorshSerialize+Clone>(value:T) {
-            let raw=borsh::to_vec(&value).unwrap();
-            let shared:crate::palw_staged_court_state_v1::PalwSharedCourtV1<T>=Box::new(value.clone()).into();
-            let arc=std::sync::Arc::new(value);
-            assert_eq!(borsh::to_vec(&shared).unwrap(),raw);assert_eq!(borsh::to_vec(&arc).unwrap(),raw);
-            let mut scan=NativeWireReaderV1::new(raw.as_slice(),raw.len() as u64);
-            let shared_shape=<crate::palw_staged_court_state_v1::PalwSharedCourtV1<T>>::scan_native_wire_v1(&mut scan).unwrap();
-            assert_eq!(scan.remaining(),0);assert!(shared_shape.heap>=shared.native_heap_v1("shared").bytes().unwrap());
-            let mut scan=NativeWireReaderV1::new(raw.as_slice(),raw.len() as u64);
-            let arc_shape=<std::sync::Arc<T>>::scan_native_wire_v1(&mut scan).unwrap();
-            assert_eq!(scan.remaining(),0);assert!(arc_shape.heap>=arc.native_heap_v1("arc").bytes().unwrap());
+        fn check<T: NativeWireScanV1 + NativeHeapV1 + borsh::BorshSerialize + Clone>(value: T) {
+            let raw = borsh::to_vec(&value).unwrap();
+            let shared: crate::palw_staged_court_state_v1::PalwSharedCourtV1<T> = Box::new(value.clone()).into();
+            let arc = std::sync::Arc::new(value);
+            assert_eq!(borsh::to_vec(&shared).unwrap(), raw);
+            assert_eq!(borsh::to_vec(&arc).unwrap(), raw);
+            let mut scan = NativeWireReaderV1::new(raw.as_slice(), raw.len() as u64);
+            let shared_shape = <crate::palw_staged_court_state_v1::PalwSharedCourtV1<T>>::scan_native_wire_v1(&mut scan).unwrap();
+            assert_eq!(scan.remaining(), 0);
+            assert!(shared_shape.heap >= shared.native_heap_v1("shared").bytes().unwrap());
+            let mut scan = NativeWireReaderV1::new(raw.as_slice(), raw.len() as u64);
+            let arc_shape = <std::sync::Arc<T>>::scan_native_wire_v1(&mut scan).unwrap();
+            assert_eq!(scan.remaining(), 0);
+            assert!(arc_shape.heap >= arc.native_heap_v1("arc").bytes().unwrap());
         }
-        check(7u64);check(7u8);check([0u8;0]);
+        check(7u64);
+        check(7u8);
+        check([0u8; 0]);
     }
     #[test]
     fn scanner_resource_limits_are_distinct_from_malformed_codec() {

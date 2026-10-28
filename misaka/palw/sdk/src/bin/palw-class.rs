@@ -13,6 +13,7 @@
 //! the node's own `--palw-register-class` path reads live terms for exactly that reason. This tool
 //! is the dry run, not the submission.
 
+#![allow(warnings)]
 use std::path::PathBuf;
 
 use kaspa_consensus_core::config::params::Params;
@@ -1301,6 +1302,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let master = required("--master")?.parse::<kaspa_hashes::Hash64>().map_err(|e| e.to_string())?.as_bytes();
             let aux_path = required("--aux-proof32")?;
             let output = PathBuf::from(required("--out")?);
+            #[allow(clippy::drop_non_drop)]
             drop(required);
             let jobs = take_flag(&mut args, "--jobs")
                 .unwrap_or_default()

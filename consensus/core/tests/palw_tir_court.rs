@@ -16,6 +16,7 @@
 //!   the honest run;
 //! * mutated refutations never panic the court.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

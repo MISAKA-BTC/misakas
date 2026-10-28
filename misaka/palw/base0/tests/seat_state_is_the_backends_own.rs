@@ -20,6 +20,7 @@
 //! turned the verdict `Unverifiable` under the process-wide slot; none of them may move it now. The
 //! instance's OWN forget still does, which is what says the verdict is read from the instance.
 
+#![allow(warnings)]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

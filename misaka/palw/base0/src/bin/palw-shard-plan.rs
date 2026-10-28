@@ -28,6 +28,7 @@
 //!   "moe_dim": 3072, "shared_dim": 6144, "attn_output_gate": 1, "total_parameters": 2800000000000 }
 //! ```
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, palw_rc_shipped_params};
 use kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1;
 use kaspa_consensus_core::palw_fp_devnet_v3::{PALW_V2_PANEL_QUORUM, PALW_V2_PANEL_SEATS};

@@ -9,6 +9,7 @@
 //!
 //! Written, not run here (the validation lane compiles and runs it).
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_artifact::{PalwArtifactMerkleFrontierV1, artifact_leaf_parts_v1};
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q, encode_artifact_file_v1};
 use misaka_palw_base0::engine_a16::derived_a16_store;

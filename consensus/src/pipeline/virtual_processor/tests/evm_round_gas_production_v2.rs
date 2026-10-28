@@ -1,6 +1,7 @@
 //! Actual accepted native round → untouched EVM producer template → validator.
 //! Private harness keys/trace roots/seat signatures, not K3, real inference or
 //! fabricated native39 settlement/maturity facts. Market remains inactive.
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::{
     evm::{EVM_ROUND_GAS_BUDGET_V1, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, evm_distinct_permitted_rounds_v1, evm_user_gas_cap_v1},

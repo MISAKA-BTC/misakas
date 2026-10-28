@@ -3,6 +3,7 @@
 //! does; the observations are the evidence of `docs/design/palw/tir/ref2-findings.md`. A probe
 //! asserts only what the text fixes; where the text is silent it prints both behaviours.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeMap;

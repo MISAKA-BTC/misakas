@@ -7,6 +7,7 @@
 //! applicable to the independent bond book and the book agrees with the ledger's view (conservation).
 //! Expected BEFORE running: PASS after the shape-arithmetic fix (098ffc749), the pipeline wires reuse `TensorWireV1::decode`.
 
+#![allow(warnings)]
 #[path = "../../tir/core/tests/v2common/mod.rs"]
 mod v2common;
 
@@ -25,8 +26,8 @@ use misaka_palw_kernel::descriptor::{
 use misaka_palw_kernel::gate::ProsecutionPolicyV1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::ledger::{
-    AuthV1, KernelLedgerV1, KernelRouteObjectV1 as O, LedgerEventV1 as E, LedgerPolicyV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1,
-    PublicSourceV1,
+    AuthV1, KernelLedgerV1, KernelRouteObjectV1 as O, LedgerEventV1 as E, LedgerPolicyV1, OutsiderFindingV1, OutsiderV1,
+    ProsecutionV1, PublicSourceV1,
 };
 use misaka_palw_kernel::pipeline::{PipelineTraceV1, build_pipeline_evidence_v1, pipeline_plan_v1, stage_view_v1, trace_pipeline_v1};
 use misaka_palw_kernel::pipeline_public::{
@@ -193,7 +194,12 @@ impl PW {
     }
 
     fn post(&mut self, daa: u64, nonce: u8) -> PipelineJobPostV1 {
-        let post = PipelineJobPostV1 { class_binding_id: self.class, facts: PipelineJobFactsV1::of(&toy_job(), RANDOM), max_new_tokens: 0, nonce: [nonce; 64] };
+        let post = PipelineJobPostV1 {
+            class_binding_id: self.class,
+            facts: PipelineJobFactsV1::of(&toy_job(), RANDOM),
+            max_new_tokens: 0,
+            nonce: [nonce; 64],
+        };
         let ev = self.blk(daa, vec![T::PostPipelineJob { job: post.clone() }]);
         assert!(ev.contains(&E::JobPosted { job: post.id() }), "{ev:?}");
         post
@@ -206,8 +212,26 @@ impl PW {
         let mut trace = trace_pipeline_v1(&self.p, &self.programs, &self.params, &RANDOM, &full).unwrap();
         lie(&mut trace);
         let pcs: Vec<ParamCommitmentsV1> = self.params.0.iter().map(ParamCommitmentsV1::of).collect();
-        let ev = build_pipeline_evidence_v1(class.header(self.class), &d, &self.p, &self.programs, &class.plan, &pcs, &trace, &full, RANDOM.binding(), 2).unwrap();
-        let claim = PipelineClaimV1 { job_id: job.id(), producer_bond: PRODUCER, generated: vec![], output_root: ev.output_root, evidence_root: ev.root() };
+        let ev = build_pipeline_evidence_v1(
+            class.header(self.class),
+            &d,
+            &self.p,
+            &self.programs,
+            &class.plan,
+            &pcs,
+            &trace,
+            &full,
+            RANDOM.binding(),
+            2,
+        )
+        .unwrap();
+        let claim = PipelineClaimV1 {
+            job_id: job.id(),
+            producer_bond: PRODUCER,
+            generated: vec![],
+            output_root: ev.output_root,
+            evidence_root: ev.root(),
+        };
         let stages = trace.stages.iter().map(|t| StageCommitmentsV1::of(&t.evidence())).collect();
         let tx = T::CommitPipelineClaim { claim: claim.clone(), evidence: ev, stages };
         (claim, trace, tx)
@@ -226,7 +250,8 @@ fn install_hook() {
             .next()
             .unwrap_or_default();
         let loc = format!("{} <- {}", info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default(), caller);
-        let msg = info.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned());
+        let msg =
+            info.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned());
         PANICS.lock().unwrap().push((loc, msg.unwrap_or_default()));
     }));
 }
@@ -256,21 +281,52 @@ fn structured(name: &str, obj: &O) -> Vec<(String, O)> {
     match obj {
         O::FileProof { accuser, claim, proof: ProsecutionV1::Pipeline(bytes) } => {
             let Ok(w) = borsh::from_slice::<PipelineFaultWireV1>(bytes) else { return out };
-            let put = |m: PipelineFaultWireV1| O::FileProof { accuser: *accuser, claim: *claim, proof: ProsecutionV1::Pipeline(borsh::to_vec(&m).unwrap()) };
+            let put = |m: PipelineFaultWireV1| O::FileProof {
+                accuser: *accuser,
+                claim: *claim,
+                proof: ProsecutionV1::Pipeline(borsh::to_vec(&m).unwrap()),
+            };
             match &w {
                 PipelineFaultWireV1::Edge { stage, input, position, claimed, upstream } => {
                     for (i, t) in tensor_mutants(claimed).into_iter().enumerate() {
-                        out.push((format!("{name}/claimed#{i}"), put(PipelineFaultWireV1::Edge { stage: *stage, input: *input, position: *position, claimed: t, upstream: upstream.clone() })));
+                        out.push((
+                            format!("{name}/claimed#{i}"),
+                            put(PipelineFaultWireV1::Edge {
+                                stage: *stage,
+                                input: *input,
+                                position: *position,
+                                claimed: t,
+                                upstream: upstream.clone(),
+                            }),
+                        ));
                     }
                     for k in 0..upstream.len() {
                         for (i, t) in tensor_mutants(&upstream[k]).into_iter().enumerate() {
                             let mut u = upstream.clone();
                             u[k] = t;
-                            out.push((format!("{name}/upstream{k}#{i}"), put(PipelineFaultWireV1::Edge { stage: *stage, input: *input, position: *position, claimed: claimed.clone(), upstream: u })));
+                            out.push((
+                                format!("{name}/upstream{k}#{i}"),
+                                put(PipelineFaultWireV1::Edge {
+                                    stage: *stage,
+                                    input: *input,
+                                    position: *position,
+                                    claimed: claimed.clone(),
+                                    upstream: u,
+                                }),
+                            ));
                         }
                     }
                     for (st, inp, pos) in [(u8::MAX, 0u16, 0u32), (0, u16::MAX, 0), (0, 0, u32::MAX), (1, u16::MAX, u32::MAX)] {
-                        out.push((format!("{name}/where{st}.{inp}.{pos}"), put(PipelineFaultWireV1::Edge { stage: st, input: inp, position: pos, claimed: claimed.clone(), upstream: upstream.clone() })));
+                        out.push((
+                            format!("{name}/where{st}.{inp}.{pos}"),
+                            put(PipelineFaultWireV1::Edge {
+                                stage: st,
+                                input: inp,
+                                position: pos,
+                                claimed: claimed.clone(),
+                                upstream: upstream.clone(),
+                            }),
+                        ));
                     }
                 }
                 // The commitment-only edge form (no claimed tensor; the edge is judged against its committed root): the same upstream
@@ -280,11 +336,27 @@ fn structured(name: &str, obj: &O) -> Vec<(String, O)> {
                         for (i, t) in tensor_mutants(&upstream[k]).into_iter().enumerate() {
                             let mut u = upstream.clone();
                             u[k] = t;
-                            out.push((format!("{name}/upstream{k}#{i}"), put(PipelineFaultWireV1::EdgeCommitment { stage: *stage, input: *input, position: *position, upstream: u })));
+                            out.push((
+                                format!("{name}/upstream{k}#{i}"),
+                                put(PipelineFaultWireV1::EdgeCommitment {
+                                    stage: *stage,
+                                    input: *input,
+                                    position: *position,
+                                    upstream: u,
+                                }),
+                            ));
                         }
                     }
                     for (st, inp, pos) in [(u8::MAX, 0u16, 0u32), (0, u16::MAX, 0), (0, 0, u32::MAX), (1, u16::MAX, u32::MAX)] {
-                        out.push((format!("{name}/where{st}.{inp}.{pos}"), put(PipelineFaultWireV1::EdgeCommitment { stage: st, input: inp, position: pos, upstream: upstream.clone() })));
+                        out.push((
+                            format!("{name}/where{st}.{inp}.{pos}"),
+                            put(PipelineFaultWireV1::EdgeCommitment {
+                                stage: st,
+                                input: inp,
+                                position: pos,
+                                upstream: upstream.clone(),
+                            }),
+                        ));
                     }
                 }
                 PipelineFaultWireV1::Stage { stage, proof } => {
@@ -313,7 +385,12 @@ fn structured(name: &str, obj: &O) -> Vec<(String, O)> {
         }
         O::Respond { claim, stage, position, bytes } => {
             let Ok(r) = borsh::from_slice::<PositionResponseV1>(bytes) else { return out };
-            let put = |m: PositionResponseV1| O::Respond { claim: *claim, stage: *stage, position: *position, bytes: borsh::to_vec(&m).unwrap() };
+            let put = |m: PositionResponseV1| O::Respond {
+                claim: *claim,
+                stage: *stage,
+                position: *position,
+                bytes: borsh::to_vec(&m).unwrap(),
+            };
             for k in 0..r.inputs.len() {
                 if let MaterialResponseV1::Whole(t) = &r.inputs[k] {
                     for (i, m) in tensor_mutants(t).into_iter().enumerate() {
@@ -403,7 +480,7 @@ fn a_stranger_who_mutates_a_pipeline_object_cannot_panic_the_fold_or_convict_an_
     let job4 = PipelineJobPostV1 { nonce: [9; 64], ..job.clone() };
     let (c4, _, tx4) = w.produce(&job4, |_| {});
     let _ = c4;
-    w.blk(16, seals_for(&[tx4.clone()]));
+    w.blk(16, seals_for(std::slice::from_ref(&tx4)));
     let reg = {
         let d = k2_tir_v3_descriptor();
         let pcs: Vec<ParamCommitmentsV1> = w.params.0.iter().map(ParamCommitmentsV1::of).collect();
@@ -424,7 +501,14 @@ fn a_stranger_who_mutates_a_pipeline_object_cannot_panic_the_fold_or_convict_an_
         ("FileProof/Pipeline stage vs honest", O::FileProof { accuser: OUTSIDER, claim: hid, proof: stage }, OUTSIDER),
         ("Respond stage position", resp, SPAM1),
         ("PostPipelineJob", O::PostPipelineJob { job: PipelineJobPostV1 { nonce: [7; 64], ..job.clone() } }, PRODUCER),
-        ("CommitPipelineClaim", { let T::CommitPipelineClaim { claim, evidence, stages } = tx4 else { unreachable!() }; O::CommitPipelineClaim { claim, evidence, stages } }, PRODUCER),
+        (
+            "CommitPipelineClaim",
+            {
+                let T::CommitPipelineClaim { claim, evidence, stages } = tx4 else { unreachable!() };
+                O::CommitPipelineClaim { claim, evidence, stages }
+            },
+            PRODUCER,
+        ),
         ("RegisterPipelineClass", reg, PRODUCER),
     ];
     let mut stats: BTreeMap<&'static str, u32> = BTreeMap::new();
@@ -456,7 +540,10 @@ fn a_stranger_who_mutates_a_pipeline_object_cannot_panic_the_fold_or_convict_an_
                 }
                 Ok(Ok(ev)) => {
                     *stats.entry("applied").or_default() += 1;
-                    assert!(!ev.iter().any(|e| matches!(e, E::Convicted { claim, .. } if *claim == hid)), "I3: honest claim convicted ({label})");
+                    assert!(
+                        !ev.iter().any(|e| matches!(e, E::Convicted { claim, .. } if *claim == hid)),
+                        "I3: honest claim convicted ({label})"
+                    );
                     for e in &ev {
                         if let E::Settlement(s) = e {
                             bk.apply(s).unwrap_or_else(|why| panic!("I4: a settlement a real bond refuses ({label}): {why}"));
@@ -513,7 +600,11 @@ fn every_byte_flip_of_a_pipeline_class_registration_is_refused_or_applied_withou
         ok.apply_encoded(&obj.encode(), &AuthV1 { signer_bond: PRODUCER }).expect("the unflipped registration applies");
     }
     let (applied, refused, panics) = support::exhaustive_flips(&base, &obj, PRODUCER);
-    eprintln!("RegisterPipelineClass byte flips: {} bytes, applied {applied}, refused {refused}, panics {}", obj.encoded_len(), panics.len());
+    eprintln!(
+        "RegisterPipelineClass byte flips: {} bytes, applied {applied}, refused {refused}, panics {}",
+        obj.encoded_len(),
+        panics.len()
+    );
     assert!(panics.is_empty(), "I1 violated: {panics:?}");
 }
 

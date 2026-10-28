@@ -15,6 +15,7 @@
 //! `palw_shard_licensing`, over any context root but V5, with mirrors that disagree, and a C7 list
 //! that is non-empty without the fence or names a class that is not a testnet-12 genesis held row.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, OverrideParams, PALW_T12_RCORE_CONSERVATIVE_CLASSES, Params, devnet_shipped_params, mainnet_shipped_params,
     palw_rc_shipped_params, palw_t12_genesis_held_class_ids_v1, palw_t12_shipped_params, palw_v2_bond_withdrawal_delay_at_v1,

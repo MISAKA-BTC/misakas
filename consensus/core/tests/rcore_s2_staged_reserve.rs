@@ -16,6 +16,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_s2_staged_reserve
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

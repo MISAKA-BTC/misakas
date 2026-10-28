@@ -3,6 +3,7 @@
 //! its roots are the pack's, on one thread and on seven; every claim a pack makes fails when it is
 //! tampered with; the logit convention is a fact, not a label.
 
+#![allow(warnings)]
 use misaka_palw_sdk::runtime_pack::manifest::{PACK_FILE, RuntimePackV1};
 use misaka_palw_sdk::runtime_pack::{BuildOpts, Status, VerifyOpts, build_pack, verify_pack};
 use misaka_palw_tir_lower::convert::{CalibInput, ConvertRequest};

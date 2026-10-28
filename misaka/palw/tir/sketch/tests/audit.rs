@@ -11,6 +11,7 @@
 //! * a single lied tile is found by about `m/N` of `m`-audit rounds;
 //! * the bytes an audit opens (printed with `--nocapture`).
 
+#![allow(warnings)]
 use misaka_palw_tir::{DType, Tensor};
 use misaka_palw_tir_exec::TirPlan;
 use misaka_palw_tir_sketch::audit::{TirAuditTallyV1, TirAuditTileV1, tir_audit_tiles_v1, tir_leaf_audit_v1};

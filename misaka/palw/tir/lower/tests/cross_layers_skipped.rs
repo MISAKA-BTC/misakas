@@ -3,6 +3,7 @@
 //! text-only logits; the cross layers stay in the spec (and the model's layer numbering), their tensors are dormant, and image rows
 //! bound to such a spec are refused by name. The integer-versus-float numbers are `tests/fidelity_tiny.rs::mllama`.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::lower::{ImageRows, LowerOpts};
 use misaka_palw_tir_lower::spec::Mixer;

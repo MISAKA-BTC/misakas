@@ -28,6 +28,7 @@
 //! PALW_CORPUS_ONLY=llama,qwen2 PALW_CORPUS_STAGES=read …                         # a subset, read stage only
 //! ```
 
+#![allow(warnings)]
 use misaka_palw_tir as tir;
 use misaka_palw_tir::{ConeEnv, Interpreter, RunState, Tensor};
 use misaka_palw_tir_exec::{NodeValue, ParamData, StepSink, TirExecutor, TirParams, TirPlan};

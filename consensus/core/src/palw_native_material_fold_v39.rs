@@ -171,17 +171,17 @@ fn start(
     }
     // Native upstream certification is performed at Seal after all original
     // bytes exist, and is rechecked at Fund. External task identity is immutable.
-    if let MaterialOriginV39::External { original_task, .. } = &d.origin {
-        if *original_task != class.source().original_task_metadata() {
-            return Err(bad("native39 material external original task differs"));
-        }
+    if let MaterialOriginV39::External { original_task, .. } = &d.origin
+        && *original_task != class.source().original_task_metadata()
+    {
+        return Err(bad("native39 material external original task differs"));
     }
     let m = CheckedMaterialPlanV39::derive(&d, ctx.daa_score, until).map_err(bad)?;
     let checked_certificate = check_certificate_plan(builder, ctx, signer, p, &d, certificate.as_ref())?;
-    if let Some(cp) = &checked_certificate {
-        if !pay_certificate(builder, ctx, signer, p, &m, cp)? {
-            return Ok(());
-        }
+    if let Some(cp) = &checked_certificate
+        && !pay_certificate(builder, ctx, signer, p, &m, cp)?
+    {
+        return Ok(());
     }
     if !pay_complete(builder, ctx, signer, p, &m)? {
         return Ok(());

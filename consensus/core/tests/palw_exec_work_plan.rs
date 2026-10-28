@@ -1,4 +1,5 @@
 //! RFC8 WORK acceptance reference: independent position walk, partition conservation and job scope.
+#![allow(warnings)]
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalExecutionFactsV1, PalwCanonicalWorkVectorV1};
 use kaspa_consensus_core::palw_exec_work_plan_v1::{
     PalwExecWorkCostV1, PalwExecWorkPlanErrorV1, palw_exec_work_plan_from_boundaries_v1, palw_exec_work_plan_v1,

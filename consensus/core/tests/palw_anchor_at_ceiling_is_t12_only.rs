@@ -26,6 +26,7 @@
 //!   (`palw_operator_anchor`) at or below it (the int-4 audit's LOW: the binder's second condition is
 //!   lane A's operator predicate), so the tests arm lane A with it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,

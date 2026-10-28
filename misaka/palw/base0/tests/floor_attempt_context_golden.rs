@@ -9,6 +9,7 @@
 //! producer runs and a seat's `verify_material` holds a capture to — and the prompt ids are the
 //! producer's, id for id. Without the draw it is the whole canonical job, as the backend names it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attempt_rules_v1::{
     PALW_ATTEMPT_PROMPT_DOMAIN_V1, palw_attempt_canonical_v1, palw_attempt_prompt_ids_v1, palw_floor_attempt_context_v1,
 };

@@ -4,6 +4,7 @@
 //! reference, and admission. The selection's tie rule (lowest index of the window) is the IR's; transformers' `topk`
 //! leaves its tie order unspecified.
 
+#![allow(warnings)]
 mod common;
 
 use common::three_ways;

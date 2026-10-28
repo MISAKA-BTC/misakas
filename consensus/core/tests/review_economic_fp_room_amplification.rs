@@ -15,7 +15,7 @@
 //! defect cannot be re-measured below the fence (below it the gate does not count free-prompt claims
 //! at all), so this test asserts only the fixed behaviour.
 #![allow(dead_code)]
-
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PALW_T12_SETTLED_ANCHOR_DEPTH, Params};
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;

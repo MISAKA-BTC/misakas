@@ -247,6 +247,7 @@ pub fn produce_from_plan_v39(
 /// A concrete replay/public-reply driver over original owning39 files. This
 /// performs arithmetic replay and local court checking; it grants no native
 /// verdict, validator approval, model epoch, or coinbase eligibility.
+#[allow(clippy::too_many_arguments)]
 pub fn audit_from_plan_v39(
     plan_file: &Path,
     plan_sha256: [u8; 32],

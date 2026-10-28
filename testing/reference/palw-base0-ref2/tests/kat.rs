@@ -22,6 +22,7 @@
 //! is evidence ADR-0040 is *right* rather than that this repository is self-consistent — so those
 //! two groups are worth asserting against it even though the other seven cannot be.
 
+#![allow(warnings)]
 use misaka_palw_base0::kat;
 use misaka_palw_base0_ref2 as ref2;
 

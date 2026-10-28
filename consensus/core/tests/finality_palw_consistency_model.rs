@@ -36,6 +36,7 @@
 //! * Bond stake. Bonds weigh one each (testnet-12's eight genesis cards are equal).
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test finality_palw_consistency_model -- --nocapture`
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_fork_authority_v2::{
     PALW_REORG_SHALLOW_TIE_DAA_V1, PalwDeepReorgV2, PalwIbdCommitV2, palw_ibd_commit_strict_economic_v1,

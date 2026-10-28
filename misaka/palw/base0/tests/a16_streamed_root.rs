@@ -11,6 +11,7 @@
 //! pushes each row's leaf straight into `PalwArtifactMerkleFrontierV1`, keeping one peak per level.
 //! A streamed root is only worth anything if it is the SAME root, which is what this file is.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_qwen25_profile::{
     PalwQwen25GeometryV1, qwen25_a16_artifact_row_profile_v7, qwen25_a16_profile_v2, qwen25_a16_profile_v5,
 };

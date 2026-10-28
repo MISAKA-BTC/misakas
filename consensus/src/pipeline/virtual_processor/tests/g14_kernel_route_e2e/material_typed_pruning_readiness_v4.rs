@@ -23,6 +23,7 @@ pub(super) async fn drain(net: &Net, db: &Path) -> (Hash64, Arc<NativeStateCarri
             )
         };
         let utxo = vp.pruning_meta_stores.read().utxoset_position().expect("pruning UTXO position read");
+        #[allow(clippy::await_holding_lock)]
         let store = vp.palw_state_v2_store.read();
         let identity = store.pruning_snapshot_key().expect("durable PALW snapshot identity read must not become absence");
         let params = vp.palw_state_params_v2.as_ref().expect("active native params");

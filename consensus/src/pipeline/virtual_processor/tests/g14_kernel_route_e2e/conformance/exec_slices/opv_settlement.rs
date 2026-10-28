@@ -37,13 +37,7 @@ async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
     assert!(beacon_fact_of(&cw, &k0).is_none(), "no beacon fact before Final");
 
     let api = cw.net.api().unwrap();
-    let floor = s
-        .slices
-        .iter()
-        .chain(std::iter::once(&s.prefix))
-        .map(|k| kernel_final_due(&api, &k.claim.id))
-        .max()
-        .unwrap();
+    let floor = s.slices.iter().chain(std::iter::once(&s.prefix)).map(|k| kernel_final_due(&api, &k.claim.id)).max().unwrap();
     cw.net.beat_to(floor + 1).await;
     // A paid claim's Final lands at the close of its signed windows: beat to it.
     let ttpb = cw.net.ttpb();

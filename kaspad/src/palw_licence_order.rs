@@ -440,11 +440,13 @@ mod tests {
     fn the_collector_walks_the_oldest_first_order() {
         use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
         let production = production_panel();
-        let licences = production.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
+        let licences =
+            production.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
         let walk = &production[licences..];
         let walk = &walk[..walk.find_code("for claim in claims {").expect("the collector's walk")];
         assert!(
-            walk.contains_code("crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), &receipt_facts, |claim| {"
+            walk.contains_code(
+                "crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), &receipt_facts, |claim| {"
             ),
             "the licences are offered oldest bind first, not in id order"
         );
@@ -459,9 +461,11 @@ mod tests {
     fn the_proof_wait_is_not_a_latch() {
         use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
         let production = production_panel();
-        let licences = production.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
-        let reset =
-            production.find_code("let proof_waited_last_tick = std::mem::replace(&mut (*readiness_waiting), false);").expect("the reset");
+        let licences =
+            production.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
+        let reset = production
+            .find_code("let proof_waited_last_tick = std::mem::replace(&mut (*readiness_waiting), false);")
+            .expect("the reset");
         let first_read =
             production.find_code("self.readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick)").expect("M1's read");
         assert!(reset < first_read && first_read < licences, "the wait is reset each tick, before any proof is read");

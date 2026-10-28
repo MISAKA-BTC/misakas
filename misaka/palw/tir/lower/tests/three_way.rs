@@ -10,6 +10,7 @@
 //! and at every position the logits and every commit point (slot, block, layer, node, value)
 //! must be equal across all three, byte for byte.
 
+#![allow(warnings)]
 mod common;
 
 use common::three_ways;

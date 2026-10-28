@@ -11,6 +11,7 @@
 //!
 //! Run: `cargo test --release -p kaspa-consensus-core --test audit_liveness_court_close_replay -- --nocapture`
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_state_v2::{
     PALW_COURT_CLOSE_CHUNK_MAX_BYTES, PalwConsensusObjectV2, PalwCourtSideV1, palw_court_close_chunk_digest_v1,

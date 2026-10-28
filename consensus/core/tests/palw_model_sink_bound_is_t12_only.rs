@@ -31,6 +31,7 @@
 //! processor chain that crosses it (`t12_model_sink_bound_fence`), and the mempool's standardness
 //! refusal that needs no fence (`a_sink_is_relayed_only_where_the_network_declares_the_market`).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
     mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,

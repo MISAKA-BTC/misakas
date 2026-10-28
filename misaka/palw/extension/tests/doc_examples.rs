@@ -3,6 +3,7 @@
 //! directory beside whatever file it names, so the copy in `docs/` stays exactly what a reader
 //! downloads.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

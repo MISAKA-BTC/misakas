@@ -12,6 +12,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test t12_class_verify_deadline
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

@@ -15,6 +15,7 @@
 //! and "high, a defence bypass that first requires blue-work dominance". Both halves are pinned
 //! here.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_fork_authority_v2::{PalwDeepReorgV2, decide_deep_reorg_v2};
 use kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1;

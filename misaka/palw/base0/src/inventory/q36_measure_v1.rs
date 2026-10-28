@@ -103,11 +103,12 @@ impl Qwen36InventoryMetadataV1 {
     }
     fn push(&mut self, name: &str, layer: Option<u16>, bytes: usize) -> Result<(), NativeCoverageV1> {
         let bytes = u64::try_from(bytes).map_err(|_| overflow())?;
-        if let Some(last) = self.tensors.last_mut() {
-            if last.tensor_name == name && last.layer == layer {
-                last.bytes = last.bytes.checked_add(bytes).ok_or_else(overflow)?;
-                return Ok(());
-            }
+        if let Some(last) = self.tensors.last_mut()
+            && last.tensor_name == name
+            && last.layer == layer
+        {
+            last.bytes = last.bytes.checked_add(bytes).ok_or_else(overflow)?;
+            return Ok(());
         }
         if self.tensors.len() == self.tensors.capacity() {
             let capacity = self.tensors.capacity().max(1).checked_mul(2).ok_or_else(overflow)?;
@@ -168,7 +169,8 @@ mod tests {
             let mut ours = Stream::new().unwrap();
             let mut core = PalwArtifactInventoryStreamV1::new();
             for i in 0..count {
-                let bytes = (i as u32).to_le_bytes();
+                #[allow(clippy::useless_conversion)]
+                let bytes = u32::try_from(i).expect("fixture index fits u32").to_le_bytes();
                 ours.push("tensor", None, i * 4, &bytes).unwrap();
                 core.push("tensor", None, i * 4, &bytes).unwrap();
             }

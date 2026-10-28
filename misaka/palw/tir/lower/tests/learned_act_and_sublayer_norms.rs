@@ -6,6 +6,7 @@
 //! programs from the committed leaves (no new court kernel), xIELU is a table PER LAYER (each layer's four scalars make its own
 //! 65,536 entries), and xIELU anywhere but a dense MLP is refused by name.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir_lower::fidelity;

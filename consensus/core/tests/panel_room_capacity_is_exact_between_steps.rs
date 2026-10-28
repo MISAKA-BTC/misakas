@@ -13,6 +13,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_capacity_is_exact_between_steps
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_work_target_v1::{
     PALW_PANEL_DEMAND_SCALE_V1 as Q, palw_panel_capacity_by_rate_v1 as capacity, palw_panel_demand_term_v1 as term,
 };

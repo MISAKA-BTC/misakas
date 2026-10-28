@@ -253,7 +253,12 @@ pub(super) fn bond_unmatured(
 }
 
 /// Tier-freeze only still-unmatured executor funds. Other executors on this root keep their own clocks.
-pub(super) fn freeze_bond(builder: &mut TransitionBuilder<'_>, bond: PalwBondKeyV2, daa: u64, lift: u64) -> Result<(), PalwStateV2Error> {
+pub(super) fn freeze_bond(
+    builder: &mut TransitionBuilder<'_>,
+    bond: PalwBondKeyV2,
+    daa: u64,
+    lift: u64,
+) -> Result<(), PalwStateV2Error> {
     let raw = palw_settled_anchor_depth_v1(builder.extras);
     let roots: Vec<_> = builder.state.exec_v2_reward_payees.get(&bond).into_iter().flatten().copied().collect();
     for root in roots {
@@ -771,9 +776,11 @@ pub(super) fn court_clock_v2_exec_provider_dependencies_v2(
     let mut kernel_claims: Vec<Hash64> = vec![*claim_id];
     if let Some(root) = state.exec_v2.roots.get(claim_id) {
         let floor = match &state.kernel_route {
-            Some(kernel) => {
-                super::palw_kernel_route_fold_v1::exec_liability_floor_v1(root.expiry_daa, params.window_court(), &kernel.header.policy)?
-            }
+            Some(kernel) => super::palw_kernel_route_fold_v1::exec_liability_floor_v1(
+                root.expiry_daa,
+                params.window_court(),
+                &kernel.header.policy,
+            )?,
             None => root.expiry_daa.checked_add(params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC dependency horizon"))?,
         };
         out.push(Dep { kind: Kind::Exec, signed_horizon_daa: floor });

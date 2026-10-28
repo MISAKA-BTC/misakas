@@ -18,6 +18,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test rfc0010_g14_guard`
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

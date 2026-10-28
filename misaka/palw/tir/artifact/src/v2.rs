@@ -331,6 +331,116 @@ impl ParamSource for EmptySource {
     }
 }
 
+/// Opt-in bounded streamed writer for full-component pipeline28 artifacts. The
+/// original v2 writer and its byte grammar are unchanged. No whole tensor allocation.
+pub fn write_container_v2_streamed_v28(
+    path: &Path,
+    pipeline: &TirPipelineV1,
+    programs: &[TirProgramV2],
+    class: Vec<u8>,
+    tokenizer_id: [u8; 64],
+    meta: String,
+    maximum_file_bytes: u64,
+    maximum_header_bytes: u32,
+    tensor: &mut dyn FnMut(u16, u16, Option<u16>, &mut dyn Write) -> std::result::Result<(), String>,
+) -> Result<[u8; 64]> {
+    if programs.len() > PALW_TIR_CONTAINER_MAX_PROGRAMS_V2 {
+        return Err(PalwTirContainerError::Program(format!(
+            "{} programs exceed {PALW_TIR_CONTAINER_MAX_PROGRAMS_V2}",
+            programs.len()
+        )));
+    }
+    let program_bytes: Vec<Vec<u8>> = programs.iter().map(|p| p.encode()).collect();
+    for (k, bytes) in program_bytes.iter().enumerate() {
+        TirProgramV2::decode_canonical(bytes).map_err(|e| PalwTirContainerError::Program(format!("program {k}: {e}")))?;
+    }
+    let pipeline_bytes = pipeline.encode();
+    TirPipelineV1::decode_canonical(&pipeline_bytes, programs)
+        .map_err(|e| PalwTirContainerError::Program(format!("the pipeline: {e}")))?;
+    let views: Vec<TirProgramV1> = programs.iter().map(param_view_v2).collect();
+    let entries: Vec<PalwTirTensorEntryV2> = pipeline_instances_v2(programs)
+        .into_iter()
+        .map(|(k, j, l)| PalwTirTensorEntryV2 {
+            program: k,
+            param: j,
+            layer: l,
+            offset: 0,
+            bytes: tensor_bytes_v1(&views[k as usize], j),
+        })
+        .collect();
+    let mut header = PalwTirContainerHeaderV2 {
+        version: PALW_TIR_CONTAINER_VERSION_V2,
+        pipeline: pipeline_bytes,
+        programs: program_bytes,
+        class,
+        tokenizer_id,
+        tensors: entries,
+        meta,
+    };
+    // Fixed-width table fields: the header's length does not depend on the offsets.
+    let header_len = borsh::to_vec(&header).map_err(|e| PalwTirContainerError::Header(e.to_string()))?.len() as u64;
+    if header_len > super::PALW_TIR_MAX_HEADER_BYTES_V1.min(maximum_header_bytes) as u64 {
+        return Err(PalwTirContainerError::Header(format!("a header of {header_len} bytes")));
+    }
+    let mut at = align(PREFIX + header_len);
+    for e in header.tensors.iter_mut() {
+        e.offset = at;
+        at = align(at.checked_add(e.bytes).ok_or_else(|| PalwTirContainerError::Header("pipeline28 extent overflow".into()))?);
+        if at > maximum_file_bytes {
+            return Err(PalwTirContainerError::Header("pipeline28 file extent exceeds explicit cap".into()));
+        }
+    }
+    let hb = borsh::to_vec(&header).map_err(|e| PalwTirContainerError::Header(e.to_string()))?;
+    debug_assert_eq!(hb.len() as u64, header_len);
+    if at > maximum_file_bytes {
+        return Err(PalwTirContainerError::Header("pipeline28 header exceeds file cap".into()));
+    }
+    let f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut w = DigestWriter { inner: std::io::BufWriter::with_capacity(1 << 20, f), state: digest_state(), written: 0 };
+    w.write_all(PALW_TIR_CONTAINER_MAGIC_V2)?;
+    w.write_all(&PALW_TIR_CONTAINER_VERSION_V2.to_le_bytes())?;
+    w.write_all(&(hb.len() as u32).to_le_bytes())?;
+    w.write_all(&hb)?;
+    for e in &header.tensors {
+        let pad = e.offset - w.written;
+        w.write_all(&vec![0u8; pad as usize])?;
+        let d = &views[e.program as usize].params[e.param as usize];
+        struct ExactTensor<'a, W: Write> {
+            writer: &'a mut W,
+            remaining: u64,
+        }
+        impl<W: Write> Write for ExactTensor<'_, W> {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                if b.len() as u64 > self.remaining {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "pipeline28 tensor exceeds original declared extent",
+                    ));
+                }
+                let n = self.writer.write(b)?;
+                self.remaining -= n as u64;
+                Ok(n)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.writer.flush()
+            }
+        }
+        let mut bounded = ExactTensor { writer: &mut w, remaining: e.bytes };
+        tensor(e.program, e.param, e.layer, &mut bounded).map_err(PalwTirContainerError::Bytes)?;
+        if bounded.remaining != 0 {
+            return Err(PalwTirContainerError::Bytes(format!(
+                "pipeline28 program {} `{}` omitted {} bytes",
+                e.program, d.name, bounded.remaining
+            )));
+        }
+        super::check_len(d.dtype, e.bytes).map_err(PalwTirContainerError::Bytes)?;
+    }
+    w.inner.flush()?;
+    let mut out = [0u8; 64];
+    out.copy_from_slice(w.state.finalize().as_bytes());
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{PalwTirContainerV1, file_digest_v1};
@@ -554,114 +664,4 @@ mod tests {
         assert!(std::fs::metadata(extra).unwrap().len() < 1 << 20);
         std::fs::remove_dir_all(dir).unwrap();
     }
-}
-
-/// Opt-in bounded streamed writer for full-component pipeline28 artifacts. The
-/// original v2 writer and its byte grammar are unchanged. No whole tensor allocation.
-pub fn write_container_v2_streamed_v28(
-    path: &Path,
-    pipeline: &TirPipelineV1,
-    programs: &[TirProgramV2],
-    class: Vec<u8>,
-    tokenizer_id: [u8; 64],
-    meta: String,
-    maximum_file_bytes: u64,
-    maximum_header_bytes: u32,
-    tensor: &mut dyn FnMut(u16, u16, Option<u16>, &mut dyn Write) -> std::result::Result<(), String>,
-) -> Result<[u8; 64]> {
-    if programs.len() > PALW_TIR_CONTAINER_MAX_PROGRAMS_V2 {
-        return Err(PalwTirContainerError::Program(format!(
-            "{} programs exceed {PALW_TIR_CONTAINER_MAX_PROGRAMS_V2}",
-            programs.len()
-        )));
-    }
-    let program_bytes: Vec<Vec<u8>> = programs.iter().map(|p| p.encode()).collect();
-    for (k, bytes) in program_bytes.iter().enumerate() {
-        TirProgramV2::decode_canonical(bytes).map_err(|e| PalwTirContainerError::Program(format!("program {k}: {e}")))?;
-    }
-    let pipeline_bytes = pipeline.encode();
-    TirPipelineV1::decode_canonical(&pipeline_bytes, programs)
-        .map_err(|e| PalwTirContainerError::Program(format!("the pipeline: {e}")))?;
-    let views: Vec<TirProgramV1> = programs.iter().map(param_view_v2).collect();
-    let entries: Vec<PalwTirTensorEntryV2> = pipeline_instances_v2(programs)
-        .into_iter()
-        .map(|(k, j, l)| PalwTirTensorEntryV2 {
-            program: k,
-            param: j,
-            layer: l,
-            offset: 0,
-            bytes: tensor_bytes_v1(&views[k as usize], j),
-        })
-        .collect();
-    let mut header = PalwTirContainerHeaderV2 {
-        version: PALW_TIR_CONTAINER_VERSION_V2,
-        pipeline: pipeline_bytes,
-        programs: program_bytes,
-        class,
-        tokenizer_id,
-        tensors: entries,
-        meta,
-    };
-    // Fixed-width table fields: the header's length does not depend on the offsets.
-    let header_len = borsh::to_vec(&header).map_err(|e| PalwTirContainerError::Header(e.to_string()))?.len() as u64;
-    if header_len > super::PALW_TIR_MAX_HEADER_BYTES_V1.min(maximum_header_bytes) as u64 {
-        return Err(PalwTirContainerError::Header(format!("a header of {header_len} bytes")));
-    }
-    let mut at = align(PREFIX + header_len);
-    for e in header.tensors.iter_mut() {
-        e.offset = at;
-        at = align(at.checked_add(e.bytes).ok_or_else(|| PalwTirContainerError::Header("pipeline28 extent overflow".into()))?);
-        if at > maximum_file_bytes {
-            return Err(PalwTirContainerError::Header("pipeline28 file extent exceeds explicit cap".into()));
-        }
-    }
-    let hb = borsh::to_vec(&header).map_err(|e| PalwTirContainerError::Header(e.to_string()))?;
-    debug_assert_eq!(hb.len() as u64, header_len);
-    if at > maximum_file_bytes {
-        return Err(PalwTirContainerError::Header("pipeline28 header exceeds file cap".into()));
-    }
-    let f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
-    let mut w = DigestWriter { inner: std::io::BufWriter::with_capacity(1 << 20, f), state: digest_state(), written: 0 };
-    w.write_all(PALW_TIR_CONTAINER_MAGIC_V2)?;
-    w.write_all(&PALW_TIR_CONTAINER_VERSION_V2.to_le_bytes())?;
-    w.write_all(&(hb.len() as u32).to_le_bytes())?;
-    w.write_all(&hb)?;
-    for e in &header.tensors {
-        let pad = e.offset - w.written;
-        w.write_all(&vec![0u8; pad as usize])?;
-        let d = &views[e.program as usize].params[e.param as usize];
-        struct ExactTensor<'a, W: Write> {
-            writer: &'a mut W,
-            remaining: u64,
-        }
-        impl<W: Write> Write for ExactTensor<'_, W> {
-            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                if b.len() as u64 > self.remaining {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "pipeline28 tensor exceeds original declared extent",
-                    ));
-                }
-                let n = self.writer.write(b)?;
-                self.remaining -= n as u64;
-                Ok(n)
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                self.writer.flush()
-            }
-        }
-        let mut bounded = ExactTensor { writer: &mut w, remaining: e.bytes };
-        tensor(e.program, e.param, e.layer, &mut bounded).map_err(PalwTirContainerError::Bytes)?;
-        if bounded.remaining != 0 {
-            return Err(PalwTirContainerError::Bytes(format!(
-                "pipeline28 program {} `{}` omitted {} bytes",
-                e.program, d.name, bounded.remaining
-            )));
-        }
-        super::check_len(d.dtype, e.bytes).map_err(PalwTirContainerError::Bytes)?;
-    }
-    w.inner.flush()?;
-    let mut out = [0u8; 64];
-    out.copy_from_slice(w.state.finalize().as_bytes());
-    Ok(out)
 }

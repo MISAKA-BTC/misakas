@@ -3,6 +3,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test g14_fam_fpcp`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     PALW_T12_FP_CONSTRAINT_PREFIX_FENCES_V1, PALW_T12_FULL_ACTIVATION_FENCES_V1, PalwPostLaunchFenceV1, Params,
     palw_t12_arm_after_int13_at_v1, palw_t12_release_v7_params,

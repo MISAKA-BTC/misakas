@@ -3,11 +3,11 @@
 //! only `h.reserved` — unlike native39's `reserved()`, which re-adds `original.reserve` while the job's fee is held in aux 144
 //! (`palw_native_job_fold_v39_liability_tests::a_held_final_keeps_the_signed_reserve_in_the_bounded_producer_index`).
 use super::*;
-use misaka_palw_kernel::flat_quota11::{FUTURE_ACTION_KINDS_V11, QuotaPlanRecordV11, QuotaQuantitiesV11};
 use crate::palw_native_liability_hold_v1::{
-    PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, PalwNativeHeldFeeRowV1,
-    palw_native_held_fee_key_v1,
+    PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+    PalwNativeHeldFeeRowV1, palw_native_held_fee_key_v1,
 };
+use misaka_palw_kernel::flat_quota11::{FUTURE_ACTION_KINDS_V11, QuotaPlanRecordV11, QuotaQuantitiesV11};
 
 fn bond(n: u64) -> PalwBondKeyV2 {
     PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0))
@@ -24,7 +24,11 @@ fn header(terminal: NativeTextTerminalV29, reserved: u64) -> JobHeader {
         actual_scope_root: d(5),
         native_restore_work: 1,
         native_post_carrier_cap: 1,
-        source_court_bound: misaka_palw_kernel::flat_execution11::NativeSourceCourtBoundV11 { max_proof_bytes: 1, work: 1, scratch_bytes: 1 },
+        source_court_bound: misaka_palw_kernel::flat_execution11::NativeSourceCourtBoundV11 {
+            max_proof_bytes: 1,
+            work: 1,
+            scratch_bytes: 1,
+        },
         positions: 1,
         baseline: QuotaQuantitiesV11::default(),
         action_envelopes: std::array::from_fn(|_| QuotaQuantitiesV11::default()),
@@ -106,8 +110,9 @@ fn audit_a_text29_held_final_releases_the_producer_reserve_while_liable() {
         },
     );
     state.kernel_route = Some(route_with(&live));
-    let params = crate::palw_state_v2::PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0)
-        .unwrap();
+    let params =
+        crate::palw_state_v2::PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0)
+            .unwrap();
     let extras = crate::palw_state_v2::PalwTransitionExtrasV1 {
         kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
             network_domain: Hash64::from_u64_word(1),
@@ -126,8 +131,12 @@ fn audit_a_text29_held_final_releases_the_producer_reserve_while_liable() {
     write_book(&mut tb, &mut fin, &book).unwrap();
     assert_eq!((fin.terminal, fin.reserved), (NativeTextTerminalV29::Final, 0), "write_book zeroes the reserve at Final");
     let row = held_row(&fin);
-    tb.write_kernel_row(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_TEXT_V29, &fin.job), Some(key(&row)))
-        .unwrap();
+    tb.write_kernel_row(
+        PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+        palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_TEXT_V29, &fin.job),
+        Some(key(&row)),
+    )
+    .unwrap();
     let now_committed = committed(&tb);
     let free = (RESERVE as u128).saturating_sub(now_committed);
     eprintln!("[verify-1 A-1] held Final at DAA 300 (H = 500): committed {now_committed}, free collateral for new work {free}");
@@ -146,8 +155,9 @@ fn audit_a_text29_held_final_reserve_leaves_with_its_held_row() {
     let live = header(NativeTextTerminalV29::Challengeable, RESERVE);
     let mut state = crate::palw_state_v2::PalwChainStateV2::genesis();
     state.kernel_route = Some(route_with(&live));
-    let params = crate::palw_state_v2::PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0)
-        .unwrap();
+    let params =
+        crate::palw_state_v2::PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0)
+            .unwrap();
     let extras = crate::palw_state_v2::PalwTransitionExtrasV1::default();
     let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     let mut fin = live.clone();

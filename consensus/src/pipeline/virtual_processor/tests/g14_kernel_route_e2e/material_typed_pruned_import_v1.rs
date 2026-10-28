@@ -250,7 +250,7 @@ async fn headers_after_point(source: &TestConsensus, target: &TestConsensus, poi
             let header = source.get_header(hash).unwrap();
             target.validate_and_insert_block(Block::from_header_arc(header)).virtual_state_task.await.unwrap();
             processed = processed.checked_add(1).unwrap();
-            if processed % 1000 == 0 {
+            if processed.is_multiple_of(1000) {
                 eprintln!("PRUNED_IMPORT_V1 phase=headers event=progress processed={processed} pp={point} tip={tip}");
             }
         }

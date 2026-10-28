@@ -172,7 +172,7 @@ impl VirtualStateProcessor {
             let delta = store.delta_of_retained_v1(block).map_err(NativeEvmAsOfFaultV2::store)?.1;
             state = state.try_delta_v1(&delta, params, false).map_err(|e| NativeEvmAsOfFaultV2::walk(e.into()))?;
         }
-        if !state.last_point().is_some_and(|point| point.block == target)
+        if state.last_point().is_none_or(|point| point.block != target)
             && !(target == self.genesis.hash && state.last_point().is_none())
         {
             return Err(NativeEvmAsOfFaultV2::Context("post-target last point differs"));

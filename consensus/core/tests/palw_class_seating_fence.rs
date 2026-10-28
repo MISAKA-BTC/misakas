@@ -11,6 +11,7 @@
 //! Fixture: testnet-12 itself with the generative fence, the decode rules and the lane's job fence armed (the fence's
 //! prerequisites), `palw_class_seating` at [`AT`]; the eight genesis bonds are eight distinct operators of the base population.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod rcore;
 use rcore::*;

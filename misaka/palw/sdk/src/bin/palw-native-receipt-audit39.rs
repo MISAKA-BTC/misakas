@@ -2,6 +2,7 @@
 //! own-node live39 transcript. Every point is re-authenticated from its own
 //! anchored full aux stream; only one point's checked projection is alive at a
 //! time. Pointer JSON carries no authority. The report never says PASS.
+#![allow(warnings)]
 use kaspa_consensus_core::{Hash64, config::params::Params, network::NetworkId};
 use misaka_palw_sdk::native_receipt_windows_v39::{AnchoredReceiptPointV39, ReceiptAccumulatorV39, ReceiptWindowContractV39};
 use sha2::{Digest as _, Sha256};
@@ -29,6 +30,7 @@ fn run() -> Result<(), String> {
     let root = PathBuf::from(get("--evidence-root")?).canonicalize().map_err(|e| e.to_string())?;
     let points = PathBuf::from(get("--points")?);
     let out = PathBuf::from(get("--out")?);
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     let archive_dir = a.remove("--archive-dir");
     if !a.is_empty() || out.exists() {

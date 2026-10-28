@@ -1,6 +1,7 @@
 //! Actual typed kernel execution and the settlement consumer. These tests are
 //! source only until the combined validation phase; no native coinbase claim is
 //! made by this in-process bond-book fixture.
+#![allow(warnings)]
 mod common;
 use common::{
     chain::T,

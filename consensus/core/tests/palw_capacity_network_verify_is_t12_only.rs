@@ -12,6 +12,7 @@
 //! `Some(never())` is absence; `validate_palw_v2` refuses it off ConsensusV2, without F-N at or below it, and with a bundle
 //! mirror that disagrees. It is in no flag-day list (the int-11 flag day names its height) and not in the capacity list.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_NETWORK_VERIFY_FENCES_V1,
     PALW_T12_POST_LAUNCH_FENCES_V1, PalwPostLaunchFenceV1, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,

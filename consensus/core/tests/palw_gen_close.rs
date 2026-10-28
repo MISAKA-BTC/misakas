@@ -6,6 +6,7 @@
 //! The claim is the golden toy VLM (`consensus-vectors/tir-v2/pipelines/toy-vlm.json`) run on an FP
 //! Job V5 — an FP Job V4 vector retargeted at the class, with the vector's image.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;

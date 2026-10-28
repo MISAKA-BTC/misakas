@@ -13,6 +13,7 @@
 //! (`palw_capacity_aggregate_liability`) at or below it. It is an entry of `PALW_T12_CAPACITY_FENCES_V1`,
 //! never of the DAA-750 list.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS,
     TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,

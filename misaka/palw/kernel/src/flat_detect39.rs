@@ -11,7 +11,7 @@ use crate::{
     flat_quota11::owning39::CheckedQuotaV39,
     flat_source39::CheckedSourceV39,
     flat_trace39::{TraceSinkV39, TraceSummaryV39, replay_streamed_v39},
-    hash::{Digest, finish, keyed},
+    hash::Digest,
     merkle3::{LayoutV3, LeafOpeningV3},
     seg::NodeOpeningV1,
 };
@@ -81,6 +81,7 @@ struct Transport<'a, 'b> {
     remaining: u32,
 }
 impl Transport<'_, '_> {
+    #[allow(clippy::result_large_err)] // Stop::Need is the demand that was refused; boxing it would change every match
     fn ask(&mut self, d: FlatDemandV39) -> Result<FlatReplyV39, Stop> {
         check_flat_demand_v39(self.context, &d)?;
         self.remaining =
@@ -97,6 +98,7 @@ impl Transport<'_, '_> {
         Ok(reply)
     }
 }
+#[allow(clippy::result_large_err)] // Stop::Need is the demand that was refused; boxing it would change every match
 fn locate<A: IndependentArchiveV39>(a: &A, t: &mut Transport<'_, '_>, directory: DirectoryV39) -> Result<u64, Stop> {
     let (mut remote, mut count) = directory_root(t.context, &directory)?;
     let mut first = 0;
@@ -247,6 +249,7 @@ impl OperandsV1 for Acquire<'_, '_, '_> {
         }
     }
 }
+#[allow(clippy::result_large_err)] // Stop::Need is the demand that was refused; boxing it would change every match
 fn filing(c: &CheckedPointContextV39<'_>, kind: u8, body: Vec<u8>) -> Result<FindingV39, Stop> {
     let mut out = Vec::with_capacity(body.len() + 7);
     out.extend_from_slice(&39u16.to_le_bytes());
@@ -256,6 +259,7 @@ fn filing(c: &CheckedPointContextV39<'_>, kind: u8, body: Vec<u8>) -> Result<Fin
     let conviction = check_flat_filing_v39(c, &out)?;
     Ok(FindingV39::Fault { filing: out, conviction })
 }
+#[allow(clippy::result_large_err)] // Stop::Need is the demand that was refused; boxing it would change every match
 fn typed_leaf(
     t: &mut Transport<'_, '_>,
     key: ValueKeyV39,
@@ -268,6 +272,7 @@ fn typed_leaf(
     };
     Ok((node, leaf))
 }
+#[allow(clippy::result_large_err)] // Stop::Need is the demand that was refused; boxing it would change every match
 fn detect<'a, A: IndependentArchiveV39>(
     c: &'a CheckedPointContextV39<'a>,
     replay: &CheckedIndependentReplayV39<'_, A>,

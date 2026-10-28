@@ -2,7 +2,7 @@
 //! recipes: exported authority is independently validated canonical Program39.
 //! No old V1/V2 admission proxy, calibration or float re-quantization is used.
 use misaka_palw_tir::{
-    Cmp, DType, Dim, Ref, Rounding, TensorType,
+    Cmp, DType, Ref, Rounding, TensorType,
     builder::{BlockBuilder, ProgramBuilder},
     library::Narrowing,
     program::{INPUT_POS, INPUT_TOKEN},
@@ -41,10 +41,10 @@ impl RuntimeShapeV40 {
             || s.d_model == 0
             || s.n_heads == 0
             || s.n_kv_heads == 0
-            || s.n_heads % s.n_kv_heads != 0
+            || !s.n_heads.is_multiple_of(s.n_kv_heads)
             || s.head_dim == 0
             || s.rotary_dim > s.head_dim
-            || s.rotary_dim % 2 != 0
+            || !s.rotary_dim.is_multiple_of(2)
             || s.n_experts == 0
             || s.experts_per_token == 0
             || s.experts_per_token > s.n_experts
@@ -59,7 +59,7 @@ impl RuntimeShapeV40 {
         if s.layer_types.contains(&0)
             && (s.linear_k_heads == 0
                 || s.linear_v_heads == 0
-                || s.linear_v_heads % s.linear_k_heads != 0
+                || !s.linear_v_heads.is_multiple_of(s.linear_k_heads)
                 || s.linear_head_dim == 0
                 || s.conv_kernel != 4)
         {
@@ -674,7 +674,7 @@ fn build_runtime_mirror_inner_v40(
         || s.head_dim > 1 << 17
         || s.linear_head_dim > 1 << 17
         || s.max_position > misaka_palw_tir::program::HISTORY_BOUND_V1_HELD
-        || rope_head_dim % 2 != 0
+        || !rope_head_dim.is_multiple_of(2)
         || rope_head_dim < s.rotary_dim
         || rope_positions < s.max_position
     {
@@ -993,7 +993,7 @@ pub fn compile_runtime_q36_v40(
 ) -> Result<serde_json::Value, String> {
     use super::frontend::{bytes, decode, relative};
     use misaka_palw_kernel::{
-        flat_source39::{FlatSourceWireV39, OriginalTensorV39, derive_inventory_root_v39},
+        flat_source39::{FlatSourceWireV39, derive_inventory_root_v39},
         hash::object_id,
     };
     use misaka_palw_tir_lower::frontend_pack::{FrontendPack, FrontendSource};
@@ -1153,7 +1153,7 @@ impl RuntimeMirrorV40 {
             let fragment = mapping.rows_per_source as u64;
             let shape = p.shape.iter().map(|n| *n as usize).collect::<Vec<_>>();
             let (root, bound) = tensor_commitment_streamed_v3(p.dtype, &shape, workspace, &mut |offset, out| {
-                if offset % width != 0 || out.len() as u64 % width != 0 {
+                if offset % width != 0 || !(out.len() as u64).is_multiple_of(width) {
                     return Err("Q36_MIRROR40_ORIGINAL_VIEW_ALIGNMENT".into());
                 }
                 let start = offset / width;
@@ -1232,6 +1232,7 @@ impl RuntimeMirrorV40 {
 /// This is reference material, never a native Final capability.
 pub struct SourceDirectoryV39<'a> {
     source: &'a misaka_palw_kernel::flat_source39::CheckedSourceV39,
+    #[allow(clippy::type_complexity)]
     files: BTreeMap<(u16, Option<u16>), (std::fs::File, u64, Option<std::time::SystemTime>)>,
     max_read_elements: usize,
 }

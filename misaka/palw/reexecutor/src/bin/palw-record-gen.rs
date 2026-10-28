@@ -13,6 +13,7 @@
 //! * every derived field (ceiling, band) is re-derived here and the row must pass the full
 //!   registry `validate()` before a single byte is written — fail-closed, like everything.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_routing::{PALW_REGISTERED_CLASS_TAGS, derived_model_band_v1, replay_work_ms_v1};
 use kaspa_consensus_core::palw_schedule::{PalwReplayCostMeasurementV1, credited_ceiling_tokens_v1};
 use misaka_palw_reexecutor::fixtures::{definition_with, test_binding_with_artifact};

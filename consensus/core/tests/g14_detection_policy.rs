@@ -8,6 +8,7 @@
 //!   with its own golden vector while the legacy draw's golden vector is unchanged;
 //! * the fence: dormant on every preset, Some-only, collapsed from `never()`, refused when armed; regime and admission.
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use kaspa_consensus_core::config::params::{
@@ -78,7 +79,13 @@ fn k_min_is_the_exact_hypergeometric_minimum_for_every_small_case() {
 /// The external audit's illustrative N = 1000 table (`rfc14_sampling_results.json`), reproduced in integer arithmetic.
 #[test]
 fn the_audits_n1000_table_is_reproduced() {
-    for (d, k90, k99, det4_ppm) in [(1000u32, 1u32, 1u32, 1_000_000u64), (500, 4, 7, 937_875), (100, 22, 43, 344_338), (10, 205, 368, 39_462), (1, 900, 990, 4_000)] {
+    for (d, k90, k99, det4_ppm) in [
+        (1000u32, 1u32, 1u32, 1_000_000u64),
+        (500, 4, 7, 937_875),
+        (100, 22, 43, 344_338),
+        (10, 205, 368, 39_462),
+        (1, 900, 990, 4_000),
+    ] {
         assert_eq!(palw_detection_k_min_v1(1000, d, 1, 10).0, k90, "90% at D={d}");
         assert_eq!(palw_detection_k_min_v1(1000, d, 1, 100).0, k99, "99% at D={d}");
         let got = palw_detection_ppm_floor_v1(1000, d, 4);
@@ -102,7 +109,7 @@ fn the_proportional_bound_binds_at_d_equals_n_for_every_k() {
                 let caught = all - binom(n - d, k);
                 assert!(u128::from(d) * all <= u128::from(n) * caught, "n={n} k={k} d={d}");
                 // And concavity: increments non-increasing.
-                if d + 1 <= n {
+                if d < n {
                     let next = all - binom(n - d - 1, k);
                     let prev = all - binom(n - d + 1, k);
                     assert!(next - caught <= caught - prev, "concave n={n} k={k} d={d}");
@@ -183,22 +190,39 @@ fn coverage_and_shadow_enter_the_bound() {
 
 #[test]
 fn n_comes_from_chain_counts_that_reprice_to_the_claim() {
-    let p = palw_detection_genesis_design_v1(h(1), PalwDetectionRouteV1::Kernel, PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval: 100 });
+    let p = palw_detection_genesis_design_v1(
+        h(1),
+        PalwDetectionRouteV1::Kernel,
+        PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval: 100 },
+    );
     let mut f = facts_for(&p, 50, u128::MAX);
     assert_eq!(p.plan_v1(&f).unwrap().n, 50);
     f.context_priced_leaves = Some(f.work_leaves - 1);
-    assert!(matches!(p.plan_v1(&f), Err(PalwDetectionRefusalV1::NotAtTheClaimsPrice { .. })), "a re-priced context is not this claim's");
+    assert!(
+        matches!(p.plan_v1(&f), Err(PalwDetectionRefusalV1::NotAtTheClaimsPrice { .. })),
+        "a re-priced context is not this claim's"
+    );
     f.context_priced_leaves = None;
     assert!(matches!(p.plan_v1(&f), Err(PalwDetectionRefusalV1::NotAtTheClaimsPrice { .. })));
     // Held and call geometries are base0's chain arithmetic.
     let held = PalwIntervalCountRuleV1::HeldPositions { width: 4 };
     let calls = PalwIntervalCountRuleV1::DecodeCalls { checkpoint_interval: 1 };
-    let f = PalwDetectionClaimFactsV1 { attempt_lane: false, work_leaves: 0, context_priced_leaves: None, prompt_tokens: 40, decode_tokens_executed: 217, collateral_sompi: 0 };
+    let f = PalwDetectionClaimFactsV1 {
+        attempt_lane: false,
+        work_leaves: 0,
+        context_priced_leaves: None,
+        prompt_tokens: 40,
+        decode_tokens_executed: 217,
+        collateral_sompi: 0,
+    };
     assert_eq!(held.interval_count_v1(&f), Some(64));
     assert_eq!(calls.interval_count_v1(&f), Some(216));
     let mut big = base_policy();
     big.n_max = 63;
-    assert!(matches!(big.plan_v1(&PalwDetectionClaimFactsV1 { collateral_sompi: u128::MAX, ..f }), Err(PalwDetectionRefusalV1::IntervalCountAboveCeiling { n: 64, n_max: 63 })));
+    assert!(matches!(
+        big.plan_v1(&PalwDetectionClaimFactsV1 { collateral_sompi: u128::MAX, ..f }),
+        Err(PalwDetectionRefusalV1::IntervalCountAboveCeiling { n: 64, n_max: 63 })
+    ));
 }
 
 /// **k grows → every coupled budget must grow, or the class is refused.** The legacy pool's 512 pairs cannot carry k ≈ 44 for 32
@@ -213,7 +237,10 @@ fn every_resource_is_coupled_to_k_and_refuses_rather_than_drops() {
 
     let mut q = p;
     q.resources.retention_pairs_cap = 512;
-    assert!(matches!(q.plan_v1(&facts_for(&q, n, u128::MAX)), Err(PalwDetectionRefusalV1::RetentionBelowDraw { .. })), "512 pairs refuse k·32");
+    assert!(
+        matches!(q.plan_v1(&facts_for(&q, n, u128::MAX)), Err(PalwDetectionRefusalV1::RetentionBelowDraw { .. })),
+        "512 pairs refuse k·32"
+    );
     let mut q = p;
     q.resources.court_openings_per_claim = plan.k_round - 1;
     assert!(matches!(q.plan_v1(&facts_for(&q, n, u128::MAX)), Err(PalwDetectionRefusalV1::CourtBudgetBelowDraw { .. })));
@@ -336,7 +363,8 @@ fn every_binding_input_moves_the_draw_and_it_is_pure() {
 /// **Rounds never re-check an interval**; the union is exactly Σ k; restart and reorg re-derive from anchors alone.
 #[test]
 fn rounds_are_distinct_rederivable_and_never_double_count() {
-    let anchors: Vec<PalwDetectionRoundAnchorV1> = (0..5).map(|r| PalwDetectionRoundAnchorV1 { block: h(100 + r), daa: 10 + r * 7 }).collect();
+    let anchors: Vec<PalwDetectionRoundAnchorV1> =
+        (0..5).map(|r| PalwDetectionRoundAnchorV1 { block: h(100 + r), daa: 10 + r * 7 }).collect();
     let (rounds, union) = palw_detection_draw_rounds_v2(&binding(3), 9, &anchors, 6, 40).unwrap();
     assert_eq!(rounds.len(), 5);
     assert_eq!(union.len(), 30, "5 × 6 distinct");
@@ -363,10 +391,16 @@ fn rounds_are_distinct_rederivable_and_never_double_count() {
     assert_eq!(r3[6].len(), 4);
     assert!(r3[7].is_empty());
     // Post-commit: an anchor at or before the claim's acceptance, or not after the previous round's, is refused.
-    assert!(matches!(palw_detection_draw_rounds_v2(&binding(3), 10, &anchors, 6, 40), Err(PalwDetectionDrawRefusalV2::AnchorNotPostCommit { round: 0, .. })));
+    assert!(matches!(
+        palw_detection_draw_rounds_v2(&binding(3), 10, &anchors, 6, 40),
+        Err(PalwDetectionDrawRefusalV2::AnchorNotPostCommit { round: 0, .. })
+    ));
     let mut stale = anchors.clone();
     stale[3].daa = stale[2].daa;
-    assert!(matches!(palw_detection_draw_rounds_v2(&binding(3), 9, &stale, 6, 40), Err(PalwDetectionDrawRefusalV2::AnchorNotPostCommit { round: 3, .. })));
+    assert!(matches!(
+        palw_detection_draw_rounds_v2(&binding(3), 9, &stale, 6, 40),
+        Err(PalwDetectionDrawRefusalV2::AnchorNotPostCommit { round: 3, .. })
+    ));
 }
 
 /// **A seat's multi-round duty**: round 0 is the panel anchor's draw, later rounds keyed on the panel anchor and the round index;
@@ -393,14 +427,20 @@ fn a_seat_draws_every_round_distinctly_from_the_panel_anchor() {
 /// one never assigned an unassigned loss; the funnel stays consistent.
 #[test]
 fn the_funnel_follows_a_detected_claim_to_its_chain_outcome() {
-    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwVoidReasonV2 as V};
     use PalwDetectionStageV1::*;
-    assert_eq!(palw_detection_chain_outcome_v1(&P::Voided { voided_daa: 1, reason: V::CourtFraud }), PalwDetectionChainOutcomeV1::Convicted);
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwVoidReasonV2 as V};
+    assert_eq!(
+        palw_detection_chain_outcome_v1(&P::Voided { voided_daa: 1, reason: V::CourtFraud }),
+        PalwDetectionChainOutcomeV1::Convicted
+    );
     assert_eq!(
         palw_detection_chain_outcome_v1(&P::Voided { voided_daa: 1, reason: V::ProducerWithholding }),
         PalwDetectionChainOutcomeV1::Defaulted
     );
-    assert_eq!(palw_detection_chain_outcome_v1(&P::Voided { voided_daa: 1, reason: V::BindTimeout }), PalwDetectionChainOutcomeV1::Unassigned);
+    assert_eq!(
+        palw_detection_chain_outcome_v1(&P::Voided { voided_daa: 1, reason: V::BindTimeout }),
+        PalwDetectionChainOutcomeV1::Unassigned
+    );
     assert_eq!(palw_detection_chain_outcome_v1(&P::Final { final_daa: 1 }), PalwDetectionChainOutcomeV1::Final);
     assert_eq!(palw_detection_chain_outcome_v1(&P::Provisional), PalwDetectionChainOutcomeV1::InFlight);
     let mut f = PalwDetectionFunnelV1::default();
@@ -417,8 +457,14 @@ fn the_funnel_follows_a_detected_claim_to_its_chain_outcome() {
     assert_eq!(f.effective_rate_ppm(), 1_000_000);
     let (stages, _) = palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Defaulted, false);
     assert!(stages.contains(&Defaulted) && !stages.contains(&Collected));
-    assert_eq!(palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Final, false), (vec![], Some(PalwDetectionLossV1::DeadlineExpiry)));
-    assert_eq!(palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Unassigned, false), (vec![], Some(PalwDetectionLossV1::Unassigned)));
+    assert_eq!(
+        palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Final, false),
+        (vec![], Some(PalwDetectionLossV1::DeadlineExpiry))
+    );
+    assert_eq!(
+        palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Unassigned, false),
+        (vec![], Some(PalwDetectionLossV1::Unassigned))
+    );
 }
 
 /// Over many anchors every interval is drawn at the uniform rate k/N (chi-square-free check: each count within 5σ).
@@ -482,7 +528,8 @@ fn the_fence_is_some_only_collapses_from_never_and_is_refused_when_armed() {
     assert!(never.validate_palw_detection_policy_v1().is_ok());
 
     let mut armed: Params = base.clone();
-    armed.palw_detection_policy_v1 = Some(PalwDetectionPolicyFenceV1 { activation: ForkActivation::new(16_000), policies: vec![base_policy()] });
+    armed.palw_detection_policy_v1 =
+        Some(PalwDetectionPolicyFenceV1 { activation: ForkActivation::new(16_000), policies: vec![base_policy()] });
     armed.sync_palw_detection_policy_v1();
     assert_ne!(armed.consensus_params_id(), base.consensus_params_id(), "Some-only: the armed value is in the ruleset");
     let refusal = armed.validate_palw_detection_policy_v1().unwrap_err().to_string();
@@ -512,7 +559,11 @@ fn the_regime_and_admission_follow_the_fence() {
     assert_eq!(palw_detection_regime_v1(None, &p.class_id, 0, 20_000), PalwDetectionRegimeV1::LegacyV1);
     assert_eq!(palw_detection_regime_v1(Some(&fence), &p.class_id, 0, 15_999), PalwDetectionRegimeV1::LegacyV1);
     assert_eq!(palw_detection_regime_v1(Some(&fence), &p.class_id, 0, 16_000), PalwDetectionRegimeV1::Policy(&fence.policies[0]));
-    assert_eq!(palw_detection_regime_v1(Some(&fence), &p.class_id, 1, 16_000), PalwDetectionRegimeV1::NoPolicy, "kernel version bound");
+    assert_eq!(
+        palw_detection_regime_v1(Some(&fence), &p.class_id, 1, 16_000),
+        PalwDetectionRegimeV1::NoPolicy,
+        "kernel version bound"
+    );
     assert_eq!(palw_detection_regime_v1(Some(&fence), &h(9), 0, 16_000), PalwDetectionRegimeV1::NoPolicy);
     let never = PalwDetectionPolicyFenceV1 { activation: ForkActivation::never(), policies: vec![p] };
     assert_eq!(palw_detection_regime_v1(Some(&never), &p.class_id, 0, u64::MAX - 1), PalwDetectionRegimeV1::LegacyV1);

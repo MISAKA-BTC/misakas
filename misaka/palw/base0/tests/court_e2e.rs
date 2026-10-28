@@ -17,6 +17,7 @@
 //! machinery over the honest material reads `NoFaultFound`, which the court maps to
 //! `ChallengerDefeated`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_bisect::{
     PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectLadderV1, PalwBisectSpaceV1, PalwBisectTurnV1,

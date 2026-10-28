@@ -608,7 +608,9 @@ impl MarketHandlers {
 
     /// How many of this block's committed actions belong to one account (audit M-16/L-6).
     pub fn queued_for_account(&self, account: &Address) -> usize {
-        if let Some(setup) = &self.retained { return setup.queued_for(account); }
+        if let Some(setup) = &self.retained {
+            return setup.queued_for(account);
+        }
         self.queued_by_account.as_ref().and_then(|m| m.lock().ok().map(|m| m.get(account).copied().unwrap_or(0))).unwrap_or(0)
     }
 
@@ -620,10 +622,16 @@ impl MarketHandlers {
     /// executor walks the accepted txs in one canonical order on every node, so these counts are a
     /// function of the same sequence everywhere.
     pub fn set_committed(&self, actions: &[PalwEvmMarketActionV1]) {
-        if let Some(setup) = &self.retained { setup.reset(actions); return; }
-        if let Some(queued) = &self.queued { queued.store(actions.len(), Ordering::SeqCst); }
+        if let Some(setup) = &self.retained {
+            setup.reset(actions);
+            return;
+        }
+        if let Some(queued) = &self.queued {
+            queued.store(actions.len(), Ordering::SeqCst);
+        }
         if let Some(accounts) = &self.queued_by_account
-            && let Ok(mut by_account) = accounts.lock() {
+            && let Ok(mut by_account) = accounts.lock()
+        {
             by_account.clear();
             for action in actions {
                 *by_account.entry(Address::from(action.account.as_bytes())).or_insert(0) += 1;

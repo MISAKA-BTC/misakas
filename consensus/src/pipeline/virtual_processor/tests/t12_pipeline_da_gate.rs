@@ -6,6 +6,7 @@
 //! stage below sixteen, a leaf below the widest ladder, an interior node inside the widest tree). The demand
 //! carries no binding: the claim and its kind are the fold's (`palw_pipeline_da_fold_v1`'s tests), and a unit
 //! past the claim's own execution is the accused's to prove.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::ConfigBuilder;

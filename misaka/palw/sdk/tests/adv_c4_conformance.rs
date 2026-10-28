@@ -5,15 +5,14 @@
 //! artifact leaves; the evidence is produced, then judged by a fresh derivation. Every test below is an attack that must fail closed
 //! or a property that must hold byte for byte. Nothing here is an approved policy; the numbers are the test policy's.
 
-use misaka_palw_challenge::beacon::{FinalPathV1, WorkBeaconV1, WorkSourceKindV1};
-use misaka_palw_challenge::conformance::{BeaconConformanceEvidenceV1, ConformanceCommitmentV1, ConformanceStatusV1};
-use misaka_palw_challenge::hash::{Digest, named_id};
-use misaka_palw_challenge::{PostCommitChallengePolicyV1, RootV1, reference_policy_v1};
+#![allow(warnings)]
+use misaka_palw_challenge::conformance::BeaconConformanceEvidenceV1;
+use misaka_palw_challenge::hash::named_id;
+use misaka_palw_challenge::{PostCommitChallengePolicyV1, reference_policy_v1};
 use misaka_palw_sdk::runtime_pack::beacon_run::*;
 use misaka_palw_sdk::runtime_pack::commit::*;
 use misaka_palw_sdk::runtime_pack::conformance::ImplSet;
 use misaka_palw_sdk::runtime_pack::facts::*;
-use misaka_palw_sdk::runtime_pack::manifest::{PACK_FILE, RuntimePackV1};
 use misaka_palw_sdk::runtime_pack::{BuildOpts, DeclareOpts, build_pack};
 use misaka_palw_sdk::tir_layout::TirLayoutChoiceV1;
 use misaka_palw_tir_lower::convert::{CalibInput, ConvertRequest};
@@ -38,6 +37,7 @@ fn scratch(tag: &str) -> PathBuf {
     d
 }
 
+#[allow(dead_code)]
 fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("dir");
     for e in std::fs::read_dir(src).expect("read").flatten() {
@@ -51,6 +51,7 @@ fn copy_dir(src: &Path, dst: &Path) {
 }
 
 struct Shared {
+    #[allow(clippy::drop_non_drop)]
     work: PathBuf,
     pack: PathBuf,
     /// The declared class file (the artifact with its exact layout).
@@ -162,6 +163,7 @@ fn verify_with(
     )
 }
 
+#[allow(clippy::drop_non_drop)]
 fn write_forged(dir: &Path, name: &str, ev: &BeaconConformanceEvidenceV1) -> PathBuf {
     let p = dir.join(name);
     std::fs::write(&p, borsh::to_vec(ev).expect("encodes")).expect("write");
@@ -207,7 +209,16 @@ fn a_scope_that_switches_off_the_independent_and_backend_implementations_cannot_
     let evp = dir.join("evidence.borsh");
     let src = MemoryFactSource(facts.clone());
     let mirror = verify_conformance(
-        &VerifyInput { pack_dir: &s.pack, artifact: &s.class_file, state_dir: &state, commitment: &root, evidence: &evp, source: &src, rerun: true, impls: weak },
+        &VerifyInput {
+            pack_dir: &s.pack,
+            artifact: &s.class_file,
+            state_dir: &state,
+            commitment: &root,
+            evidence: &evp,
+            source: &src,
+            rerun: true,
+            impls: weak,
+        },
         &quiet,
     );
     let honest = verify_with(&state, s, &root, &evp, &facts, true);
@@ -235,7 +246,10 @@ fn gap_a_tiny_scope_with_a_declared_total_fault_density_buys_forty_bits() {
     let p = CommitParamsV1::new("testnet-12", named_id("test-genesis"), named_id("test-ruleset"), policy, scope);
     let (b, _) = commit_conformance(&s.pack, &s.class_file, &state, &p, &quiet).expect("accepted");
     let bits = p.scope.derived_epsilon_bits(30);
-    eprintln!("GAP-C4-D: 30 x (1 vector of 1 token + 1 leaf) is accepted as >= {bits} bits; commitment {}", hex(&b.commitment.statement_root())[..16].to_string());
+    eprintln!(
+        "GAP-C4-D: 30 x (1 vector of 1 token + 1 leaf) is accepted as >= {bits} bits; commitment {}",
+        &hex(&b.commitment.statement_root())[..16]
+    );
     assert!(bits >= 40);
 }
 

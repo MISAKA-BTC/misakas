@@ -338,7 +338,10 @@ mod tests {
         let tx = Transaction::new(
             0,
             vec![crate::tx::TransactionInput::new(TransactionOutpoint::new(h(77), 0), Vec::new(), 0, 0)],
-            vec![TransactionOutput::new(150, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&public).as_bytes()))],
+            vec![TransactionOutput::new(
+                150,
+                crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&public).as_bytes()),
+            )],
             0,
             crate::subnets::SUBNETWORK_ID_NATIVE,
             0,
@@ -409,7 +412,10 @@ mod tests {
         }
         let mut changed = consent.clone();
         changed.terms.funding_output_index = 1;
-        assert_eq!(changed.check_actual_output_v1(&inspect_transaction_v1(&tx, 0).unwrap(), &public), Err(FundingRefusalV1::OutputMismatch));
+        assert_eq!(
+            changed.check_actual_output_v1(&inspect_transaction_v1(&tx, 0).unwrap(), &public),
+            Err(FundingRefusalV1::OutputMismatch)
+        );
     }
 
     #[test]
@@ -463,25 +469,40 @@ mod tests {
         assert_ne!(address, consent.terms.payer_key_id);
         assert_eq!(consent.terms.refund_payload, address);
         consent.verify_signature_v1(&public).unwrap();
-        consent.check_actual_output_v1(&inspect_transaction_v1(&tx,0).unwrap(), &public).unwrap();
-        let wrong = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([93;32]);
-        assert_eq!(consent.check_actual_output_v1(&inspect_transaction_v1(&tx,0).unwrap(),wrong.verification_key.as_ref()),
-            Err(FundingRefusalV1::OutputMismatch));
+        consent.check_actual_output_v1(&inspect_transaction_v1(&tx, 0).unwrap(), &public).unwrap();
+        let wrong = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([93; 32]);
+        assert_eq!(
+            consent.check_actual_output_v1(&inspect_transaction_v1(&tx, 0).unwrap(), wrong.verification_key.as_ref()),
+            Err(FundingRefusalV1::OutputMismatch)
+        );
         let mut trap = tx.clone();
         trap.outputs[0].script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&consent.terms.payer_key_id.as_bytes());
         trap.finalize();
-        assert_eq!(consent.check_actual_output_v1(&inspect_transaction_v1(&trap,0).unwrap(),&public),Err(FundingRefusalV1::OutputMismatch));
-        let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91;32]);
+        assert_eq!(
+            consent.check_actual_output_v1(&inspect_transaction_v1(&trap, 0).unwrap(), &public),
+            Err(FundingRefusalV1::OutputMismatch)
+        );
+        let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
         for refund in [consent.terms.payer_key_id, kaspa_hashes::blake2b_512_address_payload(wrong.verification_key.as_ref())] {
             let mut changed = consent.clone();
             changed.terms.refund_payload = refund;
             // Structure has no public key; it cannot derive the native address.
             changed.check_v1().unwrap();
-            changed.signature = libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key, changed.terms.id_v1().as_byte_slice(),
-                COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,[92;32]).unwrap().as_ref().to_vec();
+            changed.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+                &keys.signing_key,
+                changed.terms.id_v1().as_byte_slice(),
+                COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,
+                [92; 32],
+            )
+            .unwrap()
+            .as_ref()
+            .to_vec();
             // Even a real payer signature cannot assign another/refund trap key.
-            assert_eq!(changed.verify_signature_v1(&public),Err(FundingRefusalV1::Signature));
-            assert_eq!(changed.check_actual_output_v1(&inspect_transaction_v1(&tx,0).unwrap(),&public),Err(FundingRefusalV1::OutputMismatch));
+            assert_eq!(changed.verify_signature_v1(&public), Err(FundingRefusalV1::Signature));
+            assert_eq!(
+                changed.check_actual_output_v1(&inspect_transaction_v1(&tx, 0).unwrap(), &public),
+                Err(FundingRefusalV1::OutputMismatch)
+            );
         }
     }
 

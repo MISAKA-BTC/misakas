@@ -15,6 +15,7 @@
 //! * `head_geometry_*`, `liveness_*` — every live head is one SEAT-0 knows, and the graph versions
 //!   `seat_material_binds_the_claim` does not run keep their honest verdicts.
 
+#![allow(warnings)]
 use std::sync::Arc;
 
 use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;

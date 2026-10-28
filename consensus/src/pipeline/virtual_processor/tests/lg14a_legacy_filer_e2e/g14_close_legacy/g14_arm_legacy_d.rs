@@ -9,8 +9,8 @@
 //! Silence is a DA default here, never a computation conviction (`court_convicted` / `executor_refuted` stay false). No cryptographic
 //! computation proof of any kind is used (PRINCIPLES §8).
 use super::*;
-use kaspa_database::{create_temp_db, prelude::ConnBuilder};
 use kaspa_consensus_core::BlockHash;
+use kaspa_database::{create_temp_db, prelude::ConnBuilder};
 
 fn withhold(unit: &PalwDaUnitV1) -> bool {
     matches!(unit, PalwDaUnitV1::LegacyHeldV2(_))
@@ -65,7 +65,10 @@ async fn silent_to_default(lg: &mut Lg, produced: &Produced, deadline: u64) {
     let view = lg.view(id);
     assert!(view.da_defaulted, "the objective DA default");
     assert!(
-        matches!(view.phase, PalwClaimPhaseV2::Voided { reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::ProducerWithholding, .. }),
+        matches!(
+            view.phase,
+            PalwClaimPhaseV2::Voided { reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::ProducerWithholding, .. }
+        ),
         "voided ProducerWithholding: {:?}",
         view.phase
     );
@@ -218,7 +221,12 @@ async fn arm_legacy_d_held_da_default_after_a_reorg_off_the_demand() {
     z.ctx.simulated_time = z.ctx.simulated_time.max(b.ctx.simulated_time);
     let mut zl = lg.on_chain(z, lg.funding.clone());
     assert!(zl.view(id).record.is_some_and(|r| r.live.contains_key(&newcomer)), "the reservation predates the fork");
-    let open = zl.view(id).sessions.iter().find(|(accuser, s)| *accuser == newcomer && s.units.iter().any(withhold)).map(|(_, s)| s.deadline_daa);
+    let open = zl
+        .view(id)
+        .sessions
+        .iter()
+        .find(|(accuser, s)| *accuser == newcomer && s.units.iter().any(withhold))
+        .map(|(_, s)| s.deadline_daa);
     eprintln!("[arm-legacy d reorg] held session on Z's tip after the reorg: {open:?}");
     let deadline = match open {
         Some(d) => d,

@@ -11,6 +11,7 @@
 //! that parent too, by running this file against it — so the fence is the only thing that moved
 //! testnet-12, and nothing moved anything else.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
 };

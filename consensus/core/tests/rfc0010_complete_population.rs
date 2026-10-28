@@ -1,4 +1,5 @@
 //! Separate complete-population profile: all presets dormant, activation refused, identities versioned.
+#![allow(warnings)]
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::{
     Hash64,

@@ -112,7 +112,11 @@ impl Block {
             })
             .collect();
         Ok((
-            Self { header: self.header, transactions: BlockTransactionsV3::from_prepared_v3(transactions, allocation), evm_payload: self.evm_payload },
+            Self {
+                header: self.header,
+                transactions: BlockTransactionsV3::from_prepared_v3(transactions, allocation),
+                evm_payload: self.evm_payload,
+            },
             stale,
         ))
     }

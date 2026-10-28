@@ -42,6 +42,7 @@
 //! Run with `--release`: the engine is scalar by construction and a debug build turns this from
 //! seconds into minutes.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_base0_ops::QuantParams;
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
 use misaka_palw_base0::engine::{Base0Engine, ForwardProbe, KvCache};

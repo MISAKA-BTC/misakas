@@ -10,6 +10,7 @@
 //! and compact histories, and byte-mutated programs that still validate — where every success
 //! and every failure must agree.
 
+#![allow(warnings)]
 #[path = "../../core/tests/common/mod.rs"]
 mod tircommon;
 

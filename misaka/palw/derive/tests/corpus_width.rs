@@ -52,6 +52,7 @@
 //! was checked" and passed with exit 0 — a run that checked nothing was indistinguishable from
 //! one that checked three columns, except by its wall clock (0.00 s against 0.42 s).
 
+#![allow(warnings)]
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 
 /// The corpus answers the demonstration actually derives and publishes. Their token cost is what

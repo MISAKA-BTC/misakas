@@ -50,7 +50,7 @@
 //!
 //! Run: CARGO_BUILD_JOBS=2 cargo test -p kaspa-consensus-core --test void_after_panel_probe -- --nocapture --test-threads=1
 #![allow(clippy::too_many_arguments, dead_code)]
-
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod rc;
 use rc::*;

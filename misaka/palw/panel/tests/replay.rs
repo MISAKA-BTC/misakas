@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use kaspa_hashes::Hash64;
 use misaka_palw_panel::*;
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,6 +1,7 @@
 //! AUDIT LANE B4 — the attacker model: an expensive-tier registration with cheap execution.
 //! Read-only probe. Every number printed here is produced by the runtime in this worktree.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};

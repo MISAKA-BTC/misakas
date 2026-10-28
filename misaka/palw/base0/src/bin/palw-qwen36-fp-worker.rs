@@ -29,6 +29,7 @@
 //!   A runtime that answered wider than the court admits is the two-products split ADR-0077 R0
 //!   exists to close.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1 as _;
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_WORKER_MODE_JOB_V3, PALW_FP_WORKER_MODE_MANIFEST_V3, PALW_FP_WORKER_MODE_SERVE_V3,

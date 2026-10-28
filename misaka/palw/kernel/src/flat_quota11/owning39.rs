@@ -219,10 +219,10 @@ pub fn derive_quota_v39(
         include_native_post_io_v11(a, post)?;
         // Request and answer context checks can both authenticate original
         // actual input C; courts also share this exact paid context boundary.
-        if matches!(i, 1 | 2 | 3 | 4) {
+        if matches!(i, 1..=4) {
             *a = a.checked_add(&input_restore)?;
         }
-        if matches!(i, 3 | 4 | 5) {
+        if matches!(i, 3..=5) {
             *a = a.checked_add(&terminal_cleanup)?;
         }
     }
@@ -538,9 +538,6 @@ pub struct CheckedSourceAdmissionV39 {
 impl CheckedSourceAdmissionV39 {
     pub(super) fn parts(&self) -> (&SubjectBindingV11, &Digest, &Digest, &TrustedEpochV11, &Digest) {
         (&self.binding, &self.producer_operator, &self.consent, &self.epoch, &self.source_plan)
-    }
-    pub(super) fn into_parts(self) -> (SubjectBindingV11, Digest, Digest, Digest, TrustedEpochV11) {
-        (self.binding, self.source_plan, self.consent, self.producer_operator, self.epoch)
     }
 }
 pub fn check_source_admission_v39(

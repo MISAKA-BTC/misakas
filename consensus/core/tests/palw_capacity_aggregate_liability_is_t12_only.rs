@@ -18,6 +18,7 @@
 //!   on the live chain (rcore/cap-s1) — so `palw_drill_capacity_fences_at_v1` crosses it with the other
 //!   capacity fences at one height.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,

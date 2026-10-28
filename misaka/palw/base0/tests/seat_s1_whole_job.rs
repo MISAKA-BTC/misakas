@@ -12,6 +12,7 @@
 //! checked after the id), and the seat's verdict is `Mismatch`. The honest held attempt keeps
 //! `Matches`, and a free-prompt fold (`attempt_draw == None`) keeps its old rule.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

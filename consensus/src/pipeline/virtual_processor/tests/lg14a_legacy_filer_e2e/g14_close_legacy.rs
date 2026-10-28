@@ -10,11 +10,11 @@
 //! Every object goes through the mempool, the node's own template and the chain block's fold.
 use super::*;
 use kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1;
-use kaspa_consensus_core::palw_g14_gates_v1::{
-    PalwG14RouteFamilyV1, palw_g14_route_attempt_refusal_v1, palw_isolated_g14_genesis_v1,
-};
+use kaspa_consensus_core::palw_g14_gates_v1::{PalwG14RouteFamilyV1, palw_g14_route_attempt_refusal_v1, palw_isolated_g14_genesis_v1};
 use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
-use kaspa_consensus_core::palw_offence_attribution_v1::{PalwFalseValidReceiptV1, PalwPanelFalseValidEvidenceV2, palw_false_valid_offence_id_v2};
+use kaspa_consensus_core::palw_offence_attribution_v1::{
+    PalwFalseValidReceiptV1, PalwPanelFalseValidEvidenceV2, palw_false_valid_offence_id_v2,
+};
 use kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1;
 
 /// **The court-capacity measurement record this suite arms with (lane g14-court-capacity) — a TEST-ONLY config, never a network's
@@ -76,8 +76,11 @@ fn g14_close_config(full: bool) -> (Config, PalwConsensusParamsV2, Premine, Prem
     params.palw_g14_route_required_v1 = at;
     if full {
         params.palw_court_capacity_v1 = Some(
-            kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCapacityFenceV1::measured_at(ForkActivation::new(0), measured_court())
-                .expect("the measurement derives a policy"),
+            kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCapacityFenceV1::measured_at(
+                ForkActivation::new(0),
+                measured_court(),
+            )
+            .expect("the measurement derives a policy"),
         );
         params.sync_palw_court_capacity_v1();
         params.palw_reward_liability_horizon_v1 = at;
@@ -85,9 +88,9 @@ fn g14_close_config(full: bool) -> (Config, PalwConsensusParamsV2, Premine, Prem
     params.sync_palw_g14_gates_v1();
     let unisolated = params.validate_palw_v2().expect_err("an unmarked genesis must still refuse production arming");
     assert!(format!("{unisolated:?}").contains("no arm-readiness record"), "{unisolated:?}");
-    let incomplete = params.validate_palw_court_policy_completeness_v1(
-        kaspa_consensus_core::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyHeldDaV2,
-    ).expect_err("missing F02/F03 policy independently refuses an unmarked genesis");
+    let incomplete = params
+        .validate_palw_court_policy_completeness_v1(kaspa_consensus_core::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyHeldDaV2)
+        .expect_err("missing F02/F03 policy independently refuses an unmarked genesis");
     assert!(format!("{incomplete:?}").contains("OneOutsiderCapacityIncomplete"), "{incomplete:?}");
     params.genesis = palw_isolated_g14_genesis_v1(&params.genesis, Hash64::from_bytes([0x14; 64]))
         .expect("bounded, explicit isolated test genesis");
@@ -100,7 +103,10 @@ fn g14_close_config(full: bool) -> (Config, PalwConsensusParamsV2, Premine, Prem
     let bundle = bundle.clone();
     assert!(bundle.state.legacy_public_filer_active_at(0), "LG14-A's mirror");
     let route = bundle.state.g14_route_required_v1().expect("option (b)'s mirror");
-    assert!(route.route_armed(PalwG14RouteFamilyV1::LegacyPanelAttempt, 0, false), "the V2 Attempt family's route is armed at genesis");
+    assert!(
+        route.route_armed(PalwG14RouteFamilyV1::LegacyPanelAttempt, 0, false),
+        "the V2 Attempt family's route is armed at genesis"
+    );
     (config, bundle, premine, floats, funding)
 }
 
@@ -324,8 +330,12 @@ async fn full_collusion_outside_bond_convicts(court: bool) {
     };
     let sid = kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_session_id_v1(lg.domain.as_byte_slice(), &accusation);
     lg.rnd = lg.rnd.wrapping_add(1);
-    accusation.signature =
-        sign(NEWCOMER, sid.as_byte_slice(), kaspa_consensus_core::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, lg.rnd);
+    accusation.signature = sign(
+        NEWCOMER,
+        sid.as_byte_slice(),
+        kaspa_consensus_core::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+        lg.rnd,
+    );
     // `[court-op timing]` (the court-capacity fence's timing harness, its node half): the one-move verdict — the leaf recompute on
     // the verifier's real model rows — timed here on this machine and build. NOT a measured record (that is the slowest supported
     // node's, release build, at each class's maximum profile).
@@ -508,7 +518,10 @@ async fn legacy_v2_attempt_held_da_withholding_ends_in_da_default() {
     eprintln!("[g14-close held DA] phase {:?}, licensed {licensed}, now {}", view.phase, lg.daa());
     assert!(view.da_defaulted, "the objective DA default");
     assert!(
-        matches!(view.phase, PalwClaimPhaseV2::Voided { reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::ProducerWithholding, .. }),
+        matches!(
+            view.phase,
+            PalwClaimPhaseV2::Voided { reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::ProducerWithholding, .. }
+        ),
         "voided ProducerWithholding: {:?}",
         view.phase
     );

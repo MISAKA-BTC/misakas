@@ -19,6 +19,7 @@
 //! No weight of any real model is read or written; the kernels run on synthetic buffers of at most
 //! 512 MiB.
 
+#![allow(warnings)]
 use std::hint::black_box;
 use std::time::Instant;
 

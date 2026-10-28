@@ -6,6 +6,7 @@
 //! ignored. Everything else about unknown keys is as it was: a key the class reads, a storage marker, a key of an architecture that is
 //! not that class, remote code.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::hf_schema::{ReadOptions, read_model};
 use serde_json::{Value, json};
 use std::path::Path;

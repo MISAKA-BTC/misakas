@@ -3,6 +3,7 @@
 //! The fixtures are the lowerer's tiny Hugging Face checkpoints and GGUF files; the truncated and header-only
 //! variants are made here from them, so every test that says "headers only" proves it by removing the data.
 
+#![allow(warnings)]
 use misaka_palw_sdk::preflight::{Depth, Options, Report, StageStatus, run};
 use std::path::{Path, PathBuf};
 

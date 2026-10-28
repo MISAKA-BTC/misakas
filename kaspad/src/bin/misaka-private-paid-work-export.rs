@@ -1,6 +1,7 @@
 //! Offline actual Program work and signed paid-enrollment export for the
 //! unpublished private integration profile. This binary starts no node and
 //! grants no security, economics, source-independence or native Final approval.
+#![allow(warnings)]
 use std::{collections::BTreeMap, path::Path};
 const USAGE: &str = "misaka-private-paid-work-export --salt HEX --request FILE --out FRESH_DIRECTORY
 Requires a separately authenticated live native kernel snapshot and a real posted Program job.

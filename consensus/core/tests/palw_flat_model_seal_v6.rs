@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use kaspa_consensus_core::palw_flat_model_vector_v3::*;
 use kaspa_consensus_core::palw_model_vector_v2::ModelVectorPostV2;
 fn fixture() -> FlatModelVectorPostV3 {

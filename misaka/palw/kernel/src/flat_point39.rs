@@ -69,7 +69,7 @@ impl<'a> CheckedPointContextV39<'a> {
             || claim.actual_scope != scope.scope().root()
             || claim.positions > maximum.maximum_positions()
             || claim.segment_roots.len() != crate::seg::segment_count_v1(claim.positions) as usize
-            || claim.segment_roots.iter().any(|r| *r == [0; 64])
+            || claim.segment_roots.contains(&[0; 64])
             || inputs.tokens().len() != claim.positions as usize
             || inputs.source() != source.root()
             || inputs.maximum() != maximum.root()
@@ -218,7 +218,7 @@ impl OperandsV1 for Inputs<'_> {
             Some(Operand::Constant(c)) => {
                 let width = c.dtype.width();
                 let at = usize::try_from(flat).ok().and_then(|n| n.checked_mul(width));
-                at.and_then(|at| c.data.get(at..at.checked_add(width)?)).and_then(|raw| Some(c.dtype.decode_le(raw)))
+                at.and_then(|at| c.data.get(at..at.checked_add(width)?)).map(|raw| c.dtype.decode_le(raw))
             }
             _ => None,
         }

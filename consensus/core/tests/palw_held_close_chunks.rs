@@ -20,6 +20,7 @@
 //!
 //! Every step is the harness's: the delta re-applies and reverts, and the carriage reloads to the same state.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod rcore;
 use rcore::*;
@@ -860,9 +861,11 @@ fn studio_t3_court_adjudication_cost() {
         bundle(&env.chain.p).court
     };
     println!("STUDIO_T3_ADJ court max_close_bytes={} runs={runs} warmup={warmup}", court.max_close_bytes());
-    for (label, lie, tile_pinned, tile_named) in
-        [("convicting_close_at_named_leaf", Some(0usize), 0u64, 0u64), ("other_leaf_close_refused", Some(0), 1, 0), ("honest_tile_declared_guilty", None, 0, 0)]
-    {
+    for (label, lie, tile_pinned, tile_named) in [
+        ("convicting_close_at_named_leaf", Some(0usize), 0u64, 0u64),
+        ("other_leaf_close_refused", Some(0), 1, 0),
+        ("honest_tile_declared_guilty", None, 0, 0),
+    ] {
         let mut env = env();
         let claim = put_claim(&mut env, 1, lie);
         let (proof, _) = output_close(&env, &claim, tile_pinned);

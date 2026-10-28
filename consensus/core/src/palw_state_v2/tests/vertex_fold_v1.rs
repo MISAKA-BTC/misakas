@@ -5,6 +5,7 @@
 //! The fold does not verify signatures — the acceptance walk does, once per vertex (`consensus`'s processor tests drive that half) —
 //! so a vertex here carries a dummy signature of the right length.
 
+#![allow(warnings)]
 use super::*;
 use crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict;
 use crate::palw_vertex_v1::*;

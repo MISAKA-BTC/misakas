@@ -17,6 +17,7 @@
 //! trust a `VERIFIED_REMOTE` miner rests on. The issuer refuses a node on another ruleset (network, genesis, params id, schedule id) and
 //! signs nothing below `palw_fork_choice_commitment_v1` (dormant on every network today, so it signs nothing anywhere yet and says so).
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 
 use kaspa_consensus_core::network::NetworkId;

@@ -10,6 +10,7 @@
 //! * the float reference gives **the same bytes** as the original spelling,
 //! * a name the rule does not cover (`LayerNorm.weights`, a prefix) is not renamed.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::lower::bidir::{self, BidirCfg, Padded, Pooling};
 use misaka_palw_tir_lower::weights::{Checkpoint, check_weights, legacy_layer_norm_name};

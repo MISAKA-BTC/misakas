@@ -10,6 +10,7 @@
 //! change is meant to ARM, this file is the one to update deliberately, in the commit that arms it,
 //! with the new height and the new fingerprint written down together.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     MAINNET_PARAMS, PALW_RC_ANCHOR_CLOCK_FENCE_DAA, PALW_RC_EXECUTION_QUANTA_FENCE_DAA, PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
     palw_rc_shipped_params,

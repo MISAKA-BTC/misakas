@@ -5,6 +5,7 @@
 //!
 //! Run: `cargo test -p misaka-palw-tir-sketch --test mirror`
 
+#![allow(warnings)]
 use misaka_palw_tir_exec::TirPlan;
 use misaka_palw_tir_sketch::codec;
 use misaka_palw_tir_sketch::fixture::dense_moe_v1;

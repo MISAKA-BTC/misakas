@@ -22,6 +22,7 @@
 //! blocks are heartbeats with the carrier appended after the template was adapted (and the merkle
 //! root recomputed): that is a block any miner can publish, and it is judged by consensus alone —
 //! not by this node's template gates, which would keep a buy on a held class out of its own template.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
 };

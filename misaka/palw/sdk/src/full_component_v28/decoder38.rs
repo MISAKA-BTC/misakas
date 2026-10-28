@@ -100,12 +100,15 @@ impl PreparedDecoderV38 {
         if prepared.spec.max_position_embeddings != Some(p.original_context as usize) {
             return Err("DECODER38_ORIGINAL_DECLARED_CONTEXT_NOT_EXACT".into());
         }
-        if let Some(image) = &p.image_rows {
-            if prepared.spec.hidden_size != image.width as usize {
-                return Err("DECODER38_IMAGE_HIDDEN_WIDTH_DIFFERS".into());
-            }
+        if let Some(image) = &p.image_rows
+            && prepared.spec.hidden_size != image.width as usize
+        {
+            return Err("DECODER38_IMAGE_HIDDEN_WIDTH_DIFFERS".into());
         }
-        let output = misaka_palw_tir::program_v2::OutputDecl::Logits { node: prepared.lowered.program.logits, scheme_id:prepared.lowered.program.logits_scheme_id };
+        let output = misaka_palw_tir::program_v2::OutputDecl::Logits {
+            node: prepared.lowered.program.logits,
+            scheme_id: prepared.lowered.program.logits_scheme_id,
+        };
         let lifts = p
             .image_rows
             .as_ref()

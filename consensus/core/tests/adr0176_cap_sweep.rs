@@ -14,6 +14,7 @@
 //! | `minimal_configuration_sustains_near_cap_with_bounded_gaps` | honest-miner reachability; bounded REAL gaps |
 //! | `no_feasible_candidate_reports_the_conflicts` | Stage 2: report conflicting constraints instead of inventing numbers |
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_bond_budget_v1::*;
 use kaspa_consensus_core::palw_bond_cap_sweep_v1::*;
 

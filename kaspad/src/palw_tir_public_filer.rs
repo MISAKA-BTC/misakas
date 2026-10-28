@@ -35,7 +35,9 @@ pub(crate) fn palw_tir_public_may_file_v1(view: &PalwTirPublicFrameViewV1, filer
 }
 
 /// The arithmetic scheduler's `Ready` cone/logits primitive, program stripped (the fold fills the registered one).
-pub(crate) fn palw_tir_public_arithmetic_evidence_v1(mut proof: PalwCourtVerdictProofV2) -> Result<PalwTirPublicConvictionEvidenceV1, String> {
+pub(crate) fn palw_tir_public_arithmetic_evidence_v1(
+    mut proof: PalwCourtVerdictProofV2,
+) -> Result<PalwTirPublicConvictionEvidenceV1, String> {
     proof.tir_strip_program_v1();
     let evidence = PalwTirPublicConvictionEvidenceV1::Arithmetic { proof: Box::new(proof) };
     evidence.check_v1()?;
@@ -43,7 +45,9 @@ pub(crate) fn palw_tir_public_arithmetic_evidence_v1(mut proof: PalwCourtVerdict
 }
 
 /// A complete EOF-authenticated original ID sequence (an owner's `Finished(Ids)` or the producer's public answer).
-pub(crate) fn palw_tir_public_output_evidence_v1(ids: &PalwTirPublicAuthenticatedIdsV1) -> Result<PalwTirPublicConvictionEvidenceV1, String> {
+pub(crate) fn palw_tir_public_output_evidence_v1(
+    ids: &PalwTirPublicAuthenticatedIdsV1,
+) -> Result<PalwTirPublicConvictionEvidenceV1, String> {
     let evidence = PalwTirPublicConvictionEvidenceV1::Output { rows_root: ids.rows_root_v1(), ids: ids.ids_v1().to_vec() };
     evidence.check_v1()?;
     Ok(evidence)
@@ -152,7 +156,9 @@ pub(crate) fn palw_tir_public_grant_ready_object_v1(
     signed_daa: u64,
     descriptor: kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1,
 ) -> Result<PalwConsensusObjectV2, String> {
-    use kaspa_consensus_core::palw_panel_v2::{PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2};
+    use kaspa_consensus_core::palw_panel_v2::{
+        PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
+    };
     use kaspa_consensus_core::palw_tir_public_carriage_v1::{PALW_TIR_PUBLIC_GRANT_READY_CONTEXT_V1, PalwTirPublicGrantReadyV1};
     use kaspa_consensus_core::palw_tir_public_custody_v1::{PALW_TIR_SOURCE_GRANT_CONTEXT_V1, PalwTirPublicCustodyGrantV1};
     if !view.drawn_panel.contains(&seat) || view.liable.contains(&seat) {
@@ -279,11 +285,19 @@ mod tests {
             assert_eq!((control.target, control.signer, control.declared_rent_sompi), (T::Conviction, filer, 777));
             assert!(matches!(control.action, A::Convict(_)));
             control
-                .validate_signature_v1(network, key.public_key(), kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1)
+                .validate_signature_v1(
+                    network,
+                    key.public_key(),
+                    kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
+                )
                 .unwrap();
             assert!(
                 control
-                    .validate_signature_v1(h(0x4E8), key.public_key(), kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1)
+                    .validate_signature_v1(
+                        h(0x4E8),
+                        key.public_key(),
+                        kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1
+                    )
                     .is_err(),
                 "another network's domain"
             );

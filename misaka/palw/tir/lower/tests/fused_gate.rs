@@ -21,6 +21,7 @@
 //! * **the deliberately broken variant** (`TirExecutor::set_fused_fault`) of each kernel on its
 //!   program, which moves one output lane by one: the gate must refuse it, or it gates nothing.
 
+#![allow(warnings)]
 use misaka_palw_tir::builder::ProgramBuilder;
 use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, INPUT_TOKEN, TirProgramV1};
 use misaka_palw_tir::{DType, Interpreter, MapParams, ParamSource, Ref, RunState, Tensor, TensorType};

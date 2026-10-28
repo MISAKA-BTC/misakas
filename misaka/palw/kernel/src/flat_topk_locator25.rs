@@ -70,21 +70,30 @@ pub fn locate_selected_topk_v25(
         Ok(p) => p,
         Err(e) => return error(e),
     };
-    locate_selected_topk_prepared_v32(c,public,unit,expected,own,scan,&pr,false)
+    locate_selected_topk_prepared_v32(c, public, unit, expected, own, scan, &pr, false)
 }
-pub(crate) fn locate_selected_topk_prepared_v32(c:&FlatContextV25<'_>,public:&dyn FlatPublicReadsV25,unit:FlatReadV5,expected:&Tensor,own:&dyn Fn()->Result<Vec<Tensor>,String>,scan:&mut TopKScanBudgetV7,pr:&crate::element::PreparedV1<'_>,original32:bool)->FlatFindingV25{
+pub(crate) fn locate_selected_topk_prepared_v32(
+    c: &FlatContextV25<'_>,
+    public: &dyn FlatPublicReadsV25,
+    unit: FlatReadV5,
+    expected: &Tensor,
+    own: &dyn Fn() -> Result<Vec<Tensor>, String>,
+    scan: &mut TopKScanBudgetV7,
+    pr: &crate::element::PreparedV1<'_>,
+    original32: bool,
+) -> FlatFindingV25 {
     if unit.leaf.is_some() || unit.position >= c.base.claim.positions || !pr.valid(unit.occurrence, unit.node) {
         return error("invalid selected TopK coordinate");
     }
     let Prim::TopK { axis, k } = pr.w.node(unit.occurrence, unit.node).prim else { return error("selected relation is not TopK") };
-    if crate::flat_scope7::point_relation(&pr, unit.position, unit.occurrence, unit.node) != Ok(true) {
+    if crate::flat_scope7::point_relation(pr, unit.position, unit.occurrence, unit.node) != Ok(true) {
         return error("TopK point court not selected by original scope25");
     }
     let shape = pr.shapes(unit.position, unit.occurrence, unit.node).out;
     if expected.dtype != DType::Idx || expected.shape != shape {
         return error("independent TopK metadata differs");
     }
-    let output = match read_node(&c.base, &pr, public, unit) {
+    let output = match read_node(&c.base, pr, public, unit) {
         Ok(o) => o,
         Err(f) => return f.into(),
     };
@@ -161,5 +170,21 @@ pub(crate) fn locate_selected_topk_prepared_v32(c:&FlatContextV25<'_>,public:&dy
         return error("authenticated different root has no differing selected value");
     };
     let _ = k; // K remains charged in the independently supplied scan/read budget.
-    if original32{crate::flat_detect25::topk_relation_rows_checked_v32(c,&c.scope.root(),pr,public,unit,expected,own,scan,Some(row),Some(output),&|f|crate::flat_detect25::checked_prepared_v32(c,pr,f))}else{topk_relation_rows_v25(c, &c.scope.root(), &pr, public, unit, expected, own, scan, Some(row), Some(output))}
+    if original32 {
+        crate::flat_detect25::topk_relation_rows_checked_v32(
+            c,
+            &c.scope.root(),
+            pr,
+            public,
+            unit,
+            expected,
+            own,
+            scan,
+            Some(row),
+            Some(output),
+            &|f| crate::flat_detect25::checked_prepared_v32(c, pr, f),
+        )
+    } else {
+        topk_relation_rows_v25(c, &c.scope.root(), pr, public, unit, expected, own, scan, Some(row), Some(output))
+    }
 }

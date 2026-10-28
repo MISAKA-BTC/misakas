@@ -79,131 +79,179 @@ pub struct NativeNumericalGeometryV3 {
     path_bytes: u64,
 }
 fn add(a: u64, b: u64) -> Result<u64, NumericalMaterializeErrorV3> {
-    a.checked_add(b).ok_or_else(||NumericalMaterializeErrorV3::local_v3("numerical geometry counter overflow"))
+    a.checked_add(b).ok_or_else(|| NumericalMaterializeErrorV3::local_v3("numerical geometry counter overflow"))
 }
 /// Private shared materializer classification. Old API preserves its exact
 /// legacy strings; native callers preserve local allocation refusal as Resource.
 #[derive(Debug)]
 enum NumericalMaterializeErrorV3 {
     Semantic(String),
-    Resource { coverage:crate::palw_native_resource_v1::NativeCoverageV1, legacy:&'static str },
+    Resource { coverage: crate::palw_native_resource_v1::NativeCoverageV1, legacy: &'static str },
 }
-impl From<String> for NumericalMaterializeErrorV3 {fn from(s:String)->Self {Self::Semantic(s)}}
-impl From<&str> for NumericalMaterializeErrorV3 {fn from(s:&str)->Self {Self::Semantic(s.into())}}
-impl NumericalMaterializeErrorV3 {
-    fn local_v3(legacy:&'static str)->Self {Self::Resource {
-        coverage:crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<NativeNumericalGeometryV3>("local numerical exploration",legacy),legacy}}
-
-    fn legacy_v3(self)->String { match self { Self::Semantic(s)=>s,Self::Resource{legacy,..}=>legacy.into() } }
-    fn native_v3(self)->crate::palw_native_resource_v1::NativeDecodeErrorV1<String> {
-        use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
-        match self {Self::Semantic(s)=>E::Decode(s),Self::Resource{coverage,..}=>E::Resource(coverage)}
+impl From<String> for NumericalMaterializeErrorV3 {
+    fn from(s: String) -> Self {
+        Self::Semantic(s)
     }
 }
-fn reserve_numerical_roots_v3(roots:&mut Vec<NumericalRootV3>,additional:usize)->Result<(),NumericalMaterializeErrorV3> {
-    roots.try_reserve(additional).map_err(|e|NumericalMaterializeErrorV3::Resource {
-        coverage:crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Vec<NumericalRootV3>>(
-            "numerical root allocation",&e.to_string()),legacy:"numerical root allocation failed"})
+impl From<&str> for NumericalMaterializeErrorV3 {
+    fn from(s: &str) -> Self {
+        Self::Semantic(s.into())
+    }
 }
-fn reserve_numerical_paths_v3(paths:&mut Vec<NumericalPathV3>,count:u64)->Result<(),NumericalMaterializeErrorV3> {
-    let count=usize::try_from(count).map_err(|_|NumericalMaterializeErrorV3::Resource {
-        coverage:crate::palw_native_resource_v1::NativeCoverageV1::overflow::<Vec<NumericalPathV3>>("numerical path length"),
-        legacy:"numerical path length overflow"})?;
-    paths.try_reserve_exact(count).map_err(|e|NumericalMaterializeErrorV3::Resource {
-        coverage:crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Vec<NumericalPathV3>>(
-            "numerical path allocation",&e.to_string()),legacy:"numerical path allocation failed"})
+impl NumericalMaterializeErrorV3 {
+    fn local_v3(legacy: &'static str) -> Self {
+        Self::Resource {
+            coverage: crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<NativeNumericalGeometryV3>(
+                "local numerical exploration",
+                legacy,
+            ),
+            legacy,
+        }
+    }
+
+    fn legacy_v3(self) -> String {
+        match self {
+            Self::Semantic(s) => s,
+            Self::Resource { legacy, .. } => legacy.into(),
+        }
+    }
+    fn native_v3(self) -> crate::palw_native_resource_v1::NativeDecodeErrorV1<String> {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
+        match self {
+            Self::Semantic(s) => E::Decode(s),
+            Self::Resource { coverage, .. } => E::Resource(coverage),
+        }
+    }
+}
+fn reserve_numerical_roots_v3(roots: &mut Vec<NumericalRootV3>, additional: usize) -> Result<(), NumericalMaterializeErrorV3> {
+    roots.try_reserve(additional).map_err(|e| NumericalMaterializeErrorV3::Resource {
+        coverage: crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Vec<NumericalRootV3>>(
+            "numerical root allocation",
+            &e.to_string(),
+        ),
+        legacy: "numerical root allocation failed",
+    })
+}
+fn reserve_numerical_paths_v3(paths: &mut Vec<NumericalPathV3>, count: u64) -> Result<(), NumericalMaterializeErrorV3> {
+    let count = usize::try_from(count).map_err(|_| NumericalMaterializeErrorV3::Resource {
+        coverage: crate::palw_native_resource_v1::NativeCoverageV1::overflow::<Vec<NumericalPathV3>>("numerical path length"),
+        legacy: "numerical path length overflow",
+    })?;
+    paths.try_reserve_exact(count).map_err(|e| NumericalMaterializeErrorV3::Resource {
+        coverage: crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Vec<NumericalPathV3>>(
+            "numerical path allocation",
+            &e.to_string(),
+        ),
+        legacy: "numerical path allocation failed",
+    })
 }
 
-#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct NumericalNativeCountsV3 {
-    original_leaves:u64, roots:u64, paths:u64, edges:u64, path_bytes:u64, max_depth:u32,
+    original_leaves: u64,
+    roots: u64,
+    paths: u64,
+    edges: u64,
+    path_bytes: u64,
+    max_depth: u32,
 }
-fn scan_native_counts_v3(source:&Source,registered:&PalwTirClassRecordV1,layout:&PalwTirLayoutV1,
-    court:&PalwCourtParamsV2,demand:PalwTirDemandRulesV1,budget:NumericalGeometryBudgetV3)
-    ->Result<NumericalNativeCountsV3,NumericalMaterializeErrorV3> {
-        let header = source.header_v1();
-        if header.step_leaf_count > budget.max_original_leaves {
-            return Err(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted"));
+fn scan_native_counts_v3(
+    source: &Source,
+    registered: &PalwTirClassRecordV1,
+    layout: &PalwTirLayoutV1,
+    court: &PalwCourtParamsV2,
+    demand: PalwTirDemandRulesV1,
+    budget: NumericalGeometryBudgetV3,
+) -> Result<NumericalNativeCountsV3, NumericalMaterializeErrorV3> {
+    let header = source.header_v1();
+    if header.step_leaf_count > budget.max_original_leaves {
+        return Err(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted"));
+    }
+    // Source is an opaque native object with a retained authenticated header;
+    // resolve rechecks its original class/layout/job, once for this scan.
+    let binding =
+        header.resolve_registered_layout_v1(registered, layout, header.committed_execution_root, budget.max_original_leaves)?;
+    let verified =
+        Box::new(crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, budget.max_original_leaves).map_err(|e| e.to_string())?);
+    let intervals = analyze_ranges(&verified.space.program).map_err(|e| e.to_string())?;
+    let prepared = PreparedNumericalGeometryV3 { verified, intervals, context: binding.job_context };
+    let arity = court.dissection_arity();
+    if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
+        return Err("numerical geometry arity".into());
+    }
+    let mut out = NumericalNativeCountsV3 { original_leaves: header.step_leaf_count, ..Default::default() };
+    for index in 0..out.original_leaves {
+        let leaf = prepared.verified.space.leaf_at(&prepared.context, index).ok_or("numerical original leaf missing")?;
+        let Some(site) = dissect::palw_tir_dissect_site_v1(&prepared.verified.space, &prepared.intervals, &leaf) else { continue };
+        if out.roots >= budget.max_roots {
+            return Err(NumericalMaterializeErrorV3::local_v3("numerical root budget exhausted"));
         }
-        // Source is an opaque native object with a retained authenticated header;
-        // resolve rechecks its original class/layout/job, once for this scan.
-        let binding =
-            header.resolve_registered_layout_v1(registered, layout, header.committed_execution_root, budget.max_original_leaves)?;
-        let verified =
-            Box::new(crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, budget.max_original_leaves).map_err(|e| e.to_string())?);
-        let intervals = analyze_ranges(&verified.space.program).map_err(|e| e.to_string())?;
-        let prepared = PreparedNumericalGeometryV3 { verified, intervals, context: binding.job_context };
-        let arity = court.dissection_arity();
-        if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
-            return Err("numerical geometry arity".into());
+        let crate::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, .. } = leaf.kind else {
+            return Err("numerical site is not commit".into());
+        };
+        dissect::palw_tir_dissect_obligations_v1(&prepared.verified.space.program.blocks[block as usize], node)
+            .map_err(|e| e.to_string())?;
+        let tile = prepared.verified.space.commit_tile_len(block, node).ok_or("numerical commit tile missing")?;
+        let values = dissect::palw_tir_dissect_value_bound_v2(
+            &prepared.verified.space.program,
+            &prepared.verified.space.program.blocks[block as usize],
+            node,
+            tile,
+            demand,
+        );
+        let tiles = site.history_positions.div_ceil(site.tile_positions);
+        // Analytical preflight occurs before allocating this root's paths.
+        let counts = dissect::tree_inventory_v1::numerical_tree_inventory_v1(tiles, arity, site.reductions.len(), values)
+            .ok_or("numerical tree exceeds native caps")?;
+        if counts.max_depth as usize > crate::palw_court_shared_tir_round_v1::SHARED_TIR_MAX_PATH_V1 {
+            return Err("numerical tree exceeds native shared path depth".into());
         }
-        let mut out = NumericalNativeCountsV3 { original_leaves:header.step_leaf_count,..Default::default() };
-        for index in 0..out.original_leaves {
-            let leaf = prepared.verified.space.leaf_at(&prepared.context, index).ok_or("numerical original leaf missing")?;
-            let Some(site) = dissect::palw_tir_dissect_site_v1(&prepared.verified.space, &prepared.intervals, &leaf) else { continue };
-            if out.roots >= budget.max_roots {
-                return Err(NumericalMaterializeErrorV3::local_v3("numerical root budget exhausted"));
-            }
-            let crate::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, .. } = leaf.kind else {
-                return Err("numerical site is not commit".into());
-            };
-            dissect::palw_tir_dissect_obligations_v1(&prepared.verified.space.program.blocks[block as usize], node)
-                .map_err(|e| e.to_string())?;
-            let tile = prepared.verified.space.commit_tile_len(block, node).ok_or("numerical commit tile missing")?;
-            let values = dissect::palw_tir_dissect_value_bound_v2(
-                &prepared.verified.space.program,
-                &prepared.verified.space.program.blocks[block as usize],
-                node,
-                tile,
-                demand,
-            );
-            let tiles = site.history_positions.div_ceil(site.tile_positions);
-            // Analytical preflight occurs before allocating this root's paths.
-            let counts = dissect::tree_inventory_v1::numerical_tree_inventory_v1(tiles, arity, site.reductions.len(), values)
-                .ok_or("numerical tree exceeds native caps")?;
-            if counts.max_depth as usize > crate::palw_court_shared_tir_round_v1::SHARED_TIR_MAX_PATH_V1 {
-                return Err("numerical tree exceeds native shared path depth".into());
-            }
-            let paths = add(counts.disclosures, counts.terminals)?;
-            let bytes = add(counts.disclosure_path_bytes, counts.terminal_path_bytes)?;
-            let next_paths = add(out.paths, paths)?;
-            let next_edges = add(out.edges, counts.child_claims)?;
-            let next_bytes = add(out.path_bytes, bytes)?;
-            if next_paths > budget.max_paths || next_edges > budget.max_edges || next_bytes > budget.max_path_bytes {
-                return Err(NumericalMaterializeErrorV3::local_v3("numerical path/edge/retained-path budget exhausted"));
-            }
-            out.roots = add(out.roots,1)?;
-            out.paths = next_paths;
-            out.edges = next_edges;
-            out.path_bytes = next_bytes;
-            out.max_depth = out.max_depth.max(counts.max_depth);
+        let paths = add(counts.disclosures, counts.terminals)?;
+        let bytes = add(counts.disclosure_path_bytes, counts.terminal_path_bytes)?;
+        let next_paths = add(out.paths, paths)?;
+        let next_edges = add(out.edges, counts.child_claims)?;
+        let next_bytes = add(out.path_bytes, bytes)?;
+        if next_paths > budget.max_paths || next_edges > budget.max_edges || next_bytes > budget.max_path_bytes {
+            return Err(NumericalMaterializeErrorV3::local_v3("numerical path/edge/retained-path budget exhausted"));
         }
-        // Only counters escape: the binding, Box<Verified> and intervals DROP
-        // before second-pass materialization. Never two live preludes.
-        Ok(out)
+        out.roots = add(out.roots, 1)?;
+        out.paths = next_paths;
+        out.edges = next_edges;
+        out.path_bytes = next_bytes;
+        out.max_depth = out.max_depth.max(counts.max_depth);
+    }
+    // Only counters escape: the binding, Box<Verified> and intervals DROP
+    // before second-pass materialization. Never two live preludes.
+    Ok(out)
 }
 
-fn native_prelude_requests_v3(source:&Source,registered:&PalwTirClassRecordV1,layout:&PalwTirLayoutV1,court:&PalwCourtParamsV2)
-    ->Result<u64,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-    use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeCoverageV1,TirNativeRequestsV1,
-        standalone_tir_program_shape_v1,btree_node_envelope_bytes_v1};
-    let arity=court.dissection_arity();
-    if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) || layout.h_tile==0 {
+fn native_prelude_requests_v3(
+    source: &Source,
+    registered: &PalwTirClassRecordV1,
+    layout: &PalwTirLayoutV1,
+    court: &PalwCourtParamsV2,
+) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_native_resource_v1::{
+        NativeCoverageV1, NativeDecodeErrorV1 as E, TirNativeRequestsV1, btree_node_envelope_bytes_v1, standalone_tir_program_shape_v1,
+    };
+    let arity = court.dissection_arity();
+    if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) || layout.h_tile == 0 {
         return Err(E::Decode("numerical geometry arity/history tile".into()));
     }
-    let mut q=TirNativeRequestsV1::new();
+    let mut q = TirNativeRequestsV1::new();
     // Includes actual canonical program/layout/header reconstruction, existing
     // codec/validation/interval workspace and StepSpace typed vectors. Source
     // itself is borrowed; this is an additional numerical preparation ticket.
-    q.add_v1(Source::native_construction_requests_v1(registered,layout,source.header_v1())?).map_err(E::Resource)?;
-    let shape=standalone_tir_program_shape_v1(&registered.program).map_err(|e|E::Decode(e.to_string()))?;
-    let n=shape.structural_items_v1();
-    let overflow=||E::Resource(NativeCoverageV1::overflow::<NativeNumericalGeometryV3>("numerical native prelude"));
+    q.add_v1(Source::native_construction_requests_v1(registered, layout, source.header_v1())?).map_err(E::Resource)?;
+    let shape = standalone_tir_program_shape_v1(&registered.program).map_err(|e| E::Decode(e.to_string()))?;
+    let n = shape.structural_items_v1();
+    let overflow = || E::Resource(NativeCoverageV1::overflow::<NativeNumericalGeometryV3>("numerical native prelude"));
     q.exact_v1::<crate::palw_tir_step_v1::PalwTirVerifiedBindingV1>(1).map_err(E::Resource)?; // Box allocation
     // Explicit retained analyze_ranges result, beyond the codec/gate scratch.
     q.vec_v1::<Vec<Interval>>(n).map_err(E::Resource)?;
     q.vec_v1::<Interval>(n).map_err(E::Resource)?;
-    let mut one=TirNativeRequestsV1::new();one.vec_v1::<Interval>(1).map_err(E::Resource)?;
+    let mut one = TirNativeRequestsV1::new();
+    one.vec_v1::<Interval>(1).map_err(E::Resource)?;
     q.add_v1(n.checked_mul(one.bytes_v1()).ok_or_else(overflow)?).map_err(E::Resource)?;
     // Site owns reductions/folds/bounds/counts while obligation/value analysis
     // builds computed/seen/derived and cone stack. Aggregate actual parsed
@@ -212,7 +260,9 @@ fn native_prelude_requests_v3(source:&Source,registered:&PalwTirClassRecordV1,la
     q.vec_v1::<dissect::PalwTirFoldV1>(n).map_err(E::Resource)?;
     q.vec_v1::<Interval>(n).map_err(E::Resource)?;
     q.vec_v1::<u64>(n).map_err(E::Resource)?;
-    for _ in 0..3 { q.vec_v1::<bool>(n).map_err(E::Resource)?; }
+    for _ in 0..3 {
+        q.vec_v1::<bool>(n).map_err(E::Resource)?;
+    }
     q.vec_v1::<usize>(n.checked_add(1).ok_or_else(overflow)?).map_err(E::Resource)?;
     q.vec_v1::<u16>(n).map_err(E::Resource)?; // obligation reductions beside site reductions
     q.vec_v1::<u64>(n).map_err(E::Resource)?; // propagated value demand
@@ -221,29 +271,30 @@ fn native_prelude_requests_v3(source:&Source,registered:&PalwTirClassRecordV1,la
     // numerical_tree_inventory uses level and next BTreeMaps. Each distinct
     // positive range size at any level is <= the original actual tile count;
     // both maps may coexist while consuming the old map into its iterator.
-    let tiles=u64::from(layout.max_context).div_ceil(u64::from(layout.h_tile));
-    let trees=tiles.checked_mul(2).and_then(|x|x.checked_mul(btree_node_envelope_bytes_v1::<u64,u64>() as u64))
-        .ok_or_else(overflow)?;
+    let tiles = u64::from(layout.max_context).div_ceil(u64::from(layout.h_tile));
+    let trees =
+        tiles.checked_mul(2).and_then(|x| x.checked_mul(btree_node_envelope_bytes_v1::<u64, u64>() as u64)).ok_or_else(overflow)?;
     q.add_v1(trees).map_err(E::Resource)?;
     Ok(q.bytes_v1())
 }
-fn native_output_requests_v3(c:NumericalNativeCountsV3,arity:u8)
-    ->Result<u64,crate::palw_native_resource_v1::NativeCoverageV1> {
-    use crate::palw_native_resource_v1::{NativeCoverageV1,TirNativeRequestsV1,NativeRetainedV1};
-    let mut q=TirNativeRequestsV1::new();
-    let overflow=||NativeCoverageV1::overflow::<NativeNumericalGeometryV3>("numerical retained paths/DFS");
+fn native_output_requests_v3(c: NumericalNativeCountsV3, arity: u8) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1, TirNativeRequestsV1};
+    let mut q = TirNativeRequestsV1::new();
+    let overflow = || NativeCoverageV1::overflow::<NativeNumericalGeometryV3>("numerical retained paths/DFS");
     q.exact_v1::<NativeRetainedV1<NativeNumericalGeometryV3>>(1)?;
     q.vec_v1::<NumericalRootV3>(c.roots)?;
     q.exact_v1::<NumericalPathV3>(c.paths)?; // each root try_reserve_exact
     // Individual path clone+push has its own minimum Vec<u8> capacity.
     q.vec_v1::<u8>(c.path_bytes)?;
-    let mut one=TirNativeRequestsV1::new();one.vec_v1::<u8>(1)?;
+    let mut one = TirNativeRequestsV1::new();
+    one.vec_v1::<u8>(1)?;
     q.add_v1(c.paths.checked_mul(one.bytes_v1()).ok_or_else(overflow)?)?;
-    let frontier=u64::from(arity).checked_mul(u64::from(c.max_depth)).and_then(|x|x.checked_add(1)).ok_or_else(overflow)?;
-    q.vec_v1::<(Vec<u8>,u64,u64)>(frontier)?;
-    let mut pending=TirNativeRequestsV1::new();pending.vec_v1::<u8>(u64::from(c.max_depth))?;
+    let frontier = u64::from(arity).checked_mul(u64::from(c.max_depth)).and_then(|x| x.checked_add(1)).ok_or_else(overflow)?;
+    q.vec_v1::<(Vec<u8>, u64, u64)>(frontier)?;
+    let mut pending = TirNativeRequestsV1::new();
+    pending.vec_v1::<u8>(u64::from(c.max_depth))?;
     q.add_v1(frontier.checked_mul(pending.bytes_v1()).ok_or_else(overflow)?)?;
-    q.exact_v1::<(u64,u64)>(u64::from(arity))?; // actual child-ranges capacity
+    q.exact_v1::<(u64, u64)>(u64::from(arity))?; // actual child-ranges capacity
     Ok(q.bytes_v1())
 }
 
@@ -252,36 +303,64 @@ impl NativeNumericalGeometryV3 {
     /// original admission. Local enumeration budgets and all old limits remain.
     /// Conservatively holds construction scratch through the result lifetime.
     pub fn derive_native_v3(
-        source:&crate::palw_native_resource_v1::NativeRetainedV1<Source>,
-        registered:&PalwTirClassRecordV1,layout:&PalwTirLayoutV1,court:&PalwCourtParamsV2,
-        demand:PalwTirDemandRulesV1,budget:NumericalGeometryBudgetV3,
-    )->Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-        Self::derive_native_reserved_v3(source,registered,layout,court,demand,budget,
-            crate::palw_native_resource_v1::reserve_native_requests_v1)
+        source: &crate::palw_native_resource_v1::NativeRetainedV1<Source>,
+        registered: &PalwTirClassRecordV1,
+        layout: &PalwTirLayoutV1,
+        court: &PalwCourtParamsV2,
+        demand: PalwTirDemandRulesV1,
+        budget: NumericalGeometryBudgetV3,
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    {
+        Self::derive_native_reserved_v3(
+            source,
+            registered,
+            layout,
+            court,
+            demand,
+            budget,
+            crate::palw_native_resource_v1::reserve_native_requests_v1,
+        )
     }
     fn derive_native_reserved_v3<R>(
-        source:&crate::palw_native_resource_v1::NativeRetainedV1<Source>,
-        registered:&PalwTirClassRecordV1,layout:&PalwTirLayoutV1,court:&PalwCourtParamsV2,
-        demand:PalwTirDemandRulesV1,budget:NumericalGeometryBudgetV3,reserve:R,
-    )->Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
-    where R:FnOnce(u64)->Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,crate::palw_native_resource_v1::NativeCoverageV1> {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeRetainedV1};
-        if source.leaf_count_v1()>budget.max_original_leaves {return Err(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted").native_v3());}
-        let prelude=native_prelude_requests_v3(source,registered,layout,court)?;
-        let mut lease=reserve(prelude).map_err(E::Resource)?;
+        source: &crate::palw_native_resource_v1::NativeRetainedV1<Source>,
+        registered: &PalwTirClassRecordV1,
+        layout: &PalwTirLayoutV1,
+        court: &PalwCourtParamsV2,
+        demand: PalwTirDemandRulesV1,
+        budget: NumericalGeometryBudgetV3,
+        reserve: R,
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    where
+        R: FnOnce(
+            u64,
+        ) -> Result<
+            Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
+            crate::palw_native_resource_v1::NativeCoverageV1,
+        >,
+    {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1};
+        if source.leaf_count_v1() > budget.max_original_leaves {
+            return Err(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted").native_v3());
+        }
+        let prelude = native_prelude_requests_v3(source, registered, layout, court)?;
+        let mut lease = reserve(prelude).map_err(E::Resource)?;
         // This function returns ONLY counters. Its prepared binding/intervals
         // are dropped before the allocating second pass starts.
-        let c=scan_native_counts_v3(source,registered,layout,court,demand,budget).map_err(NumericalMaterializeErrorV3::native_v3)?;
-        let output=native_output_requests_v3(c,court.dissection_arity()).map_err(E::Resource)?;
-        if let Some(ticket)=lease.as_mut() {ticket.grow_memory_v1(output).map_err(E::Resource)?;}
-        let graph=Self::materialize_v3(source,registered,layout,court,demand,budget)
+        let c = scan_native_counts_v3(source, registered, layout, court, demand, budget)
             .map_err(NumericalMaterializeErrorV3::native_v3)?;
-        let max_depth=graph.roots.iter().flat_map(|r|r.paths.iter()).map(|p|p.path.len() as u32).max().unwrap_or(0);
-        if (graph.roots.len() as u64,graph.paths,graph.edges,graph.path_bytes,max_depth)
-            !=(c.roots,c.paths,c.edges,c.path_bytes,c.max_depth) {
+        let output = native_output_requests_v3(c, court.dissection_arity()).map_err(E::Resource)?;
+        if let Some(ticket) = lease.as_mut() {
+            ticket.grow_memory_v1(output).map_err(E::Resource)?;
+        }
+        let graph =
+            Self::materialize_v3(source, registered, layout, court, demand, budget).map_err(NumericalMaterializeErrorV3::native_v3)?;
+        let max_depth = graph.roots.iter().flat_map(|r| r.paths.iter()).map(|p| p.path.len() as u32).max().unwrap_or(0);
+        if (graph.roots.len() as u64, graph.paths, graph.edges, graph.path_bytes, max_depth)
+            != (c.roots, c.paths, c.edges, c.path_bytes, c.max_depth)
+        {
             return Err(E::Decode("native numerical firstpass/materialized inventory mismatch".into()));
         }
-        Ok(NativeRetainedV1::from_owner_reserved_v1(graph,lease))
+        Ok(NativeRetainedV1::from_owner_reserved_v1(graph, lease))
     }
 
     /// Court/demand are explicit geometry inputs, not authenticated policy.
@@ -295,8 +374,7 @@ impl NativeNumericalGeometryV3 {
         demand: PalwTirDemandRulesV1,
         budget: NumericalGeometryBudgetV3,
     ) -> Result<Self, String> {
-        Self::materialize_v3(source,registered,layout,court,demand,budget)
-            .map_err(NumericalMaterializeErrorV3::legacy_v3)
+        Self::materialize_v3(source, registered, layout, court, demand, budget).map_err(NumericalMaterializeErrorV3::legacy_v3)
     }
     fn materialize_v3(
         source: &Source,
@@ -366,10 +444,10 @@ impl NativeNumericalGeometryV3 {
             if next_paths > budget.max_paths || next_edges > budget.max_edges || next_bytes > budget.max_path_bytes {
                 return Err(NumericalMaterializeErrorV3::local_v3("numerical path/edge/retained-path budget exhausted"));
             }
-            reserve_numerical_roots_v3(&mut out.roots,1)?;
+            reserve_numerical_roots_v3(&mut out.roots, 1)?;
             let mut root = NumericalRootV3 { leaf: index, paths: Vec::new() };
             let mut actual_edges = 0u64;
-            reserve_numerical_paths_v3(&mut root.paths,paths)?;
+            reserve_numerical_paths_v3(&mut root.paths, paths)?;
             // DFS frontier has at most arity*depth siblings; output and pending
             // path bytes are bounded by the complete-tree budget above.
             let mut todo = vec![(Vec::<u8>::new(), 0, u64::from(tiles))];
@@ -486,64 +564,106 @@ mod tests {
     fn actual_allocator_capacity_refusal_keeps_native_resource_and_legacy_spelling() {
         // Deterministic real TryReserveError (capacity overflow), no huge
         // allocation attempt/OOM injector and no string-based classification.
-        let roots=reserve_numerical_roots_v3(&mut Vec::new(),usize::MAX).unwrap_err();
-        assert!(matches!(&roots,NumericalMaterializeErrorV3::Resource{..}));
-        assert_eq!(roots.legacy_v3(),"numerical root allocation failed");
-        let paths=reserve_numerical_paths_v3(&mut Vec::new(),u64::MAX).unwrap_err();
-        assert!(matches!(paths.native_v3(),crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_)));
-        let local=NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted");
-        assert_eq!(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted").legacy_v3(),"numerical original scan budget exhausted");
-        assert!(matches!(local.native_v3(),crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_)));
+        let roots = reserve_numerical_roots_v3(&mut Vec::new(), usize::MAX).unwrap_err();
+        assert!(matches!(&roots, NumericalMaterializeErrorV3::Resource { .. }));
+        assert_eq!(roots.legacy_v3(), "numerical root allocation failed");
+        let paths = reserve_numerical_paths_v3(&mut Vec::new(), u64::MAX).unwrap_err();
+        assert!(matches!(paths.native_v3(), crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_)));
+        let local = NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted");
+        assert_eq!(
+            NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted").legacy_v3(),
+            "numerical original scan budget exhausted"
+        );
+        assert!(matches!(local.native_v3(), crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_)));
         // Same spelling alone confers no classification: origin is mandatory.
-        let semantic=NumericalMaterializeErrorV3::from("numerical original scan budget exhausted");
-        assert!(matches!(semantic.native_v3(),crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_)));
+        let semantic = NumericalMaterializeErrorV3::from("numerical original scan budget exhausted");
+        assert!(matches!(semantic.native_v3(), crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_)));
     }
     #[test]
     fn native_numerical_owner_preserves_nonempty_history_paths_and_overflow_refuses() {
-        let f=fixture();
-        let original=f.frame.original_v1();
-        let source=Source::new_native_v1(&f.record,&f.layout,f.frame.header_v1(),original.execution_root,original.trace_root,f.rules.maximum_leaves).unwrap();
-        for arity in [2,4,8,16,32,64] {
-            let court=f.rules.court.with_dissection_arity(arity).unwrap();
-            let old=NativeNumericalGeometryV3::derive_v3(&source,&f.record,&f.layout,&court,PalwTirDemandRulesV1::H7,B).unwrap();
-            let owned=NativeNumericalGeometryV3::derive_native_v3(&source,&f.record,&f.layout,&court,PalwTirDemandRulesV1::H7,B).unwrap();
+        let f = fixture();
+        let original = f.frame.original_v1();
+        let source = Source::new_native_v1(
+            &f.record,
+            &f.layout,
+            f.frame.header_v1(),
+            original.execution_root,
+            original.trace_root,
+            f.rules.maximum_leaves,
+        )
+        .unwrap();
+        for arity in [2, 4, 8, 16, 32, 64] {
+            let court = f.rules.court.with_dissection_arity(arity).unwrap();
+            let old =
+                NativeNumericalGeometryV3::derive_v3(&source, &f.record, &f.layout, &court, PalwTirDemandRulesV1::H7, B).unwrap();
+            let owned =
+                NativeNumericalGeometryV3::derive_native_v3(&source, &f.record, &f.layout, &court, PalwTirDemandRulesV1::H7, B)
+                    .unwrap();
             assert!(!owned.roots.is_empty());
-            assert_eq!(owned.roots,old.roots);
-            assert_eq!((owned.paths,owned.edges,owned.path_bytes),(old.paths,old.edges,old.path_bytes));
-            let c=scan_native_counts_v3(&source,&f.record,&f.layout,&court,PalwTirDemandRulesV1::H7,B).unwrap();
-            assert_eq!(c.roots,old.roots.len() as u64);
-            assert!(native_output_requests_v3(c,arity).unwrap()>0);
+            assert_eq!(owned.roots, old.roots);
+            assert_eq!((owned.paths, owned.edges, owned.path_bytes), (old.paths, old.edges, old.path_bytes));
+            let c = scan_native_counts_v3(&source, &f.record, &f.layout, &court, PalwTirDemandRulesV1::H7, B).unwrap();
+            assert_eq!(c.roots, old.roots.len() as u64);
+            assert!(native_output_requests_v3(c, arity).unwrap() > 0);
         }
         // Independent real checker, no process-global quota arming. The owned
         // Source already exists and is outside this numerical checker scope.
-        let court=f.rules.court.with_dissection_arity(2).unwrap();
-        let prelude=native_prelude_requests_v3(&source,&f.record,&f.layout,&court).unwrap();
-        let counts=scan_native_counts_v3(&source,&f.record,&f.layout,&court,PalwTirDemandRulesV1::H7,B).unwrap();
-        let output=native_output_requests_v3(counts,2).unwrap();
-        let total=prelude.checked_add(output).unwrap();
-        for quota in [prelude-1,total-1,total] {
-            let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(
-                crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1 {memory_bytes:quota,database_bytes:0});
-            let result=NativeNumericalGeometryV3::derive_native_reserved_v3(&source,&f.record,&f.layout,&court,
-                PalwTirDemandRulesV1::H7,B,|bytes|checker.reserve_requests_v1(bytes,0).map(Some));
-            if quota==total {
-                let owned=result.unwrap();
-                assert_eq!(checker.outstanding(),(total,0));
+        let court = f.rules.court.with_dissection_arity(2).unwrap();
+        let prelude = native_prelude_requests_v3(&source, &f.record, &f.layout, &court).unwrap();
+        let counts = scan_native_counts_v3(&source, &f.record, &f.layout, &court, PalwTirDemandRulesV1::H7, B).unwrap();
+        let output = native_output_requests_v3(counts, 2).unwrap();
+        let total = prelude.checked_add(output).unwrap();
+        for quota in [prelude - 1, total - 1, total] {
+            let checker = crate::palw_native_resource_v1::NativeDemandCheckerV1::new(
+                crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1 { memory_bytes: quota, database_bytes: 0 },
+            );
+            let result = NativeNumericalGeometryV3::derive_native_reserved_v3(
+                &source,
+                &f.record,
+                &f.layout,
+                &court,
+                PalwTirDemandRulesV1::H7,
+                B,
+                |bytes| checker.reserve_requests_v1(bytes, 0).map(Some),
+            );
+            if quota == total {
+                let owned = result.unwrap();
+                assert_eq!(checker.outstanding(), (total, 0));
                 drop(owned);
-            } else { assert!(matches!(result,Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_)))); }
-            assert_eq!(checker.outstanding(),(0,0),"failed first reservation/growth and Drop release every numerical ticket");
+            } else {
+                assert!(matches!(result, Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+            }
+            assert_eq!(checker.outstanding(), (0, 0), "failed first reservation/growth and Drop release every numerical ticket");
         }
-        assert!(native_output_requests_v3(NumericalNativeCountsV3 {paths:u64::MAX,..Default::default()},2).is_err());
-        assert!(native_output_requests_v3(NumericalNativeCountsV3 {path_bytes:u64::MAX,..Default::default()},2).is_err());
-        assert!(counts.roots>0 && counts.paths>0 && counts.edges>0 && counts.path_bytes>0);
-        for small in [NumericalGeometryBudgetV3{max_original_leaves:0,..B},NumericalGeometryBudgetV3{max_roots:0,..B},
-            NumericalGeometryBudgetV3{max_paths:0,..B},NumericalGeometryBudgetV3{max_edges:0,..B},NumericalGeometryBudgetV3{max_path_bytes:0,..B}] {
-            assert!(NativeNumericalGeometryV3::derive_v3(&source,&f.record,&f.layout,&court,PalwTirDemandRulesV1::H7,small).is_err());
-            assert!(matches!(NativeNumericalGeometryV3::derive_native_v3(&source,&f.record,&f.layout,&court,PalwTirDemandRulesV1::H7,small),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+        assert!(native_output_requests_v3(NumericalNativeCountsV3 { paths: u64::MAX, ..Default::default() }, 2).is_err());
+        assert!(native_output_requests_v3(NumericalNativeCountsV3 { path_bytes: u64::MAX, ..Default::default() }, 2).is_err());
+        assert!(counts.roots > 0 && counts.paths > 0 && counts.edges > 0 && counts.path_bytes > 0);
+        for small in [
+            NumericalGeometryBudgetV3 { max_original_leaves: 0, ..B },
+            NumericalGeometryBudgetV3 { max_roots: 0, ..B },
+            NumericalGeometryBudgetV3 { max_paths: 0, ..B },
+            NumericalGeometryBudgetV3 { max_edges: 0, ..B },
+            NumericalGeometryBudgetV3 { max_path_bytes: 0, ..B },
+        ] {
+            assert!(
+                NativeNumericalGeometryV3::derive_v3(&source, &f.record, &f.layout, &court, PalwTirDemandRulesV1::H7, small).is_err()
+            );
+            assert!(matches!(
+                NativeNumericalGeometryV3::derive_native_v3(&source, &f.record, &f.layout, &court, PalwTirDemandRulesV1::H7, small),
+                Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+            ));
         }
-        assert!(matches!(NativeNumericalGeometryV3::derive_native_v3(&source,&f.record,&f.layout,&f.rules.court,
-            PalwTirDemandRulesV1::H7,NumericalGeometryBudgetV3 {max_paths:0,..B}),
-            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+        assert!(matches!(
+            NativeNumericalGeometryV3::derive_native_v3(
+                &source,
+                &f.record,
+                &f.layout,
+                &f.rules.court,
+                PalwTirDemandRulesV1::H7,
+                NumericalGeometryBudgetV3 { max_paths: 0, ..B }
+            ),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+        ));
     }
     #[test]
     fn all_native_paths_match_independent_aggregated_topology_for_every_arity() {

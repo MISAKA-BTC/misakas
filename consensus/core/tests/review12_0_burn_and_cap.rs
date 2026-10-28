@@ -2,6 +2,7 @@
 //! burn ignored live slashable locks) was fixed by d0542304 and is kept as a regression.
 //! Helpers copied from `dos_l2_registration.rs` (t12 card, t12 audit extras, floor variants).
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_economic_payout_v1::PalwEconomicPayoutFoldV1;

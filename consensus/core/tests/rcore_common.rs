@@ -8,7 +8,7 @@
 //! committed root (`into_state`: the ledger re-derived from the claims' commitments, R-core+'s load
 //! invariants, DL-1's deadlines exactly).
 #![allow(dead_code, unused_imports)]
-
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 pub use room::*;

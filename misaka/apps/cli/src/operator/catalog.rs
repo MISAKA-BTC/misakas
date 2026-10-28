@@ -22,7 +22,8 @@ const DOCS_COST: &str = "docs/history/networks/testnet-11/testnet11-join-mining.
 const DOCS_STOP: &str = "docs/history/networks/testnet-11/testnet11-join-mining.md#6b-do-not-stop-your-node-with-claims-in-flight";
 const DOCS_RUN: &str = "docs/history/networks/testnet-11/testnet11-node-operator.md#3-running-the-node";
 const DOCS_QUARANTINE: &str = "docs/history/networks/testnet-11/testnet11-node-operator.md#7-if-your-node-says-quarantined";
-const DOCS_FP_ARTIFACT: &str = "docs/history/networks/testnet-11/testnet11-free-prompt-mining.md#2-the-artifact-bound-and-the-same-file-everywhere";
+const DOCS_FP_ARTIFACT: &str =
+    "docs/history/networks/testnet-11/testnet11-free-prompt-mining.md#2-the-artifact-bound-and-the-same-file-everywhere";
 const DOCS_FP_RUN: &str = "docs/history/networks/testnet-11/testnet11-free-prompt-mining.md#4-run-it-node-gateway-watcher";
 
 /// Nothing on this host mines: no `mining.toml`, no running `kaspad`, no bond named.
@@ -79,7 +80,9 @@ pub(crate) fn not_synced(daa: u64) -> Finding {
         .current(format!("virtual DAA {daa}, not synced"))
         .required("synced")
         .fix("wait: the node mines by itself once it is synced (misaka mining status shows when)")
-        .docs("docs/history/networks/testnet-11/testnet11-node-operator.md#5-how-long-the-first-sync-takes--measured-on-the-algo-4-lane")
+        .docs(
+            "docs/history/networks/testnet-11/testnet11-node-operator.md#5-how-long-the-first-sync-takes--measured-on-the-algo-4-lane",
+        )
 }
 
 pub(crate) fn no_peers() -> Finding {

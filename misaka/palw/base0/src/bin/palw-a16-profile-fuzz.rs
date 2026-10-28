@@ -1,6 +1,7 @@
 //! **ADR-0067 Decision 5's saturation runner.** `--seed N --iters N`; the tally prints, and a
 //! non-zero finding column exits non-zero — a CI or an operator can gate on the exit code. The
 //! seed is the repro: the same seed replays the same corpus bit for bit.
+#![allow(warnings)]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let flag = |name: &str, default: u64| -> u64 {

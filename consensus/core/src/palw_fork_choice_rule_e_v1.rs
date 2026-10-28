@@ -277,7 +277,12 @@ pub struct PalwRuleEBudgetEngineV1<'a> {
 }
 
 impl PalwRuleEBondBudgetV1 for PalwRuleEBudgetEngineV1<'_> {
-    fn allocation(&self, state: &PalwChainStateV2, claim_id: &Hash64, claim: &PalwClaimStateV2) -> Option<PalwRuleEBudgetAllocationV1> {
+    fn allocation(
+        &self,
+        state: &PalwChainStateV2,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+    ) -> Option<PalwRuleEBudgetAllocationV1> {
         use crate::palw_bond_budget_v1::PalwBudgetOriginV1 as O;
         let mirror = self.mirror?;
         let row = state
@@ -372,7 +377,16 @@ impl PalwChainStateV2 {
         claim: &PalwClaimStateV2,
     ) -> Result<PalwRuleEClaimRecordV1, PalwRuleEErrorV1> {
         let irreversible = self.palw_rule_e_irreversible_v1(params)?;
-        self.palw_rule_e_record_in_v1(params, uncertified_weightless, canonical_work_daa, shares, budget, &irreversible, claim_id, claim)
+        self.palw_rule_e_record_in_v1(
+            params,
+            uncertified_weightless,
+            canonical_work_daa,
+            shares,
+            budget,
+            &irreversible,
+            claim_id,
+            claim,
+        )
     }
 
     /// The state's irreversible claim-local anchors (audit D-1; empty below `palw_claim_local_settlement_v1`), read once per side.
@@ -1288,11 +1302,16 @@ mod tests {
             side.safe_frontier_blue_score
         );
         let below = [rec(1, 10, 1, PalwRuleEClaimStatusV1::Live, 0, 5), rec(2, 20, 2, PalwRuleEClaimStatusV1::Final, 100, 0)];
-        assert_eq!(palw_rule_e_side_from_records_v1(&below, |_| true).unwrap().safe_frontier_blue_score, 0, "below the fence: unchanged");
+        assert_eq!(
+            palw_rule_e_side_from_records_v1(&below, |_| true).unwrap().safe_frontier_blue_score,
+            0,
+            "below the fence: unchanged"
+        );
         // An irreversible anchor that is not a counted frontier (an uncertified Final past Gate C) still stands as nothing.
         let mut uncertified = b;
         uncertified.certification = PalwRuleECertificationV1::Uncertified;
-        let side = palw_rule_e_side_from_records_v1(&[rec(1, 10, 1, PalwRuleEClaimStatusV1::Live, 0, 5), uncertified], |_| true).unwrap();
+        let side =
+            palw_rule_e_side_from_records_v1(&[rec(1, 10, 1, PalwRuleEClaimStatusV1::Live, 0, 5), uncertified], |_| true).unwrap();
         assert_eq!(side.safe_frontier_blue_score, 0);
         // Borsh skips the flag: every record (and so every leaf v2/v3 window and opening) encodes as before.
         assert_eq!(borsh::to_vec(&b).unwrap(), borsh::to_vec(&rec(2, 20, 2, PalwRuleEClaimStatusV1::Final, 100, 0)).unwrap());

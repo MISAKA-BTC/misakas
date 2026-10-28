@@ -10,6 +10,7 @@
 //! build before the field existed. The pinned numbers are the ones `palw_clock_floor_is_t12_only.rs`
 //! pins (v22), unchanged by this fence.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PalwActivationPoolParamsV1, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_shipped_params,

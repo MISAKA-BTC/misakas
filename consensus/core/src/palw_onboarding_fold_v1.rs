@@ -491,7 +491,11 @@ fn class_key(class: &Hash64) -> Vec<u8> {
     borsh::to_vec(class).expect("a digest serializes")
 }
 
-fn write_attempt(builder: &mut TransitionBuilder<'_>, class: &Hash64, attempt: &ConformanceAttemptRowV1) -> Result<(), PalwStateV2Error> {
+fn write_attempt(
+    builder: &mut TransitionBuilder<'_>,
+    class: &Hash64,
+    attempt: &ConformanceAttemptRowV1,
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_ONBOARDING_TABLE_CONFORMANCE_ATTEMPTS_V1,
         class_key(class),

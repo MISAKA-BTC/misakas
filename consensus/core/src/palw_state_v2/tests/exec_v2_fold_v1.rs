@@ -7,6 +7,7 @@
 //! section 9): the tests that need a verified slice use the `#[cfg(test)]` writer `mark_slice_verified_for_tests`, which is
 //! reachable by no node.
 
+#![allow(warnings)]
 use super::*;
 use crate::palw_exec_v2::*;
 use crate::palw_work_slice_v2::*;
@@ -2284,10 +2285,9 @@ mod amendment_1 {
         let extras = claim_local_extras(xx_declare());
         let (after, delta) = step_with(&before, &p, 40, 110, &[open_object(prefix.decl(claim))], &extras).unwrap();
         let f = claim_local_frame(&after, 40);
-        assert!(f
-            .native_changes
-            .iter()
-            .any(|c| c.owner == PalwClaimLocalRowOwnerV1::ExecV2 && c.table == PALW_EXEC_V2_TABLE_ROOTS_V1));
+        assert!(
+            f.native_changes.iter().any(|c| c.owner == PalwClaimLocalRowOwnerV1::ExecV2 && c.table == PALW_EXEC_V2_TABLE_ROOTS_V1)
+        );
         let origins = f.exec_dependency_origins_v1().unwrap();
         assert!(origins.unbound_roots.is_empty());
         assert_eq!(
@@ -2339,9 +2339,15 @@ mod amendment_1 {
         let (no_slice, refused_delta) = step_with(&before, &p, 51, 120, &[], &claim_local_extras(xx_slices(vec![refused]))).unwrap();
         assert_eq!(no_slice.exec_v2_state_v1(), before.exec_v2_state_v1());
         assert!(refused_delta.entries.iter().any(|entry| matches!(entry, PalwDeltaEntryV2::ExecV2Verdict {code, ..} if *code != 0)));
-        assert!(refused_delta.entries.iter().all(|entry| !matches!(entry, PalwDeltaEntryV2::ExecV2Row {..})));
-        assert!(!no_slice.kernel_route.as_ref().unwrap().aux.contains_key(&(
-            PALW_CLAIM_LOCAL_TABLE_V1, palw_claim_liability_frame_key_v1(h64(51)).to_vec())));
+        assert!(refused_delta.entries.iter().all(|entry| !matches!(entry, PalwDeltaEntryV2::ExecV2Row { .. })));
+        assert!(
+            !no_slice
+                .kernel_route
+                .as_ref()
+                .unwrap()
+                .aux
+                .contains_key(&(PALW_CLAIM_LOCAL_TABLE_V1, palw_claim_liability_frame_key_v1(h64(51)).to_vec()))
+        );
     }
 
     #[test]
@@ -4881,18 +4887,13 @@ mod amendment_1 {
         use crate::palw_state_v2::palw_claim_local_rewards_v1::{RewardReadinessV1, exec_dependency_readiness_v1};
         use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
 
-        let (p, mut s, root_id, slices, mut prefix) =
-            session_with(1_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        let (p, mut s, root_id, slices, mut prefix) = session_with(1_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
         let route = s.kernel_route.as_mut().expect("native route");
         let expiry = s.exec_v2.roots.get(&root_id).unwrap().expiry_daa;
-        let liability_until = crate::palw_exec_v2_verify::palw_exec_v2_retention_terms_v1(
-            expiry,
-            0,
-            p.window_court(),
-            &route.header.policy,
-        )
-        .unwrap()
-        .liability_until;
+        let liability_until =
+            crate::palw_exec_v2_verify::palw_exec_v2_retention_terms_v1(expiry, 0, p.window_court(), &route.header.policy)
+                .unwrap()
+                .liability_until;
         let close_row = |row: &mut ClaimRowV1| {
             row.life.state = ClaimStateV1::Final { final_daa: 105 };
             row.life.retention_met = true;
@@ -4912,10 +4913,7 @@ mod amendment_1 {
         let now = liability_until + 1;
 
         let class_key = prefix.row.class_binding_id.to_vec();
-        s.kernel_route.as_mut().unwrap().rows.insert(
-            (misaka_palw_kernel::rows::TABLE_OPV_CLASSES_V1, class_key.clone()),
-            Vec::new(),
-        );
+        s.kernel_route.as_mut().unwrap().rows.insert((misaka_palw_kernel::rows::TABLE_OPV_CLASSES_V1, class_key.clone()), Vec::new());
         assert_eq!(
             exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
             RewardReadinessV1::Hold(liability_until),
@@ -4923,9 +4921,8 @@ mod amendment_1 {
         );
 
         let route = s.kernel_route.as_mut().unwrap();
-        for (i, (claim, row)) in std::iter::once((prefix.claim_id, &prefix.row))
-            .chain(slices.iter().map(|slice| (slice.claim_id, &slice.row)))
-            .enumerate()
+        for (i, (claim, row)) in
+            std::iter::once((prefix.claim_id, &prefix.row)).chain(slices.iter().map(|slice| (slice.claim_id, &slice.row))).enumerate()
         {
             let base_claim = claim.as_bytes().to_owned();
             let lifetime = misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2 {
@@ -4974,14 +4971,8 @@ mod amendment_1 {
                 completed_rounds: 1,
                 transcript_root: [0xA7 + i as u8; 64],
             };
-            route.aux.insert(
-                (crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, index_key),
-                borsh::to_vec(&index).unwrap(),
-            );
-            route.aux.insert(
-                (crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, target.to_vec()),
-                authority,
-            );
+            route.aux.insert((crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, index_key), borsh::to_vec(&index).unwrap());
+            route.aux.insert((crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, target.to_vec()), authority);
             route.aux.insert(
                 (crate::palw_claim_challenge_v2::PAID_CLAIM_FINALS_V2, enrollment_id.to_vec()),
                 borsh::to_vec(&final_row).unwrap(),

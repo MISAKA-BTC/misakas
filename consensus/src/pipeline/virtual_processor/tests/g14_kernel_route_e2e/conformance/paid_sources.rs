@@ -172,7 +172,7 @@ impl Cw {
     /// served, verified against the ledger that admits the claim (`PalwKernelMaterialBundleV1::verify`), so the scope is the body's
     /// commitment. Past `palw_monetary_material_v1` no kernel claim commits without it. `reveal` is the exact commit object.
     pub(super) async fn kernel_covenant(&mut self, producer: usize, base: Digest, trace: &TraceV1, reveal: &K) -> Hash64 {
-            let manifest = {
+        let manifest = {
             let route = self.net.api().unwrap();
             let mut admitted: misaka_palw_kernel::ledger::KernelLedgerV1 = (*route.ledger().expect("the route's ledger")).clone();
             admitted.daa = self.net.daa() + 1;
@@ -215,12 +215,9 @@ impl Cw {
                 positions,
             };
             let row = &admitted.claims[&base];
-            let shape = |p: u32| {
-                row.body.position(0, p).map(|(v, i)| (v.iter().map(|o| o.len()).collect::<Vec<_>>(), i.len()))
-            };
-            let served = |p: usize| {
-                (trace.values[p].iter().map(|o| o.len()).collect::<Vec<_>>(), trace.inputs.get(p).map_or(0, |i| i.len()))
-            };
+            let shape = |p: u32| row.body.position(0, p).map(|(v, i)| (v.iter().map(|o| o.len()).collect::<Vec<_>>(), i.len()));
+            let served =
+                |p: usize| (trace.values[p].iter().map(|o| o.len()).collect::<Vec<_>>(), trace.inputs.get(p).map_or(0, |i| i.len()));
             let scope = bundle.verify(&admitted, u64::MAX).unwrap_or_else(|e| {
                 panic!(
                     "the complete served material verifies: {e:?}; stages {:?}; committed p0 {:?} served p0 {:?}; positions {} vs trace {}",
@@ -231,7 +228,10 @@ impl Cw {
                     trace.values.len()
                 )
             });
-            kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1 { root: Hash64::from_bytes(base), scopes: vec![scope] }
+            kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1 {
+                root: Hash64::from_bytes(base),
+                scopes: vec![scope],
+            }
         };
         // The signed byte cap covers the bundle plus the manifest and its provider framing (`PalwMaterialManifestV1::validate`).
         let bytes = manifest.scopes[0].bytes + 4_096;
@@ -250,12 +250,20 @@ impl Cw {
         let target = authority.source_target;
         let fee = fee_policy.minimum_fee_for(&target).expect("the frozen source target's fee floor");
         let k = authority.class.source_policy.work_count_k;
-        let fund = misaka_palw_sdk::claim_paid_v2::paid_claim_funding_object_v2(&route, enrollment, self.net.kid(sponsor), fee, k, &fee_policy)
-            .unwrap_or_else(|e| panic!("the payer funds the future sources: {e:?}"));
+        let fund = misaka_palw_sdk::claim_paid_v2::paid_claim_funding_object_v2(
+            &route,
+            enrollment,
+            self.net.kid(sponsor),
+            fee,
+            k,
+            &fee_policy,
+        )
+        .unwrap_or_else(|e| panic!("the payer funds the future sources: {e:?}"));
         let o = self.net.route(sponsor, &fund);
         let rehearsal = self.net.chain.ctx.consensus.palw_object_rehearsal_v1(&o);
         self.net.send(vec![(sponsor, o)]).await;
-        let terms = BeaconSourceFeeTermsV1 { source: target.terms, sponsor: self.net.kid(sponsor), fee_per_source: fee, max_sources: k };
+        let terms =
+            BeaconSourceFeeTermsV1 { source: target.terms, sponsor: self.net.kid(sponsor), fee_per_source: fee, max_sources: k };
         assert!(
             self.net.ledger().beacon_source_fees.contains_key(&terms.source.context),
             "the future source fee is funded (rehearsal: {rehearsal:?})"
@@ -274,7 +282,8 @@ impl Cw {
             .take(k as usize)
             .collect();
         assert_eq!(sealers.len(), k as usize, "enough producers with no live paid target of their own");
-        let payers: Vec<usize> = [REGISTRANT, OUTSIDER].into_iter().chain(PRODUCERS).filter(|c| !sealers.contains(c)).take(k as usize).collect();
+        let payers: Vec<usize> =
+            [REGISTRANT, OUTSIDER].into_iter().chain(PRODUCERS).filter(|c| !sealers.contains(c)).take(k as usize).collect();
         let mut jobs = Vec::new();
         for payer in &payers {
             self.jobs += 1;
@@ -322,10 +331,8 @@ impl Cw {
         let rehearsals: Vec<_> = opt_ins.iter().map(|(_, o)| self.net.chain.ctx.consensus.palw_object_rehearsal_v1(o)).collect();
         let again = opt_ins.clone();
         self.net.send(opt_ins).await;
-        let rehearsals: Vec<_> = rehearsals
-            .into_iter()
-            .zip(again.iter().map(|(_, o)| self.net.chain.ctx.consensus.palw_object_rehearsal_v1(o)))
-            .collect();
+        let rehearsals: Vec<_> =
+            rehearsals.into_iter().zip(again.iter().map(|(_, o)| self.net.chain.ctx.consensus.palw_object_rehearsal_v1(o))).collect();
         for p in &sealers {
             assert!(
                 self.net.ledger().beacon_source_fee_promises.contains_key(&(terms.source.context, self.net.kid(*p))),
@@ -392,8 +399,13 @@ impl Cw {
             let rehearsal = self.net.chain.ctx.consensus.palw_object_rehearsal_v1(&o);
             self.net.send(vec![(consumer, o)]).await;
             assert!(
-                self.net.api().unwrap().aux.keys().any(|(t, k)| *t == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2
-                    && *k == borsh::to_vec(&paid_job).unwrap()),
+                self.net
+                    .api()
+                    .unwrap()
+                    .aux
+                    .keys()
+                    .any(|(t, k)| *t == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2
+                        && *k == borsh::to_vec(&paid_job).unwrap()),
                 "the payer's job enrollment landed (rehearsal: {rehearsal:?})"
             );
             // The producer's run, its seal, its covenant, then its paid commit (the fold applies the salted reveal inside).
@@ -415,7 +427,8 @@ impl Cw {
             self.net.send(vec![(producer, o)]).await;
             // RFC08 F3: the covenant carries the claim body's complete material — every committed position, as served — verified
             // against the ledger that admits the claim (`PalwKernelMaterialBundleV1::verify`), so its scope is the body's commitment.
-            let consent = self.kernel_covenant(producer, base, &produced.trace, &K::CommitClaimSalted { commit: commit.clone(), salt }).await;
+            let consent =
+                self.kernel_covenant(producer, base, &produced.trace, &K::CommitClaimSalted { commit: commit.clone(), salt }).await;
             let route = self.net.api().unwrap();
             let replays: Vec<String> = (0..2u64)
                 .map(|d| {
@@ -463,7 +476,11 @@ impl Cw {
             let o = self.net.route(producer, &paid);
             let rehearsal = self.net.chain.ctx.consensus.palw_object_rehearsal_v1(&o);
             self.net.send(vec![(producer, o)]).await;
-            assert!(self.net.ledger().claims.contains_key(&base), "the paid commit admitted the base claim at DAA {} (rehearsal: {rehearsal:?}; ledger replays {replays:?})", self.net.daa());
+            assert!(
+                self.net.ledger().claims.contains_key(&base),
+                "the paid commit admitted the base claim at DAA {} (rehearsal: {rehearsal:?}; ledger replays {replays:?})",
+                self.net.daa()
+            );
             // ADR-0185: once an approved paid Final exists the bootstrap draw is closed, and a later target locks on the
             // seal-reveal seed — its payer funds the future source fee, other producers seal and opt in after its commitment,
             // reveal after the seal window, and the lock follows the reveal window.
@@ -491,8 +508,11 @@ impl Cw {
                 .aux_row(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(enrollment).unwrap())
                 .unwrap_or_else(|| panic!("the bootstrap lock of {:02x}{:02x} is taken", base[0], base[1]));
             assert!(
-                [misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2(), misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2()]
-                    .contains(&lock.anchor),
+                [
+                    misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2(),
+                    misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2()
+                ]
+                .contains(&lock.anchor),
                 "a bootstrap or seal-reveal draw"
             );
             let authority: PalwPaidClaimAuthorityV2 =
@@ -529,8 +549,18 @@ impl Cw {
                 lock.seats.len(),
                 (
                     self.net.ledger().paid_claim_consumers_v2.get(base).cloned(),
-                    self.net.api().unwrap().aux.keys().filter(|(t, _)| *t == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_RECEIPTS_V2).count(),
-                    self.net.api().unwrap().aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(enrollment).unwrap()).map(|l| l.source_valid)
+                    self.net
+                        .api()
+                        .unwrap()
+                        .aux
+                        .keys()
+                        .filter(|(t, _)| *t == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_RECEIPTS_V2)
+                        .count(),
+                    self.net
+                        .api()
+                        .unwrap()
+                        .aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(enrollment).unwrap())
+                        .map(|l| l.source_valid)
                 )
             );
         }

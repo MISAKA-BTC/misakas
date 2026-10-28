@@ -15,6 +15,7 @@
 //! 2026-10-01, rcore/int-10 (da6ac8beea6d): small class 120 canonical leaves, A16 class 2,199,114 — both ADMITTED at DAA 3,599
 //! and at 3,600.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;

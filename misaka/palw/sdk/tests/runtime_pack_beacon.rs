@@ -5,6 +5,7 @@
 //! artifact leaves; the evidence is produced, then judged by a fresh derivation. Every test below is an attack that must fail closed
 //! or a property that must hold byte for byte. Nothing here is an approved policy; the numbers are the test policy's.
 
+#![allow(warnings)]
 use misaka_palw_challenge::beacon::{FinalPathV1, WorkBeaconV1, WorkSourceKindV1};
 use misaka_palw_challenge::conformance::{BeaconConformanceEvidenceV1, ConformanceCommitmentV1, ConformanceStatusV1};
 use misaka_palw_challenge::hash::{Digest, named_id};

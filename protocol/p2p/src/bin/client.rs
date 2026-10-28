@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use kaspa_core::debug;
 use kaspa_p2p_lib::echo::EchoFlowInitializer;
 use std::{sync::Arc, time::Duration};

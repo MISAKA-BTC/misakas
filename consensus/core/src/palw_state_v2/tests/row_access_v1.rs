@@ -1,6 +1,7 @@
 //! RFC-0036 (Proposed, dormant): the row access layer's full-state adapter is behaviour-identical to the in-memory state on the
 //! existing fixtures — every row, every probe, every range — and the proven (pruned) backend built from it answers the same.
 //! The conformance check itself is `crate::palw_state_row_access_v1::tests::palw_row_access_conformance_v1`.
+#![allow(warnings)]
 use super::*;
 use crate::palw_state_row_access_v1::tests::palw_row_access_conformance_v1;
 

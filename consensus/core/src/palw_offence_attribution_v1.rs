@@ -52,7 +52,7 @@
 //! only for a verdict every committed leaf of which lies in the segments its mask covers, and that
 //! read nothing a segment replay does not recompute (a KV checkpoint, a generated token).
 
-use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1, palw_panel_contradiction_convicts_execution_v1};
+use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1};
 use crate::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3};
 use crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwVoidReasonV2};
@@ -2886,6 +2886,7 @@ pub fn palw_check_executor_refuted_blame_v2(
 pub(crate) mod tests {
     use super::*;
     use crate::palw_offence_v1::PalwOffenceVerifyError as E;
+    use crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_v1;
     use crate::palw_state_v2::{PalwClaimStateV2, PalwPanelSeatV2, PalwPanelStateV2};
     use crate::palw_verification_v2::palw_segment_leaf_range_v2;
     use crate::tx::TransactionId;

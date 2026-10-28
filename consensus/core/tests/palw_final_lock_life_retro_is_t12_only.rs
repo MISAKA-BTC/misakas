@@ -21,6 +21,7 @@
 //!
 //! The rule itself is exercised on testnet-12's fold by `rcore_f2_lock_redate`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCE_V2_DAA, Params, SIMNET_PARAMS,
     TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1,

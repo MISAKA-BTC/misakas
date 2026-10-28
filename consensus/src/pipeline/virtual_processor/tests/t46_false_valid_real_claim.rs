@@ -55,6 +55,7 @@
 //! signed 0x4b carrier against one standard transaction (`H::fits_one_carrier`). (F-4) A partial mask
 //! must be the assigned one while a full mask is a full attestation (T46q), and every session on the
 //! claim — a non-held data-availability one included — defers a conviction (T46n).
+#![allow(warnings)]
 use super::TestContext;
 use crate::consensus::test_consensus::TestConsensus;
 use crate::pipeline::virtual_processor::VirtualStateProcessor;

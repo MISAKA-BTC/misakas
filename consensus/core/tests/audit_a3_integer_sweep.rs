@@ -5,6 +5,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test audit_a3_integer_sweep -- --nocapture
 
+#![allow(warnings)]
 use std::time::Instant;
 
 use kaspa_consensus_core::Hash64;

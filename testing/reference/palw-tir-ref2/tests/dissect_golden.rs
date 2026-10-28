@@ -3,6 +3,7 @@
 //! at arity 2 and bottom, from the run the file's `job` describes; and the court's checks along the
 //! way (the root claim is admitted, every round folds, the bottom finds no fault).
 
+#![allow(warnings)]
 mod common;
 
 use common::demsrc::Model;

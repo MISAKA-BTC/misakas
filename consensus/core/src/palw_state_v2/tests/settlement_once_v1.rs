@@ -2,6 +2,7 @@
 //! kernel route aux 140). SOURCE ONLY — written, never compiled or executed in this lane. Each control settles one obligation
 //! through two DIFFERENT consumers (or one consumer twice) and requires exactly one payment, one marker and an unchanged state for
 //! the second attempt; and below the fence requires the historical bytes.
+#![allow(warnings)]
 use super::super::palw_settlement_once_fold_v1::{
     PalwSettleOnceV1, kernel_check_fee_at_v1, kernel_producer_reward_at_v1, palw_settled_once_v1,
 };
@@ -102,8 +103,14 @@ fn every_leg_family_settles_once_across_its_consumers() {
     let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
     let held = PalwSettlementDebitV1::Held { amount: 5 };
     let cases = [
-        (PalwSettlementObligationV1::of(PalwSettlementLegV1::GateDeferredRelease, [1; 64]), PalwSettlementConsumerV1::VerificationGate),
-        (PalwSettlementObligationV1::of(PalwSettlementLegV1::CertificationRelease, [1; 64]), PalwSettlementConsumerV1::SecurityCertification),
+        (
+            PalwSettlementObligationV1::of(PalwSettlementLegV1::GateDeferredRelease, [1; 64]),
+            PalwSettlementConsumerV1::VerificationGate,
+        ),
+        (
+            PalwSettlementObligationV1::of(PalwSettlementLegV1::CertificationRelease, [1; 64]),
+            PalwSettlementConsumerV1::SecurityCertification,
+        ),
         (PalwSettlementObligationV1::of(PalwSettlementLegV1::VestingRelease, [1; 64]), PalwSettlementConsumerV1::VestingMaturity),
         (
             PalwSettlementObligationV1::with_party(PalwSettlementLegV1::ExecLegPayment, [1; 64], [2; 64], 0),
@@ -125,7 +132,11 @@ fn every_leg_family_settles_once_across_its_consumers() {
     assert!(b.settle_once_v1(13, fund_one, PalwSettlementConsumerV1::ExecLegMaturity, 5, held).unwrap().pays());
     // The same subject under ANOTHER leg is another obligation (an issuance Final and an escrow reward of one id both pay once).
     let issuance = PalwSettlementObligationV1::of(PalwSettlementLegV1::IssuanceFinal, [1; 64]);
-    assert!(b.settle_once_v1(14, issuance, PalwSettlementConsumerV1::NativeFinal, 5, PalwSettlementDebitV1::Issuance { carve: 5 }).unwrap().pays());
+    assert!(
+        b.settle_once_v1(14, issuance, PalwSettlementConsumerV1::NativeFinal, 5, PalwSettlementDebitV1::Issuance { carve: 5 })
+            .unwrap()
+            .pays()
+    );
     assert_eq!(markers(&b.state), cases.len() + 2);
 }
 
@@ -423,8 +434,13 @@ fn an_improvement_credit_is_credited_once_per_source_row_across_its_paths() {
     b.credit_improvement_earnings_v1(hold, 61, &teacher, 30).unwrap();
     assert_eq!(owed(&b), 30);
     // Another artifact is another source.
-    b.credit_improvement_earnings_v1(C::HoldRefund { line: h64(0x10), kind: PALW_IMPROVE_HOLD_ARTIFACT_V1, id: [8; 64] }, 62, &teacher, 30)
-        .unwrap();
+    b.credit_improvement_earnings_v1(
+        C::HoldRefund { line: h64(0x10), kind: PALW_IMPROVE_HOLD_ARTIFACT_V1, id: [8; 64] },
+        62,
+        &teacher,
+        30,
+    )
+    .unwrap();
     assert_eq!(owed(&b), 60);
     // A grant tranche is keyed by its vested target: the same target twice credits once, the next target is new.
     let tranche = C::GrantTranche { line: h64(0x10), epoch: 1, index: 0, target: 10 };
@@ -454,12 +470,14 @@ fn reporter_awards_and_their_tranches_settle_once_and_the_predicate_never_binds_
     let held = PalwSettlementDebitV1::Held { amount: 40 };
     // The award of one offence: named once, whichever path (the native binding or the legacy reward row) reaches it.
     let award = PalwSettlementObligationV1::of(PalwSettlementLegV1::ReporterAward, [0x0F; 64]);
-    assert_eq!(b.settle_once_liable_v1(10, award, PalwSettlementConsumerV1::ReporterReveal, 40, held, reporter).unwrap(), PalwSettleOnceV1::First);
+    assert_eq!(
+        b.settle_once_liable_v1(10, award, PalwSettlementConsumerV1::ReporterReveal, 40, held, reporter).unwrap(),
+        PalwSettleOnceV1::First
+    );
     assert!(!b.settle_once_liable_v1(11, award, PalwSettlementConsumerV1::ReporterReveal, 40, held, reporter).unwrap().pays());
     // Its tranches are keyed by progress: the same progress twice pays once; the next progress is the next tranche.
-    let tranche = |progress| {
-        PalwSettlementObligationV1::with_party(PalwSettlementLegV1::ReporterAwardTranche, [0x0F; 64], [0; 64], progress)
-    };
+    let tranche =
+        |progress| PalwSettlementObligationV1::with_party(PalwSettlementLegV1::ReporterAwardTranche, [0x0F; 64], [0; 64], progress);
     let part = PalwSettlementDebitV1::Held { amount: 20 };
     assert!(b.settle_once_liable_v1(12, tranche(0), PalwSettlementConsumerV1::BondBudgetTick, 20, part, reporter).unwrap().pays());
     assert!(!b.settle_once_liable_v1(13, tranche(0), PalwSettlementConsumerV1::BondBudgetTick, 20, part, reporter).unwrap().pays());
@@ -485,7 +503,10 @@ fn a_source_fee_promise_is_closed_once_and_refused_past_the_fence_for_want_of_so
     // Below the fence it is dormant (the batch's own `fee_paid` set is the historical guard).
     let q = params();
     let mut d = TransitionBuilder::new(&parent, &q, false, false, false, false, &extras);
-    assert_eq!(d.settle_once_liable_v1(10, promise, PalwSettlementConsumerV1::KernelTick, 6, prepaid, unsourced).unwrap(), PalwSettleOnceV1::Dormant);
+    assert_eq!(
+        d.settle_once_liable_v1(10, promise, PalwSettlementConsumerV1::KernelTick, 6, prepaid, unsourced).unwrap(),
+        PalwSettleOnceV1::Dormant
+    );
 }
 
 /// **audit A-4: a source fee payout the once-only predicate refuses goes back to the sponsor.** The sponsor prepaid 50 into the
@@ -608,7 +629,7 @@ fn held_fee_repeat_probe_reserves_before_lookup_and_retries_without_mutation() {
 #[test]
 fn held_fee_open_probe_reserves_both_keys_before_semantic_result() {
     use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
-    use crate::palw_paid_claim_trap_v1::{PalwHeldCheckFeeRowV1, PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1};
+    use crate::palw_paid_claim_trap_v1::{PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1, PalwHeldCheckFeeRowV1};
     let p = armed();
     let extras = PalwTransitionExtrasV1::default();
     let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, [3; 64], [4; 64], 0);
@@ -616,11 +637,19 @@ fn held_fee_open_probe_reserves_both_keys_before_semantic_result() {
         let mut parent = with_route(PalwChainStateV2::genesis());
         if held {
             let mut seed = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-            super::super::palw_paid_claim_trap_fold_v1::write_held_check_fee_v1(&mut seed, &PalwHeldCheckFeeRowV1 {
-                version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
-                claim: obligation.subject, verifier: obligation.party, slot: obligation.ordinal,
-                poster: [5; 64], fee: 10, release_after_daa: 100,
-            }).unwrap();
+            super::super::palw_paid_claim_trap_fold_v1::write_held_check_fee_v1(
+                &mut seed,
+                &PalwHeldCheckFeeRowV1 {
+                    version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+                    claim: obligation.subject,
+                    verifier: obligation.party,
+                    slot: obligation.ordinal,
+                    poster: [5; 64],
+                    fee: 10,
+                    release_after_daa: 100,
+                },
+            )
+            .unwrap();
             parent = seed.state;
         }
         for limit in [0, 63, 64, 200, 201] {

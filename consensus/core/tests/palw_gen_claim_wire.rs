@@ -10,6 +10,7 @@
 //!   lane's own door refuses it by name everywhere else), the header-context door only from the fence's
 //!   height, and the acceptance walk turns exactly the admissible payloads into `GenTensorCommitted`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;

@@ -15,6 +15,7 @@
 //! The armed cases below run over testnet-12 as the DAA-3,600 release ships it (`palw_t12_release_v5_params`: the int-11 list
 //! dormant, `palw_tir_v1` at DAA 2,000, the generative fence's prerequisite) at a height no fence uses.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_gen_fence_at_v1};
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,

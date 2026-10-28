@@ -19,6 +19,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test g14_court_capacity -j 4 -- --test-threads=2
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;
@@ -32,7 +33,9 @@ use kaspa_consensus_core::palw_shard_court_v1::{PALW_SHARD_COURT_VERSION_V1, Pal
 use kaspa_consensus_core::palw_state_v2::{
     PalwStateV2Error, PalwVoidReasonV2, palw_accuser_exposure_v1, palw_max_concurrent_court_sessions_v1,
 };
-use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepTableV1, canonical_step_leaf_index, step_leaf_count_capped_v1};
+use kaspa_consensus_core::palw_step::{
+    PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepTableV1, canonical_step_leaf_index, step_leaf_count_capped_v1,
+};
 use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, PalwStepOpeningV1, PalwStepTileLeafV1};
 use kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1;
 
@@ -81,7 +84,12 @@ fn record(fence: PalwG14GatedFenceV1, genesis: Hash64, at: u64) -> PalwG14Arming
 }
 
 /// A test record; with `measured`, its measured-values evidence is that measurement record's digest.
-fn record_with(fence: PalwG14GatedFenceV1, genesis: Hash64, at: u64, measured: Option<&PalwCourtMeasurementV1>) -> PalwG14ArmingRecordV1 {
+fn record_with(
+    fence: PalwG14GatedFenceV1,
+    genesis: Hash64,
+    at: u64,
+    measured: Option<&PalwCourtMeasurementV1>,
+) -> PalwG14ArmingRecordV1 {
     let mut evidence: Vec<[u8; 32]> = (0..fence.requirements().len()).map(|i| [0x70 + i as u8; 32]).collect();
     if let Some(m) = measured {
         evidence[PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1] = m.digest();
@@ -106,7 +114,12 @@ fn arm(p: Params, at: u64, measured: Option<PalwCourtMeasurementV1>) -> (Params,
 
 /// [`arm`] with LG14-A at `filer_at` and the court-capacity fence at `court_at` (≥ `filer_at`): claims accepted between the two are
 /// not court-demanding (round 2), so every court row on them is a SPARE row — the round-1 scheduler's own pool.
-fn arm_split(mut p: Params, filer_at: u64, court_at: u64, measured: Option<PalwCourtMeasurementV1>) -> (Params, Vec<PalwG14ArmingRecordV1>) {
+fn arm_split(
+    mut p: Params,
+    filer_at: u64,
+    court_at: u64,
+    measured: Option<PalwCourtMeasurementV1>,
+) -> (Params, Vec<PalwG14ArmingRecordV1>) {
     p.palw_legacy_public_filer_v1 = Some(ForkActivation::new(filer_at));
     p.sync_palw_legacy_public_filer_v1();
     let mut records = vec![record(PalwG14GatedFenceV1::LegacyPublicFilerV1, p.genesis.hash, filer_at)];
@@ -201,7 +214,14 @@ struct Held {
 }
 
 impl Held {
-    fn try_fold(&self, daa: u64, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, rule: Rule) -> Result<(PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2), PalwStateV2Error> {
+    fn try_fold(
+        &self,
+        daa: u64,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+        key: Hash64,
+        rule: Rule,
+    ) -> Result<(PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2), PalwStateV2Error> {
         let f = flags(&self.p, daa);
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
             &self.s,
@@ -226,7 +246,13 @@ impl Held {
 
     /// One block: folded; its delta re-applies to the child and reverts to the parent (a reorg across it), and its carriage reloads
     /// under its committed root (a restart / an IBD import of it); committed.
-    fn step_work(&mut self, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, rule: Rule) -> Result<(), PalwStateV2Error> {
+    fn step_work(
+        &mut self,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+        key: Hash64,
+        rule: Rule,
+    ) -> Result<(), PalwStateV2Error> {
         let daa = self.daa + 1;
         let (next, delta) = self.try_fold(daa, objects, work, key, rule)?;
         assert_eq!(apply_delta_v2(&self.s, &delta, &self.sp).expect("re-applies"), next, "DAA {daa}: the delta is the transition");
@@ -323,7 +349,11 @@ fn held_chain(measured: Option<PalwCourtMeasurementV1>, sybils: u64) -> (Held, H
 const SPARE_ONLY_COURT_AT: u64 = 1_100;
 
 /// [`held_chain`] with the court-capacity fence at `court_at` (LG14-A at genesis).
-fn held_chain_at(measured: Option<PalwCourtMeasurementV1>, sybils: u64, court_at: u64) -> (Held, HeldRow, Vec<(PalwBondKeyV2, Hash64)>) {
+fn held_chain_at(
+    measured: Option<PalwCourtMeasurementV1>,
+    sybils: u64,
+    court_at: u64,
+) -> (Held, HeldRow, Vec<(PalwBondKeyV2, Hash64)>) {
     let policy = measured.map(|m| m.policy().expect("a policy"));
     let (p, _) = arm_split(palw_t12_launch_params_v1(), 0, court_at, measured);
     let b = bundle(&p);
@@ -334,7 +364,8 @@ fn held_chain_at(measured: Option<PalwCourtMeasurementV1>, sybils: u64, court_at
         genesis_bonds(&p)[..b.panel.seat_count() as usize].iter().map(|(k, o, _)| (*k, *o)).collect();
     let mut s = genesis_state(&p);
     let mut c = PalwStateCarriageV2::from_state(&s);
-    c.model_lifecycles.get_mut(&row.id).expect("the row").state = kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Active;
+    c.model_lifecycles.get_mut(&row.id).expect("the row").state =
+        kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Active;
     s = c.into_state_v3(&sp, None, flags(&p, 0).uncertified_weightless, p.palw_canonical_work_daa()).expect("a consistent carriage");
     let mut chain = Held { p, sp, s, daa: 999 };
     let mut bonds = vec![bond_obj(EXECUTOR, RICH), bond_obj(COALITION_PRODUCER, RICH), bond_obj(OUTSIDER, RICH)];
@@ -354,8 +385,11 @@ fn licensed(c: &mut Held, row: &HeldRow, seats: &[(PalwBondKeyV2, Hash64)], prod
     let (env, key, claim_id) =
         junk_attempt(row.id, bond_key(producer), pubkey_of(producer), &operator_pubkey_of(producer), pwu, nonce, 0x0707_A000 + nonce);
     c.step_work(&[], PalwBlockWorkV3::Attempt(&env), key, Rule::T12).expect("the attempt folds");
-    c.step(&[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0x0707_AA00 + nonce), seats: seats_of(seats) }], Rule::T12)
-        .expect("the panel binds");
+    c.step(
+        &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0x0707_AA00 + nonce), seats: seats_of(seats) }],
+        Rule::T12,
+    )
+    .expect("the panel binds");
     let keys: Vec<PalwBondKeyV2> = seats.iter().map(|s| s.0).collect();
     c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: valid_receipts(claim_id, &keys) }], Rule::T12)
         .expect("every seat signs Valid");
@@ -476,7 +510,8 @@ fn court_capacity_arming_needs_a_measured_record() {
     assert!(format!("{why:?}").contains("placeholder policy"), "{why:?}");
     // Without LG14-A at or below it: refused by name.
     let mut no_filer = t12.clone();
-    no_filer.palw_court_capacity_v1 = Some(PalwCourtCapacityFenceV1::measured_at(ForkActivation::new(RELEASE), test_measurement()).unwrap());
+    no_filer.palw_court_capacity_v1 =
+        Some(PalwCourtCapacityFenceV1::measured_at(ForkActivation::new(RELEASE), test_measurement()).unwrap());
     no_filer.sync_palw_court_capacity_v1();
     let why = no_filer.validate_palw_court_capacity_in_v1(&records).expect_err("no LG14-A");
     assert!(format!("{why:?}").contains("needs palw_legacy_public_filer_v1"), "{why:?}");
@@ -493,8 +528,11 @@ fn court_capacity_arming_needs_a_measured_record() {
     assert_ne!(armed.consensus_params_id(), t12.consensus_params_id());
     let mut other_policy = armed.clone();
     other_policy.palw_court_capacity_v1 = Some(
-        PalwCourtCapacityFenceV1::measured_at(ForkActivation::new(RELEASE), PalwCourtMeasurementV1 { rho_sompi: 2_000, ..test_measurement() })
-            .unwrap(),
+        PalwCourtCapacityFenceV1::measured_at(
+            ForkActivation::new(RELEASE),
+            PalwCourtMeasurementV1 { rho_sompi: 2_000, ..test_measurement() },
+        )
+        .unwrap(),
     );
     assert_ne!(other_policy.consensus_params_id(), armed.consensus_params_id());
 }
@@ -578,7 +616,11 @@ fn g07_saturation_and_continuous_refill_an_honest_prosecution_reaches_its_verdic
     // opened at or after the honest grant (the refills queued behind it, or opened only once the queue was empty).
     for (_, session) in c.s.court_sessions_iter() {
         if session.claim == d2 {
-            assert!(session.opened_daa >= granted_at, "a refill opened at {} ahead of the honest grant {granted_at}", session.opened_daa);
+            assert!(
+                session.opened_daa >= granted_at,
+                "a refill opened at {} ahead of the honest grant {granted_at}",
+                session.opened_daa
+            );
         }
     }
     // The honest prosecution opens with its ticket, whatever the coalition holds now.
@@ -592,7 +634,10 @@ fn g07_saturation_and_continuous_refill_an_honest_prosecution_reaches_its_verdic
         assert!(c.daa < hard, "the verdict must land inside the claim's hard deadline");
         c.beat();
         if let PalwClaimPhaseV2::Voided { voided_daa, reason } = c.s.claim(&target).unwrap().phase {
-            assert!(matches!(reason, PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::CourtFraud), "{reason:?}");
+            assert!(
+                matches!(reason, PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::CourtFraud),
+                "{reason:?}"
+            );
             verdict_at = Some(voided_daa);
         }
     }
@@ -662,9 +707,8 @@ fn g07_an_earlier_deadline_flood_cannot_push_a_queued_prosecution_past_its_deadl
             granted_at = Some(granted_daa);
         }
     }
-    let granted = (42..62)
-        .filter(|n| matches!(c.court_row(&early, &sybil(*n)).map(|r| r.stage), Some(PalwCourtStageV1::Ticket { .. })))
-        .count();
+    let granted =
+        (42..62).filter(|n| matches!(c.court_row(&early, &sybil(*n)).map(|r| r.stage), Some(PalwCourtStageV1::Ticket { .. }))).count();
     assert_eq!(granted, 20, "the 20 entries ahead were granted with it");
     assert!(
         matches!(c.court_row(&early, &sybil(62)).map(|r| r.stage), Some(PalwCourtStageV1::Queued { .. })),
@@ -696,7 +740,8 @@ fn g07_an_earlier_deadline_flood_cannot_push_a_queued_prosecution_past_its_deadl
 /// an entry that would push an EARLIER-admitted one past its deadline is refused too.
 #[test]
 fn the_scheduler_admits_only_what_every_queued_deadline_survives() {
-    let key = |deadline: u64, n: u64| PalwCourtQueueKeyV1 { deadline_daa: deadline, enqueued_daa: 0, claim: h(n), reserver: bond_key(n) };
+    let key =
+        |deadline: u64, n: u64| PalwCourtQueueKeyV1 { deadline_daa: deadline, enqueued_daa: 0, claim: h(n), reserver: bond_key(n) };
     let entry = |deadline: u64, n: u64| PalwCourtQueuedV1 { key: key(deadline, n), service_daa: 100 };
     // Two slots, both held until 500; ticket window 10, service 100: the first round opens by 510 and ends by 610.
     assert_eq!(palw_court_schedule_v1(0, 2, &[500, 500], &[entry(610, 1)], 10), Ok(vec![500]));
@@ -732,7 +777,7 @@ fn g07_unarmed_the_43rd_prosecution_is_refused_at_capacity() {
 /// reservation ends (an open session is charged to its backstop: the slot stays held for it).
 #[test]
 fn g07_bond_splitting_does_not_avoid_the_occupancy_fee() {
-    let policy = test_policy();
+    let _policy = test_policy();
     let charged = |split: bool| -> u128 {
         let (mut c, row, seats) = held_chain(Some(test_measurement()), 4);
         let claims: Vec<Hash64> = (0..4).map(|i| licensed(&mut c, &row, &seats, COALITION_PRODUCER, 20 + i).0).collect();
@@ -741,8 +786,11 @@ fn g07_bond_splitting_does_not_avoid_the_occupancy_fee() {
         let before: u128 = holders.iter().collect::<std::collections::BTreeSet<_>>().iter().map(|b| u128::from(c.collateral(b))).sum();
         c.step(&claims.iter().enumerate().map(|(i, claim)| reservation(&c.s, *claim, holder(i))).collect::<Vec<_>>(), Rule::T12)
             .expect("reservations");
-        c.step(&claims.iter().enumerate().map(|(i, claim)| accusation_by(&c, &row, *claim, holder(i))).collect::<Vec<_>>(), Rule::Opening)
-            .expect("four sessions");
+        c.step(
+            &claims.iter().enumerate().map(|(i, claim)| accusation_by(&c, &row, *claim, holder(i))).collect::<Vec<_>>(),
+            Rule::Opening,
+        )
+        .expect("four sessions");
         assert_eq!(c.s.court_sessions_iter().count(), 4);
         c.beat();
         c.step(&claims.iter().enumerate().map(|(i, claim)| release(*claim, holder(i))).collect::<Vec<_>>(), Rule::T12)
@@ -772,7 +820,8 @@ fn g07_the_block_budget_holds_at_maximum_load() {
     let (d1, _) = licensed(&mut c, &row, &seats, COALITION_PRODUCER, 31);
     c.step(&(0..5).map(|n| reservation(&c.s, d1, sybil(n))).collect::<Vec<_>>(), Rule::T12).expect("reservations");
     let five: Vec<PalwConsensusObjectV2> = (0..5).map(|n| accusation_by(&c, &row, d1, sybil(n))).collect();
-    let over = c.try_fold(c.daa + 1, &five, PalwBlockWorkV3::None, Hash64::default(), Rule::Opening).map(|_| ()).expect_err("five ops");
+    let over =
+        c.try_fold(c.daa + 1, &five, PalwBlockWorkV3::None, Hash64::default(), Rule::Opening).map(|_| ()).expect_err("five ops");
     assert!(refused_with(&over, "court budget"), "{over:?}");
     c.step(&five[..4], Rule::Opening).expect("four ops fit the budget");
     assert_eq!(c.s.court_sessions_iter().count(), 4);
@@ -801,7 +850,7 @@ fn g07_the_block_budget_holds_at_maximum_load() {
 /// saturated tip and re-applies to the same roots (a reorg across the grant).
 #[test]
 fn g07_restart_and_reorg_mid_queue_are_identical() {
-    let policy = test_policy();
+    let _policy = test_policy();
     let (mut c, row, seats) = held_chain_at(Some(test_measurement()), 42, SPARE_ONLY_COURT_AT);
     let (target, _) = licensed(&mut c, &row, &seats, EXECUTOR, 1);
     let (d1, _) = licensed(&mut c, &row, &seats, COALITION_PRODUCER, 11);
@@ -857,7 +906,8 @@ fn g07_restart_and_reorg_mid_queue_are_identical() {
 /// A node rebuilt from `c`'s carriage under `c`'s committed root (a restart, or a pruned import of a pruning-point snapshot).
 fn reloaded(c: &Held) -> Held {
     let mut n = c.clone();
-    n.s = PalwStateCarriageV2::from_state(&c.s).into_state(&c.sp, Some(c.s.state_root())).expect("the carriage reloads under its root");
+    n.s =
+        PalwStateCarriageV2::from_state(&c.s).into_state(&c.sp, Some(c.s.state_root())).expect("the carriage reloads under its root");
     n
 }
 
@@ -917,10 +967,18 @@ fn v7_restart_reorg_ibd_and_pruned_import_mid_queue_agree() {
         for (n, name) in nodes.iter_mut().zip(names) {
             let (twin, _) = n.try_fold(daa, &objects, PalwBlockWorkV3::None, Hash64::default(), rule).expect("the twin node");
             assert_eq!(twin.state_root(), next.state_root(), "DAA {daa}: the {name} node agrees on the root");
-            assert_eq!(twin.legacy_dispute_v1(&target), next.legacy_dispute_v1(&target), "DAA {daa} ({name}): reservation, stage, deadline");
+            assert_eq!(
+                twin.legacy_dispute_v1(&target),
+                next.legacy_dispute_v1(&target),
+                "DAA {daa} ({name}): reservation, stage, deadline"
+            );
             assert_eq!(twin.legacy_dispute_v1(&d1), next.legacy_dispute_v1(&d1), "DAA {daa} ({name}): the coalition's rows");
             for p in &parties {
-                assert_eq!(twin.bond(p).map(|b| b.collateral), next.bond(p).map(|b| b.collateral), "DAA {daa} ({name}): fees and releases");
+                assert_eq!(
+                    twin.bond(p).map(|b| b.collateral),
+                    next.bond(p).map(|b| b.collateral),
+                    "DAA {daa} ({name}): fees and releases"
+                );
             }
             n.s = twin;
             n.daa = daa;
@@ -1046,7 +1104,9 @@ fn palw_court_op_timing_harness() {
     let empty = spread(time(&c, &[], Rule::T12)).1;
     let bytes = borsh::to_vec(&reservations[0]).unwrap().len();
     let (lo, mid, hi) = net(time(&c, &reservations, Rule::T12), empty, 42);
-    println!("[palw_court_op_timing_harness] DisputeReservedV1 (admission, not a court op): {bytes} B; fold ns/op min {lo} median {mid} max {hi}");
+    println!(
+        "[palw_court_op_timing_harness] DisputeReservedV1 (admission, not a court op): {bytes} B; fold ns/op min {lo} median {mid} max {hi}"
+    );
     c.step(&reservations, Rule::T12).expect("reservations");
     // One held opening (ShardCourtAccused deferred to a dissection at the named leaf: the OneMove class's acceptance work).
     let empty = spread(time(&c, &[], Rule::Opening)).1;
@@ -1117,7 +1177,13 @@ fn palw_court_op_timing_harness() {
 // ---- round 2 (lane g14-court-capacity-r2, 2026-10-17): the reserve pool, bounded admission, decoy price, one-move budget, unserved = unpaid
 
 /// A junk attempt of `producer` on the 8k row whose trace retention is `retention` (so its hard deadline falls in another bucket).
-fn attempt_with_retention(c: &Held, row: &HeldRow, producer: u64, nonce: u64, retention: u64) -> (kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2, Hash64, Hash64) {
+fn attempt_with_retention(
+    c: &Held,
+    row: &HeldRow,
+    producer: u64,
+    nonce: u64,
+    retention: u64,
+) -> (kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2, Hash64, Hash64) {
     use kaspa_consensus_core::palw_attempt_v2::{attempt_id_v2, execution_anchor_v3, execution_commitment_v3};
     let pwu = match c.s.palw_canonical_per_draw_v1(&row.id, c.daa + 1, c.p.palw_canonical_work_daa()) {
         Some(work) => kaspa_consensus_core::palw_admission_v2::palw_attempt_derived_pwu_v1(row.target, work),
@@ -1156,7 +1222,8 @@ fn g07r2_a_late_honest_reserve_row_is_never_refused_and_convicts() {
     let width = policy.admission_bucket_daa(turn, c.sp.window_court());
     let (target, _) = licensed(&mut c, &row, &seats, EXECUTOR, 1);
     let decoys: Vec<Hash64> = (0..cap - 1).map(|i| licensed(&mut c, &row, &seats, COALITION_PRODUCER, 11 + i).0).collect();
-    let hard = c.s.claim(&target).unwrap().trace_retention_daa - kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&c.sp);
+    let hard =
+        c.s.claim(&target).unwrap().trace_retention_daa - kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&c.sp);
     // Bounded admission: the bucket is full — the eleventh court-demanding attempt is skipped, the block stands, no claim exists.
     let (env, key, id) = attempt_with_retention(&c, &row, COALITION_PRODUCER, 40, 999_999);
     let pre = kaspa_consensus_core::palw_state_v2::palw_court_claim_admission_v1(&c.s, &c.sp, &row.id, c.daa + 1, 999_999, 0);
@@ -1234,11 +1301,17 @@ fn g07r2_a_late_honest_reserve_row_is_never_refused_and_convicts() {
         assert!(c.daa < hard, "the verdict lands inside the hard deadline");
         refill(&mut c);
         if let PalwClaimPhaseV2::Voided { voided_daa, reason } = c.s.claim(&target).unwrap().phase {
-            assert!(matches!(reason, PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::CourtFraud), "{reason:?}");
+            assert!(
+                matches!(reason, PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::CourtFraud),
+                "{reason:?}"
+            );
             verdict = Some(voided_daa);
         }
     }
-    eprintln!("[G-07 r2] honest arrived at {arrived} (spare saturated, {queued} pre-filled), verdict at {} (hard deadline {hard})", verdict.unwrap());
+    eprintln!(
+        "[G-07 r2] honest arrived at {arrived} (spare saturated, {queued} pre-filled), verdict at {} (hard deadline {hard})",
+        verdict.unwrap()
+    );
     assert!(c.s.legacy_dispute_v1(&target).is_none(), "the conviction settled and released every row");
     assert_eq!(palw_accuser_exposure_v1(&c.s, &outsider), 0);
     assert_eq!(c.collateral(&outsider), outsider_before, "the honest prosecutor nets zero (the producer paid its occupancy)");
@@ -1334,10 +1407,15 @@ fn g07r2_one_move_accusations_have_their_own_budget() {
         ..test_policy()
     };
     heavy_one_move.validate().expect("a one-move class heavier than the session budget is charged to its own budget");
-    assert_eq!(heavy_one_move.capacity_sessions(turn), test_policy().capacity_sessions(turn), "the capacity reads the session classes");
+    assert_eq!(
+        heavy_one_move.capacity_sessions(turn),
+        test_policy().capacity_sessions(turn),
+        "the capacity reads the session classes"
+    );
     assert_eq!(heavy_one_move.budget_of(PalwCourtOpClassV1::OneMove).work, 100);
     assert_eq!(heavy_one_move.budget_of(PalwCourtOpClassV1::DissectionMove).work, 42);
-    let starved = PalwCourtCapacityPolicyV1 { one_move_budget: PalwCourtCostV1 { work: 0, ..heavy_one_move.one_move_budget }, ..test_policy() };
+    let starved =
+        PalwCourtCapacityPolicyV1 { one_move_budget: PalwCourtCostV1 { work: 0, ..heavy_one_move.one_move_budget }, ..test_policy() };
     assert!(starved.validate().is_err(), "a one-move budget that admits no accusation is refused");
     // In the fold: two one-move accusations a block.
     let two = PalwCourtMeasurementV1 { block_one_move_ns: 2_000, ..test_measurement() };
@@ -1373,14 +1451,16 @@ fn g07r2_the_reserve_bound_serves_every_first_row_by_its_deadline() {
                 next += 1;
             }
             free.sort_unstable();
-            if free[0] <= now && let Some(std::cmp::Reverse((hard, _))) = waiting.pop() {
+            if free[0] <= now
+                && let Some(std::cmp::Reverse((hard, _))) = waiting.pop()
+            {
                 free[0] = now + w;
                 worst = worst.max((now + w) as i64 - hard as i64);
                 continue;
             }
             let next_arrival = rows.get(next).map_or(u64::MAX, |r| r.0);
             let next_free = if waiting.is_empty() { u64::MAX } else { free[0] };
-            now = next_arrival.min(next_free).max(now + 0);
+            now = next_arrival.min(next_free).max(now);
             if now == u64::MAX {
                 break;
             }
@@ -1413,7 +1493,8 @@ fn g07r2_the_reserve_bound_serves_every_first_row_by_its_deadline() {
         if slots >= 2 {
             let double: Vec<u64> = (0..buckets)
                 .flat_map(|b| {
-                    std::iter::repeat_n(base + (b + 1) * w - 1, 2 * m as usize).chain(std::iter::repeat_n(base + (b + 1) * w, 2 * m as usize))
+                    std::iter::repeat_n(base + (b + 1) * w - 1, 2 * m as usize)
+                        .chain(std::iter::repeat_n(base + (b + 1) * w, 2 * m as usize))
                 })
                 .collect();
             let late = simulate(slots, w, lead, &double);
@@ -1488,7 +1569,11 @@ fn g07r2_a_court_demanding_claim_promises_the_retention_its_guarantee_needs() {
 fn testnet12_identity_did_not_move() {
     let launch = palw_t12_launch_params_v1();
     assert_eq!(
-        (launch.consensus_params_id().to_string(), launch.consensus_identity_id().to_string(), launch.consensus_schedule_id().to_string()),
+        (
+            launch.consensus_params_id().to_string(),
+            launch.consensus_identity_id().to_string(),
+            launch.consensus_schedule_id().to_string()
+        ),
         (
             "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f".to_string(),
             "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5".to_string(),

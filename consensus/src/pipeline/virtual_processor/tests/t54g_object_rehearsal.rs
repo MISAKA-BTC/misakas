@@ -10,6 +10,7 @@
 //! chain does not hold) is `NotAccepted` before any state is cloned. The held opening itself — the
 //! 8k fixtures, the run, the book, the session played to `CourtHeldVerdict` — is kaspad's
 //! `palw_filer_held` e2e, on the real transition.
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Rehearsal;
 

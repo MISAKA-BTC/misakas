@@ -6,6 +6,7 @@
 //! every mutant that still decodes and validates is RUN, with params drawn from each declared
 //! dtype's full range (weights are untrusted), including the type extremes. Nothing may panic.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeMap;

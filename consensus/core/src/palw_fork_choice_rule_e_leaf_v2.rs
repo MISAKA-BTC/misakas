@@ -434,7 +434,7 @@ pub(crate) fn palw_rule_e_verify_window_above_with(
         return Err(PalwRuleELeafV2ErrorV1::BadRange);
     }
     let root = root_from_range(n, lo, n, &mut opening.records.iter().map(leaf), &mut opening.proof.iter().copied(), node, empty)
-    .ok_or(PalwRuleELeafV2ErrorV1::BadRange)?;
+        .ok_or(PalwRuleELeafV2ErrorV1::BadRange)?;
     if root != ext.window_root {
         return Err(PalwRuleELeafV2ErrorV1::RootMismatch);
     }
@@ -561,7 +561,9 @@ pub struct PalwRuleECertificationSummaryV1 {
 }
 
 /// [`PalwRuleECertificationSummaryV1`] of a window's records.
-pub fn palw_rule_e_certification_summary_v1<'a>(records: impl IntoIterator<Item = &'a PalwRuleEClaimRecordV1>) -> PalwRuleECertificationSummaryV1 {
+pub fn palw_rule_e_certification_summary_v1<'a>(
+    records: impl IntoIterator<Item = &'a PalwRuleEClaimRecordV1>,
+) -> PalwRuleECertificationSummaryV1 {
     use crate::palw_fork_choice_rule_e_v1::{PalwRuleECertificationV1 as C, PalwRuleEClaimStatusV1 as S};
     let mut out = PalwRuleECertificationSummaryV1::default();
     for record in records {

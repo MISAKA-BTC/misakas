@@ -45,7 +45,13 @@ fn row(net: &Net, kind: u8, id: &impl borsh::BorshSerialize) -> Option<Vec<u8>> 
     net.api().unwrap().aux.get(&(112, borsh::to_vec(&(39u8, kind, id)).unwrap())).cloned()
 }
 fn ids(net: &Net, kind: u8) -> std::collections::BTreeSet<Digest> {
-    net.api().unwrap().aux.keys().filter(|(t, k)| *t == 112 && k.len() == 66 && k.starts_with(&[39, kind])).map(|(_, k)| k[2..66].try_into().unwrap()).collect()
+    net.api()
+        .unwrap()
+        .aux
+        .keys()
+        .filter(|(t, k)| *t == 112 && k.len() == 66 && k.starts_with(&[39, kind]))
+        .map(|(_, k)| k[2..66].try_into().unwrap())
+        .collect()
 }
 fn new_id(net: &Net, kind: u8, before: &std::collections::BTreeSet<Digest>) -> Digest {
     let now = ids(net, kind);
@@ -85,7 +91,14 @@ pub(super) async fn fixture(net: &mut Net) -> Fixture {
     let program = checked.program().clone();
     let pipeline_wire = PipelineV39 {
         version: 39,
-        stages: vec![StageDecl { name: "only".into(), program: 0, trip: TripRule::Fixed { n: 2 }, max_trip: 2, tokens: None, bind: vec![] }],
+        stages: vec![StageDecl {
+            name: "only".into(),
+            program: 0,
+            trip: TripRule::Fixed { n: 2 },
+            max_trip: 2,
+            tokens: None,
+            bind: vec![],
+        }],
         output_stage: 0,
     };
     let pipeline = pipeline_wire.check(std::slice::from_ref(&program)).expect("the one-stage pipeline checks");
@@ -178,14 +191,25 @@ pub(super) async fn master_component(net: &mut Net, fx: &Fixture, producer: usiz
     let (job_max, material) = composed.finish(&[]).unwrap();
     let maximum = CheckedJobMaximumV39::check(&fx.checked, &job_max, &material).unwrap();
     let quota =
-        misaka_palw_kernel::flat_quota11::owning39::derive_quota_v39(&fx.checked, &maximum, fx.class_id, policies.root(), 2, 32).unwrap();
+        misaka_palw_kernel::flat_quota11::owning39::derive_quota_v39(&fx.checked, &maximum, fx.class_id, policies.root(), 2, 32)
+            .unwrap();
     let final_policy = net.config.params.palw_native_final_v27.as_ref().unwrap().policy.clone();
     let mass = kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(&net.config.params);
-    let service =
-        kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(&mass, &final_policy.queue_policy).unwrap();
+    let service = kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(
+        &mass,
+        &final_policy.queue_policy,
+    )
+    .unwrap();
     let checked_class = fx.class.check(&fx.checked, &policies).unwrap();
     let contract = CheckedNativeMaximumV39::derive(
-        &checked_class, &maximum, &quota, &policies, &final_policy, &net.api().unwrap().header.policy, &mass, &service,
+        &checked_class,
+        &maximum,
+        &quota,
+        &policies,
+        &final_policy,
+        &net.api().unwrap().header.policy,
+        &mass,
+        &service,
     )
     .unwrap_or_else(|why| panic!("the component's maximum contract: {why}"));
     let temporal = contract.record().temporal.clone();
@@ -248,7 +272,8 @@ pub(super) async fn commit_value(
     let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("g14n2-master39-{}-{}-{}-{run}", std::process::id(), net.daa(), producer));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut archive = misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&dir.join("producer"), checked, 1 << 20).unwrap();
+    let mut archive =
+        misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&dir.join("producer"), checked, 1 << 20).unwrap();
     archive.begin(checked.root(), maximum.root(), inputs.root()).unwrap();
     let a = misaka_palw_tir::Tensor::new(DType::I16, vec![], vec![5]).unwrap();
     let b = misaka_palw_tir::Tensor::new(DType::I16, vec![], vec![value]).unwrap();
@@ -301,7 +326,8 @@ fn outsider_filing(fx: &Fixture, c: &Component, net: &Net) -> Option<Vec<u8>> {
     let inputs = ActualInputResolverV39::derive(&fx.checked, &c.maximum, &[], &NoPages).unwrap();
     let post = row(net, 28, &c.job).unwrap();
     let on_chain = NativeCommitWireV39::from_bytes(&post, 2).unwrap();
-    let mut own = misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&c.dir.join("auditor"), &fx.checked, 1 << 20).unwrap();
+    let mut own =
+        misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&c.dir.join("auditor"), &fx.checked, 1 << 20).unwrap();
     let replay = execute_independent_replay_v39(&fx.checked, &c.maximum, &inputs, &NoParams, &mut own).unwrap();
     let context = CheckedPointContextV39::check(&fx.checked, &c.maximum, on_chain.claim.root(), &on_chain.claim, &inputs).unwrap();
     let mut producer = misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::open_existing(
@@ -366,8 +392,11 @@ fn mining_config_with(collateral_multiplier: u64, v3_budget: bool) -> (Config, P
             entry.1.amount = enlarged;
         }
     }
-    let donor = premine.iter_mut().filter(|(outpoint, _)| !floats.iter().any(|(f, _)| f == outpoint))
-        .max_by_key(|(_, e)| e.amount).expect("the main premine");
+    let donor = premine
+        .iter_mut()
+        .filter(|(outpoint, _)| !floats.iter().any(|(f, _)| f == outpoint))
+        .max_by_key(|(_, e)| e.amount)
+        .expect("the main premine");
     donor.1.amount = donor.1.amount.checked_sub(added).expect("the main premine funds the extra bonds");
     assert_eq!(premine.iter().map(|(_, e)| u128::from(e.amount)).sum::<u128>(), total_before, "no money is minted for the harness");
     let mut multiset = kaspa_muhash::MuHash::new();
@@ -378,8 +407,10 @@ fn mining_config_with(collateral_multiplier: u64, v3_budget: bool) -> (Config, P
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
     params.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle.clone());
     let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
-        params.net.to_string().as_bytes(), Some(params.genesis.hash),
-    ).as_bytes();
+        params.net.to_string().as_bytes(),
+        Some(params.genesis.hash),
+    )
+    .as_bytes();
     // The fixture's funded genesis defines a new domain. Rebind the whole native
     // policy graph, including roots that authenticate subordinate policies.
     let funded = &mut params.palw_funded_execution_v11.as_mut().unwrap().policies;
@@ -394,8 +425,10 @@ fn mining_config_with(collateral_multiplier: u64, v3_budget: bool) -> (Config, P
     let final_policy = final_policy.clone();
     let mass = kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(&params);
     let service = kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(
-        &mass, &final_policy.queue_policy,
-    ).unwrap();
+        &mass,
+        &final_policy.queue_policy,
+    )
+    .unwrap();
     let native = &mut params.palw_native_execution_v39.as_mut().unwrap().policies;
     native.network_domain = domain;
     native.execution = execution;
@@ -448,7 +481,10 @@ fn mining_claim(net: &Net, id: &Digest) -> NativeMiningClaimRecordV39 {
 }
 
 /// The certification row of a mining claim (aux 136, the native `'V'` key).
-fn cert_row(net: &Net, c: &NativeMiningClaimRecordV39) -> Option<kaspa_consensus_core::palw_security_certification_v1::PalwClaimCertificationRowV1> {
+fn cert_row(
+    net: &Net,
+    c: &NativeMiningClaimRecordV39,
+) -> Option<kaspa_consensus_core::palw_security_certification_v1::PalwClaimCertificationRowV1> {
     use kaspa_consensus_core::palw_security_certification_v1::*;
     let key = certification_native_key_v39(&palw_native_certification_id_v39(&c.claim_hash()));
     net.api().unwrap().aux.get(&(PALW_SECURITY_CERTIFICATION_TABLE_V1, key)).map(|raw| borsh::from_slice(raw).unwrap())
@@ -514,7 +550,8 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     act(&mut net, 1, REGISTER_MODEL_ACTION_V39, borsh::to_vec(&wire).unwrap()).await;
     let model = new_id(&net, MINING_MODEL_KIND_V39, &before);
     for card in [0usize, 3] {
-        act(&mut net, card, MODEL_SEAT_ACTION_V39, borsh::to_vec(&NativeMiningSeatWireV39 { version: 39, model, kind: 0 }).unwrap()).await;
+        act(&mut net, card, MODEL_SEAT_ACTION_V39, borsh::to_vec(&NativeMiningSeatWireV39 { version: 39, model, kind: 0 }).unwrap())
+            .await;
         assert!(row(&net, MINING_SEAT_KIND_V39, &(model, net.bond(card))).is_some(), "card {card} holds a possession seat");
     }
     // ---- past the design verifier maturity (the genesis bonds become the Gate C pool), the mining claims (75) ----
@@ -532,7 +569,9 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     // ---- seed anchors (attempt blocks) until both certifications are drawn ----
     let ttpb = net.ttpb();
     for round in 0..64 {
-        if cert_row(&net, &bad_claim).is_some_and(|r| r.anchor.is_some()) && cert_row(&net, &good_claim).is_some_and(|r| r.anchor.is_some()) {
+        if cert_row(&net, &bad_claim).is_some_and(|r| r.anchor.is_some())
+            && cert_row(&net, &good_claim).is_some_and(|r| r.anchor.is_some())
+        {
             break;
         }
         {
@@ -541,7 +580,8 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
             // let another eligible bond provide the attempt instead of weakening the budget.
             let attempt_card = 5 + (round % 3);
             let (block, _) = net.chain.build_attempt(attempt_card, ttpb, Vec::new(), &|_| true);
-            let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&block.header.palw_commitment).unwrap();
+            let envelope =
+                kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&block.header.palw_commitment).unwrap();
             let (_, tip) = net.chain.tip_state();
             let params = net.chain.vp().palw_state_params_v2.clone().unwrap();
             let last = tip.last_point().unwrap();
@@ -608,7 +648,12 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     // own Final by a few DAA), so wait past the later of the two rows' windows — the window itself is not shortened.
     let row_final = [&bad_claim, &good_claim].iter().map(|c| cert_row(&net, c).unwrap().final_daa).max().unwrap();
     let until = drawn.final_daa.max(row_final) + cert.prosecution_window_daa + 2;
-    eprintln!("g14n2/node: prosecution wait from DAA {} to {until} (Final {}, window {})", net.daa(), drawn.final_daa, cert.prosecution_window_daa);
+    eprintln!(
+        "g14n2/node: prosecution wait from DAA {} to {until} (Final {}, window {})",
+        net.daa(),
+        drawn.final_daa,
+        cert.prosecution_window_daa
+    );
     net.beat_to(until).await;
     for c in [&bad_claim, &good_claim] {
         let r = cert_row(&net, c).unwrap();
@@ -630,7 +675,10 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     assert!(row(&net, MINING_CONVICTED_KIND_V39, &good_claim.id).is_none());
     let attestor_collateral: Vec<(usize, u64)> = colluders.iter().map(|card| (*card, net.collateral(*card))).collect();
     act(&mut net, 1, ACCUSE_MINING_ACTION_V39, borsh::to_vec(&accuse(bad_claim.id)).unwrap()).await;
-    assert!(row(&net, MINING_CONVICTED_KIND_V39, &bad_claim.id).is_some(), "the forged mining claim is convicted after its Master Final");
+    assert!(
+        row(&net, MINING_CONVICTED_KIND_V39, &bad_claim.id).is_some(),
+        "the forged mining claim is convicted after its Master Final"
+    );
     let collected = c0 - net.collateral(0);
     assert_eq!(collected, u64::try_from(bad_claim.price.reserved_exposure).unwrap().min(c0), "the reserved exposure is collected");
     assert_eq!(mining_claim(&net, &bad_claim.id).closed.map(|(_, issued)| issued), Some(false), "closed without reward");
@@ -638,7 +686,10 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     assert!(row(&net, MINING_JOB_HOLD_KIND_V39, &forged.job).is_none(), "the hold ends with the conviction");
     assert!(net.chain.tip_state().1.safe_weight() <= safe_before, "no safe weight survives from the forged claim");
     assert!(
-        !kaspa_consensus_core::palw_security_certification_v1::palw_native_mining_security_certified_v39(&net.chain.tip_state().1, &bad_claim.claim_hash()),
+        !kaspa_consensus_core::palw_security_certification_v1::palw_native_mining_security_certified_v39(
+            &net.chain.tip_state().1,
+            &bad_claim.claim_hash()
+        ),
         "the forged claim's certification is withdrawn"
     );
     for (card, before) in &attestor_collateral {
@@ -654,7 +705,10 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     assert_eq!(net.collateral(3), c3, "the honest producer is untouched");
     assert_eq!(mining_claim(&net, &good_claim.id).closed.map(|(_, i)| i), Some(true), "the honest claim keeps its receipt");
     assert!(row(&net, MINING_RECEIPT_KIND_V39, &native_mining_receipt_id_v39(good_claim.id)).is_some());
-    assert!(kaspa_consensus_core::palw_security_certification_v1::palw_native_mining_security_certified_v39(&net.chain.tip_state().1, &good_claim.claim_hash()));
+    assert!(kaspa_consensus_core::palw_security_certification_v1::palw_native_mining_security_certified_v39(
+        &net.chain.tip_state().1,
+        &good_claim.claim_hash()
+    ));
     let replay = net.replay().await;
     net.assert_same(&replay, "G-N2 node conviction");
     for c in [&forged, &honest] {

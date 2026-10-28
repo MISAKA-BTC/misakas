@@ -1,5 +1,6 @@
 //! Composite templates that are NEW (not legacy kernels): their defining exact properties.
 
+#![allow(warnings)]
 mod common;
 
 use common::{Lcg, arg, eval_graph};

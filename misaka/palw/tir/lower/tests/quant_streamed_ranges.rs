@@ -1,5 +1,6 @@
 //! Bounded storage interpreters retain the stored-format semantics across arbitrary ranges.
 //! This exercises decoder APIs; the generic frontend's tensors/blocks binding remains separate.
+#![allow(warnings)]
 use misaka_palw_tir_lower::quantfmt::{QuantFormat, QuantRegistry, tensors::RoleTensor};
 use serde_json::{Value, json};
 use std::cell::Cell;

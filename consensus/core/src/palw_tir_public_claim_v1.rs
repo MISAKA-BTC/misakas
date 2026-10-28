@@ -46,11 +46,21 @@ pub struct PalwTirPublicClaimV1 {
 #[cfg(test)]
 thread_local! { static PREPARATION_SOURCE_STAGES_V2: std::cell::Cell<[u64;4]> = const {std::cell::Cell::new([0;4])}; }
 #[cfg(test)]
-pub(crate) fn preparation_source_stages_v2() -> [u64;4] { PREPARATION_SOURCE_STAGES_V2.with(std::cell::Cell::get) }
+pub(crate) fn preparation_source_stages_v2() -> [u64; 4] {
+    PREPARATION_SOURCE_STAGES_V2.with(std::cell::Cell::get)
+}
 #[cfg(test)]
-pub(crate) fn reset_preparation_source_stages_v2() { PREPARATION_SOURCE_STAGES_V2.with(|c|c.set([0;4])); }
+pub(crate) fn reset_preparation_source_stages_v2() {
+    PREPARATION_SOURCE_STAGES_V2.with(|c| c.set([0; 4]));
+}
 #[cfg(test)]
-pub(crate) fn note_preparation_source_stage_v2(index:usize) { PREPARATION_SOURCE_STAGES_V2.with(|c|{let mut v=c.get();v[index]+=1;c.set(v);}); }
+pub(crate) fn note_preparation_source_stage_v2(index: usize) {
+    PREPARATION_SOURCE_STAGES_V2.with(|c| {
+        let mut v = c.get();
+        v[index] += 1;
+        c.set(v);
+    });
+}
 
 impl PalwTirPublicClaimV1 {
     /// Construct a native-validated CANDIDATE at the original accepting block
@@ -500,7 +510,10 @@ impl PalwTirPublicClaimV1 {
     }
 }
 /// The accepted-state reader behind the consensus API's `palw_tir_public_frame_v1`.
-pub fn palw_tir_public_frame_view_v1(state: &crate::palw_state_v2::PalwChainStateV2, claim: Hash64) -> Option<PalwTirPublicFrameViewV1> {
+pub fn palw_tir_public_frame_view_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: Hash64,
+) -> Option<PalwTirPublicFrameViewV1> {
     palw_tir_public_claim_v1(state, claim).map(|frame| frame.view_v1(state.staged_tir_owner_count_v1(&claim)))
 }
 
@@ -569,7 +582,11 @@ pub(crate) struct PalwTirPublicFrameFixtureV1 {
 // Guard-only injection: deliberately not a native admission/serialization fixture.
 #[cfg(test)]
 impl PalwTirPublicClaimV1 {
-    pub(crate) fn with_service_semantic_guard_fixture_v1(mut self, semantic: crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1, id: Hash64) -> Self {
+    pub(crate) fn with_service_semantic_guard_fixture_v1(
+        mut self,
+        semantic: crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1,
+        id: Hash64,
+    ) -> Self {
         self.plan.semantic = Some(semantic);
         self.plan.semantic_resource_plan_id = Some(id);
         self
@@ -591,37 +608,55 @@ pub(crate) fn palw_tir_public_history_frame_fixture_v1() -> PalwTirPublicFrameFi
 /// 16/9 fixture remains available for history/scale coverage.
 #[cfg(test)]
 pub(crate) fn palw_tir_public_material_frame_fixture_v1(prompt_input: bool) -> PalwTirPublicFrameFixtureV1 {
-    tests::history_frame_shape_v1(if prompt_input { tests::HistoryConditionV1::Input } else { tests::HistoryConditionV1::None },
-        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, 2, 2)
+    tests::history_frame_shape_v1(
+        if prompt_input { tests::HistoryConditionV1::Input } else { tests::HistoryConditionV1::None },
+        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        2,
+        2,
+    )
 }
 /// A distinct registered and honestly executed program: numerical Select condition
 /// reads actual Input(0), not a synthetic site or a mutated admitted plan.
 #[cfg(test)]
 pub(crate) fn palw_tir_public_input_history_frame_fixture_v1(
-    form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)->PalwTirPublicFrameFixtureV1 {
-    tests::history_frame_form_v1(true,form)
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> PalwTirPublicFrameFixtureV1 {
+    tests::history_frame_form_v1(true, form)
 }
 #[cfg(test)]
-pub(crate) fn palw_tir_public_prefix_history_frame_fixture_v1(fault:bool)->PalwTirPublicFrameFixtureV1 {
-    tests::history_frame_condition_v1(tests::HistoryConditionV1::Prefix{fault},
-        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+pub(crate) fn palw_tir_public_prefix_history_frame_fixture_v1(fault: bool) -> PalwTirPublicFrameFixtureV1 {
+    tests::history_frame_condition_v1(
+        tests::HistoryConditionV1::Prefix { fault },
+        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+    )
 }
 #[cfg(test)]
 pub(crate) fn palw_tir_public_fixed_history_frame_fixture_v1(
-    form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,committed_writer:bool)->PalwTirPublicFrameFixtureV1 {
-    tests::history_frame_condition_v1(tests::HistoryConditionV1::Fixed{committed_writer},form)
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    committed_writer: bool,
+) -> PalwTirPublicFrameFixtureV1 {
+    tests::history_frame_condition_v1(tests::HistoryConditionV1::Fixed { committed_writer }, form)
 }
 
 #[cfg(test)]
-pub(crate) fn palw_tir_public_constraint_stop_frame_fixture_v1(stop:crate::palw_freeprompt_v3::PalwFpStopReasonV3,fault:bool)
-    ->(PalwTirPublicFrameFixtureV1,crate::palw_class_semantics_v1::PalwClassSemanticsV1,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
-    tests::constraint_frame_stop_mode_v1(Some((stop,fault)))
+pub(crate) fn palw_tir_public_constraint_stop_frame_fixture_v1(
+    stop: crate::palw_freeprompt_v3::PalwFpStopReasonV3,
+    fault: bool,
+) -> (
+    PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+) {
+    tests::constraint_frame_stop_mode_v1(Some((stop, fault)))
 }
 
 /// Existing 4096-wide test execution reconstructed in its actual original job context.
 #[cfg(test)]
-pub(crate) fn palw_tir_public_frame_fixture_wide_v1(forge:Option<(usize,usize)>,maximum_custodians:u64)->PalwTirPublicFrameFixtureV1 {
-    tests::fixture_with_vocab(forge,maximum_custodians,|_|{},None,None,true)
+pub(crate) fn palw_tir_public_frame_fixture_wide_v1(
+    forge: Option<(usize, usize)>,
+    maximum_custodians: u64,
+) -> PalwTirPublicFrameFixtureV1 {
+    tests::fixture_with_vocab(forge, maximum_custodians, |_| {}, None, None, true)
 }
 
 /// Additional two-tile fixture; existing tiny/GQA/4096-wide fixtures are unchanged.
@@ -633,16 +668,24 @@ pub(crate) fn palw_tir_public_frame_fixture_two_tile_v1() -> PalwTirPublicFrameF
 /// Native-derived constrained frame over the real tiny registered program.
 /// Signature/payment setup remains the same explicit verified-half fixture.
 #[cfg(test)]
-pub(crate) fn palw_tir_public_constraint_frame_fixture_v1()->(PalwTirPublicFrameFixtureV1,
-    crate::palw_class_semantics_v1::PalwClassSemanticsV1,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+pub(crate) fn palw_tir_public_constraint_frame_fixture_v1() -> (
+    PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+) {
     tests::constraint_frame()
 }
 
 #[cfg(test)]
-pub(crate) fn palw_tir_public_tokenizer_frame_fixture_v1()->(PalwTirPublicFrameFixtureV1,
+pub(crate) fn palw_tir_public_tokenizer_frame_fixture_v1() -> (
+    PalwTirPublicFrameFixtureV1,
     crate::palw_class_semantics_v1::PalwClassSemanticsV1,
     crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
-    Vec<u8>,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {tests::tokenizer_frame()}
+    Vec<u8>,
+    crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+) {
+    tests::tokenizer_frame()
+}
 
 /// **G14 G-T2 test support:** [`palw_tir_public_frame_fixture_v1`] over a job `edit_job` shapes (a seeded V3 job, a V4 job with
 /// penalties or stop sequences, ...), whose execution decodes by THAT job's own selection rule — except at decode position
@@ -660,7 +703,10 @@ pub(crate) fn palw_tir_public_frame_fixture_ruled_v1(
 /// root than the IDs its own committed trace authenticates. Built from the start (the claim id, pledge, plan and frame all over
 /// that commitment), so the frame's structure check holds; only the output door can convict it.
 #[cfg(test)]
-pub(crate) fn palw_tir_public_frame_fixture_lying_output_v1(maximum_custodians: u64, output_root: Hash64) -> PalwTirPublicFrameFixtureV1 {
+pub(crate) fn palw_tir_public_frame_fixture_lying_output_v1(
+    maximum_custodians: u64,
+    output_root: Hash64,
+) -> PalwTirPublicFrameFixtureV1 {
     tests::fixture_with(None, maximum_custodians, |_| {}, None, Some(output_root))
 }
 
@@ -689,16 +735,23 @@ mod tests {
         wrong_at: Option<u32>,
         output_root: Option<Hash64>,
     ) -> super::PalwTirPublicFrameFixtureV1 {
-        fixture_with_vocab(forge,maximum_custodians,edit_job,wrong_at,output_root,false)
+        fixture_with_vocab(forge, maximum_custodians, edit_job, wrong_at, output_root, false)
     }
     pub(super) fn fixture_with_vocab(
-        forge:Option<(usize,usize)>,maximum_custodians:u64,
-        edit_job:impl FnOnce(&mut crate::palw_freeprompt_v3::PalwFreePromptJobV3),wrong_at:Option<u32>,output_root:Option<Hash64>,wide:bool,
-    )->super::PalwTirPublicFrameFixtureV1 {
+        forge: Option<(usize, usize)>,
+        maximum_custodians: u64,
+        edit_job: impl FnOnce(&mut crate::palw_freeprompt_v3::PalwFreePromptJobV3),
+        wrong_at: Option<u32>,
+        output_root: Option<Hash64>,
+        wide: bool,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
-        let honest = if wide {crate::palw_tir_court_v1::test_support::tiny_execution_wide().0}
-            else {crate::palw_tir_court_v1::test_support::tiny_execution(None)};
+        let honest = if wide {
+            crate::palw_tir_court_v1::test_support::tiny_execution_wide().0
+        } else {
+            crate::palw_tir_court_v1::test_support::tiny_execution(None)
+        };
         let class_id = honest.binding.class.class_id(&honest.binding.artifact_root);
         let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
         job.version = PALW_FP_V3_VERSION;
@@ -732,34 +785,62 @@ mod tests {
         let select = |position: u32, row: &[i32], before: &[u32]| {
             crate::palw_tir_court_v1::test_support::select_by_rule(&rule, row, before, wrong_at == Some(position))
         };
-        let x = if wide {crate::palw_tir_court_v1::test_support::tiny_execution_selecting_wide_in(|_,_,_|context.clone(),forge,&select)}
-            else {crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select)};
+        let x = if wide {
+            crate::palw_tir_court_v1::test_support::tiny_execution_selecting_wide_in(|_, _, _| context.clone(), forge, &select)
+        } else {
+            crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select)
+        };
         frame_from_execution(x, job, maximum_custodians, output_root)
     }
 
     pub(super) fn two_tile_frame() -> super::PalwTirPublicFrameFixtureV1 {
-        use crate::palw_tir_court_v1::test_support::{tiny_execution,tiny_execution_selecting_in_vocab,select_by_rule};
+        use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
-        use crate::palw_fp_execution_v3::{PalwFpClassFactsV3,PalwFpRunFactsV3};
+        use crate::palw_tir_court_v1::test_support::{select_by_rule, tiny_execution, tiny_execution_selecting_in_vocab};
         // A new synthetic program, not a change to the fixed existing fixtures or native caps.
-        let honest=tiny_execution_selecting_in_vocab(|class,id,prompt| {
-            let mut c=tiny_execution(None).binding.job_context;c.shape_profile_id=id;c.tokenizer_id=class.tokenizer_id;
-            c.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(prompt);c
-        },None,&|_,row,_|crate::palw_step_refute::base0_decode_token_select_v1(row) as u32,4097);
-        let (_,_,mut job,_)=crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false,false);
-        job.version=PALW_FP_V3_VERSION;job.decode=None;job.tail=None;
-        job.class_id=honest.binding.class.class_id(&honest.binding.artifact_root);
-        job.tokenizer_id=honest.binding.class.tokenizer_id;job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
-        job.prompt_tokens=honest.prompt.len() as u32;job.decode_token_limit=honest.generated.len() as u32;job.max_context_tokens=64;
-        let class=PalwFpClassFactsV3 {model_profile_id:Hash64::default(),runtime_manifest_hash:Hash64::default(),
-            runtime_class_id:Hash64::default(),shape_profile_id:job.class_id,cu_ruleset_id:Hash64::default()};
-        let facts=PalwFpRunFactsV3 {decode_tokens_executed:job.decode_token_limit,stop_reason:PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root:Hash64::default(),activation_leg_root:Hash64::default(),checkpoint_leg_root:Hash64::default(),
-            step_leg_root:Hash64::default(),step_leaf_count:honest.hashes.len() as u64};
-        let ctx=crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&class,&facts,b"testnet-12").unwrap();
-        let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&job).unwrap();
-        let x=tiny_execution_selecting_in_vocab(|_,_,_|ctx,None,&|_,row,before|select_by_rule(&rule,row,before,false),4097);
-        frame_from_execution(x,job,1,None)
+        let honest = tiny_execution_selecting_in_vocab(
+            |class, id, prompt| {
+                let mut c = tiny_execution(None).binding.job_context;
+                c.shape_profile_id = id;
+                c.tokenizer_id = class.tokenizer_id;
+                c.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
+                c
+            },
+            None,
+            &|_, row, _| crate::palw_step_refute::base0_decode_token_select_v1(row) as u32,
+            4097,
+        );
+        let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
+        job.version = PALW_FP_V3_VERSION;
+        job.decode = None;
+        job.tail = None;
+        job.class_id = honest.binding.class.class_id(&honest.binding.artifact_root);
+        job.tokenizer_id = honest.binding.class.tokenizer_id;
+        job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
+        job.prompt_tokens = honest.prompt.len() as u32;
+        job.decode_token_limit = honest.generated.len() as u32;
+        job.max_context_tokens = 64;
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: job.class_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let facts = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: honest.hashes.len() as u64,
+        };
+        let ctx = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job, &class, &facts, b"testnet-12").unwrap();
+        let rule = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&job).unwrap();
+        let x =
+            tiny_execution_selecting_in_vocab(|_, _, _| ctx, None, &|_, row, before| select_by_rule(&rule, row, before, false), 4097);
+        frame_from_execution(x, job, 1, None)
     }
 
     // Shared geometry construction: every tree is committed in this job's actual FP context.
@@ -770,46 +851,65 @@ mod tests {
         maximum_custodians: u64,
         output_root: Option<Hash64>,
     ) -> super::PalwTirPublicFrameFixtureV1 {
-        frame_from_execution_with_semantics(x,job,maximum_custodians,output_root,None)
+        frame_from_execution_with_semantics(x, job, maximum_custodians, output_root, None)
     }
     fn frame_from_execution_with_semantics(
-        x:crate::palw_tir_court_v1::test_support::TinyExecution,
-        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
-        maximum_custodians:u64,output_root:Option<Hash64>,
-        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
-    )->super::PalwTirPublicFrameFixtureV1 {
-        frame_from_execution_with_material(x,job,maximum_custodians,output_root,semantics,None)
+        x: crate::palw_tir_court_v1::test_support::TinyExecution,
+        job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians: u64,
+        output_root: Option<Hash64>,
+        semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
+        frame_from_execution_with_material(x, job, maximum_custodians, output_root, semantics, None)
     }
     fn frame_from_execution_with_material(
-        x:crate::palw_tir_court_v1::test_support::TinyExecution,
-        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
-        maximum_custodians:u64,output_root:Option<Hash64>,
-        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
-        inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
-    )->super::PalwTirPublicFrameFixtureV1 {
-        frame_from_execution_with_material_form_v1(x,job,maximum_custodians,output_root,
-            semantics,inventory,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+        x: crate::palw_tir_court_v1::test_support::TinyExecution,
+        job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians: u64,
+        output_root: Option<Hash64>,
+        semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
+        frame_from_execution_with_material_form_v1(
+            x,
+            job,
+            maximum_custodians,
+            output_root,
+            semantics,
+            inventory,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
     }
     fn frame_from_execution_with_material_form_v1(
-        x:crate::palw_tir_court_v1::test_support::TinyExecution,
-        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
-        maximum_custodians:u64,output_root:Option<Hash64>,
-        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
-        inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
-        prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    )->super::PalwTirPublicFrameFixtureV1 {
-        frame_from_execution_with_material_form_stop_v1(x,job,maximum_custodians,output_root,semantics,inventory,prompt_form,
-            crate::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached)
+        x: crate::palw_tir_court_v1::test_support::TinyExecution,
+        job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians: u64,
+        output_root: Option<Hash64>,
+        semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
+        frame_from_execution_with_material_form_stop_v1(
+            x,
+            job,
+            maximum_custodians,
+            output_root,
+            semantics,
+            inventory,
+            prompt_form,
+            crate::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
+        )
     }
     fn frame_from_execution_with_material_form_stop_v1(
-        x:crate::palw_tir_court_v1::test_support::TinyExecution,
-        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
-        maximum_custodians:u64,output_root:Option<Hash64>,
-        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
-        inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
-        prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-        stop_reason:crate::palw_freeprompt_v3::PalwFpStopReasonV3,
-    )->super::PalwTirPublicFrameFixtureV1 {
+        x: crate::palw_tir_court_v1::test_support::TinyExecution,
+        job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians: u64,
+        output_root: Option<Hash64>,
+        semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        stop_reason: crate::palw_freeprompt_v3::PalwFpStopReasonV3,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
         let binding = x.binding.clone();
@@ -919,258 +1019,471 @@ mod tests {
         .unwrap();
         super::PalwTirPublicFrameFixtureV1 { frame, record, layout, execution: x, rules, object }
     }
-    pub(super) fn constraint_frame()->(super::PalwTirPublicFrameFixtureV1,
+    pub(super) fn constraint_frame() -> (
+        super::PalwTirPublicFrameFixtureV1,
         crate::palw_class_semantics_v1::PalwClassSemanticsV1,
-        crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+        crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+    ) {
         constraint_frame_stop_mode_v1(None)
     }
-    pub(super) fn constraint_frame_stop_mode_v1(mode:Option<(crate::palw_freeprompt_v3::PalwFpStopReasonV3,bool)>)->(super::PalwTirPublicFrameFixtureV1,
+    pub(super) fn constraint_frame_stop_mode_v1(
+        mode: Option<(crate::palw_freeprompt_v3::PalwFpStopReasonV3, bool)>,
+    ) -> (
+        super::PalwTirPublicFrameFixtureV1,
         crate::palw_class_semantics_v1::PalwClassSemanticsV1,
-        crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+        crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+    ) {
+        use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
-        use crate::palw_fp_execution_v3::{PalwFpClassFactsV3,PalwFpRunFactsV3};
-        let honest=crate::palw_tir_court_v1::test_support::tiny_execution(None);
-        let class_id=honest.binding.class.class_id(&honest.binding.artifact_root);
-        let (_,accusation)=crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
-        let mut job=accusation.job;
-        job.class_id=class_id;job.tokenizer_id=honest.binding.class.tokenizer_id;
-        job.prompt_tokens=honest.prompt.len() as u32;
-        job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
-        job.decode_token_limit=honest.generated.len() as u32+u32::from(mode.is_some_and(|(s,_)|s==PalwFpStopReasonV3::EndOfGeneration));job.max_context_tokens=64;
-        let stop_reason=mode.map_or(PalwFpStopReasonV3::ExactBudgetReached,|(s,_)|s);
+        let honest = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let class_id = honest.binding.class.class_id(&honest.binding.artifact_root);
+        let (_, accusation) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
+        let mut job = accusation.job;
+        job.class_id = class_id;
+        job.tokenizer_id = honest.binding.class.tokenizer_id;
+        job.prompt_tokens = honest.prompt.len() as u32;
+        job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
+        job.decode_token_limit =
+            honest.generated.len() as u32 + u32::from(mode.is_some_and(|(s, _)| s == PalwFpStopReasonV3::EndOfGeneration));
+        job.max_context_tokens = 64;
+        let stop_reason = mode.map_or(PalwFpStopReasonV3::ExactBudgetReached, |(s, _)| s);
         // All real eight-word registered lanes render an inadmissible first byte
         // under the existing bracket/digit constraint. Arithmetic remains real;
         // the semantic court must detect this deliberately bad selection.
-        let table=crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
-            entries:vec![Some(b"x".to_vec());honest.rows[0].len()],
-            eog_token_ids:vec![mode.map_or((honest.generated[0]+1) % honest.rows[0].len() as u32,|(stop,fault)|match (stop,fault) {
-                (PalwFpStopReasonV3::ExactBudgetReached,true)=>0,
-                (PalwFpStopReasonV3::EndOfGeneration,false)=>honest.generated.len() as u32-1,
-                _=>honest.rows[0].len() as u32-1,
-            })],tokenizer_id:job.tokenizer_id,
+        let table = crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+            entries: vec![Some(b"x".to_vec()); honest.rows[0].len()],
+            eog_token_ids: vec![mode.map_or((honest.generated[0] + 1) % honest.rows[0].len() as u32, |(stop, fault)| {
+                match (stop, fault) {
+                    (PalwFpStopReasonV3::ExactBudgetReached, true) => 0,
+                    (PalwFpStopReasonV3::EndOfGeneration, false) => honest.generated.len() as u32 - 1,
+                    _ => honest.rows[0].len() as u32 - 1,
+                }
+            })],
+            tokenizer_id: job.tokenizer_id,
         };
-        let Some(PalwFpJobTailV1::Constraint(tail))=job.tail.as_mut() else {panic!("constraint job")};
-        tail.table_root=table.root();
-        let class=PalwFpClassFactsV3 {model_profile_id:Hash64::default(),runtime_manifest_hash:Hash64::default(),
-            runtime_class_id:Hash64::default(),shape_profile_id:class_id,cu_ruleset_id:Hash64::default()};
-        let facts=PalwFpRunFactsV3 {decode_tokens_executed:honest.generated.len() as u32,
-            stop_reason,full_logits_trace_root:Hash64::default(),
-            activation_leg_root:Hash64::default(),checkpoint_leg_root:Hash64::default(),step_leg_root:Hash64::default(),
-            step_leaf_count:honest.hashes.len() as u64};
-        let context=crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&class,&facts,b"testnet-12").unwrap();
-        let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {sampling:job.sampling_v2()};
+        let Some(PalwFpJobTailV1::Constraint(tail)) = job.tail.as_mut() else { panic!("constraint job") };
+        tail.table_root = table.root();
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: class_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let facts = PalwFpRunFactsV3 {
+            decode_tokens_executed: honest.generated.len() as u32,
+            stop_reason,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: honest.hashes.len() as u64,
+        };
+        let context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job, &class, &facts, b"testnet-12").unwrap();
+        let rule = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed { sampling: job.sampling_v2() };
         // Stop-mode fixture still executes the actual registered arithmetic and
         // commits its actual IDs; selection may be false under the grammar.
         // Only the ORIGINAL stop predicate is the test's honest/fault label.
-        let select=|pos:u32,row:&[i32],before:&[u32]|if mode.is_some(){pos % row.len() as u32}
-            else{crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false)};
-        let x=crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_,_,_|context.clone(),None,&select);
-        let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1 {
-            version:1,class_id,artifact_root:x.binding.artifact_root,bound_from_daa:0,
-            model_profile_id:context.model_profile_id,runtime_manifest_hash:context.runtime_manifest_hash,
-            runtime_class_id:context.runtime_class_id,tokenizer_id:context.tokenizer_id,cu_ruleset_id:context.cu_ruleset_id,
-            token_table_root:Some(table.root()),rendering_rule:None,raw_tokenizer_bytes:None,
-            tokenizer_key_events:None,prefix_state_relation:None,
+        let select = |pos: u32, row: &[i32], before: &[u32]| {
+            if mode.is_some() {
+                pos % row.len() as u32
+            } else {
+                crate::palw_tir_court_v1::test_support::select_by_rule(&rule, row, before, false)
+            }
         };
-        if mode.is_some(){assert_eq!(x.generated,(0..honest.generated.len() as u32).collect::<Vec<_>>());}
-        let frame=frame_from_execution_with_material_form_stop_v1(x,job,1,None,Some(&semantics),None,
-            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,stop_reason);
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), None, &select);
+        let semantics = crate::palw_class_semantics_v1::PalwClassSemanticsV1 {
+            version: 1,
+            class_id,
+            artifact_root: x.binding.artifact_root,
+            bound_from_daa: 0,
+            model_profile_id: context.model_profile_id,
+            runtime_manifest_hash: context.runtime_manifest_hash,
+            runtime_class_id: context.runtime_class_id,
+            tokenizer_id: context.tokenizer_id,
+            cu_ruleset_id: context.cu_ruleset_id,
+            token_table_root: Some(table.root()),
+            rendering_rule: None,
+            raw_tokenizer_bytes: None,
+            tokenizer_key_events: None,
+            prefix_state_relation: None,
+        };
+        if mode.is_some() {
+            assert_eq!(x.generated, (0..honest.generated.len() as u32).collect::<Vec<_>>());
+        }
+        let frame = frame_from_execution_with_material_form_stop_v1(
+            x,
+            job,
+            1,
+            None,
+            Some(&semantics),
+            None,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            stop_reason,
+        );
         assert!(frame.frame.plan_v1().semantic.is_some());
-        (frame,semantics,table)
+        (frame, semantics, table)
     }
 
-    pub(super) fn tokenizer_frame()->(super::PalwTirPublicFrameFixtureV1,
+    pub(super) fn tokenizer_frame() -> (
+        super::PalwTirPublicFrameFixtureV1,
         crate::palw_class_semantics_v1::PalwClassSemanticsV1,
         crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
-        Vec<u8>,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+        Vec<u8>,
+        crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+    ) {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tokenizer_artifact_inventory_v1::*;
-        let raw=br#"{"model":{"vocab":{"A":0,"B":1,"C":2,"D":3,"E":4,"F":5,"G":6,"H":7},"merges":[]},"added_tokens":[]}"#.to_vec();
-        let tokenizer=crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(&raw);
-        let table=crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
-            entries:(b'A'..=b'H').map(|b|Some(vec![b])).collect(),eog_token_ids:vec![7],tokenizer_id:tokenizer};
-        let (_,_,mut job,_)=crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false,false);
-        job.version=PALW_FP_V3_VERSION;job.tail=None;job.decode=None;job.tokenizer_id=tokenizer;
-        job.decode_token_limit=crate::palw_tir_court_v1::test_support::DECODE;job.max_context_tokens=64;
-        let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {sampling:job.sampling_v2()};
-        let select=|_:u32,row:&[i32],before:&[u32]|crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false);
-        let x=crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in_vocab_with_tokenizer(
-            |class,id,prompt| {
-                job.class_id=id;job.tokenizer_id=class.tokenizer_id;job.prompt_tokens=prompt.len() as u32;
-                job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(prompt);
-                let facts=crate::palw_fp_execution_v3::PalwFpClassFactsV3 {model_profile_id:Hash64::default(),
-                    runtime_manifest_hash:Hash64::default(),runtime_class_id:Hash64::default(),shape_profile_id:id,cu_ruleset_id:Hash64::default()};
-                crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&facts,
-                    &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job,job.decode_token_limit),b"testnet-12").unwrap()
-            },None,&select,8,tokenizer);
-        let opener=PalwBondKeyV2(job.executor_bond);
-        let key=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91;32]);
-        let mut offer=PalwTokenizerArtifactInventoryOfferV1 {version:1,artifact_hash:tokenizer,opener,
-            maximum_bytes:raw.len() as u64,accept_until_daa:10,signature:vec![]};
-        offer.signature=libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key,offer.id_v1().as_byte_slice(),
-            PALW_ARTIFACT_INVENTORY_CONTEXT_V1,[92;32]).unwrap().as_ref().to_vec();
-        offer.validate_signature_v1(key.verification_key.as_ref(),crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).unwrap();
-        let mut inventory=PalwTokenizerArtifactInventoryV1::new_v1(offer,1,
-            crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()).unwrap();
-        inventory.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Part {offset:0,bytes:raw.clone()},2).unwrap();
-        let eof=inventory.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Finish,3).unwrap().unwrap();
-        let c=&x.binding.job_context;
-        let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1 {version:1,class_id:job.class_id,
-            artifact_root:x.binding.artifact_root,bound_from_daa:0,model_profile_id:c.model_profile_id,
-            runtime_manifest_hash:c.runtime_manifest_hash,runtime_class_id:c.runtime_class_id,tokenizer_id:tokenizer,
-            cu_ruleset_id:c.cu_ruleset_id,token_table_root:Some(table.root()),
-            rendering_rule:Some(crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1),
-            raw_tokenizer_bytes:Some(eof.actual_bytes),tokenizer_key_events:Some(eof.key_event_upper_bound_v1()),prefix_state_relation:None};
-        let fx=frame_from_execution_with_material(x,job,1,None,Some(&semantics),Some(&eof));
-        assert!(fx.frame.plan_v1().semantic.as_ref().unwrap().stages.iter().any(|s|
-            s.family==crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer));
-        (fx,semantics,eof,raw,table)
+        let raw = br#"{"model":{"vocab":{"A":0,"B":1,"C":2,"D":3,"E":4,"F":5,"G":6,"H":7},"merges":[]},"added_tokens":[]}"#.to_vec();
+        let tokenizer = crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(&raw);
+        let table = crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+            entries: (b'A'..=b'H').map(|b| Some(vec![b])).collect(),
+            eog_token_ids: vec![7],
+            tokenizer_id: tokenizer,
+        };
+        let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
+        job.version = PALW_FP_V3_VERSION;
+        job.tail = None;
+        job.decode = None;
+        job.tokenizer_id = tokenizer;
+        job.decode_token_limit = crate::palw_tir_court_v1::test_support::DECODE;
+        job.max_context_tokens = 64;
+        let rule = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed { sampling: job.sampling_v2() };
+        let select =
+            |_: u32, row: &[i32], before: &[u32]| crate::palw_tir_court_v1::test_support::select_by_rule(&rule, row, before, false);
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in_vocab_with_tokenizer(
+            |class, id, prompt| {
+                job.class_id = id;
+                job.tokenizer_id = class.tokenizer_id;
+                job.prompt_tokens = prompt.len() as u32;
+                job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
+                let facts = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+                    model_profile_id: Hash64::default(),
+                    runtime_manifest_hash: Hash64::default(),
+                    runtime_class_id: Hash64::default(),
+                    shape_profile_id: id,
+                    cu_ruleset_id: Hash64::default(),
+                };
+                crate::palw_fp_execution_v3::palw_fp_job_context_v3(
+                    &job,
+                    &facts,
+                    &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, job.decode_token_limit),
+                    b"testnet-12",
+                )
+                .unwrap()
+            },
+            None,
+            &select,
+            8,
+            tokenizer,
+        );
+        let opener = PalwBondKeyV2(job.executor_bond);
+        let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+        let mut offer = PalwTokenizerArtifactInventoryOfferV1 {
+            version: 1,
+            artifact_hash: tokenizer,
+            opener,
+            maximum_bytes: raw.len() as u64,
+            accept_until_daa: 10,
+            signature: vec![],
+        };
+        offer.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            offer.id_v1().as_byte_slice(),
+            PALW_ARTIFACT_INVENTORY_CONTEXT_V1,
+            [92; 32],
+        )
+        .unwrap()
+        .as_ref()
+        .to_vec();
+        offer
+            .validate_signature_v1(
+                key.verification_key.as_ref(),
+                crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
+            )
+            .unwrap();
+        let mut inventory = PalwTokenizerArtifactInventoryV1::new_v1(
+            offer,
+            1,
+            crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+        )
+        .unwrap();
+        inventory.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Part { offset: 0, bytes: raw.clone() }, 2).unwrap();
+        let eof = inventory.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Finish, 3).unwrap().unwrap();
+        let c = &x.binding.job_context;
+        let semantics = crate::palw_class_semantics_v1::PalwClassSemanticsV1 {
+            version: 1,
+            class_id: job.class_id,
+            artifact_root: x.binding.artifact_root,
+            bound_from_daa: 0,
+            model_profile_id: c.model_profile_id,
+            runtime_manifest_hash: c.runtime_manifest_hash,
+            runtime_class_id: c.runtime_class_id,
+            tokenizer_id: tokenizer,
+            cu_ruleset_id: c.cu_ruleset_id,
+            token_table_root: Some(table.root()),
+            rendering_rule: Some(crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1),
+            raw_tokenizer_bytes: Some(eof.actual_bytes),
+            tokenizer_key_events: Some(eof.key_event_upper_bound_v1()),
+            prefix_state_relation: None,
+        };
+        let fx = frame_from_execution_with_material(x, job, 1, None, Some(&semantics), Some(&eof));
+        assert!(
+            fx.frame
+                .plan_v1()
+                .semantic
+                .as_ref()
+                .unwrap()
+                .stages
+                .iter()
+                .any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer)
+        );
+        (fx, semantics, eof, raw, table)
     }
 
     /// Actual golden GQA execution with history reductions, re-committed under the public job context.
     pub(super) fn history_frame() -> super::PalwTirPublicFrameFixtureV1 {
-        history_frame_form_v1(false,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+        history_frame_form_v1(false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
     }
-    #[derive(Clone,Copy)]
-    pub(super) enum HistoryConditionV1 { None,Input,Fixed{committed_writer:bool},Prefix{fault:bool} }
-    pub(super) fn history_frame_form_v1(direct_input:bool,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)
-        ->super::PalwTirPublicFrameFixtureV1 {
-        history_frame_condition_v1(if direct_input {HistoryConditionV1::Input}else{HistoryConditionV1::None},prompt_form)
+    #[derive(Clone, Copy)]
+    pub(super) enum HistoryConditionV1 {
+        None,
+        Input,
+        Fixed { committed_writer: bool },
+        Prefix { fault: bool },
     }
-    pub(super) fn history_frame_condition_v1(condition:HistoryConditionV1,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)
-        ->super::PalwTirPublicFrameFixtureV1 {
+    pub(super) fn history_frame_form_v1(
+        direct_input: bool,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
+        history_frame_condition_v1(if direct_input { HistoryConditionV1::Input } else { HistoryConditionV1::None }, prompt_form)
+    }
+    pub(super) fn history_frame_condition_v1(
+        condition: HistoryConditionV1,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
         history_frame_shape_v1(condition, prompt_form, 16, 9)
     }
-    pub(super) fn history_frame_shape_v1(condition:HistoryConditionV1,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-        prefill:u32,decode:u32)->super::PalwTirPublicFrameFixtureV1 {
+    pub(super) fn history_frame_shape_v1(
+        condition: HistoryConditionV1,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        prefill: u32,
+        decode: u32,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_corpus_fixture_v1::{fixture_with, programs};
-        let (name, mut program, params, tokens) = programs().into_iter()
-            .find(|(name, ..)| name == "dense-gqa-2layer").expect("golden GQA corpus");
-        let fixed=if let HistoryConditionV1::Fixed{committed_writer}=condition {
-            let state:u16=program.states.len().try_into().unwrap();
-            program.states.push(misaka_palw_tir::program::StateDecl{name:"boundary_scalar".into(),
-                kind:misaka_palw_tir::program::StateKind::Fixed{lo:0,hi:1},dtype:misaka_palw_tir::DType::I8,
-                shape:vec![],per_layer:true});
-            Some((state,committed_writer))
-        } else {None};
-        if matches!(condition,HistoryConditionV1::Input|HistoryConditionV1::Fixed{..}) {
-            use misaka_palw_tir::{Ref,Prim};
-            use misaka_palw_tir::types::Dim;
-            let (bi,ni,input,out)=program.blocks.iter().enumerate().find_map(|(bi,b)| {
-                b.nodes.iter().enumerate().find_map(|(ni,n)| {
-                    if !matches!(n.prim,Prim::ReduceSum{..}|Prim::ReduceMax{..}) {return None;}
-                    let Ref::Node(input)=*n.inputs.first()? else {return None;};
-                    let out=b.nodes.get(usize::from(input))?.out.clone();
-                    out.shape.contains(&Dim::H).then_some((bi,ni,input,out))
-                })
-            }).expect("GQA actual history reduction");
-            let block=&mut program.blocks[bi];
-            for node in &mut block.nodes {for input in &mut node.inputs {
-                if let Ref::Node(index)=input {if usize::from(*index)>=ni {*index=index.checked_add(1).unwrap();}}
-            }}
-            for index in &mut block.carry_out {if usize::from(*index)>=ni {*index=index.checked_add(1).unwrap();}}
-            if bi==usize::from(program.schedule.post)&&usize::from(program.logits)>=ni {program.logits+=1;}
-            block.nodes.insert(ni,misaka_palw_tir::program::Node {
-                prim:Prim::Select,
-                inputs:vec![fixed.map_or(Ref::Input(0),|(state,_)|Ref::State(state)),Ref::Node(input),Ref::Node(input)],out,commit:false,
+        let (name, mut program, params, tokens) =
+            programs().into_iter().find(|(name, ..)| name == "dense-gqa-2layer").expect("golden GQA corpus");
+        let fixed = if let HistoryConditionV1::Fixed { committed_writer } = condition {
+            let state: u16 = program.states.len().try_into().unwrap();
+            program.states.push(misaka_palw_tir::program::StateDecl {
+                name: "boundary_scalar".into(),
+                kind: misaka_palw_tir::program::StateKind::Fixed { lo: 0, hi: 1 },
+                dtype: misaka_palw_tir::DType::I8,
+                shape: vec![],
+                per_layer: true,
             });
-            block.nodes[ni+1].inputs[0]=Ref::Node(ni.try_into().unwrap());
+            Some((state, committed_writer))
+        } else {
+            None
+        };
+        if matches!(condition, HistoryConditionV1::Input | HistoryConditionV1::Fixed { .. }) {
+            use misaka_palw_tir::types::Dim;
+            use misaka_palw_tir::{Prim, Ref};
+            let (bi, ni, input, out) = program
+                .blocks
+                .iter()
+                .enumerate()
+                .find_map(|(bi, b)| {
+                    b.nodes.iter().enumerate().find_map(|(ni, n)| {
+                        if !matches!(n.prim, Prim::ReduceSum { .. } | Prim::ReduceMax { .. }) {
+                            return None;
+                        }
+                        let Ref::Node(input) = *n.inputs.first()? else {
+                            return None;
+                        };
+                        let out = b.nodes.get(usize::from(input))?.out.clone();
+                        out.shape.contains(&Dim::H).then_some((bi, ni, input, out))
+                    })
+                })
+                .expect("GQA actual history reduction");
+            let block = &mut program.blocks[bi];
+            for node in &mut block.nodes {
+                for input in &mut node.inputs {
+                    if let Ref::Node(index) = input {
+                        if usize::from(*index) >= ni {
+                            *index = index.checked_add(1).unwrap();
+                        }
+                    }
+                }
+            }
+            for index in &mut block.carry_out {
+                if usize::from(*index) >= ni {
+                    *index = index.checked_add(1).unwrap();
+                }
+            }
+            if bi == usize::from(program.schedule.post) && usize::from(program.logits) >= ni {
+                program.logits += 1;
+            }
+            block.nodes.insert(
+                ni,
+                misaka_palw_tir::program::Node {
+                    prim: Prim::Select,
+                    inputs: vec![fixed.map_or(Ref::Input(0), |(state, _)| Ref::State(state)), Ref::Node(input), Ref::Node(input)],
+                    out,
+                    commit: false,
+                },
+            );
+            block.nodes[ni + 1].inputs[0] = Ref::Node(ni.try_into().unwrap());
             // The program is canonical-encoded, admitted, interpreted and all
             // roots recomputed by fixture_with. No existing original is edited.
         }
-        if let Some((state,committed_writer))=fixed {
-            use misaka_palw_tir::{DType,Ref,Prim,TensorType};
-            use misaka_palw_tir::program::{ConstDecl,Node};
-            let zero=ConstDecl{dtype:DType::Idx,shape:vec![],data:vec![0;4]};
-            let z=if let Some(index)=program.consts.iter().position(|c|c==&zero) {index}
-                else {program.consts.push(zero);program.consts.len()-1};
+        if let Some((state, committed_writer)) = fixed {
+            use misaka_palw_tir::program::{ConstDecl, Node};
+            use misaka_palw_tir::{DType, Prim, Ref, TensorType};
+            let zero = ConstDecl { dtype: DType::Idx, shape: vec![], data: vec![0; 4] };
+            let z = if let Some(index) = program.consts.iter().position(|c| c == &zero) {
+                index
+            } else {
+                program.consts.push(zero);
+                program.consts.len() - 1
+            };
             // Each actual scheduled layer writes its own scalar instance from
             // the actual committed carry vector. Rank-reducing gathers use a
             // real Idx0 constant, then a clamp guarantees Fixed [0,1].
-            let layers:std::collections::BTreeSet<_>=program.schedule.layers.iter().copied().collect();
+            let layers: std::collections::BTreeSet<_> = program.schedule.layers.iter().copied().collect();
             for bi in layers {
-                let block=&mut program.blocks[usize::from(bi)];
-                let carry=block.carry_in.first().expect("GQA carry").clone();
-                let mut input=Ref::CarryIn(0);
+                let block = &mut program.blocks[usize::from(bi)];
+                let carry = block.carry_in.first().expect("GQA carry").clone();
+                let mut input = Ref::CarryIn(0);
                 for dim in 0..carry.shape.len() {
-                    let out=TensorType{dtype:carry.dtype,shape:carry.shape[dim+1..].to_vec()};
-                    let node:u16=block.nodes.len().try_into().unwrap();
-                    block.nodes.push(Node{prim:Prim::Gather{axis:0,batch_dims:0},inputs:vec![input,Ref::Const(z.try_into().unwrap())],out,commit:false});
-                    input=Ref::Node(node);
+                    let out = TensorType { dtype: carry.dtype, shape: carry.shape[dim + 1..].to_vec() };
+                    let node: u16 = block.nodes.len().try_into().unwrap();
+                    block.nodes.push(Node {
+                        prim: Prim::Gather { axis: 0, batch_dims: 0 },
+                        inputs: vec![input, Ref::Const(z.try_into().unwrap())],
+                        out,
+                        commit: false,
+                    });
+                    input = Ref::Node(node);
                 }
-                let clamp:u16=block.nodes.len().try_into().unwrap();
-                block.nodes.push(Node{prim:Prim::Clamp{lo:0,hi:1},inputs:vec![input],out:TensorType::scalar(DType::I8),commit:false});
-                block.nodes.push(Node{prim:Prim::StateWrite{state},inputs:vec![Ref::Node(clamp)],out:TensorType::scalar(DType::I8),commit:committed_writer});
+                let clamp: u16 = block.nodes.len().try_into().unwrap();
+                block.nodes.push(Node {
+                    prim: Prim::Clamp { lo: 0, hi: 1 },
+                    inputs: vec![input],
+                    out: TensorType::scalar(DType::I8),
+                    commit: false,
+                });
+                block.nodes.push(Node {
+                    prim: Prim::StateWrite { state },
+                    inputs: vec![Ref::Node(clamp)],
+                    out: TensorType::scalar(DType::I8),
+                    commit: committed_writer,
+                });
             }
         }
         let mut f = fixture_with(name, program, params, tokens, prefill, decode);
         assert!(f.greedy, "the V3 job uses greedy decoding");
         let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
-        let prefix_decode=job.decode.clone();
+        let prefix_decode = job.decode.clone();
         job.version = PALW_FP_V3_VERSION;
         job.decode = None;
         job.tail = None;
         job.class_id = f.class_id;
         job.tokenizer_id = f.class.tokenizer_id;
-        job.prompt_token_ids_hash = crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(prompt_form,&f.prompt).unwrap();
+        job.prompt_token_ids_hash = crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(prompt_form, &f.prompt).unwrap();
         job.prompt_tokens = f.prompt.len() as u32;
         job.decode_token_limit = f.generated.len() as u32;
         job.max_context_tokens = 64;
-        if let HistoryConditionV1::Prefix{fault}=condition {
-            let k=4;
-            let before=f.honest();
-            let digest=crate::palw_tir_prefix_state_v1::palw_tir_prefix_kv_digest_v1(&f.space,&f.ctx,k,
-                |leaf|Ok(before.preimages[leaf.index as usize].values_le.clone())).unwrap();
-            let mut root=crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&f.class_id,k,&digest);
-            if fault {let mut bytes=*root.as_byte_slice();bytes[0]^=1;root=Hash64::from_bytes(bytes);}
-            job.version=crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
-            job.decode=prefix_decode;
-            job.tail=Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1{class_id:f.class_id,prefix_tokens:k,state_root:root}));
+        if let HistoryConditionV1::Prefix { fault } = condition {
+            let k = 4;
+            let before = f.honest();
+            let digest = crate::palw_tir_prefix_state_v1::palw_tir_prefix_kv_digest_v1(&f.space, &f.ctx, k, |leaf| {
+                Ok(before.preimages[leaf.index as usize].values_le.clone())
+            })
+            .unwrap();
+            let mut root = crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&f.class_id, k, &digest);
+            if fault {
+                let mut bytes = *root.as_byte_slice();
+                bytes[0] ^= 1;
+                root = Hash64::from_bytes(bytes);
+            }
+            job.version = crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+            job.decode = prefix_decode;
+            job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { class_id: f.class_id, prefix_tokens: k, state_root: root }));
         }
         let class = PalwFpClassFactsV3 {
-            model_profile_id: Hash64::default(), runtime_manifest_hash: Hash64::default(),
-            runtime_class_id: Hash64::default(), shape_profile_id: f.class_id, cu_ruleset_id: Hash64::default(),
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: f.class_id,
+            cu_ruleset_id: Hash64::default(),
         };
         let facts = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit, stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(), activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(), step_leg_root: Hash64::default(), step_leaf_count: f.leaves.len() as u64,
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: f.leaves.len() as u64,
         };
         f.ctx = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job, &class, &facts, b"testnet-12").unwrap();
         let x = f.honest();
         let x = crate::palw_tir_court_v1::test_support::TinyExecution {
-            binding: x.binding, preimages: x.preimages, hashes: x.hashes, ops: f.ops,
-            prompt: f.prompt, rows: x.rows, generated: x.generated,
+            binding: x.binding,
+            preimages: x.preimages,
+            hashes: x.hashes,
+            ops: f.ops,
+            prompt: f.prompt,
+            rows: x.rows,
+            generated: x.generated,
         };
-        if matches!(condition,HistoryConditionV1::Prefix{..}) {
-            let c=&x.binding.job_context;
-            let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1{version:1,class_id:f.class_id,
-                artifact_root:x.binding.artifact_root,bound_from_daa:0,model_profile_id:c.model_profile_id,
-                runtime_manifest_hash:c.runtime_manifest_hash,runtime_class_id:c.runtime_class_id,tokenizer_id:c.tokenizer_id,
-                cu_ruleset_id:c.cu_ruleset_id,token_table_root:None,rendering_rule:None,raw_tokenizer_bytes:None,
-                tokenizer_key_events:None,prefix_state_relation:None};
-            frame_from_execution_with_material_form_v1(x,job,1,None,Some(&semantics),None,prompt_form)
-        } else {frame_from_execution_with_material_form_v1(x,job,1,None,None,None,prompt_form)}
+        if matches!(condition, HistoryConditionV1::Prefix { .. }) {
+            let c = &x.binding.job_context;
+            let semantics = crate::palw_class_semantics_v1::PalwClassSemanticsV1 {
+                version: 1,
+                class_id: f.class_id,
+                artifact_root: x.binding.artifact_root,
+                bound_from_daa: 0,
+                model_profile_id: c.model_profile_id,
+                runtime_manifest_hash: c.runtime_manifest_hash,
+                runtime_class_id: c.runtime_class_id,
+                tokenizer_id: c.tokenizer_id,
+                cu_ruleset_id: c.cu_ruleset_id,
+                token_table_root: None,
+                rendering_rule: None,
+                raw_tokenizer_bytes: None,
+                tokenizer_key_events: None,
+                prefix_state_relation: None,
+            };
+            frame_from_execution_with_material_form_v1(x, job, 1, None, Some(&semantics), None, prompt_form)
+        } else {
+            frame_from_execution_with_material_form_v1(x, job, 1, None, None, None, prompt_form)
+        }
     }
 
     #[test]
     fn history_original_frame_opens_its_own_dissected_root() {
-        use crate::palw_tir_dissect_v1::*;
         use crate::palw_tir_court_v1::*;
+        use crate::palw_tir_dissect_v1::*;
         let fx = history_frame();
         let binding = &fx.execution.binding;
         let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).unwrap();
         let intervals = misaka_palw_tir::interval::analyze_ranges(&space.program).unwrap();
-        let (leaf, site) = (0..binding.step_leaf_count).filter_map(|i| {
-            let leaf = space.leaf_at(&binding.job_context, i).unwrap();
-            palw_tir_dissect_site_v1(&space, &intervals, &leaf).map(|site| (i, site))
-        }).max_by_key(|(i, site)| (site.history_positions, site.reductions.len(), std::cmp::Reverse(*i))).unwrap();
+        let (leaf, site) = (0..binding.step_leaf_count)
+            .filter_map(|i| {
+                let leaf = space.leaf_at(&binding.job_context, i).unwrap();
+                palw_tir_dissect_site_v1(&space, &intervals, &leaf).map(|site| (i, site))
+            })
+            .max_by_key(|(i, site)| (site.history_positions, site.reductions.len(), std::cmp::Reverse(*i)))
+            .unwrap();
         assert_eq!(site.history_positions, 24);
         assert!(site.reductions.len() >= 3);
         let rules = PalwTirCourtRulesV1 {
-            max_step_leaf_count: fx.rules.maximum_leaves, prompt_form: fx.rules.prompt_form,
+            max_step_leaf_count: fx.rules.maximum_leaves,
+            prompt_form: fx.rules.prompt_form,
             limits: crate::palw_court_v2::palw_tir_court_limits_v1(&fx.rules.court),
         };
         let root = build_tir_root_claim_v1(binding, leaf, &fx.execution, &rules).unwrap();

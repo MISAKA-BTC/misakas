@@ -2,6 +2,7 @@
 //! Utilities and helpers for unit and integration testing.
 //!
 
+#![allow(warnings)]
 #[cfg(test)]
 mod rpc_core_mock;
 pub use rpc_core_mock::*;

@@ -226,7 +226,7 @@ impl VisionSpec {
                 || self.temporal != 1
                 || self.merge != 1
                 || self.window.is_some()
-                || self.head_dim() % 4 != 0
+                || !self.head_dim().is_multiple_of(4)
                 || self.eps != 1e-5
                 || self.rope_theta.is_none()
             {
@@ -237,8 +237,8 @@ impl VisionSpec {
                     if out > 0
                         && merge > 0
                         && merge <= 16
-                        && self.grid().0 % merge == 0
-                        && self.grid().1 % merge == 0
+                        && self.grid().0.is_multiple_of(merge)
+                        && self.grid().1.is_multiple_of(merge)
                         && norm_eps > 0.0
                         && norm_eps.is_finite() => {}
                 _ => return Err(bad("PixtralV38 projector/merge/profile differs".into())),
@@ -1200,6 +1200,8 @@ pub fn float_forward(
             for gy in 0..gh / m {
                 for gx in 0..gw / m {
                     let mut row = Vec::with_capacity(d * m * m);
+                    // `channel` indexes each spatial cell's inner row; the cell itself is addressed separately.
+                    #[allow(clippy::needless_range_loop)]
                     for channel in 0..d {
                         for dy in 0..m {
                             for dx in 0..m {
@@ -1513,7 +1515,7 @@ fn idx_param(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, name: &str, v: 
 /// Mistral3's channel-major `F.unfold`, expressed only as rank<=4 layout primitives.
 /// Input rows are row-major patches; each grouped row orders channel, dy, dx.
 pub fn pixtral_unfold_v38(b: &mut BlockBuilder<'_>, input: tir::Ref, gh: u32, gw: u32, width: u32, merge: u32) -> Result<tir::Ref> {
-    if merge == 0 || merge > 16 || gh == 0 || gw == 0 || width == 0 || gh % merge != 0 || gw % merge != 0 {
+    if merge == 0 || merge > 16 || gh == 0 || gw == 0 || width == 0 || !gh.is_multiple_of(merge) || !gw.is_multiple_of(merge) {
         return Err(LowerError::bad("PixtralV38 unfold geometry"));
     }
     let cells = (gh as u64)

@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use misaka_palw_challenge::*;
 
 fn fixture() -> (BeaconContextV1, PaidOptInContractV5, Vec<OptInSourceV4>, Vec<PaidSourcePromiseV5>) {

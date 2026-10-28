@@ -1,4 +1,5 @@
 //! Real native admission/walk/rehearsal boundaries, not an activated campaign.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::pipeline::virtual_processor::processor::PalwLocalTransitionFaultV1;
 use kaspa_consensus_core::{

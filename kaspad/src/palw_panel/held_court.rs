@@ -1953,7 +1953,12 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
             };
             let (_, filed) = filing.clone().expect("checked above");
             tokio::task::spawn_blocking(move || {
-                let built = palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend.as_ref()), &filed, narrowed, carried.as_deref());
+                let built = palw_held_challenger_evidence_v1(
+                    kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend.as_ref()),
+                    &filed,
+                    narrowed,
+                    carried.as_deref(),
+                );
                 drop(reserved);
                 palw_held_resident_v1(&ledger, built?, false, class_id, claim_id)
             })
@@ -2153,7 +2158,13 @@ impl PalwHeldHostV1 for PalwPanelHeldHostV1<'_> {
         let pooled = self.materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
         self.panel
             .fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)
-            .and_then(|job| PalwPanelService::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), &job, self.panel.class_prompt_ids_form(duty.class_id)))
+            .and_then(|job| {
+                PalwPanelService::fp_prompt_for_job(
+                    kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend),
+                    &job,
+                    self.panel.class_prompt_ids_form(duty.class_id),
+                )
+            })
             .map(Some)
             .ok_or_else(|| "no job material of the claim is held here".to_string())
     }
@@ -2418,8 +2429,9 @@ mod tests {
         use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
         let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
         let production = panel;
-        let begin =
-            production.find_code("held_court.begin_tick_v1(&court_duties, current_daa).await;").expect("the tick collects held builds");
+        let begin = production
+            .find_code("held_court.begin_tick_v1(&court_duties, current_daa).await;")
+            .expect("the tick collects held builds");
         let route = production.find_code("held_court.routes_v1(&held_host, duty, current_daa) {").expect("the held route");
         // RFC-0002 F7: an IR class's dissection is never this route's (its own, `tir_dissect`).
         assert!(
@@ -2436,7 +2448,8 @@ mod tests {
         let moves = production
             .find_code("held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy)")
             .expect("the moves");
-        let dated = production[moves..].find_code("court_outbox.set_due(queued.key, queued.due);").expect("each with its due date") + moves;
+        let dated =
+            production[moves..].find_code("court_outbox.set_due(queued.key, queued.due);").expect("each with its due date") + moves;
         let started =
             production.find_code("held_court::palw_held_start_builds_v1(&held_host, &mut held_court, current_daa);").expect("builds");
         assert!(begin < route && route < pushed && pushed < dense_resolve && dense_resolve < dense, "routed before the dense builder");
@@ -2460,12 +2473,17 @@ mod tests {
 
         let module = include_str!("held_court.rs");
         let module = &module[..module.find_code("#[cfg(test)]\nmod tests").expect("this module")];
-        assert!(module.contains_code("offence_attribution_active && class_is_held && duty.fused_class && duty.terminal_index.is_some()"));
+        assert!(
+            module.contains_code("offence_attribution_active && class_is_held && duty.fused_class && duty.terminal_index.is_some()")
+        );
         assert!(
             module.contains_code("self.panel.consensus_config.params.palw_offence_attribution_active_at(daa)"),
             "fenced at the tick's DAA"
         );
-        assert!(!module.contains_code(".attn_site_evidence(") && !module.contains_code(".attn_site_evidence_from_filing("), "no dense builder");
+        assert!(
+            !module.contains_code(".attn_site_evidence(") && !module.contains_code(".attn_site_evidence_from_filing("),
+            "no dense builder"
+        );
         assert!(module.contains_code(".attn_site_evidence_held_v1(capture, narrowed, carried, None)"), "N1: the responder, no filing");
         assert!(
             module.contains_code(".attn_site_evidence_held_v1(&[], narrowed, carried, Some(filing))"),
@@ -2479,7 +2497,9 @@ mod tests {
             "C2: the held form the builder makes"
         );
         assert!(
-            root.contains_code("palw_attn_root_claim_message_v1(&duty.session_id, root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT"),
+            root.contains_code(
+                "palw_attn_root_claim_message_v1(&duty.session_id, root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT"
+            ),
             "signed as every root claim is"
         );
         assert!(

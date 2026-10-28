@@ -293,7 +293,9 @@ pub fn palw_gate_c_advances_frontier_v1(
 /// receipt block. `status` is the RPC's certification state (`pending`, `no-population`, `not-certified`, `vetoed`, `expired`,
 /// `withdrawn`, `revoked`) or `accusation-pending` (certified, but an accusation is open on it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("free-prompt claim {claim} is Final but not SecurityCertified ({status}): Gate C licenses no receipt block before certification")]
+#[error(
+    "free-prompt claim {claim} is Final but not SecurityCertified ({status}): Gate C licenses no receipt block before certification"
+)]
 pub struct PalwFpReceiptUncertifiedV1 {
     pub claim: Hash64,
     pub status: &'static str,
@@ -845,7 +847,8 @@ pub struct PalwRfc0018ArmingRecordV1 {
 
 /// **The pinned records — EMPTY.** Every RFC-0018 fence armed at a real height is refused (the old `ARMABLE = false`).
 // Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
-pub const PALW_RFC0018_ARMING_RECORDS_V1: &[PalwRfc0018ArmingRecordV1] = crate::palw_t12_17000_records_v1::PALW_T12_17000_RFC0018_RECORDS_V1;
+pub const PALW_RFC0018_ARMING_RECORDS_V1: &[PalwRfc0018ArmingRecordV1] =
+    crate::palw_t12_17000_records_v1::PALW_T12_17000_RFC0018_RECORDS_V1;
 
 /// Does `records` authorize arming `fence` at `activation_daa` on the network `genesis`? The first record naming exactly this
 /// (fence, network, height) decides; its form must hold. `Err` carries the refusal text.
@@ -997,7 +1000,7 @@ impl Params {
                     "palw_independently_work_certified_v1 needs palw_probabilistic_constraints_v1 at or below it (kernel route aux 136)",
                 ));
             }
-            if !self.palw_model_tier_v1_from_daa().is_some_and(|tier| tier <= c) {
+            if self.palw_model_tier_v1_from_daa().is_none_or(|tier| tier > c) {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_independently_work_certified_v1 needs palw_model_tier_v1 at or below it: the frozen two-tier rule is the model tier \
                      source (no per-model exam, PRINCIPLES §9)",
@@ -1062,7 +1065,6 @@ impl Params {
         }
         Ok(())
     }
-
 }
 
 /// Re-exported for the processor's sibling-order call site (the attempt's model class).

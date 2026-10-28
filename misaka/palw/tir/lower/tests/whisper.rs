@@ -12,6 +12,7 @@
 //! 5. admission of each stage (no pipeline: the protocol has no audio input binding yet — `JobAudio`, FR-23).
 //! The real shapes (tiny … large-v3, no weights) are lowered and admitted or refused by name.
 
+#![allow(warnings)]
 mod common;
 
 use common::{court_coverage, int_tensor, three_ways, with_inputs};

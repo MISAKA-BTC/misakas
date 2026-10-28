@@ -8,6 +8,7 @@
 //! Nothing in any log said the four budgets summed past the host. That is what these assertions are
 //! about: the division is declared, the arithmetic is printed, and an impossible division is refused.
 
+#![allow(warnings)]
 use kaspad_lib::args::{Args, palw_host_share_bytes_v1, palw_ram_scale_for_share_v1};
 use kaspad_lib::palw_backends::{PALW_HOST_SHARE_FLOOR_BYTES_V1, check_host_share_v1};
 

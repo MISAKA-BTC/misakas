@@ -19,8 +19,11 @@ fn prefix_config(k: usize, at: u64) -> (Config, PalwConsensusParamsV2, Premine, 
     let (config, _, premine, floats) = cert_panel_one_config();
     let mut params = config.params.clone();
     palw_t12_arm_after_int13_at_v1(&mut params, &PALW_T12_G14_17000_FENCES_V1[..k], Some(at));
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode else { unreachable!() };
-    let mirror = PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*b.state.rfc0018_v1().expect("Gate C mirrored") };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut params.palw_consensus_mode else {
+        unreachable!()
+    };
+    let mirror =
+        PalwRfc0018MirrorV1 { certification: TEST_ONLY_KERNEL_CERT_POLICY_V1, ..*b.state.rfc0018_v1().expect("Gate C mirrored") };
     b.state = b
         .state
         .clone()
@@ -34,8 +37,16 @@ fn prefix_config(k: usize, at: u64) -> (Config, PalwConsensusParamsV2, Premine, 
 async fn probe_claim(parts: (Config, PalwConsensusParamsV2, Premine, Premine)) -> Result<(), String> {
     let mut w = World::on(Net::over_cfg(parts, TestConsensus::new)).await;
     let tok = kernel_tokenizer_v1(&tiny_tokenizer_json(), None).unwrap();
-    let job = kernel_job_from_text_v1(&tok.tokenizer, "hi a", Hash64::from_bytes(w.class), 64, MAX_POSITIONS, 3, Hash64::from_bytes([0x71u8; 64]))
-        .map_err(|e| format!("job: {e:?}"))?;
+    let job = kernel_job_from_text_v1(
+        &tok.tokenizer,
+        "hi a",
+        Hash64::from_bytes(w.class),
+        64,
+        MAX_POSITIONS,
+        3,
+        Hash64::from_bytes([0x71u8; 64]),
+    )
+    .map_err(|e| format!("job: {e:?}"))?;
     let o = w.net.route(1, &K::PostJob { job: job.clone() });
     w.net.send(vec![(1, o)]).await;
     if !w.net.ledger().jobs.contains_key(&job.id()) {
@@ -53,7 +64,10 @@ async fn probe_claim(parts: (Config, PalwConsensusParamsV2, Premine, Premine)) -
     let after_seal = w.net.ledger();
     let sealed = after_seal.seals.contains_key(&(job.id(), kid));
     let mut replay = KernelLedgerV1::clone(&after_seal);
-    let replayed = replay.apply_object(&reveal, &misaka_palw_kernel::route::AuthV1 { signer_bond: kid }).map(|_| ()).map_err(|e| format!("{e:?}"));
+    let replayed = replay
+        .apply_object(&reveal, &misaka_palw_kernel::route::AuthV1 { signer_bond: kid })
+        .map(|_| ())
+        .map_err(|e| format!("{e:?}"));
     let o = w.net.route(producer, &reveal);
     w.net.send(vec![(producer, o)]).await;
     if w.net.ledger().claims.contains_key(&produced.claim.id()) {
@@ -74,7 +88,9 @@ async fn probe_claim(parts: (Config, PalwConsensusParamsV2, Premine, Premine)) -
 async fn vfuzz_claim_commit_bisect_the_17400_list() {
     kaspa_core::log::try_init_logger("error");
     let n = PALW_T12_G14_17000_FENCES_V1.len();
-    let run = |k: usize, at: u64| async move { AssertUnwindSafe(probe_claim(prefix_config(k, at))).catch_unwind().await.map_err(panic_text) };
+    let run = |k: usize, at: u64| async move {
+        AssertUnwindSafe(probe_claim(prefix_config(k, at))).catch_unwind().await.map_err(panic_text)
+    };
     eprintln!("VFUZZ-BISECT prefix=0/{n} -> {:?}", run(0, 0).await);
     eprintln!("VFUZZ-BISECT prefix={n}/{n} -> {:?}", run(n, 0).await);
     let (mut lo, mut hi) = (0usize, n);
@@ -119,7 +135,10 @@ async fn gc_duty_full_17400_list_real_attempts_anchor_and_a_panel_one_claim_is_s
     w.net.beat_to(floor).await;
     assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&claim.id));
     let final_daa = w.net.daa();
-    eprintln!("GC-DUTY 17400 Panel=1: committed ~DAA {commit_daa}, seated by DAA {seated_daa}, Final at DAA {final_daa} (seat → Final {} DAA)", final_daa - seated_daa);
+    eprintln!(
+        "GC-DUTY 17400 Panel=1: committed ~DAA {commit_daa}, seated by DAA {seated_daa}, Final at DAA {final_daa} (seat → Final {} DAA)",
+        final_daa - seated_daa
+    );
     let policy = w.policy();
     let row = until_drawn(&mut w.net, &claim.id).await;
     use misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Reproduced;
@@ -147,7 +166,9 @@ async fn gc_duty_full_17400_list_real_attempts_anchor_and_a_panel_one_claim_is_s
         let card = 1 + round % 3;
         let base = w.net.chain.bundle.base_class_id;
         let facts = w.net.chain.ctx.consensus.palw_producer_facts_v2(base, Some(w.net.chain.bonds[card].0)).expect("facts");
-        if let Err(why) = facts.ready_to_produce(&TestConsensus::palw_v2_registry_keypair(card as u64).verification_key.as_ref().to_vec()) {
+        if let Err(why) =
+            facts.ready_to_produce(TestConsensus::palw_v2_registry_keypair(card as u64).verification_key.as_ref().as_ref())
+        {
             not_ready.push((round, card, format!("{why}: {:?}", facts.class_admission_refusal)));
             continue;
         }
@@ -158,9 +179,18 @@ async fn gc_duty_full_17400_list_real_attempts_anchor_and_a_panel_one_claim_is_s
         let s = w.net.chain.tip_state().1;
         // (iii) the attempt block is accepted and becomes the sink whether or not its claim is admitted (a refused attempt is a
         // skip, not an invalid block). The DAA score is not the right witness: a harness attempt block can share its parent's DAA.
-        assert_ne!(w.net.chain.sink(), sink_before, "the attempt block is accepted (the chain advances) whether or not its claim is admitted");
+        assert_ne!(
+            w.net.chain.sink(),
+            sink_before,
+            "the attempt block is accepted (the chain advances) whether or not its claim is admitted"
+        );
         eprintln!("GC-DUTY 17400 attempt round {round}: sink DAA {daa_before} -> {}", w.net.daa());
-        if s.claim(&c).is_some() { admitted += 1 } else { skipped += 1 }
+        if s.claim(&c).is_some() {
+            admitted += 1
+        } else {
+            skipped += 1
+        }
+        #[allow(clippy::collapsible_if)]
         if let Some(a) = s.round_seed_anchor().copied() {
             if anchors.last().is_none_or(|(_, b)| *b != a.block) {
                 anchors.push((w.net.daa(), a.block));
@@ -168,10 +198,15 @@ async fn gc_duty_full_17400_list_real_attempts_anchor_and_a_panel_one_claim_is_s
         }
     }
     let gaps: Vec<u64> = anchors.windows(2).map(|p| p[1].0 - p[0].0).collect();
-    eprintln!("GC-DUTY 17400 attempts: admitted {admitted}, skipped {skipped}; anchors at {:?} (gaps {gaps:?})", anchors.iter().map(|a| a.0).collect::<Vec<_>>());
+    eprintln!(
+        "GC-DUTY 17400 attempts: admitted {admitted}, skipped {skipped}; anchors at {:?} (gaps {gaps:?})",
+        anchors.iter().map(|a| a.0).collect::<Vec<_>>()
+    );
     eprintln!("GC-DUTY 17400 not ready (registry): {not_ready:?}");
     assert!(
-        not_ready.iter().all(|(_, _, why)| why.starts_with(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2)),
+        not_ready
+            .iter()
+            .all(|(_, _, why)| why.starts_with(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2)),
         "a card is held only by the registry's admission (not P_m, not a Q/B/R/F cap): {not_ready:?}"
     );
     assert!(admitted > 0, "REAL attempts are admitted under the full list");

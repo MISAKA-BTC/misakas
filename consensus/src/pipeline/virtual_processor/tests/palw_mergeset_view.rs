@@ -1,4 +1,5 @@
 //! ADR-0125 semantic amendment: real mixed mergesets keep the existing consensus clocks and raw colouring.
+#![allow(warnings)]
 use super::{TestConsensus, TestContext, adr0125_config_funded_for, adr0125_harness_bond, adr0125_round_block};
 use crate::model::stores::headers::HeaderStoreReader;
 use crate::processes::window::WindowManager;

@@ -1,4 +1,5 @@
 //! Explicit local owning39 wrapper generator. Never synthesizes calibration.
+#![allow(warnings)]
 use kaspa_consensus_core::{
     Hash64, config::params::Params, network::NetworkId, palw_native_calibration_v39::NativeCalibrationSnapshotV39,
 };
@@ -20,6 +21,7 @@ fn run() -> Result<(), String> {
     let maximum_horizon = get("--maximum-horizon-daa")?.parse::<u64>().map_err(|e| e.to_string())?;
     let catalog = get("--catalog-cap")?.parse::<u8>().map_err(|e| e.to_string())?;
     let output = PathBuf::from(get("--out")?);
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     if !a.is_empty() || output.exists() {
         return Err("native39 exact options and fresh output required".into());

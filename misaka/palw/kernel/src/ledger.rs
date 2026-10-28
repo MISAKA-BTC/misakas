@@ -1092,9 +1092,15 @@ impl KernelLedgerV1 {
 
     pub fn apply_paid_claim_tally_v2(&mut self, claim: &Digest) -> Result<(), String> {
         let input = self.paid_claim_consumers_v2.get_mut(claim).ok_or("paid V2 consumer authority missing")?;
-        if !input.lifetime.receipt_open(self.daa) { return Err("paid V2 receipt is past its signed deadline".into()); }
+        if !input.lifetime.receipt_open(self.daa) {
+            return Err("paid V2 receipt is past its signed deadline".into());
+        }
         let row = self.claims.get(claim).ok_or("paid V2 claim missing")?;
-        if row.convicted || matches!(row.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. } | ClaimStateV1::Final { .. }) {return Err("paid V2 claim already decided".into());}
+        if row.convicted
+            || matches!(row.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. } | ClaimStateV1::Final { .. })
+        {
+            return Err("paid V2 claim already decided".into());
+        }
         if self.job_claims.get(&row.job_id).is_some_and(|h| h != claim && self.claims.get(h).is_some_and(ClaimRowV1::holds_job)) {
             return Err("another claim already holds the canonical job payment right".into());
         }
@@ -1443,7 +1449,10 @@ impl KernelLedgerV1 {
             }
             // RFC-0016 V8 (inner 76): a capacity attestation is judged only by the native consumer past `palw_capacity_attestation_v1`.
             KernelRouteObjectV1::AttestCapacityV1 { .. } => {
-                return Err(KernelRefusalV1::rule(name, "capacity attestations must be interpreted by the authenticated native consumer"));
+                return Err(KernelRefusalV1::rule(
+                    name,
+                    "capacity attestations must be interpreted by the authenticated native consumer",
+                ));
             }
             // M*-49 (`palw_verifier_pay_v1`): the signer is the drawn slot holder (`authorize`); below the consumer's fence no draw
             // exists, so the attestation is refused by its own rule.
@@ -3256,10 +3265,13 @@ impl KernelLedgerV1 {
                     // EXEC consistency invariant: a bound dependency's liability covers its root window).
                     // G14 lane CLOCK: past X3 the horizon never ends before the claim's notice window (+ a demand's path).
                     let floor = clock_floor.unwrap_or(0);
-                    row.liability_until = Some(match self.paid_claim_consumers_v2.get(&claim) {
-                        Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
-                        None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
-                    }.max(floor));
+                    row.liability_until = Some(
+                        match self.paid_claim_consumers_v2.get(&claim) {
+                            Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
+                            None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
+                        }
+                        .max(floor),
+                    );
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(taken - held);
@@ -3302,12 +3314,30 @@ impl KernelLedgerV1 {
                     row.life.final_hold_until = row.life.final_hold_until.max(d.dispute_until);
                     // A sparse block never slides these logical endpoints. A live
                     // dispute is preserved and exact fraud/default above wins.
-                    if !matches!(row.life.state, ClaimStateV1::Disputed { .. } | ClaimStateV1::Convicted { .. } | ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. } | ClaimStateV1::Final { .. }) {
+                    if !matches!(
+                        row.life.state,
+                        ClaimStateV1::Disputed { .. }
+                            | ClaimStateV1::Convicted { .. }
+                            | ClaimStateV1::Unavailable { .. }
+                            | ClaimStateV1::TimedOut { .. }
+                            | ClaimStateV1::Final { .. }
+                    ) {
                         if paid.complete {
-                            if matches!(row.life.state, ClaimStateV1::Checking { .. } | ClaimStateV1::Challengeable { .. } | ClaimStateV1::Committed | ClaimStateV1::ChallengeBound { .. }) {
-                                row.life.state = ClaimStateV1::ProbabilisticPass { passed_daa: d.checking_until, window_end_daa: d.challenge_until };
+                            if matches!(
+                                row.life.state,
+                                ClaimStateV1::Checking { .. }
+                                    | ClaimStateV1::Challengeable { .. }
+                                    | ClaimStateV1::Committed
+                                    | ClaimStateV1::ChallengeBound { .. }
+                            ) {
+                                row.life.state = ClaimStateV1::ProbabilisticPass {
+                                    passed_daa: d.checking_until,
+                                    window_end_daa: d.challenge_until,
+                                };
                             }
-                        } else {row.life.state = ClaimStateV1::Checking { anchor_daa: d.committed_daa, deadline_daa: d.checking_until };}
+                        } else {
+                            row.life.state = ClaimStateV1::Checking { anchor_daa: d.committed_daa, deadline_daa: d.checking_until };
+                        }
                     }
                 }
                 let _ = row.life.apply(ClaimEventV1::Tick { daa });
@@ -3320,10 +3350,13 @@ impl KernelLedgerV1 {
                     let floor = self.claim_clock_floor_of_v1(&id).unwrap_or(0);
                     let row = self.claims.get_mut(&id).expect("listed");
                     // The paid lifetime's horizon, never shortening an EXEC hold's consented extension (see the default arm).
-                    row.liability_until = Some(match self.paid_claim_consumers_v2.get(&id) {
-                        Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
-                        None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
-                    }.max(floor));
+                    row.liability_until = Some(
+                        match self.paid_claim_consumers_v2.get(&id) {
+                            Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
+                            None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
+                        }
+                        .max(floor),
+                    );
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);
@@ -3728,7 +3761,9 @@ impl OutsiderV1<'_> {
     pub fn check_seeded_v2(&self, randomness: &crate::challenge::CheckerRandomnessV2) -> Result<OutsiderFindingV1, String> {
         let row = self.ledger.claims.get(&self.claim).ok_or("no such claim")?;
         let missing = self.missing(row);
-        if !missing.is_empty() { return Ok(OutsiderFindingV1::Demand(missing)); }
+        if !missing.is_empty() {
+            return Ok(OutsiderFindingV1::Demand(missing));
+        }
         match &row.body {
             ClaimBodyV1::Program { claim, .. } => self.check_program_randomness(row, claim, Some(randomness)),
             ClaimBodyV1::Pipeline { .. } => self.check_pipeline_randomness(row, false, Some(randomness)),
@@ -3739,7 +3774,12 @@ impl OutsiderV1<'_> {
     fn check_program(&self, row: &ClaimRowV1, claim: &KernelClaimV1) -> Result<OutsiderFindingV1, String> {
         self.check_program_randomness(row, claim, None)
     }
-    fn check_program_randomness(&self, row: &ClaimRowV1, claim: &KernelClaimV1, randomness: Option<&crate::challenge::CheckerRandomnessV2>) -> Result<OutsiderFindingV1, String> {
+    fn check_program_randomness(
+        &self,
+        row: &ClaimRowV1,
+        claim: &KernelClaimV1,
+        randomness: Option<&crate::challenge::CheckerRandomnessV2>,
+    ) -> Result<OutsiderFindingV1, String> {
         use crate::verify::{ScopeV1, ScopeVerdictV1};
         let l = self.ledger;
         let class = l.classes.get(&row.class_binding_id).ok_or("no such class")?;
@@ -3782,7 +3822,12 @@ impl OutsiderV1<'_> {
     fn check_pipeline_mode(&self, row: &ClaimRowV1, commitments_only: bool) -> Result<OutsiderFindingV1, String> {
         self.check_pipeline_randomness(row, commitments_only, None)
     }
-    fn check_pipeline_randomness(&self, row: &ClaimRowV1, commitments_only: bool, randomness: Option<&crate::challenge::CheckerRandomnessV2>) -> Result<OutsiderFindingV1, String> {
+    fn check_pipeline_randomness(
+        &self,
+        row: &ClaimRowV1,
+        commitments_only: bool,
+        randomness: Option<&crate::challenge::CheckerRandomnessV2>,
+    ) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let class = l.pipeline_classes.get(&row.class_binding_id).ok_or("no such class")?;
         let (record, header, binding) = l.pipeline_public_record(&self.claim).ok_or("no record")?;
@@ -3801,9 +3846,13 @@ impl OutsiderV1<'_> {
             })
             .collect();
         let refs: Vec<&dyn MaterialV1> = mats.iter().map(|m| m as &dyn MaterialV1).collect();
-        let finding = if commitments_only { fresh.reexecute(&refs)? }
-            else if let Some(r) = randomness { fresh.check_seeded_v2(&refs, r) }
-            else { fresh.check_salted(&refs, self.salt) };
+        let finding = if commitments_only {
+            fresh.reexecute(&refs)?
+        } else if let Some(r) = randomness {
+            fresh.check_seeded_v2(&refs, r)
+        } else {
+            fresh.check_salted(&refs, self.salt)
+        };
         match finding {
             PipelineFindingV1::Pass => Ok(OutsiderFindingV1::Clean),
             PipelineFindingV1::Fault(w) => Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Pipeline(w.to_bytes()))),
@@ -3881,5 +3930,5 @@ mod tests {
     }
 }
 
-#[path="native_inventory_ledger_v1.rs"]
+#[path = "native_inventory_ledger_v1.rs"]
 mod native_resource_inventory_v1;

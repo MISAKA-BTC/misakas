@@ -144,7 +144,11 @@ impl<'a> PalwReplayOpsV1<'a> {
     ) -> Result<PalwTirReplayV1, String> {
         self.backend.replay_tir_generated_ids_v1(_header, _job, _prompt_token_ids)
     }
-    pub fn verify_prefix_state_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, prompt_ids: &[u32]) -> Result<(), String> {
+    pub fn verify_prefix_state_v1(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_ids: &[u32],
+    ) -> Result<(), String> {
         self.backend.verify_prefix_state_v1(job, prompt_ids)
     }
     pub fn verify_fp_interval_opening(
@@ -167,7 +171,15 @@ impl<'a> PalwReplayOpsV1<'a> {
         job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
         committed_output_ids: &[u32],
     ) -> PalwFpIntervalVerdictV1 {
-        self.backend.verify_fp_interval_opening_under_job_v1(opening, claim, index, prompt_token_ids, work_leaves, job, committed_output_ids)
+        self.backend.verify_fp_interval_opening_under_job_v1(
+            opening,
+            claim,
+            index,
+            prompt_token_ids,
+            work_leaves,
+            job,
+            committed_output_ids,
+        )
     }
     pub fn fp_accept_resume_v1(
         &self,
@@ -245,7 +257,13 @@ impl<'a> PalwMaterialOpsV1<'a> {
         _native_material_until_daa: u64,
         _native_now_daa: u64,
     ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
-        self.backend.reopen_tir_prepared_capture_v1(_header, _descriptor, _cache_directory, _native_material_until_daa, _native_now_daa)
+        self.backend.reopen_tir_prepared_capture_v1(
+            _header,
+            _descriptor,
+            _cache_directory,
+            _native_material_until_daa,
+            _native_now_daa,
+        )
     }
     pub fn retire_tir_prepared_capture_v1(
         &self,
@@ -254,7 +272,12 @@ impl<'a> PalwMaterialOpsV1<'a> {
         _native_material_until_daa: u64,
         _native_irreversible_daa: u64,
     ) -> Result<(), String> {
-        self.backend.retire_tir_prepared_capture_v1(_descriptor, _cache_directory, _native_material_until_daa, _native_irreversible_daa)
+        self.backend.retire_tir_prepared_capture_v1(
+            _descriptor,
+            _cache_directory,
+            _native_material_until_daa,
+            _native_irreversible_daa,
+        )
     }
     pub fn open_float_public_source_v1(
         &self,
@@ -281,7 +304,8 @@ impl<'a> PalwMaterialOpsV1<'a> {
         _row: u32,
         _tile: u32,
         _maximum_leaves: u64,
-    ) -> Result<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1), String> {
+    ) -> Result<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1), String>
+    {
         self.backend.disclose_selected_event_v1(_material, _row, _tile, _maximum_leaves)
     }
     pub fn disclose_tir_selected_event_v1(
@@ -384,7 +408,8 @@ impl<'a> PalwMaterialOpsV1<'a> {
         _prompt_token_ids: &[u32],
         _checkpoint: u32,
         _chunk: u32,
-    ) -> Result<(crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1, crate::palw_attn_court_v1::PalwAttnChunkOpeningV1), String> {
+    ) -> Result<(crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1, crate::palw_attn_court_v1::PalwAttnChunkOpeningV1), String>
+    {
         self.backend.held_state_chunk_answer_v1(_capture, _prompt_token_ids, _checkpoint, _chunk)
     }
     pub fn held_step_range_answer_v1(
@@ -461,7 +486,16 @@ impl<'a> PalwCourtEvidenceOpsV1<'a> {
         _limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
         _copy_budget_bytes: u64,
     ) -> Result<PalwTirPublicConeProbeV1, String> {
-        self.backend.probe_tir_public_cone_v1(_header, _prompt_token_ids, _trace, _runs, _leaf_index, _rules, _limits, _copy_budget_bytes)
+        self.backend.probe_tir_public_cone_v1(
+            _header,
+            _prompt_token_ids,
+            _trace,
+            _runs,
+            _leaf_index,
+            _rules,
+            _limits,
+            _copy_budget_bytes,
+        )
     }
     pub fn probe_tir_public_cone_owned_v2(
         &self,
@@ -496,7 +530,16 @@ impl<'a> PalwCourtEvidenceOpsV1<'a> {
         limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
         copy_budget_bytes: u64,
     ) -> Result<(crate::palw_court_v2::PalwCourtVerdictProofV2, crate::palw_tir_court_v1::PalwTirBuilderMeterV1), String> {
-        self.backend.build_tir_public_cone_bounded_v1(header, prompt_token_ids, trace, runs, leaf_index, rules, limits, copy_budget_bytes)
+        self.backend.build_tir_public_cone_bounded_v1(
+            header,
+            prompt_token_ids,
+            trace,
+            runs,
+            leaf_index,
+            rules,
+            limits,
+            copy_budget_bytes,
+        )
     }
     pub fn declare_tir_prefix_state_v1(
         &self,
@@ -617,7 +660,15 @@ impl<'a> PalwCourtEvidenceOpsV1<'a> {
         _generated_token_ids: &[u32],
         _work_leaves: u64,
     ) -> Result<Option<u64>, String> {
-        self.backend.fp_name_the_leaf_v1(_opening, _block_leaves, _claim, _index, _prompt_token_ids, _generated_token_ids, _work_leaves)
+        self.backend.fp_name_the_leaf_v1(
+            _opening,
+            _block_leaves,
+            _claim,
+            _index,
+            _prompt_token_ids,
+            _generated_token_ids,
+            _work_leaves,
+        )
     }
     pub fn fp_name_the_edge_leaf_v1(
         &self,
@@ -629,7 +680,15 @@ impl<'a> PalwCourtEvidenceOpsV1<'a> {
         _generated_token_ids: &[u32],
         _work_leaves: u64,
     ) -> Result<Option<u64>, String> {
-        self.backend.fp_name_the_edge_leaf_v1(_opening, _served_edges, _claim, _index, _prompt_token_ids, _generated_token_ids, _work_leaves)
+        self.backend.fp_name_the_edge_leaf_v1(
+            _opening,
+            _served_edges,
+            _claim,
+            _index,
+            _prompt_token_ids,
+            _generated_token_ids,
+            _work_leaves,
+        )
     }
     pub fn refutation_from_served_intervals(
         &self,

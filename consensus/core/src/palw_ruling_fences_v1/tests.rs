@@ -551,7 +551,11 @@ fn req_t6_3_restricted_the_armed_model_byte_routes_close_for_new_claims_only() {
 // ---- the arm-readiness records (2026-10-18, lane d2-x3-finish): D2 and X3 refused without a record, admitted only by one ----------
 
 /// A well-formed arm-readiness record for `fence` on the network `genesis` at `daa` (distinct non-zero digests, one per requirement).
-fn arm_record(fence: crate::palw_g14_gates_v1::PalwG14GatedFenceV1, genesis: Hash64, daa: u64) -> crate::palw_g14_gates_v1::PalwG14ArmingRecordV1 {
+fn arm_record(
+    fence: crate::palw_g14_gates_v1::PalwG14GatedFenceV1,
+    genesis: Hash64,
+    daa: u64,
+) -> crate::palw_g14_gates_v1::PalwG14ArmingRecordV1 {
     let n = fence.requirements().len();
     let evidence: Vec<[u8; 32]> = (0..n).map(|i| [i as u8 + 1; 32]).collect();
     crate::palw_g14_gates_v1::PalwG14ArmingRecordV1 {
@@ -592,7 +596,11 @@ fn d2_and_x3_are_refused_without_a_record_and_admitted_exactly_at_the_records_ne
     let other = [arm_record(G::CourtModelScopeV1, other_net, FENCE), arm_record(G::ClaimHardDeadlineV1, other_net, FENCE)];
     assert!(p.validate_palw_2026_10_12_ruling_fences_in_v1(&other).is_err(), "another network: refused");
     // The shipped list stays empty, so the binary's own validation still refuses both on testnet-12.
-    assert!(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
+    assert!(
+        crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1
+            .iter()
+            .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+    );
     assert!(p.validate_palw_2026_10_12_ruling_fences_v1().is_err());
     // A record of the wrong form (zero review digest) is refused even when it names the right network and height.
     let mut bad = both;
@@ -617,7 +625,9 @@ fn x3_refuses_an_unmeasured_policy_term_even_with_a_record() {
     let mut measured = t12();
     measured.palw_claim_hard_deadline_v1 = Some(composed_fence());
     measured.sync_palw_2026_10_12_ruling_fences_v1();
-    measured.validate_palw_2026_10_12_ruling_fences_in_v1(&[arm_record(G::ClaimHardDeadlineV1, genesis, FENCE)]).expect("measured and recorded");
+    measured
+        .validate_palw_2026_10_12_ruling_fences_in_v1(&[arm_record(G::ClaimHardDeadlineV1, genesis, FENCE)])
+        .expect("measured and recorded");
 }
 
 #[test]
@@ -630,11 +640,18 @@ fn x3_spans_are_the_composition_of_the_windows_read_at_activation() {
     let probe = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(activation).policy;
     assert!(palw_x3_composition_refusal_v1(&sp, activation, &probe).is_some());
     // Δ is part of T_resolve: a policy whose resolve omits Δ is refused.
-    let no_delta = PalwClaimHardDeadlinePolicyV1 { resolve_daa: fence.policy.resolve_daa - fence.policy.cold_fetch_daa, ..fence.policy };
+    let no_delta =
+        PalwClaimHardDeadlinePolicyV1 { resolve_daa: fence.policy.resolve_daa - fence.policy.cold_fetch_daa, ..fence.policy };
     assert!(palw_x3_composition_refusal_v1(&sp, activation, &no_delta).is_some(), "resolve must include the five B_* terms");
     // The material term with a positive extension and an unmeasured c_retain is refused, never priced at zero.
     let unmeasured = PalwClaimHardDeadlinePolicyV1 { retention_cost_per_daa_sompi: 0, ..fence.policy };
-    assert!(palw_x3_material_term_with_retention_v1(10, &unmeasured, Some(&palw_x3_retention_extension_at_v1(&unmeasured, 100, 0))).is_err());
+    assert!(
+        palw_x3_material_term_with_retention_v1(10, &unmeasured, Some(&palw_x3_retention_extension_at_v1(&unmeasured, 100, 0)))
+            .is_err()
+    );
     let priced = palw_x3_retention_extension_at_v1(&fence.policy, 100, 0);
-    assert_eq!(palw_x3_material_term_with_retention_v1(10, &fence.policy, Some(&priced)), Ok(10 + priced.extra_daa * fence.policy.retention_cost_per_daa_sompi));
+    assert_eq!(
+        palw_x3_material_term_with_retention_v1(10, &fence.policy, Some(&priced)),
+        Ok(10 + priced.extra_daa * fence.policy.retention_cost_per_daa_sompi)
+    );
 }

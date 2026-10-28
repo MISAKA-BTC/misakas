@@ -427,7 +427,6 @@ pub fn derive_inference_work_v39(source: &CheckedSourceV39, first: u32, end: u32
     Ok(result)
 }
 
-
 /// Canonical work of a complete Master's components produced by one bond,
 /// from each component's ACTUAL accepted positions (its first-EOS final
 /// length) and its own registered source. A Master's stage is credited at
@@ -880,7 +879,12 @@ impl NativeMiningClaimRecordV39 {
         crate::Hash64::from_bytes(self.id)
     }
 }
-pub fn native_mining_claim_id_v39(model: Digest, master: Digest, producer: &crate::palw_state_v2::PalwBondKeyV2, sequence: u64) -> Digest {
+pub fn native_mining_claim_id_v39(
+    model: Digest,
+    master: Digest,
+    producer: &crate::palw_state_v2::PalwBondKeyV2,
+    sequence: u64,
+) -> Digest {
     object_id(b"misaka-palw/native/original-mining-claim-id/v39", &(model, master, producer, sequence))
 }
 /// Action 77 — issue the receipt of a decided claim (`kind 0`; anyone may
@@ -1023,7 +1027,10 @@ mod tests {
             source_classes: vec![[8; 64]],
             original_task: [9; 64],
             original_contexts: vec![32],
-            registrant: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::Hash64::from_bytes([1; 64]), 0)),
+            registrant: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                crate::Hash64::from_bytes([1; 64]),
+                0,
+            )),
             registrant_operator: [10; 64],
             share_permille: 0,
             admitted_daa: 100,

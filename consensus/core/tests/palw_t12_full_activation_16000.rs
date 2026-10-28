@@ -8,6 +8,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_t12_full_activation_16000`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{
     PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_full_activation_at_v1, palw_drill_int11_at_v1,
     palw_drill_post_launch_fences_at_v1, palw_drill_post_launch_fences_v2_at_v1, palw_drill_post_launch_fences_v3_at_v1,
@@ -16,8 +17,8 @@ use kaspa_consensus_core::config::drill::{
 use kaspa_consensus_core::config::params::{
     PALW_T12_FULL_ACTIVATION_DAA, PALW_T12_FULL_ACTIVATION_FENCES_V1, PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1,
     PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT13_DAA,
-    PALW_T12_INT13_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1, palw_t12_arm_full_activation_at_v1, palw_t12_drill_params_v1, palw_t12_release_v6_params,
-    palw_t12_release_v7_params, palw_t12_shipped_params,
+    PALW_T12_INT13_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1, palw_t12_arm_full_activation_at_v1, palw_t12_drill_params_v1,
+    palw_t12_release_v6_params, palw_t12_release_v7_params, palw_t12_shipped_params,
 };
 
 /// The list's names, in the order its prerequisites need. Adding an entry is one line here, one line in the list, and the notes.
@@ -466,5 +467,9 @@ fn fpsel_candidate_at_19000_validates_except_for_its_records() {
         assert!(!m.route_armed(family, AT - 1, true), "{family:?} not below {AT}");
     }
     assert!(!m.route_armed(F::FpSelection, AT, false), "an unframed FP claim stays route-absent");
-    eprintln!("fpsel candidate: {} G14 + {} kernel-route + 1 frame-cost TEST-ONLY record(s); shipped refusal: {why}", g14.len(), kernel.len());
+    eprintln!(
+        "fpsel candidate: {} G14 + {} kernel-route + 1 frame-cost TEST-ONLY record(s); shipped refusal: {why}",
+        g14.len(),
+        kernel.len()
+    );
 }

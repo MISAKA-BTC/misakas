@@ -7,7 +7,6 @@
 //!
 //! Value numbering: `docs/design/palw/integration/mac-studio-values-and-measurements-2026-10-22.md` §2 (V1–V9, decided by the value
 //! lanes). When a value lane lands a value, the matching assertion below MUST be replaced by the test that runs that path for real.
-use super::*;
 use kaspa_consensus_core::config::params::{
     PALW_T12_FULL_ACTIVATION_DAA, palw_t12_arm_full_activation_at_v1, palw_t12_shipped_params,
 };
@@ -16,8 +15,9 @@ use kaspa_consensus_core::config::params::{
 #[test]
 fn t_campaign_value_gated_paths_are_refused_in_a_node_build() {
     use kaspa_consensus_core::{
-        palw_court_paid_ingress_v1 as ingress, palw_court_service_binding_v1 as service, palw_court_shared_material_intake_v1 as intake,
-        palw_funded_escrow_v1 as escrow, palw_funded_original_coordinator_v1 as funded, palw_state_v2::PalwTransitionExtrasV1,
+        palw_court_paid_ingress_v1 as ingress, palw_court_service_binding_v1 as service,
+        palw_court_shared_material_intake_v1 as intake, palw_funded_escrow_v1 as escrow,
+        palw_funded_original_coordinator_v1 as funded, palw_state_v2::PalwTransitionExtrasV1,
         palw_tir_position_terminal_v2 as terminal,
     };
     // V1 court service profile: pinned from the user-approved estimate (2026-10-26).

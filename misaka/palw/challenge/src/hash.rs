@@ -46,24 +46,6 @@ impl std::io::Write for IdentityWriter {
     }
 }
 
-#[cfg(test)]
-mod identity_controls {
-    use super::*;
-    #[test]
-    fn streaming_keeps_legacy_framing_for_subject_collections_and_capacity_boundaries() {
-        let mut profiles = std::collections::BTreeSet::new();
-        profiles.insert([7u8; 64]);
-        profiles.insert([2; 64]);
-        for size in [0, 1, 1023, 1024, 1025, 65537] {
-            let object = (&profiles, vec![11u8; size], Some("公開"));
-            assert_eq!(
-                object_id(b"MISAKA/PALW/IDENTITY-COMPATIBILITY/CONTROL", &object),
-                h(b"MISAKA/PALW/IDENTITY-COMPATIBILITY/CONTROL", &borsh::to_vec(&object).unwrap())
-            );
-        }
-    }
-}
-
 /// The id of a named algorithm or policy this binary implements: `H("MISAKA/PALW/ALGORITHM-ID/V1"; name)`.
 pub fn named_id(name: &str) -> Digest {
     h(DOMAIN_ALGORITHM_ID, name.as_bytes())
@@ -89,4 +71,22 @@ pub const DOMAIN_BEACON_CONTEXT: &[u8] = b"MISAKA/PALW/WORK-BEACON/CONTEXT/V1";
 /// Lower-case hex, for messages and JSON tool records.
 pub fn hex(d: &[u8]) -> String {
     d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod identity_controls {
+    use super::*;
+    #[test]
+    fn streaming_keeps_legacy_framing_for_subject_collections_and_capacity_boundaries() {
+        let mut profiles = std::collections::BTreeSet::new();
+        profiles.insert([7u8; 64]);
+        profiles.insert([2; 64]);
+        for size in [0, 1, 1023, 1024, 1025, 65537] {
+            let object = (&profiles, vec![11u8; size], Some("公開"));
+            assert_eq!(
+                object_id(b"MISAKA/PALW/IDENTITY-COMPATIBILITY/CONTROL", &object),
+                h(b"MISAKA/PALW/IDENTITY-COMPATIBILITY/CONTROL", &borsh::to_vec(&object).unwrap())
+            );
+        }
+    }
 }

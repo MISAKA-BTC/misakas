@@ -8,6 +8,7 @@
 //! reservation 5,974,294,206,820. Raw weight is `⌊β·pwu⌋` of the attempt's pwu (β = 100‰) and the
 //! reservation `pwu_per_inference × 5` (`DerivedV1`), so the two are set independently, as on the chain.
 
+#![allow(warnings)]
 use super::*;
 use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
 use crate::palw_fork_authority_v2::{PalwDeepReorgV2, decide_deep_reorg_v2, palw_deep_reorg_strict_economic_v1};

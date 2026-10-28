@@ -236,11 +236,13 @@ fn u4_the_attempt_cost_is_split_measured_and_fairly_queued() {
     let now = FENCE + 1 + p.probation_min_daa.max(p.attempt_cooldown_daa) + p.attempt_cooldown_daa;
     let epoch = now / p.attempt_epoch_daa;
     let model = probation_row(41, 41, FENCE + 1);
-    let lineage = PalwEligibilityLineageRowV1 { attempts_total: 1, last_commit_daa: epoch * p.attempt_epoch_daa, ..Default::default() };
+    let lineage =
+        PalwEligibilityLineageRowV1 { attempts_total: 1, last_commit_daa: epoch * p.attempt_epoch_daa, ..Default::default() };
     let busy = PalwEligibilityNetworkRowV1 { attempt_epoch: epoch, attempts_in_epoch: half, ..Default::default() };
     let c = commit(41, PalwEligibilityExamPurposeV1::Promotion, p.probation_min_claims, 1);
     let principal = PalwEligibilityPrincipalRowV1::default();
-    let verdict = palw_eligibility_commit_admits_v1(&p, &c, &model, PalwEligibilityStageV1::Probation, &lineage, &principal, &busy, now);
+    let verdict =
+        palw_eligibility_commit_admits_v1(&p, &c, &model, PalwEligibilityStageV1::Probation, &lineage, &principal, &busy, now);
     assert!(
         matches!(verdict, Err(PalwEligibilityCommitRefusalV1::FairQueueRepeatAttempt) | Err(PalwEligibilityCommitRefusalV1::Cooldown)),
         "{verdict:?}"
@@ -407,14 +409,11 @@ fn req_elig_2_the_network_probation_budget_is_fixed_whatever_the_number_of_model
             let mut principal = PalwEligibilityPrincipalRowV1::default();
             let mut model = probation_row((i % 250) as u8, (i % 250) as u8, daa);
             // Each model asks its whole stage cap in one-block claims.
-            loop {
-                match palw_probation_admit_v1(&p, &lineage, &network, daa, crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1) {
-                    Ok(units) => {
-                        palw_probation_charge_v1(&p, daa, units, &mut model, &mut lineage, &mut principal, &mut network);
-                        granted_total += units;
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(units) =
+                palw_probation_admit_v1(&p, &lineage, &network, daa, crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1)
+            {
+                palw_probation_charge_v1(&p, daa, units, &mut model, &mut lineage, &mut principal, &mut network);
+                granted_total += units;
             }
         }
         assert!(granted_total <= network_budget, "{models} models: {granted_total} > the fixed network budget {network_budget}");
@@ -474,13 +473,12 @@ fn req_elig_4_attempts_are_counted_at_commit_and_bounded_per_lineage_principal_a
     let mut principal = PalwEligibilityPrincipalRowV1::default();
     let mut network = PalwEligibilityNetworkRowV1::default();
     let c = commit(20, PalwEligibilityExamPurposeV1::Promotion, p.probation_min_claims, 0);
-    let admit = |l: &PalwEligibilityLineageRowV1,
-                 pr: &PalwEligibilityPrincipalRowV1,
-                 n: &PalwEligibilityNetworkRowV1,
-                 c: &PalwEligibilityExamCommitV1,
-                 daa| {
-        palw_eligibility_commit_admits_v1(&p, c, &model, PalwEligibilityStageV1::Probation, l, pr, n, daa)
-    };
+    let admit =
+        |l: &PalwEligibilityLineageRowV1,
+         pr: &PalwEligibilityPrincipalRowV1,
+         n: &PalwEligibilityNetworkRowV1,
+         c: &PalwEligibilityExamCommitV1,
+         daa| { palw_eligibility_commit_admits_v1(&p, c, &model, PalwEligibilityStageV1::Probation, l, pr, n, daa) };
     use PalwEligibilityCommitRefusalV1 as R;
     assert_eq!(admit(&lineage, &principal, &network, &c, now - 1), Err(R::ProbationTooShort));
     assert_eq!(

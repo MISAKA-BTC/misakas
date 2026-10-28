@@ -21,6 +21,7 @@
 //! the refused branch's chain; a sibling the chain merges notes nobody. `drive_2d6d77f7c` keeps the old crediting to pin the defect;
 //! `drive` feeds the watchdog what the fixed relay flow feeds it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::PalwPartitionRefusalV1;
 use kaspa_p2p_flows::flowcontext::partition_watch::{

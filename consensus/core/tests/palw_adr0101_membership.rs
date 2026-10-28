@@ -1,6 +1,7 @@
 //! ADR-0101 — a membership is proven by the chain and served by anyone, and a Position never moves
 //! between holders. The invariants that are consensus-core's to hold.
 
+#![allow(warnings)]
 /// The function a line of `lines` sits in: the nearest `fn` above it.
 fn enclosing_fn(lines: &[&str], at: usize) -> String {
     lines[..at]

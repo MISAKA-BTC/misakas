@@ -7,6 +7,7 @@
 //! `Some(never())` is absence; `validate_palw_v2` refuses each off ConsensusV2, without its prerequisites at or below it, and with a
 //! bundle mirror that disagrees.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_PANEL_LIVENESS_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
     mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,

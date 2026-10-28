@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use crate::imports::*;
 pub fn make_xpub() -> ExtendedPublicKeySecp256k1 {
     use kaspa_bip32::ExtendedKey;

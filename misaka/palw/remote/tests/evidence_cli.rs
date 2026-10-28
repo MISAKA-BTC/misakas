@@ -2,6 +2,7 @@
 //! published to two reference providers, read back and verified; `status` observes them; one provider's chunk rots and `repair` mends it from the
 //! other; `fetch` returns the same bytes the claim's own roots admit. Everything is local (127.0.0.1 and temp directories).
 
+#![allow(warnings)]
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
 use misaka_palw_remote::evidence::{EvidenceManifestV1, fs, manifest_id_v1};

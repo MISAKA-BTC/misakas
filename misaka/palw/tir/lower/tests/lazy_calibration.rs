@@ -3,6 +3,7 @@
 //! the reference needs the largest single tensor (or one expert) resident, not a layer. The statistics are the resident run's, bit for bit; a
 //! mixture's expert stack is never read whole; the cache bounds what stays resident between asks.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::error::Result;
 use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::stream::{Streamed, run_layer_major};

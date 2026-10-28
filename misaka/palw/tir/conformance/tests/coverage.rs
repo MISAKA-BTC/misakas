@@ -2,6 +2,7 @@
 //! EXACTLY the integer part of `catalogued_kernel_ids_v1()` plus `fenced_kernel_ids_v1()`, so a
 //! kernel added to the court without a segment and a test fails here, by name.
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use kaspa_consensus_core::palw_step::kernel_semantics_id_v1;

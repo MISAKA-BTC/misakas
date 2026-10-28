@@ -11,6 +11,7 @@
 //! plain derivation none — the defect), testnet-11 2 on both sides of its regime's height (7,100) by
 //! either derivation (so its node is unchanged), devnet 2 by either, mainnet not V2.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_court_v2::{PalwCourtV2Error, palw_court_params_at_v2, palw_court_params_held_at_v2};

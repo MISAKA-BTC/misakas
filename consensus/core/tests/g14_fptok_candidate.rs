@@ -4,6 +4,7 @@
 //! `palw_court_outsider_lane_v1` at the same height) and shows that on testnet-12 it is refused without records and validates with a
 //! TEST-ONLY record for every gated fence, so records are all that stand between it and arming.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     PALW_T12_FULL_COURT_OUTSIDER_LANE_ENTRY, PALW_T12_FULL_LEGACY_PUBLIC_FILER_ENTRY, PALW_T12_FULL_STAGED_PUBLIC_COURT_ENTRY,
     PALW_T12_KERNEL_SLICE_FENCES_V1, PalwPostLaunchFenceV1, Params, palw_t12_arm_after_int13_at_v1, palw_t12_release_v7_params,

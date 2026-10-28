@@ -51,7 +51,6 @@ use crate::qwen36::{Qwen36Cache, Qwen36Engine, Qwen36Error, Qwen36LayerKind, Qwe
 
 #[path = "qwen36_plan/routing_v2.rs"]
 mod routing_v2;
-pub(crate) use routing_v2::Qwen36NativePlanV2;
 
 /// Why the profile could not become a plan. Mirrors `A16PlanErrorV1`: every refusal is the
 /// ADR-0067 kernel boundary — the class declared arithmetic this build does not serve — and the

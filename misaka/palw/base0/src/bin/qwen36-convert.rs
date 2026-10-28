@@ -52,6 +52,7 @@
 //! `--url` fetches each tensor by HTTP range, so the checkpoint never lands on disk. Peak disk is
 //! the artifact; peak memory is one layer's tensors.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_base0::K;
 use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
 use misaka_palw_base0::gguf::{GgufDirectory, GgufTensor, dequantize, parse_directory};

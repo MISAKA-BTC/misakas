@@ -1,4 +1,5 @@
 //! A small untrusted frontend must not allocate its exponentially expanded result before refusal.
+#![allow(warnings)]
 use misaka_palw_tir_lower::adapter::{
     self, Origin,
     expr::{EXPANSION_LIMIT, Env, MAX_DEPTH, MAX_LIST},

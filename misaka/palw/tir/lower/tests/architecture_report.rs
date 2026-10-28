@@ -6,6 +6,7 @@
 //! A model added with DATA only — an adapter file — goes through the same report and the same
 //! lowering as a built-in one.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::hf_schema::{AdapterChoice, AdapterSource, Level, ReadOptions, TensorIndex};
 use misaka_palw_tir_lower::lower::LowerOpts;

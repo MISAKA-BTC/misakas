@@ -100,10 +100,8 @@ pub fn palw_receipt_pause_claims_v2(chain: &PalwChainStateV2) -> Vec<Hash64> {
     route
         .aux
         .range((PALW_RECEIPT_PAUSE_TABLE_V2, Vec::new())..(PALW_RECEIPT_PAUSE_TABLE_V2 + 1, Vec::new()))
-        .filter_map(|((_, key), _)| {
-            (key.len() == 65 && key[0] == PALW_RECEIPT_PAUSE_PREFIX_V2)
-                .then(|| Hash64::from_bytes(key[1..].try_into().expect("a 65-byte key holds a 64-byte claim")))
-        })
+        .filter(|&((_, key), _)| key.len() == 65 && key[0] == PALW_RECEIPT_PAUSE_PREFIX_V2)
+        .map(|((_, key), _)| Hash64::from_bytes(key[1..].try_into().expect("a 65-byte key holds a 64-byte claim")))
         .collect()
 }
 

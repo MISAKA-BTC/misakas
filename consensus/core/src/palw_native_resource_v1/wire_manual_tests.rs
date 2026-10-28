@@ -79,6 +79,7 @@ fn rfc23s2_checkpoint_floor_preflight_uses_the_exact_written_namespaces() {
     wrong[1] = 1;
     assert!(!accepts(&wrong, &bytes));
     assert!(!accepts(&[b'f', 0], &bytes));
+    #[allow(clippy::byte_char_slices)]
     assert!(!accepts(&[b'F'], &bytes));
 }
 

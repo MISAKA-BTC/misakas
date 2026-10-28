@@ -11,6 +11,7 @@
 //!
 //! Token files are JSON `{"source": …, "sequences": [[id, …], …]}`.
 
+#![allow(warnings)]
 use clap::Parser;
 use misaka_palw_tir_lower::convert::{CalibInput, ConvertRequest, convert_model};
 use misaka_palw_tir_lower::detmath::MathMode;

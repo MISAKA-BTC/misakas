@@ -19,6 +19,7 @@
 //! the slash lock, the panel liability, the retiring bond's collateral (`v3` and the withdrawal
 //! gate's `v4`), and the fold's retire gate.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{
     PALW_T12_BOND_MATURITY_WINDOW_DAA, PALW_T12_SETTLED_ANCHOR_DEPTH, Params, palw_v2_bond_withdrawal_delay_at_v1,

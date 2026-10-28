@@ -6,6 +6,7 @@
 //! `palw_state_v2::tests::adr0135::admission_independence::activation_pool_v1`, F5's queue in
 //! `palw_state_v2::tests::vesting_fold_v1::pool_payouts_scheduled_never_stall_a_six_key_vesting_move`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_activation_pool_v1::{palw_activation_sink_binding_refusal_v1, palw_activation_sink_spk_v1};

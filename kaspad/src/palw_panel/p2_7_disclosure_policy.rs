@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `p2_7_disclosure_policy` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 //! **ADR-0152 X7 (Phase 2, P2-7): when the node answers a disclosure duty, what it answers from,
 //! and how its queue keys an answer.** The duty list and the answer object are consensus-core's
@@ -476,8 +475,8 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
     let court = include_str!("court_progress.rs");
     let worker = include_str!("../palw_panel.rs");
     let read = court.find_code("let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);").expect("the duty read");
-    let pinned =
-        read + court[read..].find_code("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
+    let pinned = read
+        + court[read..].find_code("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
     let built = pinned
         + court[pinned..]
             .find_code("self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await")

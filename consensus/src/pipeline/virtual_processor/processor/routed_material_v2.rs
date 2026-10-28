@@ -183,6 +183,225 @@ impl VirtualStateProcessor {
     }
 }
 
+fn require_routing_work_refresh_origin_v2(
+    original_epoch: u64,
+    current_epoch: u64,
+    canonical: bool,
+) -> Result<(), kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
+    if original_epoch != current_epoch {
+        // A completed import advances the local epoch permanently. This exact
+        // original execution cannot acquire a replacement authority by retry.
+        return Err(kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Identity(
+            "routing work import generation changed; reexecute",
+        ));
+    }
+    if !canonical {
+        // A branch change may be reversed; do not classify a fallible or
+        // currently noncanonical ancestry as terminal execution misconduct.
+        return Err(kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable(
+            "routing work pinned checkpoint no longer canonical",
+        ));
+    }
+    Ok(())
+}
+
+fn routing_work_reachability_fault_v2(
+    error: crate::processes::reachability::ReachabilityError,
+) -> kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 {
+    match error {
+        crate::processes::reachability::ReachabilityError::StoreError(error) => routing_work_store_fault_v2(error),
+        _ => kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable(
+            "routing work native ancestry unreadable",
+        ),
+    }
+}
+
+fn routing_work_store_fault_v2(
+    error: kaspa_database::prelude::StoreError,
+) -> kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 {
+    use kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 as F;
+    match error {
+        kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason) => {
+            F::Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::Unsupported {
+                component: "native routing work snapshot".into(),
+                native_type: "NativeChainStateV1".into(),
+                reason,
+            })
+        }
+        _ => F::Unavailable("native routing work store unreadable"),
+    }
+}
+impl VirtualStateProcessor {
+    // The general pruning_import_status API intentionally returns a formatted
+    // context error. Keep these native-work capacity failures typed instead.
+    fn routing_work_import_status_v2(
+        &self,
+    ) -> Result<
+        (kaspa_consensus_core::pruning::PruningImportSessionStateV1, bool),
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        let meta = self.pruning_meta_stores.read();
+        let state = meta.import_session().map_err(routing_work_store_fault_v2)?;
+        let stable = meta.try_pruning_utxoset_stable_flag().map_err(routing_work_store_fault_v2)?;
+        Ok((state, stable))
+    }
+    pub(crate) fn palw_native_routing_fp_work_authority_v2_impl(
+        &self,
+        params: &kaspa_consensus_core::config::params::Params,
+        fp: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    ) -> Result<
+        Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        self.native_routing_work_authority_v2_impl(
+            params,
+            job,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(fp.executor_bond),
+            Some(fp),
+            None,
+            None,
+        )
+    }
+    pub(crate) fn palw_native_routing_rider_work_authority_v2_impl(
+        &self,
+        params: &kaspa_consensus_core::config::params::Params,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        lead: Hash64,
+        index: u32,
+        retention: u64,
+    ) -> Result<
+        Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        self.native_routing_work_authority_v2_impl(params, job, executor, None, Some((lead, index, retention)), None)
+    }
+    pub(crate) fn palw_native_routing_refresh_work_authority_v2_impl(
+        &self,
+        params: &kaspa_consensus_core::config::params::Params,
+        original: &kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
+    ) -> Result<
+        Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        use kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 as F;
+        self.native_routing_work_authority_v2_impl(
+            params,
+            original.job(),
+            original.executor(),
+            original.fp_job(),
+            original.rider(),
+            Some(original),
+        )?
+        .ok_or(F::Unavailable("native routing work fence or profile disappeared"))
+    }
+    fn native_routing_work_authority_v2_impl(
+        &self,
+        params: &kaspa_consensus_core::config::params::Params,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        fp: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
+        rider: Option<(Hash64, u32, u64)>,
+        original: Option<&kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+    ) -> Result<
+        Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2,
+    > {
+        use kaspa_consensus_core::palw_reader_router_v2::{
+            PalwNativeRoutingWorkAuthorityV2 as Owner, PalwNativeRoutingWorkFaultV2 as F,
+        };
+        let before = self.lkg_virtual_state.load();
+        if !params
+            .palw_memory_routing_court_v2
+            .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(before.daa_score))
+        {
+            return Ok(None);
+        }
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            return Err(F::Unavailable("routing work requires native ConsensusV2"));
+        };
+        let checkpoint = before.ghostdag_data.selected_parent;
+        let (import, stable) = self.routing_work_import_status_v2()?;
+        if !stable || import.active.is_some() {
+            return Err(F::Unavailable("routing work own import unavailable"));
+        }
+        if let Some(original) = original {
+            if self.statuses_store.read().get(original.checkpoint()).map_err(routing_work_store_fault_v2)?
+                != kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid
+            {
+                return Err(F::Unavailable("routing work pinned checkpoint no longer validated"));
+            }
+            let canonical = self
+                .reachability_service
+                .try_is_chain_ancestor_of(original.checkpoint(), checkpoint)
+                .map_err(routing_work_reachability_fault_v2)?;
+            require_routing_work_refresh_origin_v2(original.import_epoch(), import.epoch, canonical)?;
+        }
+        let (point, state) = self
+            .palw_v2_reader_state(&bundle.state)
+            .map_err(routing_work_store_fault_v2)?
+            .ok_or(F::Unavailable("routing work own state absent"))?;
+        if point != checkpoint {
+            return Err(F::Unavailable("routing work selected point changed"));
+        }
+        let header = self.headers_store.get_header(checkpoint).map_err(routing_work_store_fault_v2)?;
+        if self.statuses_store.read().get(checkpoint).map_err(routing_work_store_fault_v2)?
+            != kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid
+            || kaspa_consensus_core::hashing::header::hash(&header) != checkpoint
+        {
+            return Err(F::Unavailable("routing work selected header not validated"));
+        }
+        let owner = if let Some(fp) = fp {
+            let anchor = self.headers_store.get_header(fp.anchor_block).map_err(routing_work_store_fault_v2)?;
+            if self.statuses_store.read().get(fp.anchor_block).map_err(routing_work_store_fault_v2)?
+                != kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid
+                || kaspa_consensus_core::hashing::header::hash(&anchor) != fp.anchor_block
+                || !self
+                    .reachability_service
+                    .try_is_dag_ancestor_of(fp.anchor_block, checkpoint)
+                    .map_err(routing_work_reachability_fault_v2)?
+            {
+                return Err(F::Unavailable("routing FP anchor is not own validated ancestor"));
+            }
+            Owner::from_native_fp_v2(state, params, &header, &anchor, before.daa_score, fp, job, &self.network_id_bytes, import.epoch)?
+        } else if let Some((lead, index, retention)) = rider {
+            Owner::from_native_rider_v2(
+                state,
+                params,
+                &header,
+                before.daa_score,
+                job,
+                executor,
+                lead,
+                index,
+                retention,
+                &self.network_id_bytes,
+                import.epoch,
+            )?
+        } else {
+            return Err(F::Identity("routing work origin absent"));
+        };
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.routing_work_import_status_v2()?;
+        if !stable
+            || end.active.is_some()
+            || import.epoch != end.epoch
+            || after.ghostdag_data.selected_parent != checkpoint
+            || before.daa_score != after.daa_score
+        {
+            return Err(F::Unavailable("routing work native/import generation changed"));
+        }
+        #[allow(clippy::collapsible_if)]
+        if let Some(original) = original {
+            if owner.as_ref().is_none_or(|fresh| !original.same_work_identity_v2(fresh)) {
+                return Err(F::Unavailable("routing work fixed identity changed during execution"));
+            }
+        }
+        Ok(owner.map(Arc::new))
+    }
+}
+
 #[cfg(test)]
 mod routing_execution_context_tests {
     use super::*;
@@ -191,21 +410,19 @@ mod routing_execution_context_tests {
     fn work_refresh_requires_native_canonical_ancestry_and_same_import() {
         // This is the actual refresh door's decision after its fallible native
         // reachability lookup; an advanced canonical tip is allowed.
-        assert!(require_routing_work_refresh_origin_v2(4,4,true).is_ok());
+        assert!(require_routing_work_refresh_origin_v2(4, 4, true).is_ok());
         use kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 as F;
-        assert!(matches!(require_routing_work_refresh_origin_v2(4,4,false),Err(F::Unavailable(_))));
-        assert!(matches!(require_routing_work_refresh_origin_v2(4,5,true),Err(F::Identity(_))));
-        assert!(matches!(require_routing_work_refresh_origin_v2(5,4,true),Err(F::Identity(_))));
+        assert!(matches!(require_routing_work_refresh_origin_v2(4, 4, false), Err(F::Unavailable(_))));
+        assert!(matches!(require_routing_work_refresh_origin_v2(4, 5, true), Err(F::Identity(_))));
+        assert!(matches!(require_routing_work_refresh_origin_v2(5, 4, true), Err(F::Identity(_))));
     }
 
     #[test]
     fn candidate_must_use_actual_own_selected_parent_context() {
         let checkpoint = Hash64::from_u64_word(1);
         let other = Hash64::from_u64_word(2);
-        let mut own = VirtualState::default();
-        own.parents = vec![checkpoint, other];
+        let mut own = VirtualState { parents: vec![checkpoint, other], daa_score: 7, ..Default::default() };
         own.ghostdag_data.selected_parent = checkpoint;
-        own.daa_score = 7;
         let mut candidate = Header::from_precomputed_hash(Hash64::from_u64_word(3), vec![other, checkpoint]);
         candidate.daa_score = own.daa_score;
         require_routing_template_context_v2(&own, checkpoint, &candidate).unwrap();
@@ -219,111 +436,5 @@ mod routing_execution_context_tests {
         candidate.daa_score = own.daa_score;
         own.ghostdag_data.selected_parent = other;
         assert!(require_routing_template_context_v2(&own, checkpoint, &candidate).is_err());
-    }
-}
-
-fn require_routing_work_refresh_origin_v2(original_epoch:u64,current_epoch:u64,canonical:bool)->Result<(),kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
-    if original_epoch!=current_epoch {
-        // A completed import advances the local epoch permanently. This exact
-        // original execution cannot acquire a replacement authority by retry.
-        return Err(kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Identity("routing work import generation changed; reexecute"));
-    }
-    if !canonical {
-        // A branch change may be reversed; do not classify a fallible or
-        // currently noncanonical ancestry as terminal execution misconduct.
-        return Err(kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("routing work pinned checkpoint no longer canonical"));
-    }
-    Ok(())
-}
-
-fn routing_work_reachability_fault_v2(error:crate::processes::reachability::ReachabilityError)->kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 {
-    match error {
-        crate::processes::reachability::ReachabilityError::StoreError(error)=>routing_work_store_fault_v2(error),
-        _=>kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2::Unavailable("routing work native ancestry unreadable"),
-    }
-}
-
-fn routing_work_store_fault_v2(error:kaspa_database::prelude::StoreError)->kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 {
-    use kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 as F;
-    match error {
-        kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)=>F::Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::Unsupported {
-            component:"native routing work snapshot".into(),native_type:"NativeChainStateV1".into(),reason,
-        }),
-        _=>F::Unavailable("native routing work store unreadable"),
-    }
-}
-impl VirtualStateProcessor {
-    // The general pruning_import_status API intentionally returns a formatted
-    // context error. Keep these native-work capacity failures typed instead.
-    fn routing_work_import_status_v2(&self)->Result<(kaspa_consensus_core::pruning::PruningImportSessionStateV1,bool),kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
-        let meta=self.pruning_meta_stores.read();
-        let state=meta.import_session().map_err(routing_work_store_fault_v2)?;
-        let stable=meta.try_pruning_utxoset_stable_flag().map_err(routing_work_store_fault_v2)?;
-        Ok((state,stable))
-    }
-    pub(crate) fn palw_native_routing_fp_work_authority_v2_impl(&self,params:&kaspa_consensus_core::config::params::Params,
-        fp:&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,job:&kaspa_consensus_core::palw_v2::PalwJobContextV2,
-    )->Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
-        self.native_routing_work_authority_v2_impl(params,job,kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(fp.executor_bond),Some(fp),None,None)
-    }
-    pub(crate) fn palw_native_routing_rider_work_authority_v2_impl(&self,params:&kaspa_consensus_core::config::params::Params,
-        job:&kaspa_consensus_core::palw_v2::PalwJobContextV2,executor:kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        lead:Hash64,index:u32,retention:u64,
-    )->Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
-        self.native_routing_work_authority_v2_impl(params,job,executor,None,Some((lead,index,retention)),None)
-    }
-    pub(crate) fn palw_native_routing_refresh_work_authority_v2_impl(&self,params:&kaspa_consensus_core::config::params::Params,
-        original:&kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2,
-    )->Result<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
-        use kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2 as F;
-        self.native_routing_work_authority_v2_impl(params,original.job(),original.executor(),original.fp_job(),original.rider(),Some(original))?
-            .ok_or(F::Unavailable("native routing work fence or profile disappeared"))
-    }
-    fn native_routing_work_authority_v2_impl(&self,params:&kaspa_consensus_core::config::params::Params,
-        job:&kaspa_consensus_core::palw_v2::PalwJobContextV2,executor:kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        fp:Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,rider:Option<(Hash64,u32,u64)>,
-        original:Option<&kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
-    )->Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkFaultV2> {
-        use kaspa_consensus_core::palw_reader_router_v2::{PalwNativeRoutingWorkAuthorityV2 as Owner,PalwNativeRoutingWorkFaultV2 as F};
-        let before=self.lkg_virtual_state.load();
-        if !params.palw_memory_routing_court_v2.is_some_and(|f| f!=kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(before.daa_score)) { return Ok(None); }
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)=&params.palw_consensus_mode else { return Err(F::Unavailable("routing work requires native ConsensusV2")); };
-        let checkpoint=before.ghostdag_data.selected_parent;
-        let (import,stable)=self.routing_work_import_status_v2()?;
-        if !stable || import.active.is_some() { return Err(F::Unavailable("routing work own import unavailable")); }
-        if let Some(original)=original {
-            if self.statuses_store.read().get(original.checkpoint()).map_err(routing_work_store_fault_v2)?!=kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid {
-                return Err(F::Unavailable("routing work pinned checkpoint no longer validated"));
-            }
-            let canonical=self.reachability_service.try_is_chain_ancestor_of(original.checkpoint(),checkpoint).map_err(routing_work_reachability_fault_v2)?;
-            require_routing_work_refresh_origin_v2(original.import_epoch(),import.epoch,canonical)?;
-        }
-        let (point,state)=self.palw_v2_reader_state(&bundle.state).map_err(routing_work_store_fault_v2)?.ok_or(F::Unavailable("routing work own state absent"))?;
-        if point!=checkpoint { return Err(F::Unavailable("routing work selected point changed")); }
-        let header=self.headers_store.get_header(checkpoint).map_err(routing_work_store_fault_v2)?;
-        if self.statuses_store.read().get(checkpoint).map_err(routing_work_store_fault_v2)?!=kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid
-            || kaspa_consensus_core::hashing::header::hash(&header)!=checkpoint { return Err(F::Unavailable("routing work selected header not validated")); }
-        let owner=if let Some(fp)=fp {
-            let anchor=self.headers_store.get_header(fp.anchor_block).map_err(routing_work_store_fault_v2)?;
-            if self.statuses_store.read().get(fp.anchor_block).map_err(routing_work_store_fault_v2)?!=kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid
-                || kaspa_consensus_core::hashing::header::hash(&anchor)!=fp.anchor_block
-                || !self.reachability_service.try_is_dag_ancestor_of(fp.anchor_block,checkpoint).map_err(routing_work_reachability_fault_v2)? {
-                return Err(F::Unavailable("routing FP anchor is not own validated ancestor"));
-            }
-            Owner::from_native_fp_v2(state,params,&header,&anchor,before.daa_score,fp,job,&self.network_id_bytes,import.epoch)?
-        } else if let Some((lead,index,retention))=rider {
-            Owner::from_native_rider_v2(state,params,&header,before.daa_score,job,executor,lead,index,retention,&self.network_id_bytes,import.epoch)?
-        } else { return Err(F::Identity("routing work origin absent")); };
-        let after=self.lkg_virtual_state.load();
-        let (end,stable)=self.routing_work_import_status_v2()?;
-        if !stable || end.active.is_some() || import.epoch!=end.epoch || after.ghostdag_data.selected_parent!=checkpoint || before.daa_score!=after.daa_score {
-            return Err(F::Unavailable("routing work native/import generation changed"));
-        }
-        if let Some(original)=original {
-            if owner.as_ref().is_none_or(|fresh| !original.same_work_identity_v2(fresh)) {
-                return Err(F::Unavailable("routing work fixed identity changed during execution"));
-            }
-        }
-        Ok(owner.map(Arc::new))
     }
 }

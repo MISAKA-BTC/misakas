@@ -9,6 +9,7 @@
 //! The report is a data-identity and monetary-conservation audit of the
 //! anchored state. It never states PASS, never asserts LLM correctness
 //! (PRINCIPLES §8), and grants no Final, mining receipt or consensus weight.
+#![allow(warnings)]
 use kaspa_consensus_core::{Hash64, config::params::Params, network::NetworkId, palw_state_v2::PalwChainStateV2};
 use misaka_palw_sdk::{native_archive_v39::NativeArchiveDirV39, runtime_pack::commit::hex};
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
@@ -33,6 +34,7 @@ fn run() -> Result<(), String> {
     let parent = get("--pinned-selected-parent")?.parse::<Hash64>().map_err(|e| e.to_string())?;
     let mode = get("--mode")?;
     let out = PathBuf::from(get("--out")?);
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     let id = a.remove("--id").map(|v| v.parse::<Hash64>().map_err(|e| e.to_string())).transpose()?;
     let archive_dir = a.remove("--archive-dir");
@@ -72,7 +74,8 @@ fn run() -> Result<(), String> {
         Some(d) => Some(NativeArchiveDirV39::open(std::path::Path::new(d))?),
         None => None,
     };
-    let archive_ref = archive.as_ref().map(|a| a as &dyn kaspa_consensus_core::palw_native_execution_v39::NativeOriginalSourceArchiveV39);
+    let archive_ref =
+        archive.as_ref().map(|a| a as &dyn kaspa_consensus_core::palw_native_execution_v39::NativeOriginalSourceArchiveV39);
     let anchor = serde_json::json!({
         "child": child.to_string(),
         "selected_parent": parent.to_string(),
@@ -83,13 +86,8 @@ fn run() -> Result<(), String> {
     let report = match mode.as_str() {
         "job" => {
             let id = id.ok_or("final-audit39 --id <job> required")?.as_bytes();
-            let audit = PalwChainStateV2::native_job_audit_from_stream_v39(
-                stream.auxiliary(),
-                stream.anchor(),
-                params,
-                id,
-                archive_ref,
-            )?;
+            let audit =
+                PalwChainStateV2::native_job_audit_from_stream_v39(stream.auxiliary(), stream.anchor(), params, id, archive_ref)?;
             let book = audit.book();
             serde_json::json!({
                 "schema": "misaka.palw.native-job-audit.v39",

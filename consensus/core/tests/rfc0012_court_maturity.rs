@@ -3,6 +3,7 @@
 //! registry row is installed by delta. Only extracted evidence is relabelled to a REAL class. No court, deadline, Final or
 //! retention extension is planted. Post-Final admission is tested as a refusal, not asserted from a synthetic state.
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 #[path = "rfc0012_fold_fixture/mod.rs"]

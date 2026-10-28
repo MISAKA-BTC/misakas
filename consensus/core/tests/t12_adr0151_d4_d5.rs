@@ -3,6 +3,7 @@
 //! Both were drafted as OPEN from a description of the defect. Checking the tree found them already
 //! built — D4 by ADR-0144 §9's lock ledger, D5 by the payout carrying no duration term at all — so
 //! these tests exist to PIN that, because a property nothing checks is a property that drifts back.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 

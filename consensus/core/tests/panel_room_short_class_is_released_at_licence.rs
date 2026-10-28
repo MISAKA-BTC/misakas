@@ -20,6 +20,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_short_class_is_released_at_licence
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

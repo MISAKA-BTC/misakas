@@ -1,6 +1,7 @@
 //! Local admission exhaustion must not become a weaker fork-choice verdict.
 //! Run only in the consolidated verification phase. The child isolates global
 //! admission settings from every other consensus fixture in this test binary.
+#![allow(warnings)]
 use super::*;
 use crate::model::stores::{pruning::PruningStoreReader, virtual_state::VirtualStateStoreReader};
 use kaspa_consensus_core::{

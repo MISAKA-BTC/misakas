@@ -8,6 +8,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_class_daa_epoch_table -- --nocapture`
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2};
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwConsensusObjectV2 as Obj, PalwPwuRuleV2, PalwStateParamsV2,

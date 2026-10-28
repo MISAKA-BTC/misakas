@@ -1,4 +1,5 @@
 //! Source-only regression cases for the consolidated validation phase.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     flat_detect39::*,
     flat_job39::*,

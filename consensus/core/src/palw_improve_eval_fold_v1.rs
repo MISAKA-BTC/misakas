@@ -748,7 +748,11 @@ pub(super) fn apply_improvement_eval_commitment_v1(
 impl TransitionBuilder<'_> {
     /// **RFC-0004 A6: the one writer of `improvement_eval_jobs`** (`ImprovementRow`, table 13), keeping
     /// the claim index in step.
-    pub(crate) fn write_improvement_eval_job(&mut self, key: PalwEvalJobKeyV1, new: Option<PalwEvalJobStateV1>) -> Result<(), PalwStateV2Error> {
+    pub(crate) fn write_improvement_eval_job(
+        &mut self,
+        key: PalwEvalJobKeyV1,
+        new: Option<PalwEvalJobStateV1>,
+    ) -> Result<(), PalwStateV2Error> {
         // RFC-0006: the caller-side clone handed to the row writer and the claim index node, from the actual row.
         if self.native_writers_tracking_v1() {
             let mut q = super::native_writers::NativeWriteQuoteV1::new("native improvement eval job clone and claim index");

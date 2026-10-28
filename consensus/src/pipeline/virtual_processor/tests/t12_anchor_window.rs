@@ -12,6 +12,7 @@
 //! chain block that records an anchor. The class stays `Candidate` through every audit. With `palw_anchor_window_v1` armed beside it, the
 //! merged REAL attempts anchor (M1), the anchor survives the span boundaries (M2), the audit reads the latest anchor of its window (M3), and the
 //! class leaves `Candidate` AT ITS FIRST AUDIT.
+#![allow(warnings)]
 use super::OnetimeTxSelector;
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;

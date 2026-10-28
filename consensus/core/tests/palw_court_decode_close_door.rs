@@ -22,6 +22,7 @@
 //! untested. The binding now commits a canonical tile at the fused leaf under a consistent step root,
 //! with the family's checkpoint profile. The old binding is kept as a third row, which pins that
 //! conviction.
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

@@ -8,6 +8,7 @@
 //! is absence; `validate_palw_v2` refuses each off ConsensusV2, without its prerequisites at or below it, and with a bundle mirror
 //! that disagrees. They are in no earlier flag-day list and not in the capacity lists (the int-11 flag day names their height).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_EMISSION_BUDGET_V1, PALW_T12_CAPACITY_FENCES_V1,
     PALW_T12_CAPACITY_MULTI_CLAIM_V1, PALW_T12_CAPACITY_RHO_BREAKER_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,

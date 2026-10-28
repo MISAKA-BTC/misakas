@@ -29,6 +29,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test dos_repro_3_one_junk_2m_claim_kills_the_2m_lane -- --nocapture --test-threads=2
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

@@ -18,7 +18,7 @@ fn array<T>(n: u64) -> Result<u64, PalwGdnCourtErrorV2> {
 }
 fn heap<T: NativeHeapV1>(value: &T) -> Result<u64, PalwGdnCourtErrorV2> {
     let quote = value.native_heap_v1(PATH);
-    quote.bytes().ok_or_else(|| PalwGdnCourtErrorV2::Resource(quote))
+    quote.bytes().ok_or(PalwGdnCourtErrorV2::Resource(quote))
 }
 /// Typed push growth and old/new overlap; do not treat Vec::with_capacity or
 /// Vec::clone as push growth. These are logical array requests, not RSS.

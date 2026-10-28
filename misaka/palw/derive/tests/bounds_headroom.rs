@@ -57,6 +57,7 @@
 //! the scene grammar, a raised decode cap, a kind whose artifact is superlinear in its DSL — this
 //! reasoning expires, and the assertion below is what will notice.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_derived_v1::{PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN, kind};
 use kaspa_hashes::Hash64;
 use misaka_palw_derive::{ClaimBinding, derive_named, registry};

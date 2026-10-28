@@ -1,5 +1,6 @@
 //! Contemporaneous full-state raw transport. No measurement/qualification is
 //! asserted. Every original state is later authenticated by the Core39 factory.
+#![allow(warnings)]
 use kaspa_consensus_core::{Hash64, config::params::Params, header::Header, network::NetworkId};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_wrpc_client::{
@@ -83,6 +84,7 @@ fn run() -> Result<(), String> {
     let snapshot = PathBuf::from(get("--own-params-snapshot39")?).canonicalize().map_err(|e| e.to_string())?;
     let pin = get("--own-params-snapshot-root")?;
     let sha = get("--own-params-sha256")?;
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     let first_window = a.remove("--first-window-start-daa").map(|v| v.parse::<u64>().map_err(|e| e.to_string())).transpose()?;
     let ready = a.remove("--ready-out").map(PathBuf::from);
@@ -94,6 +96,7 @@ fn run() -> Result<(), String> {
     if operator.is_empty() || database.is_empty() {
         return Err("live39 original operator/database identity absent".into());
     }
+    #[allow(clippy::collapsible_if)]
     if let Some(path) = &ready {
         if path.exists()
             || !path.parent().ok_or("live39 ready parent absent")?.canonicalize().map_err(|e| e.to_string())?.starts_with(&root)
@@ -300,6 +303,7 @@ fn run() -> Result<(), String> {
             b"misaka-palw/audit/live-collected-transcript/v39",
             &(rolling, next, parent_hash, count),
         );
+        #[allow(clippy::collapsible_if)]
         if count == 0 {
             if let Some(path) = &ready {
                 let raw=serde_json::to_vec(&serde_json::json!({"schema":"misaka.rfc02.receipt-live-ready.v39","start_child":start.to_string(),"first_parent_daa":ph.daa_score,"network":network,"genesis":genesis,"operator_id":operator,"node_database":database,"node_consensus_params_id":status.consensus_params_id})).map_err(|e|e.to_string())?;

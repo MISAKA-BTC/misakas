@@ -2,6 +2,7 @@
 //!
 //! Read-only audit artefact. Nothing here is a fixture any shipped code reads.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
 use kaspa_consensus_core::palw_economic_compute_v1::{PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1};
 use kaspa_consensus_core::palw_fp_devnet_v3::{PalwCollateralRowV1, palw_exposure_unit_pwu_v1, palw_v2_collateral_for_class_set_v1};

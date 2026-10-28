@@ -5,6 +5,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_useful_work_fences`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
     mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v5_params, palw_t12_shipped_params,

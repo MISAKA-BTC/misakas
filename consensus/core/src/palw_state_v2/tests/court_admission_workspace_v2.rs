@@ -1,5 +1,6 @@
 //! Stored capacity-book mechanism over a real folded registry and attempt.
 //! The capacity/fee values below are explicit private fixtures, not policy approval.
+#![allow(warnings)]
 use super::*;
 use crate::palw_court_capacity_v1::*;
 use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};

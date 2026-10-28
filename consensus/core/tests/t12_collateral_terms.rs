@@ -5,6 +5,7 @@
 //! in the EXPLANATION, which is the part a reader trusts. These assertions are what keep the table
 //! true, and they are per-term rather than on the total so a failure says which row moved.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
 use kaspa_consensus_core::palw_fp_devnet_v3::{
     PALW_MODEL_CLAIM_CONCURRENCY_V1, PALW_T12_GENESIS_FLOOR_CONCURRENCY_V1, palw_exposure_unit_pwu_v1,

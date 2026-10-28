@@ -48,7 +48,7 @@ impl PreparedFilingV2 {
             return Err(FilerPreparationFaultV2::Semantic("witness exceeds accepted frame prepaid ceiling".into()));
         }
         let heap = evidence.native_heap_v1("TIR filer evidence copies");
-        let heap = heap.bytes().ok_or_else(|| FilerPreparationFaultV2::Resource(heap))?;
+        let heap = heap.bytes().ok_or(FilerPreparationFaultV2::Resource(heap))?;
         let mut q = PalwMaterialConstructionRequestsV2::new();
         // At most three live deep copies beyond the book's original: this
         // snapshot, the ordinary owned API argument/build object, and a shape

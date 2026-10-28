@@ -7,11 +7,17 @@ use super::*;
 pub(super) mod queue_drain_workspace_v2;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ArtifactMigrationOrderV1 { BeforeClassRetarget, AfterMeshSweep }
+pub(super) enum ArtifactMigrationOrderV1 {
+    BeforeClassRetarget,
+    AfterMeshSweep,
+}
 
 pub(super) fn prepare_block_objects_v1(
-    builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2,
-    ctx: &PalwBlockContextV2, facts: PalwBlockFactsV1<'_>, rules: PalwRulesAtBlockV1<'_>,
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    facts: PalwBlockFactsV1<'_>,
+    rules: PalwRulesAtBlockV1<'_>,
     migration: ArtifactMigrationOrderV1,
 ) -> Result<(), PalwStateV2Error> {
     queue_drain_workspace_v2::drain_consumed_queues_v2(builder, ctx)?;

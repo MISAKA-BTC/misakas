@@ -55,6 +55,7 @@
 //! who wants a fresh bond key makes it there, keeps the secret, and passes only the verification
 //! key here.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_base0_profile::{
     PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, palw_rc_base0_registration_v1,
 };

@@ -9,6 +9,7 @@
 //!   `dense_matmul`, the router's experts in `routed_expert_matmul`, a recurrence in `recurrence`, a
 //!   history in the attention and KV dimensions, norms in `normalization`.
 
+#![allow(warnings)]
 use std::path::PathBuf;
 
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalExecutionFactsV1, PalwCanonicalWorkVectorV1};

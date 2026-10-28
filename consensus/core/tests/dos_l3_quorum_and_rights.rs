@@ -6,6 +6,7 @@
 //! does not price. Pure arithmetic: nothing here allocates more than a few KiB.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test dos_l3_quorum_and_rights -- --nocapture --test-threads=2
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

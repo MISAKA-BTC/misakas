@@ -43,7 +43,11 @@ fn seed_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
 
 /// Attempt blocks (which record round seed anchors) until the claim's Panel=1 assignment exists. Returns the anchor the draw block's
 /// state held and the DAA it appeared at.
-async fn until_seated(net: &mut Net, claim: &Digest, commit_daa: u64) -> (kaspa_consensus_core::palw_execution_lane_v1::PalwExecSeedAnchorV1, u64) {
+async fn until_seated(
+    net: &mut Net,
+    claim: &Digest,
+    commit_daa: u64,
+) -> (kaspa_consensus_core::palw_execution_lane_v1::PalwExecSeedAnchorV1, u64) {
     let ttpb = net.ttpb();
     for round in 0..32u64 {
         let before = net.chain.tip_state().1.round_seed_anchor().copied();
@@ -56,7 +60,10 @@ async fn until_seated(net: &mut Net, claim: &Digest, commit_daa: u64) -> (kaspa_
                 .flatten()
                 .find(|x| palw_kernel_panel_one_challenge_v1(claim, x) == (a.challenge_anchor, a.sample_seed))
                 .expect("the challenge pair is a held anchor's");
-            assert!([1, 5].iter().any(|s| palw_kernel_panel_one_anchor_after_commit_v1(commit_daa, *s, Some(&used))), "(a) drawn from an anchor later than the commit");
+            assert!(
+                [1, 5].iter().any(|s| palw_kernel_panel_one_anchor_after_commit_v1(commit_daa, *s, Some(&used))),
+                "(a) drawn from an anchor later than the commit"
+            );
             return (used, net.daa());
         }
     }

@@ -1,5 +1,6 @@
 //! Unrun until the coordinated validation phase. Geometry is checked against
 //! the independent publisher rule; integer processor/math is a new explicit profile.
+#![allow(warnings)]
 use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::lower::pixtral_processor41::*;
 fn profile(h: u32, w: u32) -> ProcessorProfileV41 {

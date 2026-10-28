@@ -4,12 +4,14 @@
 //! (the header bytes, the state-root preimage, the collection rows, the hex file form) is attacker-supplied. Expected results are
 //! stated before each run; `#[ignore = "FAIL …"]` marks a proven defect (run with `-- --ignored`).
 
+#![allow(warnings)]
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_state_proof_v1::{
     PalwCollectionOpeningV1, PalwFactProofV1, PalwProofErrorV1, PalwStateOpeningV1, state_root_of_pinned_header_v1, verify_class_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{
-    PalwBondKeyV2, PalwClassStateV2, PalwClassStatusV2, PalwPwuRuleV2, palw_collection_root_of_entries_v1, palw_state_root_of_preimage_v1,
+    PalwBondKeyV2, PalwClassStateV2, PalwClassStatusV2, PalwPwuRuleV2, palw_collection_root_of_entries_v1,
+    palw_state_root_of_preimage_v1,
 };
 use kaspa_hashes::Hash64;
 use misaka_palw_remote::proof::{RegistrationAtPinV1, StateProofV1, registration_at_pin_v1};
@@ -59,7 +61,13 @@ fn committed_classes(rows: Vec<(Hash64, PalwClassStateV2)>) -> (Hash64, PalwFact
     preimage.extend_from_slice(root.as_bytes().as_slice());
     preimage.extend_from_slice(&[0xBB; 9]);
     let state_root = palw_state_root_of_preimage_v1(&preimage);
-    (state_root, PalwFactProofV1 { state: PalwStateOpeningV1 { preimage }, collection: PalwCollectionOpeningV1 { label: b"classes".to_vec(), rows } })
+    (
+        state_root,
+        PalwFactProofV1 {
+            state: PalwStateOpeningV1 { preimage },
+            collection: PalwCollectionOpeningV1 { label: b"classes".to_vec(), rows },
+        },
+    )
 }
 
 /// EXPECTED (before running): the pinned-header check recomputes the header hash from the header's CONTENT and refuses a header that
@@ -101,7 +109,10 @@ fn a_state_root_edited_in_a_header_that_still_hashes_to_the_pin_must_be_refused_
 #[test]
 fn for_the_algorithms_that_hash_the_root_every_header_edit_is_the_wrong_block() {
     let hashed: Vec<u8> = (0..=255u8)
-        .filter(|a| kaspa_consensus_core::pow_layer0::is_palw_v2_algo_id(*a) || *a == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID)
+        .filter(|a| {
+            kaspa_consensus_core::pow_layer0::is_palw_v2_algo_id(*a)
+                || *a == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+        })
         .collect();
     eprintln!("algorithms that hash palw_state_root: {hashed:?}");
     assert!(!hashed.is_empty());
@@ -128,7 +139,10 @@ fn for_the_algorithms_that_hash_the_root_every_header_edit_is_the_wrong_block() 
 /// into `Absent`. VERDICT: PASS.
 #[test]
 fn every_edit_of_a_state_proof_opening_is_refused_and_hiding_a_row_never_proves_absence() {
-    let (ours, thief) = (PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(7), 1)), PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(8), 0)));
+    let (ours, thief) = (
+        PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(7), 1)),
+        PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(8), 0)),
+    );
     let (class_a, class_b, class_c) = (h(0x10), h(0x11), h(0x12));
     let rows = vec![
         (class_a, class_record(h(0xA0), Some(ours))),
@@ -199,10 +213,18 @@ fn a_forged_proof_is_an_error_never_registered_or_not_yet_registered() {
     let class = h(0x10);
     let (root, proof) = committed_classes(vec![(class, class_record(h(0xA0), Some(ours)))]);
     let header = header_with(6, 1, root);
-    assert!(matches!(registration_at_pin_v1(&header, header.hash, &proof, &class, h(0xA0), &ours), Ok(RegistrationAtPinV1::Registered(p)) if p.is_proven()));
+    assert!(
+        matches!(registration_at_pin_v1(&header, header.hash, &proof, &class, h(0xA0), &ours), Ok(RegistrationAtPinV1::Registered(p)) if p.is_proven())
+    );
     // The proof of a DIFFERENT state under the same pin.
-    let (_, other) = committed_classes(vec![(class, class_record(h(0xA0), Some(PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(9), 9)))))]);
-    assert!(registration_at_pin_v1(&header, header.hash, &other, &class, h(0xA0), &ours).is_err(), "another state's proof under our pin");
+    let (_, other) = committed_classes(vec![(
+        class,
+        class_record(h(0xA0), Some(PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(9), 9)))),
+    )]);
+    assert!(
+        registration_at_pin_v1(&header, header.hash, &other, &class, h(0xA0), &ours).is_err(),
+        "another state's proof under our pin"
+    );
     let mut hidden = proof.clone();
     hidden.collection.rows.clear();
     assert!(registration_at_pin_v1(&header, header.hash, &hidden, &class, h(0xA0), &ours).is_err());

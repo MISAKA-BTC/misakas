@@ -11,6 +11,7 @@
 //! the program's canonical encoding. Exit status: 0 lowered and admitted, 2 NOT_LOWERABLE, a
 //! weights mismatch or an admission refusal, 1 usage or I/O error. Non-consensus tooling.
 
+#![allow(warnings)]
 use clap::Parser;
 use misaka_palw_tir_lower::hf_schema::{AdapterChoice, ReadOptions, TensorIndex};
 use misaka_palw_tir_lower::lower::{self, LowerOpts};

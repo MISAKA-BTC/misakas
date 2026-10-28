@@ -1,6 +1,7 @@
 //! Owning39 payout/redemption audit from own-node points (see
 //! native_redemption_v39). The spec JSON names point folders and proofs; it is
 //! pinned by SHA-256 and carries no authority. The report never says PASS.
+#![allow(warnings)]
 use kaspa_consensus_core::{Hash64, config::params::Params, network::NetworkId};
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
@@ -22,6 +23,7 @@ fn run() -> Result<(), String> {
     let spec_path = PathBuf::from(get("--spec")?);
     let spec_sha = misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(&get("--spec-sha256")?)?;
     let out = PathBuf::from(get("--out")?);
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     let archive_dir = a.remove("--archive-dir");
     if !a.is_empty() || out.exists() {
@@ -38,7 +40,8 @@ fn run() -> Result<(), String> {
         return Err("redemption39 spec pin differs".into());
     }
     let spec: misaka_palw_sdk::native_redemption_v39::RedemptionSpecV39 = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-    let archive = archive_dir.map(|d| misaka_palw_sdk::native_archive_v39::NativeArchiveDirV39::open(std::path::Path::new(&d))).transpose()?;
+    let archive =
+        archive_dir.map(|d| misaka_palw_sdk::native_archive_v39::NativeArchiveDirV39::open(std::path::Path::new(&d))).transpose()?;
     let archive_ref =
         archive.as_ref().map(|a| a as &dyn kaspa_consensus_core::palw_native_execution_v39::NativeOriginalSourceArchiveV39);
     let report = misaka_palw_sdk::native_redemption_v39::audit_native_redemption_v39(&root, &spec, params, archive_ref)?;

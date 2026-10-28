@@ -7,6 +7,7 @@
 //! * **Past the fence** (test-armed WITHOUT its validation, which refuses every height): admitted only when the bond the object names
 //!   signed it over the network, the claim, the unit and that bond under the object's own context; another claim, another bond, no
 //!   signature or a signature under another card's key is refused.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::Config;

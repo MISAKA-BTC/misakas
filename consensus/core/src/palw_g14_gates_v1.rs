@@ -36,7 +36,7 @@ use crate::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PalwFpJobTailV1, PalwF
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 use crate::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwStateParamsV2};
 
-/// ADR-0190: the gather / model-parameter operand bound of the bounded-round door is derived. `false` until the closure-bound lane lands; 
+/// ADR-0190: the gather / model-parameter operand bound of the bounded-round door is derived. `false` until the closure-bound lane lands;
 /// while `false` the bounded door cannot be armed on any network.
 pub const PALW_TIR_BOUNDED_DOOR_GATHER_BOUND_DERIVED_V1: bool = false;
 
@@ -490,13 +490,14 @@ impl Params {
         if fence.armed(self).is_none() || self.has_isolated_g14_genesis_v1() {
             return Ok(());
         }
-        if matches!(fence,
+        if matches!(
+            fence,
             PalwG14GatedFenceV1::StagedPublicCourtV1
-            | PalwG14GatedFenceV1::StagedTirRouteV1
-            | PalwG14GatedFenceV1::StagedFloatConstraintV1
-            | PalwG14GatedFenceV1::TirPublicConvictionV1
-            | PalwG14GatedFenceV1::LegacyPublicFilerV1
-            | PalwG14GatedFenceV1::LegacyHeldDaV2
+                | PalwG14GatedFenceV1::StagedTirRouteV1
+                | PalwG14GatedFenceV1::StagedFloatConstraintV1
+                | PalwG14GatedFenceV1::TirPublicConvictionV1
+                | PalwG14GatedFenceV1::LegacyPublicFilerV1
+                | PalwG14GatedFenceV1::LegacyHeldDaV2
         ) {
             // G14 lane court-f02: each half clears only on its own evidence. F02 needs the attribution, the admission binding, the
             // shared lifecycle dispatch and native notice intake (all present) AND a pinned service profile (typed-missing, so it
@@ -507,22 +508,30 @@ impl Params {
             // claim's outside-first slot); F03 additionally needs the PAID INGRESS adopted (its per-session fee and the per-claim
             // outside reservation), typed-missing today, so F03 keeps refusing until V4 is decided. Residual (documented): even with
             // the ingress, a Sybil outsider that shares no recorded operator/payout with the claim's side is bounded only by cost.
-            let outsider = fence.armed(self).zip(self.palw_court_outsider_lane_v1_fence())
+            let outsider = fence
+                .armed(self)
+                .zip(self.palw_court_outsider_lane_v1_fence())
                 .is_some_and(|(at, lane)| lane.daa_score() <= at.daa_score())
                 && crate::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1().is_ok();
             match (outsider, service) {
                 (true, true) => {}
-                (false, false) => return Err(PalwModeV2Error::Invalid(
-                    "OneOutsiderCapacityIncomplete: RFC-0026 F03 shared localization under colluding owner occupancy is incomplete; \
+                (false, false) => {
+                    return Err(PalwModeV2Error::Invalid(
+                        "OneOutsiderCapacityIncomplete: RFC-0026 F03 shared localization under colluding owner occupancy is incomplete; \
                      ServiceOpportunityIncomplete: F02 deterministic service opportunities and inclusion assumptions are not adopted",
-                )),
-                (false, true) => return Err(PalwModeV2Error::Invalid(
-                    "OneOutsiderCapacityIncomplete: RFC-0026 F03 needs palw_court_outsider_lane_v1 in force at or below this fence and \
+                    ));
+                }
+                (false, true) => {
+                    return Err(PalwModeV2Error::Invalid(
+                        "OneOutsiderCapacityIncomplete: RFC-0026 F03 needs palw_court_outsider_lane_v1 in force at or below this fence and \
                      an adopted paid court ingress (PalwCourtIngressScheduleV1)",
-                )),
-                (true, false) => return Err(PalwModeV2Error::Invalid(
-                    "ServiceOpportunityIncomplete: RFC-0026 F02 has no pinned court service profile (PALW_COURT_SERVICE_PROFILE_V1)",
-                )),
+                    ));
+                }
+                (true, false) => {
+                    return Err(PalwModeV2Error::Invalid(
+                        "ServiceOpportunityIncomplete: RFC-0026 F02 has no pinned court service profile (PALW_COURT_SERVICE_PROFILE_V1)",
+                    ));
+                }
             }
         }
         Ok(())
@@ -593,12 +602,12 @@ impl Params {
                 "palw_court_outsider_lane_v1 needs palw_legacy_public_filer_v1 in force at or below it (G14 F03 outsider court lane)",
             ));
         }
-        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            if bundle.state.court_outsider_lane_from_daa() != Some(lane.daa_score()) {
-                return Err(PalwModeV2Error::Invalid(
-                    "palw_court_outsider_lane_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1",
-                ));
-            }
+        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.court_outsider_lane_from_daa() != Some(lane.daa_score())
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_court_outsider_lane_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1",
+            ));
         }
         Ok(())
     }
@@ -615,7 +624,9 @@ impl Params {
         }
         if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
             if bundle.state.court_clock_v2_from_daa() != Some(clock.daa_score()) {
-                return Err(PalwModeV2Error::Invalid("palw_court_clock_v2 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1"));
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_court_clock_v2 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1",
+                ));
             }
             // G14 r5 (item 6, T06): a notice at exactly a + 3,120 must still fit its whole residual demand (X3's B_remaining when
             // armed, else W_disclose + window_court) plus reorg retention plus the exclusive 1-DAA margin inside 6,880.
@@ -664,8 +675,10 @@ impl Params {
         )) {
             return missing("palw_panel_da_disclosure_v1: the disclosure kind (tag 233) is not owned by its fence");
         }
-        let object =
-            crate::palw_state_v2::PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: Hash64::default(), prompt_token_ids: vec![1] };
+        let object = crate::palw_state_v2::PalwConsensusObjectV2::PanelDaPromptDisclosedV1 {
+            claim: Hash64::default(),
+            prompt_token_ids: vec![1],
+        };
         if borsh::to_vec(&object).ok().and_then(|b| b.first().copied()) != Some(PALW_PANEL_DA_DISCLOSURE_TAG_V1) {
             return missing("palw_panel_da_disclosure_v1: the disclosure object does not encode as tag 233");
         }
@@ -704,14 +717,18 @@ impl Params {
             ));
         }
         if self.palw_tir_frame_cost_v1.is_none() || self.palw_tir_public_conviction_v1_fence().is_none() {
-            return Err(PalwModeV2Error::Invalid("palw_tir_bounded_door_v1 needs palw_tir_frame_cost_v1 and palw_tir_public_conviction_v1"));
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_bounded_door_v1 needs palw_tir_frame_cost_v1 and palw_tir_public_conviction_v1",
+            ));
         }
         if self.has_isolated_g14_genesis_v1() {
             return Ok(());
         }
         let cost = self.palw_tir_frame_cost_v1.as_ref().expect("checked above");
         crate::palw_tir_frame_cost_v1::palw_tir_frame_cost_record_admits_v1(self.genesis.hash, at.daa_score(), Some(cost), records)
-            .map_err(|_| PalwModeV2Error::Invalid("palw_tir_bounded_door_v1 has no pinned frame cost record for this network and height"))
+            .map_err(|_| {
+                PalwModeV2Error::Invalid("palw_tir_bounded_door_v1 has no pinned frame cost record for this network and height")
+            })
     }
 
     pub fn validate_palw_tir_frame_cost_in_v1(
@@ -730,8 +747,7 @@ impl Params {
         // External audit 10-17 §7 P0(3): the longest accepted pursuit ends inside the liability horizon Final and payment are held
         // to (`window_challenge_at(fence) + window_court`), on every network including an isolated test genesis.
         if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            let horizon =
-                bundle.state.window_challenge_at(at.daa_score()).saturating_add(bundle.state.window_court());
+            let horizon = bundle.state.window_challenge_at(at.daa_score()).saturating_add(bundle.state.window_court());
             if cost.clock.maximum_door_daa > horizon {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_tir_frame_cost_v1's longest accepted pursuit (maximum_door_daa) exceeds the network's liability horizon \
@@ -935,7 +951,9 @@ pub fn palw_g14_route_family_fences_v1(family: PalwG14RouteFamilyV1) -> &'static
             "palw_independently_work_certified_v1",
             "palw_g14_route_required_v1",
         ],
-        PalwG14RouteFamilyV1::LegacyPanelAttempt => &["palw_legacy_public_filer_v1", "palw_legacy_held_da_v2", "palw_g14_route_required_v1"],
+        PalwG14RouteFamilyV1::LegacyPanelAttempt => {
+            &["palw_legacy_public_filer_v1", "palw_legacy_held_da_v2", "palw_g14_route_required_v1"]
+        }
         PalwG14RouteFamilyV1::LegacyFusedLeaf => {
             &["palw_legacy_public_filer_v1", "palw_legacy_held_da_v2", "palw_court_capacity_v1", "palw_g14_route_required_v1"]
         }
@@ -945,12 +963,9 @@ pub fn palw_g14_route_family_fences_v1(family: PalwG14RouteFamilyV1) -> &'static
         }
         // Listed in intended activation order: the binding at or below the staged court. Not a params refusal, because Constraint /
         // Prefix use the staged court without it; `route_armed` counts the family from the latest of the three.
-        PalwG14RouteFamilyV1::FpTokenizer => &[
-            "palw_fp_tokenizer_match",
-            "palw_legacy_public_filer_v1",
-            "palw_staged_public_court_v1",
-            "palw_g14_route_required_v1",
-        ],
+        PalwG14RouteFamilyV1::FpTokenizer => {
+            &["palw_fp_tokenizer_match", "palw_legacy_public_filer_v1", "palw_staged_public_court_v1", "palw_g14_route_required_v1"]
+        }
         PalwG14RouteFamilyV1::NonPublicEvidence => &[],
         PalwG14RouteFamilyV1::FpPanelDaDisclosure => {
             &["palw_panel_da", "palw_court_clock_v2", "palw_panel_da_disclosure_v1", "palw_g14_route_required_v1"]
@@ -1091,11 +1106,19 @@ pub fn palw_g14_route_fp_refusal_v1(
         return None;
     }
     let Some(commitment) = commitment else {
-        return Some((PALW_G14_ROUTE_ABSENT_CODE_V1, "palw_g14_route_required_v1: no signed commitment shows this claim's job".into()));
+        return Some((
+            PALW_G14_ROUTE_ABSENT_CODE_V1,
+            "palw_g14_route_required_v1: no signed commitment shows this claim's job".into(),
+        ));
     };
     let families = palw_g14_fp_route_families_at_v1(&commitment.job, &mirror, accepted_daa);
-    let missing: Vec<PalwG14RouteFamilyV1> =
-        families.iter().copied().filter(|f| !mirror.route_armed(*f, accepted_daa, framed) || (*f == PalwG14RouteFamilyV1::FpTokenizer && !class_has_tokenizer_material)).collect();
+    let missing: Vec<PalwG14RouteFamilyV1> = families
+        .iter()
+        .copied()
+        .filter(|f| {
+            !mirror.route_armed(*f, accepted_daa, framed) || (*f == PalwG14RouteFamilyV1::FpTokenizer && !class_has_tokenizer_material)
+        })
+        .collect();
     if missing.is_empty() {
         return None;
     }

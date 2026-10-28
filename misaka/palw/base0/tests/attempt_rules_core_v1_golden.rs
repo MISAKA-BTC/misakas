@@ -20,6 +20,7 @@
 //! is the held canonical, the prompt is `p` ids of the core loop, and the 2M row's prompt is past
 //! J5b's inline bound (its root is `PromptNotAnchored`'s to check).
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

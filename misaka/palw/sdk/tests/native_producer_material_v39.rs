@@ -1,4 +1,5 @@
 //! Source-only regression cases; execution belongs to the consolidated phase.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     flat_job39::*, flat_material_output39::OutputProjectionV39, flat_material39::*, flat_source39::*, hash::Digest,
     trace::ParamCommitmentsV1,

@@ -1,6 +1,7 @@
 //! RFC-0015's fence `palw_panel_free_v1`: dormant on every preset, invisible to every identity while `None` or `Some(never())`,
 //! committed to the parameter and schedule fingerprints once it carries a height, and refused when armed.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_shipped_params,

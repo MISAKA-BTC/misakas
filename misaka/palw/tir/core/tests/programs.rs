@@ -8,6 +8,7 @@
 //! the state the position started from.** Program-specific properties (head mapping, window
 //! eviction, routing) are asserted alongside.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeMap;

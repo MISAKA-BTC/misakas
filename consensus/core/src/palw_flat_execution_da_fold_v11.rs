@@ -157,10 +157,10 @@ pub(super) fn demand(
             return Err(refused("native hash unit outside original layout"));
         }
     }
-    if let FlatVectorUnitKindV9::Value(i) = unit.kind {
-        if misaka_palw_kernel::merkle3::LayoutV3::of(&shape).len <= i {
-            return Err(refused("native selected value outside original shape"));
-        }
+    if let FlatVectorUnitKindV9::Value(i) = unit.kind
+        && misaka_palw_kernel::merkle3::LayoutV3::of(&shape).len <= i
+    {
+        return Err(refused("native selected value outside original shape"));
     }
     let mut fixed_shape = [0; 4];
     for (i, d) in shape.iter().enumerate() {

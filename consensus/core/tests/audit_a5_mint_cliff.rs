@@ -12,6 +12,7 @@
 //! Run:
 //!   cargo test -p kaspa-consensus-core --test audit_a5_mint_cliff -- --nocapture --test-threads=1
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1;
 use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_v1};

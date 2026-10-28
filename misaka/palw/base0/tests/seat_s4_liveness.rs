@@ -2,6 +2,7 @@
 //! a Qwen3.6 held v7 FOLD serving SC02 to a partial seat (the committed Qwen3.6 test opens a dense
 //! capture), and the A16 per-call dense row (v2) resuming from committed chunks with a tiled pin.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

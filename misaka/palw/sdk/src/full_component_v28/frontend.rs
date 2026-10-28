@@ -866,10 +866,10 @@ pub fn compile_complete_frontend_v28(
             continue;
         }
         if let Some(prepared) = &decoder_prepared[i] {
-            if let Some(image) = plan.stages[i].decoder38.as_ref().and_then(|p| p.image_rows.as_ref()) {
-                if materialised_scales[image.upstream_stage as usize] != Some(2f64.powi(-(image.q as i32))) {
-                    return Err("COMPLETE_FRONTEND_DECODER38_UPSTREAM_IMAGE_UNIT_DIFFERS".into());
-                }
+            if let Some(image) = plan.stages[i].decoder38.as_ref().and_then(|p| p.image_rows.as_ref())
+                && materialised_scales[image.upstream_stage as usize] != Some(2f64.powi(-(image.q as i32)))
+            {
+                return Err("COMPLETE_FRONTEND_DECODER38_UPSTREAM_IMAGE_UNIT_DIFFERS".into());
             }
             let selector = &plan.stages[i].checkpoint;
             let checkpoint = if selector == "." { source_directory.clone() } else { relative(&source_directory, selector)? };

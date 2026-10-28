@@ -32,8 +32,14 @@ impl VerifiedPaidPanelSourcesV2 {
         .map_err(|e| Refusal::new("PANEL_BEACON_INVALID", e.to_string()))
     }
     pub fn derive_beacon(&self) -> Result<misaka_palw_challenge::SealedBeaconStateV3, Refusal> {
-        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&self.context, &self.contract, &self.sources, &self.promises, self.tip)
-            .map_err(|e| Refusal::new("PANEL_BEACON_INVALID", e.to_string()))
+        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(
+            &self.context,
+            &self.contract,
+            &self.sources,
+            &self.promises,
+            self.tip,
+        )
+        .map_err(|e| Refusal::new("PANEL_BEACON_INVALID", e.to_string()))
     }
 }
 
@@ -124,7 +130,10 @@ pub fn panel_funding_object_from_kernel_rows_v2(
         || mirror.from_daa > tip
         || !challenge_policy.is_paid_opt_in_source()
     {
-        return Err(Refusal::new("PANEL_POLICY_SUBSTITUTED", "epoch or active source/fee policy differs from compiled network params"));
+        return Err(Refusal::new(
+            "PANEL_POLICY_SUBSTITUTED",
+            "epoch or active source/fee policy differs from compiled network params",
+        ));
     }
     let request = kaspa_consensus_core::palw_panel_source_fee_v2::PalwPanelSourceRequestV2 {
         network: snapshot.network,
@@ -340,7 +349,8 @@ mod tests {
         let mut rows = route.rows_page_v1(None, usize::MAX).rows;
         rows.pop();
         assert!(
-            paid_panel_sources_from_kernel_rows_v2(&borsh::to_vec(&route.header).unwrap(), rows, &roots.0, &roots.1, &context).is_err()
+            paid_panel_sources_from_kernel_rows_v2(&borsh::to_vec(&route.header).unwrap(), rows, &roots.0, &roots.1, &context)
+                .is_err()
         );
     }
     #[test]
@@ -377,18 +387,19 @@ mod tests {
         fee.policy.cost_bounds.as_mut().unwrap().maximum_liability_daa = 20_000;
         params.palw_beacon_source_fee_v1 = Some(fee);
         let mut proposal = PanelSponsorRequestV2 { epoch: 1, sponsor: authority.sponsor, fee_per_source: 50, max_sources: 2 };
-        let build =
-            |route: &PalwKernelRouteStateV1, params: &kaspa_consensus_core::config::params::Params, proposal: &PanelSponsorRequestV2| {
-                panel_funding_object_from_kernel_rows_v2(
-                    &borsh::to_vec(&route.header).unwrap(),
-                    route.rows_page_v1(None, usize::MAX).rows,
-                    &route.ledger_root(),
-                    &route.aux_root(),
-                    params,
-                    &authority.challenge_policy,
-                    proposal,
-                )
-            };
+        let build = |route: &PalwKernelRouteStateV1,
+                     params: &kaspa_consensus_core::config::params::Params,
+                     proposal: &PanelSponsorRequestV2| {
+            panel_funding_object_from_kernel_rows_v2(
+                &borsh::to_vec(&route.header).unwrap(),
+                route.rows_page_v1(None, usize::MAX).rows,
+                &route.ledger_root(),
+                &route.aux_root(),
+                params,
+                &authority.challenge_policy,
+                proposal,
+            )
+        };
         let KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } = build(&route, &params, &proposal).unwrap() else {
             panic!("new signed native kind only")
         };
@@ -396,7 +407,10 @@ mod tests {
         assert_eq!(terms.sponsor, palw_kernel_bond_id_v1(&authority.sponsor));
         assert_eq!(
             terms.source.hold_until,
-            authority.request.deadline_daa + authority.panel_policy.assignment_delay_daa + authority.panel_policy.receipt_window_daa + tail
+            authority.request.deadline_daa
+                + authority.panel_policy.assignment_delay_daa
+                + authority.panel_policy.receipt_window_daa
+                + tail
         );
         proposal.fee_per_source = 49;
         assert!(build(&route, &params, &proposal).is_err());

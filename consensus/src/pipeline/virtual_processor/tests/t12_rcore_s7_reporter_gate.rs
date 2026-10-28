@@ -15,6 +15,7 @@
 //!
 //! No block is mined: the gate, the walk and the fold are asked on the genesis state the processor
 //! stored at construction.
+#![allow(warnings)]
 use super::TestContext;
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::api::ConsensusApi;

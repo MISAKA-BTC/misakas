@@ -6,6 +6,7 @@
 //!   (the head is `score`); the float reference equals transformers' logits; the integer program is held to the float reference.
 //! * `num_labels` is the length of `id2label`, and a reward model (one label) is the same class with one logit.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir_lower::spec::OutputSpec;

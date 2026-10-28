@@ -6,6 +6,7 @@
 //! float reference against `transformers`' logits, the integer program against the float reference, admission, the three
 //! implementations and the court.
 
+#![allow(warnings)]
 mod common;
 
 use common::three_ways;

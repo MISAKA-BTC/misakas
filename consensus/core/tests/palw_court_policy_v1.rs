@@ -1,4 +1,5 @@
 //! Contract component tests, not T01–T15 node acceptance evidence.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_court_policy_v1::*;
@@ -93,7 +94,10 @@ fn court_f02_completeness_gate_clears_each_half_on_its_own_evidence() {
     // V1 (service profile) and V4 (paid ingress) are pinned from the user-approved estimates (2026-10-26): F02 clears; F03 still
     // needs the court-owner outsider lane in force at or below the fence.
     let lane_missing = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
-    assert!(lane_missing.contains("OneOutsiderCapacityIncomplete") && !lane_missing.contains("ServiceOpportunityIncomplete"), "{lane_missing}");
+    assert!(
+        lane_missing.contains("OneOutsiderCapacityIncomplete") && !lane_missing.contains("ServiceOpportunityIncomplete"),
+        "{lane_missing}"
+    );
     p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(20_001));
     let above = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
     assert!(above.contains("OneOutsiderCapacityIncomplete"), "{above}");

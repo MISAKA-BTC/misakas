@@ -6,6 +6,7 @@
 //!      same, byte for byte;
 //!   3. the option ON still lowers, runs on the reference evaluator, and agrees with the float reference no worse than OFF beyond noise.
 
+#![allow(warnings)]
 use misaka_palw_tir::interval::analyze_ranges;
 use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::ParamStore;

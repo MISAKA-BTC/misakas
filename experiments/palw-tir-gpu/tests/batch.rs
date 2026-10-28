@@ -13,6 +13,7 @@
 //! alike); and the Qwen2.5-shaped program at a small geometry, whose projections fold into GEMMs
 //! and whose attention is the batched causal product.
 
+#![allow(warnings)]
 mod common;
 mod exec_common;
 

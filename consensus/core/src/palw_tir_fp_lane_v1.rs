@@ -189,14 +189,44 @@ mod tests {
         assert_eq!(w.derived.total_leaves, x.binding.step_leaf_count, "the closed form is the capture's count");
         assert_eq!(w.derived.credited_leaves, w.derived.total_leaves, "nothing paid: everything is new");
         // Under the decode rules the whole prompt is accounted: the credit is the decode positions (and the first logits) only.
-        let d10 = palw_tir_fp_derive_work_v1(&class, p, d, p, PalwFpPrefixStateV1::genesis(Hash64::default()), 1 << 40, false).unwrap();
+        let d10 =
+            palw_tir_fp_derive_work_v1(&class, p, d, p, PalwFpPrefixStateV1::genesis(Hash64::default()), 1 << 40, false).unwrap();
         assert!(d10.derived.credited_leaves < w.derived.total_leaves && d10.derived.credited_leaves > 0);
-        assert!(d10.credited_compute < w.credited_compute && d10.credited_compute > 0, "the prefill is priced at zero, never negative");
+        assert!(
+            d10.credited_compute < w.credited_compute && d10.credited_compute > 0,
+            "the prefill is priced at zero, never negative"
+        );
         // A count the class cannot hold, and a ladder below the run, are refused by name.
-        assert!(palw_tir_fp_derive_work_v1(&class, p, layout.max_context + 1, 0, PalwFpPrefixStateV1::genesis(Hash64::default()), 1 << 40, false).is_err());
-        assert!(palw_tir_fp_derive_work_v1(&class, p, d, 0, PalwFpPrefixStateV1::genesis(Hash64::default()), w.derived.total_leaves - 1, false).is_err());
+        assert!(
+            palw_tir_fp_derive_work_v1(
+                &class,
+                p,
+                layout.max_context + 1,
+                0,
+                PalwFpPrefixStateV1::genesis(Hash64::default()),
+                1 << 40,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            palw_tir_fp_derive_work_v1(
+                &class,
+                p,
+                d,
+                0,
+                PalwFpPrefixStateV1::genesis(Hash64::default()),
+                w.derived.total_leaves - 1,
+                false
+            )
+            .is_err()
+        );
         // A consumed prefix state is out of v1's scope.
-        let state = PalwFpPrefixStateV1 { class_id: x.binding.class.class_id(&x.binding.artifact_root), prefix_tokens: 1, state_root: Hash64::from_u64_word(9) };
+        let state = PalwFpPrefixStateV1 {
+            class_id: x.binding.class.class_id(&x.binding.artifact_root),
+            prefix_tokens: 1,
+            state_root: Hash64::from_u64_word(9),
+        };
         assert!(palw_tir_fp_derive_work_v1(&class, p, d, 0, state, 1 << 40, false).is_err());
     }
 

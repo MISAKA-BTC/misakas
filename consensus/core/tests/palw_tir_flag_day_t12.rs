@@ -19,6 +19,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_flag_day_t12`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_tir_fence_at_v1};
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::params::{

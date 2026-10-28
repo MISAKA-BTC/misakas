@@ -27,6 +27,7 @@
 //! `2^--ladder-bits`, default 48 — Decision 1's carrier budget) and prices the held rows (graph-v7);
 //! its section 6 is the table ADR-0103 §1.2 wrote as arithmetic.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, devnet_shipped_params, palw_held_context_mint_v1, palw_rc_shipped_params};
 use kaspa_consensus_core::palw_class_admission_v2::{PalwHeldAdmissionV1, PalwKaryCourtV1, palw_admission_shape_at_v1};
 use kaspa_consensus_core::palw_context_ladder::{palw_a16_context_row_profile_v5, palw_qwen36_context_row_profile_v5};

@@ -1,4 +1,5 @@
 //! Real accepted BASE parents and child fences; market trade rows are not planted.
+#![allow(warnings)]
 use super::*;
 #[tokio::test]
 async fn replay_market_native_parent_window_differs_from_accepting_post_window() {

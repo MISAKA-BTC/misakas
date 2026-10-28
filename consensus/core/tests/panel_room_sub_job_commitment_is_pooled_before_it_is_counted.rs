@@ -20,6 +20,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_sub_job_commitment_is_pooled_before_it_is_counted
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

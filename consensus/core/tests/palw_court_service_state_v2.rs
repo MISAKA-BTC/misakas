@@ -1,4 +1,5 @@
 //! Rooted candidate codec/resource checks, not production service or node capacity.
+#![allow(warnings)]
 use kaspa_consensus_core::palw_native_resource_v1::{NativeHeapV1, NativeWireReaderV1, NativeWireScanV1};
 use kaspa_consensus_core::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
 use kaspa_consensus_core::{Hash64, palw_court_service_state_v2::*, palw_court_service_v1::*};
@@ -13,7 +14,8 @@ fn candidate() -> CourtServiceStateV2 {
     let claim = Hash64::from_u64_word(1);
     CourtServiceStateV2 {
         version: 2,
-        source_profile_id: Hash64::from_u64_word(99), profile_id: kaspa_consensus_core::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(99)),
+        source_profile_id: Hash64::from_u64_word(99),
+        profile_id: kaspa_consensus_core::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(99)),
         book,
         claims: BTreeMap::from([(
             claim,
@@ -93,7 +95,8 @@ fn canonical_claim_repair_keeps_blocked_claim_held_and_serves_another() {
     let b = binding(2, BTreeSet::from([[3; 64]]));
     let mut state = CourtServiceStateV2 {
         version: 2,
-        source_profile_id: Hash64::from_u64_word(99), profile_id: kaspa_consensus_core::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(99)),
+        source_profile_id: Hash64::from_u64_word(99),
+        profile_id: kaspa_consensus_core::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(99)),
         book,
         claims: BTreeMap::from([(a.claim, a.clone()), (b.claim, b.clone())]),
     };
@@ -114,15 +117,15 @@ fn canonical_claim_repair_keeps_blocked_claim_held_and_serves_another() {
 }
 #[test]
 fn x3_container_tags_remain_disjoint_from_service_v2() {
-    use kaspa_consensus_core::palw_tir_container_v1::PalwTirContainerRowV1;
     use kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1;
+    use kaspa_consensus_core::palw_tir_container_v1::PalwTirContainerRowV1;
     let id = Hash64::from_u64_word(77);
     let key = Key::TirContainer(id);
     let mut expected_key = vec![11];
     expected_key.extend(borsh::to_vec(&id).unwrap());
     assert_eq!(borsh::to_vec(&key).unwrap(), expected_key);
-    let value = PalwTirContainerRowV1 { container_root: id, manifest_digest: id,
-        weights_section: 3, inner_leaf_count: 7, bound_daa: 100 };
+    let value =
+        PalwTirContainerRowV1 { container_root: id, manifest_digest: id, weights_section: 3, inner_leaf_count: 7, bound_daa: 100 };
     let mut expected_row = vec![17];
     expected_row.extend(borsh::to_vec(&value).unwrap());
     let row = Row::TirContainer(Box::new(value));
@@ -132,11 +135,14 @@ fn x3_container_tags_remain_disjoint_from_service_v2() {
     assert!(borsh::from_slice::<Key>(&[11]).is_err(), "old prototype unit key is not an X3 container key");
     // Exact old prototype shape, with its original tag and without the new source-profile field.
     #[derive(borsh::BorshSerialize)]
-    struct OldService { version: u16, profile_id: Hash64, book: ServiceReservations,
-        claims: BTreeMap<Hash64, ServiceClaimBinding> }
+    struct OldService {
+        version: u16,
+        profile_id: Hash64,
+        book: ServiceReservations,
+        claims: BTreeMap<Hash64, ServiceClaimBinding>,
+    }
     let service = candidate();
-    let old = OldService { version: 1, profile_id: service.source_profile_id,
-        book: service.book, claims: service.claims };
+    let old = OldService { version: 1, profile_id: service.source_profile_id, book: service.book, claims: service.claims };
     let mut old_bytes = vec![17];
     old_bytes.extend(borsh::to_vec(&old).unwrap());
     assert!(borsh::from_slice::<Row>(&old_bytes).is_err());
@@ -147,13 +153,15 @@ fn x3_container_tags_remain_disjoint_from_service_v2() {
 fn service_v2_rejects_old_versions_and_foreign_profile_namespace() {
     let original = candidate();
     for version in [0, 1, 3] {
-        let mut state = original.clone(); state.version = version;
+        let mut state = original.clone();
+        state.version = version;
         assert!(state.check().is_err());
         assert!(Row::CourtService(Box::new(state).into()).check(&Key::CourtService).is_err());
     }
     let mut state = original.clone();
     state.profile_id = state.source_profile_id;
     assert!(state.check().is_err(), "a raw v1 profile is not a v2 namespaced profile");
-    let mut state = original; state.source_profile_id = Hash64::from_u64_word(100);
+    let mut state = original;
+    state.source_profile_id = Hash64::from_u64_word(100);
     assert!(state.check().is_err(), "profile substitution requires a different identity");
 }

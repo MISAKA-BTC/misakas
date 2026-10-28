@@ -12,6 +12,7 @@
 //! The class is the t12 dense row's shape (`graph-v7@8192`): an 8,192-position context, 128-lane
 //! commit tiles, the logits in 4,096-lane tiles, whole-row history sub-rows.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_class_admission_v2::PalwClassAdmissionError as E;

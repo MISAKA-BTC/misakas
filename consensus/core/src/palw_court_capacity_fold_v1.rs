@@ -9,14 +9,14 @@
 use super::*;
 use crate::palw_court_capacity_v1::*;
 
-#[path = "palw_court_capacity_sweep_workspace_v2.rs"]
-mod sweep_workspace;
 #[path = "palw_court_admission_workspace_v2.rs"]
 mod admission_workspace;
-#[path = "palw_legacy_court_ingress_workspace_v2.rs"]
-mod legacy_ingress_workspace;
 #[path = "palw_claim_court_admission_workspace_v2.rs"]
 mod claim_admission_workspace;
+#[path = "palw_legacy_court_ingress_workspace_v2.rs"]
+mod legacy_ingress_workspace;
+#[path = "palw_court_capacity_sweep_workspace_v2.rs"]
+mod sweep_workspace;
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CourtCapacityRefused(why.into())
@@ -28,8 +28,7 @@ pub const PALW_COURT_RETENTION_BELOW_GUARANTEE_CODE_V1: &str = "COURT_RETENTION_
 /// Court admission's refusal while the prosecution's own row is QUEUED (it opens with its ticket).
 pub const PALW_COURT_REFUSAL_QUEUED_V1: &str = "the prosecution is queued: it opens with its ticket";
 /// Court admission's refusal when the challenger has no live dispute reservation on the claim yet.
-pub const PALW_COURT_REFUSAL_NO_RESERVATION_V1: &str =
-    "court admission past palw_court_capacity_v1 needs the challenger's own live dispute reservation on the claim (its claim-fixed \
+pub const PALW_COURT_REFUSAL_NO_RESERVATION_V1: &str = "court admission past palw_court_capacity_v1 needs the challenger's own live dispute reservation on the claim (its claim-fixed \
      hard deadline and Final hold)";
 /// Court admission's refusal when the challenger already runs a session on the claim.
 pub const PALW_COURT_REFUSAL_RUNNING_V1: &str = "the reserver already runs a court session on this claim";
@@ -100,11 +99,14 @@ pub(super) fn charge_court_op_v1(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
-    let Some((cost, one_move)) = crate::palw_court_transport_v1::palw_court_accounted_op_v1(
-        &builder.state, builder.params, ctx.daa_score, object,
-    ).map_err(refused)? else { return Ok(()) };
-    let policy = builder.params.court_capacity_at_v1(ctx.daa_score)
-        .ok_or_else(|| refused("court operation has no active capacity budget"))?;
+    let Some((cost, one_move)) =
+        crate::palw_court_transport_v1::palw_court_accounted_op_v1(&builder.state, builder.params, ctx.daa_score, object)
+            .map_err(refused)?
+    else {
+        return Ok(());
+    };
+    let policy =
+        builder.params.court_capacity_at_v1(ctx.daa_score).ok_or_else(|| refused("court operation has no active capacity budget"))?;
     let budget = if one_move { policy.one_move_budget } else { policy.block_budget };
     let already = if one_move { builder.court_one_move_spent } else { builder.court_cost_spent };
     let spent = already.checked_add(cost).ok_or_else(|| refused("the block's court budget accumulation overflows"))?;
@@ -145,15 +147,22 @@ pub(super) fn check_court_claim_admission_v1(
     trace_retention_daa: u64,
     span_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
-    let Some(context) = court_claim_admission_context_v2(state, params, class_id, now, trace_retention_daa, span_daa)? else { return Ok(()) };
+    let Some(context) = court_claim_admission_context_v2(state, params, class_id, now, trace_retention_daa, span_daa)? else {
+        return Ok(());
+    };
     let funded = palw_funded_court_reserve_claims_v1(state);
     check_court_claim_bucket_v2(state, params, context, &funded, now)
 }
 
 #[derive(Clone, Copy)]
 struct CourtClaimAdmissionContextV2 {
-    from_daa: u64, width: u64, bucket: u64, cap: u64,
-    w_disclose: u64, class: Hash64, exclude: Option<Hash64>,
+    from_daa: u64,
+    width: u64,
+    bucket: u64,
+    cap: u64,
+    w_disclose: u64,
+    class: Hash64,
+    exclude: Option<Hash64>,
 }
 
 fn court_claim_admission_context_v2(
@@ -213,7 +222,13 @@ fn court_claim_admission_context_v2(
         trace_retention_daa.saturating_sub(w_disclose) / width
     };
     Ok(Some(CourtClaimAdmissionContextV2 {
-        from_daa: mirror.from_daa, width, bucket, cap, w_disclose, class: *class_id, exclude: None,
+        from_daa: mirror.from_daa,
+        width,
+        bucket,
+        cap,
+        w_disclose,
+        class: *class_id,
+        exclude: None,
     }))
 }
 
@@ -261,28 +276,43 @@ fn funded_court_admission_context_v2(
     let claim = state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
     let bucket = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, w_disclose) / width;
     Ok(Some(CourtClaimAdmissionContextV2 {
-        from_daa: mirror.from_daa, width, bucket, cap: policy.admission_claims_per_bucket(turn),
-        w_disclose, class: claim.class_id, exclude: Some(claim_id),
+        from_daa: mirror.from_daa,
+        width,
+        bucket,
+        cap: policy.admission_claims_per_bucket(turn),
+        w_disclose,
+        class: claim.class_id,
+        exclude: Some(claim_id),
     }))
 }
 
 fn check_court_claim_bucket_v2(
-    state: &PalwChainStateV2, params: &PalwStateParamsV2, context: CourtClaimAdmissionContextV2,
-    funded: &std::collections::BTreeSet<Hash64>, now: u64,
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    context: CourtClaimAdmissionContextV2,
+    funded: &std::collections::BTreeSet<Hash64>,
+    now: u64,
 ) -> Result<(), PalwStateV2Error> {
-    let admitted = state.claims.iter().filter(|(id, claim)| {
-        Some(**id) != context.exclude
-            && (palw_court_demanding_claim_v1(state, context.from_daa, claim)
-                || (claim.accepted_daa >= context.from_daa && funded.contains(*id)))
-            && !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. })
-            && {
-                let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, context.w_disclose);
-                hard >= now && hard / context.width == context.bucket
-            }
-    }).count() as u64;
+    let admitted = state
+        .claims
+        .iter()
+        .filter(|(id, claim)| {
+            Some(**id) != context.exclude
+                && (palw_court_demanding_claim_v1(state, context.from_daa, claim)
+                    || (claim.accepted_daa >= context.from_daa && funded.contains(*id)))
+                && !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. })
+                && {
+                    let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, context.w_disclose);
+                    hard >= now && hard / context.width == context.bucket
+                }
+        })
+        .count() as u64;
     if admitted >= context.cap {
         return Err(PalwStateV2Error::CourtClaimAdmissionFull {
-            class: context.class, bucket: context.bucket, admitted, cap: context.cap,
+            class: context.class,
+            bucket: context.bucket,
+            admitted,
+            cap: context.cap,
         });
     }
     Ok(())
@@ -421,7 +451,11 @@ fn court_outsider_lane_inside_v1(state: &PalwChainStateV2, claim_id: Hash64, bon
 }
 
 fn court_outsider_side_borrowed_v2(state: &PalwChainStateV2, claim: Hash64) -> impl Iterator<Item = PalwBondKeyV2> + '_ {
-    state.claims.get(&claim).map(|row| row.bond).into_iter()
+    state
+        .claims
+        .get(&claim)
+        .map(|row| row.bond)
+        .into_iter()
         .chain(state.panels.get(&claim).into_iter().flat_map(|panel| panel.seats.iter().map(|seat| seat.bond)))
 }
 
@@ -479,14 +513,18 @@ pub fn palw_court_ingress_fee_due_v1(params: &PalwStateParamsV2, now: u64) -> Op
 /// Final, not voided), hard deadline not passed. Ordered by `(accepted_daa, claim id)` — the admission order, which every node
 /// derives alike. Rooted facts only (the claim rows and the params' clock).
 fn court_ingress_inflight_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, now: u64) -> Vec<(u64, Hash64)> {
-    if params.court_outsider_lane_from_daa().is_none() { return Vec::new(); }
+    if params.court_outsider_lane_from_daa().is_none() {
+        return Vec::new();
+    }
     let mut inflight: Vec<_> = court_ingress_inflight_borrowed_v2(state, params, now).collect();
     inflight.sort_unstable();
     inflight
 }
 
 fn court_ingress_inflight_borrowed_v2<'a>(
-    state: &'a PalwChainStateV2, params: &'a PalwStateParamsV2, now: u64,
+    state: &'a PalwChainStateV2,
+    params: &'a PalwStateParamsV2,
+    now: u64,
 ) -> impl Iterator<Item = (u64, Hash64)> + 'a {
     let from = params.court_outsider_lane_from_daa();
     let w_disclose = palw_da_disclose_window_daa_v1(params);
@@ -514,10 +552,7 @@ pub(super) fn court_ingress_reserved_claims_v1(state: &PalwChainStateV2, params:
 /// Does `claim_id` have a running OUTSIDE-side session (opener neither its producer nor a panel seat)? That session holds the
 /// claim's reservation.
 pub(super) fn court_ingress_outside_running_v1(state: &PalwChainStateV2, claim_id: Hash64) -> bool {
-    state
-        .court_sessions
-        .values()
-        .any(|s| s.claim == claim_id && !court_outsider_lane_inside_v1(state, claim_id, &s.challenger_bond))
+    state.court_sessions.values().any(|s| s.claim == claim_id && !court_outsider_lane_inside_v1(state, claim_id, &s.challenger_bond))
 }
 
 /// **The admission coordinator's call at ORIGINAL admission** (G14 item 3, court-owner risk 1): may a new claim (of `class_id`)
@@ -551,8 +586,7 @@ pub(super) fn court_ingress_claim_admits_excluding_v1(
     }
     let cap = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
     let reserved_cap = crate::palw_court_paid_ingress_v1::palw_court_ingress_reserved_claims_cap_v1(cap);
-    let admitted =
-        court_ingress_inflight_borrowed_v2(state, params, now).filter(|(_, id)| Some(*id) != exclude).count() as u64;
+    let admitted = court_ingress_inflight_borrowed_v2(state, params, now).filter(|(_, id)| Some(*id) != exclude).count() as u64;
     if admitted >= reserved_cap {
         return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: *class_id, bucket: 0, admitted, cap: reserved_cap });
     }
@@ -666,7 +700,9 @@ pub(super) fn court_admission_v1(
     session_window: u64,
 ) -> Result<PalwCourtAdmissionV1, PalwStateV2Error> {
     let now = ctx.daa_score;
-    let Some(mirror) = builder.params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(PalwCourtAdmissionV1::Legacy) };
+    let Some(mirror) = builder.params.court_capacity_v1().filter(|m| m.active_at(now)) else {
+        return Ok(PalwCourtAdmissionV1::Legacy);
+    };
     let policy = mirror.policy;
     let record = builder
         .state
@@ -704,7 +740,8 @@ pub(super) fn court_admission_v1(
     // (`check_funded_court_reserve_v1`); its first court row runs on it.
     let reserve = !record.court_reserve_used
         && (palw_court_demanding_claim_v1(&builder.state, mirror.from_daa, claim)
-            || (claim.accepted_daa >= mirror.from_daa && funded_court_reserve_claims_borrowed_v2(&builder.state).any(|id| id == claim_id)));
+            || (claim.accepted_daa >= mirror.from_daa
+                && funded_court_reserve_claims_borrowed_v2(&builder.state).any(|id| id == claim_id)));
     // Round 2 (limit 2): the j-th concurrent court row on one claim pays j × the occupancy rate.
     let weight = policy.weight().saturating_mul(1 + record.courts.len() as u64);
     let escrow = policy.fee(ticket_window.saturating_add(session_window), weight);
@@ -716,8 +753,7 @@ pub(super) fn court_admission_v1(
     builder.reserve_court_admission_workspace_v2(claim_id, challenger, now)?;
     let mut record = builder.state.legacy_disputes.get(&claim_id).expect("checked reservation, unchanged by admission quote").clone();
     let (reserve_pool, spare_pool) = court_pools_v1(&builder.state, ticket_window);
-    let (pool, slots) =
-        if reserve { (reserve_pool, policy.reserve_slots(turn)) } else { (spare_pool, policy.spare_slots(turn)) };
+    let (pool, slots) = if reserve { (reserve_pool, policy.reserve_slots(turn)) } else { (spare_pool, policy.spare_slots(turn)) };
     let row = |stage, guaranteed| PalwReservedCourtV1 {
         stage,
         escrow,
@@ -738,7 +774,12 @@ pub(super) fn court_admission_v1(
     let guaranteed = reserve || {
         let mut queue = pool.guaranteed.clone();
         queue.push(PalwCourtQueuedV1 {
-            key: PalwCourtQueueKeyV1 { deadline_daa: record.hard_deadline_daa, enqueued_daa: now, claim: claim_id, reserver: challenger },
+            key: PalwCourtQueueKeyV1 {
+                deadline_daa: record.hard_deadline_daa,
+                enqueued_daa: now,
+                claim: claim_id,
+                reserver: challenger,
+            },
             service_daa: session_window,
         });
         let mut releases = pool.releases.clone();
@@ -875,7 +916,11 @@ pub(super) fn sweep_court_capacity_v1(builder: &mut TransitionBuilder<'_>, ctx: 
 /// court row is still WAITING (queued or ticketed) though it was admitted at least one service window (ticket + session) before the
 /// hard deadline? Then the court did not serve a prosecution it had time to serve, and the claim (pre-Final) is voided
 /// `PanelUnavailable` instead of released: it earns nothing. `false` below the fence (no court row exists there).
-pub(super) fn court_unserved_at_lapse_v1(params: &PalwStateParamsV2, record: &crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1, now: u64) -> bool {
+pub(super) fn court_unserved_at_lapse_v1(
+    params: &PalwStateParamsV2,
+    record: &crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1,
+    now: u64,
+) -> bool {
     let Some(policy) = params.court_capacity_at_v1(now) else { return false };
     let ticket_window = policy.ticket_window(params.turn_deadline_daa());
     record.courts.iter().any(|(reserver, row)| {
@@ -885,7 +930,6 @@ pub(super) fn court_unserved_at_lapse_v1(params: &PalwStateParamsV2, record: &cr
     })
 }
 
-
 #[cfg(test)]
 pub(super) fn observe_claim_membership_admission_v2(observer: Option<Box<dyn Fn()>>) {
     claim_admission_workspace::set_observer(observer);
@@ -893,7 +937,9 @@ pub(super) fn observe_claim_membership_admission_v2(observer: Option<Box<dyn Fn(
 
 impl TransitionBuilder<'_> {
     fn check_court_claim_context_native_v2(
-        &mut self, context: CourtClaimAdmissionContextV2, now: u64,
+        &mut self,
+        context: CourtClaimAdmissionContextV2,
+        now: u64,
     ) -> Result<(), PalwStateV2Error> {
         if self.native_writers_tracking_v1() {
             let quote = claim_admission_workspace::quote(&self.state)?;
@@ -904,12 +950,18 @@ impl TransitionBuilder<'_> {
         // Insert directly: FromIterator's bulk collection/sorting workspace is
         // unnecessary. At most F memberships for F qualifying input rows; D<=F.
         let mut funded = std::collections::BTreeSet::new();
-        for claim in funded_court_reserve_claims_borrowed_v2(&self.state) { funded.insert(claim); }
+        for claim in funded_court_reserve_claims_borrowed_v2(&self.state) {
+            funded.insert(claim);
+        }
         check_court_claim_bucket_v2(&self.state, self.params, context, &funded, now)
     }
 
     pub(super) fn check_attempt_court_admission_native_v2(
-        &mut self, class: &Hash64, now: u64, retention: u64, span: u64,
+        &mut self,
+        class: &Hash64,
+        now: u64,
+        retention: u64,
+        span: u64,
     ) -> Result<(), PalwStateV2Error> {
         if let Some(context) = court_claim_admission_context_v2(&self.state, self.params, class, now, retention, span)? {
             self.check_court_claim_context_native_v2(context, now)?;
@@ -917,9 +969,7 @@ impl TransitionBuilder<'_> {
         palw_court_ingress_claim_admits_v1(&self.state, self.params, class, now)
     }
 
-    pub(super) fn check_funded_original_court_admission_native_v2(
-        &mut self, claim: Hash64, now: u64,
-    ) -> Result<(), PalwStateV2Error> {
+    pub(super) fn check_funded_original_court_admission_native_v2(&mut self, claim: Hash64, now: u64) -> Result<(), PalwStateV2Error> {
         if let Some(context) = funded_court_admission_context_v2(&self.state, self.params, claim, now)? {
             self.check_court_claim_context_native_v2(context, now)?;
         }
@@ -928,30 +978,46 @@ impl TransitionBuilder<'_> {
     }
 
     pub(super) fn reserve_legacy_court_ingress_workspace_v2(
-        &mut self, opener: PalwBondKeyV2, direct_evidence: bool, now: u64,
+        &mut self,
+        opener: PalwBondKeyV2,
+        direct_evidence: bool,
+        now: u64,
     ) -> Result<(), PalwStateV2Error> {
-        if !self.native_writers_tracking_v1() { return Ok(()); }
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
+        }
         let quote = legacy_ingress_workspace::quote(&self.state, self.params, opener, direct_evidence, now)?;
         self.admit_native_write_v1(quote)
     }
 
     pub(super) fn reserve_court_admission_workspace_v2(
-        &mut self, claim: Hash64, challenger: PalwBondKeyV2, now: u64,
+        &mut self,
+        claim: Hash64,
+        challenger: PalwBondKeyV2,
+        now: u64,
     ) -> Result<(), PalwStateV2Error> {
-        if !self.native_writers_tracking_v1() { return Ok(()); }
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
+        }
         let quote = admission_workspace::quote(&self.state, self.params, claim, challenger, now)?;
         self.admit_native_write_v1(quote)
     }
 
     pub(super) fn reserve_court_opened_workspace_v2(&mut self, claim: Hash64) -> Result<(), PalwStateV2Error> {
-        if !self.native_writers_tracking_v1() { return Ok(()); }
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
+        }
         let mut quote = native_writers::NativeWriteQuoteV1::new("court admitted session row handoff");
-        if let Some(record) = self.state.legacy_disputes.get(&claim) { quote.copy(record)?; }
+        if let Some(record) = self.state.legacy_disputes.get(&claim) {
+            quote.copy(record)?;
+        }
         self.admit_native_write_v1(quote)
     }
 
     pub(super) fn reserve_court_capacity_sweep_workspace_v2(&mut self) -> Result<(), PalwStateV2Error> {
-        if !self.native_writers_tracking_v1() { return Ok(()); }
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
+        }
         self.admit_native_write_v1(sweep_workspace::quote(&self.state)?)
     }
 }

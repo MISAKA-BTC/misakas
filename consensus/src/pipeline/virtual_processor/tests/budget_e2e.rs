@@ -13,6 +13,7 @@
 //! 4. a second node fed A's blocks reaches A's PALW state root block by block, and the tip's carriage reloads under it (restart);
 //! 5. a third node sees A's chain, then a heavier sibling branch, then A's again: at every switch its PALW state — the budget included —
 //!    is the one the branch it stands on commits.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;

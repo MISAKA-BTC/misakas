@@ -20,6 +20,7 @@
 //!   judge's scale, its score the pass's, and the parts' margin is the judged score; a job whose kind, mode
 //!   and stage disagree is refused.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_gen_artifact_v1::*;
 use kaspa_consensus_core::palw_gen_court_v1::*;

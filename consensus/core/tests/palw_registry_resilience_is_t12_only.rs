@@ -23,6 +23,7 @@
 //!   refuses it from there, and a shipped build (whose gate names no fence) keeps the armed one;
 //! * `validate_palw_v2` refuses it unsynced, below R-core+ or the registry, and off ConsensusV2.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
     mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,

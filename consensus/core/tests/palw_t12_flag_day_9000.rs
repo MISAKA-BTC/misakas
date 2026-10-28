@@ -22,6 +22,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_t12_flag_day_9000`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{
     PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_int11_at_v1, palw_drill_int13_at_v1, palw_drill_model_court_window_at_v1,
     palw_drill_post_launch_fences_at_v1, palw_drill_post_launch_fences_v2_at_v1, palw_drill_post_launch_fences_v3_at_v1,
@@ -29,12 +30,12 @@ use kaspa_consensus_core::config::drill::{
 };
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_FENCES_V1,
-    PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_FENCES_V1,
-    PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
-    PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1,
-    Params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
-    palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params,
-    palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
+    PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1,
+    PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
+    PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, palw_t12_arm_int11_flag_day_at_v1,
+    palw_t12_arm_int13_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
+    palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_release_v5_params,
+    palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -314,7 +315,10 @@ fn the_fork_id_of_the_shipped_ruleset_is_int12s_and_an_armed_list_is_refused_fro
     for daa in [flag, flag + 1] {
         let o = fork_id_v1(&old, daa);
         let s = fork_id_v1(&shipped, daa);
-        assert!(evaluate_fork_id_v1(&shipped, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "shipped refuses int-12 at {daa}");
+        assert!(
+            evaluate_fork_id_v1(&shipped, daa, o.fired.as_bytes().as_slice(), o.next).refuses(),
+            "shipped refuses int-12 at {daa}"
+        );
         assert!(evaluate_fork_id_v1(&old, daa, s.fired.as_bytes().as_slice(), s.next).refuses(), "int-12 refuses shipped at {daa}");
     }
     assert!(fork_id_gate_fences_v1(&shipped).contains(&flag), "15,500 is a gate of the shipped ruleset");

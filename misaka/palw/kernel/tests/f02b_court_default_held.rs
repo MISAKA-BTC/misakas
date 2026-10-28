@@ -1,5 +1,6 @@
 //! G14 lane F02b: a court-service-bound claim whose consumer adopted no inclusion premise is HELD at its demand deadline — no
 //! `ProducerDefault`, no collateral taken, not Unavailable — and the ordinary default applies once the hold is lifted.
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

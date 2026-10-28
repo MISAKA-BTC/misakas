@@ -15,6 +15,7 @@
 //! One test function: it moves `MISAKA_PALW_CONFINEMENT` and a signing-secret variable, and an
 //! environment is process-wide.
 
+#![allow(warnings)]
 use misaka_palw::host_security::{PALW_CONFINEMENT_ENV, confinement_backend_available};
 use misaka_palw_derive::DeriveError;
 use misaka_palw_derive::kinds::code::{ExternalToolchainManifest, WORK_DIR_PREFIX, fresh_work_dir, run_external, sha256};

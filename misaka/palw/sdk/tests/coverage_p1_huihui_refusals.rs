@@ -13,6 +13,7 @@
 //! | 2 | `TIR_EXCEEDS_CEILING` 67,108,865 vs 67,108,864 (IR close sizing) | `cap + 1` is the ELEMENT twin's sentinel below `palw_tir_fence2` (the height the offline gate used to judge at); the RANGE twin in force admits the same class in 41,490,156 steps |
 //! | 3 | `COURT_COST_EXCEEDS_CEILING` 16,842,752 vs 16,777,216 tile MACs | the default logits tile (4,096 lanes) at the logits commit point; a narrower logits tile clears it |
 //! | 4 | `HELD_CLASS_UNANSWERABLE` (ADR-0152 §4-ter C5) | the legacy held route: 24 Gated DeltaNet layers, no windowed builder for the hybrid held site |
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_class_admission_v2::{
     PalwAdmissionProbeRefusalV1, PalwClassAdmissionError, PalwHeldUnanswerableV1, palw_admission_probe_v1, palw_admission_shape_at_v1,

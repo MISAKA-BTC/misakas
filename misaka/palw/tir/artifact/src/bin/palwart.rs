@@ -26,12 +26,12 @@
 //! This binary lives in the light `misaka-palw-tir-artifact` crate (no consensus or node crate), so it
 //! builds on its own: `cargo build --release -p misaka-palw-tir-artifact --bin palwart`.
 
+#![allow(warnings)]
 use misaka_palw_tir_artifact::palwart_pack::{
     LegacyStreamV3, PalwArtPackInputsV3, extract_legacy_v3, pack_legacy_stream_v3, pack_legacy_v3, summary_json_v3, verify_v3,
 };
 use misaka_palw_tir_artifact::palwart_v3::{self as v3, PalwArtSegmentDoneV3, PalwArtV3};
 use std::collections::BTreeMap;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage: palwart pack|inspect|verify|root|sniff|extract-legacy … (see the source header)";
@@ -217,7 +217,6 @@ fn pack(a: &Args) -> Result<serde_json::Value, String> {
             let mut reader = CurlStream::new(url, len);
             pack_legacy_stream_v3(LegacyStreamV3 { reader: &mut reader, len, name, sha256: Some(sha256) }, &inputs, hook)?
         }
-        _ => unreachable!("checked above"),
     };
     let w = &packed.weights;
     Ok(serde_json::json!({

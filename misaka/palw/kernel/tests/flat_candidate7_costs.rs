@@ -1,5 +1,6 @@
 //! Staged metadata tariff, admission reserve and invalid-attempt debits. No
 //! source tensor, complete model or execution/reward acceptance is exercised.
+#![allow(warnings)]
 mod common;
 use common::{ledger_world::policy, opv_world::opv_example};
 use misaka_palw_kernel::{

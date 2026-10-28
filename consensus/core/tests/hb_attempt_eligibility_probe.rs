@@ -26,6 +26,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test hb_attempt_eligibility_probe -- --nocapture --test-threads=1
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

@@ -7,6 +7,7 @@
 //! and the bond; the same signature under another bond, another tag or another payload is refused. A
 //! licence is signed by its rights holder's own key. A correctly signed object the fold refuses (here:
 //! a case for a line nobody governs) passes the gate and is dropped by the walk's rehearsal.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::ConfigBuilder;

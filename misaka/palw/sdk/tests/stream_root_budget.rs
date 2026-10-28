@@ -5,6 +5,7 @@
 //! process held before must stay under 8 MiB, and the root equals the consensus function's (computed
 //! outside the window). One test only: the allocator counts the whole process.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_root_v1;
 use misaka_palw_sdk::tir_manifest::PalwTirContainerSourceV1;
 use misaka_palw_sdk::tir_stream::{ContainerRanges, palw_tir_inventory_root_streamed_v1};

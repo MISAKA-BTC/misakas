@@ -17,6 +17,7 @@
 //! It prints the premine layout it checked (card → bond index, fee float index, payout address), which
 //! is what `probe-identity-local.sh --layout` shows the operator.
 
+#![allow(warnings)]
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::config::params::*;
 use kaspa_consensus_core::config::premine::*;

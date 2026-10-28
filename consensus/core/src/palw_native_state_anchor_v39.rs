@@ -7,7 +7,7 @@ use crate::{
     palw_fork_choice_commitment_v1::{PalwForkChoiceLeafV1, PalwForkChoiceOpeningV1, PalwForkChoicePointV1},
     palw_state_proof_v1::{PalwStateOpeningV1, state_root_of_pinned_header_v1},
 };
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::BorshSerialize;
 pub const NATIVE_ANCHOR_LABEL_V39: &[u8] = b"kernel-anchor-v39";
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct NativeStateEnvelopeV39 {

@@ -37,6 +37,7 @@
 //! `i64` multiply and one rounding shift, with the `>> 31` no longer baked in — recorded as
 //! ADR-0040 Decision H. It is the reason the op count is ten rather than nine.
 
+#![cfg_attr(test, allow(warnings))]
 pub mod artifact;
 pub mod attn_held;
 pub mod attn_responder;
@@ -57,12 +58,15 @@ pub mod decode_scheduler;
 pub mod e2e_drill;
 pub mod engine;
 pub mod engine_a16;
+pub mod flat_public_source;
+pub mod float_public_source;
 pub mod fp_capture;
 pub mod fp_interval;
 pub mod fp_recompute;
 pub mod fp_worker;
 pub mod fuzz_a16;
 pub mod fuzz_qwen36;
+pub mod gdn_court_v2;
 /// RFC-0006 consumer v2: GDN step / checkpoint-transition / convolution-window evidence from a base0 retention.
 pub mod gdn_evidence_v2;
 /// RFC-0003 §I.3, §II.2.1: the tensor (image, embedding) worker, seat and court halves — a `PalwGenJobV1` on a registered class (dormant).
@@ -70,8 +74,6 @@ pub mod gen_tensor_worker;
 /// RFC-0003 §II.2.1: the generative worker, seat and court halves — FP Job V5 on a registered pipeline class (dormant).
 pub mod gen_worker;
 pub mod gguf;
-pub mod gdn_court_v2;
-pub mod routing_court_v2;
 pub mod inventory;
 pub mod legs;
 pub mod memory_phase;
@@ -81,17 +83,16 @@ pub mod plan;
 /// RFC-0001 §2.6 stage 1: the node-only KV prefix cache for the answer-only path.
 pub mod prefix_cache;
 pub mod produce;
-pub mod flat_public_source;
-pub mod float_public_source;
 pub mod qwen25_a16_backend;
 pub mod qwen36;
 pub mod qwen36_backend;
 pub mod qwen36_calibrate;
 pub mod qwen36_plan;
 pub mod qwen36_reference;
-pub mod remote_gguf;
 pub mod rc;
+pub mod remote_gguf;
 pub mod rope;
+pub mod routing_court_v2;
 /// ADR-0133 S1, authenticated (SEAT-S4): the V2 segment opening a partial seat replays, tied to
 /// the claim before one step runs.
 pub mod segment_opening;

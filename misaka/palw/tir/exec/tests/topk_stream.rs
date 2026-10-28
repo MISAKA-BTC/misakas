@@ -1,5 +1,6 @@
 //! Native strided storage selection, independently checked by a full-sort oracle.
 //! Synthetic kernels only; not real-checkpoint, job/native/Final acceptance.
+#![allow(warnings)]
 use misaka_palw_tir::{DType, Prim};
 use misaka_palw_tir_exec::{
     Buf,

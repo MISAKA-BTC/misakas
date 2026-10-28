@@ -5,6 +5,7 @@
 //!
 //! Run (validation phase): `cargo test -p kaspa-consensus-core --test adr0177_allocation_v3`
 
+#![allow(warnings)]
 use std::collections::BTreeMap;
 
 use kaspa_consensus_core::Hash64;

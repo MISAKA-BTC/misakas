@@ -8,6 +8,7 @@
 //! commit point is admitted through F7's obligations, value bound, round and root-claim sizing and
 //! window — the class records the points, and owes its court's terminal move there.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod rcore;
 use rcore::*;

@@ -8,6 +8,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_verification_vertex_fence`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_vertex_at_v1};
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,

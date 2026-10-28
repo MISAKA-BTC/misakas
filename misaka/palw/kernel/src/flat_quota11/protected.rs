@@ -9,11 +9,10 @@ use crate::flat_execution11::{ExecutionJobStateV11, ExecutionTerminalV11};
 /// Stage14 alone constructs the private checked token after authenticating its
 /// original paid native book/source/input/claim/operator/epoch. No raw digest or
 /// frozen11 flag constructor is exposed across namespaces.
-pub(super) fn from_checked_stage_proof_v14(
-    checked: super::stage14::CheckedStageProofGrantV14,
-) -> Result<CheckedPaidSealV11,String> {
-    let (binding,key,original_paid_seal_root,seal_operator_id,producer_operator_id,posted_daa,matures_daa) = checked.into_parts();
-    Ok(CheckedPaidSealV11 {binding,key,original_paid_seal_root,seal_operator_id,producer_operator_id,posted_daa,matures_daa})
+pub(super) fn from_checked_stage_proof_v14(checked: super::stage14::CheckedStageProofGrantV14) -> Result<CheckedPaidSealV11, String> {
+    let (binding, key, original_paid_seal_root, seal_operator_id, producer_operator_id, posted_daa, matures_daa) =
+        checked.into_parts();
+    Ok(CheckedPaidSealV11 { binding, key, original_paid_seal_root, seal_operator_id, producer_operator_id, posted_daa, matures_daa })
 }
 
 pub const PROTECTED_SEALS_MAX_V11: u32 = 1024;
@@ -672,8 +671,11 @@ impl QuotaStateV11 {
             };
             let block = block_old.consume(&spent, &policy.block)?;
             let network = self.network.consume(&spent, &policy.network)?;
-            let actor =
-                self.actors.get(&seal.key.seal_actor).ok_or("lapsed seal owner aggregate is absent")?.consume(&spent, &policy.actor)?;
+            let actor = self
+                .actors
+                .get(&seal.key.seal_actor)
+                .ok_or("lapsed seal owner aggregate is absent")?
+                .consume(&spent, &policy.actor)?;
             self.block = block;
             self.network = network;
             self.actors.insert(seal.key.seal_actor, actor);

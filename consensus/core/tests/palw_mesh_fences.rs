@@ -8,6 +8,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_mesh_fences`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{
     PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_audit_mesh_at_v1, palw_drill_capped_at_v1,
     palw_drill_post_launch_fences_at_v1, palw_drill_post_launch_fences_v2_at_v1, palw_drill_post_launch_fences_v3_at_v1,

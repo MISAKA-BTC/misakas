@@ -15,6 +15,7 @@
 //!
 //! The fold half of T12 is Phase 1's (`vesting_fold_v1`); this is the processor's rehearsal and fold
 //! agreeing on it.
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::palw_vesting_v1::{
     PalwVestingNoteV1, PalwVestingSourceV1, palw_vesting_notes_of_delta_v1, palw_vesting_payout_key_v1, palw_vesting_row_maturity_v1,

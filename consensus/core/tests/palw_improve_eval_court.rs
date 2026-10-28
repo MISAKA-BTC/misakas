@@ -16,6 +16,7 @@
 //! * **a composite candidate** (RFC-0004 §6.3) is adjudicated from its sections' openings, the reference hashing to the
 //!   class's artifact root.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_gen_artifact_v1::*;
 use kaspa_consensus_core::palw_gen_step_v1::{palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1};

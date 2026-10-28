@@ -3,6 +3,7 @@
 //! stays finite, is causal (a later token never changes an earlier position's logits), and
 //! records statistics at every site — no HF files involved.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::hl::{self, BlockRole, HlProgram, StateKind};
 use misaka_palw_tir_lower::parse_config_str;

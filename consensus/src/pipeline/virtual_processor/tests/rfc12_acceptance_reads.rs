@@ -1,5 +1,6 @@
 //! Acceptance observations must distinguish a known zero balance from missing
 //! history, and read the exact outpoint from the same virtual state stamp.
+#![allow(warnings)]
 use super::*;
 
 #[tokio::test]

@@ -2,8 +2,8 @@
 //! Synthetic sparse graph evidence is not real checkpoint fidelity or full RFC.
 mod actual_outsider;
 mod funded11;
-mod stage14;
 mod real_checkpoint;
+mod stage14;
 use super::*;
 use kaspa_consensus_core::palw_flat_model_vector_da_v3::FlatVectorAnswerV3;
 use kaspa_consensus_core::palw_flat_model_vector_da_v9::*;

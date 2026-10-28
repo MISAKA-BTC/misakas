@@ -175,25 +175,24 @@ fn trace_impl_v39(
                     .map_err(|e| misaka_palw_tir::TirError::new(misaka_palw_tir::TirErrorKind::Operand, e))
             })
             .map_err(|e| e.to_string())?;
-        if require_decode {
-            if let RequestStopV39::Decode { prompt, .. } = inputs.stop() {
-                if p + 1 >= prompt.len() {
-                    let generation = p + 1 - prompt.len();
-                    let expected = *inputs.generated().get(generation).ok_or("trace39 actual generated prediction missing")?;
-                    if output.data.len() != source.program().token_bound as usize {
-                        return Err("trace39 actual logits do not match original vocabulary".into());
-                    }
-                    let best = output
-                        .data
-                        .iter()
-                        .enumerate()
-                        .max_by(|(i, a), (j, b)| a.cmp(b).then_with(|| j.cmp(i)))
-                        .map(|(i, _)| i as u32)
-                        .ok_or("trace39 no logits")?;
-                    if best != expected {
-                        return Err("trace39 actual generation differs from original greedy logits/EOS".into());
-                    }
-                }
+        if require_decode
+            && let RequestStopV39::Decode { prompt, .. } = inputs.stop()
+            && p + 1 >= prompt.len()
+        {
+            let generation = p + 1 - prompt.len();
+            let expected = *inputs.generated().get(generation).ok_or("trace39 actual generated prediction missing")?;
+            if output.data.len() != source.program().token_bound as usize {
+                return Err("trace39 actual logits do not match original vocabulary".into());
+            }
+            let best = output
+                .data
+                .iter()
+                .enumerate()
+                .max_by(|(i, a), (j, b)| a.cmp(b).then_with(|| j.cmp(i)))
+                .map(|(i, _)| i as u32)
+                .ok_or("trace39 no logits")?;
+            if best != expected {
+                return Err("trace39 actual generation differs from original greedy logits/EOS".into());
             }
         }
         let root = frontier.finish(p as u32, prepared.node_count())?;

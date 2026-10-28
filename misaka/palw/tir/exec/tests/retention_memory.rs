@@ -1,5 +1,6 @@
 //! Real backend retention with a scoped ledger probe; no public activation or RSS claim.
 #![cfg(feature = "node")]
+#![allow(warnings)]
 mod node_common;
 
 use kaspa_consensus_core::{Hash64, palw_backend::PalwExecutionBackendV1, palw_prompt_ids_v1::PalwPromptIdsFormV1};

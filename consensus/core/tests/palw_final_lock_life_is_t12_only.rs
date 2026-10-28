@@ -32,6 +32,7 @@
 //! `window_court` below it — is exercised at the state layer (`rcore_v02_lock_life`, pure) and at the
 //! processor layer (`t12_final_lock_life_fence`, a real chain crossing the height).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
     mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,

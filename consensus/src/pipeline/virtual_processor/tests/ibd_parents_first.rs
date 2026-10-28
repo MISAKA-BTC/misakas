@@ -13,6 +13,7 @@
 //! the un-upgraded fleet serves it (fails, as on testnet-12), in the order this build serves and
 //! requests it (lands), and in the fleet's order through the syncing-side hold-back (lands). The
 //! consensus order the merging block accepts the lane in is pinned as it is: this is a node fix.
+#![allow(warnings)]
 use super::{TestContext, adr0125_config, adr0125_harness_bond, adr0125_round_block};
 use crate::consensus::test_consensus::TestConsensus;
 use crate::model::stores::ghostdag::GhostdagStoreReader;

@@ -8,7 +8,7 @@
 //! and recorded on a [`TapeBlock`] tape (parent, delta, child), so the invariants suite can revert,
 //! re-apply, restart and re-fold it.
 #![allow(dead_code, unused_imports)]
-
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 pub use common::*;

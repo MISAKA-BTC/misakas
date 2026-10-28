@@ -6291,7 +6291,7 @@ impl Params {
             palw_native_liability_horizon_v1: self.palw_native_liability_horizon_v1,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
             palw_claim_challenge_v2: self.palw_claim_challenge_v2,
-            palw_claim_compact_v4: self.palw_claim_compact_v4.clone(),
+            palw_claim_compact_v4: self.palw_claim_compact_v4,
             palw_monetary_material_v1: self.palw_monetary_material_v1.clone(),
             palw_material_release_recovery_v2: self.palw_material_release_recovery_v2.clone(),
             palw_model_verification_gate_v1: self.palw_model_verification_gate_v1,

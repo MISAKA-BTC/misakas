@@ -146,9 +146,10 @@ impl PalwChainStateV2 {
             .filter(|binding| k.kernel_claim_row_v1(&binding.claim).is_some())
             .filter(|binding| {
                 premise.is_none()
-                    || binding.packet_ids.iter().any(|id| {
-                        service.book.assess(id) == crate::palw_court_service_v1::ServiceAssessment::MissingSupply
-                    })
+                    || binding
+                        .packet_ids
+                        .iter()
+                        .any(|id| service.book.assess(id) == crate::palw_court_service_v1::ServiceAssessment::MissingSupply)
             })
             .map(|binding| (binding.claim.as_bytes(), binding.hard_deadline_daa))
             .collect()
@@ -179,11 +180,8 @@ impl PalwChainStateV2 {
             *d = (*d).max(demand.deadline_daa);
         }
         let service = self.court_service_state_v1();
-        let tail = ledger
-            .policy
-            .court_deadline_daa
-            .saturating_add(ledger.policy.proof_grace_daa)
-            .saturating_add(ledger.policy.liability_daa);
+        let tail =
+            ledger.policy.court_deadline_daa.saturating_add(ledger.policy.proof_grace_daa).saturating_add(ledger.policy.liability_daa);
         for (claim, deadline) in due {
             if held.contains_key(&claim) || k.kernel_claim_row_v1(&Hash64::from_bytes(claim)).is_none() {
                 continue;
@@ -199,7 +197,8 @@ impl PalwChainStateV2 {
                 (Some(p), Some((s, b))) => {
                     let opportunity = b.packet_ids.iter().any(|id| {
                         let (Some(packet), Some(&unit)) = (s.book.packets.get(id), s.book.assignments.get(id)) else { return false };
-                        s.book.supply.contains_key(&unit) && p.admits_reserved_unit_v1(packet.release_daa, packet.service_before, unit, deadline)
+                        s.book.supply.contains_key(&unit)
+                            && p.admits_reserved_unit_v1(packet.release_daa, packet.service_before, unit, deadline)
                     });
                     if !opportunity {
                         held.insert(claim, b.hard_deadline_daa);
@@ -504,9 +503,10 @@ fn load_ledger_with_projection_v9(
             attested.iter().map(|root| root.as_bytes()).collect(),
             extras.verifier_pay.map(crate::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1),
             extras.provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa }),
-            extras
-                .model_refutation_seal
-                .map(|activation_daa| misaka_palw_kernel::sealed_bounty::SealedBountyPolicyV1 { activation_daa, contest_daa: seal_ttl_daa }),
+            extras.model_refutation_seal.map(|activation_daa| misaka_palw_kernel::sealed_bounty::SealedBountyPolicyV1 {
+                activation_daa,
+                contest_daa: seal_ttl_daa,
+            }),
             provider_liable,
         )
         .map_err(PalwStateV2Error::NativeResource)?;
@@ -655,18 +655,19 @@ fn reserve_flush_scratch_v1(
     let bytes_after = rows.saturating_add(admitted);
     let env = rows_envelope_v1();
     let (v9, v9_keys, _) = builder.state.kernel_route.as_ref().map_or((0, 0, 0), |k| {
-        rows_shape_v1(k.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new())))
+        rows_shape_v1(
+            k.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new())),
+        )
     });
     let mut q = super::native_writers::NativeWriteQuoteV1::new("kernel ledger flush scratch");
     // to_rows
     q.exact::<u8>(rows_after.saturating_mul(env.saturating_add(2048)))?.exact::<u8>(bytes_after.saturating_mul(2))?;
     // diff_rows
-    q.grown::<misaka_palw_kernel::rows::RowChangeV1>(rows_after.saturating_add(n))?
-        .exact::<u8>(
-            keys.saturating_add(rows_after.saturating_mul(PALW_KERNEL_ROW_KEY_MAX_BYTES_V1))
-                .saturating_add(rows)
-                .saturating_add(bytes_after),
-        )?;
+    q.grown::<misaka_palw_kernel::rows::RowChangeV1>(rows_after.saturating_add(n))?.exact::<u8>(
+        keys.saturating_add(rows_after.saturating_mul(PALW_KERNEL_ROW_KEY_MAX_BYTES_V1))
+            .saturating_add(rows)
+            .saturating_add(bytes_after),
+    )?;
     // removed v9 keys
     q.grown::<Vec<u8>>(v9)?.exact::<u8>(v9_keys)?;
     builder.admit_native_write_v1(q)
@@ -904,7 +905,8 @@ fn kernel_claim_kind_publicly_checked_v1(object: &KernelRouteObjectV1) -> bool {
     use misaka_palw_kernel::route::SaltedCommitV1 as C;
     use misaka_palw_kernel::spec::SpecClaimV1 as SC;
     match object {
-        KernelRouteObjectV1::CommitPipelineClaim { .. } | KernelRouteObjectV1::CommitClaimSalted { commit: C::Pipeline { .. }, .. } => false,
+        KernelRouteObjectV1::CommitPipelineClaim { .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Pipeline { .. }, .. } => false,
         KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } }
         | KernelRouteObjectV1::CommitClaimSalted { commit: C::Spec { claim }, .. } => matches!(claim, SC::Memory(_)),
         _ => true,
@@ -1233,9 +1235,12 @@ fn apply_settlements_to_exec_vesting(
             };
             let slot = check_fee_slots.entry((claim, verifier)).or_insert(0);
             let slot_ordinal = *slot;
-            let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot_ordinal);
+            let obligation =
+                PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot_ordinal);
             *slot = slot.checked_add(1).ok_or(PalwStateV2Error::Overflow("check fee slot ordinal"))?;
-            if let Some(release_after_daa) = super::palw_paid_claim_trap_fold_v1::check_fee_hold_until_checked_v1(builder, &claim, now)? {
+            if let Some(release_after_daa) =
+                super::palw_paid_claim_trap_fold_v1::check_fee_hold_until_checked_v1(builder, &claim, now)?
+            {
                 // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): a paid V2 claim's check fee is HELD — the poster's escrow is
                 // debited now, the verifier's `FinalReward` is not paid; the fee is released once, after the claim's trap reveal
                 // window (the verifier's liability horizon), less the forfeiture if the court convicts a claim it signed Clean.
@@ -1394,7 +1399,10 @@ fn apply_settlements_to_exec_vesting(
                             (false, false) => crate::palw_settlement_once_v1::PalwSettlementConsumerV1::KernelTick,
                         },
                         s.amount,
-                        crate::palw_settlement_once_v1::PalwSettlementDebitV1::Prepaid { sponsor: funding.terms.sponsor, amount: s.amount },
+                        crate::palw_settlement_once_v1::PalwSettlementDebitV1::Prepaid {
+                            sponsor: funding.terms.sponsor,
+                            amount: s.amount,
+                        },
                         super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
                             "a beacon source's fee: no claim reservation, X3 deadline or material TTL backs the source",
                         ),
@@ -1533,7 +1541,9 @@ fn apply_settlements_to_exec_vesting(
                 // held in its certification's `'H'` row and paid only when the drawn verifiers certify it (returned otherwise).
                 if s.kind == SettlementKindV1::FinalReward
                     && let Some((claim, poster)) = producer_final_rewards.get(&ordinal).copied()
-                    && super::palw_security_certification_fold_v1::hold_kernel_final_reward_v1(builder, now, &claim, &s.bond, &poster, amount)?
+                    && super::palw_security_certification_fold_v1::hold_kernel_final_reward_v1(
+                        builder, now, &claim, &s.bond, &poster, amount,
+                    )?
                 {
                     continue;
                 }
@@ -1654,7 +1664,8 @@ fn draw_panel_one_seats_v1(builder: &mut TransitionBuilder<'_>, ledger: &KernelL
     {
         let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
         for (claim, row) in ledger.claims.iter() {
-            let misaka_palw_kernel::lifecycle::ClaimStateV1::Checking { anchor_daa: committed_daa, deadline_daa } = row.life.state else {
+            let misaka_palw_kernel::lifecycle::ClaimStateV1::Checking { anchor_daa: committed_daa, deadline_daa } = row.life.state
+            else {
                 continue;
             };
             if committed_daa < from
@@ -1769,7 +1780,12 @@ pub(super) fn write_kernel_court_admissions_v1(
     for a in &admissions {
         let claim = a.claim;
         let key = kernel_court_capital_key_v1(&a.payer, claim);
-        if builder.state.kernel_route.as_ref().is_some_and(|k| k.aux.contains_key(&(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, key.clone()))) {
+        if builder
+            .state
+            .kernel_route
+            .as_ref()
+            .is_some_and(|k| k.aux.contains_key(&(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, key.clone())))
+        {
             return Err(refused("kernel court capital row already exists"));
         }
         let row = KernelCourtCapitalRowV1 {
@@ -1787,13 +1803,20 @@ pub(super) fn write_kernel_court_admissions_v1(
 
 /// **Lane F02b: release the court capital rows** whose claim left the live book (resolved-book release) or whose hard deadline was
 /// reached. Removing the row returns the collateral; nothing is charged. Runs once per block in the kernel route's closing step.
-pub(super) fn release_kernel_court_capital_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+pub(super) fn release_kernel_court_capital_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
     use crate::palw_kernel_court_admission_v1::*;
     let rows = builder.state.kernel_court_capital_rows_v1();
     for row in rows {
         let bound = builder.state.court_service_state_v1().is_some_and(|s| s.claims.contains_key(&row.claim));
         if !bound || ctx.daa_score >= row.hard_deadline_daa {
-            builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1, kernel_court_capital_key_v1(&row.payer, row.claim), None)?;
+            builder.write_kernel_row(
+                PALW_KERNEL_ROUTE_TABLE_COURT_CAPITAL_V1,
+                kernel_court_capital_key_v1(&row.payer, row.claim),
+                None,
+            )?;
         }
     }
     Ok(())
@@ -2184,8 +2207,10 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // and base job and mutual producer pairs. Below the paid-claim challenge's bootstrap policy (`bootstrap_seed` `None`, the probe and
     // every preset) the earlier exclusion holds byte for byte.
     if let KernelRouteObjectV1::OptInBeaconSource { job, .. } | KernelRouteObjectV1::OptInPaidBeaconSource { job, .. } = object {
-        let sources_admit_paid =
-            builder.params.palw_claim_challenge_v2.is_some_and(|f| f.activation.is_active(ctx.daa_score) && f.policy.bootstrap_seed.is_some());
+        let sources_admit_paid = builder
+            .params
+            .palw_claim_challenge_v2
+            .is_some_and(|f| f.activation.is_active(ctx.daa_score) && f.policy.bootstrap_seed.is_some());
         if !sources_admit_paid
             && builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true))
         {
@@ -2226,19 +2251,16 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         && let Some(seal) = ledger.seals.get(&(*job, *producer))
     {
         use crate::palw_beacon_source_order_v1::{PalwSourceEdgeV1, palw_source_order_admits_v1};
-        let new = PalwSourceEdgeV1 {
-            source: *producer,
-            target_producer,
-            sealed_daa: seal.daa,
-            target_commit_daa: target_commit,
-        };
+        let new = PalwSourceEdgeV1 { source: *producer, target_producer, sealed_daa: seal.daa, target_commit_daa: target_commit };
         // Live = within its signed horizon (failure/refund does not free a slot early, as the kernel's own cap reads it). An edge
         // whose target cannot be resolved to a paid claim carries no producer and cannot close a cycle.
-        let live = ledger.beacon_sources.iter().filter(|(_, row)| ctx.daa_score <= row.terms.hold_until).filter_map(|((other, source), row)| {
-            let target_producer = paid_source_target_producer_v1(route, other)?;
-            let target_commit_daa = route.beacon_source_target_v4(other).ok()?.context.commitment_position;
-            Some(PalwSourceEdgeV1 { source: *source, target_producer, sealed_daa: row.sealed_daa, target_commit_daa })
-        });
+        let live = ledger.beacon_sources.iter().filter(|(_, row)| ctx.daa_score <= row.terms.hold_until).filter_map(
+            |((other, source), row)| {
+                let target_producer = paid_source_target_producer_v1(route, other)?;
+                let target_commit_daa = route.beacon_source_target_v4(other).ok()?.context.commitment_position;
+                Some(PalwSourceEdgeV1 { source: *source, target_producer, sealed_daa: row.sealed_daa, target_commit_daa })
+            },
+        );
         palw_source_order_admits_v1(live, &new).map_err(|why| refused(why.reason()))?;
     }
     let kid = palw_kernel_bond_id_v1(signer);
@@ -2288,14 +2310,15 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     {
         return Ok(());
     }
-    let events = match ledger.apply_object_reserved_v1(object, &AuthV1 { signer_bond: kid }).map_err(PalwStateV2Error::NativeResource)? {
-        Ok(events) => events,
-        Err(_refusal) => {
-            // A refusal that did court work still spent the block's budget (so junk cannot be tried for free); nothing else is kept.
-            persist_budget(builder, ctx, &ledger)?;
-            return Ok(());
-        }
-    };
+    let events =
+        match ledger.apply_object_reserved_v1(object, &AuthV1 { signer_bond: kid }).map_err(PalwStateV2Error::NativeResource)? {
+            Ok(events) => events,
+            Err(_refusal) => {
+                // A refusal that did court work still spent the block's budget (so junk cannot be tried for free); nothing else is kept.
+                persist_budget(builder, ctx, &ledger)?;
+                return Ok(());
+            }
+        };
     // A class registers only if its worst filing, response and commitments can actually be carried (chunking counted).
     for event in &events {
         if let LedgerEventV1::FlatConformanceClassRegisteredV9 { class } = event {
@@ -2537,7 +2560,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // (A settlement the real bonds cannot honour fails the object — the walk's rehearsal drops it with its builder, so no half-applied
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true, ctx.daa_score)?;
-    super::palw_source_verifier_economics_fold_v2::court_events(builder,ctx,&events)?;
+    super::palw_source_verifier_economics_fold_v2::court_events(builder, ctx, &events)?;
     builder.close_terminal_kernel_budgets_v1(&ledger)?;
     persist_budget(builder, ctx, &ledger)?;
     // Only the exact signed candidate used the temporary scope. Persisting this root in
@@ -2553,7 +2576,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
 }
 
 /// **Record what this block's objects have spent of its adjudication budget** (the next object of the same chain block restores it).
-fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, ledger: &KernelLedgerV1) -> Result<(), PalwStateV2Error> {
+fn persist_budget(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    ledger: &KernelLedgerV1,
+) -> Result<(), PalwStateV2Error> {
     let spent = ledger.budget_used();
     if spent != misaka_palw_kernel::ledger::BlockBudgetV1::default() {
         builder.write_kernel_row(
@@ -2814,7 +2841,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         }
     }
     apply_settlements(builder, &events, false, ctx.daa_score)?;
-    super::palw_source_verifier_economics_fold_v2::court_events(builder,ctx,&events)?;
+    super::palw_source_verifier_economics_fold_v2::court_events(builder, ctx, &events)?;
     builder.close_terminal_kernel_budgets_v1(&ledger)?;
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
     let stale: Vec<misaka_palw_kernel::hash::Digest> = builder
@@ -3170,8 +3197,8 @@ fn paid_source_target_producer_v1(
     context: &misaka_palw_kernel::hash::Digest,
 ) -> Option<misaka_palw_kernel::hash::Digest> {
     use crate::palw_claim_challenge_v2::{
-        PAID_CLAIM_ENROLLMENTS_V2, PAID_CLAIM_ID_INDEX_PREFIX_V3, PAID_CLAIM_ROUNDS_V2, PalwPaidClaimIndexKindV3, PalwPaidClaimIndexV3,
-        paid_claim_index_key_v3,
+        PAID_CLAIM_ENROLLMENTS_V2, PAID_CLAIM_ID_INDEX_PREFIX_V3, PAID_CLAIM_ROUNDS_V2, PalwPaidClaimIndexKindV3,
+        PalwPaidClaimIndexV3, paid_claim_index_key_v3,
     };
     use borsh::BorshDeserialize;
     fn enrollment_prefix(

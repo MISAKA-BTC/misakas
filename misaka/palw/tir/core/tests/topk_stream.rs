@@ -1,4 +1,5 @@
 //! Independent full-sort oracle for the unchanged v1 TopK semantics.
+#![allow(warnings)]
 use misaka_palw_tir::{DType, Prim, Tensor, eval::eval_primitive};
 fn oracle(t: &Tensor, axis: usize, k: usize) -> Tensor {
     let mut shape = t.shape.clone();

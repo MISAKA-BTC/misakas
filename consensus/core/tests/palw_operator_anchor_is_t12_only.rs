@@ -33,6 +33,7 @@
 //! crosses the fence (`t12_operator_anchor_fence`), and against the attacker (`void_after_panel_probe`
 //! T3c, `void_after_panel_adv_verify` a5).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_GENESIS_BONDS, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,

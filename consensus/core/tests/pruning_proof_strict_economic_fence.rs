@@ -22,6 +22,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test pruning_proof_strict_economic_fence -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, palw_t12_launch_params_v1, palw_t12_shipped_params,
 };

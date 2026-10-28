@@ -410,7 +410,13 @@ fn fresh_verify_reads_inner(
                 .paid_material
                 .as_ref()
                 .ok_or_else(|| Refusal::new("SOURCE_FEE_UNFUNDED", "mandatory source fee capacity has not been prepaid"))?;
-            kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v5_with(&input, contract, facts, promises, sources.seal_reveal)
+            kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v5_with(
+                &input,
+                contract,
+                facts,
+                promises,
+                sources.seal_reveal,
+            )
         }
         Some(sources) => kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v4_with(
             &input,

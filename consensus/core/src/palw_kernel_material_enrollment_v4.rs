@@ -339,7 +339,7 @@ pub enum PalwMaterialGenerationAuthorityErrorV4 {
 fn decode_generation_row_v4<T: crate::palw_native_resource_v1::NativeWireScanV1 + borsh::BorshDeserialize>(
     raw: &[u8],
 ) -> Result<NativeRetainedV1<T>, PalwMaterialGenerationAuthorityErrorV4> {
-    use crate::palw_native_resource_v1::{preflight_native_value_v1, retain_native_value_decode_classified_v1, NativeDecodeErrorV1};
+    use crate::palw_native_resource_v1::{NativeDecodeErrorV1, preflight_native_value_v1, retain_native_value_decode_classified_v1};
     use PalwMaterialGenerationAuthorityErrorV4 as E;
     // Malformed wire shape is unavailable state, even when a logical resource
     // limit is also active. Run this before the reserving classified decoder.
@@ -372,8 +372,8 @@ pub fn require_material_generation_current_checked_v4(
     scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
 ) -> Result<(), PalwMaterialGenerationAuthorityErrorV4> {
     use crate::{
-        palw_material_release_recovery_v2::{PalwMaterialRecoveryRowV2, PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2},
-        palw_monetary_material_v1::{PalwMonetaryMaterialRowV1, PALW_MONETARY_MATERIAL_TABLE_V1},
+        palw_material_release_recovery_v2::{PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, PalwMaterialRecoveryRowV2},
+        palw_monetary_material_v1::{PALW_MONETARY_MATERIAL_TABLE_V1, PalwMonetaryMaterialRowV1},
     };
     use PalwMaterialGenerationAuthorityErrorV4 as E;
     if params.material_release_recovery_at_v2(now).is_none() {
@@ -421,7 +421,7 @@ mod generation_authority_tests {
             assert!(status.success());
             return;
         }
-        use crate::palw_native_resource_v1::{arm_native_logical_limits_v1, NativeSnapshotResourceLimitsV1};
+        use crate::palw_native_resource_v1::{NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1};
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 }));
         // Exercise the exact generic row decoder used by the checked authority.
         // A tiny scalar isolates its reservation / codec classification boundary.

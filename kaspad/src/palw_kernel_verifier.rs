@@ -77,7 +77,10 @@ pub(crate) const PALW_KERNEL_MODEL_MAGIC_V1: &[u8; 8] = b"PALWKM01";
 /// file in `dir` (`<appdir>/<network>/palw-kernel-models/`), sorted, duplicates dropped. A missing directory adds nothing; an
 /// unreadable one is said once (WARN) and adds nothing. Nothing is read here: the verifier opens the files only once its fence is in
 /// force, and uses one only for a class whose REGISTERED commitments it opens to, so below the fence behaviour is unchanged.
-pub(crate) fn palw_kernel_models_with_default_dir_v1(mut explicit: Vec<std::path::PathBuf>, dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+pub(crate) fn palw_kernel_models_with_default_dir_v1(
+    mut explicit: Vec<std::path::PathBuf>,
+    dir: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
     match std::fs::read_dir(dir) {
         Ok(entries) => {
             let mut found: Vec<std::path::PathBuf> = entries

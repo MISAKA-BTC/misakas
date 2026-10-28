@@ -746,7 +746,7 @@ impl PalwMonetaryMaterialProviderStoreV1 {
                         {
                             return Err(E::Substitution);
                         }
-                        retain_kernel.as_mut().unwrap()(consent, scope, bytes).map_err(E::Authentication)?;
+                        retain_kernel.as_mut().ok_or(E::Incomplete)?(consent, scope, bytes).map_err(E::Authentication)?;
                         scope.clone()
                     } else {
                         match scope.codec {

@@ -28,6 +28,7 @@
 //! compared on the artifact digest; `lowering_v2.json` / `lowering_v2_libm.json` pin the artifacts of
 //! version 2 from the commit that introduced it.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::detmath::{MathMode, set_mode};
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;

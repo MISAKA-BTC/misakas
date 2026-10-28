@@ -4,6 +4,7 @@
 //! Nothing here asserts a design intent; every number is read out of the shipped t12 preset or out
 //! of the constants the two comparisons actually use.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_clock_advances_without_a_claim_v1, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_fork_authority_v2::{PalwDeepReorgV2, PalwIbdCommitV2, decide_deep_reorg_v2, decide_ibd_commit_v2};
 use kaspa_consensus_core::palw_fork_choice::{PalwCandidateOrderV1, compare_palw_candidates_v1};

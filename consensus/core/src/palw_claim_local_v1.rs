@@ -557,9 +557,9 @@ impl PalwClaimLocalCheckpointV1 {
             {
                 return Err("checkpoint input was not available at admission".into());
             }
-            if (record.voided && (record.final_claim || record.certified))
-                || (record.certified && !record.final_claim)
-                || (record.liability_closed && !record.final_claim && !record.voided)
+            if record.voided && record.final_claim
+                || !record.final_claim && record.certified
+                || !record.voided && !record.final_claim && record.liability_closed
             {
                 return Err("checkpoint phase, certification and liability flags disagree".into());
             }
@@ -632,10 +632,9 @@ impl PalwClaimLocalCheckpointV1 {
                     && other.accepted_daa <= record.accepted_daa
                     && ((record.execution_root != ZERO_HASH64 && record.execution_root == other.execution_root)
                         || !record.reservations.is_disjoint(&other.reservations))
+                    && seen.insert(*other_id)
                 {
-                    if seen.insert(*other_id) {
-                        queue.push_back(*other_id);
-                    }
+                    queue.push_back(*other_id);
                 }
             }
         }

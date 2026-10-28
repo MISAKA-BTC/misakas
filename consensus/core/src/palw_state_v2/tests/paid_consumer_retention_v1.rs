@@ -1,4 +1,5 @@
 //! Real finite-consumer planner guard: a producer must authorize material first.
+#![allow(warnings)]
 use super::*;
 use crate::palw_bond_budget_v1::{
     PalwBondBudgetMirrorV1, PalwBondBudgetPolicyV1, PalwPaidConsumerLifecycleMirrorV1, PalwPaidConsumerLifecyclePolicyV1,

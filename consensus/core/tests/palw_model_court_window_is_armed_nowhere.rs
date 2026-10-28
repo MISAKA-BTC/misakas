@@ -16,6 +16,7 @@
 //! together, here: a shipped ruleset that arms the window, or a flag-day list other than the int-13 one that names it with a height,
 //! fails this file before the position can matter.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
 use kaspa_consensus_core::config::params::{

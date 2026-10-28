@@ -1,6 +1,7 @@
 //! AUDIT-ONLY (lane B3, re-run). Measures the registration-resolver vs runtime-validation
 //! divergence on testnet-12. Creates nothing outside this file, mutates nothing. Delete freely.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;

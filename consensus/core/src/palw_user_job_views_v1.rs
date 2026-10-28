@@ -29,7 +29,11 @@ fn ledger_of(state: &PalwChainStateV2) -> Option<crate::palw_native_resource_v1:
 
 /// `kernelClasses`: every single-program kernel class (capped): id, artifact root, tier, whether its artifact is attested public,
 /// token bound, max positions, and the tokenizer commitment (always `null` for a kernel class binding).
-pub fn palw_kernel_classes_json_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, clock: &PalwUserViewClockV1) -> Option<Value> {
+pub fn palw_kernel_classes_json_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    clock: &PalwUserViewClockV1,
+) -> Option<Value> {
     let ledger = ledger_of(state)?;
     let now = clock.next_daa;
     let rows: Vec<Value> = ledger

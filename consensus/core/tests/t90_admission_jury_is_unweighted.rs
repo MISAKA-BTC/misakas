@@ -41,6 +41,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test t90_admission_jury_is_unweighted
 
+#![allow(warnings)]
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::constants::SOMPI_PER_KASPA;

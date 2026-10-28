@@ -262,8 +262,6 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
         SharedTirBuilderStoreV1 as Store,
     };
     use crate::palw_court_shared_tir_state_v1 as shared;
-    use crate::palw_tir_court_v1::{tir_logits_event_disclosure_v1, PalwTirTraceEventDisclosureV1};
-    use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q, PalwTirPublicResponseV1 as R};
     use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{SignedConstraintStopIntentV1 as StopIntent,CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1 as STOP_CONTEXT};
     use crate::palw_freeprompt_v3::PalwFpStopReasonV3 as Stop;
     for stop in [Stop::ExactBudgetReached,Stop::EndOfGeneration] {for fault in [false,true] {

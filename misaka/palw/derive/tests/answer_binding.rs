@@ -17,6 +17,7 @@
 //! was in what the TOOL printed: a library that can be asked the right question is no use if the
 //! command everyone runs asks the other one.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_derived_v1::{PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN, PalwDerivedArtifactV1};
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2};
 use kaspa_hashes::Hash64;

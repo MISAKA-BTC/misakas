@@ -1,5 +1,6 @@
 //! Actual accepted BASE blocks -> exact historical public reader -> revm reads.
 //! No nonBASE canonical-head maturity or native39 settlement mapping is asserted.
+#![allow(warnings)]
 use super::*;
 use crate::model::stores::pruning::PruningStoreReader;
 use kaspa_consensus_core::{

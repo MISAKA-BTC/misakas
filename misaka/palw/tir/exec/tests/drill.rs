@@ -6,7 +6,7 @@
 //! accused's own refutation — until the certificate covers every primitive the program uses.
 
 #![cfg(feature = "node")]
-
+#![allow(warnings)]
 mod node_common;
 
 use std::collections::BTreeSet;

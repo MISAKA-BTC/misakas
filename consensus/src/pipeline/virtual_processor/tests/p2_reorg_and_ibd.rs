@@ -37,6 +37,7 @@
 //! post-`Final` conviction takes (`mark_liability_convicted`, then `post_final_producer_leg_v1` →
 //! `burn_vesting_row` and S3's `min(25% · C₀, 3 G)`). Its proof is a REAL floor execution of another
 //! job, whose root the claim carries (T18b's borrowed root, J-5).
+#![allow(warnings)]
 use super::*;
 use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
 use crate::pipeline::virtual_processor::processor::PalwWeighFaultV2;

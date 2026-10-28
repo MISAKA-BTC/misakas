@@ -29,6 +29,7 @@
 //!
 //! Every run is `#[ignore]` (minutes to an hour of a debug build) and is steered by environment
 //! variables; the results are JSON lines appended to `CAP_OUT`.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
 };
@@ -927,7 +928,7 @@ fn policy_from_env() -> LicencePolicy {
         "none" => LicencePolicy::None,
         "s2" => LicencePolicy::S2,
         other if other.starts_with("mix:") => {
-            let v: Vec<u16> = other[4..].split(',').map(|x| x.parse().expect("permille")).collect();
+            let v: Vec<u16> = other[4..].split(',').map(|x| x.parse::<u16>().expect("permille")).collect();
             LicencePolicy::Mix(v[0], v[1], v[2])
         }
         other => panic!("unknown policy {other}"),

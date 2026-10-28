@@ -5,6 +5,7 @@
 //! (`consensus-vectors/fp-v4/`) run through the worker's own decode loop and the seat's scoped
 //! replay rule — the same files the sampler's tests read.
 
+#![allow(warnings)]
 mod common;
 
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwFpIntervalVerdictV1};

@@ -4,6 +4,7 @@
 //! bound dense artifact carries the graph-v5 512 row's id. Skipped, by name, when the artifact is
 //! not on this machine; never a pass by absence.
 
+#![allow(warnings)]
 use std::process::Command;
 
 const BOUND_ARTIFACT: &str = "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet/71440f68-0f3b-4144-8b20-73c6aae7fb86/scratchpad/instruct-bound.palwart";

@@ -9,6 +9,7 @@
 //!   reach; B-03: a missing, duplicated or altered candidate is refused; the frontier bound is typed-missing (refused at `None`).
 //! * The position witness budget is typed-missing: `None` refuses as `PositionWitnessBudgetIncomplete`, never a verdict.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;
@@ -24,12 +25,14 @@ use kaspa_consensus_core::palw_tir_court_v1::{
 };
 use kaspa_consensus_core::palw_tir_dissect_v1::{
     PALW_TIR_DISSECT_OBJECT_VERSION_V1, PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, PalwTirChoicePathV2, PalwTirDissectChoiceV1,
-    PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirDissectSiteV1, PalwTirFoldV1, PalwTirLookaheadDisclosureV2, palw_tir_dissect_site_v1,
+    PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirDissectSiteV1, PalwTirFoldV1, PalwTirLookaheadDisclosureV2,
+    palw_tir_dissect_site_v1,
 };
 use kaspa_consensus_core::palw_tir_position_terminal_v2::{
-    PALW_TIR_POSITION_OBJECT_VERSION_V2, PALW_TIR_POSITION_WITNESS_BUDGET_V2, PalwTirPositionChoiceV2, PalwTirPositionCloseV2, PalwTirPositionDissectionV2,
-    PalwTirPositionWitnessErrorV2, check_tir_position_dissection_v2, check_tir_position_witness_budget_v2,
-    palw_tir_position_dissection_digest_v2, palw_tir_position_dissection_for_v2, palw_tir_position_named_v2,
+    PALW_TIR_POSITION_OBJECT_VERSION_V2, PALW_TIR_POSITION_WITNESS_BUDGET_V2, PalwTirPositionChoiceV2, PalwTirPositionCloseV2,
+    PalwTirPositionDissectionV2, PalwTirPositionWitnessErrorV2, check_tir_position_dissection_v2,
+    check_tir_position_witness_budget_v2, palw_tir_position_dissection_digest_v2, palw_tir_position_dissection_for_v2,
+    palw_tir_position_named_v2,
 };
 
 const SESSION: Hash64 = Hash64::from_bytes([0x6E; 64]);
@@ -200,8 +203,13 @@ fn a_position_move_bound_to_another_session_round_tile_or_claim_is_refused() {
                 };
                 palw_tir_position_named_v2(&phase, &d, &c).unwrap();
                 let width = d.round.children.len() as u8;
-                assert!(palw_tir_position_named_v2(&phase, &d, &PalwTirPositionChoiceV2 { position_child: width, ..c.clone() }).is_err());
-                assert!(palw_tir_position_named_v2(&phase, &d, &PalwTirPositionChoiceV2 { tile_round: c.tile_round + 1, ..c.clone() }).is_err());
+                assert!(
+                    palw_tir_position_named_v2(&phase, &d, &PalwTirPositionChoiceV2 { position_child: width, ..c.clone() }).is_err()
+                );
+                assert!(
+                    palw_tir_position_named_v2(&phase, &d, &PalwTirPositionChoiceV2 { tile_round: c.tile_round + 1, ..c.clone() })
+                        .is_err()
+                );
                 assert!(palw_tir_position_named_v2(&phase, &d, &PalwTirPositionChoiceV2 { version: 1, ..c.clone() }).is_err());
                 checked += 1;
             }
@@ -290,7 +298,12 @@ fn a_two_level_lookahead_and_one_choice_path_equal_the_old_two_rounds() {
                 for (path, expected) in olds {
                     let mut new = phase.clone();
                     new.apply_lookahead_disclosure_v2(&msg, CAP, 5, W).unwrap();
-                    let p = PalwTirChoicePathV2 { version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, session_id: SESSION, round: 0, path: path.clone() };
+                    let p = PalwTirChoicePathV2 {
+                        version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2,
+                        session_id: SESSION,
+                        round: 0,
+                        path: path.clone(),
+                    };
                     new.apply_choice_path_v2(&msg, &p, CAP, 5, W).expect("a legal path");
                     assert_eq!(new, expected, "{} leaf {leaf} path {path:?}: lookahead ≡ two V1 rounds", f.name);
                     // A path of the wrong length is refused (one child per disclosed level).
@@ -328,7 +341,8 @@ fn a_two_level_lookahead_and_one_choice_path_equal_the_old_two_rounds() {
             pending.apply_lookahead_disclosure_v2(&msg, CAP, 5, W).unwrap();
             let mut other = msg.clone();
             other.version = 3;
-            let p = PalwTirChoicePathV2 { version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, session_id: SESSION, round: 0, path: vec![0, 0] };
+            let p =
+                PalwTirChoicePathV2 { version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, session_id: SESSION, round: 0, path: vec![0, 0] };
             assert!(pending.apply_choice_path_v2(&other, &p, CAP, 5, W).is_err());
         }
     }

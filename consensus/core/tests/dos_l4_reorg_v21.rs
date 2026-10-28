@@ -18,6 +18,7 @@
 //!
 //! Harness copied from `palw_adr0107_share_growth_final.rs` (panel of one, short windows).
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2};
 use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
 use kaspa_consensus_core::palw_state_v2::{

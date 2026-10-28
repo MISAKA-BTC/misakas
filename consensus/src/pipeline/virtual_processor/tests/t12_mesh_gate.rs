@@ -8,6 +8,7 @@
 //!   about its own audited claim inside the reveal window, and verifies the same way.
 //!
 //! What a leaf or a trap does once admitted is the fold's (`palw_state_v2::tests::mesh_fold_v1`); this file is the gate's.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::ConfigBuilder;

@@ -11,6 +11,7 @@
 //! weigh seven times the honest base (405 × 130,000 = 52.65M MSK; the ADR's worst ADMITTED state is
 //! `k = 6` at 12.74M, where the Sybils must also win the race).
 
+#![allow(warnings)]
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::constants::SOMPI_PER_KASPA;

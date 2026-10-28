@@ -73,11 +73,16 @@ pub fn palw_panel_da_disclosure_status_v1(accepted_daa: u64, disclosed_at: Optio
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwPanelDaDisclosureRefusalV1 {
     NotPanelDaText,
-    TooManyIds { got: usize, max: u64 },
+    TooManyIds {
+        got: usize,
+        max: u64,
+    },
     /// The ids do not bind to the job's `prompt_token_ids_hash` (or the count differs).
     IdsDoNotBind,
     BeforeAcceptance,
-    AfterDeadline { deadline: u64 },
+    AfterDeadline {
+        deadline: u64,
+    },
     AlreadyDisclosed,
     /// No governed PanelDa claim has this id (never admitted under the fence, or already retired).
     NoSuchRow,
@@ -105,8 +110,7 @@ pub fn palw_panel_da_disclosure_admit_v1(
     if at > deadline {
         return Err(PalwPanelDaDisclosureRefusalV1::AfterDeadline { deadline });
     }
-    crate::palw_freeprompt_v3::palw_fp_prompt_ids_admit_v1(job, ids, form)
-        .map_err(|_| PalwPanelDaDisclosureRefusalV1::IdsDoNotBind)
+    crate::palw_freeprompt_v3::palw_fp_prompt_ids_admit_v1(job, ids, form).map_err(|_| PalwPanelDaDisclosureRefusalV1::IdsDoNotBind)
 }
 
 /// **The settlement hold**: `Some(why)` while a governed claim may not release reward, weight or settlement credit.
@@ -293,8 +297,10 @@ mod view_tests {
         let bytes = borsh::to_vec(&object).unwrap();
         assert_eq!(bytes[0], PALW_PANEL_DA_DISCLOSURE_TAG_V1);
         let back: crate::palw_state_v2::PalwConsensusObjectV2 = borsh::from_slice(&bytes).unwrap();
-        assert!(matches!(back, crate::palw_state_v2::PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: c, ref prompt_token_ids }
-            if c == claim && *prompt_token_ids == vec![5, 6]));
+        assert!(
+            matches!(back, crate::palw_state_v2::PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: c, ref prompt_token_ids }
+            if c == claim && *prompt_token_ids == vec![5, 6])
+        );
         crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&back).expect("it may ride a carrier");
     }
 
@@ -333,7 +339,10 @@ mod tests {
 
     #[test]
     fn values_leave_the_outsider_its_window() {
-        assert!(palw_panel_da_disclosure_window_sound_v1(PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1, PALW_G14_PANEL_DA_OUTSIDER_MIN_WINDOW_DAA_V1));
+        assert!(palw_panel_da_disclosure_window_sound_v1(
+            PALW_G14_PANEL_DA_DISCLOSE_BY_DAA_V1,
+            PALW_G14_PANEL_DA_OUTSIDER_MIN_WINDOW_DAA_V1
+        ));
         assert!(!palw_panel_da_disclosure_window_sound_v1(NOTICE_WINDOW_DAA, 1));
         assert_eq!(PALW_G14_PANEL_DA_DISCLOSURE_DEPOSIT_SOMPI_V1, 13_107_200);
     }
@@ -346,7 +355,10 @@ mod tests {
         assert_eq!(palw_panel_da_disclosure_status_v1(a, Some(d), d), PalwPanelDaDisclosureStatusV1::Disclosed { at: d });
         assert_eq!(palw_panel_da_disclosure_status_v1(a, None, d), PalwPanelDaDisclosureStatusV1::Pending { deadline: d });
         assert_eq!(palw_panel_da_disclosure_status_v1(a, None, d + 1), PalwPanelDaDisclosureStatusV1::Defaulted { deadline: d });
-        assert_eq!(palw_panel_da_disclosure_status_v1(a, Some(d + 1), d + 5), PalwPanelDaDisclosureStatusV1::Defaulted { deadline: d });
+        assert_eq!(
+            palw_panel_da_disclosure_status_v1(a, Some(d + 1), d + 5),
+            PalwPanelDaDisclosureStatusV1::Defaulted { deadline: d }
+        );
         assert!(palw_panel_da_settlement_hold_v1(PalwPanelDaDisclosureStatusV1::Pending { deadline: d }).is_some());
         assert!(palw_panel_da_settlement_hold_v1(PalwPanelDaDisclosureStatusV1::Disclosed { at: d }).is_none());
     }

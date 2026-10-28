@@ -135,10 +135,7 @@ impl AnnualModelCatalogV1 {
 
     /// Whether this edition itself adds `(class_id, artifact_root)` — the root must match: an entry never re-roots a class.
     pub fn adds(&self, class_id: &Hash64, artifact_root: &Hash64) -> bool {
-        self.models
-            .binary_search_by(|m| m.class_id.cmp(class_id))
-            .ok()
-            .is_some_and(|i| self.models[i].artifact_root == *artifact_root)
+        self.models.binary_search_by(|m| m.class_id.cmp(class_id)).ok().is_some_and(|i| self.models[i].artifact_root == *artifact_root)
     }
 
     /// **One edition's own refusals** (the chain's are in [`PalwAnnualCatalogChainV1::validate`]): bounded size, non-zero ids and
@@ -227,7 +224,9 @@ impl PalwAnnualCatalogChainV1 {
             }
             for m in &catalog.models {
                 if !seen.insert(m.class_id) {
-                    return Err("the annual catalog only ADDS: a class id is listed once over the whole chain, never re-listed or re-rooted (ADR-0175)");
+                    return Err(
+                        "the annual catalog only ADDS: a class id is listed once over the whole chain, never re-listed or re-rooted (ADR-0175)",
+                    );
                 }
             }
         }
@@ -443,7 +442,11 @@ impl Params {
 /// **The node's catalog status at `tip_daa`** (pure: Params and a height).
 pub fn palw_annual_catalog_status_v1(params: &Params, tip_daa: u64) -> PalwAnnualCatalogStatusV1 {
     let Some(fence) = params.palw_model_tier_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) else {
-        return PalwAnnualCatalogStatusV1 { tip_daa, kernel_version_max: PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1, ..Default::default() };
+        return PalwAnnualCatalogStatusV1 {
+            tip_daa,
+            kernel_version_max: PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1,
+            ..Default::default()
+        };
     };
     let chain = &fence.catalogs;
     let current = chain.active_at(tip_daa);

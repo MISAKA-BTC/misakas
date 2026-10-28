@@ -49,6 +49,7 @@
 //! and the real figures are that formula extrapolated to the real leaf counts. Nothing here is
 //! sized from an attacker-controlled count.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
@@ -434,7 +435,7 @@ fn dos_repro_0_held_class_dense_materialization_defeats_defect_record() {
                     daa_score: 0,
                     receipt_rights: None,
                     tir_free_prompt_active: false,
-                panel_da_deferred_prompt: false,
+                    panel_da_deferred_prompt: false,
                 },
                 &h(0xC1A1),
                 &id,

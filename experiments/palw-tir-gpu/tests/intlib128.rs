@@ -5,6 +5,7 @@
 //! `i128` operands and output, on the rails (`i128::MIN`, `MAX`, `±2^63`, `±2^64`, …), powers of two
 //! and their neighbours (the ties of every shift), and random values at every magnitude.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir::{DType, Rounding, arith};

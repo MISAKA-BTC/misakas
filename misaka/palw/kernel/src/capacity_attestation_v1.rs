@@ -80,8 +80,13 @@ mod tests {
         a.validate().unwrap();
         assert!(!a.is_revocation());
         assert!(borsh::to_vec(&a).unwrap().len() + 2 <= MAX_CAPACITY_ATTESTATION_OBJECT_BYTES_V1);
-        let revoke =
-            CapacityAttestationV1 { compute_ccu_per_span: 0, memory_bytes: 0, da_bytes_per_span: 0, court_permille_per_span: 0, ..a.clone() };
+        let revoke = CapacityAttestationV1 {
+            compute_ccu_per_span: 0,
+            memory_bytes: 0,
+            da_bytes_per_span: 0,
+            court_permille_per_span: 0,
+            ..a.clone()
+        };
         assert!(revoke.is_revocation());
         assert!(CapacityAttestationV1 { version: 2, ..a }.validate().is_err());
     }

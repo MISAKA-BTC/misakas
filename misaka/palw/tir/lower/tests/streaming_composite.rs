@@ -5,6 +5,7 @@
 //! parent's bytes once: the candidate's conversion stores only what is new — the adapter's
 //! tensors — and both containers assemble from the same chunks.
 
+#![allow(warnings)]
 use misaka_palw_tir_artifact::chunks::{ChunkStore, write_container_v1_chunked};
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, SiteStat};

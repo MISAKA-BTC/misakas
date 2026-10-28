@@ -12,8 +12,8 @@
 //! armed here (lane CERT's harness covers S3a'), and the whole slice list at a low height is not driven end to end (report residual).
 //! No cryptographic proof of computation is used (PRINCIPLES §8).
 
-use super::*;
 use super::f03k::{TEST_ONLY_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI, panel_one_config};
+use super::*;
 use kaspa_consensus_core::config::params::{PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY, PALW_T12_FULL_PROVIDER_COURT_ENTRY};
 
 /// The Panel=1 world's config with X3 (decided policy) and the provider court armed at 0 through the slice's entries, or not.

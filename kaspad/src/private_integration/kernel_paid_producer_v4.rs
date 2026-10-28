@@ -581,7 +581,10 @@ impl PreparedKernelPaidWorkV4 {
                 // Own accepted prior funded enrollment. Requiring useful-work
                 // finality here would create a first-work bootstrap cycle.
                 // Reorgs are rechecked below and journal dependent claims.
-                if !retry!("own accepted funded enrollment", api.palw_kernel_material_admission_accepted_v4(request, &grant.enrollment)) {
+                if !retry!(
+                    "own accepted funded enrollment",
+                    api.palw_kernel_material_admission_accepted_v4(request, &grant.enrollment)
+                ) {
                     continue;
                 }
                 let PalwMaterialRecoveryActionV2::FundedEnroll { monetary, .. } = &*grant.enrollment else {

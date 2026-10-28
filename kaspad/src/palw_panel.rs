@@ -74,15 +74,15 @@ mod palw_service_violations_e2e;
 #[cfg(test)]
 pub(crate) mod source_support;
 
-mod retirement;
-mod collector;
-mod seat_progress;
 mod answer_accounting;
+mod collector;
 mod court_progress;
-mod tick_inputs;
-mod registration;
 mod ingress;
+mod registration;
+mod retirement;
+mod seat_progress;
 mod startup;
+mod tick_inputs;
 
 mod material_pool;
 use material_pool::PoolBooksV1;
@@ -112,24 +112,24 @@ mod palw_filer_replay;
 #[path = "palw_operator_da.rs"]
 mod palw_operator_da;
 
-#[path = "palw_artifact_inventory.rs"]
-mod artifact_inventory;
-#[path = "palw_response_presign_v1.rs"]
-mod response_presign;
-#[path = "palw_fp_replay_routing_v2.rs"]
-mod fp_replay_routing;
-#[path = "palw_segment_replay_routing_v2.rs"]
-mod segment_replay_routing;
 #[path = "palw_accepted_fp_job_context_v2.rs"]
 mod accepted_fp_job_context;
+#[path = "palw_artifact_inventory.rs"]
+mod artifact_inventory;
 #[path = "palw_flat_source_responder.rs"]
 mod flat_source_responder;
 #[path = "palw_float_source_responder.rs"]
 mod float_source_responder;
+#[path = "palw_fp_replay_routing_v2.rs"]
+mod fp_replay_routing;
 /// Paid public history recovery: the literal custodians' answers (producer and granted Valid
 /// seats) and the outside owner's native Demand/Collect when every peer and archive lacks a link.
 #[path = "palw_history_recovery_actor.rs"]
 mod history_recovery_actor;
+#[path = "palw_response_presign_v1.rs"]
+mod response_presign;
+#[path = "palw_segment_replay_routing_v2.rs"]
+mod segment_replay_routing;
 #[path = "palw_tir_prefix_responder.rs"]
 mod tir_prefix_responder;
 
@@ -1193,7 +1193,7 @@ pub(crate) fn palw_seat_s4_refusal_v1(why: String) -> PalwSeatSegmentRefusalV1 {
 #[derive(Clone)]
 enum PalwSeatTaskOutV1 {
     Replay(PalwSeatReplayResultV1),
-    RoutedReplay {result:PalwSeatReplayResultV1,original:Arc<fp_replay_routing::FpReplayRoutingGuardV2>},
+    RoutedReplay { result: PalwSeatReplayResultV1, original: Arc<fp_replay_routing::FpReplayRoutingGuardV2> },
     Segment(PalwSeatSegmentResultV1),
     RoutedSegment { result: PalwSeatSegmentResultV1, original: Arc<segment_replay_routing::SegmentRoutingGuardV2> },
 }
@@ -1406,8 +1406,10 @@ impl PalwSeatReplaysV1 {
         match self.poll_task(key, now_daa, true).await {
             None => PalwSeatReplayPollV1::Absent,
             Some(None) => PalwSeatReplayPollV1::Running,
-            Some(Some((PalwSeatTaskOutV1::Replay(result)|PalwSeatTaskOutV1::RoutedReplay {result,..}, fresh))) => PalwSeatReplayPollV1::Done { result, fresh },
-            Some(Some((PalwSeatTaskOutV1::Segment(_)|PalwSeatTaskOutV1::RoutedSegment {..}, fresh))) => {
+            Some(Some((PalwSeatTaskOutV1::Replay(result) | PalwSeatTaskOutV1::RoutedReplay { result, .. }, fresh))) => {
+                PalwSeatReplayPollV1::Done { result, fresh }
+            }
+            Some(Some((PalwSeatTaskOutV1::Segment(_) | PalwSeatTaskOutV1::RoutedSegment { .. }, fresh))) => {
                 PalwSeatReplayPollV1::Done { result: Err("a segment task under a replay's key".into()), fresh }
             }
         }
@@ -1418,11 +1420,15 @@ impl PalwSeatReplaysV1 {
         match self.poll_task(key, now_daa, false).await {
             None => PalwSeatSegmentPollV1::Absent,
             Some(None) => PalwSeatSegmentPollV1::Running,
-            Some(Some((PalwSeatTaskOutV1::Segment(result)|PalwSeatTaskOutV1::RoutedSegment {result,..}, fresh))) => PalwSeatSegmentPollV1::Done { result, fresh },
-            Some(Some((PalwSeatTaskOutV1::Replay(_)|PalwSeatTaskOutV1::RoutedReplay {..}, fresh))) => PalwSeatSegmentPollV1::Done {
-                result: Err(PalwSeatSegmentRefusalV1::Local("a replay under a segment task's key".into())),
-                fresh,
-            },
+            Some(Some((PalwSeatTaskOutV1::Segment(result) | PalwSeatTaskOutV1::RoutedSegment { result, .. }, fresh))) => {
+                PalwSeatSegmentPollV1::Done { result, fresh }
+            }
+            Some(Some((PalwSeatTaskOutV1::Replay(_) | PalwSeatTaskOutV1::RoutedReplay { .. }, fresh))) => {
+                PalwSeatSegmentPollV1::Done {
+                    result: Err(PalwSeatSegmentRefusalV1::Local("a replay under a segment task's key".into())),
+                    fresh,
+                }
+            }
         }
     }
 
@@ -1457,7 +1463,7 @@ impl PalwSeatReplaysV1 {
                         PalwSeatTaskOutV1::Segment(Err(PalwSeatSegmentRefusalV1::Local(why)))
                     }
                 });
-                if matches!(result, PalwSeatTaskOutV1::Replay(Ok(_))|PalwSeatTaskOutV1::RoutedReplay {result:Ok(_),..}) {
+                if matches!(result, PalwSeatTaskOutV1::Replay(Ok(_)) | PalwSeatTaskOutV1::RoutedReplay { result: Ok(_), .. }) {
                     self.timed.insert(run.class, now_daa.saturating_sub(run.started_daa));
                 }
                 self.done.insert(
@@ -1595,21 +1601,42 @@ impl PalwSeatReplaysV1 {
     /// One bound backend and its original native owner move into the worker;
     /// the same owner returns in its cached output, including detached work.
     #[allow(clippy::too_many_arguments)]
-    fn start_fp_routed_v2(&mut self,key:PalwSeatReplayKeyV1,class:Hash64,heavy:bool,now_daa:u64,reservation:Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,bound:fp_replay_routing::BoundFpReplayV2,job:kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,prompt:Vec<usize>) {
-        let handle=tokio::task::spawn_blocking(move|| {
-            let _held_for_the_replay=reservation;
-            bound.execute(&job,&prompt)
+    fn start_fp_routed_v2(
+        &mut self,
+        key: PalwSeatReplayKeyV1,
+        class: Hash64,
+        heavy: bool,
+        now_daa: u64,
+        reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+        bound: fp_replay_routing::BoundFpReplayV2,
+        job: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt: Vec<usize>,
+    ) {
+        let handle = tokio::task::spawn_blocking(move || {
+            let _held_for_the_replay = reservation;
+            bound.execute(&job, &prompt)
         });
-        self.running.insert(key,PalwSeatReplayRunV1 {handle,class,started_daa:now_daa,heavy,overdue:false});
+        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy, overdue: false });
     }
-    fn refresh_fp_routed_with_v2(&mut self,key:&PalwSeatReplayKeyV1,active:bool,read:impl FnOnce(Hash64,&kaspa_consensus_core::palw_v2::PalwJobContextV2)->Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,String>)->Result<(),fp_replay_routing::FpReplayRoutingFaultV2> {
+    fn refresh_fp_routed_with_v2(
+        &mut self,
+        key: &PalwSeatReplayKeyV1,
+        active: bool,
+        read: impl FnOnce(
+            Hash64,
+            &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        )
+            -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>, String>,
+    ) -> Result<(), fp_replay_routing::FpReplayRoutingFaultV2> {
         use fp_replay_routing::FpReplayRoutingFaultV2 as Fault;
-        let result=match self.done.get(key).map(|done|&done.result) {
-            Some(PalwSeatTaskOutV1::RoutedReplay {original,..})=>original.current_with(read),
-            _ if active=>Err(Fault::Stale),
-            _=>Ok(()),
+        let result = match self.done.get(key).map(|done| &done.result) {
+            Some(PalwSeatTaskOutV1::RoutedReplay { original, .. }) => original.current_with(read),
+            _ if active => Err(Fault::Stale),
+            _ => Ok(()),
         };
-        if matches!(result,Err(Fault::Stale)) {self.done.remove(key);}
+        if matches!(result, Err(Fault::Stale)) {
+            self.done.remove(key);
+        }
         result
     }
 
@@ -1642,6 +1669,8 @@ impl PalwSeatReplaysV1 {
     /// life, counted by [`Self::has_room`] beside the replays (`heavy` for a C7 class), detached with
     /// its claim, and polled by [`Self::poll_segment`]. A segment's window is not the class's job,
     /// so it times nothing and is never retried here: the caller tries the next served opening.
+    // Seat-segment tests call this. The production panel loop does not.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_segment<W>(
         &mut self,
@@ -1669,7 +1698,9 @@ impl PalwSeatReplaysV1 {
     /// receipt.
     pub(crate) fn retry_refused(&mut self, key: &PalwSeatReplayKeyV1, now_daa: u64, deadline: u64) -> bool {
         let Some(done) = self.done.get(key) else { return false };
-        if !matches!(done.result, PalwSeatTaskOutV1::Replay(Err(_))|PalwSeatTaskOutV1::RoutedReplay {result:Err(_),..}) || self.retried.contains(key) {
+        if !matches!(done.result, PalwSeatTaskOutV1::Replay(Err(_)) | PalwSeatTaskOutV1::RoutedReplay { result: Err(_), .. })
+            || self.retried.contains(key)
+        {
             return false;
         }
         if now_daa.saturating_add(done.finished_daa.saturating_sub(done.started_daa)) > deadline {
@@ -1701,7 +1732,11 @@ impl PalwSeatReplaysV1 {
     /// ([`PalwSeatSegmentRefusalV1::Local`]), never the opening's (finding 1). A whole-job replay's
     /// verdict is left alone: its retry is [`Self::retry_refused`]'s.
     pub(crate) fn forget_segment(&mut self, key: &PalwSeatReplayKeyV1) {
-        if self.done.get(key).is_some_and(|done| matches!(done.result, PalwSeatTaskOutV1::Segment(_)|PalwSeatTaskOutV1::RoutedSegment {..})) {
+        if self
+            .done
+            .get(key)
+            .is_some_and(|done| matches!(done.result, PalwSeatTaskOutV1::Segment(_) | PalwSeatTaskOutV1::RoutedSegment { .. }))
+        {
             self.done.remove(key);
         }
     }
@@ -1959,7 +1994,9 @@ impl PalwSeatResumesV1 {
                             );
                         }
                         self.in_flight.remove(&(claim.claim, segment));
-                        if let Some(original) = replays.segment_original_v2(&key) { self.routing.remember(original); }
+                        if let Some(original) = replays.segment_original_v2(&key) {
+                            self.routing.remember(original);
+                        }
                         self.matched.insert((claim.claim, segment));
                         self.served.insert(claim.claim);
                         continue;
@@ -2050,7 +2087,9 @@ impl PalwSeatResumesV1 {
                 }
             }
             if matched {
-                if let Some(original) = matched_key.and_then(|key| replays.segment_original_v2(&key)) { self.routing.remember(original); }
+                if let Some(original) = matched_key.and_then(|key| replays.segment_original_v2(&key)) {
+                    self.routing.remember(original);
+                }
                 self.matched.insert((claim.claim, segment));
                 self.served.insert(claim.claim);
                 continue;
@@ -2471,7 +2510,11 @@ pub(crate) fn palw_da_material_v1(
             }
             let mut refused = String::new();
             for material in jobs {
-                let Some(ids) = PalwPanelService::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), &material, facts.form) else {
+                let Some(ids) = PalwPanelService::fp_prompt_for_job(
+                    kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend),
+                    &material,
+                    facts.form,
+                ) else {
                     refused = "the kept job's prompt is not the job's".to_string();
                     continue;
                 };
@@ -2500,8 +2543,12 @@ pub(crate) fn palw_da_material_v1(
                 };
                 // Verification must own the same authenticated job scope as execution: bare
                 // verification would compare a constrained/pipeline capture with default argmax.
-                if fp_verify_capture_under_job_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend), &material.job, &capture, facts.roots_v1(Some(&material.job)))
-                    != PalwMaterialVerdictV1::Matches
+                if fp_verify_capture_under_job_v1(
+                    kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend),
+                    &material.job,
+                    &capture,
+                    facts.roots_v1(Some(&material.job)),
+                ) != PalwMaterialVerdictV1::Matches
                 {
                     refused = "the kept job's replay does not reproduce the claim's committed roots".to_string();
                     continue;
@@ -4651,15 +4698,16 @@ impl PalwPanelService {
         let mut facts = None;
         let read = session.palw_tir_public_read_v1(&mut |state| {
             let accepted = claim.and_then(|claim| state.claim(&claim)).map(|claim| claim.accepted_daa);
-            facts = state.class_semantics_v1(&class_id).filter(|s| palw_semantics_bind_claim_v1(s, artifact_root, accepted)).map(|s| {
-                kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
-                    model_profile_id: s.model_profile_id,
-                    runtime_manifest_hash: s.runtime_manifest_hash,
-                    runtime_class_id: s.runtime_class_id,
-                    shape_profile_id: class_id,
-                    cu_ruleset_id: s.cu_ruleset_id,
-                }
-            });
+            facts =
+                state.class_semantics_v1(&class_id).filter(|s| palw_semantics_bind_claim_v1(s, artifact_root, accepted)).map(|s| {
+                    kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
+                        model_profile_id: s.model_profile_id,
+                        runtime_manifest_hash: s.runtime_manifest_hash,
+                        runtime_class_id: s.runtime_class_id,
+                        shape_profile_id: class_id,
+                        cu_ruleset_id: s.cu_ruleset_id,
+                    }
+                });
             Ok(())
         });
         read.ok().filter(|in_force| *in_force).and(facts)
@@ -4679,9 +4727,8 @@ impl PalwPanelService {
         let facts = Self::registered_class_facts_v1(session, class_id, artifact_root, None);
         {
             let kept = self.executor_backend.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(kept) = kept
-                .as_ref()
-                .filter(|kept| kept.class_id == class_id && kept.artifact_root == artifact_root && kept.facts == facts)
+            if let Some(kept) =
+                kept.as_ref().filter(|kept| kept.class_id == class_id && kept.artifact_root == artifact_root && kept.facts == facts)
             {
                 return Ok(kept.backend.clone());
             }
@@ -7136,15 +7183,22 @@ impl PalwPanelService {
             }
         };
         for (session_id, round, mine_is_responder, object) in batch {
-            let rider_batch=crate::palw_rider_outbox::palw_rider_queued_v1(round,mine_is_responder,&object);
-            if let Err(why)=court_outbox.refresh_rider(&object,&self.consensus_config.params,session) {
+            let rider_batch = crate::palw_rider_outbox::palw_rider_queued_v1(round, mine_is_responder, &object);
+            if let Err(why) = court_outbox.refresh_rider(&object, &self.consensus_config.params, session) {
                 warn!("[{PALW_PANEL}] rider native work withheld before funding: {why}");
-                if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
+                if court_outbox::rider_refusal_should_retry_v2(&why) {
+                    unsent.push((session_id, round, mine_is_responder, object));
+                }
+                continue;
             }
-            let source_packet=court_outbox::is_source_response_v1(&object);
-            if let Err(why)=court_outbox.current_source_then(&object,session,||()) {
+            let source_packet = court_outbox::is_source_response_v1(&object);
+            if let Err(why) = court_outbox.current_source_then(&object, session, || ()) {
                 warn!("[{PALW_PANEL}] source response withheld before funding: {why}");
-                if matches!(why,court_outbox::SourceResponseFaultV1::Retry(_)) {unsent.push((session_id,round,mine_is_responder,object));}else {court_outbox.finish_source_packet(&object);}
+                if matches!(why, court_outbox::SourceResponseFaultV1::Retry(_)) {
+                    unsent.push((session_id, round, mine_is_responder, object));
+                } else {
+                    court_outbox.finish_source_packet(&object);
+                }
                 continue;
             }
             let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
@@ -7177,30 +7231,48 @@ impl PalwPanelService {
                 continue;
             };
             // Funding may await RPC work. Revalidate before the carrier signer.
-            if let Err(why)=court_outbox.refresh_rider(&object,&self.consensus_config.params,session) {
+            if let Err(why) = court_outbox.refresh_rider(&object, &self.consensus_config.params, session) {
                 warn!("[{PALW_PANEL}] rider native work withheld before carrier signing: {why}");
-                if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
+                if court_outbox::rider_refusal_should_retry_v2(&why) {
+                    unsent.push((session_id, round, mine_is_responder, object));
+                }
+                continue;
             }
-            let prepared=match court_outbox.current_source_then(&object,session,||self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa)) {
-                Ok(prepared)=>prepared,
-                Err(why)=>{
+            let prepared = match court_outbox.current_source_then(&object, session, || {
+                self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa)
+            }) {
+                Ok(prepared) => prepared,
+                Err(why) => {
                     warn!("[{PALW_PANEL}] source response withheld before carrier signing: {why}");
-                    if matches!(why,court_outbox::SourceResponseFaultV1::Retry(_)) {unsent.push((session_id,round,mine_is_responder,object));}else {court_outbox.finish_source_packet(&object);}
+                    if matches!(why, court_outbox::SourceResponseFaultV1::Retry(_)) {
+                        unsent.push((session_id, round, mine_is_responder, object));
+                    } else {
+                        court_outbox.finish_source_packet(&object);
+                    }
                     continue;
                 }
             };
             match prepared {
                 Ok(prepared_carrier) => {
                     let txid = prepared_carrier.id();
-                    if let Err(why)=court_outbox.refresh_rider(&object,&self.consensus_config.params,session) {
+                    if let Err(why) = court_outbox.refresh_rider(&object, &self.consensus_config.params, session) {
                         warn!("[{PALW_PANEL}] rider native work withheld before carrier submission: {why}");
-                        if court_outbox::rider_refusal_should_retry_v2(&why) {unsent.push((session_id,round,mine_is_responder,object));}continue;
+                        if court_outbox::rider_refusal_should_retry_v2(&why) {
+                            unsent.push((session_id, round, mine_is_responder, object));
+                        }
+                        continue;
                     }
-                    let submission=match court_outbox.current_source_then(&object,session,||self.submit_prepared_carrier_v1(session,prepared_carrier)) {
-                        Ok(submission)=>submission,
-                        Err(why)=>{
+                    let submission = match court_outbox
+                        .current_source_then(&object, session, || self.submit_prepared_carrier_v1(session, prepared_carrier))
+                    {
+                        Ok(submission) => submission,
+                        Err(why) => {
                             warn!("[{PALW_PANEL}] source response withheld before carrier submission: {why}");
-                            if matches!(why,court_outbox::SourceResponseFaultV1::Retry(_)) {unsent.push((session_id,round,mine_is_responder,object));}else {court_outbox.finish_source_packet(&object);}
+                            if matches!(why, court_outbox::SourceResponseFaultV1::Retry(_)) {
+                                unsent.push((session_id, round, mine_is_responder, object));
+                            } else {
+                                court_outbox.finish_source_packet(&object);
+                            }
                             continue;
                         }
                     };
@@ -7230,13 +7302,17 @@ impl PalwPanelService {
                         Err(e) => {
                             warn!("[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}", object_name(&object));
                             carrier.set_funding(None);
-                            if rider_batch || source_packet {unsent.push((session_id,round,mine_is_responder,object));}
+                            if rider_batch || source_packet {
+                                unsent.push((session_id, round, mine_is_responder, object));
+                            }
                         }
                     }
                 }
                 Err(e) => {
                     warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}");
-                    if rider_batch || source_packet {unsent.push((session_id,round,mine_is_responder,object));}
+                    if rider_batch || source_packet {
+                        unsent.push((session_id, round, mine_is_responder, object));
+                    }
                 }
             }
         }
@@ -7979,7 +8055,16 @@ impl PalwPanelService {
         current_daa: u64,
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
-    ) -> Result<(Transaction, Hash64, Vec<u8>, kaspa_pq_validator_core::FpAnswerTransactionLeaseV1, Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>), String> {
+    ) -> Result<
+        (
+            Transaction,
+            Hash64,
+            Vec<u8>,
+            kaspa_pq_validator_core::FpAnswerTransactionLeaseV1,
+            Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>>,
+        ),
+        String,
+    > {
         use kaspa_consensus_core::palw_freeprompt_v3::{
             PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
             fp_claim_id_v3, palw_fp_capture_encode_v1,
@@ -7992,7 +8077,8 @@ impl PalwPanelService {
         // (2026-09-02): every canonical claim on the new class was refused with "transaction has
         // 250000 fees which is under the required amount of 262870", and the lane never opened.
         const CANONICAL_CLAIM_FEE_FLOOR_SOMPI: u64 = 250_000;
-        let answer_accounting_active = self.consensus_config.params.palw_fp_answer_accounting_v1_fence().is_some_and(|f| f.is_active(current_daa));
+        let answer_accounting_active =
+            self.consensus_config.params.palw_fp_answer_accounting_v1_fence().is_some_and(|f| f.is_active(current_daa));
 
         let class_id = self.canonical_class_id_v1(session)?;
         let facts = session.palw_producer_facts_v2(class_id, Some(bond)).ok_or("no producer facts for the canonical class")?;
@@ -8109,8 +8195,14 @@ impl PalwPanelService {
             Some(PalwDrillFpFaultV1::Backend(fault)) => Some(fault),
             _ => None,
         };
-        let routing_work = crate::palw_native_routing_work_v2::bind_fp_v2(session,backend.as_mut(),&self.consensus_config.params,current_daa,&job)
-            .map_err(|why|format!("native FP routing work deferred before execution: {why}"))?;
+        let routing_work = crate::palw_native_routing_work_v2::bind_fp_v2(
+            session,
+            backend.as_mut(),
+            &self.consensus_config.params,
+            current_daa,
+            &job,
+        )
+        .map_err(|why| format!("native FP routing work deferred before execution: {why}"))?;
         let drill_sparse_seed = self.config.drill_sparse_fault_seed;
         let (_backend, executed) = offload(backend, move |b| {
             let sparse_leaf = match drill_sparse_seed {
@@ -8150,10 +8242,10 @@ impl PalwPanelService {
         })
         .await?;
         let (run, shape, accounting_answer_root) = executed?;
-        if routing_work.as_ref().is_some_and(|owner|!owner.accepts_context_v2(&shape.job_context)) {
+        if routing_work.as_ref().is_some_and(|owner| !owner.accepts_context_v2(&shape.job_context)) {
             return Err("executed FP context differs from bound native routing work".into());
         }
-        crate::palw_native_routing_work_v2::refresh_v2(session,routing_work.as_ref()).map_err(|why|why.to_string())?;
+        crate::palw_native_routing_work_v2::refresh_v2(session, routing_work.as_ref()).map_err(|why| why.to_string())?;
         if let Some(leaf) = drill_fault_leaf {
             warn!(
                 "[{PALW_PANEL}] PALW DRILL: this canonical claim commits a capture corrupted at step leaf {leaf} (execution root {})",
@@ -8294,17 +8386,20 @@ impl PalwPanelService {
             session.with_consensus_api_v1(|c| c.palw_fp_commitment_price_answered_v1(&commitment, &carried, &run.output_token_ids))
         } else {
             session.palw_fp_commitment_price_v1(
-            class_id,
-            carried.clone(),
-            job.prompt_tokens,
-            commitment.decode_tokens_executed,
-            commitment.work_leaves,
-            Some(bond),
-        )
+                class_id,
+                carried.clone(),
+                job.prompt_tokens,
+                commitment.decode_tokens_executed,
+                commitment.work_leaves,
+                Some(bond),
+            )
         };
-        if answer_accounting_active && price_answer.as_ref().is_some_and(|answer| {
-            answer.daa_score != current_daa || public_quote_context.is_some_and(|quoted| quoted != (answer.chain_point, answer.daa_score))
-        }) {
+        if answer_accounting_active
+            && price_answer.as_ref().is_some_and(|answer| {
+                answer.daa_score != current_daa
+                    || public_quote_context.is_some_and(|quoted| quoted != (answer.chain_point, answer.daa_score))
+            })
+        {
             return Err("canonical public/answer price snapshot or DAA changed; retry".into());
         }
         let price = match price_answer {
@@ -8329,7 +8424,7 @@ impl PalwPanelService {
         // twice — once at the floor to read the carrier's mass, once at the fee that mass prices —
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
-        crate::palw_native_routing_work_v2::refresh_v2(session,routing_work.as_ref()).map_err(|why|why.to_string())?;
+        crate::palw_native_routing_work_v2::refresh_v2(session, routing_work.as_ref()).map_err(|why| why.to_string())?;
         let build_plain = |fee: u64| {
             if let Some((header, pledge, history, rent)) = &tir_original {
                 // The rent rides on top of relay: consensus burns exactly the declaration from this carrier's fee.
@@ -8384,9 +8479,17 @@ impl PalwPanelService {
         let build = |fee| {
             let tx = build_plain(fee)?;
             kaspa_pq_validator_core::wrap_fp_answer_accounting_tx_with_v1(
-                &key, &self.consensus_config.params, current_daa, tx, std::slice::from_ref(funding),
-                &commitment, &shape.job_context, &run.output_token_ids, accounting_answer_root,
-            ).map_err(|e| e.to_string())
+                &key,
+                &self.consensus_config.params,
+                current_daa,
+                tx,
+                std::slice::from_ref(funding),
+                &commitment,
+                &shape.job_context,
+                &run.output_token_ids,
+                accounting_answer_root,
+            )
+            .map_err(|e| e.to_string())
         };
         let probe = build(CANONICAL_CLAIM_FEE_FLOOR_SOMPI)?;
         let params = &self.consensus_config.params;
@@ -8399,7 +8502,7 @@ impl PalwPanelService {
         let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&probe.0).compute_mass)
             .max(CANONICAL_CLAIM_FEE_FLOOR_SOMPI);
         drop(probe);
-        crate::palw_native_routing_work_v2::refresh_v2(session,routing_work.as_ref()).map_err(|why|why.to_string())?;
+        crate::palw_native_routing_work_v2::refresh_v2(session, routing_work.as_ref()).map_err(|why| why.to_string())?;
         let (tx, answer_lease) = build(fee)?;
         if let Some(projection) = unpublished_projection.as_mut() {
             projection.keep();
@@ -9152,9 +9255,7 @@ impl PalwPanelService {
             // The iteration's stopwatch (`PalwTickGuardV1`): the phases below name the section that just ended.
             let mut tick_guard = PalwTickGuardV1::new();
             // Drain the gossip inbox first, so this tick's decisions see this tick's mail.
-            self.drain_panel_inbox_v1(
-                &mut inbox, &mut pool_books, &mut first_seen, &mut shard_books.arrivals, &mut receipt_arrivals,
-            );
+            self.drain_panel_inbox_v1(&mut inbox, &mut pool_books, &mut first_seen, &mut shard_books.arrivals, &mut receipt_arrivals);
 
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
@@ -9329,9 +9430,11 @@ impl PalwPanelService {
                         else {
                             continue;
                         };
-                        let Some(prompt_ids) =
-                            Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), &job, self.class_prompt_ids_form(job.job.class_id))
-                        else {
+                        let Some(prompt_ids) = Self::fp_prompt_for_job(
+                            kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()),
+                            &job,
+                            self.class_prompt_ids_form(job.job.class_id),
+                        ) else {
                             continue;
                         };
                         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
@@ -9504,24 +9607,26 @@ impl PalwPanelService {
             self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_outbox);
 
             tick_guard.phase("challenger");
-            let court_progress = self.court_progress_tick_v1(
-                tick_read,
-                court_progress::CourtProgressRefsV1 {
-                    pool_books: &mut pool_books,
-                    own_executions: &mut own_executions,
-                    attn_evidence: &mut attn_evidence,
-                    attn_root_filings: &mut attn_root_filings,
-                    tir_root_filings: &mut tir_root_filings,
-                    held_court: &mut held_court,
-                    shard_books: &mut shard_books,
-                    requested: &mut requested,
-                    requested_intervals: &mut requested_intervals,
-                    court_outbox: &mut court_outbox,
-                    da_flat_sent: &mut da_flat_sent,
-                    public_prefix_response_cursor: &mut public_prefix_response_cursor,
-                    false_valid: &mut false_valid,
-                },
-            ).await;
+            let court_progress = self
+                .court_progress_tick_v1(
+                    tick_read,
+                    court_progress::CourtProgressRefsV1 {
+                        pool_books: &mut pool_books,
+                        own_executions: &mut own_executions,
+                        attn_evidence: &mut attn_evidence,
+                        attn_root_filings: &mut attn_root_filings,
+                        tir_root_filings: &mut tir_root_filings,
+                        held_court: &mut held_court,
+                        shard_books: &mut shard_books,
+                        requested: &mut requested,
+                        requested_intervals: &mut requested_intervals,
+                        court_outbox: &mut court_outbox,
+                        da_flat_sent: &mut da_flat_sent,
+                        public_prefix_response_cursor: &mut public_prefix_response_cursor,
+                        false_valid: &mut false_valid,
+                    },
+                )
+                .await;
             tick_guard.phase("court+da");
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa)
                 && (self.config.canonical_claims || self.config.canonical_class.is_some())
@@ -9848,7 +9953,14 @@ impl PalwPanelService {
                         let panel = item.panel.as_ref()?;
                         let missing: Vec<usize> =
                             panel.iter().enumerate().filter(|(_, seat)| !item.valid.contains(seat)).map(|(at, _)| at).collect();
-                        (!missing.is_empty()).then(|| format!("{} valid={}/{} missing_seats={missing:?}", item.claim_id, panel.len() - missing.len(), panel.len()))
+                        (!missing.is_empty()).then(|| {
+                            format!(
+                                "{} valid={}/{} missing_seats={missing:?}",
+                                item.claim_id,
+                                panel.len() - missing.len(),
+                                panel.len()
+                            )
+                        })
                     })
                     .collect();
                 if !waits.is_empty() {
@@ -9940,7 +10052,8 @@ impl PalwPanelService {
                     trap_book: &trap_book,
                     duties: &duties,
                     seat_r_duties: &seat_r_duties,
-                    seat_r, vertex_fence,
+                    seat_r,
+                    vertex_fence,
                 },
                 seat_progress::SeatProgressRefsV1 {
                     pool_books: &mut pool_books,
@@ -9974,7 +10087,8 @@ impl PalwPanelService {
                     false_valid: &mut false_valid,
                     improve: &mut improve,
                 },
-            ).await;
+            )
+            .await;
             tick_guard.phase("duty-sweep");
             // --- the seat's re-send: its own receipts, while their panels stand (fix (4)) ---
             //
@@ -10142,8 +10256,16 @@ impl PalwPanelService {
                 )
                 .await;
             // RFC-0006 06-A: the held-GDN filer — a forged recurrence checkpoint of a held hybrid claim this bond may dispute.
-            self.gdn_held_filer_tick_v1(&session, &mut gdn_book, pool_books.material.map(), current_daa, network_domain, bond_key, &mut court_outbox)
-                .await;
+            self.gdn_held_filer_tick_v1(
+                &session,
+                &mut gdn_book,
+                pool_books.material.map(),
+                current_daa,
+                network_domain,
+                bond_key,
+                &mut court_outbox,
+            )
+            .await;
             // G14 ③ / ⑦: the GDN step filer — a forged recurrence step on an honest checkpoint (tag 243), filed, tracked to its verdict,
             // re-submitted after a reorg, and its conviction handed to the false-Valid filer below.
             self.gdn_step_filer_tick_v1(
@@ -10307,7 +10429,7 @@ impl PalwPanelService {
             .await;
 
             // --- ADR-0164 F-M1: the riders this node's producer built, onto the carrier queue (`palw_rider_outbox`) ---
-            crate::palw_rider_outbox::palw_rider_outbox_import_v2(|batch|court_outbox.try_push_rider_batch(batch,current_daa));
+            crate::palw_rider_outbox::palw_rider_outbox_import_v2(|batch| court_outbox.try_push_rider_batch(batch, current_daa));
 
             // --- the collector + submitter's half ---
             self.collector_tick_v1(
@@ -10320,7 +10442,8 @@ impl PalwPanelService {
                     licence_spread: &licence_spread,
                     own_receipts: &own_receipts,
                     own_receipt_class: &own_receipt_class,
-                    seat_r, vertex_fence,
+                    seat_r,
+                    vertex_fence,
                 },
                 collector::CollectorRefsV1 {
                     shard_books: &mut shard_books,
@@ -10345,7 +10468,8 @@ impl PalwPanelService {
                     canonical_last_daa: &mut canonical_last_daa,
                     improve: &mut improve,
                 },
-            ).await;
+            )
+            .await;
 
             self.retire_tick_v1(
                 tick_read,
@@ -10390,7 +10514,8 @@ impl PalwPanelService {
                     own_executions: &mut own_executions,
                     submitted: &mut submitted,
                 },
-            ).await;
+            )
+            .await;
         }
     }
 }
@@ -11784,7 +11909,11 @@ impl PalwPanelService {
         use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
         use misaka_palw_base0::fp_interval::{Base0FpIntervalOpeningV4, base0_fp_interval_close_annex_any_v1};
         let Some(job) = fp_job else { return Err(CloseFromServedV1::NotThisLane) };
-        let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), job, self.class_prompt_ids_form(job.job.class_id)) else {
+        let Some(prompt_ids) = Self::fp_prompt_for_job(
+            kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend),
+            job,
+            self.class_prompt_ids_form(job.job.class_id),
+        ) else {
             return Err(CloseFromServedV1::Refused("a canonical claim whose material is not its own prompt".to_string()));
         };
         // The answer's ids, off the same payloads the seat reads them from (ADR-0084 Decision 1).
@@ -12228,7 +12357,8 @@ impl PalwPanelService {
         use crate::palw_fp_seat::PalwFpChainCountsV1;
         use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
 
-        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
+        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+        else {
             return Some(PalwReceiptVerdictV2::Incapable);
         };
         // **Nothing this claim's replay resumes from was computed for another claim.** The state
@@ -13886,8 +14016,13 @@ impl PalwPanelService {
             match poll {
                 PalwSeatReplayPollV1::Running => waiting |= decides,
                 PalwSeatReplayPollV1::Done { result: Ok(replayed), fresh } => {
-                    let active=self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f|f!=kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score()));
-                    if let Err(why) = replays.refresh_fp_routed_with_v2(&key,active,|claim,job|session.palw_native_routing_claim_authority_v2(claim,job)) {
+                    let active = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
+                        f != kaspa_consensus_core::config::params::ForkActivation::never()
+                            && f.is_active(session.get_virtual_daa_score())
+                    });
+                    if let Err(why) = replays.refresh_fp_routed_with_v2(&key, active, |claim, job| {
+                        session.palw_native_routing_claim_authority_v2(claim, job)
+                    }) {
                         warn!("[{PALW_PANEL}] claim {}: FP replay context changed: {why}", duty.claim_id);
                         continue;
                     }
@@ -13968,37 +14103,89 @@ impl PalwPanelService {
                         });
                         continue;
                     }
-                    let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
+                    let Ok(backend) =
+                        self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                    else {
                         return (PalwSeatReplayStepV1::NoVerdict, None);
                     };
-                    let active=self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f|f!=kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score()));
-                    let (mut bound,ctx)=if active {
-                        let context_scratch=match fp_replay_routing::BoundFpReplayV2::context_scratch_v2() {Ok(ticket)=>ticket,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: FP replay context admission held: {why}",duty.claim_id);continue;}};
+                    let active = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
+                        f != kaspa_consensus_core::config::params::ForkActivation::never()
+                            && f.is_active(session.get_virtual_daa_score())
+                    });
+                    let (mut bound, ctx) = if active {
+                        let context_scratch = match fp_replay_routing::BoundFpReplayV2::context_scratch_v2() {
+                            Ok(ticket) => ticket,
+                            Err(why) => {
+                                warn!("[{PALW_PANEL}] claim {}: FP replay context admission held: {why}", duty.claim_id);
+                                continue;
+                            }
+                        };
                         // Exact-count captures may supply the authenticated job
                         // spelling, never their own routing authority.
-                        let context=jobs[index].2.iter().find_map(|bytes| {
-                            let payload=palw_fp_capture_decode_v1(bytes,form)?;
-                            let shape=backend.capture_shape(&payload.capture)?;
-                            let ctx=shape.job_context;
-                            (ctx.job_id==*job_id && duty.fp_job_pin_v1().is_some_and(|pin|kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx)==pin)).then_some(ctx)
+                        let context = jobs[index].2.iter().find_map(|bytes| {
+                            let payload = palw_fp_capture_decode_v1(bytes, form)?;
+                            let shape = backend.capture_shape(&payload.capture)?;
+                            let ctx = shape.job_context;
+                            (ctx.job_id == *job_id
+                                && duty.fp_job_pin_v1().is_some_and(|pin| {
+                                    kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx) == pin
+                                }))
+                            .then_some(ctx)
                         });
-                        let context=match context {
-                            Some(context)=>match kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&context) {Ok(context)=>context,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: FP context retention held: {why}",duty.claim_id);continue;}},
-                            None=>match accepted_fp_job_context::accepted_fp_job_context_v2(session,duty,&material.job,backend.as_ref()) {Ok(context)=>context,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: accepted FP context acquisition held: {why}",duty.claim_id);continue;}},
+                        let context = match context {
+                            Some(context) => {
+                                match kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&context) {
+                                    Ok(context) => context,
+                                    Err(why) => {
+                                        warn!("[{PALW_PANEL}] claim {}: FP context retention held: {why}", duty.claim_id);
+                                        continue;
+                                    }
+                                }
+                            }
+                            None => match accepted_fp_job_context::accepted_fp_job_context_v2(
+                                session,
+                                duty,
+                                &material.job,
+                                backend.as_ref(),
+                            ) {
+                                Ok(context) => context,
+                                Err(why) => {
+                                    warn!("[{PALW_PANEL}] claim {}: accepted FP context acquisition held: {why}", duty.claim_id);
+                                    continue;
+                                }
+                            },
                         };
-                        let bound=match fp_replay_routing::BoundFpReplayV2::bind_with(backend,duty.claim_id,&context,true,|claim,job|session.palw_native_routing_claim_authority_v2(claim,job),context_scratch) {
-                            Ok(bound)=>bound,Err(why)=>{warn!("[{PALW_PANEL}] claim {}: FP native routing bind held: {why}",duty.claim_id);continue;}
+                        let bound = match fp_replay_routing::BoundFpReplayV2::bind_with(
+                            backend,
+                            duty.claim_id,
+                            &context,
+                            true,
+                            |claim, job| session.palw_native_routing_claim_authority_v2(claim, job),
+                            context_scratch,
+                        ) {
+                            Ok(bound) => bound,
+                            Err(why) => {
+                                warn!("[{PALW_PANEL}] claim {}: FP native routing bind held: {why}", duty.claim_id);
+                                continue;
+                            }
                         };
-                        (bound,None)
+                        (bound, None)
                     } else {
-                        let context=backend.fp_job_context_v1(&material.job);
-                        (fp_replay_routing::BoundFpReplayV2::legacy(backend),context)
+                        let context = backend.fp_job_context_v1(&material.job);
+                        (fp_replay_routing::BoundFpReplayV2::legacy(backend), context)
                     };
-                    let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(bound.backend()), material, form) else { continue };
+                    let Some(prompt_ids) = Self::fp_prompt_for_job(
+                        kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(bound.backend()),
+                        material,
+                        form,
+                    ) else {
+                        continue;
+                    };
                     // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
                     let backends = self.backends();
-                    let (reserved, need) =
-                        match { let (backend, original_context)=bound.backend_and_context_mut_v2(); self.reserve_replay_at_widest_run_v1("full-seat", backend, duty.class_id, duty.claim_id, |b| {
+                    let (backend, original_context) = bound.backend_and_context_mut_v2();
+                    let reserved_result =
+                        self.reserve_replay_at_widest_run_v1("full-seat", backend, duty.class_id, duty.claim_id, |b| {
                             backends.role_memory_need_for_backend_or_chain_v1(
                                 b,
                                 duty.class_id,
@@ -14007,15 +14194,16 @@ impl PalwPanelService {
                                 FULL_SEAT_V1,
                                 |id| self.chain_carriage_v1(session, id),
                             )
-                        }) } {
-                            Ok(taken) => taken,
-                            Err(why) => {
-                                crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
-                                    format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
-                                });
-                                continue;
-                            }
-                        };
+                        });
+                    let (reserved, need) = match reserved_result {
+                        Ok(taken) => taken,
+                        Err(why) => {
+                            crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
+                                format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
+                            });
+                            continue;
+                        }
+                    };
                     info!(
                         "[{PALW_PANEL}] claim {}: replaying {} off the loop for a verdict ({:?}, deadline DAA {}, SEAT-R), reserved {}",
                         duty.claim_id,
@@ -14026,7 +14214,7 @@ impl PalwPanelService {
                     );
                     let job = material.job.clone();
                     let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
-                    replays.start_fp_routed_v2(key,duty.class_id,seat_r_duty.heavy,current_daa,Some(reserved),bound,job,prompt);
+                    replays.start_fp_routed_v2(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), bound, job, prompt);
                 }
             }
         }
@@ -14137,8 +14325,15 @@ impl PalwPanelService {
         let active = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
             f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score())
         });
-        if let Err(why) = resumes.refresh_routing_with_v2(duty.claim_id, seats, claim.mask, replays, active, matches!(&step, PalwSeatResumeStepV1::Licensed(_)),
-            |claim, job| session.palw_native_routing_claim_authority_v2(claim, job)) {
+        if let Err(why) = resumes.refresh_routing_with_v2(
+            duty.claim_id,
+            seats,
+            claim.mask,
+            replays,
+            active,
+            matches!(&step, PalwSeatResumeStepV1::Licensed(_)),
+            |claim, job| session.palw_native_routing_claim_authority_v2(claim, job),
+        ) {
             warn!("[{PALW_PANEL}] claim {}: native segment result waits: {why}", duty.claim_id);
             return PalwSeatResumeStepV1::Waiting;
         }
@@ -14228,7 +14423,10 @@ impl PalwPanelService {
         network_domain: Hash64,
         pooled: &[Vec<u8>],
     ) -> Result<Option<tokio::task::JoinHandle<PalwSeatS3SampleV1>>, ()> {
-        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { return Ok(None) };
+        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+        else {
+            return Ok(None);
+        };
         let captures = self.seat_s3_captures_v1(session, backend.as_ref(), duty, network_domain, pooled);
         if captures.is_empty() {
             return Ok(None);
@@ -14610,7 +14808,11 @@ impl PalwPanelService {
     /// reader (`retained_original_v1`) finds it and still checks it against the frame. `Ok(false)`: no provider dir, or a copy is
     /// already retained. A provider's silence is the claimant's DA no-response (a DA default), never a computation fault: nothing here
     /// files or accuses anything, and no responsibility moves to the provider (no provider court).
-    pub(crate) async fn fetch_tir_original_from_evidence_providers_v1(&self, network_domain: Hash64, claim: Hash64) -> Result<bool, String> {
+    pub(crate) async fn fetch_tir_original_from_evidence_providers_v1(
+        &self,
+        network_domain: Hash64,
+        claim: Hash64,
+    ) -> Result<bool, String> {
         if self.config.evidence_provider_dirs.is_empty() || self.fp_retained_payload_paths(&claim).iter().any(|p| p.is_file()) {
             return Ok(false);
         }
@@ -14639,7 +14841,11 @@ impl PalwPanelService {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             let partial = target.with_extension("material.partial");
             std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &target)).map_err(|e| e.to_string())?;
-            info!("[{PALW_PANEL}] claim {claim}: TIR frame original ({} B) from evidence provider(s) {:?}", bytes.len(), report.served_by);
+            info!(
+                "[{PALW_PANEL}] claim {claim}: TIR frame original ({} B) from evidence provider(s) {:?}",
+                bytes.len(),
+                report.served_by
+            );
             Ok(true)
         })
         .await
@@ -15067,7 +15273,8 @@ mod attn_opening_cap_pin {
 
         let source = crate::palw_panel::source_support::former_parent_production_source_v1();
         let root = &source[source.find_code("AttnMove::Root => {").expect("the root arm")..];
-        let asked = root.find_code("attn_root_claim_is_openable_v1(params, current_daa, evidence.binding.step_leaf_count)").expect("asked");
+        let asked =
+            root.find_code("attn_root_claim_is_openable_v1(params, current_daa, evidence.binding.step_leaf_count)").expect("asked");
         assert!(asked < root.find_code("self.sign(&message").expect("signed"), "asked before the root claim is signed");
     }
 }
@@ -15216,7 +15423,15 @@ mod fp_job_v4_material_tests {
                 job_pin: None,
             };
             let bytes = palw_fp_capture_encode_v1(&job, &prompt, &run.outcome.material);
-            assert_eq!(fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &bytes, PalwPromptIdsFormV1::Flat, roots), PalwMaterialVerdictV1::Matches);
+            assert_eq!(
+                fp_verify_material_v1(
+                    kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend),
+                    &bytes,
+                    PalwPromptIdsFormV1::Flat,
+                    roots
+                ),
+                PalwMaterialVerdictV1::Matches
+            );
             let unscoped = backend.verify_material(&run.outcome.material, roots);
             if penalized {
                 assert_ne!(unscoped, PalwMaterialVerdictV1::Matches, "the argmax cannot vouch for a penalized answer");

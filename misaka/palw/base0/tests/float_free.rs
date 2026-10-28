@@ -35,6 +35,7 @@
 //! it reports a property it did not check. So a missing file is a failure, and the expected file
 //! set is enumerated rather than globbed.
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 

@@ -15,12 +15,18 @@ pub(super) fn apply_object(
             apply_object_with_pair_v1(builder, ctx, object)
         })();
         builder.court_end_evidence = previous;
-        if result.is_err() { builder.restore(saved); }
+        if result.is_err() {
+            builder.restore(saved);
+        }
         return result;
     }
     apply_object_with_pair_v1(builder, ctx, object)
 }
-fn apply_object_with_pair_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, object: &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error> {
+fn apply_object_with_pair_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
     // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` every court operation is charged its deterministic cost
     // against the block's court budget before its arm runs. A no-op below the fence.
     palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
@@ -247,7 +253,7 @@ fn apply_object_inner(
                 let bound = (pubkey, operator_pubkey, capable_classes).native_heap_v1("native registration input copy");
                 builder
                     .native_reservation
-                    .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+                    .grow_v1(bound.bytes().ok_or(PalwStateV2Error::NativeResource(bound))?)
                     .map_err(PalwStateV2Error::NativeResource)?;
             }
             builder.write_bond(
@@ -593,9 +599,16 @@ fn apply_object_inner(
                 .state
                 .tir_class_v1(&class_id)
                 .ok_or(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding names no registered TIR class"))?;
-            let row = crate::palw_tir_container_v1::check_tir_container_binding_v1(binding, &class_id, &artifact_root, record, ctx.daa_score)
-                .map_err(PalwStateV2Error::ImmutableModelUpdate)?;
-            match crate::palw_tir_container_v1::palw_tir_bound_container_v1(&builder.state, class_id).map(|bound| bound.container_root) {
+            let row = crate::palw_tir_container_v1::check_tir_container_binding_v1(
+                binding,
+                &class_id,
+                &artifact_root,
+                record,
+                ctx.daa_score,
+            )
+            .map_err(PalwStateV2Error::ImmutableModelUpdate)?;
+            match crate::palw_tir_container_v1::palw_tir_bound_container_v1(&builder.state, class_id).map(|bound| bound.container_root)
+            {
                 Some(bound) if bound == row.container_root => {}
                 Some(_) => {
                     return Err(PalwStateV2Error::ImmutableModelUpdate("a TIR class's bound container is immutable"));
@@ -750,7 +763,8 @@ fn apply_object_inner(
         PalwConsensusObjectV2::TirLookaheadDisclosedV2 { body } => {
             if builder.extras.tir_bounded_door_active {
                 let session_id = body.session_id;
-                let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+                let session =
+                    builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
                 // Lane r6-p2-shared: a bundle ending on positions (version 3) only where this claim's position terminal
                 // applies — an older claim keeps the whole-tile close, which a disclosed position round would retire.
                 if body.disclosure.version == crate::palw_tir_dissect_v1::PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2
@@ -784,7 +798,8 @@ fn apply_object_inner(
         PalwConsensusObjectV2::TirLookaheadChosenV2 { body } => {
             if builder.extras.tir_bounded_door_active {
                 let session_id = body.path.session_id;
-                let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+                let session =
+                    builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
                 let mut phase =
                     builder.state.tir_dissections.get(&session_id).ok_or(PalwStateV2Error::NoDissection(session_id))?.as_ref().clone();
                 phase
@@ -1012,7 +1027,8 @@ fn apply_object_inner(
                     // session could only freeze the claim's `Final` for a window and end in the
                     // mercy: the accusation is refused, and the class's residual is (C)'s bound (held
                     // to Final, `c_2M = 1`, RT#2). The answerable held class (8k) opens as before.
-                    if builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim) {
+                    if builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim)
+                    {
                         return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable {
                             claim: claim_id,
                             leaf: accusation.leaf_index,
@@ -1308,7 +1324,7 @@ fn apply_object_inner(
                 let bound = shards.native_heap_v1("bond shards incoming copy");
                 builder
                     .native_reservation
-                    .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+                    .grow_v1(bound.bytes().ok_or(PalwStateV2Error::NativeResource(bound))?)
                     .map_err(PalwStateV2Error::NativeResource)?;
             }
             builder.write_bond_shards((*bond, *class_id), (!shards.is_empty()).then(|| shards.clone()))?;
@@ -1838,23 +1854,21 @@ fn apply_object_inner(
                     work: work.as_ref().map(|f| f as &dyn Fn() -> Option<crate::palw_model_registry_v1::PalwModelWorkV1>),
                 },
             )?;
-            if builder.params.memory_routing_court_from_daa().is_some_and(|at| ctx.daa_score >= at) {
-                if let Some(carriage) = admission {
-                    if carriage.profile.shape_profile_id() != *class_id {
-                        return Err(PalwStateV2Error::ImmutableModelUpdate("registered routing profile identity differs"));
-                    }
-                    if let Some(previous) = builder.state.reader_router_profile_v2(*class_id)? {
-                        if &*previous != &carriage.profile {
-                            return Err(PalwStateV2Error::ImmutableModelUpdate("registered routing profile is immutable"));
-                        }
-                    }
-                    if builder.state.kernel_route().is_none() {
-                        super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-                    }
-                    builder.write_reader_router_cell_v2(
-                        &reader_router_v2::profile_key_v2(*class_id), Some(&carriage.profile),
-                    )?;
+            if builder.params.memory_routing_court_from_daa().is_some_and(|at| ctx.daa_score >= at)
+                && let Some(carriage) = admission
+            {
+                if carriage.profile.shape_profile_id() != *class_id {
+                    return Err(PalwStateV2Error::ImmutableModelUpdate("registered routing profile identity differs"));
                 }
+                if let Some(previous) = builder.state.reader_router_profile_v2(*class_id)?
+                    && *previous != carriage.profile
+                {
+                    return Err(PalwStateV2Error::ImmutableModelUpdate("registered routing profile is immutable"));
+                }
+                if builder.state.kernel_route().is_none() {
+                    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+                }
+                builder.write_reader_router_cell_v2(&reader_router_v2::profile_key_v2(*class_id), Some(&carriage.profile))?;
             }
             if builder.extras.model_court_window_active
                 && admission
@@ -2196,7 +2210,8 @@ fn apply_object_inner(
             // The 2026-09-25 sweep's V03(1): asked BEFORE the panel record exists, which is what
             // tells a `NoCapablePanel` retry from a redraw.
             let was_ncp_retry = palw_claim_awaits_ncp_retry_v1(&builder.state, builder.params, claim_id, &claim);
-            builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }))?;
+            builder
+                .write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }))?;
             palw_tir_public_fold_v1::bind_panel_v1(builder, ctx, *claim_id)?;
             // RFC-0006: a panel drawn per shard writes the claim's per-shard record (the plan frozen, the outsider flag, each
             // seat's share of the work); a flat panel writes nothing. Dormant: no plan exists below `palw_tir_shard_v1`.
@@ -2327,9 +2342,17 @@ fn apply_object_inner(
             let gated_window =
                 builder.state.class_model_court_window_v1(&gated_claim.class_id).unwrap_or_else(|| builder.params.window_court());
             // Lane r5-f03-ingress: the paid public ingress wraps the same admission (identical while its schedule is missing).
-            match palw_court_capacity_fold_v1::court_ingress_admission_v1(builder, ctx, *claim_id, *challenger_bond, false, gated_window)? {
+            match palw_court_capacity_fold_v1::court_ingress_admission_v1(
+                builder,
+                ctx,
+                *claim_id,
+                *challenger_bond,
+                false,
+                gated_window,
+            )? {
                 palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(()),
-                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open | palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {}
+                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open
+                | palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {}
             }
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             if claim.phase.is_terminal() {
@@ -2708,7 +2731,7 @@ fn apply_object_inner(
                     chunks: BTreeMap::new(),
                 }),
             )?;
-            builder.retain_native_close_declaration_v1(ctx,object)?;
+            builder.retain_native_close_declaration_v1(ctx, object)?;
         }
         PalwConsensusObjectV2::SeatReadinessProved { bond, class_id, span, opening, signature: _ } => {
             // ADR-0133 §11.2: past readiness V2 the one-leaf proof is not evidence any more.
@@ -2888,13 +2911,13 @@ fn apply_object_inner(
                 builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone())?;
                 return Ok(());
             }
-            let service_archive=builder.state.court_sessions.get(session_id)
-                .is_some_and(|s|builder.state.court_service_holds_claim_v1(&s.claim));
+            let service_archive =
+                builder.state.court_sessions.get(session_id).is_some_and(|s| builder.state.court_service_holds_claim_v1(&s.claim));
             if service_archive {
                 // Unlike legacy delete-only endings, the archive must retain
                 // the final accepted bytes too. The outer checkpoint includes
                 // this arrival if decode/adjudication/archive later refuses.
-                builder.write_court_close_chunk((*session_id,*side),*index,bytes.clone())?;
+                builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone())?;
             }
             // **W7: the chunk that COMPLETES a group assembles it, and the close happens here.**
             //
@@ -2975,13 +2998,13 @@ fn apply_object_inner(
             // one — so an honest assembly that stayed in the table would be charged for the row it
             // just filed. This is the single ending that owes nothing.
             if service_archive {
-                let previous=builder.court_fulfilled_group.clone();
-                let result=(||{
-                    builder.prepare_fulfilled_court_group_v1(*session_id,*side,&group)?;
-                    builder.end_close_group_delivered((*session_id,*side))?;
-                    apply_object(builder,ctx,&close)
+                let previous = builder.court_fulfilled_group.clone();
+                let result = (|| {
+                    builder.prepare_fulfilled_court_group_v1(*session_id, *side, &group)?;
+                    builder.end_close_group_delivered((*session_id, *side))?;
+                    apply_object(builder, ctx, &close)
                 })();
-                builder.court_fulfilled_group=previous;
+                builder.court_fulfilled_group = previous;
                 return result;
             }
             builder.end_close_group_delivered((*session_id, *side))?;
@@ -3874,21 +3897,19 @@ fn apply_object_inner(
                     decode_tokens_executed: *decode_tokens_executed,
                     collateral_sompi: collectable,
                 };
-                if let Some((code, why)) =
-                    crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
+                if let Some((code, why)) = crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
+                    builder.params,
+                    class_id,
+                    ctx.daa_score,
+                    &facts,
+                    crate::palw_court_capacity_v1::palw_court_claim_budget_for_retention_v1(
+                        &builder.state,
                         builder.params,
                         class_id,
                         ctx.daa_score,
-                        &facts,
-                        crate::palw_court_capacity_v1::palw_court_claim_budget_for_retention_v1(
-                            &builder.state,
-                            builder.params,
-                            class_id,
-                            ctx.daa_score,
-                            *trace_retention_daa,
-                        ),
-                    )
-                {
+                        *trace_retention_daa,
+                    ),
+                ) {
                     return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
                 }
             }
@@ -4055,7 +4076,13 @@ fn apply_object_inner(
             builder.write_claim(*claim_id, Some(claim))?;
             // Lane g14-fam-panelda (ADR-0206): a governed PanelDa text claim's disclosure row and deposit lock (no-op below the fence).
             if let Some(written) = builder.state.claims.get(claim_id).cloned() {
-                super::palw_panel_da_disclosure_fold_v1::admit_panel_da_on_commit_v1(builder, ctx, *claim_id, &written, public_job.as_deref())?;
+                super::palw_panel_da_disclosure_fold_v1::admit_panel_da_on_commit_v1(
+                    builder,
+                    ctx,
+                    *claim_id,
+                    &written,
+                    public_job.as_deref(),
+                )?;
             }
             builder.stamp_staged_claim_v1(*claim_id, staged_contract)?;
             if let Some(wire) = public_job_wire {

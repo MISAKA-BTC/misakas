@@ -1,5 +1,6 @@
 //! Real Legacy ingress over native registry/claim rows and a stored running
 //! session. Private fee injection is not production policy or court acceptance.
+#![allow(warnings)]
 use super::*;
 use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
 use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};

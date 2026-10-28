@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         use std::io::Write;
         std::fs::OpenOptions::new().write(true).create_new(true).open(path)?.write_all(&p.encode())?;
     }
-    let w = WiringV1::new(&p)?;
+    let w = WiringV1::new(p)?;
     let nodes = w.occurrences.iter().map(|(b, _)| p.blocks[*b as usize].nodes.len() as u64).sum::<u64>();
     let max_inputs = p.blocks.iter().flat_map(|b| &b.nodes).map(|n| n.inputs.len()).max().unwrap_or(0);
     let mut reports = vec![];
@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // quote does not execute discovery or authenticate any reply.
         let log = |n: u64| if n <= 1 { 0 } else { 64 - (n - 1).leading_zeros() };
         let root_reads = log(positions.min(misaka_palw_kernel::seg::SEG_LEN_V4) as u64) + log(nodes) + 1;
-        let scope = match flat_resource_scope_v9(&p, positions, None) {
+        let scope = match flat_resource_scope_v9(p, positions, None) {
             Ok(s) => {
                 serde_json::json!({"status":"PASS","relations":s.relations.len(),"metadata_relation_visits":s.metadata_relation_visits,
                 "metadata_derivation_work":s.metadata_derivation_work,"worst_court_bytes":s.worst_court_bytes,
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // A report-only field image lets the same renderer show both distinct
         // price namespaces. It is never serialized as a v15 filing/root/fence.
         let quotes = if price20 {
-            misaka_palw_kernel::flat_price20::all_point_relation_quotes_v20(&p, positions, None, positions - 1)
+            misaka_palw_kernel::flat_price20::all_point_relation_quotes_v20(p, positions, None, positions - 1)
                 .map_err(|e| format!("price20 metadata quote refused: {e:?}"))?
                 .into_iter()
                 .map(|(s, n, q)| {
@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .collect::<Vec<_>>()
         } else {
-            misaka_palw_kernel::flat_price15::all_point_relation_quotes_v15(&p, positions, None, positions - 1)
+            misaka_palw_kernel::flat_price15::all_point_relation_quotes_v15(p, positions, None, positions - 1)
                 .map_err(|e| format!("price15 metadata quote refused: {e:?}"))?
         };
         for (s, n, price) in quotes {
@@ -133,7 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "requested_operand_leaves":price.operand_leaves,"requested_operand_reads":price.operand_reads,
                                 "requested_operand_leaf_bytes":price.operand_leaf_bytes,"requested_filing_bytes":price.filing_bytes,
                                 "requested_work":price.work,"requested_scratch_bytes":price.scratch_bytes,
-                                "requested_chunks32KiB":(price.filing_bytes+32767)/32768,"bounded_price_refuses":true}));
+                                "requested_chunks32KiB":price.filing_bytes.div_ceil(32768),"bounded_price_refuses":true}));
                         }
                         continue;
                     }
@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reduction_samples.push(serde_json::json!({"occurrence":s,"node":n,"primitive":format!("{prim:?}"),
                             "operand_leaves":price.operand_leaves,"operand_reads":price.operand_reads,"operand_leaf_bytes":price.operand_leaf_bytes,
                             "filing_bytes":price.filing_bytes,"work":price.work,"scratch_bytes":price.scratch_bytes,
-                            "route_chunks16KiB":(price.filing_bytes+16383)/16384}));
+                            "route_chunks16KiB":price.filing_bytes.div_ceil(16384)}));
                     }
                 }
                 Err(e) => {

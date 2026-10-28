@@ -1,4 +1,5 @@
 //! A verifier localizes without a fault hint or producer trace. Proofs are accepted by the ordinary signed-object ledger path.
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

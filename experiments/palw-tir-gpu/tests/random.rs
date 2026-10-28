@@ -10,6 +10,7 @@
 //! equal the CPU executor (and the reference) byte for byte, or fail with the same class; a case it
 //! does not run is counted by reason.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir::{Cmp, DType, Dim, Prim, Rounding, Tensor, TensorType};

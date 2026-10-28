@@ -4,6 +4,7 @@
 //! residual's scale. The integer-versus-float numbers are `tests/hf_fixtures.rs` and the corpus harness; identity of the three
 //! implementations is `tests/three_way.rs`.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir_lower::fidelity;

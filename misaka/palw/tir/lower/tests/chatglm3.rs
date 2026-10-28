@@ -5,6 +5,7 @@
 //! sha256 of that file beside it (`pin.json`). The reference is therefore UNVERIFIED — the same program would pass against a file that differs from the repository's in a way
 //! the reconstruction shares — and every verdict on this architecture says so (`LOWERABLE_UNVERIFIED`). Declared in an adapter by `remote_code_pin`; never attested.
 
+#![allow(warnings)]
 mod common;
 
 use common::three_ways;

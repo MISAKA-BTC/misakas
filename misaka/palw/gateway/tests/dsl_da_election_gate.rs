@@ -41,6 +41,7 @@
 //! producer — a liveness debt the DSL lane does not carry. A DSL nobody serves costs nobody a
 //! bond, so its lane authenticates unconditionally, like `resolve_interval_opening_for_serve`.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {

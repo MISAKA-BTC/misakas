@@ -1,6 +1,7 @@
 //! **Program version 2** (RFC-0003 §I.2.3, spec 04b §15): version 1 unchanged, version 2's view
 //! faithful, the `post` write, the inputs' declarations, the normal-form refusals, and the ranges.
 
+#![allow(warnings)]
 mod common;
 mod v2common;
 

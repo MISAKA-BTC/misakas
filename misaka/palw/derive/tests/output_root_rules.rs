@@ -11,6 +11,7 @@
 //! testnet-12 actually registers, read from its shipped preset rather than listed here, so a class
 //! the card adds is covered the day it is added.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_attempt_rules_v1::{

@@ -116,9 +116,7 @@ pub enum CourtServiceBindingRefusalV1 {
 }
 
 fn keyed(key: &[u8], bytes: &[u8]) -> Hash64 {
-    Hash64::from_bytes(
-        blake2b_simd::Params::new().hash_length(64).key(key).hash(bytes).as_bytes().try_into().expect("64-byte digest"),
-    )
+    Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(key).hash(bytes).as_bytes().try_into().expect("64-byte digest"))
 }
 
 /// Canonical packet identity: binds claim, allocation, source, the liable signer and the packet's turn ordinal.
@@ -200,14 +198,17 @@ pub fn court_service_binding_candidate_v1(
         },
     };
     next.book.reserve(&packets, hard).map_err(R::Reservation)?;
-    next.claims.insert(claim, ServiceClaimBinding {
+    next.claims.insert(
         claim,
-        allocation_id: allocation,
-        source_id: source,
-        original_accepted_daa: accepted_daa,
-        hard_deadline_daa: hard,
-        packet_ids: packets.iter().map(|p| p.id).collect(),
-    });
+        ServiceClaimBinding {
+            claim,
+            allocation_id: allocation,
+            source_id: source,
+            original_accepted_daa: accepted_daa,
+            hard_deadline_daa: hard,
+            packet_ids: packets.iter().map(|p| p.id).collect(),
+        },
+    );
     next.check_live_v1().map_err(|_| R::Inconsistent)?;
     Ok(next)
 }
@@ -271,9 +272,7 @@ pub fn attribute_service_default_v1(
         let mine: Vec<&CourtDutyClockV1> = clocks.iter().copied().filter(|c| c.claim == claim && c.answerer == *actor).collect();
         // The defaulted duty: the actor's latest clock of each acquisition (an earlier turn/stage is superseded history).
         let latest = mine.iter().copied().filter(|c| {
-            !mine.iter().any(|o| {
-                o.acquisition == c.acquisition && (o.turn, o.first_eligible_daa) > (c.turn, c.first_eligible_daa)
-            })
+            !mine.iter().any(|o| o.acquisition == c.acquisition && (o.turn, o.first_eligible_daa) > (c.turn, c.first_eligible_daa))
         });
         let had = latest.into_iter().any(|c| {
             let own = court_service_packet_id_v1(claim, binding.allocation_id, binding.source_id, actor, c.turn);
@@ -299,7 +298,11 @@ pub enum SharedNoticeV1 {
 }
 
 /// **RFC-0031 A at intake.** `prior` is the DAA of the claim's existing initial notice (the earliest native request row), if any.
-pub fn classify_shared_notice_v1(original_acceptance: u64, notice_daa: u64, prior: Option<u64>) -> Result<SharedNoticeV1, &'static str> {
+pub fn classify_shared_notice_v1(
+    original_acceptance: u64,
+    notice_daa: u64,
+    prior: Option<u64>,
+) -> Result<SharedNoticeV1, &'static str> {
     let hard = original_acceptance.checked_add(DISPUTE_WINDOW_DAA).ok_or("shared notice original hard overflows")?;
     let window = |d: u64| match shared_initial_notice_daa_in_window_v1(original_acceptance, d) {
         Ok(ok) => Ok(ok),
@@ -307,7 +310,11 @@ pub fn classify_shared_notice_v1(original_acceptance: u64, notice_daa: u64, prio
     };
     match prior {
         None => {
-            if window(notice_daa)? { Ok(SharedNoticeV1::Initial) } else { Err("initial shared notice outside a..=a+3,120") }
+            if window(notice_daa)? {
+                Ok(SharedNoticeV1::Initial)
+            } else {
+                Err("initial shared notice outside a..=a+3,120")
+            }
         }
         Some(first) => {
             if !window(first)? {
@@ -417,7 +424,10 @@ mod tests {
             court_service_packets_v1(h(1), h(2), h(3), 5, &BTreeSet::new(), &profile()),
             Err(CourtServiceBindingRefusalV1::NoLiableSigner)
         );
-        assert_eq!(court_service_packets_v1(h(1), h(2), h(3), u64::MAX - 10, &signers, &profile()), Err(CourtServiceBindingRefusalV1::Overflow));
+        assert_eq!(
+            court_service_packets_v1(h(1), h(2), h(3), u64::MAX - 10, &signers, &profile()),
+            Err(CourtServiceBindingRefusalV1::Overflow)
+        );
         assert!(palw_court_service_opportunity_complete_v1(), "V1 pinned from the user-approved estimate (2026-10-26)");
     }
 
@@ -427,7 +437,10 @@ mod tests {
         observe_all(&mut s, 1_001, 1_101, None);
         let unpaid: BTreeSet<_> = [bond(1)].into_iter().collect();
         let c = clock(bond(1), 1_001, 1_200);
-        assert_eq!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)), Ok(CourtServiceAttributionV1::PartyDefault));
+        assert_eq!(
+            attribute_service_default_v1(&s, h(1), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)),
+            Ok(CourtServiceAttributionV1::PartyDefault)
+        );
         // Without the explicit inclusion premise: still undecided, never a default.
         assert!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, None).is_err());
     }
@@ -478,10 +491,13 @@ mod tests {
         // With the actor's earlier turn-0 clock in the claim's history (what `court_duty_clocks_for_claim_v1` returns): fix-b binds
         // the attribution to the defaulted (latest) turn and its own packet, so the earlier window no longer attributes it.
         let earlier = clock(bond(2), 1_001, 1_040);
-        assert!(matches!(
-            attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, Some(&TEST_ONLY_PREMISE)),
-            Ok(CourtServiceAttributionV1::NoSlashHold(_))
-        ), "B-03 fixed: the turn-1 default is not attributed from the turn-0 window");
+        assert!(
+            matches!(
+                attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, Some(&TEST_ONLY_PREMISE)),
+                Ok(CourtServiceAttributionV1::NoSlashHold(_))
+            ),
+            "B-03 fixed: the turn-1 default is not attributed from the turn-0 window"
+        );
     }
 
     /// **audit(verify-2) B-03** — expected-vs-actual: the duty being defaulted is the actor's CURRENT turn (window 1,150..1,200,
@@ -512,8 +528,14 @@ mod tests {
         observe_all(&mut s, 1_001, 1_020, None);
         let unpaid: BTreeSet<_> = [bond(1)].into_iter().collect();
         let c = clock(bond(1), 1_001, 1_200);
-        assert_eq!(attribute_service_default_v1(&s, h(1), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)), Err("court service opportunity is still pending"));
-        assert_eq!(attribute_service_default_v1(&s, h(77), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)), Err("court service binding is missing"));
+        assert_eq!(
+            attribute_service_default_v1(&s, h(1), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)),
+            Err("court service opportunity is still pending")
+        );
+        assert_eq!(
+            attribute_service_default_v1(&s, h(77), &[&c], &unpaid, Some(&TEST_ONLY_PREMISE)),
+            Err("court service binding is missing")
+        );
     }
 
     #[test]

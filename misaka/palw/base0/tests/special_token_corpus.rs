@@ -39,6 +39,7 @@
 //!
 //! `tokenizer.rs` is owned by the worker workstream; this file changes nothing in it.
 
+#![allow(warnings)]
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 
 // ---------------------------------------------------------------------------------------------

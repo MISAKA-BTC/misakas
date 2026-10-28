@@ -8,6 +8,7 @@
 //! every height: the handshake keeps the two as peers past the height, where they disagree about blocks — a silent fork with only a
 //! schedule-id warning. This pins the hazard (it passes) on a list ARMED EXPLICITLY at a test height: the safe rule is a fresh height,
 //! or a frozen int-13 list once its build is deployed.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_INT13_DAA, Params, palw_t12_arm_int13_flag_day_at_v1, palw_t12_shipped_params,
 };

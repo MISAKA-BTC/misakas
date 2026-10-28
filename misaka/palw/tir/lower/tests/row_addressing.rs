@@ -13,7 +13,7 @@
 //! The classifier is M2's own function (`tests/common/m2_tiers.rs`, vendored verbatim from `tir/residency`).
 
 #![recursion_limit = "512"]
-
+#![allow(warnings)]
 #[path = "common/m2_tiers.rs"]
 #[allow(dead_code)]
 mod m2_tiers;

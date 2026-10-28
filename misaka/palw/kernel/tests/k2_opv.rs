@@ -8,6 +8,7 @@
 //! The policy values are examples for tests, chosen for no network. The node half of §13.2 (real node, mempool, RPC, IBD) is lane D's
 //! and stays a GAP: see `docs/evidence/palw/implementation-records/rfc-0015-panel-free-record.md`.
 
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

@@ -18,6 +18,7 @@
 //!
 //! Run: `cargo test --offline -p misaka-palw-sdk --test k2s_encoder_court -- --nocapture --test-threads=1`
 
+#![allow(warnings)]
 use misaka_palw_kernel::descriptor::{KernelScheduleV1, KernelStatusV1, k2_tir_v4_descriptor};
 use misaka_palw_kernel::gate::public_prosecution_complete_v4;
 use misaka_palw_kernel::ledger::carrier_fit_v1;

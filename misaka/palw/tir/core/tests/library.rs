@@ -7,7 +7,7 @@
 //! (`misaka-palw-tir-conformance`); here they appear only where a new template is built on them.
 
 #![allow(clippy::needless_range_loop)]
-
+#![allow(warnings)]
 mod common;
 
 use common::Lcg;

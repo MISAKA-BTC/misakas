@@ -10,6 +10,7 @@
 //! the `ScriptPolicy::PQ_ONLY` threading exist); here we pin the tag set and
 //! the policy constants, which are pure and fixture-free.
 
+#![allow(warnings)]
 use kaspa_txscript::{ScriptPolicy, is_legacy_signature_opcode, opcodes::codes};
 
 #[test]

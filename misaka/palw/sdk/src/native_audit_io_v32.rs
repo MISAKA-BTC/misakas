@@ -124,6 +124,8 @@ pub fn read_native_fact_proof_v32(path: &Path) -> Result<PalwFactProofV1, String
     decode_native_fact_proof_v32(&read_bounded_file_v32(path, MAX_PROOF_BYTES)?)
 }
 
+pub use crate::native_receipt_cas_v1::read_native_fact_proof_cas_v1;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +152,3 @@ mod tests {
         assert!(encode_native_fact_proof_v32(&old).is_err());
     }
 }
-
-pub use crate::native_receipt_cas_v1::read_native_fact_proof_cas_v1;

@@ -1805,7 +1805,9 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
                     .finals_read_v1()
                     .unwrap()
                     .iter()
-                    .map(|f| format!("{:02x}{:02x}: {} event={}", f.receipt.claim[0], f.receipt.claim[1], f.final_path, f.event.is_some()))
+                    .map(|f| {
+                        format!("{:02x}{:02x}: {} event={}", f.receipt.claim[0], f.receipt.claim[1], f.final_path, f.event.is_some())
+                    })
                     .collect();
                 panic!("paid timely sources must lock: {other:?}; claims {claims:?}; finals {finals:?}")
             }

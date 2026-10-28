@@ -6,6 +6,7 @@
 //! logits stored twice: with the IR's tie rule (lowest index — transformers' `topk` line replaced by a stable descending sort) and
 //! with `torch.topk`'s own unpinned order. The real configurations (`tests/configs/real/glm-5.json`, `glm-5.3.json`: Hub configs,
 //! read as data) say what the adapter reads and what it refuses by name.
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir_lower::float_ref::stream::Resident;

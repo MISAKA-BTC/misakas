@@ -1,5 +1,6 @@
 //! Public-snapshot/file/signature controls. The tiny typed program is a test
 //! fixture, not a trained-model, real-node, independence or release result.
+#![allow(warnings)]
 use kaspa_consensus_core::{
     palw_artifact::{artifact_leaf_v1, artifact_root_v1},
     palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1},

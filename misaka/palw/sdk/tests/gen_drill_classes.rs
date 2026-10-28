@@ -22,6 +22,7 @@
 //! `<dir>/<name>.class.palwtir2` per class and `<dir>/drill-classes.json` (model id, class id, artifact root,
 //! bytes, the canonical and widest step-leaf counts, and a `gen-claim` request template).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_court_v2::{PalwCourtVerdictProofV2, palw_gen_close_verdict_for_row_v1};
 use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER};

@@ -9,6 +9,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_2m_second_claim_is_refused_while_the_first_is_live
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

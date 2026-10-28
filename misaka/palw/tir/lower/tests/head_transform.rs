@@ -3,6 +3,7 @@
 //! HL ops and two weight roles. No transformers here: the tiny `llama` config with seeded synthetic weights; the equality
 //! with the transformers classes is the corpus lane's fixtures (`modernbert_decoder` and the BERT lineage in decoder mode).
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::fidelity::prepare_spec;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::lower::LowerOpts;

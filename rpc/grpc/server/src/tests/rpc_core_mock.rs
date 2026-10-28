@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use async_channel::{Receiver, unbounded};
 use async_trait::async_trait;
 use kaspa_notify::events::EVENT_TYPE_ARRAY;

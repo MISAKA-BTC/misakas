@@ -30,13 +30,14 @@ fn actual_transition_borrowed_check_matches_native_heads_and_preserves_semantic_
         assert_eq!(native.len(), 1, "actual tiny head has dd=1: this does not claim multi-block reordering coverage");
         gdn_check_transition_demands_borrowed_v3(&w.forged.binding, node_slot, head, case.index, &native).unwrap();
         let PalwHeldMissingV1::StateChunk { checkpoint, chunk } = native[0] else { panic!("state") };
-        for wrong in [
+        let wrongs: [Vec<PalwHeldMissingV1>; 5] = [
             vec![],
             vec![native[0], native[0]],
             vec![PalwHeldMissingV1::PromptIdsTile { tile: 0 }],
             vec![PalwHeldMissingV1::StateChunk { checkpoint: checkpoint + 1, chunk }],
             vec![PalwHeldMissingV1::StateChunk { checkpoint, chunk: chunk + 1 }],
-        ] {
+        ];
+        for wrong in wrongs {
             assert!(matches!(
                 gdn_check_transition_demands_borrowed_v3(&w.forged.binding, node_slot, head, case.index, &wrong),
                 Err(PalwGdnCourtErrorV2::Evidence(_))

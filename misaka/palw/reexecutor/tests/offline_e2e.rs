@@ -10,7 +10,7 @@
 //! the signature is verified with the actual ML-DSA-87 key — a wrong-context or wrong-bytes
 //! signing regression fails here, not on a Stage-1 verifier.
 #![cfg(unix)]
-
+#![allow(warnings)]
 use kaspa_consensus_core::palw_routing::{
     PALW_ROUTING_MLDSA87_CAPABILITY_CONTEXT, PalwVerifierCapabilityV1, verifier_capability_message_v1, verify_ready_binding_v1,
 };

@@ -54,6 +54,7 @@
 //! the A16 genesis root defect again. `--artifact` removes the second spelling for this path
 //! rather than adding a third.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_consensus_core::palw_state_v2::{
     PALW_OBJECT_CHUNK_MAX_BYTES, PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2, palw_object_chunks_v1,

@@ -30,6 +30,7 @@
 //! Run:
 //!   cargo test -p kaspa-consensus-core --test audit_repro_04_unsigned_panelbound_disqualifies_the_car -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2};

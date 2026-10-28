@@ -9,6 +9,7 @@
 //!
 //! The file under test is the tiny `qwen35` fixture (`tests/fixtures/gguf/gguf_qwen35_q8_0`), rewritten here: metadata added, a
 //! block appended.
+#![allow(warnings)]
 use misaka_palw_tir_lower::LowerError;
 use misaka_palw_tir_lower::gguf::{GgufFile, GgufModel};
 use std::path::{Path, PathBuf};

@@ -17,9 +17,10 @@ pub(super) fn transition_with_owned_predecessor_v3<K: Base0FpRecomputeKernelsV1>
     let failure: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
     // A typed Result is intentional: predecessor construction Resource must not
     // disappear into checkpoint absence or a string-only callback side channel.
+    #[allow(clippy::type_complexity)]
     let checkpoint = |i: u32| -> Result<Option<(PalwCheckpointLeafV2, Vec<Vec<u8>>)>, PalwGdnCourtErrorV2> {
         let Some(leaf) = leg.leaves.get(i as usize) else { return Ok(None) };
-        let fresh = (&mut *kernels.borrow_mut())();
+        let fresh = (*kernels.borrow_mut())();
         match honest_chunks_root_retained_v3(material, leaf, fresh) {
             Ok(Some(chunks)) => Ok(Some((leaf.clone(), chunks))),
             Ok(None) => {

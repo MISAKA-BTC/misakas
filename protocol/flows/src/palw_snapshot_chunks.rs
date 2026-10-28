@@ -927,7 +927,11 @@ mod tests {
             assert_eq!(point, h(1));
             Err(failure.clone())
         });
-        assert!(matches!(result, Err(NativeSnapshotDecodeErrorV1::Capacity(ref actual)) if actual == &failure), "{:?}", result.as_ref().err());
+        assert!(
+            matches!(result, Err(NativeSnapshotDecodeErrorV1::Capacity(ref actual)) if actual == &failure),
+            "{:?}",
+            result.as_ref().err()
+        );
         assert_eq!(budget.available_permits(), 1, "refusal returns this receiver's global spill permit");
 
         // Authenticated frames can still encode invalid Borsh. It fails before

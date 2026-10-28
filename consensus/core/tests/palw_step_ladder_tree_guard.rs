@@ -13,6 +13,7 @@
 //! It reads the tree's own source deliberately — a guard scoped to one crate would pass on the
 //! day the defect returns two crates over, which is exactly how it arrived.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
@@ -131,6 +132,12 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "base0_anchored_leaf_replay_v1, whose only callers in the tree are its own tests; the capped sibling exists at \
          base0_replay_from_checkpoint_capped_v1 and is what a production caller must use",
     ),
+    (
+        "consensus/core/src/palw_tir_position_terminal_v2.rs",
+        "step_merkle_path_v1",
+        "palw_step_single_openings_bytes_v2: a deterministic byte count over the caller's own leaf slice for the multiproof \
+         comparison (the slice length bounds it), no walk or adjudication; its only callers are this file's tests",
+    ),
 ];
 
 /// A unit-test module split out of its parent file (2026-10-12: `tests.rs`, `*_tests.rs`, a file under a `tests/` directory of a
@@ -139,6 +146,8 @@ fn is_split_test_module(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     name == "tests.rs"
         || name.ends_with("_tests.rs")
+        // versioned split test files (`*_tests_v2.rs`), `include!`d only inside a `#[cfg(test)]` module
+        || name.contains("_tests_v")
         // the node's E2E suites (`kaspad/src/*_e2e.rs`), declared only under `#[cfg(test)]` or from another such suite's `#[path]`
         || name.ends_with("_e2e.rs")
         || path.components().any(|c| c.as_os_str() == "tests")

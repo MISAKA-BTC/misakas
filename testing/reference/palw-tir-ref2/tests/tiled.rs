@@ -10,6 +10,7 @@
 //!
 //! Run: `cargo test -p misaka-palw-tir-ref2 --test tiled`
 
+#![allow(warnings)]
 mod common;
 
 use common::progen::{GenCfg, R, gen_program};

@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `q7_sampled_and_collector_tests` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 //! **ADR-0152 Q-7 on kaspad (F4 part 2), pinned where it lives.** `Sampled` is the answer of a
 //! partial seat whose replay or resume is not coming, past SEAT-R, R-core+ and S3, in the last
@@ -220,7 +219,8 @@ fn the_collector_carries_a_release_then_an_upgrade_then_pay_soonest_first() {
 fn the_collector_follows_the_licences_and_sampled_precedes_the_memory_check() {
     use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let source = crate::palw_panel::source_support::former_parent_production_source_v1();
-    let licences = source.find_code("kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(").expect("the licence collector");
+    let licences =
+        source.find_code("kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(").expect("the licence collector");
     let licence_call = &source[licences..licences + 1_200];
     let (coverage, quorum, optimistic) = (
         licence_call.find_code(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("coverage"),
@@ -249,11 +249,17 @@ fn the_collector_follows_the_licences_and_sampled_precedes_the_memory_check() {
         "a disagreeing site is the court's"
     );
     let sweep = source.find_code("let pools_sweep = palw_receipt_pools_sweep_v1(").expect("one sweep rule");
-    assert_eq!(source[sweep..].find_code(
-        "let pools_sweep = palw_receipt_pools_sweep_v1(self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"
-    ), Some(0), "the fence is passed to this sweep call");
+    assert_eq!(
+        source[sweep..].find_code(
+            "let pools_sweep = palw_receipt_pools_sweep_v1(self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"
+        ),
+        Some(0),
+        "the fence is passed to this sweep call"
+    );
     let after = &source[sweep..sweep + 400];
-    assert!(after.contains_code("receipt_pool_v2.sweep(&pools_sweep);") && after.contains_code("receipt_pool_v3.sweep(&pools_sweep);"));
+    assert!(
+        after.contains_code("receipt_pool_v2.sweep(&pools_sweep);") && after.contains_code("receipt_pool_v3.sweep(&pools_sweep);")
+    );
     let duty_loop = &source[source.find_code("for index in order {").expect("the duty loop")..];
     let due = duty_loop.find_code("palw_seat_sampled_due_v1(").expect("the Sampled decision");
     let memory = duty_loop.find_code("self.replay_memory_budget_v1(").expect("the memory check");

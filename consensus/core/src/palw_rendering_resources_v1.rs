@@ -132,9 +132,19 @@ impl PalwRenderingResourcePlanV1 {
                     .ok_or_else(|| format!("required-family sum overflows {}", stringify!($field)))?;
             )+ };
         }
-        add!(maximum_stream_bytes, maximum_stream_leaves, maximum_eog_bytes, maximum_moves,
-            maximum_parser_steps, maximum_blake_blocks, inclusion_daa, rent_sompi,
-            deposit_sompi, row_bytes, resident_ram_bytes);
+        add!(
+            maximum_stream_bytes,
+            maximum_stream_leaves,
+            maximum_eog_bytes,
+            maximum_moves,
+            maximum_parser_steps,
+            maximum_blake_blocks,
+            inclusion_daa,
+            rent_sompi,
+            deposit_sompi,
+            row_bytes,
+            resident_ram_bytes
+        );
         Ok(self)
     }
     /// Exact prospective duration from this accepted claim, with an explicitly retained reorg

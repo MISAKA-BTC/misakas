@@ -97,9 +97,9 @@ fn resolve_accepted_fp_job_context_v2(
             let context = backend
                 .fp_job_context_for_executed_v1(&c.job, c.decode_tokens_executed)
                 .ok_or_else(|| unavailable("backend cannot describe accepted FP executed count"))?;
-            if !duty
+            if duty
                 .fp_job_pin_v1()
-                .is_some_and(|pin| kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&context) == pin)
+                .is_none_or(|pin| kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&context) != pin)
             {
                 return Err(unavailable("accepted FP executed context differs from native pin"));
             }

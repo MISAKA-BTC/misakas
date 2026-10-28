@@ -3,6 +3,7 @@
 //!
 //! Fixtures copied from `dos_l2_registration.rs` so the two files fold the same states.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};

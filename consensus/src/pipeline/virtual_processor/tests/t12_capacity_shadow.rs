@@ -24,6 +24,7 @@
 //!   weight stays within its `W_cap` (2 FCW); the chain's own gate never holds more unlicensed claims
 //!   than today's `N_instant`. `CAP_SHADOW_DAA` (default 60) sets the length.
 
+#![allow(warnings)]
 use super::p2_mint_path::{Kind, Minting, beat, mined, sign};
 use super::t12_claim_capacity::{LicencePolicy, drive, expand, sim};
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};

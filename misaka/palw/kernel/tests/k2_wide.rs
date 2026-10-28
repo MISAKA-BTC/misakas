@@ -5,6 +5,7 @@
 //! coexist on one schedule (bound classes keep their kernel, deprecation stops only new work), and a claim, evidence object or
 //! receipt under one kernel is never judged by the other.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

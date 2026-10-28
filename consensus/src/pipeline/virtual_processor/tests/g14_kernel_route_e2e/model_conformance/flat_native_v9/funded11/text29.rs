@@ -153,8 +153,8 @@ async fn text29_harness_registers_prepares_consents_and_funds_a_real_job() {
 }
 
 use misaka_palw_kernel::flat_court25::{FlatContextV25, FlatFaultV25, verify_flat_fault_v25};
-use misaka_palw_kernel::flat_detect25::*;
 use misaka_palw_kernel::flat_detect5::{FlatPublicReadsV5, FlatReadV5};
+use misaka_palw_kernel::flat_detect25::*;
 use misaka_palw_kernel::flat_replay25::*;
 use misaka_palw_kernel::flat_scope25::*;
 
@@ -176,7 +176,11 @@ fn text_trace(f: &Sparse9, corrupt: bool) -> Text29Trace {
         trace
             .values
             .iter()
-            .map(|p| p.iter().map(|s| s.iter().map(|t| misaka_palw_kernel::flat_court5::flat_profile_commitment_v5(t).unwrap()).collect()).collect())
+            .map(|p| {
+                p.iter()
+                    .map(|s| s.iter().map(|t| misaka_palw_kernel::flat_court5::flat_profile_commitment_v5(t).unwrap()).collect())
+                    .collect()
+            })
             .collect(),
     );
     let roots = c.segment_roots();
@@ -203,7 +207,12 @@ impl FlatPublicReadsV25 for Material<'_> {
             misaka_palw_kernel::flat_court5::FlatHeaderV5::Flat { dtype: t.dtype.tag(), shape, root: FlatTreeV5::of(t).ok()?.root() }
         } else {
             let tree = TreesV3::of(t);
-            misaka_palw_kernel::flat_court5::FlatHeaderV5::Legacy { dtype: t.dtype.tag(), shape, row_root: tree.row_root(), col_root: tree.col_root() }
+            misaka_palw_kernel::flat_court5::FlatHeaderV5::Legacy {
+                dtype: t.dtype.tag(),
+                shape,
+                row_root: tree.row_root(),
+                col_root: tree.col_root(),
+            }
         };
         FlatHeaderValueV25 { version: 25, scope: r.scope, header }.to_bytes().ok()
     }
@@ -245,11 +254,16 @@ fn context<'a>(f: &'a Sparse9, t: &'a Text29Trace, scope: &'a FlatResourceScopeV
 /// Commit the stopped post of `t` to the funded `job` (producer card 0).
 async fn text_commit(net: &mut Net, f: &Sparse9, job: Digest, t: &Text29Trace) {
     use misaka_palw_kernel::seg::*;
-    let header: Vec<u8> = rows_with_prefix(net, EXECUTION_JOB_TABLE_V11, &[29, 0]).into_iter().find(|(k, _)| k[2..66] == job).unwrap().1;
+    let header: Vec<u8> =
+        rows_with_prefix(net, EXECUTION_JOB_TABLE_V11, &[29, 0]).into_iter().find(|(k, _)| k[2..66] == job).unwrap().1;
     // JobHeader: job ‖ class ‖ funding ‖ …
     let class: Digest = header[64..128].try_into().unwrap();
     let funding: Digest = header[128..192].try_into().unwrap();
-    let prep = rows_with_prefix(net, EXECUTION_POLICY_TABLE_V11, &[29, 0]).into_iter().find(|(k, _)| k[2..66] == job).expect("the job's preparation").1;
+    let prep = rows_with_prefix(net, EXECUTION_POLICY_TABLE_V11, &[29, 0])
+        .into_iter()
+        .find(|(k, _)| k[2..66] == job)
+        .expect("the job's preparation")
+        .1;
     let mut cursor = std::io::Cursor::new(&prep[..]);
     let wire: NativeTextPrepareV29 = borsh::BorshDeserialize::deserialize_reader(&mut cursor).unwrap();
     let maximum: NativeTextMaximumV29 = borsh::BorshDeserialize::deserialize_reader(&mut cursor).unwrap();
@@ -337,7 +351,13 @@ async fn text29_a_public_filing_convicts_a_lying_text_job_without_a_paid_owner()
             scope_checker_work: envelope.scope_checker_work_per_attempt,
         };
         let mut session = FlatReplaySessionV25::new(limits);
-        let result = session.check(&context(&f, &liar, &scope), &envelope, &Material(&liar), &|i, l| f.params.tensors.get(&(i, l)).cloned(), &liar.prompt);
+        let result = session.check(
+            &context(&f, &liar, &scope),
+            &envelope,
+            &Material(&liar),
+            &|i, l| f.params.tensors.get(&(i, l)).cloned(),
+            &liar.prompt,
+        );
         let FlatReplayResultV25::Finding(FlatFindingV25::Fault(fault)) = result else { panic!("no fault in the lie: {result:?}") };
         verify_flat_fault_v25(&context(&f, &liar, &scope), &fault).unwrap();
         let producer_before = net.collateral(0);

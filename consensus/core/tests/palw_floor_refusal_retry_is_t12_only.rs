@@ -22,6 +22,7 @@
 //!   `palw_t12_launch_params_v1` (which still hashes to the launch release's ids), moved on a salted
 //!   drill by `palw_drill_post_launch_fences_v2_at_v1` and on no other chain.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{
     PalwDrillSaltV1, palw_drill_post_launch_fences_at_v1, palw_drill_post_launch_fences_v2_at_v1,
 };

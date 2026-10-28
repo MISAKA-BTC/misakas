@@ -13,6 +13,7 @@
 //! * the carriage's first two forms encode exactly as the `Option` they replace, and the composite
 //!   reference weighs what the close sizing charges for it.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

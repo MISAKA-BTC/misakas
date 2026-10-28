@@ -11,6 +11,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_2m_licence_keeps_the_claim_owed_until_final
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

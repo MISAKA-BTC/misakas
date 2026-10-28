@@ -1,4 +1,5 @@
 //! Staged source39 regression sources. Run only during the authorized validation phase.
+#![allow(warnings)]
 use misaka_palw_sdk::full_component_v28::source39::compile_complete_frontend_v39;
 use misaka_palw_tir::{
     DType, Ref, TensorType,

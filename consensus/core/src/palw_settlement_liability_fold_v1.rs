@@ -74,6 +74,7 @@ pub(super) enum PalwLegLiabilityV1 {
 
 /// What admission knows about a new budgeted claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub(super) enum PalwAdmissionLiabilityV1 {
     /// A V2 attempt, rider or free-prompt claim (X3 defines its hard deadline from its acceptance).
     V2Claim,
@@ -285,7 +286,8 @@ impl TransitionBuilder<'_> {
                     return Ok(None); // admitted under the old ruleset
                 }
                 let hard = native_claim_signed_hard_deadline_v1(self.params, accepted_daa);
-                let budget = self.state.bond_budget.as_ref().ok_or(unsourced("the native claim's ADR-0176 reservation (no engine)"))?;
+                let budget =
+                    self.state.bond_budget.as_ref().ok_or(unsourced("the native claim's ADR-0176 reservation (no engine)"))?;
                 let row = *budget.claim_row(&budget_id).ok_or(unsourced("the native claim's ADR-0176 reservation row"))?;
                 let own = if row.open { row.liability_sompi } else { 0 };
                 let (bond_collateral, other_live_liability, bond_locked_until) = self.bond_liability_terms_v1(&row.bond, own);
@@ -458,40 +460,43 @@ impl TransitionBuilder<'_> {
         }
         let (bond, capital, accepted_daa, liability, reserved) = plan.liability_terms_v1();
         let (_, other_live_liability, _) = self.bond_liability_terms_v1(&bond, 0);
-        let (hard, material_ttl_until, retire_not_before): (PalwSettlementTermV1<u64>, PalwSettlementTermV1<u64>, PalwSettlementTermV1<u64>) =
-            match family {
-                PalwAdmissionLiabilityV1::V2Claim => {
-                    let hard = self
-                        .params
-                        .claim_hard_deadline_v1()
-                        .filter(|mirror| accepted_daa >= mirror.from_daa)
-                        .map(|mirror| crate::palw_ruling_fences_v1::palw_x3_hard_deadline_at_v1(&mirror.policy, accepted_daa))
-                        .ok_or("the signed hard deadline: X3 (palw_claim_hard_deadline_v1) does not govern a claim accepted now");
-                    // REQ-X3-6: the claim writer raises the new claim's retention to at least the hard deadline.
-                    let retire = if self.params.claim_retirement_daa == 0 {
-                        Ok(u64::MAX)
-                    } else {
-                        // Terminal is no earlier than acceptance: a lower bound.
-                        Ok(accepted_daa.saturating_add(self.params.claim_retirement_daa))
-                    };
-                    (hard, hard, retire)
-                }
-                PalwAdmissionLiabilityV1::KernelClaim { claim } => {
-                    let route = self.state.kernel_route.as_ref();
-                    // The paid commit fold applies the kernel commit before it writes the authority row, so the signed lifetime it
-                    // validated rides the builder for that one call.
-                    let hard = route
-                        .and_then(|r| r.paid_claim_signed_lifetime_v2(&claim))
-                        .map(|lifetime| lifetime.liability_until)
-                        .or(self.paid_lifetime_admission_v1.filter(|(base, _)| *base == claim).map(|(_, until)| until))
-                        .ok_or("the signed hard deadline: the kernel claim has no producer-signed paid lifetime");
-                    let ttl = self
-                        .covenant_ttl_v1(Hash64::from_bytes(claim))
-                        .ok_or("the material TTL: no healthy event-relative monetary covenant for the kernel claim");
-                    (hard, ttl, hard)
-                }
-                PalwAdmissionLiabilityV1::NativeClaim { hard } => (Ok(hard), Ok(u64::MAX), Ok(hard)),
-            };
+        let (hard, material_ttl_until, retire_not_before): (
+            PalwSettlementTermV1<u64>,
+            PalwSettlementTermV1<u64>,
+            PalwSettlementTermV1<u64>,
+        ) = match family {
+            PalwAdmissionLiabilityV1::V2Claim => {
+                let hard = self
+                    .params
+                    .claim_hard_deadline_v1()
+                    .filter(|mirror| accepted_daa >= mirror.from_daa)
+                    .map(|mirror| crate::palw_ruling_fences_v1::palw_x3_hard_deadline_at_v1(&mirror.policy, accepted_daa))
+                    .ok_or("the signed hard deadline: X3 (palw_claim_hard_deadline_v1) does not govern a claim accepted now");
+                // REQ-X3-6: the claim writer raises the new claim's retention to at least the hard deadline.
+                let retire = if self.params.claim_retirement_daa == 0 {
+                    Ok(u64::MAX)
+                } else {
+                    // Terminal is no earlier than acceptance: a lower bound.
+                    Ok(accepted_daa.saturating_add(self.params.claim_retirement_daa))
+                };
+                (hard, hard, retire)
+            }
+            PalwAdmissionLiabilityV1::KernelClaim { claim } => {
+                let route = self.state.kernel_route.as_ref();
+                // The paid commit fold applies the kernel commit before it writes the authority row, so the signed lifetime it
+                // validated rides the builder for that one call.
+                let hard = route
+                    .and_then(|r| r.paid_claim_signed_lifetime_v2(&claim))
+                    .map(|lifetime| lifetime.liability_until)
+                    .or(self.paid_lifetime_admission_v1.filter(|(base, _)| *base == claim).map(|(_, until)| until))
+                    .ok_or("the signed hard deadline: the kernel claim has no producer-signed paid lifetime");
+                let ttl = self
+                    .covenant_ttl_v1(Hash64::from_bytes(claim))
+                    .ok_or("the material TTL: no healthy event-relative monetary covenant for the kernel claim");
+                (hard, ttl, hard)
+            }
+            PalwAdmissionLiabilityV1::NativeClaim { hard } => (Ok(hard), Ok(u64::MAX), Ok(hard)),
+        };
         let terms = PalwSettlementTermsSourcedV1 {
             reserved_reward: Ok(reserved),
             consumed_reward: Ok(0),

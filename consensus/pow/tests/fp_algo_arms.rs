@@ -13,6 +13,7 @@
 //! 3. the receipt lane (7) does NOT — its digest is identity binding, its lottery is admission —
 //!    and, for the same reason, it buys no block level.
 
+#![allow(warnings)]
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2};
 use kaspa_consensus_core::palw_freeprompt_v3::{

@@ -14,6 +14,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_s6_per_bond_share
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

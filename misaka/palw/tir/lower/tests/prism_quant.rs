@@ -11,6 +11,7 @@
 //! scale per 128 weights — the representation TQ1_0 and Q2_0 already lower through (`lower::qlinear`). A checkpoint that declares a
 //! weight-space rotation beside them (`prism.hadamard.*`) is still refused by the GGUF reader (`tests/gguf_unmodelled.rs`): the
 //! descriptor decodes the STORED weights, never the model's, until the rotation is lowered.
+#![allow(warnings)]
 use misaka_palw_tir_lower::quantfmt::QuantRegistry;
 
 #[test]

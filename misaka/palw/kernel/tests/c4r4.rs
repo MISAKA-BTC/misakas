@@ -18,6 +18,7 @@
 //! * F-C4R4-08 (P2, beacon accounting): since the OPV caps count pre-Final claims only, a beacon window sees `hard × ⌈…/window⌉` Finals,
 //!   not `max_live_claims_total`; and no ledger state names a Final job's poster (the distinct rule's consumer is always unknown).
 
+#![allow(warnings)]
 mod common;
 
 use common::chain::{POSTER, T};

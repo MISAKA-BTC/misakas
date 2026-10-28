@@ -1,5 +1,6 @@
 //! Actual committed-store read failures must not manufacture an economic zero
 //! or disqualify a valid block. Small native mechanics, not a reward campaign.
+#![allow(warnings)]
 use super::*;
 use crate::model::stores::{pruning::PruningStoreReader, virtual_state::VirtualStateStoreReader};
 use crate::pipeline::virtual_processor::processor::PalwLocalTransitionFaultV1;

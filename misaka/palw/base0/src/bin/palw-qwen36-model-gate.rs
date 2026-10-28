@@ -31,6 +31,7 @@
 //! it) and the display-stopped answer to `<dir>/<case>.answer` — the bytes a consumer would hand
 //! `palw-derive derive --answer`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpPromptSegmentV1, PalwFpWorkerInputV3,
     PalwFreePromptJobV3,

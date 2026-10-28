@@ -7,6 +7,7 @@
 //!  C4  the free-prompt lane's true ceiling: claim.pwu = quanta x quantum, capped at 8x canonical
 //!  C5  invariant (iii): does more NON-USEFUL work mean more profit? weight per executed MAC-eq.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1;
 use kaspa_consensus_core::palw_economic_compute_v1::{
     PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1, palw_job_economic_compute_v1,

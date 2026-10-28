@@ -1,6 +1,7 @@
 //! AUDIT-ONLY (lane B3). What one Valid signature must lock, at the colluding quorum the code
 //! assumes (3) and at the quorum the S2 door actually admits (1). Read-only; delete freely.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_admission_v2::palw_attempt_derived_pwu_v1;
 use kaspa_consensus_core::palw_economic_safety_v1::palw_seat_lock_required_v2;

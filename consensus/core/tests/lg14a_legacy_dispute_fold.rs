@@ -7,6 +7,7 @@
 //! dispute records against their indexes and caps, DL-1's deadlines exactly). The fence-off twin is testnet-12 as it runs.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test lg14a_legacy_dispute_fold
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

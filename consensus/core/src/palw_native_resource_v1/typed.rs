@@ -1,6 +1,5 @@
 //! Native allocation requests, visited by type rather than inferred from codec bytes.
 //! This is a pinned Rust BTree allocation envelope, not physical RSS approval.
-use super::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem::size_of,
@@ -293,6 +292,7 @@ macro_rules! native_tuple_struct { ($ty:ty; $($field:ident),* $(,)?) => {
         }
     }
 }; }
+#[allow(unused_macros)]
 macro_rules! native_unit {
     ($ty:ty) => {
         impl NativeHeapV1 for $ty {
@@ -320,6 +320,7 @@ macro_rules! native_enum {
                     Some(n)
                 }),* }
             }
+            #[allow(unused_variables)]
             fn native_heap_v1(&self,path:&str)->NativeCoverageV1 {
                 match self { $(Self::$variant $( { $($named),* } )? $( ( $($tuple),* ) )? => {
                     #[allow(unused_mut)] let mut sum=NativeCoverageV1::zero();
@@ -331,6 +332,7 @@ macro_rules! native_enum {
         }
     };
 }
+#[allow(unused_macros)]
 macro_rules! native_unsupported {
     ($ty:ty) => {
         impl NativeHeapV1 for $ty {
@@ -340,6 +342,7 @@ macro_rules! native_unsupported {
         }
     };
 }
+#[allow(unused_imports)]
 pub(crate) use {native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
 
 impl<T: NativeHeapV1 + ?Sized> NativeHeapV1 for &T {

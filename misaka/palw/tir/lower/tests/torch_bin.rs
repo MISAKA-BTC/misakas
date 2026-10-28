@@ -11,6 +11,7 @@
 //!   bomb, instantiating opcodes, a lying zip. Every one is a `FORMAT_UNSUPPORTED` error that names its cause, none allocates what a
 //!   prefix claims, and none runs anything (a pickle that would, if run, write a marker file: the marker never appears).
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::weights::torchzip::{self, Limits, interpret_pickle, read_header};
 use misaka_palw_tir_lower::weights::{Checkpoint, SafetensorsFile, TensorSource};
 use std::path::{Path, PathBuf};

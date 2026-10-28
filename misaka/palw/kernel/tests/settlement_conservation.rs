@@ -1,4 +1,5 @@
 //! Checked reference settlement, separate from native coin/reward admission.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     hash::Digest,
     ledger::LedgerEventV1,

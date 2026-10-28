@@ -1,6 +1,7 @@
 //! audit(compute-weight) W-1 — a model's tier is its own `(id, root)`: a later registration (a model line with other weights) on an
 //! approved graph is never 1.0. In `palw_state_v2/tests/` because the state's tables are private to it.
 
+#![allow(warnings)]
 use crate::Hash64;
 use crate::config::params::{ForkActivation, Params};
 use crate::network::{NetworkId, NetworkType};
@@ -56,7 +57,10 @@ fn tier_class(root: Hash64, registrant: Option<PalwBondKeyV2>) -> crate::palw_st
     }
 }
 
-fn tier_version(root: Hash64, status: crate::palw_model_lines_v1::PalwVersionStatusV1) -> crate::palw_model_lines_v1::PalwModelVersionV1 {
+fn tier_version(
+    root: Hash64,
+    status: crate::palw_model_lines_v1::PalwVersionStatusV1,
+) -> crate::palw_model_lines_v1::PalwModelVersionV1 {
     crate::palw_model_lines_v1::PalwModelVersionV1 {
         root,
         parent: None,

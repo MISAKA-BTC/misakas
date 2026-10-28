@@ -6,6 +6,7 @@
 //!
 //! Run:  cargo test -p kaspa-consensus-core --test audit_harness_probe -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_base_params, palw_t12_shipped_params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

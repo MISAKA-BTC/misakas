@@ -2,6 +2,7 @@
 //! accusation records RFC-0028-shaped clocks, the actor's answer is recorded, and the F02 default decides silence natively (no
 //! injected silence fact): supplied + silent → refund + slash (test slash value), answered → no default, unsupplied → no-slash hold
 //! and recovery by a re-opened turn, reorg restores everything.
+#![allow(warnings)]
 use super::super::palw_native_liability_hold_fold_v1::*;
 use super::super::palw_native_post_final_default_fold_v1::*;
 use super::super::palw_native_post_final_duty_v1::*;
@@ -88,7 +89,12 @@ fn queued(state: &PalwChainStateV2, key: [u8; 64]) -> Option<(Hash64, u64)> {
     state.pending_payouts.get(&Hash64::from_bytes(key)).map(|p| (p.payload, p.amount))
 }
 /// Held + accused at ACCUSED (one builder; returns it at the accusation).
-fn accused<'a>(state: &'a PalwChainStateV2, p: &'a PalwStateParamsV2, e: &'a PalwTransitionExtrasV1, family: u8) -> TransitionBuilder<'a> {
+fn accused<'a>(
+    state: &'a PalwChainStateV2,
+    p: &'a PalwStateParamsV2,
+    e: &'a PalwTransitionExtrasV1,
+    family: u8,
+) -> TransitionBuilder<'a> {
     let mut b = TransitionBuilder::new(state, p, false, false, false, false, e);
     hold_native_fee_v1(&mut b, &held(family)).unwrap();
     register_post_final_material_v1(&mut b, family, &JOB, commitment(family), 1_024).unwrap();
@@ -98,7 +104,11 @@ fn accused<'a>(state: &'a PalwChainStateV2, p: &'a PalwStateParamsV2, e: &'a Pal
 fn deadline(p: &PalwStateParamsV2) -> u64 {
     ACCUSED + p.turn_deadline_daa()
 }
-fn production(b: &TransitionBuilder<'_>, r: &PalwNativeHeldFeeRowV1, c: &crate::palw_court_duty_clock_v1::CourtDutyClockV1) -> Result<bool, &'static str> {
+fn production(
+    b: &TransitionBuilder<'_>,
+    r: &PalwNativeHeldFeeRowV1,
+    c: &crate::palw_court_duty_clock_v1::CourtDutyClockV1,
+) -> Result<bool, &'static str> {
     native_post_final_duty_answered_v1(b, r, c)
 }
 
@@ -229,7 +239,10 @@ fn r6_d4_no_supply_is_a_no_slash_hold_then_a_recovery_turn() {
     let row = native_post_final_duty_row_v1(&b.state, family, &JOB).unwrap();
     assert_eq!(row.duties.len(), 2);
     let next = &row.duties[1].clock;
-    assert_eq!((next.turn, next.first_eligible_daa, next.response_deadline_daa), (1, after.daa_score + 1, after.daa_score + p.turn_deadline_daa()));
+    assert_eq!(
+        (next.turn, next.first_eligible_daa, next.response_deadline_daa),
+        (1, after.daa_score + 1, after.daa_score + p.turn_deadline_daa())
+    );
     assert!(held_native_fee_v1(&b.state, family, &JOB).is_some());
     // The new turn is supplied and the actor stays silent: default.
     observe_native_post_final_duties_with_v1(&mut b, &ctx(5, after.daa_score + 1, 5), &profile()).unwrap();
@@ -393,7 +406,8 @@ fn r6_d4_measure_post_final_duty_wall_time() {
         let pick = |q: f64| rest[((rest.len() as f64 - 1.0) * q).round() as usize];
         (warm, pick(0.5), pick(0.95), *rest.last().unwrap())
     };
-    let host = format!("{}-{} {}", std::env::consts::OS, std::env::consts::ARCH, if cfg!(debug_assertions) { "debug" } else { "release" });
+    let host =
+        format!("{}-{} {}", std::env::consts::OS, std::env::consts::ARCH, if cfg!(debug_assertions) { "debug" } else { "release" });
     let (p, e) = (armed(), conviction_extras());
     for &n in &scales {
         let parent0 = parent();
@@ -457,7 +471,10 @@ fn r6_d4_measure_post_final_duty_wall_time() {
             );
         }
         let row = native_post_final_duty_row_v1(&observed_state, family, &job(0)).unwrap();
-        eprintln!("MEASURE_DA in_crate=true op=post_final_duty_row bytes={} answer_payload_bytes=12", borsh::to_vec(&row).unwrap().len());
+        eprintln!(
+            "MEASURE_DA in_crate=true op=post_final_duty_row bytes={} answer_payload_bytes=12",
+            borsh::to_vec(&row).unwrap().len()
+        );
     }
 }
 
@@ -476,7 +493,10 @@ fn f02_t02_t07_silent_supplied_actor_deadline_and_inclusion_premise_boundaries()
         e.court_service_inclusion_premise_v1 = premise;
         let mut b = accused(&state, &p, &e, PALW_NATIVE_FAMILY_TEXT_V29);
         observe_native_post_final_duties_with_v1(&mut b, &ctx(3, unit, 3), &profile()).unwrap();
-        assert_eq!(native_post_final_duty_row_v1(&b.state, PALW_NATIVE_FAMILY_TEXT_V29, &JOB).unwrap().duties[0].supplied_daa, Some(unit));
+        assert_eq!(
+            native_post_final_duty_row_v1(&b.state, PALW_NATIVE_FAMILY_TEXT_V29, &JOB).unwrap().duties[0].supplied_daa,
+            Some(unit)
+        );
         decide_native_post_final_default_v1(&b, &held(PALW_NATIVE_FAMILY_TEXT_V29), now, &production)
     };
     let zero = Some(Premise { version: 1, inclusion_delay_daa: 0 });
@@ -488,7 +508,10 @@ fn f02_t02_t07_silent_supplied_actor_deadline_and_inclusion_premise_boundaries()
     let after = deadline(&p) + 1;
     assert_eq!(run(Some(Premise { version: 1, inclusion_delay_daa: gap - 1 }), after), Ok(CourtServiceAttributionV1::PartyDefault));
     assert_eq!(run(Some(Premise { version: 1, inclusion_delay_daa: gap }), after), Ok(CourtServiceAttributionV1::PartyDefault));
-    assert!(matches!(run(Some(Premise { version: 1, inclusion_delay_daa: gap + 1 }), after), Ok(CourtServiceAttributionV1::NoSlashHold(_))));
+    assert!(matches!(
+        run(Some(Premise { version: 1, inclusion_delay_daa: gap + 1 }), after),
+        Ok(CourtServiceAttributionV1::NoSlashHold(_))
+    ));
     // Negative controls: no adopted premise, or an unknown premise version, never defaults.
     assert!(run(None, after).is_err(), "typed-missing premise: undecided, no slash");
     assert!(matches!(run(Some(Premise { version: 2, inclusion_delay_daa: 0 }), after), Ok(CourtServiceAttributionV1::NoSlashHold(_))));

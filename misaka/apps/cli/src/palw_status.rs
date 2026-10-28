@@ -11,8 +11,8 @@
 //! All of them are view kinds of op 227 (no new op numbers): a node built before them refuses the version-2 request.
 
 use kaspa_consensus_core::palw_user_status_v1::{PALW_STATUS_CODE_TEXTS_V1, palw_status_code_text_v1};
-use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::GetPalwFenceScheduleRequest;
+use kaspa_rpc_core::api::rpc::RpcApi;
 use serde_json::Value;
 
 use crate::node::Ctx;
@@ -275,7 +275,12 @@ pub(crate) fn explain(code: Option<&str>) -> CliResult {
     match code {
         Some(c) => match palw_status_code_text_v1(c) {
             Some(t) => println!("{c}: {t}"),
-            None => return Err(CliError::new(exit::GENERIC, format!("no explanation for code '{c}' in this build (`misaka palw explain` lists them)"))),
+            None => {
+                return Err(CliError::new(
+                    exit::GENERIC,
+                    format!("no explanation for code '{c}' in this build (`misaka palw explain` lists them)"),
+                ));
+            }
         },
         None => {
             for (c, t) in PALW_STATUS_CODE_TEXTS_V1 {

@@ -25,7 +25,7 @@ impl SourceObligationV39 {
         object_id(b"misaka-palw/kernel/original-producer-source-obligation/v39", self)
     }
 }
-fn admission(plan: &CheckedQuotaV39) -> Result<QuotaQuantitiesV11, String> {
+fn admission(_plan: &CheckedQuotaV39) -> Result<QuotaQuantitiesV11, String> {
     let bytes = super::super::sharded::QUOTA_GLOBAL_ROW_BYTES_V11
         + super::super::sharded::QUOTA_SELECTED_ACTOR_ROW_BYTES_V11
         + super::super::sharded::QUOTA_SELECTED_SUBJECT_ROW_BYTES_V11
@@ -307,6 +307,7 @@ pub fn debit_native_cached_answer_v39(
 /// The caller authenticates a held Final and supplies its fixed signed liability
 /// horizon. This consumes the original reservation within its original interval;
 /// it changes no stored deadline, subject, grant or wire representation.
+#[allow(clippy::too_many_arguments)] // the debit names every authenticated input of the cached answer; grouping them would hide which one a caller forged
 pub fn debit_native_cached_answer_until_v39(
     policy: &QuotaPolicyV11,
     epoch: &TrustedEpochV11,
@@ -558,7 +559,7 @@ mod liability_service_tests {
                 &epoch,
                 &plan,
                 &plan.root(),
-                &next_global,
+                next_global,
                 &next_global.root(),
                 (next_actor, &next_actor.root()),
                 (&subject, &subject.row_root()),
@@ -577,7 +578,7 @@ mod liability_service_tests {
                     &epoch,
                     &plan,
                     &plan.root(),
-                    &exhausted_global,
+                    exhausted_global,
                     &exhausted_global.root(),
                     (exhausted_actor, &exhausted_actor.root()),
                     (&subject, &subject.row_root()),

@@ -1,6 +1,7 @@
 //! Versioned length contract36 (unverified source checkpoint, 2026-10-15): a length
 //! change is a new version; v1 keeps its frozen bound; v8 windows bind their plan;
 //! RFC03 media axes decode but stay refused until their own fence.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     flat_history8::{HistoryNodeV8, HistorySelectionPlanV8},
     flat_lengths7::{FlatJobLengthsV7, FlatLengthAxisV7},

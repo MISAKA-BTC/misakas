@@ -180,7 +180,9 @@ impl PalwFundedEscrowRowV1 {
         let unreleased = self.unreleased_v1()?;
         match self.settled_by {
             // One spend ends the row: the whole value is accounted in it, nothing is owed after it, and it carries its DAA.
-            Some(_) if unreleased != 0 || self.liability_open || self.settled_daa < self.accepted_daa => Err(PalwEscrowRefusalV1::OnceOnly),
+            Some(_) if unreleased != 0 || self.liability_open || self.settled_daa < self.accepted_daa => {
+                Err(PalwEscrowRefusalV1::OnceOnly)
+            }
             // Unsettled: the current outpoint holds the unreleased value (> 0); a return only ever ends a row.
             None if unreleased == 0 || self.returned_sompi != 0 || self.settled_daa != 0 => Err(PalwEscrowRefusalV1::OnceOnly),
             _ => Ok(()),
@@ -249,7 +251,10 @@ pub fn palw_escrow_row_transition_v1(
             if before.settled_by.is_some() {
                 return Err(PalwEscrowRefusalV1::AlreadySettled);
             }
-            if after.paid_sompi < before.paid_sompi || after.burned_sompi < before.burned_sompi || after.returned_sompi < before.returned_sompi {
+            if after.paid_sompi < before.paid_sompi
+                || after.burned_sompi < before.burned_sompi
+                || after.returned_sompi < before.returned_sompi
+            {
                 return Err(PalwEscrowRefusalV1::Transition);
             }
             if after.settled_by.is_some() {
@@ -532,10 +537,8 @@ pub fn palw_escrow_qualified_spend_v1(
             }
         }
         // Conservation: the dues may not exceed what the escrow still holds.
-        let remaining = unreleased
-            .checked_sub(paid_now)
-            .and_then(|v| v.checked_sub(burned_now))
-            .ok_or(PalwEscrowRefusalV1::Conservation)?;
+        let remaining =
+            unreleased.checked_sub(paid_now).and_then(|v| v.checked_sub(burned_now)).ok_or(PalwEscrowRefusalV1::Conservation)?;
         if remaining > 0 {
             let output = tx.outputs.get(next).ok_or(PalwEscrowRefusalV1::ReturnOutputMismatch)?;
             if output.value != remaining || payload_of(output) != Some(row.refund_payload) {
@@ -562,7 +565,9 @@ pub fn palw_escrow_qualified_spend_v1(
     }
     // Third-party relay (RFC-0035 §7.4), narrowest form: empty payload (the payer's own spend) or exactly this row's template
     // for this path, with the escrow at input 0 (see `palw_escrow_relay_template_payload_v1`).
-    if !tx.payload.is_empty() && (tx.payload != palw_escrow_relay_template_payload_v1(row.contract_id, row.funding_outpoint, path) || input_index != 0) {
+    if !tx.payload.is_empty()
+        && (tx.payload != palw_escrow_relay_template_payload_v1(row.contract_id, row.funding_outpoint, path) || input_index != 0)
+    {
         return Err(PalwEscrowRefusalV1::RelayTemplateMismatch);
     }
     // audit A-2: one escrow row per transaction — the escrow is input 0 for every spend (the payer's own included). Each row's plan
@@ -609,7 +614,11 @@ pub fn palw_escrow_settlement_rule_id_v1(path: PalwEscrowSpendPathV1) -> Hash64 
 /// it through the ML-DSA sighash's payload hash. Why the template is not inside the TFO1 consent itself: the carrier's txid (and so
 /// the outpoint the signature must commit) depends on the TFO1 payload, so the payer signs the template right after building the
 /// carrier and distributes it off-chain — still once, at funding time, never a future signature.
-pub fn palw_escrow_relay_template_payload_v1(contract_id: Hash64, outpoint: TransactionOutpoint, path: PalwEscrowSpendPathV1) -> Vec<u8> {
+pub fn palw_escrow_relay_template_payload_v1(
+    contract_id: Hash64,
+    outpoint: TransactionOutpoint,
+    path: PalwEscrowSpendPathV1,
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + 64 + 64 + 4 + 64);
     out.extend_from_slice(PALW_ESCROW_RELAY_TEMPLATE_MAGIC_V1);
     out.extend_from_slice(contract_id.as_byte_slice());
@@ -634,7 +643,9 @@ pub fn palw_tfo1_provisional_lock_v1(tx: &Transaction) -> Option<TransactionOutp
 }
 
 /// The unsettled rows by outpoint — what the spend filter reads (a settled row's outpoint is already spent).
-pub fn palw_escrow_rows_by_outpoint_v1(rows: &BTreeMap<Hash64, PalwFundedEscrowRowV1>) -> HashMap<TransactionOutpoint, PalwFundedEscrowRowV1> {
+pub fn palw_escrow_rows_by_outpoint_v1(
+    rows: &BTreeMap<Hash64, PalwFundedEscrowRowV1>,
+) -> HashMap<TransactionOutpoint, PalwFundedEscrowRowV1> {
     rows.values().filter(|row| row.settled_by.is_none()).map(|row| (row.funding_outpoint, *row)).collect()
 }
 
@@ -711,7 +722,10 @@ mod tests {
         undated.returned_sompi = 1_000;
         undated.settled_by = Some(Hash64::from_u64_word(1));
         assert_eq!(undated.check_v1(), Err(PalwEscrowRefusalV1::OnceOnly));
-        assert_eq!(PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), outpoint(), 0, h(3), payer_payload(), 1, 2, false), Err(PalwEscrowRefusalV1::RowShape));
+        assert_eq!(
+            PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), outpoint(), 0, h(3), payer_payload(), 1, 2, false),
+            Err(PalwEscrowRefusalV1::RowShape)
+        );
     }
 
     #[test]
@@ -719,7 +733,10 @@ mod tests {
         let r = row(false);
         let ok = spend(vec![TransactionOutput::new(1_000, payer_spk()), TransactionOutput::new(40, ScriptPublicKey::default())], 1);
         // Before the hard deadline: a settlement, and the schedule is typed-missing.
-        assert_eq!(palw_escrow_qualified_spend_v1(&r, &ok, &[1_000, 50], 10_099, None), Err(PalwEscrowRefusalV1::SettlementScheduleMissing));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &ok, &[1_000, 50], 10_099, None),
+            Err(PalwEscrowRefusalV1::SettlementScheduleMissing)
+        );
         // At the deadline with no liability: the payer return qualifies and settles the row once.
         let plan = palw_escrow_qualified_spend_v1(&r, &ok, &[1_000, 50], 10_100, None).unwrap();
         assert_eq!(plan.path, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
@@ -727,8 +744,14 @@ mod tests {
         assert_eq!(plan.new.settled_by, Some(ok.id()));
         assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&plan.old), Some(&plan.new)), Ok(()));
         // Once settled, never again.
-        assert_eq!(palw_escrow_qualified_spend_v1(&plan.new, &ok, &[1_000, 50], 10_200, None), Err(PalwEscrowRefusalV1::AlreadySettled));
-        assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&plan.new), Some(&plan.new)), Err(PalwEscrowRefusalV1::AlreadySettled));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&plan.new, &ok, &[1_000, 50], 10_200, None),
+            Err(PalwEscrowRefusalV1::AlreadySettled)
+        );
+        assert_eq!(
+            palw_escrow_row_transition_v1(&r.contract_id, Some(&plan.new), Some(&plan.new)),
+            Err(PalwEscrowRefusalV1::AlreadySettled)
+        );
         // An open liability keeps it a settlement even after the deadline.
         assert_eq!(
             palw_escrow_qualified_spend_v1(&row(true), &ok, &[1_000, 50], 20_000, None),
@@ -742,9 +765,15 @@ mod tests {
         let short = spend(vec![TransactionOutput::new(999, payer_spk())], 0);
         assert_eq!(palw_escrow_qualified_spend_v1(&r, &short, &[1_000], 10_100, None), Err(PalwEscrowRefusalV1::ReturnOutputMismatch));
         let elsewhere = spend(vec![TransactionOutput::new(1_000, ScriptPublicKey::default())], 0);
-        assert_eq!(palw_escrow_qualified_spend_v1(&r, &elsewhere, &[1_000], 10_100, None), Err(PalwEscrowRefusalV1::ReturnOutputMismatch));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &elsewhere, &[1_000], 10_100, None),
+            Err(PalwEscrowRefusalV1::ReturnOutputMismatch)
+        );
         let skims = spend(vec![TransactionOutput::new(1_000, payer_spk()), TransactionOutput::new(60, ScriptPublicKey::default())], 1);
-        assert_eq!(palw_escrow_qualified_spend_v1(&r, &skims, &[1_000, 50], 10_100, None), Err(PalwEscrowRefusalV1::EscrowFundsOtherOutputs));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &skims, &[1_000, 50], 10_100, None),
+            Err(PalwEscrowRefusalV1::EscrowFundsOtherOutputs)
+        );
         let wrong_entry = spend(vec![TransactionOutput::new(1_000, payer_spk())], 0);
         assert_eq!(palw_escrow_qualified_spend_v1(&r, &wrong_entry, &[1_001], 10_100, None), Err(PalwEscrowRefusalV1::EntryMismatch));
         let not_ours = Transaction::new(
@@ -816,18 +845,34 @@ mod tests {
         assert_eq!(plan.input_index, 0);
         assert_eq!(plan.new.settled_by, Some(ok.id()));
         // Payer's own spend, no template: still qualified.
-        assert!(palw_escrow_qualified_spend_v1(&r, &tx(vec![escrow_in.clone(), relay_in.clone()], vec![]), &[1_000, 50], 10_100, None).is_ok());
+        assert!(
+            palw_escrow_qualified_spend_v1(&r, &tx(vec![escrow_in.clone(), relay_in.clone()], vec![]), &[1_000, 50], 10_100, None)
+                .is_ok()
+        );
         // Another contract's template, another outpoint's template, arbitrary payload, escrow not at input 0.
         let other_contract = palw_escrow_relay_template_payload_v1(h(9), r.funding_outpoint, rule);
-        let other_outpoint = palw_escrow_relay_template_payload_v1(r.contract_id, TransactionOutpoint::new(Hash64::from_u64_word(77), 2), rule);
+        let other_outpoint =
+            palw_escrow_relay_template_payload_v1(r.contract_id, TransactionOutpoint::new(Hash64::from_u64_word(77), 2), rule);
         for payload in [other_contract, other_outpoint, vec![1, 2, 3]] {
             assert_eq!(
-                palw_escrow_qualified_spend_v1(&r, &tx(vec![escrow_in.clone(), relay_in.clone()], payload), &[1_000, 50], 10_100, None),
+                palw_escrow_qualified_spend_v1(
+                    &r,
+                    &tx(vec![escrow_in.clone(), relay_in.clone()], payload),
+                    &[1_000, 50],
+                    10_100,
+                    None
+                ),
                 Err(PalwEscrowRefusalV1::RelayTemplateMismatch)
             );
         }
         assert_eq!(
-            palw_escrow_qualified_spend_v1(&r, &tx(vec![relay_in.clone(), escrow_in.clone()], template.clone()), &[50, 1_000], 10_100, None),
+            palw_escrow_qualified_spend_v1(
+                &r,
+                &tx(vec![relay_in.clone(), escrow_in.clone()], template.clone()),
+                &[50, 1_000],
+                10_100,
+                None
+            ),
             Err(PalwEscrowRefusalV1::RelayTemplateMismatch)
         );
         // Before the hard deadline the template authorizes nothing.
@@ -851,12 +896,24 @@ mod tests {
         use crate::tx::{PopulatedTransaction, UtxoEntry};
         let r = row(false);
         let hash_type = SigHashType(SIG_HASH_SINGLE.0 | SIG_HASH_ANY_ONE_CAN_PAY.0);
-        let template = palw_escrow_relay_template_payload_v1(r.contract_id, r.funding_outpoint, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+        let template = palw_escrow_relay_template_payload_v1(
+            r.contract_id,
+            r.funding_outpoint,
+            PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline,
+        );
         let escrow_entry = UtxoEntry::new(1_000, payer_spk(), 100, false);
         let relay_entry = UtxoEntry::new(50, ScriptPublicKey::default(), 100, false);
         let ret = TransactionOutput::new(1_000, payer_spk());
         let escrow_in = TransactionInput::new(outpoint(), vec![], 0, 1);
-        let presigned = Transaction::new(0, vec![escrow_in.clone()], vec![ret.clone()], 0, crate::subnets::SUBNETWORK_ID_NATIVE, 0, template.clone());
+        let presigned = Transaction::new(
+            0,
+            vec![escrow_in.clone()],
+            vec![ret.clone()],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            template.clone(),
+        );
         let relayed = Transaction::new(
             0,
             vec![escrow_in.clone(), TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(600), 0), vec![], 0, 1)],
@@ -867,12 +924,18 @@ mod tests {
             template.clone(),
         );
         let sighash = |tx: &Transaction, entries: Vec<UtxoEntry>| {
-            calc_mldsa87_signature_hash(&PopulatedTransaction::new(tx, entries), 0, hash_type, &Mldsa87SigHashReusedValuesUnsync::new())
+            calc_mldsa87_signature_hash(
+                &PopulatedTransaction::new(tx, entries),
+                0,
+                hash_type,
+                &Mldsa87SigHashReusedValuesUnsync::new(),
+            )
         };
         let signed = sighash(&presigned, vec![escrow_entry.clone()]);
         assert_eq!(signed, sighash(&relayed, vec![escrow_entry.clone(), relay_entry.clone()]));
         let mut other = relayed.clone();
-        other.payload = palw_escrow_relay_template_payload_v1(h(9), r.funding_outpoint, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+        other.payload =
+            palw_escrow_relay_template_payload_v1(h(9), r.funding_outpoint, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
         assert_ne!(signed, sighash(&other, vec![escrow_entry.clone(), relay_entry.clone()]));
         let mut theft = relayed.clone();
         theft.outputs[0] = TransactionOutput::new(1_000, ScriptPublicKey::default());
@@ -914,7 +977,10 @@ mod tests {
         let schedule = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, first_dues());
         let tx1 = spend_of(outpoint(), vec![pay(11, 300), pay(12, 100), TransactionOutput::new(550, payer_spk()), pay(13, 20)], 1);
         // Production: no schedule exists ⇒ refused.
-        assert_eq!(palw_escrow_qualified_spend_v1(&r, &tx1, &[1_000, 20], 500, None), Err(PalwEscrowRefusalV1::SettlementScheduleMissing));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &tx1, &[1_000, 20], 500, None),
+            Err(PalwEscrowRefusalV1::SettlementScheduleMissing)
+        );
         assert_eq!(palw_escrow_fee_schedule_v1(&r), None);
         let plan = palw_escrow_qualified_spend_v1(&r, &tx1, &[1_000, 20], 500, Some(&schedule)).unwrap();
         assert_eq!(plan.path, PalwEscrowSpendPathV1::Settlement);
@@ -926,12 +992,21 @@ mod tests {
         assert!(r2.liability_open);
         assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&r), Some(&r2)), Ok(()));
         // The old outpoint is gone: spending it again names nothing.
-        assert_eq!(palw_escrow_qualified_spend_v1(&r2, &tx1, &[1_000, 20], 501, Some(&schedule)), Err(PalwEscrowRefusalV1::NotEscrowInput));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r2, &tx1, &[1_000, 20], 501, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::NotEscrowInput)
+        );
         // Once-only: the same dues against the continued row pay nothing more, and a bare change-back is not a settlement.
         let idle = spend_of(r2.funding_outpoint, vec![TransactionOutput::new(550, payer_spk())], 0);
-        assert_eq!(palw_escrow_qualified_spend_v1(&r2, &idle, &[550], 501, Some(&schedule)), Err(PalwEscrowRefusalV1::NothingToSettle));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r2, &idle, &[550], 501, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::NothingToSettle)
+        );
         // The entry must carry the CURRENT unreleased value, not the original amount.
-        assert_eq!(palw_escrow_qualified_spend_v1(&r2, &idle, &[1_000], 501, Some(&schedule)), Err(PalwEscrowRefusalV1::EntryMismatch));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r2, &idle, &[1_000], 501, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::EntryMismatch)
+        );
 
         // The liability resolves (the fold's sweep); one more work due, then everything left returns and the row settles.
         let mut r3 = r2;
@@ -949,7 +1024,10 @@ mod tests {
         assert_eq!((done.settled_by, done.settled_daa, done.liability_open), (Some(tx2.id()), 600, false));
         assert_eq!(done.funding_outpoint, r3.funding_outpoint, "the settling spend consumed the current outpoint");
         assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&r3), Some(&done)), Ok(()));
-        assert_eq!(palw_escrow_qualified_spend_v1(&done, &tx2, &[550], 601, Some(&schedule)), Err(PalwEscrowRefusalV1::AlreadySettled));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&done, &tx2, &[550], 601, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::AlreadySettled)
+        );
     }
 
     /// Every way a settlement can lie is refused by name.
@@ -978,23 +1056,39 @@ mod tests {
         // The change-back must be exact and the payer's.
         for change in [TransactionOutput::new(549, payer_spk()), pay(13, 550)] {
             assert_eq!(
-                palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), vec![pay(11, 300), pay(12, 100), change], 0), &[1_000], 500, Some(&schedule)),
+                palw_escrow_qualified_spend_v1(
+                    &r,
+                    &spend_of(outpoint(), vec![pay(11, 300), pay(12, 100), change], 0),
+                    &[1_000],
+                    500,
+                    Some(&schedule)
+                ),
                 Err(PalwEscrowRefusalV1::ReturnOutputMismatch)
             );
         }
         // The burn is inside the fee: an extra output drawing on it is escrow-funded.
         let skim = spend_of(outpoint(), vec![pay(11, 300), pay(12, 100), TransactionOutput::new(550, payer_spk()), pay(13, 50)], 0);
-        assert_eq!(palw_escrow_qualified_spend_v1(&r, &skim, &[1_000], 500, Some(&schedule)), Err(PalwEscrowRefusalV1::EscrowFundsOtherOutputs));
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &skim, &[1_000], 500, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::EscrowFundsOtherOutputs)
+        );
         // A consumed value that is not a due boundary (paid twice / out of order).
         let mut off = r;
         off.paid_sompi = 200;
         off.funding_outpoint = TransactionOutpoint::new(h(78), 0);
         assert_eq!(
-            palw_escrow_qualified_spend_v1(&off, &spend_of(off.funding_outpoint, vec![TransactionOutput::new(800, payer_spk())], 0), &[800], 500, Some(&schedule)),
+            palw_escrow_qualified_spend_v1(
+                &off,
+                &spend_of(off.funding_outpoint, vec![TransactionOutput::new(800, payer_spk())], 0),
+                &[800],
+                500,
+                Some(&schedule)
+            ),
             Err(PalwEscrowRefusalV1::SettlementRuleMismatch)
         );
         // Dues beyond what the escrow holds.
-        let greedy = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, vec![due(PalwEscrowDueKindV1::WorkPayment, Some(11), 1_001)]);
+        let greedy =
+            PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, vec![due(PalwEscrowDueKindV1::WorkPayment, Some(11), 1_001)]);
         assert_eq!(
             palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), vec![pay(11, 1_001)], 1), &[1_000, 5], 500, Some(&greedy)),
             Err(PalwEscrowRefusalV1::Conservation)
@@ -1002,7 +1096,13 @@ mod tests {
         // A burn with a payee, or a payment without one, is not a due the rule knows.
         let malformed = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, vec![due(PalwEscrowDueKindV1::Burn, Some(11), 10)]);
         assert_eq!(
-            palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), vec![TransactionOutput::new(990, payer_spk())], 0), &[1_000], 500, Some(&malformed)),
+            palw_escrow_qualified_spend_v1(
+                &r,
+                &spend_of(outpoint(), vec![TransactionOutput::new(990, payer_spk())], 0),
+                &[1_000],
+                500,
+                Some(&malformed)
+            ),
             Err(PalwEscrowRefusalV1::SettlementRuleMismatch)
         );
         // A burn-everything settlement drains the row and settles it (nothing left to answer with).
@@ -1016,7 +1116,8 @@ mod tests {
     #[test]
     fn funded_escrow_liability_resolves_on_verdict_discharge_or_hard_deadline_only() {
         let r = row(true); // hard deadline 10,100
-        let live = PalwEscrowClaimLiabilityViewV1 { open_courts: 0, claim_live: true, claim_voided: false, post_final_liability: false };
+        let live =
+            PalwEscrowClaimLiabilityViewV1 { open_courts: 0, claim_live: true, claim_voided: false, post_final_liability: false };
         assert!(!palw_escrow_liability_resolved_v1(&r, &live, 5_000), "a live claim keeps its escrow");
         assert!(palw_escrow_liability_resolved_v1(&r, &live, 10_101), "past the hard deadline nothing new can start");
         assert!(!palw_escrow_liability_resolved_v1(&r, &live, 10_100), "the deadline itself is still actionable");

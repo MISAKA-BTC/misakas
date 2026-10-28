@@ -4,6 +4,7 @@
 //! gate, once per claim, many per producer, one shape, the claim's own lifetime), the reveal's inputs, the Clean signers'
 //! liability, the bounty's seat, the held fee's release and forfeiture, the sweep's waiting rule, and that below the fence (and
 //! for every claim outside a paid V2 enrollment) nothing changes.
+#![allow(warnings)]
 use super::super::palw_paid_claim_trap_fold_v1::*;
 use super::*;
 use crate::palw_claim_challenge_v2::{PAID_CLAIM_LOCKS_V2, PAID_CLAIM_RECEIPTS_V2, PalwPaidClaimLockV2};
@@ -168,7 +169,11 @@ fn a_commitment_lands_once_per_claim_before_the_seal_window_and_a_producer_may_h
     parent.bonds.insert(bond_key(1), bond_record(1_000, 1));
     parent.bonds.insert(bond_key(2), bond_record(1_000, 2));
     let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-    let claim_of = |enrollment: u8| PalwPaidTrapClaimV1 { enrollment: [enrollment; 64], base_claim: [enrollment ^ 0xFF; 64], ..paid(bond_key(1)) };
+    let claim_of = |enrollment: u8| PalwPaidTrapClaimV1 {
+        enrollment: [enrollment; 64],
+        base_claim: [enrollment ^ 0xFF; 64],
+        ..paid(bond_key(1))
+    };
     let null = |base: [u8; 64]| palw_paid_trap_commitment_v1(&base, None, &salt_of(9));
     let seal_start = 100;
     // Before the seal window, by its producer: accepted.
@@ -176,7 +181,9 @@ fn a_commitment_lands_once_per_claim_before_the_seal_window_and_a_producer_may_h
     apply_paid_trap_commitment_v1(&mut b, &ctx(1, 90, 90), &bond_key(1), &first, seal_start, &null(first.base_claim)).unwrap();
     assert!(commitment_row(&b.state, &first.enrollment).is_some());
     // The same claim again: refused (exactly one per claim).
-    assert!(apply_paid_trap_commitment_v1(&mut b, &ctx(1, 91, 91), &bond_key(1), &first, seal_start, &null(first.base_claim)).is_err());
+    assert!(
+        apply_paid_trap_commitment_v1(&mut b, &ctx(1, 91, 91), &bond_key(1), &first, seal_start, &null(first.base_claim)).is_err()
+    );
     // The same producer's other paid claims: each takes its own commitment — no one-open-per-setter limit.
     for e in [0x12u8, 0x13, 0x14] {
         let other = claim_of(e);
@@ -185,7 +192,9 @@ fn a_commitment_lands_once_per_claim_before_the_seal_window_and_a_producer_may_h
     assert_eq!(trap_rows(&b.state), 4);
     // At the seal window (the seed may be forming), by another bond, or below the fence: refused, nothing written.
     let late = claim_of(0x15);
-    assert!(apply_paid_trap_commitment_v1(&mut b, &ctx(1, 100, 100), &bond_key(1), &late, seal_start, &null(late.base_claim)).is_err());
+    assert!(
+        apply_paid_trap_commitment_v1(&mut b, &ctx(1, 100, 100), &bond_key(1), &late, seal_start, &null(late.base_claim)).is_err()
+    );
     assert!(apply_paid_trap_commitment_v1(&mut b, &ctx(1, 93, 93), &bond_key(2), &late, seal_start, &null(late.base_claim)).is_err());
     let q = params();
     let mut d = TransitionBuilder::new(&parent, &q, false, false, false, false, &extras);
@@ -225,7 +234,8 @@ fn trap_and_null_commitments_are_the_same_shape_on_chain_until_revealed() {
     // The same encoded length; decoded, every field but the enrollment and the opaque digest is identical (deposit, poster,
     // DAA, lifetime) — nothing on chain before the reveal tells them apart.
     assert_eq!(t.len(), n.len());
-    let (t, n): (PalwPaidTrapCommitmentRowV1, PalwPaidTrapCommitmentRowV1) = (borsh::from_slice(&t).unwrap(), borsh::from_slice(&n).unwrap());
+    let (t, n): (PalwPaidTrapCommitmentRowV1, PalwPaidTrapCommitmentRowV1) =
+        (borsh::from_slice(&t).unwrap(), borsh::from_slice(&n).unwrap());
     assert_eq!(
         PalwPaidTrapCommitmentRowV1 { enrollment: [0; 64], commitment: [0; 64], ..t },
         PalwPaidTrapCommitmentRowV1 { enrollment: [0; 64], commitment: [0; 64], ..n }
@@ -270,8 +280,13 @@ fn a_reveal_opens_the_claims_commitment_committed_before_the_lock_to_a_fault_tha
     assert!(palw_paid_trap_reveal_admits_v1(&state.paid_trap_reveal_input_v1(&p, &r, 201, true)).is_err());
     install_lock(&mut state, vec![bond_key(2), bond_key(3)], 101);
     // Another salt (or tile) opens nothing; a reveal over another claim opens nothing for this paid claim.
-    assert!(palw_paid_trap_reveal_admits_v1(&state.paid_trap_reveal_input_v1(&p, &reveal(producer, BASE, salt_of(u64::MAX)), 201, true)).is_err());
-    assert!(palw_paid_trap_reveal_admits_v1(&state.paid_trap_reveal_input_v1(&p, &reveal(producer, [0xC2; 64], salt), 201, true)).is_err());
+    assert!(
+        palw_paid_trap_reveal_admits_v1(&state.paid_trap_reveal_input_v1(&p, &reveal(producer, BASE, salt_of(u64::MAX)), 201, true))
+            .is_err()
+    );
+    assert!(
+        palw_paid_trap_reveal_admits_v1(&state.paid_trap_reveal_input_v1(&p, &reveal(producer, [0xC2; 64], salt), 201, true)).is_err()
+    );
     // A null commitment opened as such is no reveal.
     let null_salt = salt_of(77);
     install_commitment(&mut state, producer, palw_paid_trap_commitment_v1(&BASE, None, &null_salt), 100);
@@ -294,10 +309,11 @@ fn a_reveal_opens_the_claims_commitment_committed_before_the_lock_to_a_fault_tha
 fn below_the_fence_and_outside_a_paid_enrollment_a_reveal_keeps_the_mesh_rule_byte_for_byte() {
     let mut state = with_route(PalwChainStateV2::genesis());
     let r = reveal(bond_key(1), BASE, salt_of(7));
-    state.vertex.mesh.traps.insert(
-        r.commitment(),
-        PalwTrapRowV1 { setter: r.setter_bond, committed_daa: 100, deposit: 0, revealed_claim: None },
-    );
+    state
+        .vertex
+        .mesh
+        .traps
+        .insert(r.commitment(), PalwTrapRowV1 { setter: r.setter_bond, committed_daa: 100, deposit: 0, revealed_claim: None });
     for p in [params(), armed()] {
         // No paid V2 authority names BASE (and below the fence none is even looked for): the mesh rule judges it.
         assert!(state.paid_trap_target_v1(&p, &r.claim, 300).is_none());
@@ -460,10 +476,9 @@ fn the_sweep_waits_for_a_terminal_claim_and_forgets_old_convictions() {
         release_after_daa: 440,
     };
     let route = parent.kernel_route.as_mut().unwrap();
-    route.aux.insert(
-        (PALW_PAID_CLAIM_TRAP_TABLE_V1, palw_paid_trap_held_fee_key_v1(&BASE, &[3; 64], 0)),
-        borsh::to_vec(&held).unwrap(),
-    );
+    route
+        .aux
+        .insert((PALW_PAID_CLAIM_TRAP_TABLE_V1, palw_paid_trap_held_fee_key_v1(&BASE, &[3; 64], 0)), borsh::to_vec(&held).unwrap());
     for (claim, forget_after_daa) in [([0xC1; 64], 100u64), ([0xC2; 64], 900)] {
         let row = PalwPaidClaimConvictionRowV1 {
             version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
@@ -534,10 +549,12 @@ fn below_the_fence_nothing_is_read_or_written() {
         fee: 1_000,
         release_after_daa: 0,
     };
-    parent.kernel_route.as_mut().unwrap().aux.insert(
-        (PALW_PAID_CLAIM_TRAP_TABLE_V1, palw_paid_trap_held_fee_key_v1(&BASE, &[3; 64], 0)),
-        borsh::to_vec(&held).unwrap(),
-    );
+    parent
+        .kernel_route
+        .as_mut()
+        .unwrap()
+        .aux
+        .insert((PALW_PAID_CLAIM_TRAP_TABLE_V1, palw_paid_trap_held_fee_key_v1(&BASE, &[3; 64], 0)), borsh::to_vec(&held).unwrap());
     let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
     assert_eq!(check_fee_hold_until_v1(&b, &BASE, 100), None);
     assert_eq!(paid_trap_lock_admits_v1(&b.state, &p, &[0x77; 64], 100), Ok(()));

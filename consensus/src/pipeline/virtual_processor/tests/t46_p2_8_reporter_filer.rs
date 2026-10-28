@@ -12,6 +12,7 @@
 //! The filer's own rule — when to commit, file, reveal, re-send and let go — is pinned in kaspad
 //! (`reporter_filer::tests`); a node e2e on a devnet preset (plan §4's T54c proper) is a POST-LAUNCH
 //! item (the operator deferred every drill and node launch until after the t12 launch, 2026-09-24).
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::palw_offence_attribution_v1::{palw_executor_refuted_object_v1, palw_filed_offence_commit_key_v1};
 use kaspa_consensus_core::palw_state_v2::{

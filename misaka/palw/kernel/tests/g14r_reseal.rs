@@ -4,6 +4,7 @@
 //! window, and a copyist who sealed the same bytes in between took the bounty. A re-seal of ANOTHER proof still replaces the row and
 //! restarts the clock (the rule the earliest-seal bounty relies on).
 
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

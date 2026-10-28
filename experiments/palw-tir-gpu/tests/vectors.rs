@@ -4,6 +4,7 @@
 //! reference, the CPU executor and the device under the CPU executor's refined plan; the device
 //! must reproduce the vector's `expect` byte for byte, or fail with its `expect_error` class.
 
+#![allow(warnings)]
 mod common;
 
 use std::path::PathBuf;

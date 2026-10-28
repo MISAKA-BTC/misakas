@@ -1,6 +1,7 @@
 //! Prospective paid TIR acquisition components. This module does not activate a
 //! claim, allocate a native clock/capital budget or acknowledge an unsigned send.
 //! Native owned progress must authorize every future owner/responder action.
+#![allow(dead_code)]
 use crate::palw_memory_ledger::{PalwMemoryReservationKeyV1, PalwMemoryReservationV1, host_ledger_v1};
 use kaspa_consensus_core::{
     BlockHash, Hash64,
@@ -185,7 +186,13 @@ impl OperationalLedgerV1 {
         if *permit.scope_v1() != expected {
             return Err("TIR work permit changes exact accepted execution scope".into());
         }
-        Ok(Self { source_id: expected.source_id, maximum: permit.work_v1(), spent: Default::default(), permit: Some(permit), pass: false })
+        Ok(Self {
+            source_id: expected.source_id,
+            maximum: permit.work_v1(),
+            spent: Default::default(),
+            permit: Some(permit),
+            pass: false,
+        })
     }
 
     pub(super) fn require_current_v1(

@@ -29,6 +29,7 @@
 //! * **until registered + window** — the armed processor's resolution admits the newcomer at anchor
 //!   `registered_daa + 1,000` and not one DAA before, and from testnet-12's own 1,000 fence on the
 //!   armed and the released processor resolve one window (no double counting).
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::BlockHash;

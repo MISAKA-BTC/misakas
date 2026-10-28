@@ -130,7 +130,7 @@ async fn finalize_native_root(cw: &mut Cw, s: &Session) -> (u64, Obj) {
             cw.net.daa() < end,
             "native Final must be reachable before the signed root expiry: claim {:?}, root {:?}",
             cw.net.chain.tip_state().1.claim(&s.real.claim).map(|c| c.phase.clone()),
-            cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).map(|r| r.phase.clone())
+            cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).map(|r| r.phase)
         );
         cw.net.beat_to(cw.net.daa() + 1).await;
     }
@@ -177,34 +177,30 @@ async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_acce
         PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, ProviderSubjectV1,
         palw_provider_court_message_v1,
     };
-    let mut cw = active_world_over_with_params(
-        VerificationModeV1::OptimisticPublicVerification,
-        |config| TestConsensus::new(config),
-        |params| {
-            let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
-            budget.capital_unit_sompi = 100_000_000;
-            budget.claims_per_unit = 100;
-            budget.block_units_per_unit = 100_000_000;
-            budget.reward_per_unit_sompi = 100_000_000;
-            budget.final_weight_per_unit = 1_000_000_000;
-            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: budget });
-            params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
-            params.palw_material_income_v3 = Some(ForkActivation::new(1));
-            params.palw_paid_consumer_lifecycle_v1 = Some(PalwPaidConsumerLifecycleFenceV1 {
-                activation: ForkActivation::new(1),
-                policy: PalwPaidConsumerLifecyclePolicyV1 {
-                    version: 1,
-                    // Covers the class minimum path (bind + receipt + challenge, clock v2); the consumer rule refuses a shorter span.
-                    service_span_daa: 12_000,
-                    dispute_tail_daa: 3_000,
-                    material_tail_daa: 2_000,
-                },
-            });
-            params.palw_provider_court_v1 = Some(ForkActivation::new(1));
-            params.sync_palw_bond_budget_v1();
-            assert!(params.validate_palw_paid_consumer_lifecycle_v1().is_err());
-        },
-    )
+    let mut cw = active_world_over_with_params(VerificationModeV1::OptimisticPublicVerification, TestConsensus::new, |params| {
+        let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        budget.capital_unit_sompi = 100_000_000;
+        budget.claims_per_unit = 100;
+        budget.block_units_per_unit = 100_000_000;
+        budget.reward_per_unit_sompi = 100_000_000;
+        budget.final_weight_per_unit = 1_000_000_000;
+        params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: budget });
+        params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
+        params.palw_material_income_v3 = Some(ForkActivation::new(1));
+        params.palw_paid_consumer_lifecycle_v1 = Some(PalwPaidConsumerLifecycleFenceV1 {
+            activation: ForkActivation::new(1),
+            policy: PalwPaidConsumerLifecyclePolicyV1 {
+                version: 1,
+                // Covers the class minimum path (bind + receipt + challenge, clock v2); the consumer rule refuses a shorter span.
+                service_span_daa: 12_000,
+                dispute_tail_daa: 3_000,
+                material_tail_daa: 2_000,
+            },
+        });
+        params.palw_provider_court_v1 = Some(ForkActivation::new(1));
+        params.sync_palw_bond_budget_v1();
+        assert!(params.validate_palw_paid_consumer_lifecycle_v1().is_err());
+    })
     .await;
     let class = cw.v2_class;
     // RFC08 08-C: no seam — the registry's own rules admit the class before its REAL attempt.

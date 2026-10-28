@@ -9,6 +9,7 @@
 //! Past the fence the registration carries two signatures and the second is over this message under
 //! its own context. This is the signed half, with a real ML-DSA-87 key rather than a stub verifier.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_state_v2::{
     PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT, PalwBondKeyV2, palw_operator_possession_message_v1,
 };

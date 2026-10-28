@@ -244,11 +244,8 @@ impl<'a> TransitionBuilder<'a> {
         self.admit_native_write_v1(q)?;
         let absent = new.is_some()
             && self.state.kernel_route.as_ref().is_some_and(|kernel| {
-                let map = if table < crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 {
-                    &kernel.rows
-                } else {
-                    &kernel.aux
-                };
+                let map =
+                    if table < crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &kernel.rows } else { &kernel.aux };
                 !map.contains_key(&(table, key.to_vec()))
             });
         let mut q = NativeWriteQuoteV1::new(path);

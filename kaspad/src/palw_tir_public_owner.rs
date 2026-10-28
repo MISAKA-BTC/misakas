@@ -42,12 +42,14 @@
 use crate::palw_panel::court_outbox::CourtOutboxV1;
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
-use super::tir_public_filer::palw_tir_public_arithmetic_evidence_v1;
 use super::tir_public_filer_scheduler::PalwTirPublicFilerBookV1;
+#[cfg(test)]
+use kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceV1;
+#[cfg(test)]
+use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::{
     Hash64,
-    palw_backend::{PalwExecutionBackendV1, PalwTirOwnStepSourceV1, PalwTirPublicConeNeedV1},
-    palw_court_v2::PalwCourtVerdictProofV2,
+    palw_backend::{PalwExecutionBackendV1, PalwTirPublicConeNeedV1},
     palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwConsensusObjectV2},
     palw_tir_public_carriage_v1::{
         PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1,
@@ -64,25 +66,25 @@ use kaspa_core::{debug, info};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-#[path = "palw_tir_owner_replay_owned_v2.rs"]
-mod replay_owned;
+#[path = "palw_tir_cone_derived_owned_v2.rs"]
+mod cone_derived_owned;
+#[path = "palw_tir_cone_inputs_owned_v2.rs"]
+mod cone_inputs_owned;
 #[path = "palw_tir_owner_harvest_v2.rs"]
 mod harvest;
 #[path = "palw_tir_material_share_owned_v2.rs"]
 mod material_share;
-#[path = "palw_tir_cone_inputs_owned_v2.rs"]
-mod cone_inputs_owned;
-#[path = "palw_tir_cone_derived_owned_v2.rs"]
-mod cone_derived_owned;
-use material_share::SharedMaterialV2;
+#[path = "palw_tir_owner_replay_owned_v2.rs"]
+mod replay_owned;
 use kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1;
-#[path="palw_tir_source_worker_owned_v2.rs"]
+use material_share::SharedMaterialV2;
+#[path = "palw_tir_source_worker_owned_v2.rs"]
 pub(super) mod source_owned;
 use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, NativeRetainedV1};
 use replay_owned::OwnedTirReplayV2;
 #[path = "palw_tir_cone_evidence_owned_v2.rs"]
 pub(super) mod cone_evidence_owned;
-use kaspa_consensus_core::palw_backend::{PalwTirPublicConeProbeOwnedV2, PalwTirPublicConeReadyV2, PalwTirPublicConeFaultV2};
+use kaspa_consensus_core::palw_backend::{PalwTirPublicConeFaultV2, PalwTirPublicConeProbeOwnedV2, PalwTirPublicConeReadyV2};
 
 const PALW_PANEL: &str = "palw-panel";
 
@@ -252,12 +254,13 @@ fn owner_cone_probe_v1(
     let mut compact =
         header.resolve_registered_layout_v1(registered, layout, header.committed_execution_root, rules.max_step_leaf_count)?;
     kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut compact);
-    let derived=cone_derived_owned::OwnedConeDerivedV2::prepare_v2(source.source_id_v1(),&compact,units,ids,rules.max_step_leaf_count)?;
+    let derived =
+        cone_derived_owned::OwnedConeDerivedV2::prepare_v2(source.source_id_v1(), &compact, units, ids, rules.max_step_leaf_count)?;
     // Each disclosure owns an admitted independent compact clone now. Retire
     // the initial reconstruction before the backend can build another binding
     // and StepSpace; do not overlap two baselines against one Source peak.
     drop(compact);
-    let intervals=&derived.intervals;
+    let intervals = &derived.intervals;
     let gap = |first: u64, count: u64| -> Option<(u64, u64)> {
         let end = first.saturating_add(count);
         let mut cursor = first;
@@ -399,8 +402,9 @@ impl PalwPanelService {
             court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return;
         }
-        if let Err(why)=filer.advance_journal_v2().await {
-            debug!("[{PALW_PANEL}] TIR owner waits for its pending-finding journal: {why}");return;
+        if let Err(why) = filer.advance_journal_v2().await {
+            debug!("[{PALW_PANEL}] TIR owner waits for its pending-finding journal: {why}");
+            return;
         }
         let form = self.config.prompt_ids_form;
         // Lane g14-court-capacity-r2: the owner fair start (`palw_court_capacity_v1`), read at the tick's clock below.
@@ -663,7 +667,9 @@ impl PalwPanelService {
                                     original.job.class_id,
                                 )
                                 .ok_or("TIR owner: class layout is gone")?;
-                                let Some(inputs)=cone_inputs_owned::prepare_for_case_v2(registered,layout,case,&mut source_refusal) else {
+                                let Some(inputs) =
+                                    cone_inputs_owned::prepare_for_case_v2(registered, layout, case, &mut source_refusal)
+                                else {
                                     return Ok(());
                                 };
                                 steps.push(OwnerStepV1::Cone {
@@ -677,7 +683,7 @@ impl PalwPanelService {
                             } else {
                                 let units = &case.units;
                                 match super::tir_arithmetic_scheduler::next_public_from_source_v1(
-                                    &source,
+                                    source,
                                     case.own.as_ref(),
                                     |request| units.iter().find(|u| u.request_v1() == request).map(|unit| &***unit),
                                 )? {
@@ -740,7 +746,7 @@ impl PalwPanelService {
                                     ),
                                     now.saturating_add(1),
                                     kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_owner_tenure_v1(
-                                        &frame,
+                                        frame,
                                         row.owned.owner_idle_grace_daa_v1(),
                                     ),
                                 ) => {}
@@ -1126,9 +1132,9 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path="palw_tir_cone_owned_consumer_tests_v2.rs"]
+#[path = "palw_tir_cone_owned_consumer_tests_v2.rs"]
 mod cone_owned_consumer_tests;
 
 #[cfg(test)]
-#[path="palw_tir_source_read_owner_tests_v2.rs"]
+#[path = "palw_tir_source_read_owner_tests_v2.rs"]
 mod source_read_owned_tests;

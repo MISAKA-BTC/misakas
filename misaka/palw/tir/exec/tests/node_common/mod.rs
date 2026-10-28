@@ -3,6 +3,7 @@
 //! job contexts.
 #![allow(dead_code)]
 
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../core/tests/common/mod.rs"]
 pub mod tircommon;
 

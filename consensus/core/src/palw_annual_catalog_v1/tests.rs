@@ -26,18 +26,21 @@ use crate::config::params::TESTNET_PARAMS;
 use crate::fork_id_v1::{ForkIdVerdict, evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use crate::palw_bond_budget_v1::*;
 use crate::palw_model_tier_v1::{
-    PALW_MODEL_TIER_APPROVED_PERMILLE_V1, PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1, PALW_MODEL_TIER_REGISTERED_PERMILLE_DESIGN_V1,
-    PalwModelTierFenceV1, PalwModelTierV1, PalwTierSourceV1, palw_model_tier_coefficient_permille_v1, palw_model_tier_of_v1,
-    palw_model_tier_weight_v1,
+    PALW_MODEL_TIER_APPROVED_PERMILLE_V1, PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1,
+    PALW_MODEL_TIER_REGISTERED_PERMILLE_DESIGN_V1, PalwModelTierFenceV1, PalwModelTierV1, PalwTierSourceV1,
+    palw_model_tier_coefficient_permille_v1, palw_model_tier_of_v1, palw_model_tier_weight_v1,
 };
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::tx::TransactionOutpoint;
 
 /// The cross-implementation vectors: `python3 -I` over `scripts/release/misaka-release-manifest.py`'s `catalog_root` (the same bytes,
 /// the same keyed blake2b-512) printed these for the two catalogs built below.
-const R0: &str = "3da5390791b755610bd820466a28ae8f32cc9f6633660201b6b2bc7b73cf63dd9f675623db33c6b6c1a349afd2f82c48d9e99d7d0403be538ebb016052517db6";
-const R1: &str = "6cb437ad38163cdbc973c26aff67784ba1bb8627c9c76004a3c16da40cb3d9c75377a887a810d344fbc3b7a1ef1793fb1573ff7bdeca1ebef9397f1417c1586d";
-const EMPTY: &str = "c94db3542b1e0be58ad1da59b39fabf37b650f6c3e22348e06cb2bd6b1216143be3519a80bbd68578d62daf2d203b7a3db96e6d10c95a324cee8ef9d47f72b6a";
+const R0: &str =
+    "3da5390791b755610bd820466a28ae8f32cc9f6633660201b6b2bc7b73cf63dd9f675623db33c6b6c1a349afd2f82c48d9e99d7d0403be538ebb016052517db6";
+const R1: &str =
+    "6cb437ad38163cdbc973c26aff67784ba1bb8627c9c76004a3c16da40cb3d9c75377a887a810d344fbc3b7a1ef1793fb1573ff7bdeca1ebef9397f1417c1586d";
+const EMPTY: &str =
+    "c94db3542b1e0be58ad1da59b39fabf37b650f6c3e22348e06cb2bd6b1216143be3519a80bbd68578d62daf2d203b7a3db96e6d10c95a324cee8ef9d47f72b6a";
 
 const H_EDITION: u64 = 5_000;
 const KAS: u64 = 100_000_000;
@@ -228,7 +231,11 @@ fn the_tier_is_catalog_membership_and_never_registry_state() {
 fn old_and_new_builds_share_the_identity_until_the_edition_activates() {
     let old = armed(old_chain(), 0);
     let new = armed(new_chain(), 0);
-    assert_eq!(old.consensus_identity_id(), new.consensus_identity_id(), "the next edition leaves the identity: peers through the rollout");
+    assert_eq!(
+        old.consensus_identity_id(),
+        new.consensus_identity_id(),
+        "the next edition leaves the identity: peers through the rollout"
+    );
     assert_ne!(old.consensus_params_id(), new.consensus_params_id(), "the raw id sees the edition");
     assert_ne!(old.consensus_schedule_id(), new.consensus_schedule_id(), "the schedule id reports it (a warning, not a gate)");
     // Two new builds that disagree about the next edition's CONTENT agree on identity (both are 'not yet') and differ in schedule.
@@ -452,6 +459,10 @@ fn the_lifecycle_names_are_operational_and_only_a_released_edition_ships() {
     let chain = new_chain();
     assert_eq!(palw_catalog_binary_state_v1(&chain.editions[1], H_EDITION - 1), PalwCatalogBinaryStateV1::Scheduled);
     assert_eq!(palw_catalog_binary_state_v1(&chain.editions[1], H_EDITION), PalwCatalogBinaryStateV1::Active);
-    assert_eq!(palw_catalog_binary_state_v1(&chain.editions[0], 0), PalwCatalogBinaryStateV1::Active, "the genesis catalog is active from genesis");
+    assert_eq!(
+        palw_catalog_binary_state_v1(&chain.editions[0], 0),
+        PalwCatalogBinaryStateV1::Active,
+        "the genesis catalog is active from genesis"
+    );
     assert_eq!(PalwCatalogBinaryStateV1::Scheduled.name(), "SCHEDULED");
 }

@@ -43,6 +43,7 @@
 //! (`kaspa-consensus` links no secp256k1 signer), so they are fixtures, and the test decodes each and
 //! checks its sender, target, nonce, chain id and calldata against this crate's own encoders before
 //! it uses them — a fixture that drifts fails with the regeneration recipe.
+#![allow(warnings)]
 use super::super::t12_round_lane_e2e::t12_with_harness_cards_and_evm;
 use super::*;
 use kaspa_consensus_core::coinbase::MinerData;

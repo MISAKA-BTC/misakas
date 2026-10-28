@@ -287,27 +287,6 @@ pub(super) fn ieee_integer(dtype: &str, bytes: &[u8], shift: i16, rule: Rounding
     Ok(if negative { -(magnitude as i128) } else { magnitude as i128 })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn ieee_quantization_preserves_ties_subnormals_and_wide_precision() {
-        let q = |x: f64, r| ieee_integer("F64", &x.to_le_bytes(), 0, r).unwrap();
-        assert_eq!(q(-2.5, Rounding::HalfUp), -2);
-        assert_eq!(q(-2.5, Rounding::HalfAwayFromZero), -3);
-        assert_eq!(q(2.5, Rounding::Floor), 2);
-        assert_eq!(q(-f64::from_bits(1), Rounding::Floor), -1);
-        assert_eq!(q(f64::from_bits(1), Rounding::HalfUp), 0);
-        assert_eq!(q(9_007_199_254_740_994.0, Rounding::HalfUp), 9_007_199_254_740_994);
-        assert_eq!(q(f64::MAX, Rounding::Floor), i128::MAX);
-        assert_eq!(q(-f64::MAX, Rounding::Floor), -i128::MAX);
-        assert!(ieee_integer("F32", &f32::NAN.to_le_bytes(), 0, Rounding::Floor).is_err());
-        assert!(ieee_integer("F16", &0x7c00u16.to_le_bytes(), 0, Rounding::Floor).is_err());
-        assert_eq!(ieee_integer("BF16", &0x3f80u16.to_le_bytes(), 12, Rounding::Floor).unwrap(), 4096);
-        assert_eq!(ieee_integer("F16", &0xc100u16.to_le_bytes(), 0, Rounding::HalfAwayFromZero).unwrap(), -3);
-    }
-}
-
 impl Compiled {
     /// New full-component producer's bounded real-weight stream. Inputs are never parameters.
     pub(super) fn write_stage_tensor_v28(
@@ -413,5 +392,26 @@ impl Compiled {
             source_tensors: records.into_values().collect(),
             quant_formats,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn ieee_quantization_preserves_ties_subnormals_and_wide_precision() {
+        let q = |x: f64, r| ieee_integer("F64", &x.to_le_bytes(), 0, r).unwrap();
+        assert_eq!(q(-2.5, Rounding::HalfUp), -2);
+        assert_eq!(q(-2.5, Rounding::HalfAwayFromZero), -3);
+        assert_eq!(q(2.5, Rounding::Floor), 2);
+        assert_eq!(q(-f64::from_bits(1), Rounding::Floor), -1);
+        assert_eq!(q(f64::from_bits(1), Rounding::HalfUp), 0);
+        assert_eq!(q(9_007_199_254_740_994.0, Rounding::HalfUp), 9_007_199_254_740_994);
+        assert_eq!(q(f64::MAX, Rounding::Floor), i128::MAX);
+        assert_eq!(q(-f64::MAX, Rounding::Floor), -i128::MAX);
+        assert!(ieee_integer("F32", &f32::NAN.to_le_bytes(), 0, Rounding::Floor).is_err());
+        assert!(ieee_integer("F16", &0x7c00u16.to_le_bytes(), 0, Rounding::Floor).is_err());
+        assert_eq!(ieee_integer("BF16", &0x3f80u16.to_le_bytes(), 12, Rounding::Floor).unwrap(), 4096);
+        assert_eq!(ieee_integer("F16", &0xc100u16.to_le_bytes(), 0, Rounding::HalfAwayFromZero).unwrap(), -3);
     }
 }

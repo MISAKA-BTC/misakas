@@ -9,6 +9,7 @@
 //!   lowered (`tests/golden_lowering.rs` holds its digest), only the `(m, s)` params differ;
 //! * a model whose calibrated logits pass 120 natural-log units is refused, not clipped.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::lower::{LOGITS_Q24_REFUSE_AT, LowerOpts, materialise};

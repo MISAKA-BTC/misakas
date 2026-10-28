@@ -198,7 +198,7 @@ pub(super) fn authenticated_ids_plan_v1(
     let mut same_prefix = true;
     for (position, &committed) in generated_token_ids.iter().enumerate() {
         if committed >= binding.shape_profile.vocab_size {
-            return Ok(Some(TiledPlanV1 {position:position as u32,committed,witness:None,beat_lane:None}));
+            return Ok(Some(TiledPlanV1 { position: position as u32, committed, witness: None, beat_lane: None }));
         }
         if let Some(next) = mask.admit(&state, committed) {
             if same_prefix

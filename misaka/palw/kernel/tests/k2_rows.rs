@@ -1,5 +1,6 @@
 //! The row view of the ledger (`rows`): rebuilt from rows it is the same ledger, its root is computed from the rows alone and equals
 //! the ledger's, and a block's journal (`diff_rows`) applies and reverts exactly.
+#![allow(warnings)]
 mod common;
 use common::chain::T;
 use common::ledger_world::*;

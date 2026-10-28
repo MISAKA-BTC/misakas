@@ -10,6 +10,7 @@
 //!
 //! `TIR_REF2_CASES` scales the case counts (default 1 = the counts below).
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

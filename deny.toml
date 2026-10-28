@@ -23,4 +23,13 @@ unmaintained = "none"
 # Triaged-but-unfixable advisory IDs go here, each with a justification + tracking issue.
 ignore = [
   # "RUSTSEC-XXXX-NNNN", # why it is safe to ignore + link to the tracking issue
+  # crypto-bigint 0.5.5 timing variability (fixed only in 0.7.6). It reaches us solely through
+  # elliptic-curve 0.13 <- k256 0.13 <- alloy 0.8 / revm 14 (the EVM side); no 0.5.x fix exists and
+  # moving to 0.7 needs k256/elliptic-curve 0.14, i.e. an alloy + revm major upgrade. The node only
+  # runs public-input secp256k1 work there (ecrecover precompile, signature checks) — nothing
+  # secret to leak; consensus signatures are ML-DSA and do not touch this crate. The one secret-key
+  # use is local EVM signing in `misaka-cli` (evm-send), exposed only to an attacker who can time
+  # the user's own machine. Remove when alloy/revm move to k256 >= 0.14 (crypto-bigint >= 0.7.6).
+  # Recorded in docs/maintenance/ci-green-2026-10-26.md.
+  "RUSTSEC-2026-0387",
 ]

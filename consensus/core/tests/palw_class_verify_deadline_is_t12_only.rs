@@ -9,6 +9,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test palw_class_verify_deadline_is_t12_only
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{
     ForkActivation, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,

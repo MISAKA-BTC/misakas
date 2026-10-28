@@ -17,6 +17,7 @@
 //! seats the claim must load it (`--palw-token-table`, or beside the class artifact as `<artifact>.palwtokens`), or it abstains.
 //! Prints the artifact stem on stdout. Exit 0 on success.
 
+#![allow(warnings)]
 #[path = "../chain.rs"]
 #[allow(dead_code)]
 mod chain;

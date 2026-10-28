@@ -2,6 +2,7 @@
 //! These fixtures measure the actual carried evidence and prove local constraint closure.
 //! They do not certify population throughput, watcher economics or whole-claim soundness.
 #![cfg(feature = "node")]
+#![allow(warnings)]
 mod node_common;
 
 use kaspa_consensus_core::Hash64;

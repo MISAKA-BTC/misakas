@@ -448,7 +448,12 @@ impl PalwFoldReadV1<'_> {
     }
 }
 
-fn rfc0016_unqueue_v1(builder: &mut TransitionBuilder<'_>, class_id: &Hash64, queued_daa: u64, claim_id: &Hash64) -> Result<(), PalwStateV2Error> {
+fn rfc0016_unqueue_v1(
+    builder: &mut TransitionBuilder<'_>,
+    class_id: &Hash64,
+    queued_daa: u64,
+    claim_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(PALW_RFC0016_QUEUE_TABLE_V1, queue_key_v1(class_id, queued_daa, claim_id), None)?;
     builder.write_kernel_row(PALW_RFC0016_QUEUE_INDEX_TABLE_V1, queue_index_key_v1(claim_id), None)?;
     Ok(())
@@ -509,7 +514,8 @@ pub(super) fn apply_attest_capacity_v1(
     }
     let key = capacity_attestation_key_v1(&class, &attestation.verifier);
     if attestation.is_revocation() {
-        let held = builder.state.kernel_route.as_ref().is_some_and(|r| r.aux.contains_key(&(PALW_RFC0016_TELEMETRY_TABLE_V1, key.clone())));
+        let held =
+            builder.state.kernel_route.as_ref().is_some_and(|r| r.aux.contains_key(&(PALW_RFC0016_TELEMETRY_TABLE_V1, key.clone())));
         if !held {
             return Err(refuse("no capacity attestation of this verifier for this class to revoke"));
         }
@@ -535,7 +541,12 @@ pub(super) fn apply_attest_capacity_v1(
 /// Bounded per block: at most this many expired capacity attestations are pruned in one tick.
 pub const PALW_RFC0016_ATTESTATION_PRUNE_PER_BLOCK_V1: usize = 64;
 
-fn rfc0016_write_v1<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, table: u8, key: Vec<u8>, value: &T) -> Result<(), PalwStateV2Error> {
+fn rfc0016_write_v1<T: borsh::BorshSerialize>(
+    builder: &mut TransitionBuilder<'_>,
+    table: u8,
+    key: Vec<u8>,
+    value: &T,
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(table, key, Some(borsh::to_vec(value).expect("an RFC-0016 row serializes")))?;
     Ok(())
 }
@@ -544,7 +555,11 @@ fn rfc0016_write_v1<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_
 /// the kernel route's rows present: its verifier share takes the M\*-49 slope of its class's utilization, and if its class's demand
 /// (this claim included) exceeds capacity it joins the class's pending queue — one reservation (its block right, already consumed),
 /// no bind deadline while queued (`palw_provisional_bind_deadline_v1`), its window from the DAA it leaves.
-pub(super) fn on_attempt_accepted_rfc0016_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, claim_id: Hash64) -> Result<(), PalwStateV2Error> {
+pub(super) fn on_attempt_accepted_rfc0016_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
     let Some(mirror) = builder.params.rfc0016_v1() else { return Ok(()) };
     if !builder.params.rfc0016_capacity_active_at(now) || builder.state.kernel_route.is_none() {
@@ -796,7 +811,12 @@ pub(super) fn rfc0016_opv_claim_committed_v1(
 
 /// **The escrow-payout telemetry** (consensus-derived): a kernel claim's Final reward, paid from its user's escrow, is added to its
 /// model's epoch row (never summed with coinbase). A no-op where the claim's model was not noted (below the fence).
-pub(super) fn rfc0016_note_escrow_payout_v1(builder: &mut TransitionBuilder<'_>, now: u64, kernel_claim: &[u8; 64], amount: u64) -> Result<(), PalwStateV2Error> {
+pub(super) fn rfc0016_note_escrow_payout_v1(
+    builder: &mut TransitionBuilder<'_>,
+    now: u64,
+    kernel_claim: &[u8; 64],
+    amount: u64,
+) -> Result<(), PalwStateV2Error> {
     if builder.params.rfc0016_v1().is_none() || builder.state.kernel_route.is_none() {
         return Ok(());
     }

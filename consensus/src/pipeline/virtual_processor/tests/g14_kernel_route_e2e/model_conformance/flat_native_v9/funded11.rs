@@ -2,11 +2,11 @@
 //! nodes. Small synthetic fixtures are not checkpoint/model coverage evidence.
 use super::*;
 mod chunks;
-mod public_filing;
-mod text29;
 mod owning39;
+mod public_filing;
 mod real_checkpoint;
 mod source16;
+mod text29;
 use kaspa_consensus_core::palw_flat_execution_v11::*;
 use kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11;
 use misaka_palw_kernel::flat_execution11::{ExecutionTerminalV11, nonce_bytes_v11};
@@ -143,7 +143,7 @@ async fn execution11_native_commit_binds_original_job_input_and_reserves_produce
     net.beat_to(book.claim().unwrap().retention_until + 1).await;
     action(&mut net, 0, EXECUTION_ACTION_CLOSE_V11, borsh::to_vec(&id).unwrap()).await;
     assert_eq!(net.api().unwrap().execution_job_header_v11(&id).unwrap().terminal, ExecutionTerminalV11::Challengeable);
-    assert!(net.api().unwrap().aux.get(&(EXECUTION_CREDIT_TABLE_V11, borsh::to_vec(&id).unwrap())).is_none());
+    assert!(!net.api().unwrap().aux.contains_key(&(EXECUTION_CREDIT_TABLE_V11, borsh::to_vec(&id).unwrap())));
     let replay = net.replay().await;
     net.assert_same(&replay, "native exact committed job and closed incomplete Final");
 }

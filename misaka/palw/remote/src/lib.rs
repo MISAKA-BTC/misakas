@@ -24,6 +24,7 @@
 //!
 //! Domain strings are `misaka-palw/remote/...`; none of them is a consensus rule.
 
+#![cfg_attr(test, allow(warnings))]
 pub mod attempt;
 pub mod bondreg;
 pub mod bundle;

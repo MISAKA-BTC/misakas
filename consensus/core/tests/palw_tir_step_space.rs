@@ -7,6 +7,7 @@
 //! of each program is committed through the fail-closed builder and its binding verifies — and
 //! stops verifying when any part of it moves.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
 use kaspa_consensus_core::palw_tir_class_v1::{

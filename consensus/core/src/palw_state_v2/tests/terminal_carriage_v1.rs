@@ -1,5 +1,6 @@
 //! V-fold evidence, not a signature/service fixture. Ordinary reservation and objective courts
 //! are applied; the supplied MLDSA-sized declarations are signature-checked by separate gate tests.
+#![allow(warnings)]
 use super::*;
 use crate::palw_legacy_public_filer_v1::*;
 use crate::palw_offence_v1::PalwOffenceKindV1;

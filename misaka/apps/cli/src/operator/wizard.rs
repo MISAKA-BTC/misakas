@@ -1314,13 +1314,13 @@ impl<'a> Wizard<'a> {
                 self.ui.sub(&paint::dim(&said));
             }
             None => {
-                supervisor::signal(own.pid, libc::SIGTERM);
+                supervisor::signal(own.pid, supervisor::sig::SIGTERM);
                 let deadline = Instant::now() + Duration::from_secs(90);
                 while supervisor::alive(own.pid) && Instant::now() < deadline {
                     tokio::time::sleep(Duration::from_millis(250)).await;
                 }
                 if supervisor::alive(own.pid) {
-                    supervisor::signal(own.pid, libc::SIGKILL);
+                    supervisor::signal(own.pid, supervisor::sig::SIGKILL);
                 }
             }
         }
@@ -2211,9 +2211,13 @@ impl<'a> Wizard<'a> {
             Ok(_) => {}
             Err(e) if params.palw_dns_retirement.is_some() => {
                 return Err(Halt::Blocked(
-                    Finding::error("E-SETUP-DNS-RETIREMENT-UNREAD", exit::COMPONENT_DOWN, "The DNS retirement status could not be read")
-                        .reason("this network schedules the RFC-0012 retirement, so onboarding needs the node to say it has not passed")
-                        .current(e.to_string()),
+                    Finding::error(
+                        "E-SETUP-DNS-RETIREMENT-UNREAD",
+                        exit::COMPONENT_DOWN,
+                        "The DNS retirement status could not be read",
+                    )
+                    .reason("this network schedules the RFC-0012 retirement, so onboarding needs the node to say it has not passed")
+                    .current(e.to_string()),
                 ));
             }
             Err(_) => {}

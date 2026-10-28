@@ -22,7 +22,7 @@
 //! Not a proof system: plain arithmetic over consensus DAA.
 
 use crate::palw_court_policy_v1::{CourtClockBounds, CourtPolicyError, DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA};
-use crate::palw_legacy_public_filer_v1::{palw_dispute_hard_deadline_v1, PalwDisputeClaimV1};
+use crate::palw_legacy_public_filer_v1::{PalwDisputeClaimV1, palw_dispute_hard_deadline_v1};
 use crate::palw_state_v2::{PalwClaimStateV2, PalwStateParamsV2};
 
 /// The legacy route carries no separate reorg-retention term; its material reads use `W_disclose` (the follow-up term).
@@ -54,10 +54,7 @@ pub fn palw_court_clock_v2_governs(params: &PalwStateParamsV2, claim: &PalwClaim
 /// The fold's one claim writer raises `trace_retention_daa` to at least this at creation (as X3's REQ-X3-6 does), so an extension
 /// never needs the producer's fresh consent and never outruns the signed horizon.
 pub fn palw_court_clock_v2_required_retention(accepted_daa: u64, w_disclose: u64) -> Result<u64, CourtPolicyError> {
-    accepted_daa
-        .checked_add(DISPUTE_WINDOW_DAA)
-        .and_then(|h| h.checked_add(w_disclose.max(PALW_COURT_CLOCK_V2_REORG_RETENTION_DAA)))
-        .ok_or(CourtPolicyError::Overflow)
+    accepted_daa.checked_add(DISPUTE_WINDOW_DAA).and_then(|h| h.checked_add(w_disclose)).ok_or(CourtPolicyError::Overflow)
 }
 
 /// **Derive all clocks** from `accepted_daa`. `signed_retention` is the claim's signed horizon (`trace_retention_daa`); it must cover
@@ -237,9 +234,7 @@ pub enum PalwCourtDependencyRefusalV2 {
 
 /// **The reorg-retention term from params** (r5: no longer 0 on governed claims): the staged public court's
 /// `reorg_retention_daa` when that config is in force, else 0 (the legacy route carries none).
-pub fn palw_court_clock_v2_reorg_retention(
-    staged: Option<&crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1>,
-) -> u64 {
+pub fn palw_court_clock_v2_reorg_retention(staged: Option<&crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1>) -> u64 {
     staged.map_or(PALW_COURT_CLOCK_V2_REORG_RETENTION_DAA, |c| c.reorg_retention_daa)
 }
 
@@ -357,11 +352,7 @@ pub fn palw_route_door_open_v2(
 /// is the extended `a + 10,000` (a reservation IS the extension). If X3 is ALSO armed for the claim, its `B_remaining` is kept as
 /// the budget: `start + B_remaining <= a + 10,000`; X3's own (policy) hard and cutoff are not read for this claim. Without X3 the
 /// budget term is 0. Overflow refuses.
-pub fn palw_claim_pursuit_may_start_v2(
-    params: &PalwStateParamsV2,
-    claim: &PalwClaimStateV2,
-    start: u64,
-) -> Result<(), &'static str> {
+pub fn palw_claim_pursuit_may_start_v2(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, start: u64) -> Result<(), &'static str> {
     match crate::palw_court_policy_v1::shared_initial_notice_daa_in_window_v1(claim.accepted_daa, start) {
         Ok(true) => {}
         Ok(false) => return Err("clock v2: a pursuit starts only within a <= start <= a + 3,120 (palw_court_clock_v2)"),
@@ -432,7 +423,9 @@ pub struct PalwCourtResidualBudgetV2 {
 pub enum PalwCourtResidualRefusalV2 {
     Overflow,
     /// `need` DAA (with the 1-DAA exclusive margin) exceed the 6,880 residual.
-    Exceeds { need: u64 },
+    Exceeds {
+        need: u64,
+    },
 }
 
 /// **T06**: `turns·turn + evidence + recording + recovery + reorg + 1 <= 6,880`. The `+ 1` is the exclusive `collect_until` margin
@@ -640,13 +633,15 @@ mod tests {
         let mut old_short = 0;
         for (a, prefix_tokens, vocab) in [(F, 4, 32), (16_000, 1, 2), (16_000, 8, 256)] {
             let terms = cfg.claim_terms(a, prefix_tokens, vocab).unwrap();
-            let custody = PalwCourtDependencyV2 { kind: PalwCourtDependencyKindV2::Custody, signed_horizon_daa: terms.material_until_daa };
+            let custody =
+                PalwCourtDependencyV2 { kind: PalwCourtDependencyKindV2::Custody, signed_horizon_daa: terms.material_until_daa };
             let need = palw_court_clock_v2_dependencies_cover_v2(a, w, reorg, [&custody]).expect("the staged material covers it");
             assert_eq!(need, a + DISPUTE_WINDOW_DAA + w.max(reorg));
             assert!(terms.collect_until_daa > a + DISPUTE_WINDOW_DAA, "the route's own door outlives the extended hard");
             // The old windows (4,096 collection, 256 reorg): covered only when the plan's inclusion term happens to fill the gap.
             let old_terms = old.claim_terms(a, prefix_tokens, vocab).unwrap();
-            let short = PalwCourtDependencyV2 { kind: PalwCourtDependencyKindV2::Custody, signed_horizon_daa: old_terms.material_until_daa };
+            let short =
+                PalwCourtDependencyV2 { kind: PalwCourtDependencyKindV2::Custody, signed_horizon_daa: old_terms.material_until_daa };
             let covered = palw_court_clock_v2_dependencies_cover_v2(a, w, 256, [&short]);
             eprintln!(
                 "[p3-v9] plan ({prefix_tokens},{vocab}) a {a}: inclusion {} DAA, new material a + {}, old material a + {} -> old {covered:?}",
@@ -713,7 +708,8 @@ mod tests {
         // Each term at the limit: one DAA more Δ than the slack refuses T06 (the boundary is exact).
         let over = x3::PalwX3DeltaTermsV1 { reorg_slack_daa: terms.reorg_slack_daa + slack + 1, ..terms };
         let over_policy = x3::palw_x3_policy_with_terms_v1(&sp, activation, over, 1);
-        let over_armed = sp.with_claim_hard_deadline_v1(Some(x3::PalwClaimHardDeadlineMirrorV1 { from_daa: 16_000, policy: over_policy }));
+        let over_armed =
+            sp.with_claim_hard_deadline_v1(Some(x3::PalwClaimHardDeadlineMirrorV1 { from_daa: 16_000, policy: over_policy }));
         assert!(palw_court_clock_v2_t06_of_params_v2(&over_armed, reorg).is_err());
         let hard = x3::palw_x3_hard_deadline_at_v1(&policy, 16_000);
         eprintln!("[p3-v10] t12 B_remaining {b_remaining} DAA, T06 slack {slack} DAA, X3-only hard a + {}", hard - 16_000);
@@ -770,10 +766,7 @@ mod tests {
         assert_eq!(palw_court_clock_v2_required_retention_with(1_000, W, big).unwrap(), 1_000 + DISPUTE_WINDOW_DAA + big);
         let c = palw_court_clocks_v2_with(1_000, true, W, big, u64::MAX, 0).unwrap();
         assert_eq!(c.retention_until, 11_000 + big, "material retention covers the reorg term");
-        assert_eq!(
-            palw_court_clocks_v2_with(1_000, true, W, big, 11_000 + big - 1, 0),
-            Err(CourtPolicyError::DependencyTooShort)
-        );
+        assert_eq!(palw_court_clocks_v2_with(1_000, true, W, big, 11_000 + big - 1, 0), Err(CourtPolicyError::DependencyTooShort));
     }
 
     #[test]
@@ -834,10 +827,7 @@ mod tests {
         // Route hard: clock v2 wins over X3 when it governs; X3's own when only X3 applies.
         assert_eq!(palw_claim_route_hard_v2(&sp, &c), Some(F + DISPUTE_WINDOW_DAA));
         let x3_only = with_x3(t12_sp());
-        assert_eq!(
-            palw_claim_route_hard_v2(&x3_only, &c),
-            crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(&x3_only, &c)
-        );
+        assert_eq!(palw_claim_route_hard_v2(&x3_only, &c), crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(&x3_only, &c));
     }
 
     #[test]
@@ -924,7 +914,8 @@ mod tests {
         // A transferred claim whose provider quorum covers nothing (lapsed / one operator) refuses.
         let quorum = palw_provider_quorum_horizon_of_v2([u64::MAX], 2);
         assert!(
-            palw_dispute_record_hard_deadline_v2(&sp, &c, W, 256, &[dep(PalwCourtDependencyKindV2::Provider, quorum)], F + 10).is_err()
+            palw_dispute_record_hard_deadline_v2(&sp, &c, W, 256, &[dep(PalwCourtDependencyKindV2::Provider, quorum)], F + 10)
+                .is_err()
         );
     }
 
@@ -969,9 +960,15 @@ mod tests {
         for deps in [vec![custody], vec![exec]] {
             let admitted = palw_court_clock_v2_admission_dependencies_v2(&sp, &c, W, reorg, &deps);
             let got = palw_dispute_record_hard_deadline_v2(&sp, &c, W, reorg, &deps, F + 10);
-            eprintln!("[verify2-b06] window_court {}, need {need}, deps {:?}: admission {admitted:?}, dispute {got:?}", sp.window_court(),
-                deps.iter().map(|d| (d.kind, d.signed_horizon_daa)).collect::<Vec<_>>());
-            assert!(admitted.is_err() || got.is_ok(), "B-06: a claim admitted with these dependencies must be disputable, got {got:?}");
+            eprintln!(
+                "[verify2-b06] window_court {}, need {need}, deps {:?}: admission {admitted:?}, dispute {got:?}",
+                sp.window_court(),
+                deps.iter().map(|d| (d.kind, d.signed_horizon_daa)).collect::<Vec<_>>()
+            );
+            assert!(
+                admitted.is_err() || got.is_ok(),
+                "B-06: a claim admitted with these dependencies must be disputable, got {got:?}"
+            );
         }
         // Boundary: exactly `need` is admitted and disputable; `need - 1` is refused at admission.
         for (h, ok) in [(need, true), (need - 1, false)] {

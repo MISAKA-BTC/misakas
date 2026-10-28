@@ -14,6 +14,7 @@
 //! The node behind the socket can be swapped ([`PalwSocketNode::serve`]) — a restart, an IBD node, an imported node — and the wRPC
 //! proxy can be stopped and restarted on the same port ([`SocketRpc::restart_proxy`]): a connected client is dropped and reconnects.
 #![allow(dead_code)]
+#![allow(warnings)]
 use async_channel::{Receiver, unbounded};
 use async_trait::async_trait;
 use kaspa_consensus_core::api::ConsensusApi;

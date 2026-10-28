@@ -7,6 +7,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_fence2`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA,
     Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,

@@ -24,6 +24,7 @@
 //! `t43_the_trickle_regime_matures_at_the_bound`), a halt that holds rows past it is T37, and a
 //! conviction after retirement with no row left (the claim's row already moved) is T46f.
 
+#![allow(warnings)]
 use super::*;
 
 /// **T28.** A floor claim with a real step fault, licensed through Verification V2 (a coverage

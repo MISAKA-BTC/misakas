@@ -67,7 +67,8 @@ impl CourtServiceStateV2 {
                 }
             }
         }
-        if self.version != crate::palw_court_service_release_v1::COURT_SERVICE_ROW_VERSION_V3 && owned.len() != self.book.packets.len() {
+        if self.version != crate::palw_court_service_release_v1::COURT_SERVICE_ROW_VERSION_V3 && owned.len() != self.book.packets.len()
+        {
             return Err("unbound service packet".into());
         }
         Ok(())
@@ -172,13 +173,7 @@ impl CourtServiceStateV2 {
         if defaulted.iter().any(|c| c.claim != plan.original_claim) {
             return Err("court service default names another claim's duty clock");
         }
-        crate::palw_court_service_binding_v1::attribute_service_default_v1(
-            self,
-            plan.original_claim,
-            defaulted,
-            unpaid,
-            premise,
-        )
+        crate::palw_court_service_binding_v1::attribute_service_default_v1(self, plan.original_claim, defaulted, unpaid, premise)
     }
 }
 
@@ -194,8 +189,7 @@ pub(crate) fn require_tir_service_custody_window_v1(
         return Err("service material horizon exceeds signed TIR custody".into());
     }
     if plan.semantic.is_some() {
-        let bundle = state.staged_bundle_contract_v1(plan.original_claim)
-            .ok_or("service semantic dependency contract is missing")?;
+        let bundle = state.staged_bundle_contract_v1(plan.original_claim).ok_or("service semantic dependency contract is missing")?;
         require_tir_service_semantic_custody_v1(frame, bundle, required_until)?;
     }
     Ok(())
@@ -237,9 +231,7 @@ pub(crate) fn tir_service_required_material_until_v1(
     hard_deadline_daa: u64,
 ) -> Result<u64, String> {
     let plan = frame.plan_v1();
-    if plan.terms.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
-        != Some(hard_deadline_daa)
-    {
+    if plan.terms.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA) != Some(hard_deadline_daa) {
         return Err("service material horizon substitutes original hard deadline".into());
     }
     let after_reorg = hard_deadline_daa
@@ -358,49 +350,71 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     }
     /// The claim whose service binding holds `key`, and whether `key` is the original's own material (frame, acquisition and its
     /// bytes, preparation, witness, semantic claim/owner contracts) rather than a dependent court row.
-    fn court_service_material_claim_v1(&self, key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1) -> Option<(Hash64, bool)> {
+    fn court_service_material_claim_v1(
+        &self,
+        key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+    ) -> Option<(Hash64, bool)> {
         use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
         let original = matches!(
             key,
-            Key::Claim(_) | Key::Owner(..) | Key::TirClaim(_) | Key::TirAcquisition(..) | Key::TirPreparation(..) | Key::TirWitness(..)
-                | Key::TirRawChunk(_) | Key::TirAcceptedBody(_)
+            Key::Claim(_)
+                | Key::Owner(..)
+                | Key::TirClaim(_)
+                | Key::TirAcquisition(..)
+                | Key::TirPreparation(..)
+                | Key::TirWitness(..)
+                | Key::TirRawChunk(_)
+                | Key::TirAcceptedBody(_)
         );
         let claim = match key {
             // Keep semantic dependencies and their owner material across TTL.
             // Native moves/closures still mutate rows; only destructive removal
             // and automatic default/TTL sweeps are deferred while unresolved.
-            Key::Claim(claim) | Key::Owner(claim, _) if crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
-                .is_none_or(|frame| frame.plan_v1().semantic.is_some()) => Some(*claim),
+            Key::Claim(claim) | Key::Owner(claim, _)
+                if crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
+                    .is_none_or(|frame| frame.plan_v1().semantic.is_some()) =>
+            {
+                Some(*claim)
+            }
             Key::TirClaim(claim) | Key::TirAcquisition(claim, ..) | Key::TirPreparation(claim, ..) | Key::TirWitness(claim, ..) => {
                 Some(*claim)
             }
-            Key::CourtSharedContext(claim) | Key::CourtSharedIds(claim) | Key::CourtSharedRoot(claim,_) => Some(*claim),
+            Key::CourtSharedContext(claim) | Key::CourtSharedIds(claim) | Key::CourtSharedRoot(claim, _) => Some(*claim),
             // RFC-0032 A canonical material is held like other shared original data;
             // incomplete drafts/parts are not (they leave at their own TTL).
             Key::CourtMaterial(claim, _) | Key::CourtMaterialLedger(claim, _) => Some(*claim),
             Key::CourtSharedStream(_) | Key::CourtSharedChunk(..) => match self.staged_court_row_v1(key) {
-                Some(Row::CourtSharedStream(s))=>Some(s.claim),Some(Row::CourtSharedChunk(c))=>Some(c.claim),_=>None,
+                Some(Row::CourtSharedStream(s)) => Some(s.claim),
+                Some(Row::CourtSharedChunk(c)) => Some(c.claim),
+                _ => None,
             },
             Key::CourtSharedBottom(_) => match self.staged_court_row_v1(key) {
-                Some(Row::CourtSharedBottom(r))=>Some(r.control.claim),_=>None,
+                Some(Row::CourtSharedBottom(r)) => Some(r.control.claim),
+                _ => None,
             },
             Key::CourtSharedRound(_) => match self.staged_court_row_v1(key) {
-                Some(Row::CourtSharedRound(r))=>Some(r.control.claim),_=>None,
+                Some(Row::CourtSharedRound(r)) => Some(r.control.claim),
+                _ => None,
             },
             Key::CourtCloseReceipt(..) => match self.staged_court_row_v1(key) {
-                Some(Row::CourtCloseReceipt(r))=>Some(r.session.claim),_=>None,
+                Some(Row::CourtCloseReceipt(r)) => Some(r.session.claim),
+                _ => None,
             },
             Key::CourtArchiveProgress(..) => match self.staged_court_row_v1(key) {
-                Some(Row::CourtArchiveProgress(r)) => Some(r.claim), _ => None,
+                Some(Row::CourtArchiveProgress(r)) => Some(r.claim),
+                _ => None,
             },
             Key::CourtEndArchive(_) => match self.staged_court_row_v1(key) {
-                Some(Row::CourtEndArchive(a)) => Some(a.session.claim), _ => None,
+                Some(Row::CourtEndArchive(a)) => Some(a.session.claim),
+                _ => None,
             },
             Key::CourtSharedResponse(..) => match self.staged_court_row_v1(key) {
-                Some(Row::CourtSharedResponse(r))=>Some(r.claim),_=>None,
+                Some(Row::CourtSharedResponse(r)) => Some(r.claim),
+                _ => None,
             },
             Key::CourtSharedQuery(_) => match self.staged_court_row_v1(key) {
-                Some(Row::CourtSharedQuery(q))=>Some(q.claim),_=>None,
+                Some(Row::CourtSharedQuery(q)) => Some(q.claim),
+                _ => None,
             },
             Key::CourtDutyClock(_) => match self.staged_court_row_v1(key) {
                 Some(Row::CourtDutyClock(clock)) => Some(clock.claim),
@@ -464,7 +478,13 @@ impl CourtServiceStateV2 {
 
 /// New isolated candidate namespace. Not an adopted profile record.
 pub fn court_service_profile_id_v2(source: Hash64) -> Hash64 {
-    Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64)
-        .key(b"misaka-palw/court-service/v2").hash(&borsh::to_vec(&source).expect("hash serialization"))
-        .as_bytes().try_into().expect("64"))
+    Hash64::from_bytes(
+        blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(b"misaka-palw/court-service/v2")
+            .hash(&borsh::to_vec(&source).expect("hash serialization"))
+            .as_bytes()
+            .try_into()
+            .expect("64"),
+    )
 }

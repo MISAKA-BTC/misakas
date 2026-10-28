@@ -12,6 +12,7 @@
 //! * the prompt starts with the forced prefix, and the source is priced as prompt tokens (OQ15,
 //!   PENDING USER CONFIRMATION with OQ13).
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;

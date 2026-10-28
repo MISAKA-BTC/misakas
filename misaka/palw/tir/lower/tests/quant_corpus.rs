@@ -5,6 +5,7 @@
 //! N = 300): set `QUANT_CORPUS=<file>` to run it; the descriptors' own embedded vectors run always
 //! (`quantfmt::tests`).
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::quantfmt::QuantRegistry;
 use std::collections::BTreeMap;
 

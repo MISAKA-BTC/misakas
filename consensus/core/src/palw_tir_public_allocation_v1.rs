@@ -71,7 +71,10 @@ pub fn tir_public_prepared_bytes_v1(
     // decoded under), not the format's 65,536-lane tile — measured: 13–60 KB generations against 28–118 MB bounds before.
     // §11 (a): at most the job's actual widest leaf (the class's step space), never above the layout's decode bound.
     let raw_format_leaf = add(
-        source.widest_leaf_value_bytes_v1().min(source.maximum_leaf_bytes_v1()).min(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?),
+        source
+            .widest_leaf_value_bytes_v1()
+            .min(source.maximum_leaf_bytes_v1())
+            .min(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?),
         26,
     )?;
     let capture_payload = add(add(mul(prefill, 4)?, mul(d, add(mul(vocab, 4)?, 8)?)?)?, mul(n, raw_format_leaf)?)?;
@@ -149,13 +152,28 @@ pub enum PalwTirPublicAllocationMissingV1 {
     NativeSemanticStatement,
     NativeFloatRoute,
     CanonicalWitnessSizing(String),
-    NativeWitnessCeiling { required: u64, native: u64 },
-    NativeRootClaimCeiling { required: u64, native: u64 },
-    PreparedPublicationBound { required: u64, allocated: u64 },
-    PreparedSliceBound { required: u64, allocated: u64 },
+    NativeWitnessCeiling {
+        required: u64,
+        native: u64,
+    },
+    NativeRootClaimCeiling {
+        required: u64,
+        native: u64,
+    },
+    PreparedPublicationBound {
+        required: u64,
+        allocated: u64,
+    },
+    PreparedSliceBound {
+        required: u64,
+        allocated: u64,
+    },
     /// The frame's conviction door (`collect_until − accepted`) exceeds the measured record's longest accepted pursuit
     /// (`PalwTirFrameClockV1::maximum_door_daa`, at most the network's liability horizon): not built, so not accepted (G-03).
-    DoorBeyondLiabilityHorizon { required: u64, allowed: u64 },
+    DoorBeyondLiabilityHorizon {
+        required: u64,
+        allowed: u64,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwTirPublicAllocationQuoteV1 {
@@ -332,7 +350,7 @@ fn executor_plan(
     let shape = space.job_shape(ctx).map_err(|e| e.to_string())?;
     let positions = u64::from(shape.positions);
     let d = u64::from(source.decode_count_v1());
-    let prefill = u64::from(ctx.declared_prefill_tokens);
+    let _prefill = u64::from(ctx.declared_prefill_tokens);
     let vocab = u64::from(source.vocab_v1());
     let tiles = vocab.div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
     let n = source.leaf_count_v1();
@@ -365,7 +383,7 @@ fn executor_plan(
             const CHUNK: u64 = 32 << 20;
             let tensor = narrow(bytes)?;
             let chunk = if row <= CHUNK { mul(CHUNK / row, row)?.min(tensor) } else { CHUNK.min(tensor) };
-            let piece = crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1 as u64;
+            let piece = crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1;
             let leaves = if row <= CHUNK { mul(chunk / row, row.div_ceil(piece))? } else { chunk.div_ceil(piece) };
             largest_chunk = largest_chunk.max(chunk);
             most_chunk_leaves = most_chunk_leaves.max(leaves);
@@ -410,14 +428,14 @@ fn executor_plan(
         }
     }
     for instance in space.fixed_instances() {
-        values = add(values, mul(u64::from(instance.elements), 32)?)?;
+        values = add(values, mul(instance.elements, 32)?)?;
     }
     for instance in space.hist_instances() {
         let misaka_palw_tir::program::StateKind::Hist { window } = p.states[instance.state as usize].kind else {
             return Err("native Hist instance changes its registered kind".into());
         };
         let rows = add(u64::from(window).min(positions), u64::from(space.layout.h_tile))?;
-        values = add(values, mul(mul(u64::from(instance.elements), rows)?, 16)?)?;
+        values = add(values, mul(mul(instance.elements, rows)?, 16)?)?;
     }
     // All own parameter data is an own-copy premise, not a new global artifact
     // availability obligation. Charge even a resident provider's whole closure.
@@ -803,7 +821,7 @@ fn finish_allocation_source_v2(
     } else {
         None
     };
-    let acquisition = PalwTirPublicOwnedPlanV1::derive_v1(&source, rules.maximum_custodians, rules.config, rules.clock)?;
+    let acquisition = PalwTirPublicOwnedPlanV1::derive_v1(source, rules.maximum_custodians, rules.config, rules.clock)?;
     // D=0 has no trace rows/IDs to acquire, not an unknown source silently
     // omitted. Original output identity over the empty IDs is a local check.
     let flat_trace = if view.is_tiled_v1() || source.decode_count_v1() == 0 {
@@ -818,15 +836,15 @@ fn finish_allocation_source_v2(
             rules.config.prices,
         )?)
     };
-    let executor = executor_plan(record, &verified.space, &source, rules)?;
-    let native_work = work_rules(&verified.space, &source, &executor, rules)?;
-    let owner_work = derive_tir_public_work_allocation_v1(record, layout, header, &source, &acquisition, native_work)?;
+    let executor = executor_plan(record, &verified.space, source, rules)?;
+    let native_work = work_rules(&verified.space, source, &executor, rules)?;
+    let owner_work = derive_tir_public_work_allocation_v1(record, layout, header, source, &acquisition, native_work)?;
     // Two separate rooted spent pools MUST have two prepaid components. The
     // claim-wide preparation holds literal custodian lanes only (a preparer
     // reads no other slot's answers); it never lets public responders consume
     // the owner's replay/probe credit (the frame allocation fix of 2026-10-16).
     let preparation_work = owner_work.preparation_lanes_v1(&acquisition)?;
-    let preparation = derive_tir_public_preparation_plan_v1(&source, &preparation_work, &acquisition)?;
+    let preparation = derive_tir_public_preparation_plan_v1(source, &preparation_work, &acquisition)?;
     if executor.prepared_disk_bytes > preparation.maximum_prepared_bytes {
         return incomplete(PalwTirPublicAllocationMissingV1::PreparedPublicationBound {
             required: executor.prepared_disk_bytes,
@@ -842,7 +860,7 @@ fn finish_allocation_source_v2(
             allocated: preparation.maximum_slices_per_actor,
         });
     }
-    let terminal = match terminal_plan(&verified.space, record, &source, rules)? {
+    let terminal = match terminal_plan(&verified.space, record, source, rules)? {
         Ok(plan) => plan,
         Err(missing) => return incomplete(missing),
     };

@@ -39,7 +39,6 @@ use kaspa_consensus_core::{
         stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
         validator_participation_reward_outputs, victim_compensation_outputs,
     },
-    hashing,
     header::Header,
     muhash::MuHashExtensions,
     subnets::{SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
@@ -231,7 +230,12 @@ impl PalwEscrowSpendLocksV1 {
     /// **The one escrow-lock rule** — the block filter (`BondSpendFilter::escrow_refusal`), the mempool
     /// (`validate_mempool_transaction_in_utxo_context`) and therefore the template all ask this, with the actual populated input
     /// amounts: the first input that spends a provisionally locked outpoint, or a rooted row's outpoint without a qualified plan.
-    pub(crate) fn refusal(&self, tx: &Transaction, input_amounts: impl IntoIterator<Item = u64>, daa_score: u64) -> Option<TransactionOutpoint> {
+    pub(crate) fn refusal(
+        &self,
+        tx: &Transaction,
+        input_amounts: impl IntoIterator<Item = u64>,
+        daa_score: u64,
+    ) -> Option<TransactionOutpoint> {
         self.refusal_with_bond_burn(tx, input_amounts, daa_score, 0)
     }
 
@@ -483,35 +487,53 @@ impl VirtualStateProcessor {
         }
         if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
             let payload = if tx.payload.starts_with(b"FPA1") && self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(daa)) {
-                let Some(view) = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize) else { return 0; };
+                let Some(view) = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(
+                    &tx.payload,
+                    u32::MAX as usize,
+                ) else {
+                    return 0;
+                };
                 view.inner
-            } else { &tx.payload };
+            } else {
+                &tx.payload
+            };
             // G14 item 1 (RFC-0035 A): a TFO1 carrier burns its literal TFP1's declared rent exactly as that TFP1 carrier would, so
             // the coordinator's native rent check (`prepare_paired_original_v1`) reads a burn that actually happened. Refused or
             // admitted, the rent is destroyed (the TFP1 rule); the funding output is untouched (it is an output, not fee).
             if payload.starts_with(b"TFO1") {
-                return kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(payload)
-                    .and_then(|envelope| envelope.original_v1())
-                    .map(|original| original.declared_rent_sompi)
-                    .unwrap_or(0);
+                return kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(
+                    payload,
+                )
+                .and_then(|envelope| envelope.original_v1())
+                .map(|original| original.declared_rent_sompi)
+                .unwrap_or(0);
             }
             return kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(payload)
-                .map(|envelope| envelope.declared_rent_sompi).unwrap_or(0);
+                .map(|envelope| envelope.declared_rent_sompi)
+                .unwrap_or(0);
         }
         if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
-            use kaspa_consensus_core::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
-            return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
-                .objects.first().and_then(|carried| {
-                    if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { control } = &carried.object {
-                        if (matches!((&control.target, &control.action), (T::OwnerOpen { .. }, A::Open) | (T::Conviction, A::Convict(_)))
-                            || matches!((&control.target, &control.action), (T::ConvictionWitness, A::WitnessPart(_))))
-                            && control.check_v1().is_ok()
-                        {
-                            return Some(control.declared_rent_sompi);
-                        }
+            use kaspa_consensus_core::palw_tir_public_carriage_v1::{
+                PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T,
+            };
+            return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(
+                std::slice::from_ref(tx),
+            )
+            .objects
+            .first()
+            .and_then(|carried| {
+                #[allow(clippy::collapsible_if)]
+                if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { control } = &carried.object {
+                    if (matches!((&control.target, &control.action), (T::OwnerOpen { .. }, A::Open) | (T::Conviction, A::Convict(_)))
+                        || matches!((&control.target, &control.action), (T::ConvictionWitness, A::WitnessPart(_))))
+                        && control.check_v1().is_ok()
+                    {
+                        return Some(control.declared_rent_sompi);
                     }
-                    None
-                }).unwrap_or(0);
+                }
+                None
+            })
+            .unwrap_or(0);
         }
         0
     }
@@ -565,15 +587,15 @@ impl VirtualStateProcessor {
         // Actual processor configuration only. Never derive a policy body from
         // the carrier's signed profile IDs or a caller graph/count declaration.
         let court = self.palw_court_params_at(accepting_daa).and_then(Result::ok);
-        let native = court.as_ref().map(|c|(c,self.palw_court_step_ladder_at(accepting_daa,c)));
-        let accounting = validated.tx.payload.starts_with(b"FPA1")
-            && self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(accepting_daa));
-        let inspect = if accounting { kaspa_consensus_core::palw_state_v2::palw_funded_original_answer_candidate_v1 }
-            else { kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1 };
-        inspect(
-            state, self.palw_network_domain_v2(), accepting_daa, validated,
-            self.palw_state_params_v2.as_ref(), native,
-        )
+        let native = court.as_ref().map(|c| (c, self.palw_court_step_ladder_at(accepting_daa, c)));
+        let accounting =
+            validated.tx.payload.starts_with(b"FPA1") && self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(accepting_daa));
+        let inspect = if accounting {
+            kaspa_consensus_core::palw_state_v2::palw_funded_original_answer_candidate_v1
+        } else {
+            kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1
+        };
+        inspect(state, self.palw_network_domain_v2(), accepting_daa, validated, self.palw_state_params_v2.as_ref(), native)
     }
 
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
@@ -584,7 +606,11 @@ impl VirtualStateProcessor {
         pov_daa_score: u64,
     ) {
         self.calculate_utxo_state_with_funded_candidates_v1(
-            ctx, selected_parent_utxo_view, selected_parent_bond_view, pov_daa_score, None,
+            ctx,
+            selected_parent_utxo_view,
+            selected_parent_bond_view,
+            pov_daa_score,
+            None,
         );
     }
 
@@ -764,9 +790,9 @@ impl VirtualStateProcessor {
             // walks this loop exactly as it did before the field existed.
             // ADR-0088 Decision 11: the registry's three rent-priced objects burn their rent the
             // same way, behind their own fence; the map is collected when either fence is armed.
-            let collect_carrier_fees =
-                self.palw_certification_rent_at(pov_daa_score) || self.palw_model_lines_active_at(pov_daa_score)
-                    || self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
+            let collect_carrier_fees = self.palw_certification_rent_at(pov_daa_score)
+                || self.palw_model_lines_active_at(pov_daa_score)
+                || self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
             let mut block_fee = 0u64;
             let mut finality_fee = 0u64;
             // G14 lane escrow-rfc08 (RFC-0035 A): past the fence, each accepted TFO1 carrier whose literal payer-signed terms pair
@@ -779,7 +805,8 @@ impl VirtualStateProcessor {
                 // together with the bond burn, so RFC-0035 §7.1's one allocation of F holds (0 wherever no row exists).
                 let mut escrow_burned = 0u64;
                 if escrow_fence_active {
-                    if let Some(outpoint) = kaspa_consensus_core::palw_funded_escrow_v1::palw_tfo1_provisional_lock_v1(validated_tx.tx) {
+                    if let Some(outpoint) = kaspa_consensus_core::palw_funded_escrow_v1::palw_tfo1_provisional_lock_v1(validated_tx.tx)
+                    {
                         new_provisional_escrows.push(outpoint);
                     }
                     // A rooted row's outpoint reaches acceptance only under a qualified plan (the filter refused the rest); the
@@ -802,11 +829,13 @@ impl VirtualStateProcessor {
                                     new_provisional_escrows.push(plan.new.funding_outpoint);
                                 }
                                 escrow_burned = escrow_burned.saturating_add(plan.burned_now);
-                                ctx.palw_escrow_settlements.push(kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1 {
-                                    contract_id: row.contract_id,
-                                    old: plan.old,
-                                    new: plan.new,
-                                });
+                                ctx.palw_escrow_settlements.push(
+                                    kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1 {
+                                        contract_id: row.contract_id,
+                                        old: plan.old,
+                                        new: plan.new,
+                                    },
+                                );
                             }
                         }
                     }
@@ -814,14 +843,23 @@ impl VirtualStateProcessor {
                 if let Some((state, accepting_daa)) = candidate_state {
                     let accounting_funded = self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(accepting_daa))
                         && validated_tx.tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-                        && kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&validated_tx.tx.payload, u32::MAX as usize)
-                            .is_some_and(|v| v.inner.starts_with(b"TFO1"));
-                    if accounting_funded || kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(validated_tx.tx) {
+                        && kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(
+                            &validated_tx.tx.payload,
+                            u32::MAX as usize,
+                        )
+                        .is_some_and(|v| v.inner.starts_with(b"TFO1"));
+                    if accounting_funded
+                        || kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(validated_tx.tx)
+                    {
                         let diagnostic = self.palw_funded_original_candidate_from_native_v1(state, accepting_daa, validated_tx);
                         // Full / selected-parent cached checks are not relabelled
                         // as each other. Both leave the funded installer CLOSED.
-                        info!("PALW TFO1 ordinary carrier {}: funded candidate {:?}; selected-parent cached script checks {}",
-                            validated_tx.id(), diagnostic, is_selected_parent);
+                        info!(
+                            "PALW TFO1 ordinary carrier {}: funded candidate {:?}; selected-parent cached script checks {}",
+                            validated_tx.id(),
+                            diagnostic,
+                            is_selected_parent
+                        );
                     }
                 }
                 ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
@@ -837,7 +875,10 @@ impl VirtualStateProcessor {
                 let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0).saturating_add(escrow_burned);
                 if collect_carrier_fees {
                     palw_record_accepted_carrier_fees_v1(
-                        validated_tx, owed, &mut ctx.palw_v2_accepted_tx_fees, &mut ctx.palw_v2_rent_available_fees,
+                        validated_tx,
+                        owed,
+                        &mut ctx.palw_v2_accepted_tx_fees,
+                        &mut ctx.palw_v2_rent_available_fees,
                     );
                 }
                 // **ADR-0075 SA-1/SA-2: the RENT is burned, and only the carriage is the miner's.**
@@ -1524,10 +1565,8 @@ impl VirtualStateProcessor {
     ) -> BlockProcessResult<()> {
         // Admission precedes the one input-script copy and lives through the
         // comparison. Malformed payloads and local capacity keep distinct causes.
-        let _miner_script_lease = self
-            .coinbase_manager
-            .reserve_coinbase_payload_decode_v2(&coinbase.payload)
-            .map_err(|error| match error {
+        let _miner_script_lease =
+            self.coinbase_manager.reserve_coinbase_payload_decode_v2(&coinbase.payload).map_err(|error| match error {
                 kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
                     crate::errors::RuleError::LocalNativeCapacityUnavailable(why)
                 }
@@ -2829,6 +2868,32 @@ fn apply_slashing_effects_to_state<V: UtxoView>(
     }
 }
 
+/// Record two views of the same natively validated carrier. Bond burn is senior to rent.
+pub(super) fn palw_record_accepted_carrier_fees_v1(
+    tx: &ValidatedTransaction<'_>,
+    bond_burn: u64,
+    raw: &mut std::collections::HashMap<TransactionId, u64>,
+    rent_available: &mut std::collections::HashMap<TransactionId, u64>,
+) {
+    let available = tx.calculated_fee.checked_sub(bond_burn).expect("native accepted bond spend paid its mandatory burn");
+    raw.insert(tx.id(), tx.calculated_fee);
+    rent_available.insert(tx.id(), available);
+}
+
+/// Internal fee view: the accepted native fee after mandatory bond burn, never raw F twice.
+pub(in crate::pipeline::virtual_processor) fn palw_carrier_rent_available_v1(
+    available: &std::collections::HashMap<TransactionId, u64>,
+    carrier: TransactionId,
+    priced: bool,
+) -> u64 {
+    if priced { available.get(&carrier).copied().unwrap_or(0) } else { super::processor::PALW_RENT_UNPRICED }
+}
+
+/// A bridge's finality share is a subset of the same collectible amount used for total fees.
+pub(super) fn palw_finality_collectible_fee_v1(tx: &Transaction, collectible: u64, active: bool) -> u64 {
+    if active && tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some()) { collectible } else { 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
@@ -3634,7 +3699,8 @@ mod tests {
             let view = ActiveBondView::from_records([(active, bond(active)), (pending_op, pending), (releasable_op, releasable)]);
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let filter =
+                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
 
             assert!(filter.locks(&active), "Active bond's output-0 must be locked (skip the spend)");
             assert!(filter.locks(&pending_op), "Pending bond's output-0 must be locked");
@@ -3658,19 +3724,22 @@ mod tests {
             let no_burns = std::collections::HashMap::new();
 
             // Both models live: each locks its own, and nothing else.
-            let both = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
+            let both =
+                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
             assert!(both.locks(&dns_op));
             assert!(both.locks(&palw_op));
             assert!(!both.locks(&outpoint(9)));
 
             // No V2 bundle: byte-identical to the legacy gate — the PALW outpoint is just an
             // outpoint.
-            let dns_only = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let dns_only =
+                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
             assert!(dns_only.locks(&dns_op));
             assert!(!dns_only.locks(&palw_op));
 
             // DNS mergeset gate closed (or no DNS params at all): the V2 registry still locks.
-            let palw_only = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
+            let palw_only =
+                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
             assert!(palw_only.locks(&palw_op));
             assert!(!palw_only.locks(&dns_op), "a DNS bond is not this model's business when the DNS view is absent");
         }
@@ -3731,7 +3800,8 @@ mod tests {
             use kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1;
             use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
 
-            let payload = kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let payload =
+                kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
             let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
             let escrow_op = outpoint(11);
             let row = PalwFundedEscrowRowV1::fresh_v1(
@@ -3767,7 +3837,11 @@ mod tests {
             let rooted = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
             let filter =
                 BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
-            assert_eq!(filter.escrow_refusal(&theft, &entries), Some(escrow_op), "a non-qualified spend of a rooted escrow is skipped");
+            assert_eq!(
+                filter.escrow_refusal(&theft, &entries),
+                Some(escrow_op),
+                "a non-qualified spend of a rooted escrow is skipped"
+            );
             assert_eq!(filter.escrow_refusal(&payer_return, &entries), None, "the payer return after the hard deadline qualifies");
             // Before the hard deadline even the payer's own return is a settlement, and the schedule is typed-missing.
             let early =
@@ -3776,16 +3850,24 @@ mod tests {
 
             // The same mergeset: the carrier's own output is provisionally locked against every spend, the payer's included.
             let provisional = PalwEscrowSpendLocksV1 { rows: Default::default(), provisional: [escrow_op].into_iter().collect() };
-            let filter =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&provisional) };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                escrow: Some(&provisional),
+            };
             assert_eq!(filter.escrow_refusal(&payer_return, &entries), Some(escrow_op));
             assert_eq!(filter.escrow_refusal(&tx_spending(outpoint(12)), &entries), None, "another outpoint is never locked by it");
 
             // The next block after a refused contract: no row, no provisional lock — the ordinary payer fallback is spendable.
-            let none =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let none = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
             assert_eq!(none.escrow_refusal(&payer_return, &entries), None);
-            assert_eq!(none.escrow_refusal(&theft, &entries), None, "an unlocked payer output is an ordinary P2PKH (its script decides)");
+            assert_eq!(
+                none.escrow_refusal(&theft, &entries),
+                None,
+                "an unlocked payer output is an ordinary P2PKH (its script decides)"
+            );
 
             fn tx_spending(op: TransactionOutpoint) -> Transaction {
                 Transaction::new(
@@ -3809,7 +3891,8 @@ mod tests {
             use kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1;
             use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutput, UtxoEntry};
 
-            let payload = kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let payload =
+                kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
             let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
             let (a_op, b_op) = (outpoint(11), outpoint(13));
             let row = |contract: u64, op: TransactionOutpoint| {
@@ -3843,13 +3926,23 @@ mod tests {
             };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
+            let filter =
+                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
             let two_entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(1_000, payer.clone(), 100, false)];
-            let both = spend(vec![a_op, b_op], vec![TransactionOutput::new(1_000, payer.clone()), TransactionOutput::new(1_000, payer.clone())]);
+            let both = spend(
+                vec![a_op, b_op],
+                vec![TransactionOutput::new(1_000, payer.clone()), TransactionOutput::new(1_000, payer.clone())],
+            );
             assert_eq!(filter.escrow_refusal(&both, &two_entries), Some(b_op), "the second escrow row of one transaction is refused");
             let one_entry = vec![UtxoEntry::new(1_000, payer.clone(), 100, false)];
-            assert_eq!(filter.escrow_refusal(&spend(vec![a_op], vec![TransactionOutput::new(1_000, payer.clone())]), &one_entry), None);
-            assert_eq!(filter.escrow_refusal(&spend(vec![b_op], vec![TransactionOutput::new(1_000, payer.clone())]), &one_entry), None);
+            assert_eq!(
+                filter.escrow_refusal(&spend(vec![a_op], vec![TransactionOutput::new(1_000, payer.clone())]), &one_entry),
+                None
+            );
+            assert_eq!(
+                filter.escrow_refusal(&spend(vec![b_op], vec![TransactionOutput::new(1_000, payer.clone())]), &one_entry),
+                None
+            );
         }
 
         /// **G14 lane escrow-rfc08 round 2: the mempool asks the block filter's own escrow rule** (`PalwEscrowSpendLocksV1::refusal`,
@@ -3862,17 +3955,27 @@ mod tests {
             };
             use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
 
-            let payload = kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let payload =
+                kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
             let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
             let escrow_op = outpoint(21);
             let row = PalwFundedEscrowRowV1::fresh_v1(
-                Hash64::from_u64_word(5), Hash64::from_u64_word(6), escrow_op, 1_000, Hash64::from_u64_word(7), payload, 100, DAA - 1, false,
+                Hash64::from_u64_word(5),
+                Hash64::from_u64_word(6),
+                escrow_op,
+                1_000,
+                Hash64::from_u64_word(7),
+                payload,
+                100,
+                DAA - 1,
+                false,
             )
             .unwrap();
             let locks = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
+            let filter =
+                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
             let relay_op = outpoint(22);
             let spend = |out0: TransactionOutput, payload: Vec<u8>| {
                 Transaction::new(
@@ -3885,8 +3988,10 @@ mod tests {
                     payload,
                 )
             };
-            let entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(50, ScriptPublicKey::default(), 100, false)];
-            let template = palw_escrow_relay_template_payload_v1(row.contract_id, escrow_op, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+            let entries =
+                vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(50, ScriptPublicKey::default(), 100, false)];
+            let template =
+                palw_escrow_relay_template_payload_v1(row.contract_id, escrow_op, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
             let cases = [
                 (spend(TransactionOutput::new(1_000, ScriptPublicKey::default()), vec![]), Some(escrow_op)),
                 (spend(TransactionOutput::new(1_000, payer.clone()), vec![]), None),
@@ -3898,7 +4003,14 @@ mod tests {
                 assert_eq!(mempool, expected);
                 assert_eq!(filter.escrow_refusal(&tx, &entries), mempool, "mempool and block filter answer alike");
             }
-            assert_eq!(PalwEscrowSpendLocksV1::default().refusal(&spend(TransactionOutput::new(1, ScriptPublicKey::default()), vec![]), [1_000u64, 50], DAA), None);
+            assert_eq!(
+                PalwEscrowSpendLocksV1::default().refusal(
+                    &spend(TransactionOutput::new(1, ScriptPublicKey::default()), vec![]),
+                    [1_000u64, 50],
+                    DAA
+                ),
+                None
+            );
         }
     }
 
@@ -4207,36 +4319,5 @@ mod tests {
             // Net committed set = a's reporter mint only.
             assert_eq!(multiset.finalize(), multiset_of(&[(mint_a, mint_a_entry)]).finalize());
         }
-    }
-}
-
-/// Record two views of the same natively validated carrier. Bond burn is senior to rent.
-pub(super) fn palw_record_accepted_carrier_fees_v1(
-    tx: &ValidatedTransaction<'_>,
-    bond_burn: u64,
-    raw: &mut std::collections::HashMap<TransactionId, u64>,
-    rent_available: &mut std::collections::HashMap<TransactionId, u64>,
-) {
-    let available = tx.calculated_fee.checked_sub(bond_burn)
-        .expect("native accepted bond spend paid its mandatory burn");
-    raw.insert(tx.id(), tx.calculated_fee);
-    rent_available.insert(tx.id(), available);
-}
-
-/// Internal fee view: the accepted native fee after mandatory bond burn, never raw F twice.
-pub(in crate::pipeline::virtual_processor) fn palw_carrier_rent_available_v1(
-    available: &std::collections::HashMap<TransactionId, u64>,
-    carrier: TransactionId,
-    priced: bool,
-) -> u64 {
-    if priced { available.get(&carrier).copied().unwrap_or(0) } else { super::processor::PALW_RENT_UNPRICED }
-}
-
-/// A bridge's finality share is a subset of the same collectible amount used for total fees.
-pub(super) fn palw_finality_collectible_fee_v1(tx: &Transaction, collectible: u64, active: bool) -> u64 {
-    if active && tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some()) {
-        collectible
-    } else {
-        0
     }
 }

@@ -189,46 +189,75 @@ impl PalwConstraintStreamCourtV1 {
     /// Caller admits source/context/hash/clone/stream/replay scratch separately.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_from_tiled_ids_with_original_stop_context_v1(
-        claim_id:Hash64,owner:PalwBondKeyV2,reserved_daa:u64,
-        view:&crate::palw_decode_view_v1::PalwDecodeViewV1,view_identity:&[u8],
-        source:&crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
-        ids:&crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
-        original:&PalwFreePromptCommitmentV3,eog_count:u32,eog_opening:&PalwStepOpeningV1,
-        signed_context:Hash64,
-    )->Result<Self,String> {
-        let header=source.header_v1();
-        if !view.is_tiled_v1()||!source.supports_tiled_trace_v1()
-            ||view.lane!=crate::palw_step::PalwStepLaneV1::Int32
-            ||view.job_context!=header.job_context||view.class_id!=header.job_context.shape_profile_id
-            ||view.vocab_size!=source.vocab_v1()||view.full_logits_trace_root!=header.full_logits_trace_root
-            ||view.committed_execution_root!=header.committed_execution_root||view.step_leaf_count!=header.step_leaf_count
-            ||ids.source_id_v1()!=source.source_id_v1()||ids.ids_v1().len() as u64!=u64::from(source.decode_count_v1()) {
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        view_identity: &[u8],
+        source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+        ids: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
+        original: &PalwFreePromptCommitmentV3,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        signed_context: Hash64,
+    ) -> Result<Self, String> {
+        let header = source.header_v1();
+        if !view.is_tiled_v1()
+            || !source.supports_tiled_trace_v1()
+            || view.lane != crate::palw_step::PalwStepLaneV1::Int32
+            || view.job_context != header.job_context
+            || view.class_id != header.job_context.shape_profile_id
+            || view.vocab_size != source.vocab_v1()
+            || view.full_logits_trace_root != header.full_logits_trace_root
+            || view.committed_execution_root != header.committed_execution_root
+            || view.step_leaf_count != header.step_leaf_count
+            || ids.source_id_v1() != source.source_id_v1()
+            || ids.ids_v1().len() as u64 != u64::from(source.decode_count_v1())
+        {
             return Err("terminal TIR predicate changes actual source/view/FullIds".into());
         }
-        let job=&original.job;
-        if fp_claim_id_v3(original)!=claim_id||!job.is_constraint()
-            ||original.execution_root!=view.committed_execution_root
-            ||original.trace_root!=view.full_logits_trace_root
-            ||original.decode_tokens_executed!=view.job_context.exact_decode_tokens
-            ||original.decode_tokens_executed==0||original.decode_tokens_executed>job.decode_token_limit
-            ||crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original)
-                !=crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&view.job_context)
-            ||match original.stop_reason {
-                PalwFpStopReasonV3::ExactBudgetReached=>original.decode_tokens_executed!=job.decode_token_limit,
-                PalwFpStopReasonV3::EndOfGeneration=>original.decode_tokens_executed>=job.decode_token_limit,
-            } {
+        let job = &original.job;
+        if fp_claim_id_v3(original) != claim_id
+            || !job.is_constraint()
+            || original.execution_root != view.committed_execution_root
+            || original.trace_root != view.full_logits_trace_root
+            || original.decode_tokens_executed != view.job_context.exact_decode_tokens
+            || original.decode_tokens_executed == 0
+            || original.decode_tokens_executed > job.decode_token_limit
+            || crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original)
+                != crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&view.job_context)
+            || match original.stop_reason {
+                PalwFpStopReasonV3::ExactBudgetReached => original.decode_tokens_executed != job.decode_token_limit,
+                PalwFpStopReasonV3::EndOfGeneration => original.decode_tokens_executed >= job.decode_token_limit,
+            }
+        {
             return Err("terminal TIR predicate changes native original claim/count/stop facts".into());
         }
-        if ids.ids_v1().iter().any(|id|*id>=view.vocab_size) {
+        if ids.ids_v1().iter().any(|id| *id >= view.vocab_size) {
             // This separate objective fault already has the native Output door.
             return Err("terminal TIR predicate delegates out-of-vocabulary IDs to native Output".into());
         }
-        let position=u32::try_from(ids.ids_v1().len()).map_err(|_|"terminal TIR position overflow")?;
-        let canonical=borsh::to_vec(&(source.source_id_v1(),ids.rows_root_v1(),ids.ids_v1()))
-            .map_err(|e|e.to_string())?;
-        Self::from_authenticated_selection_view_v1(claim_id,owner,reserved_daa,original.execution_root,
-            view,view_identity,job,ids.ids_v1(),position,None,None,false,eog_count,eog_opening,
-            Some(signed_context),&canonical,Some(original.stop_reason))
+        let position = u32::try_from(ids.ids_v1().len()).map_err(|_| "terminal TIR position overflow")?;
+        let canonical = borsh::to_vec(&(source.source_id_v1(), ids.rows_root_v1(), ids.ids_v1())).map_err(|e| e.to_string())?;
+        Self::from_authenticated_selection_view_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            original.execution_root,
+            view,
+            view_identity,
+            job,
+            ids.ids_v1(),
+            position,
+            None,
+            None,
+            false,
+            eog_count,
+            eog_opening,
+            Some(signed_context),
+            &canonical,
+            Some(original.stop_reason),
+        )
     }
     /// The tiled seed over a decode view. The caller derives `view` natively (a verified legacy
     /// binding, or a TIR claim's admitted header and registered record) and passes the exact
@@ -1047,17 +1076,9 @@ mod tests {
     ) -> Result<usize, String> {
         let context = row.seed_id();
         let mut parts = 0;
-        let limit = if small {
-            1
-        } else {
-            crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1
-        };
+        let limit = if small { 1 } else { crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1 };
         for ids in a.eog.ids.chunks(limit) {
-            row.push_eog(
-                context,
-                row.eog_offset_v1().ok_or("EOG cursor absent")?,
-                ids,
-            )?;
+            row.push_eog(context, row.eog_offset_v1().ok_or("EOG cursor absent")?, ids)?;
             parts += 1;
         }
         row.finish_eog()?;
@@ -1068,29 +1089,15 @@ mod tests {
                 row.finish_eog_token(context)?;
                 continue;
             }
-            let o = a
-                .renderings
-                .iter()
-                .find(|o| o.id == id)
-                .ok_or("fixture rendering absent")?;
-            row.begin_rendering(
-                context,
-                id,
-                o.rendering.is_some(),
-                o.rendering.as_ref().map_or(0, |b| b.len()) as u32,
-                &o.opening,
-            )?;
+            let o = a.renderings.iter().find(|o| o.id == id).ok_or("fixture rendering absent")?;
+            row.begin_rendering(context, id, o.rendering.is_some(), o.rendering.as_ref().map_or(0, |b| b.len()) as u32, &o.opening)?;
             if let Some(bytes) = &o.rendering {
                 let mut material = bytes.clone();
                 if corrupt && !corrupted && !material.is_empty() {
                     material[0] ^= 1;
                     corrupted = true;
                 }
-                let chunk = if small {
-                    1
-                } else {
-                    crate::palw_rendering_stream_v1::PALW_RENDERING_STREAM_PART_BYTES_V1
-                };
+                let chunk = if small { 1 } else { crate::palw_rendering_stream_v1::PALW_RENDERING_STREAM_PART_BYTES_V1 };
                 let mut offset = 0;
                 for part in material.chunks(chunk) {
                     row.push_rendering(context, offset, part)?;
@@ -1109,21 +1116,9 @@ mod tests {
     fn canonical_constraint_material_replay_matches_distinct_legal_partitions() {
         for fault in [false, true] {
             let (base, a) = court(fault);
-            assert!(
-                a.eog.ids.len() > 1,
-                "the fixture must exercise different EOG packet counts"
-            );
-            assert!(
-                a.renderings
-                    .iter()
-                    .any(|o| o.rendering.as_ref().is_some_and(|b| !b.is_empty()))
-            );
-            let identity = (
-                base.seed_id(),
-                base.execution_root_v1(),
-                base.table_root,
-                base.job_id,
-            );
+            assert!(a.eog.ids.len() > 1, "the fixture must exercise different EOG packet counts");
+            assert!(a.renderings.iter().any(|o| o.rendering.as_ref().is_some_and(|b| !b.is_empty())));
+            let identity = (base.seed_id(), base.execution_root_v1(), base.table_root, base.job_id);
             let mut canonical = base.clone();
             let mut alternative = base.clone();
             let ca = replay_partition(&mut canonical, &a, false, false).unwrap();
@@ -1131,24 +1126,8 @@ mod tests {
             assert!(cb > ca);
             assert_eq!(canonical.fault().unwrap(), alternative.fault().unwrap());
             assert_eq!(canonical.fault().unwrap().is_some(), fault);
-            assert_eq!(
-                identity,
-                (
-                    canonical.seed_id(),
-                    canonical.execution_root_v1(),
-                    canonical.table_root,
-                    canonical.job_id
-                )
-            );
-            assert_eq!(
-                identity,
-                (
-                    alternative.seed_id(),
-                    alternative.execution_root_v1(),
-                    alternative.table_root,
-                    alternative.job_id
-                )
-            );
+            assert_eq!(identity, (canonical.seed_id(), canonical.execution_root_v1(), canonical.table_root, canonical.job_id));
+            assert_eq!(identity, (alternative.seed_id(), alternative.execution_root_v1(), alternative.table_root, alternative.job_id));
             for small in [false, true] {
                 let mut bad = base.clone();
                 assert!(replay_partition(&mut bad, &a, small, true).is_err());
@@ -1176,7 +1155,6 @@ mod tests {
             }
         }
     }
-
 }
 
 // Read-only native allocation inventory; no state/root/codec field is added.

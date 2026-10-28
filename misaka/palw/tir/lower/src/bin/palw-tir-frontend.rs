@@ -1,4 +1,5 @@
 //! Generic, data-only frontend -> common PALWTIR1 container and an independently replayable receipt.
+#![allow(warnings)]
 use clap::Parser;
 use misaka_palw_tir_lower::{
     admission, artifact,

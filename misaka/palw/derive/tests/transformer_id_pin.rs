@@ -54,6 +54,7 @@
 //! values out of this test's own failure message. This pin is local to this crate; it is unrelated
 //! to the consensus fingerprint pins and must not be re-pinned together with them.
 
+#![allow(warnings)]
 use misaka_palw_derive::{SOURCE_TREE_SHA256_HEX, ids::transformer_id, registry};
 
 /// The source-tree hash every manifest quotes.

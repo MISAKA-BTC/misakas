@@ -2044,7 +2044,7 @@ pub(super) fn palw_fraud_filer_bootstrap_step_v2(
     let mut round: Vec<PalwLegacyHeldUnitV2> = (0..chunks).map(|chunk| PalwLegacyHeldUnitV2::PromptIds { chunk }).collect();
     if height > 0
         && !case.constraint_preflight_pending_v1()
-        && !(case.public_fp_job_v1().is_some_and(|job| job.is_prefix_state()) && !case.prefix_complete)
+        && (!case.public_fp_job_v1().is_some_and(|job| job.is_prefix_state()) || case.prefix_complete)
     {
         round.extend(palw_legacy_kary_round_units_v1(
             kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyTreeV2::Step,
@@ -2307,6 +2307,7 @@ pub(super) fn palw_fraud_filer_d2_route_v1(
 }
 
 /// **G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the node's move in the D2 readiness disclosure court.**
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PalwD2C1NodeMoveV1 {
     /// As the root's seat: answer an open case with the path from this node's own committed digests (tag 232).
@@ -2320,6 +2321,7 @@ pub(super) enum PalwD2C1NodeMoveV1 {
 /// node's own commitment; `None` → no answer, the chain then decides default or hold). As a challenger: one demand per committed
 /// root of another seat, at [`palw_d2_disclosure_ordinal_draw_v1`]'s coordinate, only when no case exists there and only with an
 /// ADOPTED cap and fee schedule — typed-missing values never produce a demand (`None` is never success).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn palw_fraud_filer_d2_disclosure_moves_v1(
     d2: bool,
     registry: &kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1,
@@ -4505,9 +4507,8 @@ impl PalwPanelService {
                                 // R-D2-NODE: the claim part with this verifier's own rows (a fused site keeps the fused terminal,
                                 // which already reads the witness and own rows only).
                                 let witness = witness.as_deref().ok_or("the claim-part route needs the public committed witness")?;
-                                return replica.claim_part_terminal(
-                                    witness, leaf, claim, &bound_to, trace_root, producer, bond_key, ladder,
-                                );
+                                return replica
+                                    .claim_part_terminal(witness, leaf, claim, &bound_to, trace_root, producer, bond_key, ladder);
                             }
                             replica.terminal(
                                 &binding,
@@ -6215,8 +6216,8 @@ impl PalwPanelService {
             .max_close_bytes()
             .min(kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
         let file_by = Some(progress.terms.collect_until_daa.saturating_sub(2));
-        if progress.bundle.is_some() {
-            let file_by = Some(progress.bundle.as_ref().expect("present").plan.terms.collect_until_daa.saturating_sub(2));
+        if let Some(until) = progress.bundle.as_ref().map(|bundle| bundle.plan.terms.collect_until_daa) {
+            let file_by = Some(until.saturating_sub(2));
             return self
                 .fraud_filer_bundle_stage_v1(
                     session,
@@ -9413,7 +9414,8 @@ pub(super) mod tests {
     fn d2_c1_node_filer_demands_and_the_seat_answers_through_the_fold() {
         use kaspa_consensus_core::palw_court_model_scope_routes_v1::{readiness_disclosure as dc, readiness_root as rr};
         use std::num::NonZeroU32;
-        let key = |n: u64| PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(n), 0));
+        let key =
+            |n: u64| PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(n), 0));
         let (seat, challenger) = (key(3), key(9));
         let ctx = rr::ReadinessContextV1 {
             beacon: kaspa_hashes::Hash64::from_u64_word(11),
@@ -9444,7 +9446,10 @@ pub(super) mod tests {
         assert_eq!(Some(demand.ordinal), dc::palw_d2_disclosure_ordinal_draw_v1(&root, &challenger));
         let (k, e) = dc::palw_d2_disclosure_open_v1(&reg, demand, cap, fees, 101).unwrap();
         reg.insert(k, e);
-        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 102, cap, fees, all, no_path).is_empty(), "no second demand");
+        assert!(
+            palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 102, cap, fees, all, no_path).is_empty(),
+            "no second demand"
+        );
 
         // Seat: answers from its own commitment inside the deadline, not after; without a path it files nothing.
         let ordinal = demand.ordinal;

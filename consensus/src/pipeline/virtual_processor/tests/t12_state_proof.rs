@@ -10,6 +10,7 @@
 //! * a header that is not the pinned block, a tampered preimage, a forged row set and a wrong collection are each refused;
 //! * a block the node cannot prove (unknown, or a collection that does not exist) is an error naming why, not a guess.
 
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::palw_state_proof_v1::{PalwProofErrorV1, state_root_of_pinned_header_v1, verify_bond_v1, verify_class_v1};

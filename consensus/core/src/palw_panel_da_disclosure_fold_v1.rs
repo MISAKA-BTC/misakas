@@ -114,10 +114,15 @@ pub(super) fn fold_panel_da_disclosure_v1(
     claim: &Hash64,
     prompt_token_ids: &[u32],
 ) -> Result<(), PalwStateV2Error> {
-    if !builder.params.panel_da_disclosure_from_daa().is_some_and(|from| ctx.daa_score >= from) {
+    if builder.params.panel_da_disclosure_from_daa().is_none_or(|from| ctx.daa_score < from) {
         return Err(refused("below palw_panel_da_disclosure_v1"));
     }
-    let row = builder.state.panel_da_disclosures.get(claim).cloned().ok_or_else(|| refused(format!("{:?}", PalwPanelDaDisclosureRefusalV1::NoSuchRow)))?;
+    let row = builder
+        .state
+        .panel_da_disclosures
+        .get(claim)
+        .cloned()
+        .ok_or_else(|| refused(format!("{:?}", PalwPanelDaDisclosureRefusalV1::NoSuchRow)))?;
     row.admit_v1(prompt_token_ids, ctx.daa_score).map_err(|why| refused(format!("{why:?}")))?;
     let class_id = builder.state.claims.get(claim).map(|c| c.class_id).ok_or_else(|| refused("the disclosed claim is retired"))?;
     let mut disclosed = row;

@@ -3,6 +3,7 @@
 //! primitive instance and convicted by a court that reads only public material, the DA path kept apart from fraud, and every
 //! way a plan can try to weaken its own check.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

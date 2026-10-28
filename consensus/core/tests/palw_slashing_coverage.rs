@@ -5,6 +5,7 @@
 //! and whether `claim.reserved` (the `void_and_slash` amount) can cover one claim's payout.
 //! PoCs are unit/property only; no network attack.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_RC_DA_COURT_FENCE_DAA, PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA, palw_rc_shipped_params,
 };

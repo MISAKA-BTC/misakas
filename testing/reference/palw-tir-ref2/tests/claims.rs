@@ -9,6 +9,7 @@
 //! The full sweeps take a few seconds in release (`cargo test --release -p misaka-palw-tir-ref2
 //! --test claims -- --ignored`); the default run samples.
 
+#![allow(warnings)]
 use misaka_palw_tir_ref2::transcendental::{LN2_Q, ONE, RSQRT_SEED, floor_div, int_exp, int_ln, int_rsqrt, log2_floor};
 
 fn exp_sweep(step: usize) {

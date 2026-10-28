@@ -17,6 +17,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test position_b1_carrier_refund`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params};
 use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

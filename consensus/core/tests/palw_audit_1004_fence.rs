@@ -6,6 +6,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_audit_1004_fence`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT13_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int13_flag_day_at_v1,

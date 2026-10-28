@@ -9,6 +9,7 @@
 //! * `TokenSource::FinalizedOutput` and `TokenSource::Key`: a judge reads the prompt and a finalized
 //!   generation, a pairwise judge two of them, and an exact match an item's key.
 
+#![allow(warnings)]
 mod v2common;
 
 use std::collections::BTreeMap;

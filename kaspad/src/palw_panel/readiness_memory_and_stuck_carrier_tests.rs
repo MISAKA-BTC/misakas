@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `readiness_memory_and_stuck_carrier_tests` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
@@ -47,7 +46,9 @@ impl CodeNeedleV1 for str {
         let mut offset = 0;
         let mut last = None;
         while let Some(span) = code_span_v1(rest, needle) {
-            if span.is_empty() { break; }
+            if span.is_empty() {
+                break;
+            }
             last = Some(offset + span.start);
             offset += span.end;
             rest = &rest[span.end..];
@@ -183,7 +184,8 @@ fn the_readiness_duty_asks_capacity_and_takes_its_bytes_from_the_proof_lane() {
     let duties = &duties[..duties.find("\n    }\n").expect("its end")];
     assert!(duties.contains_code("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
     assert!(!duties.contains_code("replay_memory_budget_v1("), "the moment's gate starved the drill's proofs");
-    let reserve = duties.find_code("self.reserve_readiness_proof_v1(class.class_id, span_now, streamed_need)").expect("the proof lane");
+    let reserve =
+        duties.find_code("self.reserve_readiness_proof_v1(class.class_id, span_now, streamed_need)").expect("the proof lane");
     let streamed = duties.find_code("backend.artifact_readiness_material_streamed_v1(").expect("the streamed walk");
     let vector = duties.find_code("backend.artifact_readiness_material(&draw)").expect("the vector, for a family that cannot stream");
     assert!(reserve < streamed && streamed < vector, "reserve, stream, and only then the vector");
@@ -781,7 +783,10 @@ fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
     ] {
         assert!(opened.contains(line), "the opening: {line}");
     }
-    assert!(tick[..escalated].chars().filter(|c| !c.is_whitespace()).collect::<String>().ends_with("!stuck_opened&&"), "the escalated site defers to it");
+    assert!(
+        tick[..escalated].chars().filter(|c| !c.is_whitespace()).collect::<String>().ends_with("!stuck_opened&&"),
+        "the escalated site defers to it"
+    );
     let tail_at = tick.find_code("(*last_lane) = slots.finish(carrier_chain.inflight());").expect("the tail");
     let (sites, tail) = tick.split_at(tail_at);
     assert_eq!(

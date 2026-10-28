@@ -12,6 +12,7 @@
 //! chain recorded, listing one card as a `Valid` signer), so what the gate, the walk and the fold
 //! each decide is all that is measured. Convictions on a real claim (a producer-built fault, a
 //! bound panel, a segmented licence) are spec §3.6's T46 suite.
+#![allow(warnings)]
 use super::TestContext;
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::api::ConsensusApi;

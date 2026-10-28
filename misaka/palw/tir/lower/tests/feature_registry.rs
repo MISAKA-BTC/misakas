@@ -6,6 +6,7 @@
 //! * the registry is well formed: stable-looking ids, no duplicates, and for implemented features
 //!   test ids that name a test file and a test (or fixture) that exists.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::lower::LowerOpts;
 use misaka_palw_tir_lower::model::{BASE_PRIMITIVES, Lowering, REGISTRY, Requirement, feature_info};

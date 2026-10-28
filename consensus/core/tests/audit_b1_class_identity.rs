@@ -2,6 +2,7 @@
 //!
 //! Read-only audit artefact. Nothing here is a fixture any shipped code reads.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::class_manifest_const_v1 as manifest;
 use kaspa_consensus_core::config::params::*;

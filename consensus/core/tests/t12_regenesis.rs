@@ -1,5 +1,6 @@
 //! **testnet-12's regenesis, pinned.** The facts an operator would otherwise have to re-derive by
 //! reading four files, asserted so a change to any of them fails here rather than on a live chain.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::*;
 use kaspa_consensus_core::config::premine::*;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

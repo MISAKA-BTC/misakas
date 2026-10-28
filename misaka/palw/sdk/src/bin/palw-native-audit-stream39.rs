@@ -1,5 +1,6 @@
 //! Own-node paged fullaux collector. No measurements or assertions of native
 //! execution are produced; the offline39 private verifier authenticates it.
+#![allow(warnings)]
 use kaspa_consensus_core::{Hash64, config::params::Params, header::Header, network::NetworkId};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_wrpc_client::{
@@ -71,6 +72,7 @@ fn run() -> Result<(), String> {
     let out = PathBuf::from(get("--out")?);
     let maximum = get("--maximum-evidence-bytes")?.parse::<u64>().map_err(|e| e.to_string())?;
     let timeout = get("--timeout-seconds")?.parse::<u64>().map_err(|e| e.to_string())?;
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     let shared_objects = a.remove("--objects-dir");
     let original_snapshot = a.remove("--own-params-snapshot34");

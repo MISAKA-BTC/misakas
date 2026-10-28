@@ -27,6 +27,7 @@
 //!   BOTH sessions counted at their charge `max(reserved, G)` — refused. Below the fence the old
 //!   reservation (`reserved` alone) admits it.
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

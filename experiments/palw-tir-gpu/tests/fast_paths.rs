@@ -8,6 +8,7 @@
 //! is closest to the `i32` bound. Weights are packed params, activations are lanes (a computed
 //! node's form) — the forms the fast kernels serve.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir::{DType, Dim, Prim, Tensor, TensorType};

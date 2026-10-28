@@ -4,6 +4,7 @@
 //! `dump_t12_shipped_ids` prints the ids in a form that compiles on both sources, so the same file can be copied into a
 //! detached checkout of `247ade1f9` and run there (`scripts/verify/t12-fleet-identity.sh`). The pinned values below were
 //! computed that way from `247ade1f9`. `fleet_ids_match_247ade1f9` holds the shipped ruleset to them.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::fork_id_v1::fork_id_v1;
 
@@ -64,7 +65,11 @@ fn fleet_ids_match_247ade1f9() {
     // The release's fingerprint moves exactly when the flag day is armed on the preset (dormant since F1).
     let armed = kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.is_some();
     assert_eq!(shipped.consensus_params_id().to_string() != params, armed, "fingerprint vs armed");
-    println!("FLEETDIAG EXPECT_FP={} UPGRADE_FROM_FP={params} schedule={}", shipped.consensus_params_id(), shipped.consensus_schedule_id());
+    println!(
+        "FLEETDIAG EXPECT_FP={} UPGRADE_FROM_FP={params} schedule={}",
+        shipped.consensus_params_id(),
+        shipped.consensus_schedule_id()
+    );
 }
 
 /// **The DAA-17,000 slice, armed, keeps the handshake identity** (a future height collapses to `never`). Diagnostic: prints every

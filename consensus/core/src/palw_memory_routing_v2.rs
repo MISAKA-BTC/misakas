@@ -59,8 +59,12 @@ pub const PALW_ROUTE_COST_GATHER_US_V2: Option<u64> = None;
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum PalwMemoryRoutingEvidenceV2 {
-    GdnTransition { refutation: PalwGdnTransitionRefutationV2 } = 0,
-    GdnConvWindow { refutation: PalwGdnConvWindowRefutationV2 } = 1,
+    GdnTransition {
+        refutation: PalwGdnTransitionRefutationV2,
+    } = 0,
+    GdnConvWindow {
+        refutation: PalwGdnConvWindowRefutationV2,
+    } = 1,
     RoutedStep {
         refutation: PalwExecutionStepRefutationV1,
         /// ADR-0081 Decision 3's prompt tile, where the network's form is Merkle and the reader gathers a prompt id; otherwise `None`.

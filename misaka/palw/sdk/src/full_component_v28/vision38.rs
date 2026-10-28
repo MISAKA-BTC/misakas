@@ -301,7 +301,7 @@ pub(super) fn write_materialised_stage_v39(
         &mut dyn TensorSink,
     ) -> misaka_palw_tir_lower::Result<misaka_palw_tir_lower::lower::StreamMaterialised>,
 ) -> Result<(serde_json::Value, Vec<misaka_palw_kernel::flat_source39::OriginalTensorV39>), String> {
-    if block_bytes < 8 || block_bytes > 16 << 20 {
+    if !(8..=16 << 20).contains(&block_bytes) {
         return Err("SOURCE39_MATERIALISER_BLOCK_BOUND".into());
     }
     let source = Checkpoint::open(checkpoint).map_err(|e| e.to_string())?;

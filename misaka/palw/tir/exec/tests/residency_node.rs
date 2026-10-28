@@ -15,7 +15,7 @@
 //! policy's arithmetic (I-5).
 
 #![cfg(feature = "node")]
-
+#![allow(warnings)]
 mod node_common;
 mod residency_common;
 

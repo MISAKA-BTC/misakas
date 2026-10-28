@@ -1,6 +1,7 @@
 //! AUDIT LANE A1 — which pwu-checking rule is actually live on t12.
 //! Run: cargo test -p kaspa-consensus-core --test audit_a1_fence_reachability -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 

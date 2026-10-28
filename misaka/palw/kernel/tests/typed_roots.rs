@@ -5,6 +5,7 @@
 //! Every scenario runs the ledger's own per-object API through blocks, and every prosecution is built by a fresh
 //! [`SpecOutsiderV1`] over a ledger REBUILT FROM ROWS (`from_rows(to_rows)`), so nothing the producer holds privately reaches a court.
 
+#![allow(warnings)]
 use std::collections::BTreeMap;
 
 use misaka_palw_kernel::descriptor::{KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor};

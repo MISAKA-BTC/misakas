@@ -11,8 +11,8 @@
 //! `Respond` is open to any registered bond (`KernelLedgerV1::respond`: "a valid response pays nothing and closes the demand, whoever
 //! signs it"). The carrier's funder (the relay) is not an actor of the object: it is neither charged nor credited. The fixture's
 //! distinct card keys show distinct SIGNERS only; they are no evidence that the operators are independent.
-use super::*;
 use super::super::g14_t_campaign::offer_forged;
+use super::*;
 
 /// Every bond's (collateral, slashed, kernel reserved, owed), the money a forged object must not move.
 fn money(w: &World) -> Vec<(u64, u64, u128, u64)> {

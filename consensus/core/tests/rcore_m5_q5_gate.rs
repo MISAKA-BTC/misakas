@@ -39,6 +39,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_m5_q5_gate
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

@@ -15,6 +15,7 @@
 //! `PALW_GEN_BLESS=1 cargo test -p misaka-palw-gen --test vectors` rewrites them — which is a change
 //! of the vectors and is reviewed as a change of the semantics.
 
+#![allow(warnings)]
 use std::path::PathBuf;
 
 use misaka_palw_gen::output::{

@@ -19,6 +19,7 @@
 //!   implementation record states.
 //!
 //! **Each test states its expected result first.** `observe` records, after every block, what every reader would say.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_reopened_chain, t12_with_harness_cards_and_evm,
 };

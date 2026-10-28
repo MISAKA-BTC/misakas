@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `court_responder_coverage_pin` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 /// **PIN THE LIMITATION, NOT THE BEHAVIOUR: no shipped binary files a `CourtAttnRootClaimed`**
 /// (ADR-0082 Decision 2; mainnet audit 2026-09-06, C-2/H-5).
@@ -92,7 +91,8 @@ fn under_the_held_fence_the_panel_opens_no_bisection_and_accuses_with_the_carria
     let sampler = &sampler[..sampler.find("\n    }\n").expect("its end")];
     assert!(sampler.contains_code("palw_refutation_prompt_carriage_v1(prompt_ids_form, refutation)"), "the sampler carries");
     assert!(
-        sampler.contains_code("check_execution_step_refutation_opened_capped_v1(&refutation, &proven, prompt_opening.as_ref(), ladder)"),
+        sampler
+            .contains_code("check_execution_step_refutation_opened_capped_v1(&refutation, &proven, prompt_opening.as_ref(), ladder)"),
         "and grades the carriage it built"
     );
     assert!(source.contains_code("prompt_ids_opening: prompt_opening,"), "the accusation carries the tile the sampler opened");
@@ -119,7 +119,8 @@ fn the_capture_sampler_and_the_interval_route_reserve_and_the_sampler_prepares_o
     // Read with the whitespace squeezed out: a call the formatter splits across lines is the same call.
     let squeezed: String = arm.chars().filter(|c| !c.is_whitespace()).collect();
     let need = squeezed.find_code(".whole_capture_memory_need_v1(").expect("the capture is priced as a whole capture");
-    let reserve = squeezed.find_code("self.reserve_replay_at_widest_run_v1(\"full-seatcapture\",backend.as_mut(),").expect("and reserved");
+    let reserve =
+        squeezed.find_code("self.reserve_replay_at_widest_run_v1(\"full-seatcapture\",backend.as_mut(),").expect("and reserved");
     let offloaded = squeezed.rfind("offload(backend,move|b|{").expect("then offloaded");
     assert!(need < reserve && reserve < offloaded, "priced, reserved, offloaded — in that order");
     assert!(squeezed[reserve..].contains_code("break'verdictNone;"), "a refusal defers the duty and files nothing");
@@ -151,7 +152,10 @@ fn m1_a_court_close_spends_no_discarded_segment_resume() {
     let arm = &source[reserve..close];
     assert!(arm.contains_code("offload(backend, move |b|"), "the close still runs off the runtime");
     assert!(!arm.contains_code(".replay_accused_segment_v1("), "M1: no whole-segment replay whose result nothing reads");
-    assert!(arm.contains_code("refutation_for_free_prompt_index") && arm.contains_code("refutation_for_index"), "the refutation is the close");
+    assert!(
+        arm.contains_code("refutation_for_free_prompt_index") && arm.contains_code("refutation_for_index"),
+        "the refutation is the close"
+    );
 }
 
 /// **ADR-0133 S1 (3), pinned where it lives: a free-prompt partial seat resumes assigned
@@ -161,7 +165,8 @@ fn a_free_prompt_partial_seat_resumes_assigned_segments_past_v2() {
     use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
 
     let source = crate::palw_panel::source_support::former_parent_production_source_v1();
-    let start = source.find_code("Past Verification V2 a partial seat resumes assigned segments first").expect("the free-prompt S1 arm");
+    let start =
+        source.find_code("Past Verification V2 a partial seat resumes assigned segments first").expect("the free-prompt S1 arm");
     let capture = start + source[start..].find_code("palw_fp_capture_decode_v1(").expect("the capture arm");
     let arm = &source[start..capture];
     let resume = arm.find_code("palw_v2_try_partial_resume_v1(").expect("S1 runtime resume is on the live lane");
@@ -221,9 +226,13 @@ fn the_panel_pursues_a_named_leaf_serves_its_evidence_and_answers_the_held_court
     assert!(pursued < broke, "the pursuit runs before the gate files nothing");
     let resolver = source.find_code("fn open_retained_interval(").expect("the resolver");
     let served = source[resolver..].find_code("self.retained_leaf_evidence_v1(").expect("a leaf request is served");
-    let arithmetic = source[resolver..].find_code("base0_fp_block_leaves_request_decode_v1(interval_index)").expect("the interval kinds");
+    let arithmetic =
+        source[resolver..].find_code("base0_fp_block_leaves_request_decode_v1(interval_index)").expect("the interval kinds");
     assert!(served < arithmetic, "a leaf-evidence request is answered before any interval arithmetic");
-    assert!(source.contains_code("crate::palw_fp_seat::palw_fp_verify_leaf_request_v1("), "the authorizer verifies the leaf's message");
+    assert!(
+        source.contains_code("crate::palw_fp_seat::palw_fp_verify_leaf_request_v1("),
+        "the authorizer verifies the leaf's message"
+    );
     let loop_start = source.find_code("let da_duties = session.palw_da_duties_v2(vec![bond_key]);").expect("the DA loop");
     let held = source[loop_start..].find_code("if let Some(missing) = duty.held_missing {").expect("the held unit branch");
     let event = source[loop_start..].find_code("palw_da_event_index_parts_v1(duty.missing_event_index)").expect("the event path");
@@ -284,7 +293,6 @@ fn the_panel_pursues_a_named_leaf_serves_its_evidence_and_answers_the_held_court
 /// whole-block path is reached.
 #[test]
 fn a_fault_at_an_intervals_edge_asks_for_both_edges_and_names_from_them() {
-
     let source = crate::palw_panel::source_support::former_parent_production_source_v1();
     let arm = &source[source.find("PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {").expect("the arm")..];
     let edge = arm.find("let (left, right) = v4.range.edges_v1(step_leaf_count);").expect("the edges are read off the opening");
@@ -300,7 +308,6 @@ fn a_fault_at_an_intervals_edge_asks_for_both_edges_and_names_from_them() {
 /// interval's range never walks to its committed root, and the close refuses every liar.
 #[test]
 fn the_close_from_served_intervals_holds_and_asks_for_the_disputed_leafs_block() {
-
     let source = crate::palw_panel::source_support::former_parent_production_source_v1();
     let gather = &source[source.find("fn close_source_from_served_intervals_v1(").expect("the close's gathering")..];
     let gather = &gather[..gather.find("\n    }\n").expect("its end")];

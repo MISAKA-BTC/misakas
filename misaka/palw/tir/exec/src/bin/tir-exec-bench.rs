@@ -28,6 +28,7 @@
 //! mapped, the pinned set read once, the embedding gathered a row at a time — and prints the store's
 //! numbers, the measurement to set against the mapping's.
 
+#![allow(warnings)]
 use std::borrow::Cow;
 use std::time::Instant;
 

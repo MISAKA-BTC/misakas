@@ -6,6 +6,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test audit_emission_per_daa -- --nocapture`
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_capacity_s567_v1::{
     PALW_EMISSION_BLOCKS_PER_DAA_V1, PALW_EMISSION_UNIT_MILLI_V1, palw_emission_admits_v1, palw_emission_budget_milli_v1,
     palw_rider_shares_v1,

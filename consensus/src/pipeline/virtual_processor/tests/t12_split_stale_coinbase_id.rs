@@ -20,6 +20,7 @@
 //! this file pins is the one `FlowContext::submit_rpc_block` now applies —
 //! `Block::with_current_tx_ids` where an in-process block enters consensus — beside
 //! `modify_block_template`'s own `finalize`.
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::blockstatus::BlockStatus;
 

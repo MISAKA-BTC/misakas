@@ -26,8 +26,8 @@
 //! No aggregate-liability coefficient (ADR-0160's ρ) is used: each lock is backed one-for-one by posted collateral.
 
 use crate::palw_state_v2::{
-    PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2, palw_accuser_exposure_v1, palw_bond_accuser_reserve_v1, palw_bond_committed_raw_v1,
-    palw_bond_off_ceiling_raw_v1,
+    PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2, palw_accuser_exposure_v1, palw_bond_accuser_reserve_v1,
+    palw_bond_committed_raw_v1, palw_bond_off_ceiling_raw_v1,
 };
 
 /// **One bond's collateral split at a DAA** (sompi).

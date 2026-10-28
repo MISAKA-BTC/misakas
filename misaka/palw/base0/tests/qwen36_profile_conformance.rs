@@ -12,6 +12,7 @@
 //! of that lineage actually carries. Nothing here runs the model; the fixture is used only as the
 //! authority on what a Qwen3.6 artifact contains, which it is because the engine reads it.
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v1};

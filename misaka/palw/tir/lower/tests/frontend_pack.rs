@@ -1,4 +1,5 @@
 //! Independent primitive/state composition, bounded source conversion, and the existing engines.
+#![allow(warnings)]
 mod common;
 use misaka_palw_tir::builder::ProgramBuilder;
 use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;

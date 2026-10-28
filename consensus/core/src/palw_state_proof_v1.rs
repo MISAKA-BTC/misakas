@@ -81,11 +81,11 @@ pub struct PalwCollectionOpeningV1 {
 
 impl PalwCollectionOpeningV1 {
     pub fn root(&self) -> Hash64 {
-        if self.label==crate::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32 {
+        if self.label == crate::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32 {
             return crate::palw_native_audit_proof_v32::native_aux_opening_root_v32(&self.rows).unwrap_or_default();
         }
-        if self.label==crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32 {
-            return palw_collection_root_of_entries_v1(b"pending_payouts",self.rows.len(),self.rows.iter().cloned());
+        if self.label == crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32 {
+            return palw_collection_root_of_entries_v1(b"pending_payouts", self.rows.len(), self.rows.iter().cloned());
         }
         palw_collection_root_of_entries_v1(&self.label, self.rows.len(), self.rows.iter().cloned())
     }

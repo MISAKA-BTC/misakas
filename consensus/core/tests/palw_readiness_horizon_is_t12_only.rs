@@ -11,6 +11,7 @@
 //! mainnet fingerprint byte-identically to the build before the field existed — the numbers pinned
 //! beside every other testnet-12-only fence, unchanged.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PalwReadinessV2MaxAgeParamsV1, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_shipped_params,

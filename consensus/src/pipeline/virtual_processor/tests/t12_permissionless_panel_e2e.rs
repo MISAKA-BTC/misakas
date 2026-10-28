@@ -21,6 +21,7 @@
 //! 4. a second node fed A's blocks (IBD) reaches A's PALW state root block by block, and the tip's carriage reloads under it;
 //! 5. a third node sees A's chain, then a heavier sibling branch that binds `C` on another carrier, then A's again: at every switch
 //!    its engine state is the one a fresh replay of that branch commits, and `C`'s Panel is the same on both.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;

@@ -5,6 +5,7 @@
 //! rendering is a property of the tokenizer and vocabulary — but "correct because I reasoned it"
 //! is what a shared match arm looks like when it is wrong. This is the check.
 
+#![allow(warnings)]
 use misaka_palw_base0::e2e_drill::PalwRcFamilyV1;
 use misaka_palw_derive::derive::rendered_output_hash_for_family;
 

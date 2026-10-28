@@ -9,6 +9,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_2m_gate_stays_shut_after_licence_under_both_rules
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

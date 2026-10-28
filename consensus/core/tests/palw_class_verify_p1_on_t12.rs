@@ -5,6 +5,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_class_verify_p1_on_t12 -- --nocapture`
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

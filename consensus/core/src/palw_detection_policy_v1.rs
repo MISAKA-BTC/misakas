@@ -626,10 +626,8 @@ impl PalwDetectionPolicyV1 {
         }
         // **Resources, coupled to K.**
         let r = &self.resources;
-        let (fetch_bytes, replay_units) = (
-            u128::from(k_total) * u128::from(r.opening_bytes),
-            u128::from(k_total) * u128::from(r.replay_units_per_interval),
-        );
+        let (fetch_bytes, replay_units) =
+            (u128::from(k_total) * u128::from(r.opening_bytes), u128::from(k_total) * u128::from(r.replay_units_per_interval));
         if self.method == PalwInspectionMethodV1::IntervalReplay && fetch_bytes > u128::from(r.max_claim_fetch_bytes) {
             return Err(R::FetchBytesOverBudget { need: fetch_bytes, cap: r.max_claim_fetch_bytes });
         }
@@ -664,7 +662,11 @@ impl PalwDetectionPolicyV1 {
         let total = u64::from(rounds - 1).checked_mul(dl.round_spacing_daa).and_then(|x| x.checked_add(round_daa));
         let spacing_ok = rounds == 1 || dl.round_spacing_daa >= round_daa;
         if !spacing_ok || total.is_none_or(|t| t > dl.inspection_deadline_daa) {
-            return Err(R::DeadlineUnreachable { need: round_daa, spacing: dl.round_spacing_daa, deadline: dl.inspection_deadline_daa });
+            return Err(R::DeadlineUnreachable {
+                need: round_daa,
+                spacing: dl.round_spacing_daa,
+                deadline: dl.inspection_deadline_daa,
+            });
         }
         Ok(PalwDetectionPlanV1 {
             n,
@@ -928,7 +930,8 @@ pub fn palw_detection_draw_round_v2(
         return Ok(Vec::new());
     }
     let seed = palw_detection_round_seed_v2(binding, round, anchor);
-    let label = StreamLabelV1 { kind: StreamKindV1::Segment, scope_id: checker_scope_v2(&binding.checker), relation: round, repetition: 0 };
+    let label =
+        StreamLabelV1 { kind: StreamKindV1::Segment, scope_id: checker_scope_v2(&binding.checker), relation: round, repetition: 0 };
     let ranks = ChallengeStreamV1::new(&seed, &label)
         .distinct_indices(remaining, take)
         .map_err(|_| PalwDetectionDrawRefusalV2::Stream("the stream exhausted or the range was empty"))?;
@@ -980,7 +983,12 @@ pub fn palw_detection_draw_rounds_v2(
 
 /// **Is this claim shadowed** — fully re-executed by policy, at `shadow_rate_ppm`? `H(domain ‖ network ‖ anchor ‖ claim ‖ policy)`
 /// below the rate. The anchor is round 0's, so the producer cannot know at commitment.
-pub fn palw_detection_is_shadowed_v2(policy: &PalwDetectionPolicyV1, network_domain: &Hash64, anchor: &Hash64, claim_id: &Hash64) -> bool {
+pub fn palw_detection_is_shadowed_v2(
+    policy: &PalwDetectionPolicyV1,
+    network_domain: &Hash64,
+    anchor: &Hash64,
+    claim_id: &Hash64,
+) -> bool {
     if policy.shadow_rate_ppm == 0 {
         return false;
     }
@@ -1024,7 +1032,8 @@ pub fn palw_detection_seat_rounds_v2(
     let mut inspected = BTreeSet::new();
     let mut out = Vec::with_capacity(rounds as usize);
     for r in 0..rounds {
-        let drawn = palw_detection_draw_round_v2(binding, r, &palw_detection_seat_round_anchor_v2(panel_anchor, r), k_round, n, &inspected)?;
+        let drawn =
+            palw_detection_draw_round_v2(binding, r, &palw_detection_seat_round_anchor_v2(panel_anchor, r), k_round, n, &inspected)?;
         inspected.extend(drawn.iter().copied());
         out.push(drawn);
     }
@@ -1065,7 +1074,7 @@ pub fn palw_detection_claim_refusal_with_budget_v1(
     let regime = palw_detection_regime_v1(params.detection_policy_v1(), class_id, 0, accepted_daa);
     let result = match (regime, budget) {
         (PalwDetectionRegimeV1::Policy(policy), Some(budget)) => {
-            let mut bound = policy.clone();
+            let mut bound = *policy;
             bound.resources.court_openings_per_claim = budget.compellable_openings;
             bound.resources.da_bytes_per_claim = budget.da_bytes;
             bound.deadlines.inspection_deadline_daa =
@@ -1313,7 +1322,11 @@ impl PalwDetectionFunnelV1 {
 /// **The genesis design table** — a policy template per route, with a caller-supplied class id (roots are not invented). Every cost,
 /// unit and byte value is a DESIGN value until measured on the real artifact (`docs/design/palw/g14-detection-policy-2026-10-17.md`
 /// §7); the fence refuses arming regardless.
-pub fn palw_detection_genesis_design_v1(class_id: Hash64, route: PalwDetectionRouteV1, n_rule: PalwIntervalCountRuleV1) -> PalwDetectionPolicyV1 {
+pub fn palw_detection_genesis_design_v1(
+    class_id: Hash64,
+    route: PalwDetectionRouteV1,
+    n_rule: PalwIntervalCountRuleV1,
+) -> PalwDetectionPolicyV1 {
     let interval = matches!(route, PalwDetectionRouteV1::Base0A16 | PalwDetectionRouteV1::PalwQ361);
     PalwDetectionPolicyV1 {
         version: PALW_DETECTION_POLICY_VERSION_V1,
@@ -1360,7 +1373,7 @@ impl PalwDetectionRefusalV1 {
     /// A stable name per refusal (for `PalwModeV2Error::Invalid` and the metrics' log lines).
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Malformed(why) => *why,
+            Self::Malformed(why) => why,
             Self::NoPolicyForClass => "DETECTION_NO_POLICY_FOR_CLASS",
             Self::NotAtTheClaimsPrice { .. } => "DETECTION_NOT_AT_THE_CLAIMS_PRICE",
             Self::NoIntervals => "DETECTION_NO_INTERVALS",

@@ -195,7 +195,9 @@ pub struct PalwX3DeltaTermsV1 {
 impl PalwX3DeltaTermsV1 {
     /// `Δ = B_cold_fetch + B_check + B_localize + B_carrier + B_reorg_slack` (saturating).
     pub fn delta_daa(&self) -> u64 {
-        [self.cold_fetch_daa, self.check_daa, self.localize_daa, self.carrier_daa, self.reorg_slack_daa].into_iter().fold(0, u64::saturating_add)
+        [self.cold_fetch_daa, self.check_daa, self.localize_daa, self.carrier_daa, self.reorg_slack_daa]
+            .into_iter()
+            .fold(0, u64::saturating_add)
     }
 }
 
@@ -292,7 +294,9 @@ pub fn palw_x3_composition_refusal_v1(
     policy: &PalwClaimHardDeadlinePolicyV1,
 ) -> Option<&'static str> {
     let composed = palw_x3_composed_policy_v1(params, activation, *policy);
-    if (policy.prepare_daa, policy.observe_daa, policy.resolve_daa) != (composed.prepare_daa, composed.observe_daa, composed.resolve_daa) {
+    if (policy.prepare_daa, policy.observe_daa, policy.resolve_daa)
+        != (composed.prepare_daa, composed.observe_daa, composed.resolve_daa)
+    {
         return Some(
             "palw_claim_hard_deadline_v1: T_prepare, T_observe and T_resolve must be the composition of the windows read at activation (REQ-X3-1)",
         );

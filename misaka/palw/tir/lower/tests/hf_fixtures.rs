@@ -9,6 +9,7 @@
 //! tensor consumed (an unread tensor is a feature we might be missing), and logits equal to HF's
 //! within float tolerance with the same argmax at every position.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::weights::Checkpoint;
 use misaka_palw_tir_lower::{hf_weights, hl, parse_config_str};

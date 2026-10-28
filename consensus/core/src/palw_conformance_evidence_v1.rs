@@ -1051,12 +1051,11 @@ pub fn fresh_verify_v5_with(
     } else {
         misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(input.ctx, contract, sources, promises, input.tip_daa)
     };
-    let derived =
-        match collected {
-            Ok(S::Locked(b)) => Ok(b),
-            Ok(state) => Err(format!("{state:?}")),
-            Err(e) => Err(format!("POLICY_INVALID {e}")),
-        };
+    let derived = match collected {
+        Ok(S::Locked(b)) => Ok(b),
+        Ok(state) => Err(format!("{state:?}")),
+        Err(e) => Err(format!("POLICY_INVALID {e}")),
+    };
     fresh_verify_inner(input, Some(derived))
 }
 

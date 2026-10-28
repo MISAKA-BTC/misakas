@@ -232,7 +232,7 @@ impl Params {
         let Some(at) = fence.armed(self) else { return Ok(()) };
         if fence != PalwKernelRouteGatedFenceV1::ProbabilisticConstraintsV1 {
             let route = PalwKernelRouteGatedFenceV1::ProbabilisticConstraintsV1.armed(self);
-            if !route.is_some_and(|r| r.daa_score() <= at.daa_score()) {
+            if route.is_none_or(|r| r.daa_score() > at.daa_score()) {
                 return Err(PalwModeV2Error::Invalid(match fence {
                     PalwKernelRouteGatedFenceV1::SignedRegistrationV1 => {
                         "palw_signed_registration_v1 needs palw_probabilistic_constraints_v1 in force at or below it: tag 108 rides the \
@@ -262,17 +262,17 @@ impl Params {
     pub fn validate_palw_kernel_route_panel_one_v1(&self) -> Result<(), PalwModeV2Error> {
         let Some(at) = self.palw_kernel_route_panel_one_v1_fence() else { return Ok(()) };
         let route = PalwKernelRouteGatedFenceV1::ProbabilisticConstraintsV1.armed(self);
-        if !route.is_some_and(|r| r.daa_score() <= at.daa_score()) {
+        if route.is_none_or(|r| r.daa_score() > at.daa_score()) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_kernel_route_panel_one_v1 needs palw_probabilistic_constraints_v1 in force at or below it (the kernel route's seat draw)",
             ));
         }
-        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            if bundle.state.kernel_route_panel_one_from_daa() != Some(at.daa_score()) {
-                return Err(PalwModeV2Error::Invalid(
-                    "palw_kernel_route_panel_one_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1",
-                ));
-            }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.kernel_route_panel_one_from_daa() != Some(at.daa_score())
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_kernel_route_panel_one_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1",
+            ));
         }
         Ok(())
     }
@@ -307,7 +307,12 @@ mod tests {
 
     #[test]
     fn kernel_route_fences_are_dormant_and_refused_without_a_record() {
-        assert!(PALW_KERNEL_ROUTE_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
+        assert!(
+            PALW_KERNEL_ROUTE_ARMING_RECORDS_V1
+                .iter()
+                .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash),
+            "no record is pinned in this binary"
+        );
         for p in [MAINNET_PARAMS, TESTNET_PARAMS] {
             for fence in PalwKernelRouteGatedFenceV1::ALL {
                 assert_eq!(fence.armed(&p), None);
@@ -367,7 +372,10 @@ mod tests {
         use crate::palw_kernel_route_v1::*;
         // Default (None): the interim 3-of-3 at every height.
         assert_eq!(palw_kernel_route_seats_and_quorum_v1(None, u64::MAX), (3, 3));
-        assert_eq!(palw_kernel_route_seats_and_quorum_v1(None, 0), (PALW_KERNEL_ROUTE_INTERIM_SEATS_V1, PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1));
+        assert_eq!(
+            palw_kernel_route_seats_and_quorum_v1(None, 0),
+            (PALW_KERNEL_ROUTE_INTERIM_SEATS_V1, PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1)
+        );
         // Armed at 100: 3-of-3 below, Panel=1 at and past it.
         assert_eq!(palw_kernel_route_seats_and_quorum_v1(Some(100), 99), (3, 3));
         assert_eq!(palw_kernel_route_seats_and_quorum_v1(Some(100), 100), (1, 1));
@@ -395,7 +403,9 @@ mod tests {
             let records = [record(fence, g, 16_000), record(PalwKernelRouteGatedFenceV1::ProbabilisticConstraintsV1, g, 16_001)];
             let mut p = TESTNET_PARAMS;
             arm(&mut p, fence, Some(ForkActivation::new(16_000)));
-            let Err(PalwModeV2Error::Invalid(why)) = p.validate_palw_kernel_route_fence_record_in_v1(fence, &records) else { panic!() };
+            let Err(PalwModeV2Error::Invalid(why)) = p.validate_palw_kernel_route_fence_record_in_v1(fence, &records) else {
+                panic!()
+            };
             assert!(why.contains("at or below"), "{why}");
             p.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(16_001));
             assert!(p.validate_palw_kernel_route_fence_record_in_v1(fence, &records).is_err(), "route above it");

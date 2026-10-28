@@ -4,7 +4,7 @@
 //! logits committed under the tiled scheme and its params as a TIR inventory; a store over any
 //! commitment of its leaves; and the helpers that re-point a carriage at another commitment.
 #![allow(dead_code, unused_imports)]
-
+#![allow(warnings)]
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::PathBuf;

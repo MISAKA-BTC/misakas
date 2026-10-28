@@ -5,6 +5,7 @@
 //! lowering to an integer program (a convolution is an im2col gather and one matmul; the batch norm is folded), the version-2
 //! program on `InterpreterV2` (the image a `u8` HWC input), and admission. The integer output is held against HF's by cosine.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir as tir;

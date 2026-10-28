@@ -85,8 +85,8 @@ pub mod budget;
 pub mod challenge;
 pub mod check;
 pub mod claim_clock;
-pub mod claim_subject;
 pub mod claim_paid_material_generation_v5;
+pub mod claim_subject;
 pub mod court_scope;
 pub mod descriptor;
 pub mod element;
@@ -201,9 +201,6 @@ pub mod flat_seal9;
 // decision of 2026-10-15 (docs/PRINCIPLES.md §8: no cryptographic proofs of computation). Removed in the 2026-10-15 merge sweep.
 /// N3 (2026-10-15 round 3): BootstrapExact source contributions (inner 73), consumer-owned past `palw_beacon_bootstrap_v1`.
 pub mod beacon_bootstrap_v1;
-/// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
-/// `palw_model_eligibility_v1`; dormant.
-pub mod model_eligibility_v1;
 /// RFC-0016 V8 (inner 76): a verifier's capacity attestation, judged by the native consumer past `palw_capacity_attestation_v1`;
 /// dormant.
 pub mod capacity_attestation_v1;
@@ -213,6 +210,9 @@ pub mod claim_interactive_v3;
 pub mod claim_paid_v2;
 /// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
 pub mod econ_contracts_v1;
+/// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
+/// `palw_model_eligibility_v1`; dormant.
+pub mod model_eligibility_v1;
 pub mod panel_lifetime_v2;
 
 /// Owning full source39 grammar; no legacy source promotion.

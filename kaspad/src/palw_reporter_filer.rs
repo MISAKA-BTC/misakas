@@ -1771,7 +1771,10 @@ impl PalwPanelService {
             return;
         }
         let Some(probe) = filer.take_probe(duty.claim_id, bytes, current_daa) else { return };
-        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { return };
+        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+        else {
+            return;
+        };
         // At the widest prefill run the ledger grants, on this duty's own instance — the one the probe
         // below runs on (int-10.2 A2).
         let backends = self.backends();
@@ -3224,7 +3227,8 @@ mod tests {
             &this[start..start + this[start..].find("\n    }\n").expect("its end")]
         };
         // (a)
-        let fault = source.find_code("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
+        let fault =
+            source.find_code("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
         let arm = &source[fault..fault + source[fault..].find_code("self.persist_foreign_material(&duty.claim_id, &bytes);").unwrap()];
         let at = |needle: &str| arm.find(needle).unwrap_or_else(|| panic!("the fault arm no longer contains {needle:?}"));
         let order = [
@@ -3239,7 +3243,9 @@ mod tests {
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
         assert!(!arm[order[2]..order[5]].contains_code("break 'verdict"), "no exit of the accusation's block skips kind 4");
         assert!(
-            !arm.contains_code("court_pending.push(") && !arm.contains_code("court_outbox.push_pending(") && !arm.contains_code("accused.insert("),
+            !arm.contains_code("court_pending.push(")
+                && !arm.contains_code("court_outbox.push_pending(")
+                && !arm.contains_code("accused.insert("),
             "the decision queues, not the arm"
         );
         // The decision is `palw_capture_arm_files_v1` (its order is tested on a book:
@@ -3272,7 +3278,8 @@ mod tests {
         let seat_call = worker.find("self.seat_progress_tick_v1(").expect("seat stage");
         assert!(seat_call < tick && tick < submitter, "seat faults precede the filer tick and carrier phase");
         // The tick also advances terminal filings since the terminal carriage (`tick_with_terminal_v2`); the same seams are pruned.
-        assert!(body("pub(super) fn reporter_filer_tick_v1(").contains_code("filer.tick_with_terminal_v2(\n            court_outbox,\n            accused,\n            |entry, gated| \
+        assert!(body("pub(super) fn reporter_filer_tick_v1(").contains_code(
+            "filer.tick_with_terminal_v2(\n            court_outbox,\n            accused,\n            |entry, gated| \
              session.palw_reporter_filing_read_v1("
         ));
         // (d)

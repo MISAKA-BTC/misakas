@@ -21,6 +21,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rfc0012_safe_maturity_attacks -- --nocapture --test-threads=1
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

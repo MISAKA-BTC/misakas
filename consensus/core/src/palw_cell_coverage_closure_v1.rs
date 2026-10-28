@@ -183,7 +183,7 @@ impl<'a> PalwCellClosureModeV1<'a> {
         accepted_daa: u64,
         router_binding: Option<&'a crate::palw_router_binding_v2::PalwRouterBindingRowV2>,
     ) -> Self {
-        if !cell_closure_from_daa.is_some_and(|from| accepted_daa >= from) {
+        if cell_closure_from_daa.is_none_or(|from| accepted_daa < from) {
             Self::Off
         } else if memory_routing_from_daa.is_some_and(|from| accepted_daa >= from) {
             Self::MemoryRoutingV2 { router_binding: router_binding.filter(|row| row.bound_from_daa <= accepted_daa) }
@@ -347,7 +347,7 @@ pub fn palw_cell_closure_court_convicts_v2(
     profile: &PalwShapeProfileV3,
     router_binding: Option<&crate::palw_router_binding_v2::PalwRouterBindingRowV2>,
 ) -> bool {
-    if !memory_routing_from_daa.is_some_and(|from| accepted_daa >= from) {
+    if memory_routing_from_daa.is_none_or(|from| accepted_daa < from) {
         return palw_cell_closure_court_convicts_v1(cell_closure_from_daa, accepted_daa, profile);
     }
     let binding = router_binding.filter(|row| row.bound_from_daa <= accepted_daa);

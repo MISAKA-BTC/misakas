@@ -14,6 +14,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test g14_arm_legacy_17000
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_court_capacity_v1::*;
 use kaspa_consensus_core::palw_g14_gates_v1::*;
@@ -101,7 +102,12 @@ fn armed(outsider_lane: bool) -> (Params, Vec<PalwG14ArmingRecordV1>) {
 fn arm_legacy_17000_candidates_pass_every_gate_but_the_records() {
     let shipped = palw_t12_shipped_params();
     let ids = (shipped.consensus_params_id(), shipped.consensus_identity_id(), shipped.consensus_schedule_id());
-    assert!(PALW_G14_ARMING_RECORDS_V1.iter().all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash), "no record is pinned in this binary");
+    assert!(
+        PALW_G14_ARMING_RECORDS_V1
+            .iter()
+            .all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash),
+        "no record is pinned in this binary"
+    );
 
     // The candidates are exactly the two families' fences plus F03's outsider lane.
     let mut want: Vec<&str> = palw_g14_route_family_fences_v1(PalwG14RouteFamilyV1::LegacyPanelAttempt).to_vec();
@@ -119,7 +125,8 @@ fn arm_legacy_17000_candidates_pass_every_gate_but_the_records() {
         assert_eq!(f, Some(AT), "{name} armed at {AT}");
     }
     // Every gate passes with the records — the WHOLE validation, F02 and F03 included.
-    p.validate_palw_v2_with_arming_records_v1(&records).unwrap_or_else(|e| panic!("the 17,000 candidates validate with records: {e:?}"));
+    p.validate_palw_v2_with_arming_records_v1(&records)
+        .unwrap_or_else(|e| panic!("the 17,000 candidates validate with records: {e:?}"));
     // ... and only the records are missing.
     let unpinned = p.validate_palw_v2().expect_err("no record is pinned");
     assert!(format!("{unpinned:?}").contains("no arm-readiness record"), "{unpinned:?}");

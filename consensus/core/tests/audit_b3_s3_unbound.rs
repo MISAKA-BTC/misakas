@@ -1,6 +1,7 @@
 //! AUDIT-ONLY (lane B3). Measures the t12 S3 sampling geometry and the panel cut.
 //! Creates nothing, mutates nothing. Delete freely.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;
 use kaspa_consensus_core::palw_layer_sample_v3::{PALW_LAYER_SAMPLE_V3_SITES, palw_layer_sample_v3};

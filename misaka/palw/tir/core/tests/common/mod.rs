@@ -2,7 +2,9 @@
 //! validated, run by the reference evaluator's cone evaluator) on vectors supplied as params.
 #![allow(dead_code)]
 
+#[allow(clippy::duplicate_mod)]
 pub mod admission;
+#[allow(clippy::duplicate_mod)]
 pub mod models;
 
 use misaka_palw_tir::builder::{BlockBuilder, ProgramBuilder};

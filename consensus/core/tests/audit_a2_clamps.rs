@@ -2,6 +2,7 @@
 //! credit / collateral path, measured on the testnet-12 shipped card. Read-only: this file
 //! computes and prints, it changes nothing.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PALW_T12_DENSE_N_CTX, PALW_T12_HYBRID_N_CTX, Params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

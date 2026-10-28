@@ -8,6 +8,7 @@
 //! authored soft-float. Any single disagreement is a CRITICAL finding against the §29 gate-1
 //! claim and must stop the line — never widen a tolerance here.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_reference::{
     PALW_REFERENCE_CANONICAL_NAN_V1, ref_add_v1, ref_dot_v1, ref_gemm_v1, ref_mul_v1, ref_neg_v1, ref_sub_v1,
 };

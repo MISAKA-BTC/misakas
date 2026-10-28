@@ -103,9 +103,11 @@ pub(super) fn apply_memory_routing_v2(
                 artifact_root,
             };
             let binding_row = palw_router_binding_row_of_v2(&builder.state, &claim.class_id);
-            let verdict =
-                palw_memory_routing_verdict_v2(accusation, &actual, ladder, binding_row.as_ref(), claim.accepted_daa).map_err(|e| match e {
-                    crate::palw_step_refute::memory_v2::PalwGdnCourtErrorV2::Resource(cause) => PalwStateV2Error::NativeResource(cause),
+            let verdict = palw_memory_routing_verdict_v2(accusation, &actual, ladder, binding_row.as_ref(), claim.accepted_daa)
+                .map_err(|e| match e {
+                    crate::palw_step_refute::memory_v2::PalwGdnCourtErrorV2::Resource(cause) => {
+                        PalwStateV2Error::NativeResource(cause)
+                    }
                     other => PalwStateV2Error::ShardCourt(other.to_string()),
                 })?;
             match verdict {

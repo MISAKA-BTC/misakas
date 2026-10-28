@@ -34,6 +34,7 @@
 //! storage receipt is a promise, an infohash or an HTTP 200 is not availability, and nothing here moves a slash. Run `status`/`repair` from cron
 //! (with `--now-daa` from a node) to keep a claim's evidence alive after the miner's PC is off.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 
 use kaspa_hashes::Hash64;
@@ -66,6 +67,7 @@ fn read_roots(path: &Path) -> ClaimRoots {
 }
 
 /// `--providers` when the caller named them, otherwise every public testnet-12 evidence provider.
+#[allow(dead_code)]
 fn providers_arg(providers: &Option<String>) -> String {
     providers.clone().unwrap_or_else(misaka_endpoints::testnet12_evidence_provider_list_v1)
 }

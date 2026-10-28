@@ -119,16 +119,15 @@ fn apply_inner(
         PaidClaimObjectV2::Receipt { receipt } => Some(&receipt.enrollment),
         _ => None,
     };
-    if let Some(enrollment) = legacy_enrollment {
-        if b.state
+    if let Some(enrollment) = legacy_enrollment
+        && b.state
             .kernel_route()
             .unwrap()
             .paid_bootstrap_binding_v6(enrollment)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
             .is_some()
-        {
-            return Err(refused("V6 source enrollment refuses legacy funding/lock/receipt/round mode"));
-        }
+    {
+        return Err(refused("V6 source enrollment refuses legacy funding/lock/receipt/round mode"));
     }
     let signer_id = palw_kernel_bond_id_v1(signer);
     // PRINCIPLES §8 (2026-10-15): compact V4 stays decodable and is refused before it can spend admission.
@@ -237,7 +236,7 @@ fn apply_inner(
             // historical enrollment while admitting a generation wrapper.
             let mut live = 0usize;
             let mut job_consumers = 0usize;
-            for ((table, key), _) in &r.aux {
+            for (table, key) in r.aux.keys() {
                 if *table != PAID_CLAIM_ENROLLMENTS_V2 || key.len() != 64 {
                     continue;
                 }

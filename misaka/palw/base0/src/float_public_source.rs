@@ -29,7 +29,8 @@ use kaspa_consensus_core::{
     Hash64,
     palw_backend::{PalwFloatPublicSourceReaderV1, PalwOriginalCaptureReaderV1},
     palw_float_constraint_source_v1::{
-        PALW_FLOAT_PUBLIC_SIDECAR_MAGIC_V1, PalwFloatPublicSidecarHeaderV1, PalwFloatPublicSidecarReaderV1, write_float_public_sidecar_v1,
+        PALW_FLOAT_PUBLIC_SIDECAR_MAGIC_V1, PalwFloatPublicSidecarHeaderV1, PalwFloatPublicSidecarReaderV1,
+        write_float_public_sidecar_v1,
     },
     palw_float_decode_v1::palw_float32_event_phase_v1,
     palw_step_leg::PalwStepBindingV2,
@@ -152,15 +153,16 @@ mod tests {
     #[test]
     fn retained_float_material_streams_an_authenticated_row_from_any_retained_copy() {
         let mut context = kaspa_consensus_core::palw_base0_profile::rc_job_context(
-            &kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
-                .expect("base0 geometry"),
+            &kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+                kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+            )
+            .expect("base0 geometry"),
             2,
             3,
         );
         context.exact_decode_tokens = 3;
         let vocab = 20_000usize;
-        let rows: Vec<Vec<f32>> =
-            (0..3).map(|r| (0..vocab).map(|l| ((l * 7 + r * 13) % 101) as f32 * 0.5 - 20.0).collect()).collect();
+        let rows: Vec<Vec<f32>> = (0..3).map(|r| (0..vocab).map(|l| ((l * 7 + r * 13) % 101) as f32 * 0.5 - 20.0).collect()).collect();
         let generated = vec![4u32, 77, 19_999];
         let (material, root) = float_public_material_v1(&context, &rows, &generated).unwrap();
         let mut sidecar = Vec::new();
@@ -172,25 +174,39 @@ mod tests {
         let mut reader =
             PalwFloatPublicSidecarReaderV1::open_v1(Arc::new(BorrowedV1(leaked)) as Arc<dyn PalwOriginalCaptureReaderV1>).unwrap();
         let header = reader.header_v1().clone();
-        assert_eq!(full_logits_trace_root_v2(&context.context_hash(), &header.ids.summary, &header.ids.ordered_event_commitment), root);
+        assert_eq!(
+            full_logits_trace_root_v2(&context.context_hash(), &header.ids.summary, &header.ids.ordered_event_commitment),
+            root
+        );
         let position = 1u32;
-        let mut stream =
-            kaspa_consensus_core::palw_float_decode_v1::PalwFloatRowStreamV1::new_v1(&context.context_hash(), position, vocab as u32, &[77])
-                .unwrap();
+        let mut stream = kaspa_consensus_core::palw_float_decode_v1::PalwFloatRowStreamV1::new_v1(
+            &context.context_hash(),
+            position,
+            vocab as u32,
+            &[77],
+        )
+        .unwrap();
         loop {
             let offset = stream.lanes_read_v1();
             if offset == vocab as u32 {
                 break;
             }
-            let Some(Action::RowPart { offset: at, bytes }) = reader.poll_v1(Cursor::RowPart { offset }, Some(position)).unwrap() else {
+            let Some(Action::RowPart { offset: at, bytes }) = reader.poll_v1(Cursor::RowPart { offset }, Some(position)).unwrap()
+            else {
                 panic!("a row part")
             };
             assert!(bytes.len() <= 65_536);
             stream.part_v1(at, &bytes).unwrap();
         }
-        let Some(Action::RowFinish { opening }) = reader.poll_v1(Cursor::RowFinish, Some(position)).unwrap() else { panic!("a finish") };
-        let facts =
-            stream.finish_v1(&context.context_hash(), &root, &header.ids.summary, &header.ids.ordered_event_commitment, &opening).unwrap();
-        assert_eq!(facts.greedy_lane as usize, kaspa_consensus_core::palw_float_decode_v1::palw_float32_greedy_select_v1(&rows[1]).unwrap());
+        let Some(Action::RowFinish { opening }) = reader.poll_v1(Cursor::RowFinish, Some(position)).unwrap() else {
+            panic!("a finish")
+        };
+        let facts = stream
+            .finish_v1(&context.context_hash(), &root, &header.ids.summary, &header.ids.ordered_event_commitment, &opening)
+            .unwrap();
+        assert_eq!(
+            facts.greedy_lane as usize,
+            kaspa_consensus_core::palw_float_decode_v1::palw_float32_greedy_select_v1(&rows[1]).unwrap()
+        );
     }
 }

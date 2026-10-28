@@ -43,8 +43,8 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_artifact::{
-    PalwArtifactInventoryDigestV1, PalwArtifactInventoryV1,
-    PalwArtifactOperandV1, PalwArtifactRowDigestV1, PalwInventoryError, artifact_leaf_parts_v1,
+    PalwArtifactInventoryDigestV1, PalwArtifactInventoryV1, PalwArtifactOperandV1, PalwArtifactRowDigestV1, PalwInventoryError,
+    artifact_leaf_parts_v1,
 };
 use kaspa_consensus_core::palw_base0_ops::ScaleParams;
 use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_tensor_names_v1};
@@ -73,7 +73,9 @@ pub enum InventoryBuildError {
     Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
 }
 impl From<kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> for InventoryBuildError {
-    fn from(value: kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1) -> Self { Self::Resource(value) }
+    fn from(value: kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1) -> Self {
+        Self::Resource(value)
+    }
 }
 
 /// `(multiplier LE, shift)` — the five bytes op 9 reads.

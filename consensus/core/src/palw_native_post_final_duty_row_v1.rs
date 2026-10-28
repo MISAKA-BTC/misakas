@@ -1,8 +1,8 @@
 //! Row types of the RFC08 post-Final duty record (aux 144, `0x02 ‖ family ‖ job`), kept at the crate root so the native
 //! resource scanners can name them; the fold lives in `palw_state_v2::palw_native_post_final_duty_v1` (G14 r6 D4).
-use borsh::{BorshDeserialize, BorshSerialize};
 use crate::palw_court_duty_clock_v1::CourtDutyClockV1;
 use crate::palw_state_v2::PalwBondKeyV2;
+use borsh::{BorshDeserialize, BorshSerialize};
 
 /// One actor's duty in a post-Final accusation.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -40,4 +40,3 @@ pub struct PalwNativePostFinalDutyRowV1 {
     pub accused_daa: u64,
     pub duties: Vec<NativePostFinalDutyV1>,
 }
-

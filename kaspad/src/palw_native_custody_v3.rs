@@ -22,17 +22,13 @@
 //! (`misaka_palw_remote::provider_transport_v1`) over a loopback socket by default or between hosts with
 //! `--private-probe-native-network=remote` (2026-10-15 round 3).
 use kaspa_consensus_core::{
-    BlockHash,
-    header::Header,
     palw_attempt_material_v3::{
         PALW_MATERIAL_READY_CONTEXT_V3, PalwAttemptMaterialEnvelopeV3, PalwNativeMaterialReadyV3, draft_native_ready_v3,
         verify_ready_signature_v3,
     },
     palw_attempt_v2::{PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2},
     palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1},
-    palw_material_capacity_v1::{
-        PalwHeldMaterialBundleV1, PalwMaterialManifestV1, PalwMaterialNativeAuthorityV1, PalwMaterialScopeV1,
-    },
+    palw_material_capacity_v1::{PalwHeldMaterialBundleV1, PalwMaterialManifestV1, PalwMaterialNativeAuthorityV1},
     palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
     palw_state_v2::PalwBondKeyV2,
 };
@@ -355,7 +351,7 @@ mod tests {
     use super::*;
     use kaspa_consensus_core::{
         palw_attempt_material_v3::{PalwNativeMaterialBindingV3, PalwNativeMaterialSessionV3},
-        palw_material_capacity_v1::PalwMaterialCodecV1,
+        palw_material_capacity_v1::{PalwMaterialCodecV1, PalwMaterialScopeV1},
         tx::TransactionOutpoint,
     };
 

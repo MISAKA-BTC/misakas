@@ -9,6 +9,7 @@
 //! * a sink cannot be patched (a streamed run that tried would leave placeholder parameters);
 //! * packing the streamed bytes gives the root of packing the file.
 
+#![allow(warnings)]
 use misaka_palw_base0::qwen36::{Qwen36Writer, qwen36_dev_fixture};
 use misaka_palw_tir_artifact::palwart_pack::{LegacyStreamV3, PalwArtPackInputsV3, pack_legacy_stream_v3, pack_legacy_v3};
 use misaka_palw_tir_artifact::palwart_v3::family;

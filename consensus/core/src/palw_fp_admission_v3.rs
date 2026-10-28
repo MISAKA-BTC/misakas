@@ -1151,10 +1151,7 @@ mod tests {
 
         let mut accused = certified.clone();
         accused.set_open_courts_for_tests(h64(0xFC), 1);
-        assert_eq!(
-            palw_fp_receipt_clock_v1(&gc, &accused, &h64(0xFC), &claim, 124).map_err(|e| e.status),
-            Err("accusation-pending")
-        );
+        assert_eq!(palw_fp_receipt_clock_v1(&gc, &accused, &h64(0xFC), &claim, 124).map_err(|e| e.status), Err("accusation-pending"));
         match admit_gc(&accused, &ctx(6, 150, 6), &late, &env) {
             Err(PalwFpAdmissionV3Error::Uncertified(u)) => assert_eq!(u.status, "accusation-pending"),
             other => panic!("admission must refuse while an accusation is pending, got {other:?}"),
@@ -1225,10 +1222,7 @@ mod tests {
         let (b150, d150) = fold_empty_r6(&accused, &gc, &ctx(7, 150, 7));
         let row = palw_receipt_pause_row_v2(&b150, &h64(0xFC)).unwrap().expect("the pause row is written");
         assert_eq!(row.account().open_since_daa, Some(150));
-        assert_eq!(
-            palw_fp_receipt_clock_v2(&gc, &b150, &h64(0xFC), &claim, 124).map_err(|e| e.status),
-            Err("accusation-pending")
-        );
+        assert_eq!(palw_fp_receipt_clock_v2(&gc, &b150, &h64(0xFC), &claim, 124).map_err(|e| e.status), Err("accusation-pending"));
         assert!(
             d150.entries.iter().any(|e| matches!(e, crate::palw_state_v2::PalwDeltaEntryV2::KernelRouteRow { table, .. }
                 if *table == crate::palw_receipt_pause_v2::PALW_RECEIPT_PAUSE_TABLE_V2)),
@@ -1327,10 +1321,7 @@ mod tests {
 
         let mut bad = certified.clone();
         bad.set_kernel_aux_row_for_tests(PALW_RECEIPT_PAUSE_TABLE_V2, palw_receipt_pause_key_v2(&h64(0xFC)), Some(vec![9, 9, 9]));
-        assert_eq!(
-            palw_fp_receipt_clock_v2(&gc, &bad, &h64(0xFC), &claim, 124).map_err(|e| e.status),
-            Err("pause-row-malformed")
-        );
+        assert_eq!(palw_fp_receipt_clock_v2(&gc, &bad, &h64(0xFC), &claim, 124).map_err(|e| e.status), Err("pause-row-malformed"));
     }
 
     /// **User decision 2026-10-17 (Gate C retirement)**: a governed Final free-prompt claim is not retired before its certification can
@@ -1387,8 +1378,7 @@ mod tests {
         assert_eq!(palw_gate_c_retention_extension_daa_v1(&base, accepted), 0, "below Gate C: nothing added");
         assert_eq!(palw_gate_c_retention_extension_daa_v1(&gc, accepted), policy.lifetime_daa() + tail);
         let min = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&gc);
-        let promised =
-            accepted + crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(&state, &gc, &h64(1), accepted);
+        let promised = accepted + crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(&state, &gc, &h64(1), accepted);
         assert_eq!(promised, accepted + min + policy.lifetime_daa() + tail, "the producer's retention carries the extension");
         // The fixture's Final (124) is within the released minimum of its acceptance, so the material outlives the latest
         // certification decision and the whole receipt lane, and the claim's retirement.

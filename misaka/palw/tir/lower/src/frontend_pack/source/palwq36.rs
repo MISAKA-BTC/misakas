@@ -45,7 +45,7 @@ impl Reader {
             return Err(fail("header/range limit"));
         }
         let mut b = vec![0; usize::try_from(n).map_err(|_| fail("host size"))?];
-        self.file.read_exact(&mut b).map_err(|e| fail(e))?;
+        self.file.read_exact(&mut b).map_err(fail)?;
         self.pos = end;
         Ok(b)
     }
@@ -55,7 +55,7 @@ impl Reader {
         if end > self.len || end > MAX_HEADER {
             return Err(fail("header extent"));
         }
-        self.file.seek(SeekFrom::Start(end)).map_err(|e| fail(e))?;
+        self.file.seek(SeekFrom::Start(end)).map_err(fail)?;
         self.pos = end;
         Ok(at)
     }
@@ -77,8 +77,8 @@ impl Reader {
 }
 impl PalwQ36 {
     pub(super) fn open(path: &Path) -> Result<Self> {
-        let file = File::open(path).map_err(|e| fail(e))?;
-        let meta = file.metadata().map_err(|e| fail(e))?;
+        let file = File::open(path).map_err(fail)?;
+        let meta = file.metadata().map_err(fail)?;
         if !meta.is_file() || meta.len() > MAX_FILE {
             return Err(fail("file limit"));
         }
@@ -236,19 +236,19 @@ impl TensorSource for PalwQ36 {
         }
         let mut file = self.file.lock().map_err(|_| fail("file lock"))?;
         if e.width == e.stride {
-            file.seek(SeekFrom::Start(e.at + range.start)).map_err(|v| fail(v))?;
-            file.read_exact(&mut out).map_err(|v| fail(v))?;
+            file.seek(SeekFrom::Start(e.at + range.start)).map_err(fail)?;
+            file.read_exact(&mut out).map_err(fail)?;
         } else {
             // Strided views never materialize the full parameter header. Each bounded batch
             // preserves all bits, including zero-point fields used as q36 coefficients.
             let first = range.start / e.width;
             let last = (range.end - 1) / e.width;
             let mut at = first;
-            file.seek(SeekFrom::Start(e.at + first * 17)).map_err(|v| fail(v))?;
+            file.seek(SeekFrom::Start(e.at + first * 17)).map_err(fail)?;
             while at <= last {
                 let rows = (last - at + 1).min(16_384);
                 let mut batch = vec![0u8; rows as usize * 17];
-                file.read_exact(&mut batch).map_err(|v| fail(v))?;
+                file.read_exact(&mut batch).map_err(fail)?;
                 for (j, row) in batch.chunks_exact(17).enumerate() {
                     let i = at + j as u64;
                     if row[8] > 62 {
@@ -266,7 +266,7 @@ impl TensorSource for PalwQ36 {
         Ok(out)
     }
     fn validate_snapshot(&self) -> Result<()> {
-        let m = std::fs::metadata(&self.path).map_err(|e| fail(e))?;
+        let m = std::fs::metadata(&self.path).map_err(fail)?;
         if m.len() != self.length || m.modified().ok() != self.modified {
             return Err(fail("source changed"));
         }
@@ -314,7 +314,7 @@ mod tests {
         name(&mut b, "output.weight.exp");
         put(&mut b, 4);
         put(&mut b, 2);
-        let start = (b.len() as u64 + 8 + 16383) / 16384 * 16384;
+        let start = (b.len() as u64 + 8).div_ceil(16384) * 16384;
         put(&mut b, start);
         b.resize(start as usize, 0);
         b.extend_from_slice(&[0, 127, 128, 255, 3, 4]);

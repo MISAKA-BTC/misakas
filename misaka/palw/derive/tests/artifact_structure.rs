@@ -32,6 +32,7 @@
 //! Every check runs over EVERY corpus sample of its kind, not a lucky one: a writer that is right
 //! about a cube and wrong about a hierarchy is a writer that is wrong.
 
+#![allow(warnings)]
 use kaspa_hashes::Hash64;
 use misaka_palw_derive::{ClaimBinding, Derivation, derive_named};
 use std::collections::BTreeSet;

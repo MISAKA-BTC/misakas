@@ -70,20 +70,20 @@ impl Qwen36ArtifactV1 {
     pub(crate) fn inventory_param_rows_v1(&self, name: &str) -> Result<InventoryParamRowsV1, InventoryBuildError> {
         // Match the engine's source selection. The extent directory is immutable
         // artifact metadata; using it avoids an LRU miss loading unrelated weights.
-        if let (Store::Mapped { map, .. }, Some(residency), Some((key, _))) = (&self.store, &self.residency, expert_key_v1(name)) {
-            if residency.experts.contains_key(&key) {
-                let &(offset, len) = residency.expert_param_extents.get(name).ok_or_else(|| missing(name))?;
-                count(len, name)?;
-                let ticket = reserve_native_requests_v1(request::<WireScratch>(len, 1)?)?;
-                let mut wire = WireScratch { bytes: Vec::new(), _ticket: ticket };
-                wire.bytes.try_reserve_exact(len).map_err(|e| {
-                    NativeCoverageV1::unsupported::<WireScratch>("inventory encoded parameter allocation", &e.to_string())
-                })?;
-                wire.bytes.resize(len, 0);
-                let offset = u64::try_from(offset).map_err(|_| NativeCoverageV1::overflow::<WireScratch>("parameter file offset"))?;
-                map.read_exact_at(offset, &mut wire.bytes).map_err(|_| missing(name))?;
-                return InventoryParamRowsV1::decode(&wire.bytes, name);
-            }
+        if let (Store::Mapped { map, .. }, Some(residency), Some((key, _))) = (&self.store, &self.residency, expert_key_v1(name))
+            && residency.experts.contains_key(&key)
+        {
+            let &(offset, len) = residency.expert_param_extents.get(name).ok_or_else(|| missing(name))?;
+            count(len, name)?;
+            let ticket = reserve_native_requests_v1(request::<WireScratch>(len, 1)?)?;
+            let mut wire = WireScratch { bytes: Vec::new(), _ticket: ticket };
+            wire.bytes
+                .try_reserve_exact(len)
+                .map_err(|e| NativeCoverageV1::unsupported::<WireScratch>("inventory encoded parameter allocation", &e.to_string()))?;
+            wire.bytes.resize(len, 0);
+            let offset = u64::try_from(offset).map_err(|_| NativeCoverageV1::overflow::<WireScratch>("parameter file offset"))?;
+            map.read_exact_at(offset, &mut wire.bytes).map_err(|_| missing(name))?;
+            return InventoryParamRowsV1::decode(&wire.bytes, name);
         }
         InventoryParamRowsV1::decode(self.params.get(name).ok_or_else(|| missing(name))?, name)
     }

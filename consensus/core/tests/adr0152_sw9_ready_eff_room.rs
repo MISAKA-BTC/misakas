@@ -15,6 +15,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test adr0152_sw9_ready_eff_room
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

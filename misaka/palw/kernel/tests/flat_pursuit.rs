@@ -1,6 +1,7 @@
 //! RFC-0002 item 3 (lane RFC02-T): the flat-v5 candidate pursuit on G14-B's clock (`misaka_palw_kernel::flat_pursuit5`), at a toy and
 //! at the actual 32-position Qwen2.5 pilot program's shapes. Every number is derived from policy terms and shapes, nothing measured.
 
+#![allow(warnings)]
 mod common;
 
 use common::ledger_world::policy;

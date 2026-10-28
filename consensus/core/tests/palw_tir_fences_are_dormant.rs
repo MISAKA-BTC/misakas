@@ -24,6 +24,7 @@
 //! If a Phase F change turns this file red, the change is not dormant. A change that ARMS a Phase F
 //! fence on a preset re-pins the moved row here, in the commit that arms it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT13_DAA,

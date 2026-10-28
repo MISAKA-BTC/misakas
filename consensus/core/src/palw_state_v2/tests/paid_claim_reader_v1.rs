@@ -1,4 +1,5 @@
 //! Private mechanics regression: real kernel claim, native paid Lock/Receipt folds, then op247 reader.
+#![allow(warnings)]
 use super::*;
 use crate::palw_claim_challenge_v2::*;
 use crate::palw_kernel_route_v1::*;

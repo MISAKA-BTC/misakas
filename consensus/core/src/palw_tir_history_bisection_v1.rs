@@ -235,7 +235,11 @@ pub fn palw_tir_history_bisect_v1(
         for (party, view) in parties {
             let children =
                 (view.disclose)(0, padded).map_err(|error| PalwTirHistoryBisectionError::Refused { party, round: 0, error })?;
-            palw_attn_fold_check_v1(&view.root, &children).map_err(|error| PalwTirHistoryBisectionError::Refused { party, round: 0, error })?;
+            palw_attn_fold_check_v1(&view.root, &children).map_err(|error| PalwTirHistoryBisectionError::Refused {
+                party,
+                round: 0,
+                error,
+            })?;
         }
     }
     if responder.root == challenger.root {
@@ -252,8 +256,11 @@ pub fn palw_tir_history_bisect_v1(
             .map_err(|error| PalwTirHistoryBisectionError::Refused { party: PalwTirHistoryPartyV1::Responder, round, error })?;
         let mut disclosed: Vec<Vec<PalwAttnRangeClaimV1>> = Vec::with_capacity(2);
         for (i, (party, view)) in parties.iter().enumerate() {
-            let children =
-                (view.disclose)(first, count).map_err(|error| PalwTirHistoryBisectionError::Refused { party: *party, round, error })?;
+            let children = (view.disclose)(first, count).map_err(|error| PalwTirHistoryBisectionError::Refused {
+                party: *party,
+                round,
+                error,
+            })?;
             if children.len() != ranges.len() {
                 return Err(PalwTirHistoryBisectionError::ChildCountMismatch {
                     party: *party,
@@ -262,8 +269,11 @@ pub fn palw_tir_history_bisect_v1(
                     got: children.len(),
                 });
             }
-            palw_attn_fold_check_v1(&claims[i], &children)
-                .map_err(|error| PalwTirHistoryBisectionError::Refused { party: *party, round, error })?;
+            palw_attn_fold_check_v1(&claims[i], &children).map_err(|error| PalwTirHistoryBisectionError::Refused {
+                party: *party,
+                round,
+                error,
+            })?;
             commitments.push(palw_tir_history_round_commitment_v1(first, count, &children));
             disclosed.push(children);
         }
@@ -326,7 +336,7 @@ pub fn palw_tir_history_tile_operands_v1(
     params: A16AttnFusedParamsV1,
     tile: u64,
 ) -> Result<TileOperandsV1, PalwTirHistoryBisectionError> {
-    if kv_dim == 0 || k_series.len() % kv_dim != 0 {
+    if kv_dim == 0 || !k_series.len().is_multiple_of(kv_dim) {
         return Err(PalwTirHistoryBisectionError::RowsNotAligned { len: k_series.len(), kv_dim });
     }
     if v_series.len() != k_series.len() {
@@ -452,7 +462,7 @@ pub fn palw_tir_position_partials_v1(
 
 /// Positions and tiles of a K/V series, after the alignment checks shared by the operand cutters.
 fn series_shape_v1(k_series: &[i32], v_series: &[i32], kv_dim: usize) -> Result<(u64, u64), PalwTirHistoryBisectionError> {
-    if kv_dim == 0 || k_series.len() % kv_dim != 0 {
+    if kv_dim == 0 || !k_series.len().is_multiple_of(kv_dim) {
         return Err(PalwTirHistoryBisectionError::RowsNotAligned { len: k_series.len(), kv_dim });
     }
     if v_series.len() != k_series.len() {
@@ -526,18 +536,10 @@ pub fn adjudicate_position_terminal_v1(
     claims: &[PalwAttnRangeClaimV1; 2],
 ) -> Result<Vec<PalwTirHistoryPartyV1>, PalwTirHistoryBisectionError> {
     let recomputed = match position {
-        Some(ops) => a16_attn_tile_triple_v1(
-            &ops.q,
-            &ops.k_tile,
-            &ops.v_tile,
-            ops.kv_dim,
-            ops.kv_off,
-            ops.lanes,
-            ops.params,
-            m_star,
-            s_star,
-        )
-        .map_err(PalwTirHistoryBisectionError::Operands)?,
+        Some(ops) => {
+            a16_attn_tile_triple_v1(&ops.q, &ops.k_tile, &ops.v_tile, ops.kv_dim, ops.kv_off, ops.lanes, ops.params, m_star, s_star)
+                .map_err(PalwTirHistoryBisectionError::Operands)?
+        }
         None => identity_partial_v1(claims[0].v_acc.len()),
     };
     let mut convicted = Vec::new();
@@ -635,7 +637,11 @@ mod tests {
     }
 
     /// Run the bisection with each party's root equal to the fold of its own tiles, then adjudicate.
-    fn run(st: &Step, responder_tiles: &[PalwAttnRangeClaimV1], challenger_tiles: &[PalwAttnRangeClaimV1]) -> (PalwTirHistoryVerdictV1, Vec<PalwTirHistoryPartyV1>) {
+    fn run(
+        st: &Step,
+        responder_tiles: &[PalwAttnRangeClaimV1],
+        challenger_tiles: &[PalwAttnRangeClaimV1],
+    ) -> (PalwTirHistoryVerdictV1, Vec<PalwTirHistoryPartyV1>) {
         let ra = root_of(responder_tiles);
         let rb = root_of(challenger_tiles);
         let da = |f, c| palw_tir_history_disclose_v1(responder_tiles, f, c);
@@ -744,7 +750,10 @@ mod tests {
                 let got = palw_tir_history_bisect_v1(st.n, &a, &b);
                 if st.n > 1 {
                     assert!(
-                        matches!(got, Err(PalwTirHistoryBisectionError::Refused { party: PalwTirHistoryPartyV1::Responder, round: 0, .. })),
+                        matches!(
+                            got,
+                            Err(PalwTirHistoryBisectionError::Refused { party: PalwTirHistoryPartyV1::Responder, round: 0, .. })
+                        ),
                         "H={positions}: {got:?}"
                     );
                 } else {
@@ -764,7 +773,11 @@ mod tests {
                 assert!(
                     matches!(
                         got,
-                        Err(PalwTirHistoryBisectionError::Refused { party: PalwTirHistoryPartyV1::Responder, error: PalwAttnDissectError::SumDoesNotFold { .. }, .. })
+                        Err(PalwTirHistoryBisectionError::Refused {
+                            party: PalwTirHistoryPartyV1::Responder,
+                            error: PalwAttnDissectError::SumDoesNotFold { .. },
+                            ..
+                        })
                     ),
                     "H={positions}: {got:?}"
                 );
@@ -786,7 +799,10 @@ mod tests {
                     .expect("operands");
                 assert!(ops.k_tile.len() / st.kv_dim <= TILE);
                 assert!(ops.read_bytes() <= one_tile, "H={positions} tile {t}");
-                assert!(ops.read_bytes_with_rounds(rounds) <= one_tile + rounds as u64 * 2 * PALW_TIR_HISTORY_BISECTION_COMMITMENT_BYTES_V1);
+                assert!(
+                    ops.read_bytes_with_rounds(rounds)
+                        <= one_tile + rounds as u64 * 2 * PALW_TIR_HISTORY_BISECTION_COMMITMENT_BYTES_V1
+                );
             }
         }
     }
@@ -822,8 +838,19 @@ mod tests {
 
     /// The honest slot partials of one tile of a [`Step`] (real kernel, one row each).
     fn positions_of(st: &Step, tile: u64) -> Vec<PalwAttnRangeClaimV1> {
-        palw_tir_position_partials_v1(&st.q, &st.k, &st.v, st.kv_dim, st.kv_off, st.lanes, params(), st.root.max, st.root.exp_sum, tile)
-            .expect("honest slot partials")
+        palw_tir_position_partials_v1(
+            &st.q,
+            &st.k,
+            &st.v,
+            st.kv_dim,
+            st.kv_off,
+            st.lanes,
+            params(),
+            st.root.max,
+            st.root.exp_sum,
+            tile,
+        )
+        .expect("honest slot partials")
     }
 
     /// The tile partial a party states when its slot partials are `slots`: their fold.
@@ -859,7 +886,8 @@ mod tests {
                 let pos = palw_tir_history_position_round_v1(&l, &rp(l.tile), &cp(l.tile)).expect("a position");
                 let ops = palw_tir_position_operands_v1(&st.q, &st.k, &st.v, st.kv_dim, st.kv_off, st.lanes, params(), pos.position)
                     .expect("the position's operands");
-                let convicted = adjudicate_position_terminal_v1(ops.as_ref(), st.root.max, st.root.exp_sum, &pos.claims).expect("a terminal");
+                let convicted =
+                    adjudicate_position_terminal_v1(ops.as_ref(), st.root.max, st.root.exp_sum, &pos.claims).expect("a terminal");
                 Some((pos, convicted))
             }
         }
@@ -921,7 +949,8 @@ mod tests {
                         assert_eq!(pos.slot, slot);
                         assert_eq!(pos.rounds, 1);
                         assert_eq!(pos.commitments.len(), 2);
-                        let want = if liar_is_challenger { PalwTirHistoryPartyV1::Challenger } else { PalwTirHistoryPartyV1::Responder };
+                        let want =
+                            if liar_is_challenger { PalwTirHistoryPartyV1::Challenger } else { PalwTirHistoryPartyV1::Responder };
                         assert_eq!(convicted, vec![want], "H={positions} tile {t} slot {slot}");
                     }
                 }
@@ -974,7 +1003,14 @@ mod tests {
         };
         let got = palw_tir_history_position_round_v1(&localised, &bad, &honest);
         assert!(
-            matches!(got, Err(PalwTirHistoryBisectionError::Refused { party: PalwTirHistoryPartyV1::Responder, round: 0, error: PalwAttnDissectError::SumDoesNotFold { .. } })),
+            matches!(
+                got,
+                Err(PalwTirHistoryBisectionError::Refused {
+                    party: PalwTirHistoryPartyV1::Responder,
+                    round: 0,
+                    error: PalwAttnDissectError::SumDoesNotFold { .. }
+                })
+            ),
             "{got:?}"
         );
         // Two honest parties on agreeing tile claims: nothing to localise, and no party is refused.

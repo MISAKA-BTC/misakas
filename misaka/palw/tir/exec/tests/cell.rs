@@ -13,7 +13,9 @@
 //!   consequence;
 //! * a wrong generated id is a token fault of the last shard's cell; an input the source lacks is `Unavailable`; a cell over runs
 //!   (`TirRunInputsV1`, the `TirStepRun` form) verifies the same and refuses a run that does not reach the root.
-#![cfg(feature = "node")]
+#![allow(warnings)]
+// The helper device is reached over a Unix socket pair (`std::os::unix::net`), so the suite is Unix-only.
+#![cfg(all(feature = "node", unix))]
 
 mod node_common;
 

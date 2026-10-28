@@ -56,12 +56,12 @@ pub mod prim;
 pub mod program;
 pub mod program_v2;
 pub mod program_v39;
-pub mod validate_v39;
 pub mod scoring;
 pub mod tensor;
 pub mod types;
 pub mod validate;
 pub mod validate_v2;
+pub mod validate_v39;
 
 pub use error::{TirError, TirErrorKind, TirResult};
 pub use interp::{ConeEnv, Interpreter, MapParams, ParamSource, RunState, StepOutput};

@@ -269,7 +269,7 @@ impl PalwChainStateV2 {
     /// accepted under the memory/routing court reads the new held route from its
     /// immutable registered profile. Missing held profile data fails closed.
     pub fn held_claim_is_unanswerable_v2(&self, params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
-        if !params.memory_routing_court_from_daa().is_some_and(|at| claim.accepted_daa >= at) {
+        if params.memory_routing_court_from_daa().is_none_or(|at| claim.accepted_daa < at) {
             return params.held_class_is_unanswerable_v1(&claim.class_id);
         }
         match self.fp_work_profile_of(&claim.class_id) {
@@ -2508,7 +2508,12 @@ impl PalwChainStateV2 {
         &'a self,
         from: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
         to: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
-    ) -> impl Iterator<Item = (&'a crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, &'a crate::palw_staged_court_state_v1::PalwStagedCourtRowV1)> + 'a {
+    ) -> impl Iterator<
+        Item = (
+            &'a crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+            &'a crate::palw_staged_court_state_v1::PalwStagedCourtRowV1,
+        ),
+    > + 'a {
         self.staged_courts.range(*from..=*to)
     }
 
@@ -2526,7 +2531,15 @@ impl PalwChainStateV2 {
         let mut holds = BTreeSet::new();
         let now = self.last_point().map(|p| p.daa_score).unwrap_or(0);
         for (key, row) in &self.staged_courts {
-            if matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..)) {
+            if matches!(
+                key,
+                Key::TirAcquisition(..)
+                    | Key::TirRawChunk(_)
+                    | Key::TirAcceptedBody(_)
+                    | Key::TirPreparation(..)
+                    | Key::TirClaim(_)
+                    | Key::TirWitness(..)
+            ) {
                 let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
                 due.insert((at, *key));
                 holds.extend(row_holds);
@@ -2563,16 +2576,45 @@ impl PalwChainStateV2 {
                 }
             }
         }
-        let actual_due: BTreeSet<_> = self.staged_due.iter().filter(|(_, key)| {
-            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..))
-        }).copied().collect();
-        let actual_holds: BTreeSet<_> = self.staged_holds.iter().filter(|(_, _, key)| {
-            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..))
-        }).copied().collect();
-        if owners != self.staged_tir_by_owner || claims != self.staged_tir_by_claim || responders != self.staged_tir_responders
+        let actual_due: BTreeSet<_> = self
+            .staged_due
+            .iter()
+            .filter(|(_, key)| {
+                matches!(
+                    key,
+                    Key::TirAcquisition(..)
+                        | Key::TirRawChunk(_)
+                        | Key::TirAcceptedBody(_)
+                        | Key::TirPreparation(..)
+                        | Key::TirClaim(_)
+                        | Key::TirWitness(..)
+                )
+            })
+            .copied()
+            .collect();
+        let actual_holds: BTreeSet<_> = self
+            .staged_holds
+            .iter()
+            .filter(|(_, _, key)| {
+                matches!(
+                    key,
+                    Key::TirAcquisition(..)
+                        | Key::TirRawChunk(_)
+                        | Key::TirAcceptedBody(_)
+                        | Key::TirPreparation(..)
+                        | Key::TirClaim(_)
+                        | Key::TirWitness(..)
+                )
+            })
+            .copied()
+            .collect();
+        if owners != self.staged_tir_by_owner
+            || claims != self.staged_tir_by_claim
+            || responders != self.staged_tir_responders
             || preparers != self.staged_tir_preparers
             || producers != self.staged_tir_claims_by_producer
-            || due != actual_due || holds != actual_holds
+            || due != actual_due
+            || holds != actual_holds
         {
             return Err(PalwStateV2Error::CarriageInconsistent("TIR acquisition lifecycle indexes differ from rooted rows".into()));
         }
@@ -3808,7 +3850,9 @@ impl PalwChainStateV2 {
             exposure == self.reserved_exposure
         };
         if !exposure_matches {
-            return Err(PalwStateV2Error::CarriageInconsistent("reserved_exposure differs from the native duties it summarizes".into()));
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "reserved_exposure differs from the native duties it summarizes".into(),
+            ));
         }
         // **ADR-0056 Decision 3, the same property for the registry's own ledger.** Two
         // accumulators, each derivable from the collection it summarizes and each checked against
@@ -4038,27 +4082,29 @@ impl PalwChainStateV2 {
                 clock.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
             use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as R;
-            if let R::CourtArchiveProgress(r)=row {
+            if let R::CourtArchiveProgress(r) = row {
                 // Preserve local construction refusal instead of converting it
                 // into a malformed state/offence while loading accepted bytes.
                 r.check_loaded_context(self)?;
                 continue;
             }
             match row {
-                R::CourtSharedContext(c)=>c.check_context(self),
-                R::CourtSharedQuery(q)=>q.check_context(self),
-                R::CourtSharedIds(ids)=>ids.check_context(self),
-                R::CourtSharedResponse(r)=>r.check_context(self),
-                R::CourtEndArchive(r)=>r.check_loaded_context(self),
-                R::CourtCloseReceipt(r)=>r.check_loaded_context(self),
-                R::CourtSharedRoot(r)=>r.check_loaded_context(self),
-                R::CourtSharedRound(r)=>r.check_loaded_context(self),
-                R::CourtSharedBottom(r)=>r.check_loaded_context(self),
-                R::CourtSharedStream(s)=>s.check_context(self),
-                R::CourtSharedChunk(c)=>c.check_context(self),
-                R::CourtMaterialDraft(d)=>d.check_context(self),
-                R::CourtMaterial(m)=>m.check_context(self),_=>Ok(()),
-            }.map_err(PalwStateV2Error::CarriageInconsistent)?;
+                R::CourtSharedContext(c) => c.check_context(self),
+                R::CourtSharedQuery(q) => q.check_context(self),
+                R::CourtSharedIds(ids) => ids.check_context(self),
+                R::CourtSharedResponse(r) => r.check_context(self),
+                R::CourtEndArchive(r) => r.check_loaded_context(self),
+                R::CourtCloseReceipt(r) => r.check_loaded_context(self),
+                R::CourtSharedRoot(r) => r.check_loaded_context(self),
+                R::CourtSharedRound(r) => r.check_loaded_context(self),
+                R::CourtSharedBottom(r) => r.check_loaded_context(self),
+                R::CourtSharedStream(s) => s.check_context(self),
+                R::CourtSharedChunk(c) => c.check_context(self),
+                R::CourtMaterialDraft(d) => d.check_context(self),
+                R::CourtMaterial(m) => m.check_context(self),
+                _ => Ok(()),
+            }
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
@@ -4548,7 +4594,9 @@ impl PalwChainStateV2 {
         }
         let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
-            if self.court_service_holds_retirement_v1(id, claim) { continue; }
+            if self.court_service_holds_retirement_v1(id, claim) {
+                continue;
+            }
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {

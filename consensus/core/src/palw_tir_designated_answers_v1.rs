@@ -163,7 +163,9 @@ impl PalwTirDesignatedRequestV1 {
 }
 
 /// Open a request record. Validates the designated set and the obligation.
-pub fn palw_tir_open_designated_v1(request: PalwTirDesignatedRequestV1) -> Result<PalwTirDesignatedRecordV1, PalwTirDesignatedErrorV1> {
+pub fn palw_tir_open_designated_v1(
+    request: PalwTirDesignatedRequestV1,
+) -> Result<PalwTirDesignatedRecordV1, PalwTirDesignatedErrorV1> {
     if request.designated.is_empty() {
         return Err(PalwTirDesignatedErrorV1::NoDesignatedCustodian);
     }
@@ -211,7 +213,10 @@ pub fn palw_tir_mark_false_valid_v1(record: &mut PalwTirDesignatedRecordV1, sign
 }
 
 /// The request's outcome at `now_daa` (a pure function; the same at every replay).
-pub fn palw_tir_designated_outcome_v1(record: &PalwTirDesignatedRecordV1, now_daa: u64) -> Result<PalwTirDesignatedOutcomeV1, PalwTirDesignatedErrorV1> {
+pub fn palw_tir_designated_outcome_v1(
+    record: &PalwTirDesignatedRecordV1,
+    now_daa: u64,
+) -> Result<PalwTirDesignatedOutcomeV1, PalwTirDesignatedErrorV1> {
     if let Some(answer) = record.answer {
         return Ok(PalwTirDesignatedOutcomeV1::Answered { by: answer.by, body: answer.body });
     }
@@ -230,7 +235,10 @@ pub fn palw_tir_designated_outcome_v1(record: &PalwTirDesignatedRecordV1, now_da
 
 /// The designated custodians whose window had closed by `now_daa` without their own answer in it. Recorded only; never a slash here.
 /// A non-designated custodian is never in this list.
-pub fn palw_tir_missed_designated_v1(record: &PalwTirDesignatedRecordV1, now_daa: u64) -> Result<Vec<PalwTirCustodianIdV1>, PalwTirDesignatedErrorV1> {
+pub fn palw_tir_missed_designated_v1(
+    record: &PalwTirDesignatedRecordV1,
+    now_daa: u64,
+) -> Result<Vec<PalwTirCustodianIdV1>, PalwTirDesignatedErrorV1> {
     let mut missed = Vec::new();
     for (index, custodian) in record.request.designated.iter().enumerate() {
         let end = record.request.window_end_daa(index).ok_or(PalwTirDesignatedErrorV1::ZeroObligation)?;
@@ -246,7 +254,12 @@ pub fn palw_tir_missed_designated_v1(record: &PalwTirDesignatedRecordV1, now_daa
 }
 
 /// Whether an authenticated body may be reused for `to`: the same key and the same body digest, and nothing else.
-pub fn palw_tir_body_reusable_v1(from: &PalwTirRequestKeyV1, from_body: &PalwTirDigestV1, to: &PalwTirRequestKeyV1, to_body: &PalwTirDigestV1) -> bool {
+pub fn palw_tir_body_reusable_v1(
+    from: &PalwTirRequestKeyV1,
+    from_body: &PalwTirDigestV1,
+    to: &PalwTirRequestKeyV1,
+    to_body: &PalwTirDigestV1,
+) -> bool {
     from == to && from_body == to_body
 }
 
@@ -399,7 +412,14 @@ mod tests {
 
     #[test]
     fn an_honest_owner_awaiting_an_answer_is_not_idle_and_handover_keeps_evidence() {
-        let t = PalwTirOwnerTenureV1 { claim: [7; 32], awaiting: Some(key()), last_progress_daa: 0, pursuit_step: 3, evidence_until_daa: 900, charges: 5 };
+        let t = PalwTirOwnerTenureV1 {
+            claim: [7; 32],
+            awaiting: Some(key()),
+            last_progress_daa: 0,
+            pursuit_step: 3,
+            evidence_until_daa: 900,
+            charges: 5,
+        };
         assert!(!palw_tir_owner_idle_v1(&t, 10_000, 50), "awaiting is never idle");
         let mut waiting_done = t.clone();
         waiting_done.awaiting = None;
@@ -415,7 +435,8 @@ mod tests {
         let mut reg = PalwTirDesignatedRegistryV1::default();
         let before = reg.clone();
         palw_tir_apply_designated_event_v1(&mut reg, false, PalwTirDesignatedEventV1::Open(request(2))).unwrap();
-        palw_tir_apply_designated_event_v1(&mut reg, false, PalwTirDesignatedEventV1::FalseValid { key: key(), signer: c(1) }).unwrap();
+        palw_tir_apply_designated_event_v1(&mut reg, false, PalwTirDesignatedEventV1::FalseValid { key: key(), signer: c(1) })
+            .unwrap();
         assert_eq!(reg, before, "pre-fence: nothing is written");
         assert_eq!(borsh::to_vec(&reg).unwrap(), borsh::to_vec(&before).unwrap(), "pre-fence bytes are identical");
     }
@@ -430,10 +451,19 @@ mod tests {
         );
         let snapshot = reg.clone();
         // A non-designated answer is ignored (Ok, no change); a late answer is refused (no change). Requests open at 100, default at 120.
-        palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(9), body: [1; 32], at_daa: 105 }).unwrap();
+        palw_tir_apply_designated_event_v1(
+            &mut reg,
+            true,
+            PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(9), body: [1; 32], at_daa: 105 },
+        )
+        .unwrap();
         assert_eq!(reg, snapshot, "non-designated answer: no state change");
         assert_eq!(
-            palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(1), body: [1; 32], at_daa: 9_999 }),
+            palw_tir_apply_designated_event_v1(
+                &mut reg,
+                true,
+                PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(1), body: [1; 32], at_daa: 9_999 }
+            ),
             Err(PalwTirDesignatedRegistryErrorV1::Rule(PalwTirDesignatedErrorV1::AnswerAfterDefault))
         );
         assert_eq!(reg, snapshot, "refused answer: no state change");
@@ -444,7 +474,12 @@ mod tests {
         let events = |reg: &mut PalwTirDesignatedRegistryV1| {
             palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::Open(request(2))).unwrap();
             palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::FalseValid { key: key(), signer: c(2) }).unwrap();
-            palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(2), body: [3; 32], at_daa: 115 }).unwrap();
+            palw_tir_apply_designated_event_v1(
+                reg,
+                true,
+                PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(2), body: [3; 32], at_daa: 115 },
+            )
+            .unwrap();
         };
         let mut a = PalwTirDesignatedRegistryV1::default();
         let mut b = PalwTirDesignatedRegistryV1::default();

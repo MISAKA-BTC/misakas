@@ -1,5 +1,6 @@
 //! Actual native/store guard controls. No pruning-depth override or accepted
 //! claim/Final facts are supplied by these snapshot reader fixtures.
+#![allow(warnings)]
 use super::*;
 use crate::{model::stores::block_transactions::BlockTransactionsStoreReader, pipeline::virtual_processor::PalwPruningCaptureFaultV1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;

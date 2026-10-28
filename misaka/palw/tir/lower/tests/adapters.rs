@@ -6,6 +6,7 @@
 //! (cargo feature `legacy-oracle`, `src/hf_config/legacy_oracle`); the golden lowering gate
 //! (`tests/golden_lowering.rs`) is the permanent one.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::adapter::{self, builtin};
 use misaka_palw_tir_lower::spec::{Confidence, ModelSpec, Reference};
 use serde_json::Value;

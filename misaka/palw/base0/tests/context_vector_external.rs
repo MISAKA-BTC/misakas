@@ -14,6 +14,7 @@
 //! to completion, and the ADR's §9.5 says which host and how long. The document is pinned because
 //! a reproduction exists, not because enough of them agreed (ADR-0110 Decision 5).
 
+#![allow(warnings)]
 use misaka_palw_base0::context_vector::{
     PalwContextRulesetV1, PalwContextStageV1, PalwContextVerdictV1, palw_context_vector_v1, palw_verify_context_vector_v1,
 };

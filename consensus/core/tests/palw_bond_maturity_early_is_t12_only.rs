@@ -34,6 +34,7 @@
 //! The processor half — the acceptance layer and the assembler resolving one window on a real
 //! testnet-12 chain that crosses the fence — is `consensus`'s `t12_seat_maturity_fence`.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

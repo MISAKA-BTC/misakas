@@ -54,6 +54,7 @@
 //! * **V4:** the attempt lane made 20 / 36 / 68 / 85 claims a DAA at 4 / 8 / 16 / 32 parallel
 //!   producers (four merge rounds a DAA; a merge takes ≈ 21 at most); binding 100 and 1,000 claims in
 //!   one anchor block took 135 ms and 1,870 ms (1.35 / 1.87 ms a bind).
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
 };

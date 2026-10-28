@@ -17,6 +17,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_panel_part_c_g14_hold`
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

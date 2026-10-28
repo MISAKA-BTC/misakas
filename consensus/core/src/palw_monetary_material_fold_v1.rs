@@ -113,16 +113,15 @@ fn check_enrollment(
     if prior.is_none() && existing.len() >= p.max_contracts as usize {
         return Err(refused("monetary material contract table is full"));
     }
-    if let Some(old) = prior {
-        if old.terms != *t
+    if let Some(old) = prior
+        && (old.terms != *t
             || old.providers.iter().filter(|p| !p.charged || !p.fee_paid).count() + e.offers.len()
                 > PALW_MONETARY_MATERIAL_MAX_PROVIDERS_V1
             || e.offers.iter().any(|o| {
                 old.providers.iter().any(|previous| previous.provider == o.provider && (!previous.charged || !previous.fee_paid))
-            })
-        {
-            return Err(refused("replacement changes the accepted obligation or reuses an old provider"));
-        }
+            }))
+    {
+        return Err(refused("replacement changes the accepted obligation or reuses an old provider"));
     }
     let sponsor = active(builder, &t.sponsor)?;
     let mut operators = BTreeSet::new();
@@ -219,7 +218,9 @@ fn fund(
         builder.reserve_source_income_v1(ctx, e.id(), e.terms.root, offer.provider, ctx.daa_score, offer.prepaid_fee_sompi)?;
         let id = super::palw_bond_budget_fold_v1::source_income_id_v1(e.id(), e.terms.root, &offer.provider);
         builder
-            .bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.bind_material_income_v1(e.terms.root, id, j))?
+            .bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| {
+                b.bind_material_income_v1(e.terms.root, id, j)
+            })?
             .ok_or_else(|| refused("material fee provenance engine is missing"))?
             .map_err(|e| refused(e.to_string()))?;
     }
@@ -883,7 +884,12 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                     };
                     builder.settle_once_liable_v1(
                         ctx.daa_score,
-                        PalwSettlementObligationV1::with_party(PalwSettlementLegV1::MaterialProviderDefault, row.terms.root.as_bytes(), kid, 0),
+                        PalwSettlementObligationV1::with_party(
+                            PalwSettlementLegV1::MaterialProviderDefault,
+                            row.terms.root.as_bytes(),
+                            kid,
+                            0,
+                        ),
                         PalwSettlementConsumerV1::MonetaryMaterial,
                         p.collateral_sompi,
                         PalwSettlementDebitV1::Collateral { bond: kid, amount: p.collateral_sompi },
@@ -940,7 +946,12 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
 }
 
 /// Bind receipt authority before the monetary engine forgets a drained income.
-pub(super) fn observe_payment(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, income: Hash64, queue: Hash64) -> Result<(), PalwStateV2Error> {
+pub(super) fn observe_payment(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    income: Hash64,
+    queue: Hash64,
+) -> Result<(), PalwStateV2Error> {
     if builder.params.monetary_material_at_v1(ctx.daa_score).is_none() {
         return Ok(());
     }
@@ -990,8 +1001,7 @@ pub(super) fn observe_payment(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                 && observation.amount == provider.prepaid_fee_sompi
             {
                 provider.fee_paid = true;
-                row.service_fee_paid_sompi =
-                    row.service_fee_paid_sompi.checked_add(u128::from(observation.amount)).unwrap_or(u128::MAX);
+                row.service_fee_paid_sompi = row.service_fee_paid_sompi.saturating_add(u128::from(observation.amount));
             }
             row.last_payment = Some(observation.clone());
             write(builder, row.terms.root, Some(&row))?;
@@ -1405,13 +1415,11 @@ mod tests {
         attempt.artifact_root = h(41);
         attempt.executor_bond = victim.0;
         attempt.operator_id = h(4);
-        let canonical = crate::palw_attempt_material_v3::select_native_session_v3(
-            builder.state.monetary_material_rows_v1(),
-            &attempt,
-            2,
-            |p| builder.state.bond(p).map(|b| b.operator_id),
-        )
-        .map(|row| row.terms.root);
+        let canonical =
+            crate::palw_attempt_material_v3::select_native_session_v3(builder.state.monetary_material_rows_v1(), &attempt, 2, |p| {
+                builder.state.bond(p).map(|b| b.operator_id)
+            })
+            .map(|row| row.terms.root);
         assert!(
             refused.is_err() && canonical == Some(h(20)),
             "audit fix-cd: a third party's session naming the victim executor was {:?}; the victim's canonical session is now {:?} (own session is {:?})",
@@ -1490,7 +1498,10 @@ mod tests {
             builder.write_payout(queue, None).unwrap();
             observe_payment(&mut builder, &ctx(1_000), income, queue).unwrap();
             builder
-                .bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.confirm_native_income_payment_v1(&params.bond_budget().unwrap().policy, &income, 1_000, j)).unwrap()
+                .bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| {
+                    b.confirm_native_income_payment_v1(&params.bond_budget().unwrap().policy, &income, 1_000, j)
+                })
+                .unwrap()
                 .unwrap()
                 .unwrap();
         }
@@ -1499,7 +1510,11 @@ mod tests {
         assert_eq!(observed.entitlement, Some(super::super::palw_bond_budget_fold_v1::source_income_id_v1(e.id(), h(9), &bond(3))));
         tick(&mut builder, &ctx(1_435)).unwrap();
         assert_eq!(builder.state.monetary_material_release_anchor_v1(h(9)), None);
-        builder.bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.release_material_income_v1(1_436, j)).unwrap();
+        builder
+            .bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| {
+                b.release_material_income_v1(1_436, j)
+            })
+            .unwrap();
         tick(&mut builder, &ctx(1_436)).unwrap();
         let row = builder.state.monetary_material_row_v1(h(9)).unwrap();
         assert_eq!(row.tail_block, Some(ctx(1_436).block));

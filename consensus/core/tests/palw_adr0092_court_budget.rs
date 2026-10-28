@@ -5,6 +5,7 @@
 //! in it is a generated artifact. `misaka-palw-base0 --bin base0-class-sizing` is the generator;
 //! these are the assertions that make its findings hold.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, devnet_shipped_params, palw_rc_shipped_params};
 use kaspa_consensus_core::palw_attn_court_v1::palw_attn_court_admits_row_v1;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwCourtParamsV2};

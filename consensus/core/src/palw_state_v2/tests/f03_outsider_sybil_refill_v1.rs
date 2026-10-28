@@ -16,6 +16,7 @@
 //!
 //! TEST-ONLY values: ingress fee `FEE = 5` sompi (injected, not the V4 schedule), rung window 8 (cap 8, R = 4), collaterals 1,000.
 //! Fixture values, not adopted parameters. Distinct bond keys here are NOT evidence of independence or of a lottery approval.
+#![allow(warnings)]
 use super::*;
 use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
 
@@ -185,4 +186,3 @@ fn f03_t05_outsider_convicts_with_every_non_reserved_slot_held() {
     assert!(matches!(w.s.claim(&w.target).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the lying claim is voided");
     assert_eq!(before - w.s.bond(&bond_key(2)).unwrap().collateral, FEE, "no second ingress charge on the close");
 }
-

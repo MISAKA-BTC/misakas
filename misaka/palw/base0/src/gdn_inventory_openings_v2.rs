@@ -335,6 +335,7 @@ mod tests {
                 assert_eq!(root, inventory.root());
                 for opening in openings.iter() {
                     assert_eq!(Some(opening), open_artifact_leaf_v1(inventory.operands(), opening.leaf_index).as_ref());
+                    #[allow(clippy::needless_borrow)]
                     verify_artifact_opening_v1(&opening, root).unwrap();
                 }
             }

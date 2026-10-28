@@ -10,6 +10,7 @@
 //! disagrees, and a CREDITED step of F-L that starts below F-Q (D-23). Both are entries of
 //! `PALW_T12_CAPACITY_FENCES_V1`, never of the DAA-750 list.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS,
     TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_capacity_fences_v1,

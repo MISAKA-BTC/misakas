@@ -124,8 +124,11 @@ impl PalwTirFundedOriginalEnvelopeV1 {
         let literal = self.encode_v1()?;
         let payload = if tx.payload.starts_with(b"FPA1") {
             crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
-                .ok_or("invalid FPA1 funded carrier")?.inner
-        } else { &tx.payload };
+                .ok_or("invalid FPA1 funded carrier")?
+                .inner
+        } else {
+            &tx.payload
+        };
         // Inspect the actual outer TX: its signed input scope and funding output are never projected.
         if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || payload != literal {
             return Err("TFO1 is not paired to this literal original carrier".into());
@@ -199,7 +202,12 @@ mod tests {
             vec![TransactionInput::new(TransactionOutpoint::new(h(99), 0), vec![], 0, 0)],
             vec![
                 TransactionOutput::new(1, ScriptPublicKey::default()),
-                TransactionOutput::new(1000, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&e.payer_pubkey).as_bytes())),
+                TransactionOutput::new(
+                    1000,
+                    crate::mldsa87_primitives::p2pkh_mldsa87_spk(
+                        &kaspa_hashes::blake2b_512_address_payload(&e.payer_pubkey).as_bytes(),
+                    ),
+                ),
             ],
             0,
             crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
@@ -303,7 +311,7 @@ mod tests {
         let e = envelope();
         let plain = carrier(&e);
         let mut outer = plain.clone();
-        outer.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&plain.payload, &[7,8]);
+        outer.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&plain.payload, &[7, 8]);
         outer.finalize();
         assert_ne!(plain.id(), outer.id());
         let pairing = crate::palw_funded_original_coordinator_v1::palw_funded_original_answer_pairing_v1(&outer).unwrap();
@@ -316,13 +324,16 @@ mod tests {
             let mut wrong = outer.clone();
             match n {
                 0 => wrong.outputs[1].value -= 1,
-                1 => wrong.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&outer.payload, &[7,8]),
+                1 => wrong.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&outer.payload, &[7, 8]),
                 _ => wrong.payload.push(0),
             }
             wrong.finalize();
             assert!(e.inspect_carrier_v1(&wrong).is_err());
         }
-        assert!(e.funding.verify_signature_v1(&e.payer_pubkey).is_err(), "framing never authenticates synthetic consent or answer/output binding");
+        assert!(
+            e.funding.verify_signature_v1(&e.payer_pubkey).is_err(),
+            "framing never authenticates synthetic consent or answer/output binding"
+        );
     }
     #[test]
     fn actual_own_output_and_once_only_fee_are_bound_to_the_identical_carrier() {

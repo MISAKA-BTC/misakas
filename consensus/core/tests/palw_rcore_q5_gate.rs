@@ -20,6 +20,7 @@
 //!   offers that V2 upgrade before any pay set, and never a pay set of `Valid`s on a gated claim.
 //! * Every one with its fence-off twin, and every write round-trips through its delta.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2,
 };

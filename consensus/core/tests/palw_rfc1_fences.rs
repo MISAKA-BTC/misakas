@@ -5,6 +5,7 @@
 //! collapse), `None` on every shipped preset, named by `palw_fences_v1` and the fork id's probe, refused by
 //! `validate_palw_v2` without its prerequisites BY NAME, and armed by a drill entry whose result assembles.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FLAG_DAY_DAA, Params, SIMNET_PARAMS, TESTNET11_PARAMS, mainnet_shipped_params,
     palw_t12_release_v3_params, palw_t12_release_v5_params, palw_t12_shipped_params,

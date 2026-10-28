@@ -1,5 +1,6 @@
 //! Explicit Pixtral profile: source geometry, bias inventory and layout semantics.
 //! Test sources only until the ordered verification phase is authorized.
+#![allow(warnings)]
 use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::{
     encoder,
