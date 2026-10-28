@@ -93,3 +93,9 @@ node 切替を rollback した場合（旧 t12 の unit に戻す場合）も、
 - **seeder 側には、公開を止める要因はない。** 今のバイナリと設定のまま、新 genesis の node を配れる。
 - 公開の前に必要なのは、node を切り替えた後の `40-verify.sh` PASS と `60-join-check.sh` PASS。`EXPECT_FP` と release の kaspad のパスは node 側の kit で決まる。
 - 公開は止めないが、落ちると困る点: 既定 port で入れる入口は .113 の 1 か所だけ（§3-1、§3-4）。
+
+## 8. 2026-10-28 追記 — G14 17,400 で 4 台とも release の seeder へ(lane DEPLOY-PREP)
+- seeder は anchor の fence schedule id を完全一致で比べる。17,400 を予定に持つ binary の anchor は、旧 seeder(1174b965)からは
+  **upgrade した瞬間から** 広告されない(17,400 を待たない)。.113 の upgrade 直後に 4 台を入れ替える。手順は `G14-17400-ROLLOUT.md` §5。
+- seeder3 の host 95.111 は今 public t12 node(`kaspad-t12`、0.0.0.0:26311、外から到達可)を持つ → `lib-seeders.sh` の同居列を `yes` に。
+  その node の更新は `upgrade-95111.sh`(同 §4)。冗長化の提案(95.111 を 3 本目の anchor、seeder2/4 の委任、anchors-only の解除)は同 §5。

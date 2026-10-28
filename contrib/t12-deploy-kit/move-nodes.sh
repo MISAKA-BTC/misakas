@@ -33,7 +33,8 @@ move_target_spec() { # <id> <host>
 # at 94 % disk with the explorer on it, ibm runs three nodes. The 8k class keeps 8 ready seats against 7 required (retire_checks
 # refuses below that). Its bond stays registered; its readiness lapses and the panel draw stops naming it. Undo: `unretire 5`.
 #   <bond id>|<host>
-RETIRES=( "5|5104" )
+# 2026-10-27 (user, DEC-B5): b5 is KEPT — never retired with move-host.sh, back in install-5104.sh NODES for 17,400. No retirements.
+RETIRES=()
 
 # The spec the SOURCE (5.104) runs it as now — copied from install-5104.sh's NODES (move-host.sh checks the unit's
 # ExecStart names b<id>.sh before it stops anything, so a drift is refused rather than followed).

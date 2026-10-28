@@ -22,10 +22,13 @@ LIVE_ANCHORS=169.58.232.113,169.58.39.220
 #        name     ssh target           listen ip        binary path                           style config file                                       delegated name           public node on host
 SEEDER_TABLE='
 c5104    root@5.104.81.23     5.104.81.23      /usr/local/bin/misaka-dnsseeder-t12   env   /etc/default/misaka-dnsseeder-t12                 -                        no
-seeder3  root@95.111.236.186  95.111.236.186   /root/misaka-dnsseeder-t12            unit  /etc/systemd/system/misaka-dnsseeder-t12.service  seeder3.misakascan.com   no
+seeder3  root@95.111.236.186  95.111.236.186   /root/misaka-dnsseeder-t12            unit  /etc/systemd/system/misaka-dnsseeder-t12.service  seeder3.misakascan.com   yes
 ibm      root@169.58.39.220   169.58.39.220    /usr/local/bin/misaka-dnsseeder-t12   env   /etc/default/misaka-dnsseeder-t12                 -                        yes
 seeder1  root@169.58.232.113  169.58.232.113   /usr/local/bin/misaka-dnsseeder-t12   unit  /etc/systemd/system/misaka-dnsseeder-t12.service  seeder1.misakascan.com   yes
 '
+
+# 2026-10-27 (lane DEPLOY-PREP): seeder3's host 95.111 now runs a public t12 node, kaspad-t12 on 0.0.0.0:26311 (O-SEED3, its
+# --node-wrpc-borsh 26313 backing node) — so its last column is `yes` and 20-stage.sh no longer smoke-tests there (c5104 still does).
 
 seeder_names() { awk 'NF{print $1}' <<<"$SEEDER_TABLE"; }
 seeder_row() { awk -v n="$1" '$1==n' <<<"$SEEDER_TABLE"; }

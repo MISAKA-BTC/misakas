@@ -5,13 +5,19 @@
 #   b2  misaka-t12-seat2 (drop-in)  127.0.0.1:26311  borsh 26313  json 26314   8k seat (no longer an 8k producer — below)
 #   b3  misaka-t12-seat3 (drop-in)  127.0.0.1:26321  borsh 26323  json 26324   8k seat
 #   b4  misaka-t12-seat4 (drop-in)  127.0.0.1:26331  borsh 26333  json 26334   8k seat
-#   (b5 retired here on the 2026-10-26 seat reduction — move-nodes.sh RETIRES)  was: misaka-t12-seat5 (drop-in) 127.0.0.1:26341  borsh 26343  json 26344   8k seat
+#   b5  misaka-t12-seat5 (drop-in)  127.0.0.1:26341  borsh 26343  json 26344   8k seat — back under the kit for 17,400 (below)
 #   (b7 moved to .113 on 2026-10-02 — install-113.sh)  was: misaka-t12-seat7 (NEW unit) 127.0.0.1:26351  borsh 26353  json 26354   8k seat (card 7, re-keyed here 09-23)
 # borsh 26313 is what misaka-dnsseeder-t12 here already asks for peers.
 # 2026-10-26 seat reduction (docs/design/palw/t12-panel-room-bind-loop-1026.md §5): three seats on 8 vCPUs ran ~2.2 cores each
 # (load 8-11, 4.6 GiB swapped), so an 8k replay took a median 730 s and a p90 of ~10,000 s here against 250 s on .113. b5 retires
 # (`move-host.sh retire 5`, no target: .113 is at 94 % disk and hosts the explorer); b2 and b4 stay, b2 for the seeder's 26313.
 # b2's and b4's peer lists lose 127.0.0.1:26341, so their next `upgrade` is an ARGS change (UPGRADE_ARGS_CHANGE_OK=1).
+# **b5 kept (user, 2026-10-27, ledger DEC-B5 / O-B5)**: the retirement above was never carried out with move-host.sh (no
+# $STATE_DIR/moved-b5 marker; the unit stayed enabled). On 10-27 b5 was hand-upgraded to ddf5485d88df with a launch script derived
+# from that release's b4.sh. For 17,400 (lane DEPLOY-PREP) b5 is back in NODES with exactly the spec it ran before the reduction and
+# runs now (share 3,584, MemoryMax 9G, peers b2 + b4 + the public nodes), so `stage` generates b5.sh and `upgrade` handles it like
+# b2/b4. b2's and b4's peer lists regain 127.0.0.1:26341: an ARGS change (UPGRADE_ARGS_CHANGE_OK=1). MemoryMax stays 9G per seat
+# here (DEC-RAM: 3 × 12G > the host's 23.5 GiB). move-nodes.sh RETIRES is emptied.
 # Shares (R-core+, PLAN.md §2): five nodes on 24,033 MiB leave no room for the ideal, so every node here
 # is a SEAT ONLY with the minimum that runs one duty at a time: 3,584 MiB = one 8k seat duty 3,500 (+ 84);
 # the second replay slot and a covering signer's DA answer queue behind it. b2 was the fleet's second 8k
@@ -53,8 +59,9 @@ PUB="169.58.232.113:26311,169.58.39.220:26311,169.58.39.220:26321"
 # seats here plus a public node down at once would leave the 8k class under its 7 ready seats (PLAN.md §15)
 UPGRADE_REQUIRE_UP=(169.58.232.113:26311 169.58.39.220:26311 169.58.39.220:26321)
 NODES=(
-  "2|misaka-t12-seat2|dropin|127.0.0.1:26311|26313|26314|-|-|3584|9|none|0|1|127.0.0.1:26331,$PUB"
-  "4|misaka-t12-seat4|dropin|127.0.0.1:26331|26333|26334|-|-|3584|9|none|0|1|127.0.0.1:26311,$PUB"
+  "2|misaka-t12-seat2|dropin|127.0.0.1:26311|26313|26314|-|-|3584|9|none|0|1|127.0.0.1:26331,127.0.0.1:26341,$PUB"
+  "4|misaka-t12-seat4|dropin|127.0.0.1:26331|26333|26334|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26341,$PUB"
+  "5|misaka-t12-seat5|dropin|127.0.0.1:26341|26343|26344|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26331,$PUB"
 )
 # the first regenesis deploy's seat appdirs (a few MB each). NOT the route-matrix session's
 # /root/.t12f-b* or /root/t12-private/run/* — those are its to clear.

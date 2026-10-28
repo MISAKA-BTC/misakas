@@ -187,6 +187,27 @@ build_args() { # fills ARGS from the parsed node
         *) die "b$N_ID: produce must be none|floor|8k (2M is closed at launch), got $N_PRODUCE" ;;
     esac
     if [ "$N_HB" = 1 ]; then ARGS+=("--palw-heartbeat-miner-address=$HB_ADDR"); fi
+    # G14 capacity lane / F7 (lane DEPLOY-PREP, 17,400): the node-local byte cap of <appdir>/misaka-testnet-12
+    # (`--storage-cap-bytes`; it also implies --storage-gc-pruned-evm-indexes). fleet.env STORAGE_CAP_BYTES, empty = off (t12 has
+    # never set it; ARGS unchanged). Node-local, no consensus rule reads it. Recommended 30000000000 once E2E-OPS's full-scale F7 run
+    # confirms the peak — see G14-17400-ROLLOUT.md §9. Setting it is an ARGS change (UPGRADE_ARGS_CHANGE_OK=1).
+    if [ -n "${STORAGE_CAP_BYTES:-}" ]; then
+        [[ "$STORAGE_CAP_BYTES" =~ ^[0-9]+$ ]] && [ "$STORAGE_CAP_BYTES" -ge 10000000000 ] \
+            || die "STORAGE_CAP_BYTES=$STORAGE_CAP_BYTES — bytes, at least 10000000000 (a t12 appdir is ~10 GB before its first prune)"
+        ARGS+=("--storage-cap-bytes=$STORAGE_CAP_BYTES")
+    fi
+    # Lane ROLES / R4 (post-17,400): the wide128 kernel RegisterClass is posted by ONE node (card 1 = b1 on ibm by default) with
+    # `--palw-kernel-register-class=<file>`; KERNEL_REGISTER_CLASS_DRY_RUN=1 adds the dry run (logs class id, root, bond; posts nothing).
+    # fleet.env KERNEL_REGISTER_CLASS_FILE empty = off (the 17,400 upgrade itself carries NO register flag). Runbook: G14-17400-ROLLOUT.md §7.
+    if [ -n "${KERNEL_REGISTER_CLASS_FILE:-}" ] && [ "$N_ID" = "${KERNEL_REGISTER_CLASS_NODE:-1}" ]; then
+        ARGS+=("--palw-kernel-register-class=$KERNEL_REGISTER_CLASS_FILE")
+        [ "${KERNEL_REGISTER_CLASS_DRY_RUN:-1}" = 1 ] && ARGS+=(--palw-kernel-register-class-dry-run)
+    fi
+    # One node's temporary operator flags (post-17,400 runbook: e.g. the first Panel=1 kernel job's --palw-kernel-post-job on one
+    # node): NODE_EXTRA_ARGS_B<id> in the environment or fleet.env, space-separated, no spaces inside a flag. Empty = off. The drill
+    # and duty-flag refusals below still apply. Remove it again after use (re-stage + restart that one node).
+    local _nx="NODE_EXTRA_ARGS_B$N_ID"
+    if [ -n "${!_nx:-}" ]; then local _a; for _a in ${!_nx}; do ARGS+=("$_a"); done; fi
     # A host's own node flags (install-<host>.sh HOST_EXTRA_ARGS, e.g. 5.104's --palw-seat-replay-slots=1), last, on every node here.
     if [ -n "${HOST_EXTRA_ARGS+set}" ]; then ARGS+=("${HOST_EXTRA_ARGS[@]}"); fi
     local a

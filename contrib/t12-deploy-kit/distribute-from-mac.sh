@@ -25,6 +25,8 @@
 #                                       .113, ibm as $KERNEL_MODEL_FILE.incoming (sha256 = KERNEL_MODEL_SHA256 checked here);
 #                                       install-*.sh stage verifies again and copies it into each node's
 #                                       <appdir>/misaka-testnet-12/palw-kernel-models/ (PLAN.md section 15 addendum)
+#   ./distribute-from-mac.sh register-class <file>   post-17,400: wide128's RegisterClass .bin -> ibm (G14-17400-ROLLOUT.md §7)
+#   ./distribute-from-mac.sh 95111      the release kaspad (+ seeder) -> 95.111's $INCOMING/$REV (upgrade-95111.sh)
 set -euo pipefail
 KIT=$(cd "$(dirname "$0")" && pwd)
 . "$KIT/fleet.env"
@@ -137,5 +139,26 @@ kernel-model)
         on "$h" "sha256sum $KERNEL_MODEL_FILE.incoming"
         say "kernel model -> $h (as .incoming; stage verifies and places it per node)"
     done ;;
-*) sed -n '2,27p' "$0"; exit 2 ;;
+register-class)
+    # lane ROLES R4 / DEPLOY-PREP (post-17,400): wide128's encoded RegisterClass (gen-wide128-palwkm's
+    # wide128-v1-7.register-class.bin) -> the ONE host whose node posts it (KERNEL_REGISTER_CLASS_HOST, default ibm = b1).
+    rc=${2:-}; [ -f "$rc" ] || die "usage: $0 register-class <wide128-v1-7.register-class.bin>"
+    [ -n "${KERNEL_REGISTER_CLASS_FILE:-}" ] && [ -n "${KERNEL_REGISTER_CLASS_SHA256:-}" ] || die "set KERNEL_REGISTER_CLASS_FILE and KERNEL_REGISTER_CLASS_SHA256 in fleet.env"
+    [ "$(lsha "$rc")" = "$KERNEL_REGISTER_CLASS_SHA256" ] || die "register-class sha256 on the Mac differs from KERNEL_REGISTER_CLASS_SHA256"
+    h=${KERNEL_REGISTER_CLASS_HOST:-ibm}
+    on "$h" "mkdir -p $(dirname "$KERNEL_REGISTER_CLASS_FILE")"
+    push "$h" "$rc" "$KERNEL_REGISTER_CLASS_FILE"
+    [ "$(on "$h" "sha256sum $KERNEL_REGISTER_CLASS_FILE" | cut -d' ' -f1)" = "$KERNEL_REGISTER_CLASS_SHA256" ] || die "sha256 on $h differs after copy"
+    say "register-class -> $h:$KERNEL_REGISTER_CLASS_FILE (sha ok)" ;;
+95111)
+    # O-SEED3 (lane DEPLOY-PREP): seeder3's backing node kaspad-t12 on 95.111 is outside the three kit hosts. Ship the release
+    # kaspad (and the seeder) to its $INCOMING/$REV; upgrade-95111.sh does the rest.
+    need_rev
+    [ "$(lsha "$CACHE/$REV/kaspad")" = "$KASPAD_SHA256" ] || die "kaspad sha256 on the Mac differs from fleet.env"
+    on 95111 "mkdir -p $INCOMING/$REV"
+    push 95111 "$CACHE/$REV/kaspad" "$INCOMING/$REV/"
+    [ "$SEEDER_SHA256" = KEEP ] || push 95111 "$CACHE/$REV/misaka-dnsseeder" "$INCOMING/$REV/"
+    on 95111 "cd $INCOMING/$REV && sha256sum *"
+    say "binaries -> 95.111 ($INCOMING/$REV)" ;;
+*) sed -n '2,29p' "$0"; exit 2 ;;
 esac

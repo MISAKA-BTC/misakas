@@ -40,9 +40,15 @@ BINARIES=(kaspad misaka palw-class)
 # int-10.2 D1: a two-seat host since b7 moved here (2026-10-02) — the host pinner and the host ledger, as on 5.104 and ibm.
 HOST_PINNER=1
 HOST_LEDGER_DIR=/run/misaka-palw
+# MemoryMax (DEC-RAM, user 2026-10-27, applied for 17,400 by lane DEPLOY-PREP): 12 GiB on this two-seat host. b7 goes 9G -> 12G.
+# b6 is NOT lowered to 12G by default: it runs at 17G today, and on 10-27 its cgroup read memory.current 11.4 GiB (anon 7.15 GiB +
+# file 4.3 GiB) with memory.peak 13.9 GiB. Under 12G the ledger's cgroup term (memory.max − memory.current − 1 GiB, page cache
+# included — the header above) would sit far below b6's 8 GiB share and refuse duties, and b6 is the public entry node, a heartbeat
+# miner and the explorer's node. To apply the decision literally, change b6's memmax field 17 -> 12 below (Lead/user call; the
+# fields stay literal numbers: kaspad/tests/t12_role_memory_figures.rs parses them).
 NODES=(
   "6|misaka-t12-node|dropin|0.0.0.0:26311|26313|26314|26312|8545|8192|17|floor|1|1|169.58.39.220:26311,169.58.39.220:26321"
-  "7|misaka-t12-seat7|new|127.0.0.1:26351|26353|26354|-|-|3584|9|none|0|1|127.0.0.1:26311,169.58.39.220:26311,169.58.39.220:26321"
+  "7|misaka-t12-seat7|new|127.0.0.1:26351|26353|26354|-|-|3584|12|none|0|1|127.0.0.1:26311,169.58.39.220:26311,169.58.39.220:26321"
 )
 OLD_APPDIRS=(/root/.t12)
 EXPLORER_DB=${EXPLORER_DB:-kaspa_t12r}
