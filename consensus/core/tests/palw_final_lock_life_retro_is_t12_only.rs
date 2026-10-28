@@ -32,10 +32,11 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as the fleet runs it — the DAA-750 post-launch release (`c3dbaee3c`): params, identity,
 /// schedule. `palw_final_lock_life_is_t12_only`'s `T12_RELEASE`; this fence, dormant, must not move it.
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
+    "970ecf83d7bcbced782456e5dfc6f8d2d02c294e531785714dbf6600353eefa7",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "5540edc1abf8648d8e4ff76612f56bccd2fcbead3065ef6237c2fb74a86103fb",
 );
 
 /// Heights the next flag day might take: above the DAA-750 release (its lane V02 fence must be at or
@@ -140,6 +141,8 @@ fn arming_the_retro_life_moves_the_params_and_schedule_ids_but_not_the_identity(
     let mut genesis = palw_t12_launch_params_v1();
     genesis.palw_final_lock_life = Some(ForkActivation::new(0));
     genesis.palw_final_lock_life_retro = Some(ForkActivation::new(0));
+    genesis.palw_final_lock_full_collateral = Some(ForkActivation::new(17_400));
+    genesis.sync_palw_final_lock_full_collateral();
     genesis.sync_palw_rcore_plus();
     genesis.validate_palw_v2().expect("a network may be born with the rule");
     assert_ne!(genesis.consensus_identity_id().to_string(), palw_t12_launch_params_v1().consensus_identity_id().to_string());

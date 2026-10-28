@@ -602,6 +602,9 @@ impl Params {
         measured: &[PalwRfc0016MeasuredRecordV1],
         arming: &[PalwRfc0016ArmingRecordV1],
     ) -> Result<(), PalwModeV2Error> {
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
         let Some(at) = fence.armed(self) else { return Ok(()) };
         if !palw_rfc0016_values_measured_v1(values, measured) {
             return Err(PalwModeV2Error::Invalid(match fence {
@@ -613,7 +616,8 @@ impl Params {
                 }
             }));
         }
-        palw_rfc0016_arming_record_admits_v1(fence, self.genesis.hash, at, values, arming).map_err(PalwModeV2Error::Invalid)
+        palw_rfc0016_arming_record_admits_v1(fence, self.palw_arming_record_genesis_v1(), at, values, arming)
+            .map_err(PalwModeV2Error::Invalid)
     }
 
     /// **`palw_elastic_final_capacity_v1`'s refusals**: the mirror; a ConsensusV2 rule on a network whose model registry governs; the

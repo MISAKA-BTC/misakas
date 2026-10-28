@@ -248,7 +248,7 @@ impl Params {
         if self.has_isolated_g14_genesis_v1() {
             return Ok(());
         }
-        match palw_kernel_route_arming_record_admits_v1(fence, self.genesis.hash, at.daa_score(), records) {
+        match palw_kernel_route_arming_record_admits_v1(fence, self.palw_arming_record_genesis_v1(), at.daa_score(), records) {
             Ok(()) => Ok(()),
             Err(PalwG14ArmingRefusalV1::NoRecord) => Err(PalwModeV2Error::Invalid(fence.no_record_refusal())),
             Err(other) => Err(PalwModeV2Error::Invalid(other.reason())),

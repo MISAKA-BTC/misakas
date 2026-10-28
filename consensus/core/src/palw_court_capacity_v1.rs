@@ -522,16 +522,17 @@ impl Params {
             // slot, a pinned `UserDecision` waiver for exactly this (fence, network, height, slot). Any other policy without a
             // measurement, the placeholder (above) and `policy.validate()` (above) keep refusing.
             if fence.policy == crate::palw_g14_values_v1::PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1 {
+                let genesis = self.palw_arming_record_genesis_v1();
                 let record = records.iter().find(|record| {
                     record.fence == crate::palw_g14_gates_v1::PalwG14GatedFenceV1::CourtCapacityV1
-                        && record.genesis == self.genesis.hash
+                        && record.genesis == genesis
                         && record.activation_daa == at
                 });
                 let approved = record.and_then(|r| r.evidence.get(PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1)).is_some_and(|d| {
                     matches!(
                         crate::palw_arming_waiver_v1::palw_arming_evidence_kind_v1(
                             "palw_court_capacity_v1",
-                            self.genesis.hash,
+                            genesis,
                             at,
                             PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1 as u16,
                             crate::palw_g14_gates_v1::PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1[PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1],
@@ -553,7 +554,7 @@ impl Params {
         };
         let record = records.iter().find(|record| {
             record.fence == crate::palw_g14_gates_v1::PalwG14GatedFenceV1::CourtCapacityV1
-                && record.genesis == self.genesis.hash
+                && record.genesis == self.palw_arming_record_genesis_v1()
                 && record.activation_daa == at
         });
         if record.and_then(|record| record.evidence.get(PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1)) != Some(&measurement.digest()) {

@@ -11009,6 +11009,9 @@ pub fn palw_t12_launch_params_v1() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 
@@ -11933,6 +11936,7 @@ pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
             }
         }
     }
+    params.sync_palw_g14_gates_v1();
 }
 
 /// **testnet-12's int-13 list — the code-change-only fences that wait on a height** (written for the coordinator's brief of 2026-10-08, a
@@ -11997,6 +12001,7 @@ pub fn palw_t12_arm_int13_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
             }
         }
     }
+    params.sync_palw_g14_gates_v1();
 }
 
 /// **testnet-12 as its int-12 release (the DAA-5,300 flag day, `rcore/int-12`) ships it** — [`palw_t12_shipped_params`] with the int-13
@@ -12036,6 +12041,9 @@ pub fn palw_t12_release_v4_params() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 
@@ -12055,6 +12063,9 @@ pub fn palw_t12_release_v3_params() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 
@@ -12076,6 +12087,9 @@ pub fn palw_t12_release_v2_params() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 
@@ -12098,6 +12112,9 @@ pub fn palw_t12_release_v1_params() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 

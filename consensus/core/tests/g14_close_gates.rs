@@ -441,6 +441,7 @@ fn an_arming_record_admits_exactly_its_network_and_height() {
 fn staged_court_validation_requires_the_legacy_filer_fence() {
     let mut p = palw_t12_shipped_params();
     p.palw_staged_public_court_v1 = Some(ForkActivation::new(RELEASE));
+    p.sync_palw_g14_gates_v1();
     let why = palw_g14_staged_court_needs_legacy_filer_v1(&p).expect_err("no filer");
     assert!(format!("{why:?}").contains("palw_legacy_public_filer_v1"), "{why:?}");
     // The whole validation names the prerequisite (asked before the record gate).
@@ -604,8 +605,8 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     let s3 = fold_sp(&r.p, &fp_armed, &r.s, &ctx(3, FENCE - 1, 3, 0), &[commit], PalwBlockWorkV3::None, Hash64::default())
         .expect("admitted before the fence");
     assert!(s3.claim(&h(0xB1)).is_some());
-    // Below every fence (testnet-12 as shipped): byte-identical — the mirror is `None`, the gate answers nothing.
-    assert_eq!(sp_of(&palw_t12_shipped_params()).g14_route_required_v1(), None);
+    // Below every fence the gate answers nothing. Shipped testnet-12 arms the route at DAA 17,400.
+    assert_eq!(sp_of(&palw_t12_shipped_params()).g14_route_required_v1().map(|m| m.from_daa), Some(17_400));
     assert_eq!(palw_g14_route_attempt_refusal_v1(&sp_of(&p), u64::MAX), None);
     // Params-level: the fence at DAA 14,000 mirrors 14,000 and reads the route fences' resolved heights.
     let mut t12 = palw_t12_shipped_params();
@@ -614,7 +615,22 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     let mirror = sp_of(&t12).g14_route_required_v1().expect("mirrored");
     // Lane FPTOK: testnet-12's own tokenizer binding (if it has one) is mirrored, but it alone is no route.
     let tokenizer_match_from = t12.palw_fp_tokenizer_match_fence().map(|f| f.daa_score());
-    assert_eq!(mirror, PalwG14RouteMirrorV1 { from_daa: RELEASE, tokenizer_match_from, ..none }, "testnet-12 arms no G14 route");
+    assert_eq!(
+        mirror,
+        PalwG14RouteMirrorV1 {
+            from_daa: RELEASE,
+            legacy_filer_from: Some(17_400),
+            legacy_held_da_from: Some(17_400),
+            staged_court_from: Some(17_400),
+            tir_conviction_from: Some(17_400),
+            court_capacity_from: Some(17_400),
+            kernel_panel_one_from: Some(17_400),
+            gate_c_from: Some(17_400),
+            tokenizer_match_from,
+            panel_da_disclosure_from: Some(17_400),
+        },
+        "the G14 routes are armed at 17,400; the tokenizer binding is testnet-12's own"
+    );
     assert!(palw_g14_route_attempt_refusal_v1(&sp_of(&t12), RELEASE).is_some());
     assert!(palw_g14_route_attempt_refusal_v1(&sp_of(&t12), RELEASE - 1).is_none());
 }
@@ -1001,17 +1017,18 @@ fn testnet12_identity_did_not_move() {
             launch.consensus_schedule_id().to_string()
         ),
         (
-            "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f".to_string(),
+            "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5".to_string(),
             "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5".to_string(),
-            "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd".to_string(),
+            "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece".to_string(),
         )
     );
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
-    assert_eq!(t12.palw_g14_route_required_v1, None);
+    let armed = Some(kaspa_consensus_core::config::params::ForkActivation::new(17_400));
+    assert_eq!(t12.palw_g14_route_required_v1, armed);
     assert_eq!(t12.palw_reward_liability_horizon_v1, None);
     let PalwConsensusMode::ConsensusV2(b) = &t12.palw_consensus_mode else { panic!("V2") };
-    assert_eq!(b.state.g14_route_required_v1(), None);
+    assert_eq!(b.state.g14_route_required_v1().map(|m| m.from_daa), Some(17_400));
     assert_eq!(b.state.reward_liability_horizon_from_daa(), None);
     eprintln!(
         "[t12 ids] params {} identity {} schedule {}",

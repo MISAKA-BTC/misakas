@@ -45,11 +45,11 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 5ee7fd8e…, 1678e073…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
+    "73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "fd42c16706195ec0a6fa63902e1bd612303136b342bd29424e28be22599a5f2e",
 );
 
 /// Heights an operator might pick after launch: a low one a drill crosses, the common post-launch
@@ -71,7 +71,19 @@ fn armed_at(height: u64) -> Params {
     let mut p = palw_t12_launch_params_v1();
     p.palw_final_lock_life = Some(ForkActivation::new(height));
     p.sync_palw_final_lock_life();
+    // Launch keeps the legacy filer at 17,400. A lock life beside it needs the full-collateral
+    // fence at or below the later of the two.
+    collateral_beside_filer(&mut p, height);
     p
+}
+
+fn collateral_beside_filer(p: &mut Params, life: u64) {
+    let Some(filer) = p.palw_legacy_public_filer_v1.filter(|f| *f != ForkActivation::never()) else { return };
+    let later = life.max(filer.daa_score());
+    if p.palw_final_lock_full_collateral.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > later) {
+        p.palw_final_lock_full_collateral = Some(ForkActivation::new(later));
+        p.sync_palw_final_lock_full_collateral();
+    }
 }
 
 fn presets() -> Vec<(&'static str, Params)> {
@@ -196,6 +208,7 @@ fn the_shortening_needs_rcore_plus_and_a_synced_mirror() {
     let mut via_rcore = palw_t12_launch_params_v1();
     via_rcore.palw_final_lock_life = Some(ForkActivation::new(500));
     via_rcore.sync_palw_rcore_plus();
+    collateral_beside_filer(&mut via_rcore, 500);
     assert_eq!(mirror(&via_rcore), Some(500));
     via_rcore.validate_palw_v2().expect("re-mirrored through R-core+'s setter");
     // Below R-core+ (a hypothetical network arming R-core+ later than the shortening) — refused by name.

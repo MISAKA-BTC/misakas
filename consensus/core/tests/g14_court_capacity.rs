@@ -24,7 +24,9 @@
 mod common;
 use common::*;
 
-use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_launch_params_v1, palw_t12_shipped_params};
+use kaspa_consensus_core::config::params::{
+    ForkActivation, PALW_T12_G14_17000_FENCES_V1, palw_t12_arm_after_int13_at_v1, palw_t12_launch_params_v1, palw_t12_shipped_params,
+};
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 use kaspa_consensus_core::palw_court_capacity_v1::*;
 use kaspa_consensus_core::palw_g14_gates_v1::*;
@@ -120,6 +122,9 @@ fn arm_split(
     court_at: u64,
     measured: Option<PalwCourtMeasurementV1>,
 ) -> (Params, Vec<PalwG14ArmingRecordV1>) {
+    // Shipped and launch already arm this list at 17,400. The fixture records only the filer and,
+    // when measured, court capacity, so those entries go back to dormant first.
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     p.palw_legacy_public_filer_v1 = Some(ForkActivation::new(filer_at));
     p.sync_palw_legacy_public_filer_v1();
     let mut records = vec![record(PalwG14GatedFenceV1::LegacyPublicFilerV1, p.genesis.hash, filer_at)];
@@ -523,6 +528,7 @@ fn court_capacity_arming_needs_a_measured_record() {
     let mut never = t12.clone();
     never.palw_court_capacity_v1 = Some(PalwCourtCapacityFenceV1::placeholder_at(ForkActivation::never()));
     never.sync_palw_court_capacity_v1();
+    never.sync_palw_g14_gates_v1();
     never.validate_palw_v2().expect("never() is dormant");
     // Arming moves the ids (Some-only, with the policy); a different policy is a different network.
     assert_ne!(armed.consensus_params_id(), t12.consensus_params_id());
@@ -1575,17 +1581,17 @@ fn testnet12_identity_did_not_move() {
             launch.consensus_schedule_id().to_string()
         ),
         (
-            "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f".to_string(),
+            "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5".to_string(),
             "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5".to_string(),
-            "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd".to_string(),
+            "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece".to_string(),
         )
     );
     let t12 = palw_t12_shipped_params();
     let (params, identity, schedule) =
         (t12.consensus_params_id().to_string(), t12.consensus_identity_id().to_string(), t12.consensus_schedule_id().to_string());
     eprintln!("[t12 ids] params {params} identity {identity} schedule {schedule}");
-    assert!(params.starts_with("ef379378") && identity.starts_with("5de80e64") && schedule.starts_with("9ef2b1a7"));
+    assert!(params.starts_with("73e67678") && identity.starts_with("5de80e64") && schedule.starts_with("fd42c167"));
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
-    assert_eq!(t12.palw_court_capacity_v1, None);
-    assert_eq!(bundle(&t12).state.court_capacity_v1(), None);
+    assert_eq!(t12.palw_court_capacity_v1.as_ref().map(|f| f.activation), Some(ForkActivation::new(17_400)));
+    assert_eq!(bundle(&t12).state.court_capacity_v1().map(|m| m.from_daa), Some(17_400));
 }

@@ -320,6 +320,11 @@ fn the_fence_off_twin_validates_and_the_fence_moves_only_testnet12() {
     // R-core+ themselves, so the twin that takes R-core+ away is the launch ruleset's.
     let t12 = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
     let mut twin = t12.clone();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut twin,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     twin.palw_rcore_plus = None;
     twin.palw_rcore_conservative_classes = &[];
     twin.sync_palw_rcore_plus();

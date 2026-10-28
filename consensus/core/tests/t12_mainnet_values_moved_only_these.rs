@@ -41,11 +41,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 61d4eb4d…, 2d23b5f3…)
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was d837fb19…, 9e6afcf5…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "d837fb191d81f01d30f241d28fdb9d13a12caa9cd5ee5644abbe37da53b37cf5",
+    "d15e80d731df7b500ca79049df2f465bef6fa0af18c3cfe9146992eb42402334",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "9e6afcf540c02944e18bf3a75e31cbfaf65884510c136e57ce9f692a7cd5c27b",
+    "7df513969ce4167ef1c598beb647a65ba652229fa75fb03da699ec1e31640478",
 );
 
 #[test]

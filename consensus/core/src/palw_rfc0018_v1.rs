@@ -1058,9 +1058,13 @@ impl Params {
     /// **The record gate** against `records` in place of the binary's pinned list (tests and arm-readiness tooling; the node validates
     /// with [`PALW_RFC0018_ARMING_RECORDS_V1`]). Unarmed fences pass.
     pub fn validate_palw_rfc0018_records_in_v1(&self, records: &[PalwRfc0018ArmingRecordV1]) -> Result<(), PalwModeV2Error> {
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
         for fence in PalwRfc0018GatedFenceV1::ALL {
             if let Some(at) = fence.armed(self) {
-                palw_rfc0018_arming_record_admits_v1(fence, self.genesis.hash, at, records).map_err(PalwModeV2Error::Invalid)?;
+                palw_rfc0018_arming_record_admits_v1(fence, self.palw_arming_record_genesis_v1(), at, records)
+                    .map_err(PalwModeV2Error::Invalid)?;
             }
         }
         Ok(())

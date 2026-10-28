@@ -456,6 +456,23 @@ impl Params {
             && crate::header::Header::from(&self.genesis).hash == self.genesis.hash
     }
 
+    /// **Is this a testnet-12 drill genesis?** The coinbase is the drill marker, the merkle root
+    /// recomputes from it, and the network is testnet-12. A drill is public testnet-12's rules on a
+    /// salted block (`config::drill`); its hash depends on the salt, so no arm-readiness record names it.
+    pub fn has_t12_drill_genesis_v1(&self) -> bool {
+        self.net == crate::config::drill::palw_drill_network_v1()
+            && self.genesis.coinbase_payload == crate::config::drill::PALW_T12_DRILL_GENESIS_COINBASE_PAYLOAD
+            && self.genesis.hash_merkle_root == crate::merkle::calc_hash_merkle_root(self.genesis.build_genesis_transactions().iter())
+    }
+
+    /// **The genesis an arm-readiness record is keyed by.** Public testnet-12's records name
+    /// [`PALW_T12_GENESIS`](crate::config::genesis::PALW_T12_GENESIS). A drill of that network is the
+    /// same rules at the same heights, so the public record authorizes it. The drill's own hash stays
+    /// on the params and in the fingerprints. Every other genesis is looked up as itself.
+    pub fn palw_arming_record_genesis_v1(&self) -> crate::Hash64 {
+        if self.has_t12_drill_genesis_v1() { crate::config::genesis::PALW_T12_GENESIS.hash } else { self.genesis.hash }
+    }
+
     /// **One gated fence's record gate**: `Ok` when the fence is not armed (`None`, `never()`), on an isolated G14 test genesis, or when
     /// a pinned record authorizes exactly this network and height AND the court policy is complete;
     /// otherwise the fence's own refusal. A readiness digest cannot close RFC-0026 F02/F03.
@@ -476,7 +493,7 @@ impl Params {
         if self.has_isolated_g14_genesis_v1() {
             return Ok(());
         }
-        match palw_g14_arming_record_admits_v1(fence, self.genesis.hash, at.daa_score(), records) {
+        match palw_g14_arming_record_admits_v1(fence, self.palw_arming_record_genesis_v1(), at.daa_score(), records) {
             Ok(()) => self.validate_palw_court_policy_completeness_v1(fence),
             Err(PalwG14ArmingRefusalV1::NoRecord) => Err(PalwModeV2Error::Invalid(fence.no_record_refusal())),
             Err(other) => Err(PalwModeV2Error::Invalid(other.reason())),
@@ -725,10 +742,13 @@ impl Params {
             return Ok(());
         }
         let cost = self.palw_tir_frame_cost_v1.as_ref().expect("checked above");
-        crate::palw_tir_frame_cost_v1::palw_tir_frame_cost_record_admits_v1(self.genesis.hash, at.daa_score(), Some(cost), records)
-            .map_err(|_| {
-                PalwModeV2Error::Invalid("palw_tir_bounded_door_v1 has no pinned frame cost record for this network and height")
-            })
+        crate::palw_tir_frame_cost_v1::palw_tir_frame_cost_record_admits_v1(
+            self.palw_arming_record_genesis_v1(),
+            at.daa_score(),
+            Some(cost),
+            records,
+        )
+        .map_err(|_| PalwModeV2Error::Invalid("palw_tir_bounded_door_v1 has no pinned frame cost record for this network and height"))
     }
 
     pub fn validate_palw_tir_frame_cost_in_v1(
@@ -758,8 +778,13 @@ impl Params {
         if self.has_isolated_g14_genesis_v1() {
             return Ok(());
         }
-        crate::palw_tir_frame_cost_v1::palw_tir_frame_cost_record_admits_v1(self.genesis.hash, at.daa_score(), Some(cost), records)
-            .map_err(|why| PalwModeV2Error::Invalid(why.reason()))
+        crate::palw_tir_frame_cost_v1::palw_tir_frame_cost_record_admits_v1(
+            self.palw_arming_record_genesis_v1(),
+            at.daa_score(),
+            Some(cost),
+            records,
+        )
+        .map_err(|why| PalwModeV2Error::Invalid(why.reason()))
     }
 
     /// `palw_g14_route_required_v1` in force at `daa_score`.
@@ -1210,6 +1235,11 @@ pub fn palw_g14_genesis_test_params_v1() -> Params {
     }
     p.palw_tir_frame_cost_v1 = Some(cost);
     p.palw_public_evidence_reward_v1 = at;
+    // Shipped testnet-12 arms X3 and the panel-da disclosure at 17,400. g14-genesis keeps X3 off
+    // (no approved value) and leaves panel-da material non-public: the disclosure fence stays off,
+    // so V5 image and PanelDa keep the NonPublicEvidence refusal.
+    p.palw_claim_hard_deadline_v1 = None;
+    p.palw_panel_da_disclosure_v1 = None;
     p.sync_palw_2026_10_12_ruling_fences_v1();
     p.palw_g14_route_required_v1 = at;
     p.palw_reward_liability_horizon_v1 = at;

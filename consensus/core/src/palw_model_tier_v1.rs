@@ -391,8 +391,12 @@ impl Params {
         }
         // RFC-0019 §16 / ADR-0179: the catalog chain is the value; c, κ and every edition's release process (signed manifest,
         // mixed-binary drills across the switch) are admitted only by a pinned arm-readiness record (lane rfcgap-b, 2026-10-22: was a
-        // fixed refusal). The list is empty, so arming stays refused whatever the chain says.
-        palw_model_tier_arming_record_admits_v1(self.genesis.hash, fence, records).map_err(PalwModeV2Error::Invalid)
+        // fixed refusal). The list is empty, so arming stays refused whatever the chain says. An isolated
+        // G14 test genesis skips the pin, as the other G14 gates do.
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
+        palw_model_tier_arming_record_admits_v1(self.palw_arming_record_genesis_v1(), fence, records).map_err(PalwModeV2Error::Invalid)
     }
 
     /// **The fence's refusals with the binary's pinned record list** ([`PALW_MODEL_TIER_ARMING_RECORDS_V1`], empty).

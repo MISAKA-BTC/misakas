@@ -36,17 +36,19 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as THIS build ships it — the DAA-750 post-launch release (the same pins
 /// `palw_registry_resilience_is_t12_only`'s `T12_RELEASE` holds): params, identity, schedule.
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
+    "970ecf83d7bcbced782456e5dfc6f8d2d02c294e531785714dbf6600353eefa7",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "5540edc1abf8648d8e4ff76612f56bccd2fcbead3065ef6237c2fb74a86103fb",
 );
 
-/// testnet-12 as it LAUNCHED (`0e8ec984e`): both post-launch lists dormant.
+/// testnet-12 as `palw_t12_launch_params_v1` hashes it (2026-10-28). G14 stays armed at 17,400 on
+/// that constructor, so the params and schedule ids moved; the identity did not.
 const T12_LAUNCH: (&str, &str, &str) = (
-    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+    "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece",
 );
 
 /// Every other preset at the release, as `palw_registry_resilience_is_t12_only` pins them.

@@ -733,10 +733,10 @@ def registry() -> list[Pin]:
                     length=64, comment=None))
     pins.append(Pin("join_doc.schedule_id", "copy", JOIN_DOC, [r"^Consensus fence schedule: [0-9, ]+ \(schedule id "],
                     "from.testnet-12.schedule_id", fmt="token", length=64, comment=None))
-    pins.append(Pin("readme.fp", "copy", README, [r"consensus params fingerprint \*\*`"], "from.testnet-12.params_id", fmt="token",
+    pins.append(Pin("readme.fp", "copy", README, [r"Its fingerprint is\n\*\*`"], "from.testnet-12.params_id", fmt="token",
                     length=64, comment=None))
-    pins.append(Pin("readme.schedule_id", "copy", README, [r"consensus params fingerprint \*\*`", r"and schedule id `"],
-                    "from.testnet-12.schedule_id", fmt="abbr", comment=None))
+    pins.append(Pin("readme.schedule_id", "copy", README, [r"and schedule id `"], "from.testnet-12.schedule_id", fmt="token",
+                    length=64, comment=None))
     pins.append(Pin("scan_index.fp", "copy", SCAN_INDEX,
                     [r'network prints params fingerprint\n\s*<span class="mono" style="word-break:break-all">'],
                     "from.testnet-12.params_id", fmt="token", length=64, comment=None))
@@ -750,6 +750,17 @@ def registry() -> list[Pin]:
                     lambda c: c["from.testnet-12.params_id"][:16], fmt="token", length=16, comment=None))
     # RFC-0002 Phase F: every ruleset's ids as the IR dormancy pins hold them.
     pins += _tirdorm()
+    # The same launch triple, copied into the G14 close tests. The dormancy pin above is the source;
+    # these copies have to be registry entries or the unregistered-literal scan blocks --apply.
+    for stem in ("g14_close_gates", "g14_close_legacy", "g14_court_capacity"):
+        file = f"consensus/core/tests/{stem}.rs"
+        for nth, what in enumerate(("params_id", "identity_id", "schedule_id")):
+            pins.append(Pin(
+                key=f"launch_copy.{stem}.{what}", scope="t12", file=file,
+                anchors=[r"fn testnet12_identity_did_not_move\(\)"], nth=nth, length=64,
+                value=f"tirdorm.palw_t12_launch_params_v1.{what}",
+                tests=(f"{file}::testnet12_identity_did_not_move",),
+            ))
     # Agent SHARD (RFC-0006 x RFC-0010): the unarmed testnet-12 and lane-A folds hashed on the integration line `b676927de`,
     # before the lane changed anything. History: a fixed fact of that line, never re-pinned by this tool — the test itself is
     # the guard (a change to the unarmed fold is a test failure to explain, not a value to move).

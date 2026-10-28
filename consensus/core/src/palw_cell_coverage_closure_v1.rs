@@ -397,7 +397,7 @@ impl Params {
         if self.has_isolated_g14_genesis_v1() {
             return Ok(());
         }
-        match palw_cell_closure_arming_record_admits_v1(self.genesis.hash, at, records) {
+        match palw_cell_closure_arming_record_admits_v1(self.palw_arming_record_genesis_v1(), at, records) {
             Ok(()) => Ok(()),
             Err(crate::palw_g14_gates_v1::PalwG14ArmingRefusalV1::NoRecord) => Err(PalwModeV2Error::Invalid(
                 "palw_cell_coverage_closure_v1 cannot be armed: the closure rule (RFC-0006 R6-CELL round 4) is built, but no arm-readiness \

@@ -160,10 +160,11 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 770fb822…, 9410712f…)
         "from(testnet-12) − IR flag day",
-        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
+        "6d21887536b8b3953d23471975c52f5c3de616db19f9de523ff2ac0751d346a6",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "87bb1893f531a73def768abde6590a37a8e0304f80edd865bf4601afbc587b5a",
     ),
     (
         "from(devnet)",
@@ -196,40 +197,46 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 770fb822…, 9410712f…)
         "palw_t12_shipped_params − IR flag day",
-        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
+        "6d21887536b8b3953d23471975c52f5c3de616db19f9de523ff2ac0751d346a6",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "87bb1893f531a73def768abde6590a37a8e0304f80edd865bf4601afbc587b5a",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was b8564b88…, 93da24cc…)
         "palw_t12_launch_params_v1",
-        "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+        "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+        "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
         "palw_t12_release_v1_params",
-        "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
+        "970ecf83d7bcbced782456e5dfc6f8d2d02c294e531785714dbf6600353eefa7",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+        "5540edc1abf8648d8e4ff76612f56bccd2fcbead3065ef6237c2fb74a86103fb",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 24e1aec3…, d263d7f2…)
         "palw_t12_release_v2_params",
-        "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
+        "f8271af56b6ceead746d5b0317cdf11d6e8a26a667defe888c06ba946737a009",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
+        "de172bdee1263065e03c9fad0ceb82661522d7d07ba86c0bb40fbb5d9e5b1974",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 770fb822…, 9410712f…)
         "palw_t12_release_v3_params",
-        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
+        "6d21887536b8b3953d23471975c52f5c3de616db19f9de523ff2ac0751d346a6",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "87bb1893f531a73def768abde6590a37a8e0304f80edd865bf4601afbc587b5a",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 31b913ef…, 9410712f…)
         "palw_t12_drill_params_v1 − IR flag day",
-        "31b913ef15a1617472bc1764978763e530c021b116c98a77e6e5f6f47769faa4",
+        "37e8b4bdf3103b3c079ac15342eeb7b606ce5ea227d5cc4e640f02b6d3df08dd",
         "2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "87bb1893f531a73def768abde6590a37a8e0304f80edd865bf4601afbc587b5a",
     ),
 ];
 

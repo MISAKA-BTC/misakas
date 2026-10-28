@@ -60,19 +60,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2d4d50dd…, 75261e0b…)
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was a9280987…, 250fe032…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "a928098725ed6533cdae313f39d5c32089720eeb1255a8d490ce1c06f4f47e19",
+    "22d8d77ef19305bc64bda1c754c809829c49b236b0b039ead8a5bd6b35adea82",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "250fe032e9a5ab2de3d5ad427427bc2707100269ace5c5803c7f4ee9764b975e",
+    "d69f9957c18026b1ec0a3320ef88f04dfcefdbe12116ddc194fc2cce8e0d511a",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 5ee7fd8e…, 1678e073…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
+    "73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "fd42c16706195ec0a6fa63902e1bd612303136b342bd29424e28be22599a5f2e",
 );
 
 fn shipped(name: &str) -> Params {
