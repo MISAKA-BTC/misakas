@@ -1038,7 +1038,17 @@ fn the_model_allocation_clips_reward_only_and_unassigned_budget_is_never_minted(
     let none = run(Some(100), None);
     assert_eq!(off, (620, 40, true), "the allocation off: the carve");
     assert_eq!(even, (310, 40, true), "half the capital on the claim's model: half the realized carve");
-    assert_eq!(none, (0, 40, true), "no capital assigned: Σ A = 0, nothing allocated, nothing minted");
+    // Allocation bootstrap (user 2026-10-28, option (b), ADR-0177 note): with no capital assigned anywhere (Σ A = 0) the pre-fence
+    // rule pays the carve — the allocation cannot stop REAL at activation.
+    assert_eq!(none, (620, 40, true), "no capital assigned anywhere: Σ A = 0, the bootstrap pays the pre-fence carve");
+    // Past the bootstrap (Σ A > 0): all the capital on ONE model. The claim's model either holds it (the whole carve) or holds none —
+    // and then it is allocated nothing: its unassigned budget is never minted.
+    let only_1 = run(Some(100), Some(vec![(h64(1), 1_000)]));
+    let only_2 = run(Some(100), Some(vec![(h64(2), 1_000)]));
+    let mut granted = [only_1.0, only_2.0];
+    granted.sort();
+    assert_eq!(granted, [0, 620], "Σ A > 0: the funded model takes its share, a model with no capital gets 0 (nothing minted)");
+    assert_eq!((only_1.1, only_1.2, only_2.1, only_2.2), (40, true, 40, true), "the weight and the claim are unaffected");
 }
 
 /// **Retirement and reversal refund nothing** and keep the weight books exact: a budgeted Final claim retires the weight it was granted.
