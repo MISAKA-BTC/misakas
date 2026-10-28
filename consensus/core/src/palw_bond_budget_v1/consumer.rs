@@ -100,6 +100,20 @@ impl Params {
                 .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
     }
     pub fn validate_palw_paid_consumer_lifecycle_v1(&self) -> Result<(), PalwModeV2Error> {
+        let configured = self
+            .palw_paid_consumer_lifecycle_v1
+            .as_ref()
+            .filter(|f| f.activation != ForkActivation::never())
+            .map(|f| PalwPaidConsumerLifecycleMirrorV1 { from_daa: f.activation.daa_score(), policy: f.policy });
+        let effective = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.state.paid_consumer_lifecycle(),
+            _ => None,
+        };
+        if effective != configured.as_ref() {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_paid_consumer_lifecycle_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_bond_budget_v1",
+            ));
+        }
         let Some(f) = self.palw_paid_consumer_lifecycle_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) else {
             return Ok(());
         };
@@ -379,5 +393,29 @@ mod tests {
         } else {
             panic!("t12 native params");
         }
+    }
+
+    #[test]
+    fn finite_lifecycle_rejects_a_stale_or_ghost_effective_contract() {
+        let mut p = crate::config::params::palw_t12_shipped_params();
+        p.palw_paid_consumer_lifecycle_v1 =
+            Some(PalwPaidConsumerLifecycleFenceV1 { activation: ForkActivation::new(17_400), policy: policy() });
+        let mismatch = |p: &Params| {
+            assert!(format!("{:?}", p.validate_palw_paid_consumer_lifecycle_v1().unwrap_err()).contains("mirror"));
+        };
+        mismatch(&p);
+        p.sync_palw_bond_budget_v1();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode else { panic!("t12") };
+        let mut changed = bundle.state.paid_consumer_lifecycle().unwrap().clone();
+        changed.policy.service_span_daa += 1;
+        bundle.state = bundle.state.clone().with_paid_consumer_lifecycle(Some(changed));
+        mismatch(&p);
+        p.sync_palw_bond_budget_v1();
+        p.palw_paid_consumer_lifecycle_v1 = None;
+        mismatch(&p);
+        p.palw_paid_consumer_lifecycle_v1 =
+            Some(PalwPaidConsumerLifecycleFenceV1 { activation: ForkActivation::never(), policy: policy() });
+        p.sync_palw_bond_budget_v1();
+        p.validate_palw_paid_consumer_lifecycle_v1().unwrap();
     }
 }
